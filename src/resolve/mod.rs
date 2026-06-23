@@ -10,17 +10,29 @@
 //! - [`scope`]: [`Scope`] and [`ScopeChain`] for nested scope resolution.
 //! - [`symbol_table`]: [`SymbolEntry`], [`FileSymbolTable`],
 //!   [`ProjectSymbolTable`] for symbol indexing.
+//! - [`calls`]: [`CallResolver`] for resolving CALLS edges (ADR-011).
+//! - [`dataflow`]: [`DataFlowResolver`] for resolving DataFlows edges
+//!   (BR-TRACE-001~004).
+//! - [`cross_lang`]: [`FfiResolver`] for resolving FfiCalls edges across
+//!   languages (ADD §7.4, BR-TRACE-008).
 
+pub mod calls;
+pub mod cross_lang;
+pub mod dataflow;
 pub mod error;
 pub mod fqn;
 pub mod scope;
 pub mod symbol_table;
 
+pub use calls::CallResolver;
+pub use cross_lang::{FfiResolver, MatchStrategy};
+pub use dataflow::DataFlowResolver;
 pub use error::{ResolveError, Result};
 pub use fqn::FqnGenerator;
 pub use scope::{Scope, ScopeChain};
 pub use symbol_table::{FileSymbolTable, ProjectSymbolTable, SymbolEntry};
 
+use crate::model::{Edge, Graph};
 use crate::parse::ExtractResult;
 
 /// Builds a project-level symbol table from extraction results.
@@ -63,6 +75,39 @@ pub fn build_symbol_table(results: &[ExtractResult], project: &str) -> ProjectSy
         }
     }
     table
+}
+
+/// Resolves all symbols: calls + dataflows + FFI, returning resolved edges.
+///
+/// This is the top-level orchestration function for the resolve phase
+/// (ADR-011). It runs [`CallResolver`] to produce CALLS edges,
+/// [`DataFlowResolver`] to produce DataFlows edges, and [`FfiResolver`] to
+/// produce FfiCalls edges (ADD §7.4), adding all resolved edges to the graph.
+///
+/// # Arguments
+///
+/// * `results` - The extraction results from the parse phase.
+/// * `symbol_table` - The project-level symbol table built from `results`.
+/// * `project` - The project name.
+/// * `graph` - The graph to add resolved edges to.
+///
+/// # Returns
+///
+/// A vector of all resolved edges (also added to `graph`).
+pub fn resolve_all(
+    results: &[ExtractResult],
+    symbol_table: &ProjectSymbolTable,
+    project: &str,
+    graph: &mut Graph,
+) -> Vec<Edge> {
+    let mut edges = Vec::new();
+    let call_resolver = CallResolver::new(symbol_table, project);
+    edges.extend(call_resolver.resolve_calls(results, graph));
+    let df_resolver = DataFlowResolver::new(symbol_table, project);
+    edges.extend(df_resolver.resolve_dataflows(results, graph));
+    let ffi_resolver = FfiResolver::new(symbol_table, project);
+    edges.extend(ffi_resolver.resolve_ffi(results, graph));
+    edges
 }
 
 #[cfg(test)]
@@ -361,5 +406,119 @@ mod tests {
         let table = build_symbol_table(&[result], "myproject");
         let entry = table.lookup_exact("foo").unwrap();
         assert_eq!(entry.project, "myproject");
+    }
+
+    // --- resolve_all orchestration ---
+
+    #[test]
+    fn resolve_all_combines_calls_and_dataflows() {
+        let foo_node = Node::builder(NodeLabel::Function, "foo", "qn")
+            .language(Language::Rust)
+            .file_path("a.rs")
+            .is_exported(true)
+            .build();
+        let bar_node = Node::builder(NodeLabel::Function, "bar", "qn")
+            .language(Language::Rust)
+            .file_path("a.rs")
+            .is_exported(true)
+            .build();
+        let foo_qn = FqnGenerator::generate("proj", "a.rs", "foo", Language::Rust);
+        let bar_qn = FqnGenerator::generate("proj", "a.rs", "bar", Language::Rust);
+
+        let mut result = ExtractResult::new("a.rs", Language::Rust);
+        result.nodes = vec![foo_node, bar_node];
+        result.calls.push(CallInfo {
+            caller_qn: Some(foo_qn.clone()),
+            callee_name: "bar".to_string(),
+            line: 5,
+            args: vec![],
+        });
+        result.assignments.push(crate::parse::AssignInfo {
+            target_name: "x".to_string(),
+            source_name: "bar".to_string(),
+            line: 6,
+            is_return_assign: true,
+        });
+
+        let results = vec![result];
+        let table = build_symbol_table(&results, "proj");
+        let mut graph = Graph::new();
+        // Add nodes to graph with qn as id.
+        for r in &results {
+            for node in &r.nodes {
+                let qn = FqnGenerator::generate("proj", &r.file_path, &node.name, Language::Rust);
+                let mut g = node.clone();
+                g.id = qn.clone();
+                g.qualified_name = qn;
+                graph.add_node(g);
+            }
+        }
+
+        let edges = resolve_all(&results, &table, "proj", &mut graph);
+
+        // Should have 1 CALLS edge + 1 DataFlows edge = 2 total.
+        assert_eq!(edges.len(), 2);
+        assert_eq!(graph.edge_count(), 2);
+
+        let calls_count = edges.iter().filter(|e| e.edge_type == crate::model::EdgeType::Calls).count();
+        let dataflows_count = edges
+            .iter()
+            .filter(|e| e.edge_type == crate::model::EdgeType::DataFlows)
+            .count();
+        assert_eq!(calls_count, 1);
+        assert_eq!(dataflows_count, 1);
+
+        // Verify CALLS edge: foo -> bar
+        let call_edge = edges.iter().find(|e| e.edge_type == crate::model::EdgeType::Calls).unwrap();
+        assert_eq!(call_edge.source, foo_qn);
+        assert_eq!(call_edge.target, bar_qn);
+    }
+
+    #[test]
+    fn resolve_all_empty_results_returns_empty() {
+        let table = ProjectSymbolTable::new();
+        let mut graph = Graph::new();
+        let edges = resolve_all(&[], &table, "proj", &mut graph);
+        assert!(edges.is_empty());
+        assert_eq!(graph.edge_count(), 0);
+    }
+
+    #[test]
+    fn resolve_all_adds_edges_to_graph() {
+        let foo_node = Node::builder(NodeLabel::Function, "foo", "qn")
+            .language(Language::Rust)
+            .file_path("a.rs")
+            .is_exported(true)
+            .build();
+        let foo_qn = FqnGenerator::generate("proj", "a.rs", "foo", Language::Rust);
+
+        let mut result = ExtractResult::new("a.rs", Language::Rust);
+        result.nodes = vec![foo_node];
+        result.calls.push(CallInfo {
+            caller_qn: Some(foo_qn.clone()),
+            callee_name: "foo".to_string(),
+            line: 5,
+            args: vec![],
+        });
+
+        let results = vec![result];
+        let table = build_symbol_table(&results, "proj");
+        let mut graph = Graph::new();
+        for r in &results {
+            for node in &r.nodes {
+                let qn = FqnGenerator::generate("proj", &r.file_path, &node.name, Language::Rust);
+                let mut g = node.clone();
+                g.id = qn.clone();
+                g.qualified_name = qn;
+                graph.add_node(g);
+            }
+        }
+
+        resolve_all(&results, &table, "proj", &mut graph);
+
+        // The self-call edge should be in the graph.
+        assert_eq!(graph.edge_count(), 1);
+        let neighbors = graph.neighbors(&foo_qn, Some(crate::model::EdgeType::Calls));
+        assert_eq!(neighbors.len(), 1);
     }
 }

@@ -45,62 +45,62 @@
   - [x] SubTask 6.4: 编写 Python 提取器测试（def/class/import/__init__.py），再实现 parse/python 提取器
   - [x] SubTask 6.5: 编写 TypeScript 提取器测试（function/class/import/export），再实现 parse/typescript 提取器
 
-- [ ] Task 7: 实现并行解析（parse 模块）
-  - [ ] SubTask 7.1: 编写并行解析测试（rayon 文件级并行、无锁合并 ADR-010），再实现 parallel_parse
+- [x] Task 7: 实现并行解析（parse 模块）
+  - [x] SubTask 7.1: 编写并行解析测试（rayon 文件级并行、无锁合并 ADR-010），再实现 parallel_parse
 
 ## Phase 3: 符号解析 + 变量追踪 + 跨语言
 
-- [ ] Task 8: 实现符号解析基础（resolve 模块）
-  - [ ] SubTask 8.1: 编写 FQN 生成测试（project.dir.file.entity 格式 ADD §7.1、Python __init__.py 特殊处理、Fortran 模块嵌套），再实现 FQN 生成
-  - [ ] SubTask 8.2: 编写作用域链测试（resolve/scope），再实现 ScopeChain
-  - [ ] SubTask 8.3: 编写符号表测试（文件级 + 项目级 resolve/symbol_table），再实现 SymbolTable
+- [x] Task 8: 实现符号解析基础（resolve 模块）
+  - [x] SubTask 8.1: 编写 FQN 生成测试（project.dir.file.entity 格式 ADD §7.1、Python __init__.py 特殊处理、Fortran 模块嵌套），再实现 FQN 生成
+  - [x] SubTask 8.2: 编写作用域链测试（resolve/scope），再实现 ScopeChain
+  - [x] SubTask 8.3: 编写符号表测试（文件级 + 项目级 resolve/symbol_table），再实现 SymbolTable
 
-- [ ] Task 9: 实现调用关系与数据流解析（resolve 模块）
-  - [ ] SubTask 9.1: 编写调用解析测试（receiver-bound-calls + free-call-fallback 通用 passes ADR-011、BR-TRACE-007 同语言调用），再实现 resolve/calls
-  - [ ] SubTask 9.2: 编写数据流测试（BR-TRACE-001 参数传递、BR-TRACE-002 返回赋值、BR-TRACE-003 变量赋值、BR-TRACE-005 读取、BR-TRACE-006 写入），再实现 resolve/dataflow
-  - [ ] SubTask 9.3: 编写 AC-TRACE-001 测试（A 调用 B 返回 A→B 路径），验证通过
-  - [ ] SubTask 9.4: 编写 AC-TRACE-002 测试（变量 x 传递给 foo 参数返回数据流路径），验证通过
+- [x] Task 9: 实现调用关系与数据流解析（resolve 模块）
+  - [x] SubTask 9.1: 编写调用解析测试（receiver-bound-calls + free-call-fallback 通用 passes ADR-011、BR-TRACE-007 同语言调用），再实现 resolve/calls
+  - [x] SubTask 9.2: 编写数据流测试（BR-TRACE-001 参数传递、BR-TRACE-002 返回赋值、BR-TRACE-003 变量赋值、BR-TRACE-005 读取、BR-TRACE-006 写入），再实现 resolve/dataflow
+  - [x] SubTask 9.3: 编写 AC-TRACE-001 测试（A 调用 B 返回 A→B 路径），验证通过
+  - [x] SubTask 9.4: 编写 AC-TRACE-002 测试（变量 x 传递给 foo 参数返回数据流路径），验证通过
 
-- [ ] Task 10: 实现跨语言 FFI 解析（resolve/cross_lang 模块）
-  - [ ] SubTask 10.1: 编写 FFI 解析测试（Rust extern "C" 调 C、C↔Fortran ISO_C_BINDING、名称匹配 + 签名匹配双策略 ADD §7.4、置信度 0.70-0.85 BR-TRACE-008），再实现 cross_lang
-  - [ ] SubTask 10.2: 编写 AC-TRACE-003 测试（Rust extern "C" 调 C 返回 FfiCalls 边路径），验证通过
+- [x] Task 10: 实现跨语言 FFI 解析（resolve/cross_lang 模块）
+  - [x] SubTask 10.1: 编写 FFI 解析测试（Rust extern "C" 调 C、C↔Fortran ISO_C_BINDING、名称匹配 + 签名匹配双策略 ADD §7.4、置信度 0.70-0.85 BR-TRACE-008），再实现 cross_lang
+  - [x] SubTask 10.2: 编写 AC-TRACE-003 测试（Rust extern "C" 调 C 返回 FfiCalls 边路径），验证通过
 
 ## Phase 4: 索引流水线 + 存储
 
-- [ ] Task 11: 实现索引流水线（index 模块，门面模式）
-  - [ ] SubTask 11.1: 编写 hash 测试（SHA-256 文件哈希 ADR-009），再实现 index/hash
-  - [ ] SubTask 11.2: 编写增量索引测试（哈希 diff：changed/added/deleted、BR-INDEX-001 跳过、BR-INDEX-002 删除检测、BR-INDEX-003 --force），再实现 index/incremental
-  - [ ] SubTask 11.3: 编写 AC-INDEX-002 测试（增量仅解析变更文件），验证通过
-  - [ ] SubTask 11.4: 编写 AC-INDEX-005 测试（--force 全量重解析），验证通过
-  - [ ] SubTask 11.5: 编写 Pipeline 测试（门面模式 IndexFacade，编排 discover→parse→resolve→storage），再实现 index/pipeline
-  - [ ] SubTask 11.6: 编写 AC-INDEX-001 测试（C/Rust/Fortran 代码库端到端索引），验证通过
-  - [ ] SubTask 11.7: 编写 AC-INDEX-003 测试（多项目共存互不干扰），验证通过
-  - [ ] SubTask 11.8: 编写异常处理测试（路径不存在退出码 1、数据库锁定重试 3 次退出码 2、解析失败跳过继续、内存不足退出码 3、数据库损坏退出码 4），再实现异常处理
+- [x] Task 11: 实现索引流水线（index 模块，门面模式）
+  - [x] SubTask 11.1: 编写 hash 测试（SHA-256 文件哈希 ADR-009），再实现 index/hash
+  - [x] SubTask 11.2: 编写增量索引测试（哈希 diff：changed/added/deleted、BR-INDEX-001 跳过、BR-INDEX-002 删除检测、BR-INDEX-003 --force），再实现 index/incremental
+  - [x] SubTask 11.3: 编写 AC-INDEX-002 测试（增量仅解析变更文件），验证通过
+  - [x] SubTask 11.4: 编写 AC-INDEX-005 测试（--force 全量重解析），验证通过
+  - [x] SubTask 11.5: 编写 Pipeline 测试（门面模式 IndexFacade，编排 discover→parse→resolve→storage），再实现 index/pipeline
+  - [x] SubTask 11.6: 编写 AC-INDEX-001 测试（C/Rust/Fortran 代码库端到端索引），验证通过
+  - [x] SubTask 11.7: 编写 AC-INDEX-003 测试（多项目共存互不干扰），验证通过
+  - [x] SubTask 11.8: 编写异常处理测试（路径不存在退出码 1、数据库锁定重试 3 次退出码 2、解析失败跳过继续、内存不足退出码 3、数据库损坏退出码 4），再实现异常处理
 
 ## Phase 5: 查询追踪 + CLI
 
-- [ ] Task 12: 实现追踪引擎（trace 模块）
-  - [ ] SubTask 12.1: 编写调用图遍历测试（BFS Calls/FfiCalls 边、深度限制 AC-TRACE-004），再实现 trace/call_graph
-  - [ ] SubTask 12.2: 编写数据流遍历测试（BFS DataFlows/Reads/Writes 边），再实现 trace/data_flow
-  - [ ] SubTask 12.3: 编写影响分析测试（变更符号爆炸半径 P1），再实现 trace/impact
-  - [ ] SubTask 12.4: 编写 TraceFacade 测试（门面模式，--type calls/dataflow/all），再实现 TraceFacade
+- [x] Task 12: 实现追踪引擎（trace 模块）
+  - [x] SubTask 12.1: 编写调用图遍历测试（BFS Calls/FfiCalls 边、深度限制 AC-TRACE-004），再实现 trace/call_graph
+  - [x] SubTask 12.2: 编写数据流遍历测试（BFS DataFlows/Reads/Writes 边），再实现 trace/data_flow
+  - [x] SubTask 12.3: 编写影响分析测试（变更符号爆炸半径 P1），再实现 trace/impact
+  - [x] SubTask 12.4: 编写 TraceFacade 测试（门面模式，--type calls/dataflow/all），再实现 TraceFacade
 
-- [ ] Task 13: 实现查询引擎（query 模块）
-  - [ ] SubTask 13.1: 编写 Cypher 查询测试（AC-QUERY-001），再实现 query/cypher
-  - [ ] SubTask 13.2: 编写结构化搜索测试（按名称/类型/文件 AC-SEARCH-001），再实现 query/structured
-  - [ ] SubTask 13.3: 编写全文搜索测试（BM25 LadybugDB FTS），再实现 query/fulltext
-  - [ ] SubTask 13.4: 编写 QueryFacade 测试（门面模式），再实现 QueryFacade
+- [x] Task 13: 实现查询引擎（query 模块）
+  - [x] SubTask 13.1: 编写 Cypher 查询测试（AC-QUERY-001），再实现 query/cypher
+  - [x] SubTask 13.2: 编写结构化搜索测试（按名称/类型/文件 AC-SEARCH-001），再实现 query/structured
+  - [x] SubTask 13.3: 编写全文搜索测试（BM25 LadybugDB FTS），再实现 query/fulltext
+  - [x] SubTask 13.4: 编写 QueryFacade 测试（门面模式），再实现 QueryFacade
 
-- [ ] Task 14: 实现 CLI 工具（cli 模块）
-  - [ ] SubTask 14.1: 编写 index 命令测试（输入输出 PRD §4.1.3、退出码），再实现 cli/index_cmd
-  - [ ] SubTask 14.2: 编写 query 命令测试，再实现 cli/query_cmd
-  - [ ] SubTask 14.3: 编写 trace 命令测试（输入输出 PRD §4.2.3），再实现 cli/trace_cmd
-  - [ ] SubTask 14.4: 编写 impact 命令测试，再实现 cli/impact_cmd
-  - [ ] SubTask 14.5: 编写 search 命令测试（--semantic/--limit），再实现 cli/search_cmd
-  - [ ] SubTask 14.6: 编写 status 命令测试，再实现 cli/status_cmd
-  - [ ] SubTask 14.7: 编写 list 命令测试，再实现 cli/list_cmd
-  - [ ] SubTask 14.8: 编写 clean 命令测试，再实现 cli/clean_cmd
-  - [ ] SubTask 14.9: 编写 CLI 入口测试（clap 4 子命令路由、退出码 0/1/2/3/4），再实现 cli/main
+- [x] Task 14: 实现 CLI 工具（cli 模块）
+  - [x] SubTask 14.1: 编写 index 命令测试（输入输出 PRD §4.1.3、退出码），再实现 cli/index_cmd
+  - [x] SubTask 14.2: 编写 query 命令测试，再实现 cli/query_cmd
+  - [x] SubTask 14.3: 编写 trace 命令测试（输入输出 PRD §4.2.3），再实现 cli/trace_cmd
+  - [x] SubTask 14.4: 编写 impact 命令测试，再实现 cli/impact_cmd
+  - [x] SubTask 14.5: 编写 search 命令测试（--semantic/--limit），再实现 cli/search_cmd
+  - [x] SubTask 14.6: 编写 status 命令测试，再实现 cli/status_cmd
+  - [x] SubTask 14.7: 编写 list 命令测试，再实现 cli/list_cmd
+  - [x] SubTask 14.8: 编写 clean 命令测试，再实现 cli/clean_cmd
+  - [x] SubTask 14.9: 编写 CLI 入口测试（clap 4 子命令路由、退出码 0/1/2/3/4），再实现 cli/main
 
 ## Phase 6: 守护模式 + 可选嵌入
 

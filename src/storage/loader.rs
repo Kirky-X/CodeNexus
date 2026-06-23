@@ -98,13 +98,18 @@ pub fn write_edges_csv(edges: &[Edge]) -> String {
 /// The CSV file must have a header row whose column names match the target
 /// table's columns. The `table` name is escaped via [`escape_identifier`] to
 /// handle reserved keywords like `Macro`.
+///
+/// `PARALLEL=FALSE` is specified because LadybugDB's parallel CSV reader does
+/// not support quoted fields containing embedded newlines (e.g. multi-line
+/// function signatures produced by the Fortran extractor). The serial reader
+/// handles RFC 4180-compliant quoted fields correctly.
 pub fn load_from_csv(conn: &StorageConnection, table: &str, csv_path: &Path) -> Result<()> {
     let path_str = csv_path
         .to_str()
         .ok_or_else(|| StorageError::InvalidData(format!("non-utf8 csv path: {csv_path:?}")))?
         .replace('\\', "/");
     let escaped_table = escape_identifier(table);
-    let cypher = format!("COPY {escaped_table} FROM '{path_str}';");
+    let cypher = format!("COPY {escaped_table} FROM '{path_str}' (PARALLEL=FALSE);");
     conn.execute(&cypher)?;
     Ok(())
 }
