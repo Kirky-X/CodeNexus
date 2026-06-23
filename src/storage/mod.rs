@@ -1,0 +1,20 @@
+//! LadybugDB persistence layer.
+//!
+//! Encapsulates the [`lbug`] connection, schema DDL generation (DDD §12.1),
+//! CSV bulk loading (ADR-014), Cypher query execution, and the Repository
+//! pattern abstraction for data access.
+
+pub mod connection;
+pub mod error;
+pub mod loader;
+pub mod repository;
+pub mod schema;
+
+pub use connection::StorageConnection;
+pub use error::{Result, StorageError};
+pub use loader::CsvLoader;
+pub use repository::{FunctionRecord, ProjectRecord, Repository};
+pub use schema::{
+    all_init_ddl, embedding_table_ddl, index_ddl, node_table_columns, node_table_ddl,
+    relation_table_columns, relation_table_ddl,
+};

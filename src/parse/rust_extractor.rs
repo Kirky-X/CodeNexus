@@ -1,0 +1,894 @@
+//! Rust language extractor (Adapter pattern, ADR-003, ADR-011).
+//!
+//! Adapts tree-sitter-rust's syntax tree into CodeNexus nodes, edges, and
+//! intermediate extraction records ([`ExtractResult`]).
+//!
+//! # Extracted node types
+//!
+//! - `function_item` → [`NodeLabel::Function`]
+//! - `struct_item` → [`NodeLabel::Struct`]
+//! - `enum_item` → [`NodeLabel::Enum`]
+//! - `trait_item` → [`NodeLabel::Trait`]
+//! - `impl_item` → [`NodeLabel::Impl`]
+//! - `const_item` → [`NodeLabel::Const`]
+//! - `static_item` → [`NodeLabel::Static`]
+//! - `type_item` → [`NodeLabel::TypeAlias`]
+//! - `macro_definition` → [`NodeLabel::Macro`]
+//!
+//! # Extracted records
+//!
+//! - `use_declaration` → [`ImportInfo`]
+//! - `call_expression` → [`CallInfo`]
+//! - `let_declaration` → [`AssignInfo`]
+//! - `extern_item` / `extern_block` → [`ExternInfo`]
+
+use tree_sitter::Node;
+
+use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
+
+use super::error::{ParseError, Result};
+use super::extractor::{AssignInfo, CallInfo, ExternInfo, ExtractResult, Extractor, ImportInfo};
+use super::parser_factory::ParserFactory;
+
+/// Rust language tree-sitter extractor (Adapter pattern).
+pub struct RustExtractor {
+    _priv: (),
+}
+
+impl RustExtractor {
+    /// Creates a new `RustExtractor`.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { _priv: () }
+    }
+}
+
+impl Default for RustExtractor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Extractor for RustExtractor {
+    fn language(&self) -> Language {
+        Language::Rust
+    }
+
+    fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
+        let mut result = ExtractResult::new(file_path, Language::Rust);
+        let mut parser = ParserFactory::create_parser(Language::Rust)?;
+        let tree = parser
+            .parse(source, None)
+            .ok_or_else(|| ParseError::ParseFailed {
+                file_path: file_path.to_string(),
+            })?;
+        let root = tree.root_node();
+        // source_file is the root for Rust.
+        for i in 0..root.named_child_count() as u32 {
+            if let Some(child) = root.named_child(i) {
+                visit_node(child, source, file_path, project, &mut result);
+            }
+        }
+        Ok(result)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tree-walking helpers
+// ---------------------------------------------------------------------------
+
+fn visit_node(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    project: &str,
+    result: &mut ExtractResult,
+) {
+    match node.kind() {
+        "function_item" => {
+            extract_function(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result);
+        }
+        "struct_item" => {
+            extract_named_item(node, NodeLabel::Struct, source, file_path, project, result);
+        }
+        "enum_item" => {
+            extract_named_item(node, NodeLabel::Enum, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result);
+        }
+        "trait_item" => {
+            extract_named_item(node, NodeLabel::Trait, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result);
+        }
+        "impl_item" => {
+            extract_impl(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result);
+        }
+        "const_item" => {
+            extract_named_item(node, NodeLabel::Const, source, file_path, project, result);
+        }
+        "static_item" => {
+            extract_named_item(node, NodeLabel::Static, source, file_path, project, result);
+        }
+        "type_item" => {
+            extract_named_item(node, NodeLabel::TypeAlias, source, file_path, project, result);
+        }
+        "macro_definition" => {
+            extract_named_item(node, NodeLabel::Macro, source, file_path, project, result);
+        }
+        "use_declaration" => {
+            extract_use(node, source, result);
+        }
+        "call_expression" => {
+            extract_call(node, source, result);
+            visit_children(node, source, file_path, project, result);
+        }
+        "let_declaration" => {
+            extract_let(node, source, result);
+            visit_children(node, source, file_path, project, result);
+        }
+        "extern_item" | "extern_block" | "foreign_mod_item" => {
+            extract_extern_block(node, source, result);
+            visit_children(node, source, file_path, project, result);
+        }
+        _ => {
+            visit_children(node, source, file_path, project, result);
+        }
+    }
+}
+
+fn visit_children(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    project: &str,
+    result: &mut ExtractResult,
+) {
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(child) = node.named_child(i) {
+            visit_node(child, source, file_path, project, result);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Definition extractors
+// ---------------------------------------------------------------------------
+
+fn extract_function(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    project: &str,
+    result: &mut ExtractResult,
+) {
+    let Some(name_node) = node.child_by_field_name("name") else {
+        return;
+    };
+    let Some(name) = node_text(name_node, source).map(String::from) else {
+        return;
+    };
+    let is_exported = is_pub(node);
+    let signature = node_text(node, source).map(String::from);
+    let qn = make_qn(file_path, &name);
+    let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
+        .file_path(file_path)
+        .start_line(node.start_position().row as u32 + 1)
+        .end_line(node.end_position().row as u32 + 1)
+        .language(Language::Rust)
+        .project(project)
+        .is_exported(is_exported)
+        .is_global(true);
+    if let Some(sig) = signature {
+        builder = builder.signature(sig);
+    }
+    let model_node = builder.build();
+    add_definition_edges(file_path, project, &model_node, result);
+    result.nodes.push(model_node);
+}
+
+fn extract_named_item(
+    node: Node,
+    label: NodeLabel,
+    source: &str,
+    file_path: &str,
+    project: &str,
+    result: &mut ExtractResult,
+) {
+    let Some(name_node) = node.child_by_field_name("name") else {
+        return;
+    };
+    let Some(name) = node_text(name_node, source).map(String::from) else {
+        return;
+    };
+    let is_exported = is_pub(node);
+    let qn = make_qn(file_path, &name);
+    let model_node = ModelNode::builder(label, name, qn)
+        .file_path(file_path)
+        .start_line(node.start_position().row as u32 + 1)
+        .end_line(node.end_position().row as u32 + 1)
+        .language(Language::Rust)
+        .project(project)
+        .is_exported(is_exported)
+        .is_global(true)
+        .build();
+    add_definition_edges(file_path, project, &model_node, result);
+    result.nodes.push(model_node);
+}
+
+fn extract_impl(node: Node, source: &str, file_path: &str, project: &str, result: &mut ExtractResult) {
+    // impl_item has a `type` field (the type being implemented) and an
+    // optional `trait` field (the trait being implemented).
+    let Some(type_node) = node.child_by_field_name("type") else {
+        return;
+    };
+    let Some(name) = node_text(type_node, source).map(String::from) else {
+        return;
+    };
+    let trait_name = node
+        .child_by_field_name("trait")
+        .and_then(|n| node_text(n, source).map(String::from));
+    let qn = make_qn(file_path, &name);
+    let mut builder = ModelNode::builder(NodeLabel::Impl, name, qn)
+        .file_path(file_path)
+        .start_line(node.start_position().row as u32 + 1)
+        .end_line(node.end_position().row as u32 + 1)
+        .language(Language::Rust)
+        .project(project)
+        .is_global(true);
+    if let Some(trait_name) = trait_name {
+        builder = builder.properties(serde_json::json!({"trait": trait_name}));
+    }
+    let model_node = builder.build();
+    add_definition_edges(file_path, project, &model_node, result);
+    result.nodes.push(model_node);
+}
+
+// ---------------------------------------------------------------------------
+// Record extractors
+// ---------------------------------------------------------------------------
+
+fn extract_use(node: Node, source: &str, result: &mut ExtractResult) {
+    // use_declaration has an `argument` field which is a use_clause.
+    // The use_clause can be:
+    //   - identifier (e.g. `use foo;`)
+    //   - scoped_use_list (e.g. `use std::io;`)
+    //   - use_as_clause (e.g. `use foo as bar;`)
+    //   - use_wildcard (e.g. `use std::*;`)
+    let Some(arg) = node.child_by_field_name("argument") else {
+        return;
+    };
+    let path = use_path(arg, source).unwrap_or_default();
+    let names = use_imported_names(arg, source);
+    result.imports.push(ImportInfo {
+        source_file: path,
+        imported_names: names,
+        line: node.start_position().row as u32 + 1,
+    });
+}
+
+fn extract_call(node: Node, source: &str, result: &mut ExtractResult) {
+    let Some(func_node) = node.child_by_field_name("function") else {
+        return;
+    };
+    let Some(callee) = callee_name(func_node, source) else {
+        return;
+    };
+    let args = call_arguments(node, source);
+    result.calls.push(CallInfo {
+        caller_qn: None,
+        callee_name: callee,
+        line: node.start_position().row as u32 + 1,
+        args,
+    });
+}
+
+fn extract_let(node: Node, source: &str, result: &mut ExtractResult) {
+    // let_declaration has a `pattern` field and an optional `value` field.
+    let Some(pattern_node) = node.child_by_field_name("pattern") else {
+        return;
+    };
+    let Some(target) = pattern_name(pattern_node, source) else {
+        return;
+    };
+    let value_node = node.child_by_field_name("value");
+    let (source_name, is_return_assign) = match value_node {
+        Some(v) => {
+            // If the value is a call_expression, this is a return assignment.
+            let is_call = v.kind() == "call_expression";
+            let name = if is_call {
+                v.child_by_field_name("function")
+                    .and_then(|f| callee_name(f, source))
+                    .unwrap_or_default()
+            } else {
+                node_text(v, source).map(String::from).unwrap_or_default()
+            };
+            (name, is_call)
+        }
+        None => (String::new(), false),
+    };
+    result.assignments.push(AssignInfo {
+        target_name: target,
+        source_name,
+        line: node.start_position().row as u32 + 1,
+        is_return_assign,
+    });
+}
+
+fn extract_extern_block(node: Node, source: &str, result: &mut ExtractResult) {
+    // extern_block contains extern_item children which are function declarations.
+    // Determine the foreign language from the string literal (e.g. "C").
+    let lang = extern_language(node, source);
+    let mut names = Vec::new();
+    let mut signature = None;
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(child) = node.named_child(i) {
+            collect_extern_names(child, source, &mut names);
+            if signature.is_none() {
+                signature = node_text(child, source).map(String::from);
+            }
+        }
+    }
+    if names.is_empty() {
+        return;
+    }
+    result.externs.push(ExternInfo {
+        language: lang,
+        names,
+        line: node.start_position().row as u32 + 1,
+        signature,
+    });
+}
+
+fn collect_extern_names(node: Node, source: &str, names: &mut Vec<String>) {
+    if node.kind() == "function_signature_item" {
+        if let Some(name_node) = node.child_by_field_name("name") {
+            if let Some(name) = node_text(name_node, source).map(String::from) {
+                names.push(name);
+            }
+        }
+    }
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(child) = node.named_child(i) {
+            collect_extern_names(child, source, names);
+        }
+    }
+}
+
+fn extern_language(node: Node, source: &str) -> Language {
+    // Look for a string_literal in the extern_modifier child
+    // (e.g. extern "C" { ... }).
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(child) = node.named_child(i) {
+            if child.kind() == "extern_modifier" {
+                // The extern_modifier contains a string_literal.
+                for j in 0..child.named_child_count() as u32 {
+                    if let Some(grandchild) = child.named_child(j) {
+                        if grandchild.kind() == "string_literal" {
+                            let text = node_text(grandchild, source).unwrap_or("");
+                            let cleaned = text.trim_matches('"').to_ascii_lowercase();
+                            if cleaned == "c" {
+                                return Language::C;
+                            }
+                            if cleaned == "fortran" {
+                                return Language::Fortran;
+                            }
+                            if cleaned == "python" {
+                                return Language::Python;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Also check direct string_literal children (older grammar versions).
+    for i in 0..node.child_count() as u32 {
+        if let Some(child) = node.child(i) {
+            if child.kind() == "string_literal" {
+                let text = node_text(child, source).unwrap_or("");
+                let cleaned = text.trim_matches('"').to_ascii_lowercase();
+                if cleaned == "c" {
+                    return Language::C;
+                }
+                if cleaned == "fortran" {
+                    return Language::Fortran;
+                }
+                if cleaned == "python" {
+                    return Language::Python;
+                }
+            }
+        }
+    }
+    // Default to C for unknown extern blocks.
+    Language::C
+}
+
+// ---------------------------------------------------------------------------
+// Name / path helpers
+// ---------------------------------------------------------------------------
+
+fn is_pub(node: Node) -> bool {
+    // Check if the node has a visibility modifier child that is `pub`.
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(child) = node.named_child(i) {
+            if child.kind() == "visibility_modifier" {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn use_path(node: Node, source: &str) -> Option<String> {
+    match node.kind() {
+        "use_clause" => {
+            // Recurse into the use_clause's child.
+            for i in 0..node.named_child_count() as u32 {
+                if let Some(child) = node.named_child(i) {
+                    if let Some(p) = use_path(child, source) {
+                        return Some(p);
+                    }
+                }
+            }
+            None
+        }
+        "scoped_use_list" | "scoped_identifier" => {
+            // Build the path from `path` and `name` fields.
+            let path = node
+                .child_by_field_name("path")
+                .and_then(|n| use_path(n, source));
+            let name = node
+                .child_by_field_name("name")
+                .and_then(|n| node_text(n, source).map(String::from));
+            match (path, name) {
+                (Some(p), Some(n)) => Some(format!("{p}::{n}")),
+                (None, Some(n)) => Some(n),
+                (Some(p), None) => Some(p),
+                (None, None) => None,
+            }
+        }
+        "identifier" | "crate" | "self" | "super" => {
+            node_text(node, source).map(String::from)
+        }
+        "use_as_clause" => {
+            // `use foo as bar;` -> path is "foo"
+            node.child_by_field_name("path")
+                .and_then(|n| use_path(n, source))
+        }
+        "use_wildcard" => {
+            // `use foo::*;` -> the path is the first named child
+            // (e.g. scoped_identifier "std::collections"), and we append "::*".
+            if let Some(path_node) = node.named_child(0) {
+                if let Some(p) = use_path(path_node, source) {
+                    return Some(format!("{p}::*"));
+                }
+            }
+            Some("*".to_string())
+        }
+        "scoped_type_list" => {
+            // Similar to scoped_use_list
+            let path = node
+                .child_by_field_name("path")
+                .and_then(|n| use_path(n, source));
+            let name = node
+                .child_by_field_name("name")
+                .and_then(|n| node_text(n, source).map(String::from));
+            match (path, name) {
+                (Some(p), Some(n)) => Some(format!("{p}::{n}")),
+                (None, Some(n)) => Some(n),
+                (Some(p), None) => Some(p),
+                (None, None) => None,
+            }
+        }
+        _ => node_text(node, source).map(String::from),
+    }
+}
+
+fn use_imported_names(node: Node, source: &str) -> Vec<String> {
+    match node.kind() {
+        "use_clause" => {
+            let mut names = Vec::new();
+            for i in 0..node.named_child_count() as u32 {
+                if let Some(child) = node.named_child(i) {
+                    names.extend(use_imported_names(child, source));
+                }
+            }
+            names
+        }
+        "use_as_clause" => {
+            // `use foo as bar;` -> imported name is "bar"
+            node.child_by_field_name("alias")
+                .and_then(|n| node_text(n, source).map(String::from))
+                .into_iter()
+                .collect()
+        }
+        "identifier" | "type_identifier" => {
+            node_text(node, source).map(String::from).into_iter().collect()
+        }
+        "use_wildcard" => Vec::new(),
+        "scoped_use_list" | "scoped_identifier" | "scoped_type_list" => {
+            // For `std::io`, the imported name is the last component.
+            node.child_by_field_name("name")
+                .and_then(|n| node_text(n, source).map(String::from))
+                .into_iter()
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn callee_name(node: Node, source: &str) -> Option<String> {
+    match node.kind() {
+        "identifier" | "type_identifier" => node_text(node, source).map(String::from),
+        "field_expression" => {
+            // e.g. `obj.method()` or `Module::func()` -> extract the field name.
+            let field = node.child_by_field_name("field")?;
+            node_text(field, source).map(String::from)
+        }
+        "scoped_identifier" => {
+            // e.g. `std::mem::swap` -> extract the last component.
+            node.child_by_field_name("name")
+                .and_then(|n| node_text(n, source).map(String::from))
+        }
+        "call_expression" => {
+            let func = node.child_by_field_name("function")?;
+            callee_name(func, source)
+        }
+        "parenthesized_expression" => {
+            let inner = node.named_child(0)?;
+            callee_name(inner, source)
+        }
+        "generic_function" => {
+            // generic_function has a `function` field.
+            let func = node.child_by_field_name("function")?;
+            callee_name(func, source)
+        }
+        _ => None,
+    }
+}
+
+fn pattern_name(node: Node, source: &str) -> Option<String> {
+    match node.kind() {
+        "identifier" => node_text(node, source).map(String::from),
+        "tuple_pattern" | "tuple_struct_pattern" => {
+            // Extract the first identifier in the tuple pattern.
+            for i in 0..node.named_child_count() as u32 {
+                if let Some(child) = node.named_child(i) {
+                    if let Some(name) = pattern_name(child, source) {
+                        return Some(name);
+                    }
+                }
+            }
+            None
+        }
+        "struct_pattern" => {
+            node.child_by_field_name("type")
+                .and_then(|n| node_text(n, source).map(String::from))
+        }
+        "reference_pattern" | "mut_pattern" => {
+            let inner = node.named_child(0)?;
+            pattern_name(inner, source)
+        }
+        _ => node_text(node, source).map(String::from),
+    }
+}
+
+fn call_arguments(node: Node, source: &str) -> Vec<String> {
+    let Some(args_node) = node.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
+    let mut args = Vec::new();
+    for i in 0..args_node.named_child_count() as u32 {
+        if let Some(arg) = args_node.named_child(i) {
+            if let Ok(text) = arg.utf8_text(source.as_bytes()) {
+                args.push(text.to_string());
+            }
+        }
+    }
+    args
+}
+
+fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
+    node.utf8_text(source.as_bytes()).ok()
+}
+
+fn make_qn(file_path: &str, name: &str) -> String {
+    format!("{file_path}::{name}")
+}
+
+fn add_definition_edges(
+    file_path: &str,
+    project: &str,
+    node: &ModelNode,
+    result: &mut ExtractResult,
+) {
+    result.edges.push(Edge::new(
+        file_path.to_string(),
+        node.id.clone(),
+        EdgeType::Contains,
+        project,
+    ));
+    result.edges.push(Edge::new(
+        file_path.to_string(),
+        node.id.clone(),
+        EdgeType::Defines,
+        project,
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::NodeLabel;
+
+    const RUST_SOURCE: &str = r#"use std::io;
+extern "C" {
+    fn c_function(x: i32) -> i32;
+}
+pub struct Point { x: i32, y: i32 }
+enum Color { Red, Green, Blue }
+trait Drawable { fn draw(&self); }
+impl Drawable for Point { fn draw(&self) {} }
+fn add(a: i32, b: i32) -> i32 { a + b }
+fn main() {
+    let result = add(1, 2);
+    let p = Point { x: 1, y: 2 };
+}
+"#;
+
+    fn extract(source: &str) -> ExtractResult {
+        let ext = RustExtractor::new();
+        ext.extract(source, "test.rs", "proj").expect("extraction should succeed")
+    }
+
+    #[test]
+    fn language_returns_rust() {
+        assert_eq!(RustExtractor::new().language(), Language::Rust);
+    }
+
+    #[test]
+    fn default_creates_extractor() {
+        let ext = RustExtractor::default();
+        assert_eq!(ext.language(), Language::Rust);
+    }
+
+    #[test]
+    fn extracts_use_declaration() {
+        let result = extract(RUST_SOURCE);
+        assert_eq!(result.imports.len(), 1, "should extract 1 use declaration");
+        assert!(
+            result.imports[0].source_file.contains("std"),
+            "use path should contain std: {}",
+            result.imports[0].source_file
+        );
+        assert!(
+            result.imports[0].source_file.contains("io"),
+            "use path should contain io: {}",
+            result.imports[0].source_file
+        );
+    }
+
+    #[test]
+    fn extracts_extern_block_with_c_function() {
+        let result = extract(RUST_SOURCE);
+        assert_eq!(result.externs.len(), 1, "should extract 1 extern block");
+        let ext = &result.externs[0];
+        assert_eq!(ext.language, Language::C, "extern language should be C");
+        assert!(
+            ext.names.contains(&"c_function".to_string()),
+            "extern names should contain c_function: {:?}",
+            ext.names
+        );
+    }
+
+    #[test]
+    fn extracts_struct() {
+        let result = extract(RUST_SOURCE);
+        let structs: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Struct).collect();
+        assert_eq!(structs.len(), 1);
+        assert_eq!(structs[0].name, "Point");
+        assert!(structs[0].is_exported, "Point should be exported (pub)");
+    }
+
+    #[test]
+    fn extracts_enum() {
+        let result = extract(RUST_SOURCE);
+        let enums: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Enum).collect();
+        assert_eq!(enums.len(), 1);
+        assert_eq!(enums[0].name, "Color");
+        assert!(!enums[0].is_exported, "Color should not be exported");
+    }
+
+    #[test]
+    fn extracts_trait() {
+        let result = extract(RUST_SOURCE);
+        let traits: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Trait).collect();
+        assert_eq!(traits.len(), 1);
+        assert_eq!(traits[0].name, "Drawable");
+    }
+
+    #[test]
+    fn extracts_impl() {
+        let result = extract(RUST_SOURCE);
+        let impls: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Impl).collect();
+        assert_eq!(impls.len(), 1);
+        assert_eq!(impls[0].name, "Point");
+    }
+
+    #[test]
+    fn extracts_functions() {
+        let result = extract(RUST_SOURCE);
+        let funcs: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Function).collect();
+        // add, main, and draw (inside impl) are functions.
+        let names: Vec<_> = funcs.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"add"), "should extract add function");
+        assert!(names.contains(&"main"), "should extract main function");
+    }
+
+    #[test]
+    fn function_is_exported_when_pub() {
+        let result = extract("pub fn public_fn() {} fn private_fn() {}");
+        let public = result.nodes.iter().find(|n| n.name == "public_fn").unwrap();
+        let private = result.nodes.iter().find(|n| n.name == "private_fn").unwrap();
+        assert!(public.is_exported, "pub fn should be exported");
+        assert!(!private.is_exported, "private fn should not be exported");
+    }
+
+    #[test]
+    fn function_has_signature() {
+        let result = extract(RUST_SOURCE);
+        let add = result.nodes.iter().find(|n| n.name == "add").unwrap();
+        assert!(add.signature.is_some(), "function should have a signature");
+        assert!(add.signature.as_deref().unwrap().contains("add"));
+    }
+
+    #[test]
+    fn extracts_calls() {
+        let result = extract(RUST_SOURCE);
+        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(
+            callees.contains(&"add"),
+            "should extract call to add: {:?}",
+            callees
+        );
+    }
+
+    #[test]
+    fn extracts_assignments() {
+        let result = extract(RUST_SOURCE);
+        assert!(!result.assignments.is_empty(), "should extract assignments");
+        let result_assign = result
+            .assignments
+            .iter()
+            .find(|a| a.target_name == "result")
+            .expect("should find `let result = add(1, 2)` assignment");
+        assert_eq!(result_assign.source_name, "add");
+        assert!(
+            result_assign.is_return_assign,
+            "assignment from function call should be return assign"
+        );
+    }
+
+    #[test]
+    fn non_call_assignment_is_not_return_assign() {
+        let result = extract("fn main() { let x = 5; }");
+        let assign = result
+            .assignments
+            .iter()
+            .find(|a| a.target_name == "x")
+            .expect("should find `let x = 5` assignment");
+        assert!(!assign.is_return_assign);
+    }
+
+    #[test]
+    fn creates_contains_and_defines_edges() {
+        let result = extract(RUST_SOURCE);
+        let contains_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Contains).count();
+        let defines_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Defines).count();
+        let node_count = result.nodes.len();
+        assert_eq!(contains_count, node_count);
+        assert_eq!(defines_count, node_count);
+    }
+
+    #[test]
+    fn qualified_name_uses_file_path_and_name() {
+        let result = extract(RUST_SOURCE);
+        let add = result.nodes.iter().find(|n| n.name == "add").unwrap();
+        assert_eq!(add.qualified_name, "test.rs::add");
+    }
+
+    #[test]
+    fn empty_source_returns_empty_result() {
+        let result = extract("");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn extracts_const_and_static() {
+        let src = "const MAX: i32 = 100; static GLOBAL: i32 = 0;";
+        let result = extract(src);
+        let consts: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Const).collect();
+        let statics: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Static).collect();
+        assert_eq!(consts.len(), 1);
+        assert_eq!(consts[0].name, "MAX");
+        assert_eq!(statics.len(), 1);
+        assert_eq!(statics[0].name, "GLOBAL");
+    }
+
+    #[test]
+    fn extracts_type_alias() {
+        let src = "type Score = i32;";
+        let result = extract(src);
+        let aliases: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::TypeAlias).collect();
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0].name, "Score");
+    }
+
+    #[test]
+    fn extracts_macro_definition() {
+        let src = "macro_rules! say_hello { () => { println!(\"hello\"); } }";
+        let result = extract(src);
+        let macros: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Macro).collect();
+        assert_eq!(macros.len(), 1);
+        assert_eq!(macros[0].name, "say_hello");
+    }
+
+    #[test]
+    fn handles_method_calls() {
+        let src = "fn main() { let s = String::new(); s.push_str(\"hi\"); }";
+        let result = extract(src);
+        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(callees.contains(&"new"), "should extract String::new call");
+        assert!(callees.contains(&"push_str"), "should extract s.push_str call");
+    }
+
+    #[test]
+    fn handles_generic_function_calls() {
+        let src = "fn main() { let v = Vec::<i32>::new(); }";
+        let result = extract(src);
+        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(callees.contains(&"new"), "should extract generic function call");
+    }
+
+    #[test]
+    fn use_wildcard_extracts_path() {
+        let src = "use std::collections::*;";
+        let result = extract(src);
+        assert_eq!(result.imports.len(), 1);
+        assert!(result.imports[0].source_file.contains("*"));
+        assert!(result.imports[0].imported_names.is_empty());
+    }
+
+    #[test]
+    fn use_as_clause_extracts_alias() {
+        let src = "use std::io as ioo;";
+        let result = extract(src);
+        assert_eq!(result.imports.len(), 1);
+        assert!(result.imports[0].imported_names.contains(&"ioo".to_string()));
+    }
+
+    #[test]
+    fn result_language_is_rust() {
+        let result = extract(RUST_SOURCE);
+        assert_eq!(result.language, Language::Rust);
+        assert_eq!(result.file_path, "test.rs");
+    }
+
+    #[test]
+    fn impl_stores_trait_in_properties() {
+        let result = extract(RUST_SOURCE);
+        let impls: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Impl).collect();
+        assert_eq!(impls.len(), 1);
+        let props = &impls[0].properties;
+        assert!(
+            props.get("trait").is_some(),
+            "impl should store trait name in properties: {props}"
+        );
+        assert_eq!(props.get("trait").unwrap(), "Drawable");
+    }
+}

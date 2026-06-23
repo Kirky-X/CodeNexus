@@ -1,0 +1,78 @@
+[package]
+name = "codenexus"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+description = "A queryable code knowledge graph tool built on LadybugDB and tree-sitter"
+license = "MIT"
+
+[lib]
+name = "codenexus"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codenexus"
+path = "src/main.rs"
+
+[features]
+default = []
+embed = ["dep:reqwest"]
+lsp = []
+
+[dependencies]
+# Graph database (ADR-002)
+lbug = "0.17.1"
+
+# tree-sitter parsing (ADR-003)
+tree-sitter = "0.26"
+tree-sitter-c = "0.24"
+tree-sitter-rust = "0.24"
+tree-sitter-fortran = "0.6"
+tree-sitter-python = "0.25"
+tree-sitter-typescript = "0.23"
+
+# Parallel parsing (ADR-010)
+rayon = "1"
+
+# File discovery (ADR-012)
+ignore = "0.4"
+
+# File watching (ADR-013)
+# NOTE: notify-debouncer-full 0.8 is only available as a release candidate that
+# requires notify 7. We pin 0.7, the latest stable release compatible with
+# notify 6 (the version required by ADR-013).
+notify = "6"
+notify-debouncer-full = "0.7"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Hashing (ADR-009)
+sha2 = "0.10"
+
+# HTTP for embed feature (ADR-004)
+reqwest = { version = "0.12", features = ["json"], optional = true }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# CSV generation (ADR-014)
+csv = "1"
+
+# Temporary files for CSV bulk-loading (ADR-014)
+tempfile = "3"
+
+# UUIDv7 for IDs
+uuid = { version = "1", features = ["v7"] }
+
+[dev-dependencies]
+assert_matches = "1"

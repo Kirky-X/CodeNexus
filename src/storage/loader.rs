@@ -1,0 +1,668 @@
+//! CSV batch loading (ADR-014).
+//!
+//! Generates RFC 4180-compliant CSV for node and edge tables using the [`csv`]
+//! crate, then loads them into LadybugDB via `COPY FROM`. This is the
+//! recommended bulk-load path for large indexing runs (ADR-014).
+//!
+//! # Node → column mapping
+//!
+//! Each [`NodeLabel`] has a distinct column layout (see [`node_table_columns`]).
+//! The [`node_to_row`] helper extracts values from a [`Node`], pulling
+//! table-specific fields (e.g. `hash`, `content`, `parameterCount`) from the
+//! node's `properties` JSON when they don't have a dedicated struct field.
+
+use std::io::Write;
+use std::path::Path;
+
+use csv::Writer;
+
+use super::connection::StorageConnection;
+use super::error::{Result, StorageError};
+use super::schema::{escape_identifier, node_table_columns, relation_table_columns};
+use crate::model::{Edge, Node, NodeLabel};
+
+/// CSV batch loader for node and edge tables (ADR-014).
+///
+/// Stateless — the struct exists primarily for API symmetry with
+/// [`crate::storage::Repository`] and to group the CSV-related functions.
+#[derive(Debug, Clone, Default)]
+pub struct CsvLoader;
+
+impl CsvLoader {
+    /// Creates a new [`CsvLoader`].
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+
+    /// Convenience wrapper around [`write_nodes_csv`] that writes the CSV to
+    /// `path` on disk.
+    pub fn write_nodes_file(
+        &self,
+        nodes: &[Node],
+        label: NodeLabel,
+        path: &Path,
+    ) -> Result<()> {
+        let csv = write_nodes_csv(nodes, label);
+        std::fs::write(path, csv)?;
+        Ok(())
+    }
+
+    /// Convenience wrapper around [`write_edges_csv`] that writes the CSV to
+    /// `path` on disk.
+    pub fn write_edges_file(&self, edges: &[Edge], path: &Path) -> Result<()> {
+        let csv = write_edges_csv(edges);
+        std::fs::write(path, csv)?;
+        Ok(())
+    }
+}
+
+/// Generates a CSV string for a node table (header + one row per node).
+///
+/// The header row contains the column names from [`node_table_columns`] for the
+/// given `label`. Each subsequent row contains the field values extracted by
+/// [`node_to_row`]. The output is RFC 4180-compliant: fields containing
+/// commas, quotes, or newlines are properly escaped.
+#[must_use]
+pub fn write_nodes_csv(nodes: &[Node], label: NodeLabel) -> String {
+    let columns = node_table_columns(label);
+    let mut writer = Writer::from_writer(Vec::new());
+    // Header
+    writer.write_record(columns).expect("csv header write");
+    // Rows
+    for node in nodes {
+        let row = node_to_row(node, label);
+        writer.write_record(&row).expect("csv row write");
+    }
+    let bytes = writer.into_inner().expect("csv flush");
+    String::from_utf8(bytes).expect("csv utf8")
+}
+
+/// Generates a CSV string for the `CodeRelation` table (header + one row per
+/// edge).
+#[must_use]
+pub fn write_edges_csv(edges: &[Edge]) -> String {
+    let columns = relation_table_columns();
+    let mut writer = Writer::from_writer(Vec::new());
+    writer.write_record(columns).expect("csv header write");
+    for edge in edges {
+        let row = edge_to_row(edge);
+        writer.write_record(&row).expect("csv row write");
+    }
+    let bytes = writer.into_inner().expect("csv flush");
+    String::from_utf8(bytes).expect("csv utf8")
+}
+
+/// Loads a CSV file into a table via LadybugDB's `COPY FROM` command.
+///
+/// The CSV file must have a header row whose column names match the target
+/// table's columns. The `table` name is escaped via [`escape_identifier`] to
+/// handle reserved keywords like `Macro`.
+pub fn load_from_csv(conn: &StorageConnection, table: &str, csv_path: &Path) -> Result<()> {
+    let path_str = csv_path
+        .to_str()
+        .ok_or_else(|| StorageError::InvalidData(format!("non-utf8 csv path: {csv_path:?}")))?
+        .replace('\\', "/");
+    let escaped_table = escape_identifier(table);
+    let cypher = format!("COPY {escaped_table} FROM '{path_str}';");
+    conn.execute(&cypher)?;
+    Ok(())
+}
+
+/// Extracts a string property from a node's `properties` JSON, returning an
+/// empty string if absent.
+fn prop_str(node: &Node, key: &str) -> String {
+    node.properties
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_default()
+}
+
+/// Extracts an integer property from a node's `properties` JSON, returning an
+/// empty string if absent (LadybugDB COPY treats empty as NULL for INT types
+/// when the column is nullable; for non-null INT columns the caller should
+/// ensure a value is present).
+fn prop_int(node: &Node, key: &str) -> String {
+    node.properties
+        .get(key)
+        .and_then(|v| v.as_i64())
+        .map(|i| i.to_string())
+        .unwrap_or_default()
+}
+
+/// Converts an `Option<u32>` to a string (empty if `None`).
+fn opt_line(n: Option<u32>) -> String {
+    n.map(|v| v.to_string()).unwrap_or_default()
+}
+
+/// Converts an `Option<String>` to a string (empty if `None`).
+fn opt_str(s: &Option<String>) -> String {
+    s.clone().unwrap_or_default()
+}
+
+/// Converts an `Option<Language>` to its string representation.
+fn opt_lang(lang: &Option<crate::model::Language>) -> String {
+    lang.map(|l| l.to_string()).unwrap_or_default()
+}
+
+/// Builds the column-value vector for a node, in the order specified by
+/// [`node_table_columns`].
+#[must_use]
+pub fn node_to_row(node: &Node, label: NodeLabel) -> Vec<String> {
+    match label {
+        NodeLabel::Project => vec![
+            node.id.clone(),
+            node.name.clone(),
+            prop_str(node, "rootPath"),
+            opt_lang(&node.language),
+            prop_int(node, "fileCount"),
+            prop_int(node, "indexedAt"),
+        ],
+        NodeLabel::Folder => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            opt_str(&node.file_path),
+        ],
+        NodeLabel::File => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            opt_str(&node.file_path),
+            opt_lang(&node.language),
+            prop_str(node, "hash"),
+            prop_int(node, "lineCount"),
+        ],
+        NodeLabel::Module | NodeLabel::Namespace => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::Class | NodeLabel::Struct | NodeLabel::Enum | NodeLabel::Trait => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            opt_line(node.end_line),
+            node.is_exported.to_string(),
+            opt_str(&node.docstring),
+            prop_str(node, "content"),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::Impl => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            opt_line(node.end_line),
+            prop_str(node, "implType"),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::Function => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            opt_line(node.end_line),
+            opt_str(&node.signature),
+            opt_str(&node.return_type),
+            node.is_exported.to_string(),
+            opt_str(&node.docstring),
+            prop_str(node, "content"),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::Method => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            opt_line(node.end_line),
+            opt_str(&node.signature),
+            opt_str(&node.return_type),
+            node.is_exported.to_string(),
+            opt_str(&node.docstring),
+            prop_str(node, "content"),
+            prop_int(node, "parameterCount"),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::Variable => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            node.is_global.to_string(),
+            opt_str(&node.return_type),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::GlobalVar => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            opt_str(&node.return_type),
+            node.is_exported.to_string(),
+        ],
+        NodeLabel::Parameter => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            prop_str(node, "paramType"),
+            prop_int(node, "paramIndex"),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::Const => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            prop_str(node, "constType"),
+            prop_str(node, "constValue"),
+            node.is_exported.to_string(),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::Static => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            opt_str(&node.return_type),
+            node.is_exported.to_string(),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::Macro => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            opt_line(node.end_line),
+            opt_str(&node.signature),
+            prop_str(node, "content"),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::TypeAlias => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            prop_str(node, "aliasType"),
+            node.is_exported.to_string(),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::Typedef => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            prop_str(node, "typedefType"),
+            opt_str(&node.parent_qn),
+        ],
+    }
+}
+
+/// Builds the column-value vector for an edge, in the order specified by
+/// [`relation_table_columns`].
+#[must_use]
+pub fn edge_to_row(edge: &Edge) -> Vec<String> {
+    let id = format!(
+        "{}_{}_{}_{}",
+        edge.source,
+        edge.target,
+        edge.edge_type.as_db_type(),
+        edge.start_line.unwrap_or(0)
+    );
+    vec![
+        id,
+        edge.source.clone(),
+        edge.target.clone(),
+        edge.edge_type.as_db_type().to_string(),
+        format!("{:.6}", edge.confidence),
+        opt_str(&edge.reason),
+        opt_line(edge.start_line),
+        edge.project.clone(),
+    ]
+}
+
+/// Writes a CSV string to a temporary file and returns the path.
+///
+/// Used by tests and by the repository when bulk-loading.
+pub(crate) fn write_csv_temp(content: &str, file_name: &str) -> Result<std::path::PathBuf> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join(file_name);
+    let mut file = std::fs::File::create(&path)?;
+    file.write_all(content.as_bytes())?;
+    // Leak the tempdir so the file survives for the caller; the OS reclaims it
+    // on process exit. This matches the lifetime model used in tests.
+    std::mem::forget(dir);
+    Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{EdgeType, Language};
+
+    fn sample_function_node() -> Node {
+        Node::builder(NodeLabel::Function, "main", "proj.src.main")
+            .id("func_001")
+            .project("demo")
+            .file_path("/src/main.rs")
+            .start_line(10)
+            .end_line(20)
+            .language(Language::Rust)
+            .signature("fn main() -> i32")
+            .return_type("i32")
+            .docstring("Entry point")
+            .is_exported(true)
+            .parent_qn("proj.src")
+            .properties(serde_json::json!({"content": "fn main() { }"}))
+            .build()
+    }
+
+    #[test]
+    fn write_nodes_csv_has_header_row() {
+        let csv = write_nodes_csv(&[], NodeLabel::Function);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(
+            lines[0],
+            "id,project,name,qualifiedName,filePath,startLine,endLine,signature,returnType,isExported,docstring,content,parentQn"
+        );
+    }
+
+    #[test]
+    fn write_nodes_csv_has_one_row_per_node() {
+        let nodes = vec![sample_function_node()];
+        let csv = write_nodes_csv(&nodes, NodeLabel::Function);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), 2, "expected header + 1 row");
+    }
+
+    #[test]
+    fn write_nodes_csv_contains_correct_values() {
+        let nodes = vec![sample_function_node()];
+        let csv = write_nodes_csv(&nodes, NodeLabel::Function);
+        let lines: Vec<&str> = csv.lines().collect();
+        let row = lines[1];
+        assert!(row.contains("func_001"));
+        assert!(row.contains("demo"));
+        assert!(row.contains("main"));
+        assert!(row.contains("proj.src.main"));
+        assert!(row.contains("/src/main.rs"));
+        assert!(row.contains("fn main() -> i32"));
+        assert!(row.contains("i32"));
+        assert!(row.contains("Entry point"));
+        assert!(row.contains("fn main() { }"));
+    }
+
+    #[test]
+    fn write_nodes_csv_escapes_commas_in_fields() {
+        let node = Node::builder(NodeLabel::Function, "foo,bar", "qn")
+            .id("id1")
+            .project("p")
+            .docstring("has, comma")
+            .build();
+        let csv = write_nodes_csv(&[node], NodeLabel::Function);
+        let lines: Vec<&str> = csv.lines().collect();
+        // The field with a comma should be quoted
+        assert!(lines[1].contains("\"foo,bar\""));
+        assert!(lines[1].contains("\"has, comma\""));
+    }
+
+    #[test]
+    fn write_nodes_csv_escapes_quotes_in_fields() {
+        let node = Node::builder(NodeLabel::Function, "foo\"bar", "qn")
+            .id("id1")
+            .project("p")
+            .docstring("say \"hi\"")
+            .build();
+        let csv = write_nodes_csv(&[node], NodeLabel::Function);
+        let lines: Vec<&str> = csv.lines().collect();
+        // Quotes inside fields are doubled per RFC 4180
+        assert!(lines[1].contains("\"foo\"\"bar\""));
+        assert!(lines[1].contains("\"say \"\"hi\"\"\""));
+    }
+
+    #[test]
+    fn write_nodes_csv_escapes_newlines_in_fields() {
+        let node = Node::builder(NodeLabel::Function, "foo", "qn")
+            .id("id1")
+            .project("p")
+            .docstring("line1\nline2")
+            .build();
+        let csv = write_nodes_csv(&[node], NodeLabel::Function);
+        // The newline is inside a quoted field, so the CSV has 3 lines total
+        // (header + 2 lines for the quoted field with embedded newline).
+        assert!(csv.contains("\"line1\nline2\""));
+    }
+
+    #[test]
+    fn write_nodes_csv_for_project_label() {
+        let node = Node::builder(NodeLabel::Project, "demo", "demo")
+            .id("proj_001")
+            .properties(serde_json::json!({
+                "rootPath": "/repo/demo",
+                "fileCount": 42,
+                "indexedAt": 1700000000
+            }))
+            .build();
+        let csv = write_nodes_csv(&[node], NodeLabel::Project);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(
+            lines[0],
+            "id,name,rootPath,language,fileCount,indexedAt"
+        );
+        assert!(lines[1].contains("proj_001"));
+        assert!(lines[1].contains("demo"));
+        assert!(lines[1].contains("/repo/demo"));
+        assert!(lines[1].contains("42"));
+        assert!(lines[1].contains("1700000000"));
+    }
+
+    #[test]
+    fn write_nodes_csv_for_file_label() {
+        let node = Node::builder(NodeLabel::File, "main.rs", "demo.src.main")
+            .id("file_001")
+            .project("demo")
+            .file_path("/src/main.rs")
+            .language(Language::Rust)
+            .properties(serde_json::json!({"hash": "abc123", "lineCount": 100}))
+            .build();
+        let csv = write_nodes_csv(&[node], NodeLabel::File);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert!(lines[1].contains("abc123"));
+        assert!(lines[1].contains("100"));
+        assert!(lines[1].contains("rust"));
+    }
+
+    #[test]
+    fn write_nodes_csv_empty_input_returns_header_only() {
+        let csv = write_nodes_csv(&[], NodeLabel::Class);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].starts_with("id,"));
+    }
+
+    #[test]
+    fn write_edges_csv_has_header_row() {
+        let csv = write_edges_csv(&[]);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(
+            lines[0],
+            "id,source,target,type,confidence,reason,startLine,project"
+        );
+    }
+
+    #[test]
+    fn write_edges_csv_contains_correct_values() {
+        let edge = Edge::builder("func_a", "func_b", EdgeType::Calls, "demo")
+            .confidence(0.95)
+            .reason("direct call")
+            .start_line(15)
+            .build();
+        let csv = write_edges_csv(&[edge]);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[1].contains("func_a"));
+        assert!(lines[1].contains("func_b"));
+        assert!(lines[1].contains("CALLS"));
+        assert!(lines[1].contains("0.950000"));
+        assert!(lines[1].contains("direct call"));
+        assert!(lines[1].contains("15"));
+        assert!(lines[1].contains("demo"));
+    }
+
+    #[test]
+    fn write_edges_csv_escapes_special_chars_in_reason() {
+        let edge = Edge::builder("s", "t", EdgeType::Calls, "p")
+            .reason("arg, index=0\nnext line")
+            .build();
+        let csv = write_edges_csv(&[edge]);
+        assert!(csv.contains("\"arg, index=0\nnext line\""));
+    }
+
+    #[test]
+    fn node_to_row_function_has_thirteen_columns() {
+        let node = sample_function_node();
+        let row = node_to_row(&node, NodeLabel::Function);
+        assert_eq!(row.len(), 13);
+        assert_eq!(row[0], "func_001");
+        assert_eq!(row[1], "demo");
+        assert_eq!(row[2], "main");
+    }
+
+    #[test]
+    fn node_to_row_project_has_six_columns() {
+        let node = Node::builder(NodeLabel::Project, "p", "p")
+            .id("p1")
+            .properties(serde_json::json!({"rootPath": "/", "fileCount": 1, "indexedAt": 2}))
+            .build();
+        let row = node_to_row(&node, NodeLabel::Project);
+        assert_eq!(row.len(), 6);
+        assert_eq!(row[2], "/");
+        assert_eq!(row[4], "1");
+        assert_eq!(row[5], "2");
+    }
+
+    #[test]
+    fn node_to_row_method_has_fourteen_columns() {
+        let node = Node::builder(NodeLabel::Method, "m", "qn")
+            .id("m1")
+            .project("p")
+            .properties(serde_json::json!({"content": "x", "parameterCount": 3}))
+            .build();
+        let row = node_to_row(&node, NodeLabel::Method);
+        assert_eq!(row.len(), 14);
+        assert_eq!(row[12], "3");
+    }
+
+    #[test]
+    fn edge_to_row_has_eight_columns() {
+        let edge = Edge::new("s", "t", EdgeType::Calls, "p");
+        let row = edge_to_row(&edge);
+        assert_eq!(row.len(), 8);
+        assert_eq!(row[1], "s");
+        assert_eq!(row[2], "t");
+        assert_eq!(row[3], "CALLS");
+    }
+
+    #[test]
+    fn load_from_csv_loads_nodes_into_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = StorageConnection::open(dir.path().join("testdb")).unwrap();
+        std::mem::forget(dir);
+        conn.init_schema().unwrap();
+
+        let node = sample_function_node();
+        let csv = write_nodes_csv(&[node], NodeLabel::Function);
+        let csv_path = write_csv_temp(&csv, "functions.csv").unwrap();
+        load_from_csv(&conn, "Function", &csv_path).expect("COPY failed");
+
+        let rows = conn
+            .query("MATCH (f:Function) RETURN f.name AS name;")
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0], serde_json::json!("main"));
+    }
+
+    #[test]
+    fn load_from_csv_loads_edges_into_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = StorageConnection::open(dir.path().join("testdb")).unwrap();
+        std::mem::forget(dir);
+        conn.init_schema().unwrap();
+
+        let edge = Edge::builder("s", "t", EdgeType::Calls, "demo")
+            .confidence(0.9)
+            .start_line(5)
+            .build();
+        let csv = write_edges_csv(&[edge]);
+        let csv_path = write_csv_temp(&csv, "edges.csv").unwrap();
+        load_from_csv(&conn, "CodeRelation", &csv_path).expect("COPY failed");
+
+        let rows = conn
+            .query("MATCH (r:CodeRelation) RETURN r.type AS type;")
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0], serde_json::json!("CALLS"));
+    }
+
+    #[test]
+    fn load_from_csv_handles_macro_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = StorageConnection::open(dir.path().join("testdb")).unwrap();
+        std::mem::forget(dir);
+        conn.init_schema().unwrap();
+
+        let node = Node::builder(NodeLabel::Macro, "MY_MACRO", "demo.MY_MACRO")
+            .id("macro_1")
+            .project("demo")
+            .start_line(1)
+            .end_line(3)
+            .signature("#define MY_MACRO(x) x+1")
+            .properties(serde_json::json!({"content": "#define MY_MACRO(x) x+1"}))
+            .build();
+        let csv = write_nodes_csv(&[node], NodeLabel::Macro);
+        let csv_path = write_csv_temp(&csv, "macros.csv").unwrap();
+        load_from_csv(&conn, "Macro", &csv_path).expect("COPY Macro failed");
+
+        let rows = conn
+            .query("MATCH (m:`Macro`) RETURN m.name AS name;")
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0], serde_json::json!("MY_MACRO"));
+    }
+
+    #[test]
+    fn csv_loader_new_returns_default() {
+        let loader = CsvLoader::new();
+        let _ = format!("{loader:?}");
+    }
+}
