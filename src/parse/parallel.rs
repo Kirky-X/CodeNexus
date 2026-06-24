@@ -1,0 +1,426 @@
+//! Parallel file parsing using rayon (ADR-010).
+//!
+//! Provides file-level parallelism for the extraction phase: each file is
+//! parsed independently by a rayon worker thread, and thread-local
+//! [`ParserPool`](super::parser_pool::ParserPool) instances cache parsers per
+//! thread (ADR-010). Because the parsing phase does not create cross-file
+//! edges (those are created in the resolve phase), results can be merged
+//! lock-free — each file produces its own [`ExtractResult`].
+//!
+//! Parse failures are logged and skipped: a single bad file never stops the
+//! whole batch. Failures are collected in [`ParallelParseResult::errors`]
+//! alongside the successful [`ParallelParseResult::results`].
+
+use rayon::prelude::*;
+
+use crate::discover::FileInfo;
+use crate::parse::error::ParseError;
+use crate::parse::extractor::{extract_file, ExtractResult};
+
+// ---------------------------------------------------------------------------
+// ParallelParseResult
+// ---------------------------------------------------------------------------
+
+/// The result of parsing a batch of files in parallel.
+///
+/// Successful extractions are collected in [`results`](Self::results), while
+/// per-file failures (e.g. I/O errors, unknown language) are collected in
+/// [`errors`](Self::errors) without aborting the batch.
+#[derive(Debug)]
+pub struct ParallelParseResult {
+    /// Successfully extracted results, one per file that parsed without error.
+    pub results: Vec<ExtractResult>,
+    /// Per-file failures as `(relative_path, error_message)` pairs.
+    pub errors: Vec<(String, String)>,
+    /// Number of files that were parsed successfully.
+    pub files_parsed: usize,
+    /// Number of files that failed to parse.
+    pub files_failed: usize,
+}
+
+// ---------------------------------------------------------------------------
+// parallel_parse
+// ---------------------------------------------------------------------------
+
+/// Parses multiple files in parallel using rayon (ADR-010).
+///
+/// Each file is parsed independently (file-level parallelism). Parse failures
+/// are collected rather than propagated, so a single bad file does not stop
+/// the batch. Results are merged lock-free: each file produces its own
+/// [`ExtractResult`] and the parsing phase creates no cross-file edges (those
+/// are created in the resolve phase).
+///
+/// # Arguments
+///
+/// * `files` - The discovered files to parse.
+/// * `project` - The project name (used for node `project` field, DDD §2.3).
+///
+/// # Returns
+///
+/// A [`ParallelParseResult`] containing the successful extractions, the
+/// per-file failures, and the success/failure counts.
+#[must_use]
+pub fn parallel_parse(files: &[FileInfo], project: &str) -> ParallelParseResult {
+    // File-level parallelism (ADR-010): each file is parsed independently by
+    // a rayon worker thread. Thread-local ParserPool instances cache parsers
+    // per thread (see extract_file -> get_extractor -> ParserFactory).
+    //
+    // Lock-free merge: the parsing phase creates no cross-file edges (those
+    // are created in the resolve phase), so each file produces its own
+    // ExtractResult that can be collected without synchronization.
+    //
+    // Parse failures are collected, not propagated: a single bad file never
+    // stops the batch.
+    let results: Vec<Result<ExtractResult, (String, String)>> = files
+        .par_iter()
+        .map(|file| {
+            let lang = file.language.ok_or_else(|| {
+                (file.relative_path.clone(), "unknown language".to_string())
+            })?;
+            extract_file(&file.path, lang, project)
+                .map_err(|e| (file.relative_path.clone(), e.to_string()))
+        })
+        .collect();
+
+    // Separate successes and failures lock-free (post-collection).
+    let mut ok_results = Vec::with_capacity(files.len());
+    let mut errors = Vec::new();
+    for result in results {
+        match result {
+            Ok(r) => ok_results.push(r),
+            Err((path, msg)) => errors.push((path, msg)),
+        }
+    }
+
+    let files_parsed = ok_results.len();
+    let files_failed = errors.len();
+
+    ParallelParseResult {
+        results: ok_results,
+        errors,
+        files_parsed,
+        files_failed,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// parse_single
+// ---------------------------------------------------------------------------
+
+/// Parses a single file (for sequential use or testing).
+///
+/// # Errors
+///
+/// Returns [`ParseError::UnsupportedLanguage`] if the file's language is
+/// `None`, or a [`ParseError::Io`] / [`ParseError::ParseFailed`] from
+/// [`extract_file`] if the file cannot be read or parsed.
+pub fn parse_single(file: &FileInfo, project: &str) -> Result<ExtractResult, ParseError> {
+    let lang = file
+        .language
+        .ok_or_else(|| ParseError::UnsupportedLanguage("unknown".to_string()))?;
+    extract_file(&file.path, lang, project)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Language;
+
+    /// Builds a `FileInfo` for a file written to `dir/name` with `content`
+    /// and the given language.
+    fn make_file(
+        dir: &std::path::Path,
+        name: &str,
+        content: &str,
+        language: Option<Language>,
+    ) -> FileInfo {
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        FileInfo {
+            path,
+            relative_path: name.to_string(),
+            language,
+            size: content.len() as u64,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 1. Parallel parse of multiple Rust files
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parallel_parse_multiple_rust_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = vec![
+            make_file(dir.path(), "a.rs", "fn foo() {}", Some(Language::Rust)),
+            make_file(dir.path(), "b.rs", "fn bar() {}", Some(Language::Rust)),
+        ];
+
+        let result = parallel_parse(&files, "testproject");
+        assert_eq!(result.files_parsed, 2);
+        assert_eq!(result.files_failed, 0);
+        assert_eq!(result.results.len(), 2);
+        assert!(result.errors.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // 2. Parallel parse of mixed languages (C, Rust, Python)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parallel_parse_mixed_languages() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = vec![
+            make_file(dir.path(), "a.rs", "fn foo() {}", Some(Language::Rust)),
+            make_file(
+                dir.path(),
+                "b.c",
+                "int foo(void) { return 0; }",
+                Some(Language::C),
+            ),
+            make_file(dir.path(), "c.py", "def foo(): pass", Some(Language::Python)),
+        ];
+
+        let result = parallel_parse(&files, "proj");
+        assert_eq!(result.files_parsed, 3);
+        assert_eq!(result.files_failed, 0);
+        assert_eq!(result.results.len(), 3);
+
+        // Each result should carry its own language.
+        let langs: Vec<Language> = result.results.iter().map(|r| r.language).collect();
+        assert!(langs.contains(&Language::Rust));
+        assert!(langs.contains(&Language::C));
+        assert!(langs.contains(&Language::Python));
+    }
+
+    // -----------------------------------------------------------------------
+    // 3. Parse failure handling: one bad file, others succeed
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parallel_parse_failure_handling() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = make_file(dir.path(), "a.rs", "fn foo() {}", Some(Language::Rust));
+        // A FileInfo pointing at a file that does not exist on disk triggers
+        // an Io error inside extract_file.
+        let bad = FileInfo {
+            path: dir.path().join("does_not_exist.rs"),
+            relative_path: "does_not_exist.rs".to_string(),
+            language: Some(Language::Rust),
+            size: 0,
+        };
+        let files = vec![good, bad];
+
+        let result = parallel_parse(&files, "proj");
+        assert_eq!(result.files_parsed, 1, "the good file should parse");
+        assert_eq!(result.files_failed, 1, "the bad file should fail");
+        assert_eq!(result.results.len(), 1);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].0, "does_not_exist.rs");
+        assert!(
+            !result.errors[0].1.is_empty(),
+            "error message should be non-empty"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 4. Empty file list
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parallel_parse_empty_list() {
+        let files: Vec<FileInfo> = vec![];
+        let result = parallel_parse(&files, "proj");
+        assert_eq!(result.files_parsed, 0);
+        assert_eq!(result.files_failed, 0);
+        assert!(result.results.is_empty());
+        assert!(result.errors.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // 5. Files with unknown language (None) are treated as errors
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parallel_parse_unknown_language_is_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = vec![make_file(dir.path(), "a.rs", "fn foo() {}", None)];
+
+        let result = parallel_parse(&files, "proj");
+        assert_eq!(result.files_parsed, 0);
+        assert_eq!(result.files_failed, 1);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].0, "a.rs");
+        assert!(
+            result.errors[0].1.contains("unknown language"),
+            "error should mention unknown language: {}",
+            result.errors[0].1
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 6. parallel_parse returns correct counts
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parallel_parse_correct_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = vec![
+            make_file(dir.path(), "a.rs", "fn a() {}", Some(Language::Rust)),
+            make_file(dir.path(), "b.rs", "fn b() {}", Some(Language::Rust)),
+            make_file(dir.path(), "c.rs", "fn c() {}", Some(Language::Rust)),
+            // Two failures: a missing file and an unknown language.
+            FileInfo {
+                path: dir.path().join("missing.rs"),
+                relative_path: "missing.rs".to_string(),
+                language: Some(Language::Rust),
+                size: 0,
+            },
+            FileInfo {
+                path: dir.path().join("unknown.rs"),
+                relative_path: "unknown.rs".to_string(),
+                language: None,
+                size: 0,
+            },
+        ];
+
+        let result = parallel_parse(&files, "proj");
+        assert_eq!(result.files_parsed, 3);
+        assert_eq!(result.files_failed, 2);
+        assert_eq!(result.results.len(), 3);
+        assert_eq!(result.errors.len(), 2);
+        // files_parsed + files_failed should equal the input length.
+        assert_eq!(result.files_parsed + result.files_failed, files.len());
+    }
+
+    // -----------------------------------------------------------------------
+    // 7. parse_single works for a single file
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_single_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_file(dir.path(), "a.rs", "fn foo() {}", Some(Language::Rust));
+
+        let result = parse_single(&file, "proj");
+        assert!(result.is_ok(), "parse_single should succeed: {:?}", result.err());
+        let result = result.unwrap();
+        assert_eq!(result.language, Language::Rust);
+        assert!(!result.nodes.is_empty(), "should extract nodes");
+        assert!(
+            result.nodes.iter().any(|n| n.name == "foo"),
+            "should extract the foo function: {:?}",
+            result.nodes.iter().map(|n| &n.name).collect::<Vec<_>>()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 8. parse_single returns error for unknown language
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_single_unknown_language_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_file(dir.path(), "a.rs", "fn foo() {}", None);
+
+        let result = parse_single(&file, "proj");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ParseError::UnsupportedLanguage(_) => { /* expected */ }
+            other => panic!("expected UnsupportedLanguage, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 9. Thread safety: parallel_parse works with many files (10+)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parallel_parse_thread_safety_many_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let count = 15;
+        let files: Vec<FileInfo> = (0..count)
+            .map(|i| {
+                make_file(
+                    dir.path(),
+                    &format!("file_{i}.rs"),
+                    &format!("fn func_{i}() {{}}"),
+                    Some(Language::Rust),
+                )
+            })
+            .collect();
+
+        let result = parallel_parse(&files, "proj");
+        assert_eq!(result.files_parsed, count);
+        assert_eq!(result.files_failed, 0);
+        assert_eq!(result.results.len(), count);
+        assert!(result.errors.is_empty());
+
+        // Every function name should appear among the extracted nodes.
+        let mut all_names: Vec<String> = result
+            .results
+            .iter()
+            .flat_map(|r| r.nodes.iter().map(|n| n.name.clone()))
+            .collect();
+        all_names.sort();
+        for i in 0..count {
+            assert!(
+                all_names.contains(&format!("func_{i}")),
+                "missing func_{i} in extracted nodes"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 10. Results contain correct nodes/edges from extraction
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parallel_parse_results_contain_nodes_and_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = vec![make_file(
+            dir.path(),
+            "a.rs",
+            "fn foo() {}\nfn bar() {}\n",
+            Some(Language::Rust),
+        )];
+
+        let result = parallel_parse(&files, "proj");
+        assert_eq!(result.files_parsed, 1);
+        assert_eq!(result.results.len(), 1);
+
+        let extract = &result.results[0];
+        // Nodes: both foo and bar should be extracted as Function nodes.
+        let names: Vec<&str> = extract.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"foo"), "should extract foo: {names:?}");
+        assert!(names.contains(&"bar"), "should extract bar: {names:?}");
+        // Edges: the extractor creates Contains/Defines edges for definitions.
+        assert!(
+            !extract.edges.is_empty(),
+            "should extract edges for definitions"
+        );
+        // Each result should carry the project name on its edges.
+        for edge in &extract.edges {
+            assert_eq!(edge.project, "proj", "edge project should match");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Bonus: parallel_parse preserves order independence (results count)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parallel_parse_preserves_total_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = vec![
+            make_file(dir.path(), "a.rs", "fn a() {}", Some(Language::Rust)),
+            make_file(dir.path(), "b.py", "def b(): pass", Some(Language::Python)),
+            make_file(dir.path(), "c.c", "int c(void) { return 0; }", Some(Language::C)),
+        ];
+
+        let result = parallel_parse(&files, "proj");
+        // Every input file produced exactly one outcome (success or failure).
+        assert_eq!(result.results.len() + result.errors.len(), files.len());
+        assert_eq!(result.files_parsed + result.files_failed, files.len());
+    }
+}

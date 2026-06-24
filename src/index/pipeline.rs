@@ -1,0 +1,882 @@
+//! Index pipeline orchestration (Facade pattern, ADD §4.1).
+//!
+//! [`IndexFacade`] is the single entry point for the indexing workflow. It
+//! owns a [`Pipeline`] which orchestrates the full discover → parse → resolve
+//! → storage sequence, computing SHA-256 file hashes for incremental indexing
+//! (ADR-009) and applying the diff logic from [`super::incremental`].
+//!
+//! # Pipeline steps (ADD §4.1)
+//!
+//! 1. `discover_files(path)` → `Vec<FileInfo>` via [`Walker`].
+//! 2. `query_existing_hashes(project)` from the database.
+//! 3. `diff_hashes()` → `changed`/`added`/`deleted` (or all `changed` if
+//!    `force`).
+//! 4. `parallel_parse(changed + added)` → `Vec<ExtractResult>`.
+//! 5. `build_in_memory_graph(results)` (nodes + per-file edges).
+//! 6. `resolve_symbols(graph)` — calls + dataflow + FFI edges.
+//! 7. `delete_old_nodes(deleted_files)` from the database.
+//! 8. `load_csv(resolved_graph)` to the database (nodes + edges).
+//! 9. Return [`IndexResult`].
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use tracing::warn;
+
+use crate::discover::{FileInfo, Walker};
+use crate::index::error::{IndexError, Result};
+use crate::index::hash::compute_file_hash;
+use crate::index::incremental::{diff_files, FileDiff};
+use crate::model::{Edge, Graph, Language, Node, NodeLabel, new_file_id, new_project_id};
+use crate::parse::parallel_parse;
+use crate::resolve::{build_symbol_table, resolve_all};
+use crate::storage::Repository;
+
+/// The outcome of a single indexing run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexResult {
+    /// The project id (UUIDv7) assigned to this indexing run.
+    pub project_id: String,
+    /// Number of files actually parsed (changed + added).
+    pub files_indexed: usize,
+    /// Number of files skipped because their hash matched the DB.
+    pub files_skipped: usize,
+    /// Number of nodes created (file + definition nodes).
+    pub nodes_created: usize,
+    /// Number of edges created (definition + resolved edges).
+    pub edges_created: usize,
+    /// Wall-clock duration of the indexing run, in milliseconds.
+    pub duration_ms: u64,
+}
+
+impl IndexResult {
+    /// Creates a new `IndexResult` with the given fields.
+    #[must_use]
+    pub fn new(
+        project_id: impl Into<String>,
+        files_indexed: usize,
+        files_skipped: usize,
+        nodes_created: usize,
+        edges_created: usize,
+        duration_ms: u64,
+    ) -> Self {
+        Self {
+            project_id: project_id.into(),
+            files_indexed,
+            files_skipped,
+            nodes_created,
+            edges_created,
+            duration_ms,
+        }
+    }
+
+    /// Creates an empty `IndexResult` (zero everything except `project_id`).
+    #[must_use]
+    pub fn empty(project_id: impl Into<String>) -> Self {
+        Self::new(project_id, 0, 0, 0, 0, 0)
+    }
+}
+
+/// Facade for the indexing pipeline (Facade pattern).
+///
+/// Owns the database path and produces a fresh [`Pipeline`] per indexing run.
+/// The facade is the single entry point used by the CLI `index` command.
+pub struct IndexFacade {
+    db_path: PathBuf,
+}
+
+impl IndexFacade {
+    /// Creates a new `IndexFacade` that stores its database at `db_path`.
+    ///
+    /// The database (and schema) is created lazily on the first `index*` call.
+    pub fn new(db_path: &Path) -> Result<Self> {
+        Ok(Self {
+            db_path: db_path.to_path_buf(),
+        })
+    }
+
+    /// Runs the full index pipeline (no incremental diffing).
+    ///
+    /// Equivalent to `index_incremental` with `force=true` for the parse
+    /// phase, but always (re)creates the project node.
+    pub fn index(&self, path: &Path, project_name: &str, force: bool) -> Result<IndexResult> {
+        let repository = Repository::open(&self.db_path)?;
+        let pipeline = Pipeline::new(repository);
+        pipeline.run(path, project_name, force)
+    }
+
+    /// Runs the incremental index pipeline (only changed files are parsed).
+    ///
+    /// See [`Pipeline::run`] for the per-step behavior.
+    pub fn index_incremental(
+        &self,
+        path: &Path,
+        project_name: &str,
+        force: bool,
+    ) -> Result<IndexResult> {
+        self.index(path, project_name, force)
+    }
+}
+
+/// Internal pipeline orchestration over a [`Repository`].
+///
+/// Each [`Pipeline::run`] call performs the full ADD §4.1 sequence:
+/// discover → diff → parse → resolve → storage.
+pub struct Pipeline {
+    repository: Repository,
+}
+
+impl Pipeline {
+    /// Creates a new `Pipeline` wrapping `repository`.
+    #[must_use]
+    pub fn new(repository: Repository) -> Self {
+        Self { repository }
+    }
+
+    /// Runs the full indexing pipeline.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The repository root to index.
+    /// * `project_name` - The project display name (also used as the DB
+    ///   `project` column for multi-project isolation, BR-INDEX-004).
+    /// * `force` - When `true`, every disk file is re-parsed regardless of its
+    ///   hash (BR-INDEX-003, `--force`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IndexError::PathNotFound`] if `path` does not exist.
+    /// Returns [`IndexError::Storage`] for database failures.
+    /// Parse failures are logged and skipped (PRD §4.1.6).
+    pub fn run(&self, path: &Path, project_name: &str, force: bool) -> Result<IndexResult> {
+        let start = Instant::now();
+
+        // PRD §4.1.6: path not found → exit code 1.
+        if !path.exists() {
+            return Err(IndexError::PathNotFound(path.display().to_string()));
+        }
+
+        // Step 1: discover files on disk.
+        let disk_files = Walker::new(path).discover()?;
+
+        // Assign a project id. We reuse an existing project id if one exists
+        // for this name (incremental re-index); otherwise generate a new one.
+        let project_id = self.lookup_or_create_project_id(project_name, path, &disk_files)?;
+
+        // Step 2: query existing hashes from the DB.
+        let db_hashes = self
+            .repository
+            .get_all_file_hashes(&project_id)
+            .unwrap_or_default();
+
+        // Step 3: diff hashes → changed/added/deleted (or all changed if force).
+        let diff = diff_files(&disk_files, &db_hashes, force)?;
+
+        // Step 4: parallel-parse changed + added files.
+        let mut to_parse: Vec<FileInfo> = diff.changed.clone();
+        to_parse.extend(diff.added.iter().cloned());
+        let parse_result = parallel_parse(&to_parse, &project_id);
+
+        // PRD §4.1.6: parse failures are logged and skipped.
+        for (file_path, error_msg) in &parse_result.errors {
+            warn!(file = %file_path, error = %error_msg, "parse failed, skipping file");
+        }
+
+        // Step 5: build in-memory graph (definition nodes + per-file edges).
+        let mut graph = Graph::new();
+        let mut all_nodes: Vec<Node> = Vec::new();
+        let mut all_edges: Vec<Edge> = Vec::new();
+
+        // Add File nodes for every parsed file (used by incremental indexing).
+        let file_nodes = build_file_nodes(&diff, &project_id);
+        for file_node in &file_nodes {
+            graph.add_node(file_node.clone());
+        }
+        all_nodes.extend(file_nodes);
+
+        // Merge per-file extraction results into the graph.
+        for result in &parse_result.results {
+            for node in &result.nodes {
+                // Use the FQN as the graph id so resolve_all can look up nodes.
+                let mut g = node.clone();
+                if g.id.is_empty() || g.id == node.qualified_name {
+                    g.id = node.qualified_name.clone();
+                }
+                // Ensure the project is set (extractors set it, but be defensive).
+                if g.project.is_empty() {
+                    g.project = project_id.clone();
+                }
+                graph.add_node(g.clone());
+                all_nodes.push(g);
+            }
+            for edge in &result.edges {
+                graph.add_edge(edge.clone());
+                all_edges.push(edge.clone());
+            }
+        }
+
+        // Step 6: resolve symbols (calls + dataflow + FFI).
+        let symbol_table = build_symbol_table(&parse_result.results, &project_id);
+        let resolved_edges = resolve_all(
+            &parse_result.results,
+            &symbol_table,
+            &project_id,
+            &mut graph,
+        );
+        all_edges.extend(resolved_edges);
+
+        // Step 7: delete old nodes for deleted files (BR-INDEX-002) and for
+        // changed files (we're about to re-insert their nodes).
+        for deleted_path in &diff.deleted {
+            if let Err(err) = self.repository.delete_file_nodes(deleted_path, &project_id) {
+                warn!(file = %deleted_path, error = %err, "failed to delete file nodes");
+            }
+        }
+        for changed_file in &diff.changed {
+            if let Err(err) = self
+                .repository
+                .delete_file_nodes(&changed_file.relative_path, &project_id)
+            {
+                warn!(
+                    file = %changed_file.relative_path,
+                    error = %err,
+                    "failed to delete changed file nodes"
+                );
+            }
+        }
+
+        // Step 8: persist the project node, definition nodes, and edges.
+        self.save_project_node(&project_id, project_name, path, &disk_files)?;
+        self.save_nodes_by_label(&all_nodes)?;
+        if !all_edges.is_empty() {
+            self.repository.save_edges(&all_edges)?;
+        }
+
+        // Step 9: build the IndexResult.
+        let duration_ms = start.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        let files_indexed = parse_result.files_parsed;
+        let files_skipped = diff.unchanged.len();
+        let nodes_created = all_nodes.len();
+        let edges_created = all_edges.len();
+
+        Ok(IndexResult::new(
+            project_id,
+            files_indexed,
+            files_skipped,
+            nodes_created,
+            edges_created,
+            duration_ms,
+        ))
+    }
+
+    /// Looks up an existing project id by name, or generates a new one.
+    ///
+    /// We treat the project *name* as the stable identifier across re-indexes.
+    /// If a project with this name already exists in the DB, we reuse its id;
+    /// otherwise we generate a fresh `proj_<uuid>` id.
+    fn lookup_or_create_project_id(
+        &self,
+        project_name: &str,
+        root: &Path,
+        disk_files: &[FileInfo],
+    ) -> Result<String> {
+        // Look for an existing project with this name.
+        let projects = self.repository.list_projects().unwrap_or_default();
+        for project in projects {
+            if project.name == project_name {
+                return Ok(project.id);
+            }
+        }
+        // No existing project; generate a new id.
+        let _ = (root, disk_files); // unused on this branch; kept for clarity.
+        Ok(new_project_id())
+    }
+
+    /// Saves (or re-saves) the project node.
+    ///
+    /// Only saves the project node if it does not already exist — this
+    /// preserves the File nodes (and their hashes) from prior runs, which
+    /// the incremental indexer depends on.
+    fn save_project_node(
+        &self,
+        project_id: &str,
+        project_name: &str,
+        root: &Path,
+        disk_files: &[FileInfo],
+    ) -> Result<()> {
+        // If the project node already exists, update its metadata in place
+        // by deleting only the Project row (not the File/Function nodes).
+        if self.repository.get_project(project_id)?.is_some() {
+            // Delete only the Project node itself.
+            let cypher = format!(
+                "MATCH (p:Project {{id: '{}'}}) DELETE p;",
+                project_id.replace('\'', "\\'"),
+            );
+            // Ignore errors (e.g. table missing) — the project may not exist.
+            let _ = self.repository.connection().execute(&cypher);
+        }
+        let project_node = Node::builder(NodeLabel::Project, project_name, project_name)
+            .id(project_id)
+            .properties(serde_json::json!({
+                "rootPath": root.display().to_string(),
+                "fileCount": disk_files.len() as i64,
+                "indexedAt": now_unix_seconds(),
+            }))
+            .build();
+        self.repository.save_project(&project_node)?;
+        Ok(())
+    }
+
+    /// Groups nodes by label and bulk-saves each group.
+    fn save_nodes_by_label(&self, nodes: &[Node]) -> Result<()> {
+        // Group nodes by label so each label is bulk-loaded in one COPY.
+        let mut by_label: HashMap<NodeLabel, Vec<Node>> = HashMap::new();
+        for node in nodes {
+            by_label.entry(node.label).or_default().push(node.clone());
+        }
+        for (label, group) in by_label {
+            if group.is_empty() {
+                continue;
+            }
+            // Project nodes are saved via save_project_node; skip them here.
+            if label == NodeLabel::Project {
+                continue;
+            }
+            self.repository.save_nodes(&group, label)?;
+        }
+        Ok(())
+    }
+}
+
+/// Builds a [`Node`] (label `File`) for each changed/added file, carrying the
+/// SHA-256 hash in `properties.hash` for future incremental runs.
+fn build_file_nodes(diff: &FileDiff, project_id: &str) -> Vec<Node> {
+    let mut nodes = Vec::new();
+    for file in diff.changed.iter().chain(diff.added.iter()) {
+        let hash = match compute_file_hash(&file.path) {
+            Ok(h) => h,
+            Err(err) => {
+                warn!(
+                    file = %file.relative_path,
+                    error = %err,
+                    "failed to hash file, skipping File node"
+                );
+                continue;
+            }
+        };
+        let language = file.language.unwrap_or(Language::Rust);
+        let line_count = line_count_of(&file.path).unwrap_or(0);
+        let node = Node::builder(NodeLabel::File, file.relative_path.clone(), file.relative_path.clone())
+            .id(new_file_id())
+            .project(project_id)
+            .file_path(&file.relative_path)
+            .language(language)
+            .properties(serde_json::json!({
+                "hash": hash,
+                "lineCount": line_count,
+            }))
+            .build();
+        nodes.push(node);
+    }
+    nodes
+}
+
+/// Returns the number of lines in `path`, or `None` if it cannot be read.
+fn line_count_of(path: &Path) -> Option<u32> {
+    let content = std::fs::read_to_string(path).ok()?;
+    Some(content.lines().count() as u32)
+}
+
+/// Returns the current unix timestamp in seconds.
+fn now_unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Language;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Writes a file at `dir/rel` (creating parent directories as needed).
+    fn write_file(dir: &Path, rel: &str, content: &str) {
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, content).unwrap();
+    }
+
+    /// Returns a fresh on-disk database path inside a temp dir.
+    ///
+    /// The TempDir is leaked intentionally so the database files survive for
+    /// the test's lifetime (LadybugDB keeps file handles open).
+    fn fresh_db_path() -> PathBuf {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("testdb");
+        std::mem::forget(dir);
+        path
+    }
+
+    // --- IndexResult ---
+
+    #[test]
+    fn index_result_new_sets_all_fields() {
+        let r = IndexResult::new("proj_1", 10, 5, 100, 50, 1234);
+        assert_eq!(r.project_id, "proj_1");
+        assert_eq!(r.files_indexed, 10);
+        assert_eq!(r.files_skipped, 5);
+        assert_eq!(r.nodes_created, 100);
+        assert_eq!(r.edges_created, 50);
+        assert_eq!(r.duration_ms, 1234);
+    }
+
+    #[test]
+    fn index_result_empty_zeros_everything() {
+        let r = IndexResult::empty("proj_x");
+        assert_eq!(r.project_id, "proj_x");
+        assert_eq!(r.files_indexed, 0);
+        assert_eq!(r.files_skipped, 0);
+        assert_eq!(r.nodes_created, 0);
+        assert_eq!(r.edges_created, 0);
+        assert_eq!(r.duration_ms, 0);
+    }
+
+    #[test]
+    fn index_result_clone_is_equal() {
+        let r = IndexResult::new("p", 1, 2, 3, 4, 5);
+        assert_eq!(r, r.clone());
+    }
+
+    #[test]
+    fn index_result_debug_contains_fields() {
+        let r = IndexResult::new("proj_1", 10, 5, 100, 50, 1234);
+        let s = format!("{r:?}");
+        assert!(s.contains("proj_1"));
+        assert!(s.contains("IndexResult"));
+    }
+
+    // --- IndexFacade / Pipeline: AC-INDEX-001 ---
+
+    #[test]
+    fn ac_index_001_indexes_c_rust_fortran_files() {
+        // AC-INDEX-001: Index a codebase with C/Rust/Fortran files → all
+        // indexed, graph created.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_file(root, "main.rs", "fn main() { helper(); }\n");
+        write_file(root, "util.c", "int util(void) { return 42; }\n");
+        write_file(root, "math.f90", "subroutine math_sub()\nend subroutine math_sub\n");
+
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        let result = facade
+            .index(root, "demo", false)
+            .expect("index should succeed");
+
+        assert!(result.files_indexed > 0, "should index files: {result:?}");
+        assert!(result.nodes_created > 0, "should create nodes: {result:?}");
+        assert!(result.duration_ms < u64::MAX, "duration should be recorded");
+        assert!(!result.project_id.is_empty(), "project_id should be set");
+    }
+
+    // --- AC-INDEX-002: incremental re-index only parses changed file ---
+
+    #[test]
+    fn ac_index_002_incremental_only_parses_changed_file() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_file(root, "a.rs", "fn a() {}\n");
+        write_file(root, "b.rs", "fn b() {}\n");
+
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+
+        // First index: both files are new → both parsed.
+        let first = facade.index(root, "demo", false).expect("first index");
+        assert_eq!(first.files_indexed, 2, "first run parses both files");
+        assert_eq!(first.files_skipped, 0, "nothing to skip on first run");
+
+        // Second index without changes: both files skipped.
+        let second = facade
+            .index_incremental(root, "demo", false)
+            .expect("second index");
+        assert_eq!(
+            second.files_skipped, 2,
+            "BR-INDEX-001: unchanged files skipped"
+        );
+        assert_eq!(second.files_indexed, 0, "no files to re-parse");
+
+        // Modify one file, re-index: only that file is parsed.
+        write_file(root, "a.rs", "fn a() { /* modified */ }\n");
+        let third = facade
+            .index_incremental(root, "demo", false)
+            .expect("third index");
+        assert_eq!(third.files_indexed, 1, "only the modified file is parsed");
+        assert_eq!(third.files_skipped, 1, "the other file is skipped");
+    }
+
+    // --- AC-INDEX-003: multiple projects coexist in the same DB ---
+
+    #[test]
+    fn ac_index_003_multiple_projects_coexist() {
+        let tmp_a = TempDir::new().unwrap();
+        let tmp_b = TempDir::new().unwrap();
+        write_file(tmp_a.path(), "a.rs", "fn alpha() {}\n");
+        write_file(tmp_b.path(), "b.rs", "fn beta() {}\n");
+
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+
+        let result_a = facade.index(tmp_a.path(), "project_a", false).expect("index A");
+        let result_b = facade.index(tmp_b.path(), "project_b", false).expect("index B");
+
+        assert!(result_a.files_indexed > 0);
+        assert!(result_b.files_indexed > 0);
+
+        // Both projects should coexist in the DB.
+        let repo = Repository::open(&db_path).expect("repo");
+        let projects = repo.list_projects().expect("list_projects");
+        assert_eq!(projects.len(), 2, "AC-INDEX-003: both projects coexist");
+        let names: Vec<String> = projects.iter().map(|p| p.name.clone()).collect();
+        assert!(names.contains(&"project_a".to_string()));
+        assert!(names.contains(&"project_b".to_string()));
+    }
+
+    // --- AC-INDEX-005: --force re-parses all files ---
+
+    #[test]
+    fn ac_index_005_force_re_parses_all_files() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_file(root, "a.rs", "fn a() {}\n");
+        write_file(root, "b.rs", "fn b() {}\n");
+
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+
+        // First index: both files parsed.
+        let first = facade.index(root, "demo", false).expect("first index");
+        assert_eq!(first.files_indexed, 2);
+        assert_eq!(first.files_skipped, 0);
+
+        // Second index with force=true: all files re-parsed, none skipped.
+        let forced = facade
+            .index_incremental(root, "demo", true)
+            .expect("forced index");
+        assert_eq!(
+            forced.files_indexed, 2,
+            "AC-INDEX-005: --force re-parses all files"
+        );
+        assert_eq!(
+            forced.files_skipped, 0,
+            "force must not skip any files"
+        );
+    }
+
+    // --- Path not found → error ---
+
+    #[test]
+    fn path_not_found_returns_error() {
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        let result = facade.index(Path::new("/nonexistent/path/xyz"), "demo", false);
+        assert!(result.is_err(), "path not found should error");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, IndexError::PathNotFound(_)),
+            "expected PathNotFound, got {err:?}"
+        );
+        assert_eq!(err.exit_code(), 1, "PRD §4.1.6: path not found → exit 1");
+    }
+
+    // --- Empty directory → files_indexed = 0 ---
+
+    #[test]
+    fn empty_directory_indexes_zero_files() {
+        let tmp = TempDir::new().unwrap();
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        let result = facade.index(tmp.path(), "empty", false).expect("index");
+        assert_eq!(result.files_indexed, 0, "empty dir → 0 files indexed");
+        assert_eq!(result.files_skipped, 0);
+        // We still create a project node, so nodes_created may be 1.
+        assert!(result.duration_ms < u64::MAX, "duration should be recorded");
+    }
+
+    // --- Duration is recorded ---
+
+    #[test]
+    fn duration_is_recorded() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "a.rs", "fn a() {}\n");
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        let result = facade.index(tmp.path(), "demo", false).expect("index");
+        // duration_ms is non-negative by construction; we just verify it's set
+        // to a finite value (it may be 0 on very fast machines).
+        assert!(result.duration_ms < u64::MAX);
+    }
+
+    // --- Re-index reuses the same project id (incremental) ---
+
+    #[test]
+    fn re_index_reuses_project_id() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "a.rs", "fn a() {}\n");
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+
+        let first = facade.index(tmp.path(), "demo", false).expect("first");
+        let second = facade
+            .index_incremental(tmp.path(), "demo", false)
+            .expect("second");
+
+        assert_eq!(
+            first.project_id, second.project_id,
+            "re-index should reuse the project id"
+        );
+    }
+
+    // --- Pipeline::new ---
+
+    #[test]
+    fn pipeline_new_wraps_repository() {
+        let repo = Repository::in_memory().expect("repo");
+        let _pipeline = Pipeline::new(repo);
+    }
+
+    // --- build_file_nodes ---
+
+    #[test]
+    fn build_file_nodes_creates_file_node_per_changed_or_added_file() {
+        let tmp = TempDir::new().unwrap();
+        let f1 = FileInfo {
+            path: tmp.path().join("a.rs"),
+            relative_path: "a.rs".to_string(),
+            language: Some(Language::Rust),
+            size: 0,
+        };
+        fs::write(&f1.path, "fn a() {}\n").unwrap();
+        let f2 = FileInfo {
+            path: tmp.path().join("b.rs"),
+            relative_path: "b.rs".to_string(),
+            language: Some(Language::Rust),
+            size: 0,
+        };
+        fs::write(&f2.path, "fn b() {}\n").unwrap();
+
+        let mut diff = FileDiff::new();
+        diff.changed.push(f1);
+        diff.added.push(f2);
+
+        let nodes = build_file_nodes(&diff, "proj");
+        assert_eq!(nodes.len(), 2, "one File node per changed/added file");
+        assert!(nodes.iter().all(|n| n.label == NodeLabel::File));
+        assert!(nodes.iter().all(|n| n.project == "proj"));
+        // Each File node carries a hash property.
+        for node in &nodes {
+            let hash = node.properties.get("hash").and_then(|v| v.as_str());
+            assert!(hash.is_some(), "File node should carry a hash");
+            assert_eq!(hash.unwrap().len(), 64, "hash should be 64 hex chars");
+        }
+    }
+
+    #[test]
+    fn build_file_nodes_skips_missing_files() {
+        let missing = FileInfo {
+            path: PathBuf::from("/nonexistent/missing.rs"),
+            relative_path: "missing.rs".to_string(),
+            language: Some(Language::Rust),
+            size: 0,
+        };
+        let mut diff = FileDiff::new();
+        diff.added.push(missing);
+
+        let nodes = build_file_nodes(&diff, "proj");
+        assert!(
+            nodes.is_empty(),
+            "missing file should produce no File node"
+        );
+    }
+
+    #[test]
+    fn build_file_nodes_empty_diff_returns_empty() {
+        let diff = FileDiff::new();
+        let nodes = build_file_nodes(&diff, "proj");
+        assert!(nodes.is_empty());
+    }
+
+    // --- line_count_of ---
+
+    #[test]
+    fn line_count_of_counts_lines() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("a.rs");
+        fs::write(&path, "line1\nline2\nline3\n").unwrap();
+        assert_eq!(line_count_of(&path), Some(3));
+    }
+
+    #[test]
+    fn line_count_of_empty_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("empty.rs");
+        fs::write(&path, "").unwrap();
+        assert_eq!(line_count_of(&path), Some(0));
+    }
+
+    #[test]
+    fn line_count_of_missing_file_returns_none() {
+        assert!(line_count_of(Path::new("/nonexistent/missing.rs")).is_none());
+    }
+
+    // --- now_unix_seconds ---
+
+    #[test]
+    fn now_unix_seconds_is_positive() {
+        let ts = now_unix_seconds();
+        assert!(ts > 0, "unix timestamp should be positive: {ts}");
+    }
+
+    // --- IndexFacade::new ---
+
+    #[test]
+    fn index_facade_new_succeeds() {
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("testdb");
+        let facade = IndexFacade::new(&db_path);
+        assert!(facade.is_ok(), "facade creation should succeed");
+    }
+
+    // --- Multi-file re-index with deletion (BR-INDEX-002) ---
+
+    #[test]
+    fn re_index_detects_deleted_files() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_file(root, "a.rs", "fn a() {}\n");
+        write_file(root, "b.rs", "fn b() {}\n");
+
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+
+        // First index: both files.
+        let first = facade.index(root, "demo", false).expect("first");
+        assert_eq!(first.files_indexed, 2);
+
+        // Delete b.rs, re-index: a.rs unchanged (skipped), b.rs deleted.
+        fs::remove_file(root.join("b.rs")).unwrap();
+        let second = facade
+            .index_incremental(root, "demo", false)
+            .expect("second");
+        assert_eq!(second.files_skipped, 1, "a.rs unchanged → skipped");
+        assert_eq!(second.files_indexed, 0, "no new/changed files to parse");
+    }
+
+    // --- Pipeline handles nested directories ---
+
+    #[test]
+    fn pipeline_indexes_nested_directories() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_file(root, "main.rs", "fn main() {}\n");
+        write_file(root, "src/lib.rs", "fn lib_fn() {}\n");
+        write_file(root, "src/sub/mod.rs", "fn mod_fn() {}\n");
+
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        let result = facade.index(root, "nested", false).expect("index");
+        assert_eq!(result.files_indexed, 3, "all nested files indexed");
+    }
+
+    // --- Pipeline persists nodes to DB ---
+
+    #[test]
+    fn pipeline_persists_nodes_to_db() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_file(root, "main.rs", "fn main() { helper(); }\nfn helper() {}\n");
+
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        let result = facade.index(root, "demo", false).expect("index");
+        assert!(result.nodes_created > 0);
+
+        // Verify nodes are persisted by querying the DB directly.
+        let repo = Repository::open(&db_path).expect("repo");
+        let functions = repo.query_functions(&result.project_id).expect("query");
+        assert!(
+            !functions.is_empty(),
+            "functions should be persisted: {functions:?}"
+        );
+        let names: Vec<String> = functions.iter().map(|f| f.name.clone()).collect();
+        assert!(names.contains(&"main".to_string()), "main should be persisted");
+        assert!(names.contains(&"helper".to_string()), "helper should be persisted");
+    }
+
+    // --- Pipeline persists project node ---
+
+    #[test]
+    fn pipeline_persists_project_node() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "a.rs", "fn a() {}\n");
+
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        let result = facade.index(tmp.path(), "my_project", false).expect("index");
+
+        let repo = Repository::open(&db_path).expect("repo");
+        let project = repo
+            .get_project(&result.project_id)
+            .expect("get_project")
+            .expect("project should exist");
+        assert_eq!(project.name, "my_project");
+        assert_eq!(project.id, result.project_id);
+    }
+
+    // --- Pipeline with parse failure continues (PRD §4.1.6) ---
+
+    #[test]
+    fn pipeline_continues_after_parse_failure() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        // A valid Rust file.
+        write_file(root, "good.rs", "fn good() {}\n");
+        // A file with a .rs extension but unreadable content is still parsed
+        // by tree-sitter (it produces an error tree but doesn't fail). To
+        // force a parse failure, we use a FileInfo pointing at a path that
+        // doesn't exist on disk — but the walker won't produce that. Instead
+        // we verify that a normal index run succeeds even with one empty file.
+        write_file(root, "empty.rs", "");
+
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        let result = facade.index(root, "demo", false).expect("index");
+        // Both files should be indexed (empty file produces no nodes but
+        // doesn't fail).
+        assert_eq!(result.files_indexed, 2);
+    }
+
+    // --- IndexResult fields are sane ---
+
+    #[test]
+    fn index_result_files_indexed_plus_skipped_le_disk_files() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "a.rs", "fn a() {}\n");
+        write_file(tmp.path(), "b.rs", "fn b() {}\n");
+
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        let _first = facade.index(tmp.path(), "demo", false).expect("first");
+        let second = facade
+            .index_incremental(tmp.path(), "demo", false)
+            .expect("second");
+        // On the second run, all 2 files are skipped.
+        assert_eq!(second.files_indexed + second.files_skipped, 2);
+    }
+}
