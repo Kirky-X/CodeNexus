@@ -2,6 +2,11 @@
 //!
 //! Calls [`QueryFacade::search`] (or [`QueryFacade::fulltext_search`] when
 //! `--semantic` is set) and prints the results as a JSON array.
+//!
+//! When the `embed` feature is enabled and `--semantic` is set, the command
+//! uses [`HybridStrategy`] (BM25 + vector RRF fusion, AC-SEARCH-002) if an
+//! embedding API key is configured; otherwise it falls back to BM25 full-text
+//! search.
 
 use serde::Serialize;
 
@@ -22,7 +27,7 @@ pub fn run(args: &SearchArgs) -> Result<()> {
     let db_path = std::path::Path::new(&args.db);
     let facade = QueryFacade::new(db_path)?;
     let results = if args.semantic {
-        facade.fulltext_search(&args.text, None, args.limit)?
+        semantic_search(&facade, &args.text, args.limit)?
     } else {
         facade.search(&args.text, None, args.limit)?
     };
@@ -30,6 +35,34 @@ pub fn run(args: &SearchArgs) -> Result<()> {
     let json = serde_json::to_string(&output)?;
     println!("{json}");
     Ok(())
+}
+
+/// Executes a semantic search, using the embed subsystem when available.
+///
+/// When the `embed` feature is enabled and an API key is configured, this uses
+/// [`HybridStrategy`] (BM25 + vector RRF fusion). Otherwise it falls back to
+/// BM25 full-text search via [`QueryFacade::fulltext_search`].
+fn semantic_search(
+    facade: &QueryFacade,
+    text: &str,
+    limit: usize,
+) -> Result<Vec<SearchResult>> {
+    #[cfg(feature = "embed")]
+    {
+        use crate::embed::{EmbeddingConfig, HybridStrategy, OpenAIEmbedClient, SearchStrategy};
+
+        let config = EmbeddingConfig::from_env();
+        if config.has_api_key() {
+            if let Ok(client) = OpenAIEmbedClient::new(config) {
+                let strategy = HybridStrategy::new(facade.connection(), &client);
+                if let Ok(results) = strategy.search(text, None, limit) {
+                    return Ok(results);
+                }
+            }
+        }
+    }
+    // Fallback: BM25 full-text search (always available).
+    Ok(facade.fulltext_search(text, None, limit)?)
 }
 
 /// JSON-serializable view of a single search result.
