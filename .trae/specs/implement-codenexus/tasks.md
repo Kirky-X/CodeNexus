@@ -104,33 +104,33 @@
 
 ## Phase 6: 守护模式 + 可选嵌入
 
-- [ ] Task 15: 实现守护模式（daemon 模块，观察者模式）
-  - [ ] SubTask 15.1: 编写守护模式测试（notify-debouncer-full ADR-013、防抖默认 2000ms BR-DAEMON-001、可配置 --debounce-ms BR-DAEMON-004、代码文件过滤 BR-DAEMON-002、索引期间暂停 BR-DAEMON-003），再实现 daemon
-  - [ ] SubTask 15.2: 编写 AC-DAEMON-001 测试（修改代码文件 2s 后触发增量索引），验证通过
-  - [ ] SubTask 15.3: 编写 AC-DAEMON-002 测试（连续修改合并为一次索引），验证通过
-  - [ ] SubTask 15.4: 编写 AC-DAEMON-003 测试（非代码文件不触发），验证通过
-  - [ ] SubTask 15.5: 编写 daemon 命令测试，再实现 cli/daemon_cmd
+- [x] Task 15: 实现守护模式（daemon 模块，观察者模式）
+  - [x] SubTask 15.1: 编写守护模式测试（notify-debouncer-full ADR-013、防抖默认 2000ms BR-DAEMON-001、可配置 --debounce-ms BR-DAEMON-004、代码文件过滤 BR-DAEMON-002、索引期间暂停 BR-DAEMON-003），再实现 daemon
+  - [x] SubTask 15.2: 编写 AC-DAEMON-001 测试（修改代码文件 2s 后触发增量索引），验证通过
+  - [x] SubTask 15.3: 编写 AC-DAEMON-002 测试（连续修改合并为一次索引），验证通过
+  - [x] SubTask 15.4: 编写 AC-DAEMON-003 测试（非代码文件不触发），验证通过
+  - [x] SubTask 15.5: 编写 daemon 命令测试，再实现 cli/daemon_cmd
 
-- [ ] Task 16: 实现可选嵌入（embed 模块，feature gate，策略模式）
-  - [ ] SubTask 16.1: 编写嵌入服务客户端测试（reqwest HTTP 调用 OpenAI 兼容 API、API Key 环境变量不持久化），再实现 embed/client
-  - [ ] SubTask 16.2: 编写向量存储测试（LadybugDB Embedding 表 FLOAT[384]），再实现 embed/storage
-  - [ ] SubTask 16.3: 编写语义搜索测试（向量搜索 + RRF 融合 AC-SEARCH-002、Windows 降级仅 BM25），再实现 embed/search（策略模式）
-  - [ ] SubTask 16.4: 编写嵌入服务不可用降级测试，验证跳过嵌入继续索引
+- [x] Task 16: 实现可选嵌入（embed 模块，feature gate，策略模式）
+  - [x] SubTask 16.1: 编写嵌入服务客户端测试（reqwest HTTP 调用 OpenAI 兼容 API、API Key 环境变量不持久化），再实现 embed/client
+  - [x] SubTask 16.2: 编写向量存储测试（LadybugDB Embedding 表 FLOAT[384]），再实现 embed/storage
+  - [x] SubTask 16.3: 编写语义搜索测试（向量搜索 + RRF 融合 AC-SEARCH-002、Windows 降级仅 BM25），再实现 embed/search（策略模式）
+  - [x] SubTask 16.4: 编写嵌入服务不可用降级测试，验证跳过嵌入继续索引
 
 ## Phase 7: 测试套件 + 覆盖率
 
-- [ ] Task 17: 完善测试套件与覆盖率
-  - [ ] SubTask 17.1: 编写集成测试（tests/ 目录，端到端索引真实代码库、查询、追踪全流程）
-  - [ ] SubTask 17.2: 补充单元测试覆盖率达 95%（IO 层用 tempfile，核心逻辑优先覆盖 TR-006）
-  - [ ] SubTask 17.3: 运行 `cargo tarpaulin --fail-under 95` 验证覆盖率达标
-  - [ ] SubTask 17.4: 运行 `cargo clippy -- -D warnings` 验证无警告
-  - [ ] SubTask 17.5: 运行 `cargo test` 验证全部测试通过
+- [x] Task 17: 完善测试套件与覆盖率
+  - [x] SubTask 17.1: 编写集成测试（tests/ 目录，端到端索引真实代码库、查询、追踪全流程）
+  - [x] SubTask 17.2: 补充单元测试覆盖率达 95%（IO 层用 tempfile，核心逻辑优先覆盖 TR-006）
+  - [x] SubTask 17.3: 运行 `cargo tarpaulin --fail-under 95` 验证覆盖率达标
+  - [x] SubTask 17.4: 运行 `cargo clippy -- -D warnings` 验证无警告
+  - [x] SubTask 17.5: 运行 `cargo test` 验证全部测试通过
 
 ## Phase 9: Skill 创建
 
-- [ ] Task 18: 创建 Skill 文件
-  - [ ] SubTask 18.1: 创建 skill/SKILL.md，指导 Agent 使用 CLI 命令（index/query/trace/impact/search/daemon/status/list/clean）
-  - [ ] SubTask 18.2: 验证 Agent 可按 Skill 文件正确执行索引、查询、追踪操作
+- [x] Task 18: 创建 Skill 文件
+  - [x] SubTask 18.1: 创建 skill/SKILL.md，指导 Agent 使用 CLI 命令（index/query/trace/impact/search/daemon/status/list/clean）
+  - [x] SubTask 18.2: 验证 Agent 可按 Skill 文件正确执行索引、查询、追踪操作
 
 # Task Dependencies
 
