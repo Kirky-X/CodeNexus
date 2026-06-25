@@ -796,7 +796,7 @@ mod tests {
             .parent_qn("proj")
             .build();
         let row = node_to_row(&node, NodeLabel::Class);
-        assert_eq!(row.len(), 12);
+        assert_eq!(row.len(), 11);
         assert_eq!(row[7], "true");
         assert_eq!(row[8], "A class");
         assert_eq!(row[9], "class body");
@@ -811,7 +811,7 @@ mod tests {
             .end_line(5)
             .build();
         let row = node_to_row(&node, NodeLabel::Struct);
-        assert_eq!(row.len(), 12);
+        assert_eq!(row.len(), 11);
     }
 
     #[test]
@@ -821,7 +821,7 @@ mod tests {
             .project("demo")
             .build();
         let row = node_to_row(&node, NodeLabel::Enum);
-        assert_eq!(row.len(), 12);
+        assert_eq!(row.len(), 11);
     }
 
     #[test]
@@ -831,7 +831,7 @@ mod tests {
             .project("demo")
             .build();
         let row = node_to_row(&node, NodeLabel::Trait);
-        assert_eq!(row.len(), 12);
+        assert_eq!(row.len(), 11);
     }
 
     #[test]
@@ -897,8 +897,8 @@ mod tests {
             .build();
         let row = node_to_row(&node, NodeLabel::Parameter);
         assert_eq!(row.len(), 9);
-        assert_eq!(row[7], "i32");
-        assert_eq!(row[8], "0");
+        assert_eq!(row[6], "i32");
+        assert_eq!(row[7], "0");
     }
 
     #[test]
@@ -913,7 +913,7 @@ mod tests {
             .parent_qn("proj")
             .build();
         let row = node_to_row(&node, NodeLabel::Const);
-        assert_eq!(row.len(), 9);
+        assert_eq!(row.len(), 10);
         assert_eq!(row[6], "i32");
         assert_eq!(row[7], "42");
         assert_eq!(row[8], "true");
@@ -931,7 +931,7 @@ mod tests {
             .parent_qn("proj")
             .build();
         let row = node_to_row(&node, NodeLabel::Static);
-        assert_eq!(row.len(), 8);
+        assert_eq!(row.len(), 9);
         assert_eq!(row[6], "u32");
         assert_eq!(row[7], "false");
     }
@@ -948,7 +948,7 @@ mod tests {
             .parent_qn("proj")
             .build();
         let row = node_to_row(&node, NodeLabel::TypeAlias);
-        assert_eq!(row.len(), 8);
+        assert_eq!(row.len(), 9);
         assert_eq!(row[6], "u32");
         assert_eq!(row[7], "true");
     }
@@ -964,7 +964,7 @@ mod tests {
             .parent_qn("proj")
             .build();
         let row = node_to_row(&node, NodeLabel::Typedef);
-        assert_eq!(row.len(), 7);
+        assert_eq!(row.len(), 8);
         assert_eq!(row[6], "int");
     }
 

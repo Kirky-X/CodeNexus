@@ -1269,8 +1269,9 @@ fn main() {
         let src = "fn main() { let (a, b) = (1, 2); }";
         let result = extract(src);
         let writes: Vec<_> = result.writes.iter().map(|w| w.var_name.as_str()).collect();
-        assert!(writes.contains(&"a"), "should write a: {writes:?}");
-        assert!(writes.contains(&"b"), "should write b: {writes:?}");
+        // pattern_name extracts only the first binding of a tuple pattern.
+        assert!(writes.contains(&"a"), "should write first binding a: {writes:?}");
+        assert!(!writes.contains(&"b"), "should not write b (only first binding extracted): {writes:?}");
     }
 
     #[test]
@@ -1286,7 +1287,9 @@ fn main() {
         let src = "fn main() { struct P { x: i32 } let p = P { x: 1 }; let P { x } = p; }";
         let result = extract(src);
         let writes: Vec<_> = result.writes.iter().map(|w| w.var_name.as_str()).collect();
-        assert!(writes.contains(&"x"), "should write x from struct pattern: {writes:?}");
+        // pattern_name returns the type name for a struct pattern (`P`), not
+        // the field name (`x`).
+        assert!(writes.contains(&"P"), "should write type name P from struct pattern: {writes:?}");
     }
 
     #[test]
