@@ -334,6 +334,21 @@ impl Daemon {
             return;
         }
 
+        // LOG-005：记录每个 daemon 事件（在通知观察者之前）。
+        for event in &daemon_events {
+            let (change_type, path) = match event {
+                DaemonEvent::Create(p) => ("create", p.display()),
+                DaemonEvent::Modify(p) => ("modify", p.display()),
+                DaemonEvent::Remove(p) => ("remove", p.display()),
+            };
+            info!(
+                event = "daemon_event",
+                change_type = change_type,
+                path = %path,
+                "daemon event"
+            );
+        }
+
         for observer in &mut self.observers {
             observer.on_events(&daemon_events);
         }
@@ -364,9 +379,11 @@ mod tests {
     use notify_debouncer_full::notify::event::EventAttributes;
     use notify_debouncer_full::notify::Event;
     use std::fs;
+    use std::io::Write;
     use std::sync::Mutex;
     use std::thread;
     use tempfile::TempDir;
+    use tracing_subscriber::fmt::MakeWriter;
 
     // --- 测试辅助函数 ---
 
@@ -1133,6 +1150,144 @@ mod tests {
         assert!(
             handle2.load(Ordering::SeqCst),
             "stop_handle 返回的 Arc 应共享状态"
+        );
+    }
+
+    // --- LOG-005: daemon_event 事件发出验证 ---
+
+    /// 一个 `MakeWriter`，将发出的事件缓冲到共享的 `Vec<u8>` 中，以便测试
+    /// 断言 subscriber 实际写入的内容。
+    struct CapturingMakeWriter {
+        buf: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl MakeWriter for CapturingMakeWriter {
+        type Writer = CapturingWriter;
+
+        fn make_writer(&self) -> Self::Writer {
+            CapturingWriter {
+                buf: self.buf.clone(),
+            }
+        }
+    }
+
+    struct CapturingWriter {
+        buf: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for CapturingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.buf.lock().unwrap().write_all(bytes)?;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// 在一个作用域 tracing subscriber 内运行 `f`，将所有事件输出捕获为字符串返回。
+    fn capture_tracing<R>(f: impl FnOnce() -> R) -> String {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::FmtSubscriber::builder()
+            .with_target(false)
+            .with_writer(CapturingMakeWriter { buf: buf.clone() })
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        let bytes = buf.lock().unwrap().clone();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn log_005_daemon_event_emitted_for_code_files() {
+        let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
+        let (observer, _call_count, _events) = CountingObserver::new();
+        daemon.add_observer(Box::new(observer));
+
+        let debounced_events = vec![
+            make_event(
+                EventKind::Create(notify_debouncer_full::notify::event::CreateKind::File),
+                "main.rs",
+            ),
+            make_event(
+                EventKind::Modify(notify_debouncer_full::notify::event::ModifyKind::Any),
+                "lib.c",
+            ),
+        ];
+
+        let captured = capture_tracing(|| {
+            daemon.process_debounced_events(&debounced_events);
+        });
+
+        assert!(
+            captured.contains("daemon_event"),
+            "LOG-005: daemon_event 事件应被发出，实际捕获: {captured:?}"
+        );
+        // 每个代码文件事件都应触发一个 daemon_event。
+        let count = captured.matches("daemon_event").count();
+        assert_eq!(
+            count, 2,
+            "LOG-005: 每个代码文件事件应发出一个 daemon_event，实际 {count}"
+        );
+        assert!(
+            captured.contains("create") && captured.contains("modify"),
+            "daemon_event 应携带 change_type 字段"
+        );
+        assert!(
+            captured.contains("main.rs") && captured.contains("lib.c"),
+            "daemon_event 应携带文件路径"
+        );
+    }
+
+    #[test]
+    fn log_005_daemon_event_not_emitted_for_non_code_files() {
+        let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
+        let (observer, _call_count, _events) = CountingObserver::new();
+        daemon.add_observer(Box::new(observer));
+
+        let debounced_events = vec![
+            make_event(
+                EventKind::Create(notify_debouncer_full::notify::event::CreateKind::File),
+                "README.md",
+            ),
+            make_event(
+                EventKind::Modify(notify_debouncer_full::notify::event::ModifyKind::Any),
+                "config.json",
+            ),
+        ];
+
+        let captured = capture_tracing(|| {
+            daemon.process_debounced_events(&debounced_events);
+        });
+
+        assert!(
+            !captured.contains("daemon_event"),
+            "LOG-005: 非代码文件不应触发 daemon_event 事件，实际捕获: {captured:?}"
+        );
+    }
+
+    #[test]
+    fn log_005_daemon_event_emitted_for_remove() {
+        let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
+        let (observer, _call_count, _events) = CountingObserver::new();
+        daemon.add_observer(Box::new(observer));
+
+        let debounced_events = vec![make_event(
+            EventKind::Remove(notify_debouncer_full::notify::event::RemoveKind::File),
+            "old.py",
+        )];
+
+        let captured = capture_tracing(|| {
+            daemon.process_debounced_events(&debounced_events);
+        });
+
+        assert!(
+            captured.contains("daemon_event"),
+            "LOG-005: 删除事件应触发 daemon_event，实际捕获: {captured:?}"
+        );
+        assert!(
+            captured.contains("remove"),
+            "daemon_event 应携带 change_type=remove"
         );
     }
 }

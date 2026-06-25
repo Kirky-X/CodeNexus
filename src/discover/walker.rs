@@ -118,12 +118,12 @@ impl Walker {
                 None => continue,
             };
             let metadata = entry.metadata()?;
-            let relative_path = path
-                .strip_prefix(&self.root)
-                .map_err(|_| DiscoverError::RelativePath {
-                    path: path.to_path_buf(),
-                    root: self.root.clone(),
-                })?;
+            let relative_path =
+                path.strip_prefix(&self.root)
+                    .map_err(|_| DiscoverError::RelativePath {
+                        path: path.to_path_buf(),
+                        root: self.root.clone(),
+                    })?;
             files.push(FileInfo {
                 path: path.to_path_buf(),
                 relative_path: relative_path.to_string_lossy().into_owned(),
@@ -447,10 +447,7 @@ mod tests {
             is_code_file(Path::new("foo.tsx")),
             Some(Language::TypeScript)
         );
-        assert_eq!(
-            is_code_file(Path::new("foo.f90")),
-            Some(Language::Fortran)
-        );
+        assert_eq!(is_code_file(Path::new("foo.f90")), Some(Language::Fortran));
         assert_eq!(is_code_file(Path::new("foo.f")), Some(Language::Fortran));
         assert_eq!(is_code_file(Path::new("foo.f95")), Some(Language::Fortran));
     }
