@@ -16,7 +16,7 @@
 //! - BR-TRACE-005: Variable read - Function -> Variable, Reads edge.
 //! - BR-TRACE-006: Variable write - Function -> Variable, Writes edge.
 
-use crate::model::{Edge, EdgeType, Graph};
+use crate::model::{Edge, EdgeType, Graph, Node, NodeLabel};
 use crate::parse::ExtractResult;
 use crate::resolve::ProjectSymbolTable;
 
@@ -105,6 +105,19 @@ impl<'a> DataFlowResolver<'a> {
                         self.resolve_arg_pass(file, arg, &call.callee_name, arg_index)
                     {
                         edge.start_line = Some(call.line);
+                        // Create the Parameter node so the edge target is not
+                        // orphaned (DQ-004).
+                        let param_qn = edge.target.clone();
+                        let param_node = Node::builder(
+                            NodeLabel::Parameter,
+                            format!("param{arg_index}"),
+                            param_qn.clone(),
+                        )
+                        .id(param_qn)
+                        .project(self.project)
+                        .file_path(file)
+                        .build();
+                        graph.add_node(param_node);
                         graph.add_edge(edge.clone());
                         edges.push(edge);
                     }
@@ -314,12 +327,15 @@ impl<'a> DataFlowResolver<'a> {
             return entry.qn.clone();
         }
         // Fallback: file-qualified name with extension stripped, matching FQN
-        // path-segment conventions.
+        // path-segment conventions. A leading "./" is stripped first so that
+        // relative paths like "./src/foo.rs" produce "src.foo.x" rather than
+        // "..src.foo.x".
         let normalized = file.replace('\\', "/");
+        let normalized = normalized.strip_prefix("./").unwrap_or(&normalized);
         let file_stem = normalized
             .rsplit_once('.')
             .map(|(stem, _)| stem)
-            .unwrap_or(&normalized);
+            .unwrap_or(normalized);
         let file_dotted = file_stem.replace('/', ".");
         format!("{file_dotted}.{name}")
     }
@@ -378,15 +394,6 @@ mod tests {
                 graph.add_node(graph_node);
             }
         }
-    }
-
-    /// Adds a standalone node to the graph with a specific id.
-    fn add_graph_node(graph: &mut Graph, id: &str, name: &str, label: NodeLabel) {
-        let node = Node::builder(label, name, id)
-            .id(id)
-            .project("proj")
-            .build();
-        graph.add_node(node);
     }
 
     // --- is_identifier helper ---
@@ -517,6 +524,43 @@ mod tests {
         assert!(edge.is_some());
     }
 
+    // --- resolve_var_identifier fallback FQN format ---
+
+    #[test]
+    fn resolve_var_identifier_fallback_strips_leading_dot_slash() {
+        // Relative path "./src/foo.rs" must not produce a leading ".." in the
+        // FQN. Expected: src.foo.{name}, not ..src.foo.{name}.
+        let table = ProjectSymbolTable::new();
+        let resolver = DataFlowResolver::new(&table, "proj");
+        let edge = resolver
+            .resolve_var_assign("./src/foo.rs", "x", "y")
+            .unwrap();
+        assert_eq!(edge.source, "src.foo.y");
+        assert_eq!(edge.target, "src.foo.x");
+    }
+
+    #[test]
+    fn resolve_var_identifier_fallback_handles_absolute_path() {
+        // Path without a leading "./" must keep working unchanged.
+        let table = ProjectSymbolTable::new();
+        let resolver = DataFlowResolver::new(&table, "proj");
+        let edge = resolver.resolve_var_assign("src/foo.rs", "x", "y").unwrap();
+        assert_eq!(edge.source, "src.foo.y");
+        assert_eq!(edge.target, "src.foo.x");
+    }
+
+    #[test]
+    fn resolve_var_identifier_fallback_handles_windows_path() {
+        // Backslash separators must be normalised to dots, no leading dot.
+        let table = ProjectSymbolTable::new();
+        let resolver = DataFlowResolver::new(&table, "proj");
+        let edge = resolver
+            .resolve_var_assign("src\\foo.rs", "x", "y")
+            .unwrap();
+        assert_eq!(edge.source, "src.foo.y");
+        assert_eq!(edge.target, "src.foo.x");
+    }
+
     // --- resolve_arg_pass (BR-TRACE-001) ---
 
     #[test]
@@ -633,6 +677,41 @@ mod tests {
     }
 
     #[test]
+    fn resolve_dataflows_creates_parameter_node_for_arg_pass() {
+        // DQ-004: resolve_dataflows must create a Parameter node for each
+        // arg-pass edge so the edge target is not orphaned.
+        let foo_node = make_node("foo", "a.rs", "proj", NodeLabel::Function);
+        let mut result = make_result("a.rs", vec![foo_node]);
+        result.calls.push(CallInfo {
+            caller_qn: Some("proj.a.foo".to_string()),
+            callee_name: "foo".to_string(),
+            line: 5,
+            args: vec!["x".to_string()],
+        });
+
+        let results = vec![result];
+        let table = build_symbol_table(&results, "proj");
+        let mut graph = Graph::new();
+
+        let resolver = DataFlowResolver::new(&table, "proj");
+        let edges = resolver.resolve_dataflows(&results, &mut graph);
+
+        assert_eq!(edges.len(), 1, "should create 1 arg-pass edge");
+        let param_qn = "proj.a.foo.param0";
+        assert_eq!(edges[0].target, param_qn);
+
+        let param_nodes = graph.nodes_by_label(NodeLabel::Parameter);
+        assert_eq!(
+            param_nodes.len(),
+            1,
+            "DQ-004: Parameter node must be created, not orphaned"
+        );
+        assert_eq!(param_nodes[0].id, param_qn);
+        assert_eq!(param_nodes[0].qualified_name, param_qn);
+        assert_eq!(param_nodes[0].project, "proj");
+    }
+
+    #[test]
     fn resolve_dataflows_skips_literal_args() {
         let foo_node = make_node("foo", "a.rs", "proj", NodeLabel::Function);
         let mut result = make_result("a.rs", vec![foo_node]);
@@ -743,8 +822,6 @@ mod tests {
         let table = build_symbol_table(&results, "proj");
         let mut graph = Graph::new();
         add_nodes_to_graph(&mut graph, &results, "proj");
-        // Add the parameter node to the graph so neighbors can find it.
-        add_graph_node(&mut graph, &param_qn, "param0", NodeLabel::Parameter);
 
         let resolver = DataFlowResolver::new(&table, "proj");
         resolver.resolve_dataflows(&results, &mut graph);

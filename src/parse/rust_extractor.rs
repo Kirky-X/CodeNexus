@@ -28,6 +28,7 @@
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
+use crate::resolve::FqnGenerator;
 
 use super::error::{ParseError, Result};
 use super::extractor::{
@@ -145,7 +146,7 @@ fn visit_node(
             extract_use(node, source, result);
         }
         "call_expression" => {
-            extract_call(node, source, result);
+            extract_call(node, source, file_path, project, current_func, result);
             visit_children(node, source, file_path, project, result, current_func);
         }
         "let_declaration" => {
@@ -216,7 +217,7 @@ fn extract_function(
     };
     let is_exported = is_pub(node);
     let signature = node_text(node, source).map(String::from);
-    let qn = make_qn(file_path, &name);
+    let qn = make_qn(file_path, &name, project);
     let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -248,7 +249,7 @@ fn extract_named_item(
         return;
     };
     let is_exported = is_pub(node);
-    let qn = make_qn(file_path, &name);
+    let qn = make_qn(file_path, &name, project);
     let model_node = ModelNode::builder(label, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -280,7 +281,7 @@ fn extract_impl(
     let trait_name = node
         .child_by_field_name("trait")
         .and_then(|n| node_text(n, source).map(String::from));
-    let qn = make_qn(file_path, &name);
+    let qn = make_qn(file_path, &name, project);
     let mut builder = ModelNode::builder(NodeLabel::Impl, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -319,7 +320,14 @@ fn extract_use(node: Node, source: &str, result: &mut ExtractResult) {
     });
 }
 
-fn extract_call(node: Node, source: &str, result: &mut ExtractResult) {
+fn extract_call(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    project: &str,
+    current_func: Option<&str>,
+    result: &mut ExtractResult,
+) {
     let Some(func_node) = node.child_by_field_name("function") else {
         return;
     };
@@ -327,8 +335,9 @@ fn extract_call(node: Node, source: &str, result: &mut ExtractResult) {
         return;
     };
     let args = call_arguments(node, source);
+    let caller_qn = current_func.map(|name| make_qn(file_path, name, project));
     result.calls.push(CallInfo {
-        caller_qn: None,
+        caller_qn,
         callee_name: callee,
         line: node.start_position().row as u32 + 1,
         args,
@@ -740,8 +749,8 @@ fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
     node.utf8_text(source.as_bytes()).ok()
 }
 
-fn make_qn(file_path: &str, name: &str) -> String {
-    format!("{file_path}::{name}")
+fn make_qn(file_path: &str, name: &str, project: &str) -> String {
+    FqnGenerator::generate(project, file_path, name, Language::Rust)
 }
 
 fn add_definition_edges(
@@ -983,7 +992,7 @@ fn main() {
     fn qualified_name_uses_file_path_and_name() {
         let result = extract(RUST_SOURCE);
         let add = result.nodes.iter().find(|n| n.name == "add").unwrap();
-        assert_eq!(add.qualified_name, "test.rs::add");
+        assert_eq!(add.qualified_name, "proj.test.add");
     }
 
     #[test]
@@ -1227,6 +1236,110 @@ fn main() {
         assert!(
             result.writes.is_empty(),
             "top-level const should produce no writes"
+        );
+    }
+
+    #[test]
+    fn extern_block_with_fortran_language() {
+        let src = r#"extern "Fortran" { fn f subroutine(x: i32); }"#;
+        let result = extract(src);
+        assert_eq!(result.externs.len(), 1);
+        assert_eq!(result.externs[0].language, Language::Fortran);
+    }
+
+    #[test]
+    fn extern_block_with_python_language() {
+        let src = r#"extern "Python" { fn py_func(x: i32); }"#;
+        let result = extract(src);
+        assert_eq!(result.externs.len(), 1);
+        assert_eq!(result.externs[0].language, Language::Python);
+    }
+
+    #[test]
+    fn extern_block_default_language_is_c() {
+        // An extern block with an unrecognized ABI string defaults to C.
+        let src = r#"extern "Rust" { fn rust_func(x: i32); }"#;
+        let result = extract(src);
+        assert_eq!(result.externs.len(), 1);
+        assert_eq!(result.externs[0].language, Language::C);
+    }
+
+    #[test]
+    fn tuple_destructuring_pattern() {
+        let src = "fn main() { let (a, b) = (1, 2); }";
+        let result = extract(src);
+        let writes: Vec<_> = result.writes.iter().map(|w| w.var_name.as_str()).collect();
+        assert!(writes.contains(&"a"), "should write a: {writes:?}");
+        assert!(writes.contains(&"b"), "should write b: {writes:?}");
+    }
+
+    #[test]
+    fn reference_pattern() {
+        let src = "fn main() { let x = 1; let &y = &x; }";
+        let result = extract(src);
+        let writes: Vec<_> = result.writes.iter().map(|w| w.var_name.as_str()).collect();
+        assert!(writes.contains(&"y"), "should write y from reference pattern: {writes:?}");
+    }
+
+    #[test]
+    fn struct_pattern() {
+        let src = "fn main() { struct P { x: i32 } let p = P { x: 1 }; let P { x } = p; }";
+        let result = extract(src);
+        let writes: Vec<_> = result.writes.iter().map(|w| w.var_name.as_str()).collect();
+        assert!(writes.contains(&"x"), "should write x from struct pattern: {writes:?}");
+    }
+
+    #[test]
+    fn parenthesized_call_expression() {
+        let src = "fn foo() -> fn() { bar } fn bar() {} fn main() { (foo())(); }";
+        let result = extract(src);
+        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(
+            callees.contains(&"foo"),
+            "should extract call to foo: {callees:?}"
+        );
+    }
+
+    #[test]
+    fn chained_call_expression() {
+        // `foo()()` — the outer call's function is itself a call_expression.
+        let src = "fn foo() -> fn() { bar } fn bar() {} fn main() { foo()(); }";
+        let result = extract(src);
+        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(
+            callees.contains(&"foo"),
+            "should extract outer call to foo: {callees:?}"
+        );
+    }
+
+    #[test]
+    fn let_binding_with_non_identifier_value() {
+        // `let x = if ... { ... } else { ... };` — the value is not a simple
+        // identifier, so source_name is empty and is_return_assign is false.
+        let src = "fn main() { let x = if true { 1 } else { 2 }; }";
+        let result = extract(src);
+        let assign = result
+            .assignments
+            .iter()
+            .find(|a| a.target_name == "x")
+            .expect("should find assignment to x");
+        assert_eq!(assign.source_name, "");
+        assert!(!assign.is_return_assign);
+    }
+
+    #[test]
+    fn use_declaration_with_scoped_identifier() {
+        // `use std::collections::HashMap;` — covers use_path scoped_identifier
+        // with both path and name fields present.
+        let src = "use std::collections::HashMap;";
+        let result = extract(src);
+        assert_eq!(result.imports.len(), 1);
+        assert!(
+            result.imports[0]
+                .imported_names
+                .contains(&"HashMap".to_string()),
+            "should import HashMap: {:?}",
+            result.imports[0].imported_names
         );
     }
 }
