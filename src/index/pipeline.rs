@@ -267,12 +267,31 @@ impl Pipeline {
         all_nodes.extend(file_nodes);
 
         // Merge per-file extraction results into the graph.
+        // Build a mapping from absolute file paths to relative paths so
+        // definition nodes (which extractors set to the absolute path) can be
+        // normalized to match File nodes (which use relative paths).
+        let path_to_rel: HashMap<&str, &str> = to_parse
+            .iter()
+            .filter_map(|f| f.path.to_str().map(|p| (p, f.relative_path.as_str())))
+            .collect();
         for result in &parse_result.results {
+            let rel_path = path_to_rel
+                .get(result.file_path.as_str())
+                .copied()
+                .unwrap_or(result.file_path.as_str());
             for node in &result.nodes {
-                // Use the FQN as the graph id so resolve_all can look up nodes.
                 let mut g = node.clone();
-                if g.id.is_empty() || g.id == node.qualified_name {
+                // Definition nodes (Class, Function, etc.) use FQN as id so
+                // resolve_all and trace can look them up by qualified_name.
+                // Project/File/Folder keep their UUIDv7 ids.
+                if !matches!(g.label, NodeLabel::Project | NodeLabel::File | NodeLabel::Folder) {
                     g.id = node.qualified_name.clone();
+                }
+                // Normalize filePath to relative for consistency with File
+                // nodes, so delete_file_nodes matches all nodes by relative
+                // path during incremental re-indexing.
+                if let Some(fp) = g.file_path.as_mut() {
+                    *fp = rel_path.to_string();
                 }
                 // Ensure the project is set (extractors set it, but be defensive).
                 if g.project.is_empty() {
@@ -296,6 +315,20 @@ impl Pipeline {
             &mut graph,
         );
         all_edges.extend(resolved_edges);
+
+        // Collect Parameter nodes created during dataflow resolution (DQ-004)
+        // so they are persisted to the database alongside other nodes.
+        for node in graph.nodes_by_label(NodeLabel::Parameter) {
+            let mut param = node.clone();
+            // Normalize filePath to relative for consistency with File nodes,
+            // so delete_file_nodes matches during incremental re-indexing.
+            if let Some(fp) = param.file_path.as_mut() {
+                if let Some(&rel) = path_to_rel.get(fp.as_str()) {
+                    *fp = rel.to_string();
+                }
+            }
+            all_nodes.push(param);
+        }
 
         // Step 7: delete old nodes for deleted files (BR-INDEX-002) and for
         // changed files (we're about to re-insert their nodes).
@@ -745,6 +778,90 @@ mod tests {
         assert_eq!(
             first.project_id, second.project_id,
             "re-index should reuse the project id"
+        );
+    }
+
+    // --- ID-FQN consistency: definition node id must equal FQN ---
+
+    #[test]
+    fn definition_node_id_equals_qualified_name() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_file(root, "main.rs", "fn helper() {}\n");
+
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        let result = facade.index(root, "demo", false).expect("index");
+
+        let repo = Repository::open(&db_path).expect("repo");
+        let funcs = repo
+            .query_functions(&result.project_id)
+            .expect("query_functions");
+        assert!(!funcs.is_empty(), "should have at least one function");
+
+        for func in &funcs {
+            assert_eq!(
+                func.id, func.qualified_name,
+                "Function node id must equal qualified_name for trace to work"
+            );
+        }
+    }
+
+    // --- filePath consistency: definition nodes use relative paths ---
+
+    #[test]
+    fn definition_node_file_path_is_relative() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_file(root, "main.rs", "fn helper() {}\n");
+
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        let result = facade.index(root, "demo", false).expect("index");
+
+        let repo = Repository::open(&db_path).expect("repo");
+        let funcs = repo
+            .query_functions(&result.project_id)
+            .expect("query_functions");
+        assert!(!funcs.is_empty(), "should have at least one function");
+
+        for func in &funcs {
+            assert!(
+                !func.file_path.starts_with('/') && !func.file_path.contains(':'),
+                "filePath should be relative, got: {}",
+                func.file_path
+            );
+        }
+    }
+
+    // --- Incremental re-index must not create duplicate nodes ---
+
+    #[test]
+    fn incremental_reindex_no_duplicate_nodes() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_file(root, "a.rs", "fn a() {}\n");
+
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+
+        let first = facade.index(root, "demo", false).expect("first index");
+        assert_eq!(first.files_indexed, 1);
+
+        write_file(root, "a.rs", "fn a() { /* modified */ }\n");
+        let second = facade
+            .index_incremental(root, "demo", false)
+            .expect("second index");
+        assert_eq!(second.files_indexed, 1);
+
+        let repo = Repository::open(&db_path).expect("repo");
+        let funcs = repo
+            .query_functions(&second.project_id)
+            .expect("query_functions");
+        assert_eq!(
+            funcs.len(),
+            1,
+            "should have exactly one function (no duplicates after re-index)"
         );
     }
 
