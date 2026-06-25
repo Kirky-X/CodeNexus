@@ -12,11 +12,16 @@ use super::args::IndexArgs;
 use super::error::Result;
 use crate::index::IndexFacade;
 use crate::index::IndexResult;
+use crate::storage::{QualityChecker, Repository};
 
 /// Runs the `index` subcommand.
 ///
 /// Opens (or creates) the database at `args.db`, indexes `args.path` under
 /// the project name `args.name`, and prints the [`IndexResult`] as JSON.
+///
+/// After indexing completes, runs the data quality checks (DQ-002/004/005/006)
+/// and prints any violations to stderr. The DQ report does not affect the exit
+/// status — index success is reported via stdout JSON as before.
 ///
 /// # Errors
 ///
@@ -27,6 +32,24 @@ pub fn run(args: &IndexArgs) -> Result<()> {
     let db_path = Path::new(&args.db);
     let facade = IndexFacade::new(db_path)?;
     let result = facade.index(path, &args.name, args.force)?;
+
+    // Run data quality checks (DQ-002/004/005/006) against the freshly indexed
+    // database. `Repository::open` re-runs `init_schema`, which is idempotent.
+    let repo = Repository::open(db_path)?;
+    let checker = QualityChecker::new(&repo);
+    let dq_report = checker.run_all()?;
+    if !dq_report.is_clean() {
+        eprintln!("Data quality violations found:");
+        for violation in &dq_report.violations {
+            eprintln!(
+                "  [{}] {} (project: {})",
+                violation.rule,
+                violation.message,
+                violation.project.as_deref().unwrap_or("N/A")
+            );
+        }
+    }
+
     let output = IndexOutput::from(result);
     let json = serde_json::to_string(&output)?;
     println!("{json}");

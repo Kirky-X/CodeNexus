@@ -124,7 +124,11 @@ mod tests {
         drop(repo);
         let args = make_args("alpha", db.to_str().unwrap());
         let result = run(&args);
-        assert!(result.is_ok(), "clean by name should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "clean by name should succeed: {:?}",
+            result.err()
+        );
 
         // Verify alpha is gone but beta remains.
         let repo = Repository::open(&db).expect("repo");
@@ -141,7 +145,11 @@ mod tests {
         drop(repo);
         let args = make_args("p1", db.to_str().unwrap());
         let result = run(&args);
-        assert!(result.is_ok(), "clean by id should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "clean by id should succeed: {:?}",
+            result.err()
+        );
 
         let repo = Repository::open(&db).expect("repo");
         let projects = repo.list_projects().unwrap_or_default();
@@ -156,7 +164,11 @@ mod tests {
         drop(repo);
         let args = make_args("solo", db.to_str().unwrap());
         let result = run(&args);
-        assert!(result.is_ok(), "clean last project should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "clean last project should succeed: {:?}",
+            result.err()
+        );
     }
 
     // --- run() error cases ---

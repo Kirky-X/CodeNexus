@@ -35,11 +35,11 @@ pub use error::{CliError, Result};
 #[cfg(test)]
 mod dispatch_tests {
     use super::*;
-    use clap::Parser;
     use crate::cli::args::{
-        CleanArgs, DaemonArgs, ImpactArgs, IndexArgs, ListArgs, QueryArgs, SearchArgs,
-        StatusArgs, TraceArgs,
+        CleanArgs, DaemonArgs, ImpactArgs, IndexArgs, ListArgs, QueryArgs, SearchArgs, StatusArgs,
+        TraceArgs,
     };
+    use clap::Parser;
 
     /// Builds a `Cli` from a list of arguments and dispatches to the matching
     /// handler, returning the `Result<()>` just like `main.rs` does.
@@ -85,7 +85,11 @@ mod dispatch_tests {
             db.to_str().unwrap(),
         ]);
         let result = dispatch(cli);
-        assert!(result.is_ok(), "dispatch index should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "dispatch index should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -105,7 +109,11 @@ mod dispatch_tests {
             db.to_str().unwrap(),
         ]);
         let result = dispatch(cli);
-        assert!(result.is_ok(), "dispatch query should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "dispatch query should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -136,7 +144,11 @@ mod dispatch_tests {
         }
         let cli = Cli::parse_from(["codenexus", "status", "--db", db.to_str().unwrap()]);
         let result = dispatch(cli);
-        assert!(result.is_ok(), "dispatch status should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "dispatch status should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -148,7 +160,11 @@ mod dispatch_tests {
         }
         let cli = Cli::parse_from(["codenexus", "list", "--db", db.to_str().unwrap()]);
         let result = dispatch(cli);
-        assert!(result.is_ok(), "dispatch list should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "dispatch list should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -156,30 +172,25 @@ mod dispatch_tests {
         let db = fresh_db_path();
         {
             let repo = crate::storage::Repository::open(&db).unwrap();
-            let node = crate::model::Node::builder(
-                crate::model::NodeLabel::Project,
-                "demo",
-                "demo",
-            )
-            .id("p1")
-            .language(crate::model::Language::Rust)
-            .properties(serde_json::json!({
-                "rootPath": "/",
-                "fileCount": 0,
-                "indexedAt": 0,
-            }))
-            .build();
+            let node =
+                crate::model::Node::builder(crate::model::NodeLabel::Project, "demo", "demo")
+                    .id("p1")
+                    .language(crate::model::Language::Rust)
+                    .properties(serde_json::json!({
+                        "rootPath": "/",
+                        "fileCount": 0,
+                        "indexedAt": 0,
+                    }))
+                    .build();
             repo.save_project(&node).unwrap();
         }
-        let cli = Cli::parse_from([
-            "codenexus",
-            "clean",
-            "demo",
-            "--db",
-            db.to_str().unwrap(),
-        ]);
+        let cli = Cli::parse_from(["codenexus", "clean", "demo", "--db", db.to_str().unwrap()]);
         let result = dispatch(cli);
-        assert!(result.is_ok(), "dispatch clean should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "dispatch clean should succeed: {:?}",
+            result.err()
+        );
     }
 
     // --- Exit codes propagate through dispatch ---
@@ -290,31 +301,15 @@ mod dispatch_tests {
         dispatch(cli).expect("index should succeed");
 
         // List — should show one project.
-        let cli = Cli::parse_from([
-            "codenexus",
-            "list",
-            "--db",
-            db.to_str().unwrap(),
-        ]);
+        let cli = Cli::parse_from(["codenexus", "list", "--db", db.to_str().unwrap()]);
         dispatch(cli).expect("list should succeed");
 
         // Clean — should remove the project.
-        let cli = Cli::parse_from([
-            "codenexus",
-            "clean",
-            "demo",
-            "--db",
-            db.to_str().unwrap(),
-        ]);
+        let cli = Cli::parse_from(["codenexus", "clean", "demo", "--db", db.to_str().unwrap()]);
         dispatch(cli).expect("clean should succeed");
 
         // List again — should be empty.
-        let cli = Cli::parse_from([
-            "codenexus",
-            "list",
-            "--db",
-            db.to_str().unwrap(),
-        ]);
+        let cli = Cli::parse_from(["codenexus", "list", "--db", db.to_str().unwrap()]);
         dispatch(cli).expect("list after clean should succeed");
     }
 

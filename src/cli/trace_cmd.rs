@@ -141,7 +141,11 @@ fn find_symbol_node_ids(repo: &Repository, symbol: &str) -> Result<Vec<String>> 
         );
         if let Ok(rows) = repo.connection().query(&cypher) {
             for row in rows {
-                if let Some(id) = row.into_iter().next().and_then(|v| v.as_str().map(String::from)) {
+                if let Some(id) = row
+                    .into_iter()
+                    .next()
+                    .and_then(|v| v.as_str().map(String::from))
+                {
                     ids.push(id);
                 }
             }
@@ -227,22 +231,25 @@ const NODE_LABELS_WITH_NAME_QN: &[NodeLabel] = &[
 /// Extracts the common fields (`id`, `project`, `name`, `qualifiedName`,
 /// `filePath`, `startLine`, `endLine`) by column name. Extra fields are
 /// ignored — the trace facade only needs the location and name.
-fn row_to_node(
-    columns: &[String],
-    row: &[serde_json::Value],
-    label: NodeLabel,
-) -> Option<Node> {
+fn row_to_node(columns: &[String], row: &[serde_json::Value], label: NodeLabel) -> Option<Node> {
     let get = |key: &str| -> Option<&serde_json::Value> {
-        columns.iter().position(|c| c == key).and_then(|i| row.get(i))
+        columns
+            .iter()
+            .position(|c| c == key)
+            .and_then(|i| row.get(i))
     };
     let get_str = |key: &str| -> String {
-        get(key).and_then(|v| v.as_str()).map(String::from).unwrap_or_default()
+        get(key)
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_default()
     };
-    let get_opt_str = |key: &str| -> Option<String> {
-        get(key).and_then(|v| v.as_str()).map(String::from)
-    };
+    let get_opt_str =
+        |key: &str| -> Option<String> { get(key).and_then(|v| v.as_str()).map(String::from) };
     let get_opt_u32 = |key: &str| -> Option<u32> {
-        get(key).and_then(|v| v.as_i64()).and_then(|i| u32::try_from(i).ok())
+        get(key)
+            .and_then(|v| v.as_i64())
+            .and_then(|i| u32::try_from(i).ok())
     };
 
     let id = get_str("id");
@@ -286,8 +293,15 @@ fn row_to_edge(row: &[serde_json::Value]) -> Option<Edge> {
     let type_str = row.get(2).and_then(|v| v.as_str()).unwrap_or("CALLS");
     let confidence = row.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
     let reason = row.get(4).and_then(|v| v.as_str()).map(String::from);
-    let start_line = row.get(5).and_then(|v| v.as_i64()).and_then(|i| u32::try_from(i).ok());
-    let project = row.get(6).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let start_line = row
+        .get(5)
+        .and_then(|v| v.as_i64())
+        .and_then(|i| u32::try_from(i).ok());
+    let project = row
+        .get(6)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let edge_type = parse_edge_type(type_str);
     Some(Edge {
         source,
@@ -483,7 +497,11 @@ mod tests {
         seed_call_graph(&db);
         let args = make_args("a", "all", 3, db.to_str().unwrap());
         let result = run(&args);
-        assert!(result.is_ok(), "trace all should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "trace all should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -492,7 +510,11 @@ mod tests {
         seed_call_graph(&db);
         let args = make_args("a", "dataflow", 3, db.to_str().unwrap());
         let result = run(&args);
-        assert!(result.is_ok(), "trace dataflow should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "trace dataflow should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -506,7 +528,11 @@ mod tests {
             db: db.to_str().unwrap().to_string(),
         };
         let result = run(&args);
-        assert!(result.is_ok(), "default trace should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "default trace should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -515,7 +541,11 @@ mod tests {
         seed_call_graph(&db);
         let args = make_args("a", "calls", 1, db.to_str().unwrap());
         let result = run(&args);
-        assert!(result.is_ok(), "depth 1 trace should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "depth 1 trace should succeed: {:?}",
+            result.err()
+        );
     }
 
     // --- run() error cases ---

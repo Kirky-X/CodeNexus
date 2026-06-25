@@ -346,10 +346,12 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(make_var("x", "x"));
         g.add_node(make_var("y", "y"));
-        g.add_edge(Edge::builder("x", "y", EdgeType::DataFlows, "proj")
-            .confidence(0.9)
-            .reason("assignment: y = x")
-            .build());
+        g.add_edge(
+            Edge::builder("x", "y", EdgeType::DataFlows, "proj")
+                .confidence(0.9)
+                .reason("assignment: y = x")
+                .build(),
+        );
         let tracer = DataFlowTracer::new(&g);
         let paths = tracer.trace(&"x".to_string(), 3);
         assert_eq!(paths.len(), 1);

@@ -54,12 +54,7 @@ pub fn run(args: &DaemonArgs) -> Result<()> {
     let facade = IndexFacade::new(db_path)?;
 
     // 创建守护进程实例（BR-DAEMON-001/004：防抖窗口可配置）。
-    let mut daemon = Daemon::new(
-        watch_path,
-        &args.name,
-        args.debounce_ms,
-        db_path,
-    );
+    let mut daemon = Daemon::new(watch_path, &args.name, args.debounce_ms, db_path);
 
     // 注册索引观察者（观察者模式：主题持有观察者列表）。
     let observer = IndexObserver::new(facade, args.name.clone(), watch_path.to_path_buf());
@@ -151,7 +146,7 @@ mod tests {
         let args = make_args(
             tmp.path().to_str().unwrap(),
             "demo",
-            200,  // 短防抖时间加速测试
+            200, // 短防抖时间加速测试
             db.to_str().unwrap(),
         );
 
@@ -173,10 +168,7 @@ mod tests {
         //
         // 验证：如果运行到这里说明 run() 没有立即返回错误（路径校验通过、
         // 数据库打开成功、守护进程启动成功）。
-        assert!(
-            !handle.is_finished(),
-            "守护进程应在运行中（阻塞）"
-        );
+        assert!(!handle.is_finished(), "守护进程应在运行中（阻塞）");
 
         // 由于无法优雅停止，我们放弃 join。测试进程退出时会终止所有线程。
         // 这是一个已知的限制：daemon_cmd::run 不暴露 stop_handle。

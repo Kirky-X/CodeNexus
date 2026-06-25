@@ -31,7 +31,8 @@ pub fn run(args: &SearchArgs) -> Result<()> {
     } else {
         facade.search(&args.text, None, args.limit)?
     };
-    let output: Vec<SearchResultOutput> = results.into_iter().map(SearchResultOutput::from).collect();
+    let output: Vec<SearchResultOutput> =
+        results.into_iter().map(SearchResultOutput::from).collect();
     let json = serde_json::to_string(&output)?;
     println!("{json}");
     Ok(())
@@ -42,11 +43,7 @@ pub fn run(args: &SearchArgs) -> Result<()> {
 /// When the `embed` feature is enabled and an API key is configured, this uses
 /// [`HybridStrategy`] (BM25 + vector RRF fusion). Otherwise it falls back to
 /// BM25 full-text search via [`QueryFacade::fulltext_search`].
-fn semantic_search(
-    facade: &QueryFacade,
-    text: &str,
-    limit: usize,
-) -> Result<Vec<SearchResult>> {
+fn semantic_search(facade: &QueryFacade, text: &str, limit: usize) -> Result<Vec<SearchResult>> {
     #[cfg(feature = "embed")]
     {
         use crate::embed::{EmbeddingConfig, HybridStrategy, OpenAIEmbedClient, SearchStrategy};
@@ -183,7 +180,11 @@ mod tests {
         seed_search_fixture(&db);
         let args = make_args("parse", true, 10, db.to_str().unwrap());
         let result = run(&args);
-        assert!(result.is_ok(), "semantic search should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "semantic search should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -192,7 +193,11 @@ mod tests {
         seed_search_fixture(&db);
         let args = make_args("zzz_nonexistent", false, 10, db.to_str().unwrap());
         let result = run(&args);
-        assert!(result.is_ok(), "no-match search should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "no-match search should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -201,7 +206,11 @@ mod tests {
         seed_search_fixture(&db);
         let args = make_args("parse", false, 1, db.to_str().unwrap());
         let result = run(&args);
-        assert!(result.is_ok(), "limit-1 search should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "limit-1 search should succeed: {:?}",
+            result.err()
+        );
     }
 
     // --- run() error cases ---
@@ -222,6 +231,10 @@ mod tests {
         drop(conn);
         let args = make_args("parse", false, 10, db.to_str().unwrap());
         let result = run(&args);
-        assert!(result.is_ok(), "empty-db search should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "empty-db search should succeed: {:?}",
+            result.err()
+        );
     }
 }

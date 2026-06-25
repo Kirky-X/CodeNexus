@@ -218,10 +218,12 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(make_func("a", "a"));
         g.add_node(make_func("b", "b"));
-        g.add_edge(Edge::builder("a", "b", EdgeType::FfiCalls, "proj")
-            .confidence(0.85)
-            .reason("extern \"C\" declaration match")
-            .build());
+        g.add_edge(
+            Edge::builder("a", "b", EdgeType::FfiCalls, "proj")
+                .confidence(0.85)
+                .reason("extern \"C\" declaration match")
+                .build(),
+        );
         let tracer = CallGraphTracer::new(&g);
         let paths = tracer.trace(&"a".to_string(), 3);
         assert_eq!(paths.len(), 1);
@@ -268,7 +270,12 @@ mod tests {
             let len_before = names.len();
             names.sort();
             names.dedup();
-            assert_eq!(names.len(), len_before, "path revisits a node: {:?}", p.nodes);
+            assert_eq!(
+                names.len(),
+                len_before,
+                "path revisits a node: {:?}",
+                p.nodes
+            );
             assert!(p.depth <= 5);
         }
     }

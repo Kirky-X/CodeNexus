@@ -97,9 +97,7 @@ mod tests {
     }
 
     fn make_args(db: &str) -> StatusArgs {
-        StatusArgs {
-            db: db.to_string(),
-        }
+        StatusArgs { db: db.to_string() }
     }
 
     // --- ProjectOutput ---
@@ -150,7 +148,11 @@ mod tests {
         drop(repo);
         let args = make_args(db.to_str().unwrap());
         let result = run(&args);
-        assert!(result.is_ok(), "empty-db status should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "empty-db status should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -162,7 +164,11 @@ mod tests {
         drop(repo);
         let args = make_args(db.to_str().unwrap());
         let result = run(&args);
-        assert!(result.is_ok(), "status with projects should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "status with projects should succeed: {:?}",
+            result.err()
+        );
     }
 
     // --- run() error cases ---

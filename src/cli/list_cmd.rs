@@ -88,9 +88,7 @@ mod tests {
     }
 
     fn make_args(db: &str) -> ListArgs {
-        ListArgs {
-            db: db.to_string(),
-        }
+        ListArgs { db: db.to_string() }
     }
 
     // --- ProjectOutput ---
@@ -138,7 +136,11 @@ mod tests {
         drop(repo);
         let args = make_args(db.to_str().unwrap());
         let result = run(&args);
-        assert!(result.is_ok(), "empty-db list should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "empty-db list should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -150,7 +152,11 @@ mod tests {
         drop(repo);
         let args = make_args(db.to_str().unwrap());
         let result = run(&args);
-        assert!(result.is_ok(), "list with projects should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "list with projects should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -161,7 +167,11 @@ mod tests {
         drop(repo);
         let args = make_args(db.to_str().unwrap());
         let result = run(&args);
-        assert!(result.is_ok(), "list single project should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "list single project should succeed: {:?}",
+            result.err()
+        );
     }
 
     // --- run() error cases ---

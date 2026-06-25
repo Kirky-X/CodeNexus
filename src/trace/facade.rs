@@ -79,12 +79,7 @@ impl<'a> TraceFacade<'a> {
     ///
     /// `depth` must be at least 1; otherwise an
     /// [`InvalidDepth`][TraceError::InvalidDepth] error is returned.
-    pub fn trace(
-        &self,
-        symbol: &str,
-        trace_type: TraceType,
-        depth: usize,
-    ) -> Result<TraceResult> {
+    pub fn trace(&self, symbol: &str, trace_type: TraceType, depth: usize) -> Result<TraceResult> {
         if depth == 0 {
             return Err(TraceError::InvalidDepth(depth));
         }
@@ -119,7 +114,10 @@ impl<'a> TraceFacade<'a> {
             return Ok(by_name[0].id.clone());
         }
         if by_name.len() > 1 {
-            return Err(TraceError::AmbiguousSymbol(symbol.to_string(), by_name.len()));
+            return Err(TraceError::AmbiguousSymbol(
+                symbol.to_string(),
+                by_name.len(),
+            ));
         }
         // Fall back to qualified_name match.
         let by_qn: Vec<&crate::model::Node> = self
@@ -181,14 +179,20 @@ mod tests {
     #[test]
     fn trace_type_from_cli_str_parses_known() {
         assert_eq!(TraceType::from_cli_str("calls"), Some(TraceType::Calls));
-        assert_eq!(TraceType::from_cli_str("dataflow"), Some(TraceType::DataFlow));
+        assert_eq!(
+            TraceType::from_cli_str("dataflow"),
+            Some(TraceType::DataFlow)
+        );
         assert_eq!(TraceType::from_cli_str("all"), Some(TraceType::All));
     }
 
     #[test]
     fn trace_type_from_cli_str_case_insensitive() {
         assert_eq!(TraceType::from_cli_str("CALLS"), Some(TraceType::Calls));
-        assert_eq!(TraceType::from_cli_str("DataFlow"), Some(TraceType::DataFlow));
+        assert_eq!(
+            TraceType::from_cli_str("DataFlow"),
+            Some(TraceType::DataFlow)
+        );
         assert_eq!(TraceType::from_cli_str("ALL"), Some(TraceType::All));
     }
 

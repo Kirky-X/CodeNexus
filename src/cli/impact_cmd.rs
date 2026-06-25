@@ -48,11 +48,8 @@ pub fn run(args: &ImpactArgs) -> Result<()> {
 /// Resolves a symbol name to a node id by matching `name` first, then
 /// `qualified_name`. Returns `None` if no node matches.
 fn resolve_start_id(graph: &Graph, symbol: &str) -> Option<String> {
-    let by_name: Vec<&crate::model::Node> = graph
-        .nodes
-        .values()
-        .filter(|n| n.name == symbol)
-        .collect();
+    let by_name: Vec<&crate::model::Node> =
+        graph.nodes.values().filter(|n| n.name == symbol).collect();
     if by_name.len() == 1 {
         return Some(by_name[0].id.clone());
     }
@@ -190,7 +187,11 @@ mod tests {
         seed_call_chain(&db);
         let args = make_args("a", 1, db.to_str().unwrap());
         let result = run(&args);
-        assert!(result.is_ok(), "depth 1 impact should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "depth 1 impact should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -200,7 +201,11 @@ mod tests {
         // c has no callers → impacted is empty, but run still succeeds.
         let args = make_args("c", 3, db.to_str().unwrap());
         let result = run(&args);
-        assert!(result.is_ok(), "no-callers impact should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "no-callers impact should succeed: {:?}",
+            result.err()
+        );
     }
 
     // --- run() error cases ---
@@ -213,7 +218,11 @@ mod tests {
         // Missing symbol is NOT an error for impact analysis — it just returns
         // an empty impacted list.
         let result = run(&args);
-        assert!(result.is_ok(), "missing symbol should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "missing symbol should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -228,13 +237,10 @@ mod tests {
     #[test]
     fn resolve_start_id_by_name() {
         let mut graph = Graph::new();
-        let node = crate::model::Node::builder(
-            crate::model::NodeLabel::Function,
-            "foo",
-            "demo.foo",
-        )
-        .id("foo-id")
-        .build();
+        let node =
+            crate::model::Node::builder(crate::model::NodeLabel::Function, "foo", "demo.foo")
+                .id("foo-id")
+                .build();
         graph.add_node(node);
         let id = resolve_start_id(&graph, "foo");
         assert_eq!(id.as_deref(), Some("foo-id"));
@@ -243,13 +249,10 @@ mod tests {
     #[test]
     fn resolve_start_id_by_qualified_name() {
         let mut graph = Graph::new();
-        let node = crate::model::Node::builder(
-            crate::model::NodeLabel::Function,
-            "foo",
-            "demo.src.foo",
-        )
-        .id("foo-id")
-        .build();
+        let node =
+            crate::model::Node::builder(crate::model::NodeLabel::Function, "foo", "demo.src.foo")
+                .id("foo-id")
+                .build();
         graph.add_node(node);
         let id = resolve_start_id(&graph, "demo.src.foo");
         assert_eq!(id.as_deref(), Some("foo-id"));
@@ -266,22 +269,14 @@ mod tests {
     fn resolve_start_id_ambiguous_returns_first() {
         let mut graph = Graph::new();
         graph.add_node(
-            crate::model::Node::builder(
-                crate::model::NodeLabel::Function,
-                "foo",
-                "demo.foo1",
-            )
-            .id("id1")
-            .build(),
+            crate::model::Node::builder(crate::model::NodeLabel::Function, "foo", "demo.foo1")
+                .id("id1")
+                .build(),
         );
         graph.add_node(
-            crate::model::Node::builder(
-                crate::model::NodeLabel::Function,
-                "foo",
-                "demo.foo2",
-            )
-            .id("id2")
-            .build(),
+            crate::model::Node::builder(crate::model::NodeLabel::Function, "foo", "demo.foo2")
+                .id("id2")
+                .build(),
         );
         let id = resolve_start_id(&graph, "foo");
         // Ambiguous: returns the first match (best-effort).

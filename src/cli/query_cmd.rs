@@ -116,7 +116,10 @@ mod tests {
     fn run_executes_count_query() {
         let db = fresh_db_path();
         seed(&db);
-        let args = make_args("MATCH (f:Function) RETURN count(f) AS cnt;", db.to_str().unwrap());
+        let args = make_args(
+            "MATCH (f:Function) RETURN count(f) AS cnt;",
+            db.to_str().unwrap(),
+        );
         let result = run(&args);
         assert!(result.is_ok(), "run should succeed: {:?}", result.err());
     }
@@ -142,7 +145,11 @@ mod tests {
             db.to_str().unwrap(),
         );
         let result = run(&args);
-        assert!(result.is_ok(), "empty result should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "empty result should succeed: {:?}",
+            result.err()
+        );
     }
 
     // --- run() error cases ---
@@ -176,6 +183,10 @@ mod tests {
             project: Some("demo".to_string()),
         };
         let result = run(&args);
-        assert!(result.is_ok(), "run with project should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "run with project should succeed: {:?}",
+            result.err()
+        );
     }
 }

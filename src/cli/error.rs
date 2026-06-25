@@ -16,6 +16,7 @@
 //! | 4    | database corrupt       | corrupt database                    |
 
 use thiserror::Error;
+use tracing::error;
 
 use crate::daemon::DaemonError;
 use crate::index::IndexError;
@@ -73,7 +74,7 @@ impl CliError {
     /// following PRD §4.1.6.
     #[must_use]
     pub fn exit_code(&self) -> i32 {
-        match self {
+        let code = match self {
             // Index errors carry their own exit-code mapping.
             CliError::Index(e) => e.exit_code(),
             // Input validation failures → exit 1.
@@ -90,13 +91,23 @@ impl CliError {
             CliError::Storage(_) => 2,
             // Daemon errors (notify watcher / IO) are system errors → exit 3.
             CliError::Daemon(_) => 3,
-        }
+        };
+        error!(
+            event = "error",
+            error_type = ?self,
+            exit_code = code,
+            "CLI error occurred"
+        );
+        code
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::fmt::MakeWriter;
 
     // --- Display messages ---
 
@@ -313,5 +324,89 @@ mod tests {
         assert!(ok.is_ok());
         let err: Result<i32> = Err(CliError::InvalidInput("x".to_string()));
         assert!(err.is_err());
+    }
+
+    // --- LOG-004: error event emission ---
+
+    /// A `MakeWriter` that buffers emitted events into a shared `Vec<u8>` so a
+    /// test can assert on what the subscriber actually wrote.
+    struct CapturingMakeWriter {
+        buf: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl MakeWriter for CapturingMakeWriter {
+        type Writer = CapturingWriter;
+
+        fn make_writer(&self) -> Self::Writer {
+            CapturingWriter {
+                buf: self.buf.clone(),
+            }
+        }
+    }
+
+    struct CapturingWriter {
+        buf: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for CapturingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.buf.lock().unwrap().write_all(bytes)?;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Runs `f` inside a scoped tracing subscriber that captures all event
+    /// output into a string, returning that string.
+    fn capture_tracing<R>(f: impl FnOnce() -> R) -> String {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::FmtSubscriber::builder()
+            .with_target(false)
+            .with_writer(CapturingMakeWriter { buf: buf.clone() })
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        let bytes = buf.lock().unwrap().clone();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn log_004_error_event_emitted_on_exit_code() {
+        let err = CliError::InvalidInput("bad input".to_string());
+
+        let captured = capture_tracing(|| {
+            let code = err.exit_code();
+            assert_eq!(code, 1);
+        });
+
+        assert!(
+            captured.contains("error"),
+            "LOG-004: error event should be emitted, got: {captured:?}"
+        );
+        assert!(
+            captured.contains("exit_code"),
+            "error event should carry exit_code field"
+        );
+        assert!(
+            captured.contains("InvalidInput"),
+            "error event should carry the error type via Debug"
+        );
+    }
+
+    #[test]
+    fn log_004_error_event_carries_correct_exit_code() {
+        let err: CliError = IndexError::PathNotFound("/missing".to_string()).into();
+
+        let captured = capture_tracing(|| {
+            let _ = err.exit_code();
+        });
+
+        // The error event should mention exit_code=1 (path not found → exit 1).
+        assert!(
+            captured.contains("exit_code") && captured.contains("1"),
+            "LOG-004: error event should carry the correct exit code, got: {captured:?}"
+        );
     }
 }

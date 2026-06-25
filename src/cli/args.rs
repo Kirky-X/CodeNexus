@@ -57,7 +57,7 @@ pub struct IndexArgs {
     #[arg(long, default_value_t = false)]
     pub force: bool,
     /// Enable LSP-enhanced extraction (reserved for future use).
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, help = "Enable LSP-enhanced extraction (reserved for future use)（预留，当前未实现）")]
     pub lsp: bool,
     /// Enable embedding generation (requires the `embed` feature).
     #[arg(long, default_value_t = false)]
