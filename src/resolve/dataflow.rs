@@ -433,7 +433,7 @@ mod tests {
         assert!(edge.is_some());
         let edge = edge.unwrap();
         assert_eq!(edge.edge_type, EdgeType::DataFlows);
-        assert_eq!(edge.source, "proj.a.foo");
+        assert_eq!(edge.source, "proj.a.rs.foo");
         assert_eq!(edge.target, "a.x");
         assert!((edge.confidence - 0.90).abs() < 1e-6);
     }
@@ -459,8 +459,8 @@ mod tests {
         let resolver = DataFlowResolver::new(&table, "proj");
         let edge = resolver.resolve_return_assign("a.rs", "foo", "x").unwrap();
 
-        assert_eq!(edge.source, "proj.a.foo");
-        assert_eq!(edge.target, "proj.a.x");
+        assert_eq!(edge.source, "proj.a.rs.foo");
+        assert_eq!(edge.target, "proj.a.rs.x");
     }
 
     #[test]
@@ -478,7 +478,7 @@ mod tests {
 
         assert!(edge.is_some());
         let edge = edge.unwrap();
-        assert_eq!(edge.source, "proj.b.foo");
+        assert_eq!(edge.source, "proj.b.rs.foo");
     }
 
     // --- resolve_var_assign (BR-TRACE-003) ---
@@ -510,8 +510,8 @@ mod tests {
         let resolver = DataFlowResolver::new(&table, "proj");
         let edge = resolver.resolve_var_assign("a.rs", "x", "y").unwrap();
 
-        assert_eq!(edge.source, "proj.a.y");
-        assert_eq!(edge.target, "proj.a.x");
+        assert_eq!(edge.source, "proj.a.rs.y");
+        assert_eq!(edge.target, "proj.a.rs.x");
     }
 
     #[test]
@@ -577,7 +577,7 @@ mod tests {
         let edge = edge.unwrap();
         assert_eq!(edge.edge_type, EdgeType::DataFlows);
         assert_eq!(edge.source, "a.var");
-        assert_eq!(edge.target, "proj.a.foo.param0");
+        assert_eq!(edge.target, "proj.a.rs.foo.param0");
         assert!((edge.confidence - 0.80).abs() < 1e-6);
     }
 
@@ -600,7 +600,7 @@ mod tests {
         let resolver = DataFlowResolver::new(&table, "proj");
         let edge = resolver.resolve_arg_pass("a.rs", "var", "foo", 2).unwrap();
 
-        assert_eq!(edge.target, "proj.a.foo.param2");
+        assert_eq!(edge.target, "proj.a.rs.foo.param2");
     }
 
     #[test]
@@ -613,8 +613,8 @@ mod tests {
         let resolver = DataFlowResolver::new(&table, "proj");
         let edge = resolver.resolve_arg_pass("a.rs", "var", "foo", 0).unwrap();
 
-        assert_eq!(edge.source, "proj.a.var");
-        assert_eq!(edge.target, "proj.a.foo.param0");
+        assert_eq!(edge.source, "proj.a.rs.var");
+        assert_eq!(edge.target, "proj.a.rs.foo.param0");
     }
 
     // --- resolve_dataflows: batch resolution ---
@@ -641,7 +641,7 @@ mod tests {
         });
         // bar(var) -> parameter passing (BR-TRACE-001)
         result.calls.push(CallInfo {
-            caller_qn: Some("proj.a.foo".to_string()),
+            caller_qn: Some("proj.a.rs.foo".to_string()),
             callee_name: "bar".to_string(),
             line: 7,
             args: vec!["var".to_string()],
@@ -661,7 +661,7 @@ mod tests {
         assert!(edges.iter().all(|e| e.edge_type == EdgeType::DataFlows));
 
         // Verify return assignment edge: foo -> x
-        let return_edge = edges.iter().find(|e| e.source == "proj.a.foo").unwrap();
+        let return_edge = edges.iter().find(|e| e.source == "proj.a.rs.foo").unwrap();
         assert_eq!(return_edge.target, "a.x");
 
         // Verify variable assignment edge: z -> y
@@ -671,7 +671,7 @@ mod tests {
         // Verify arg pass edge: var -> bar.param0
         let arg_edge = edges
             .iter()
-            .find(|e| e.target == "proj.a.bar.param0")
+            .find(|e| e.target == "proj.a.rs.bar.param0")
             .unwrap();
         assert_eq!(arg_edge.source, "a.var");
     }
@@ -683,7 +683,7 @@ mod tests {
         let foo_node = make_node("foo", "a.rs", "proj", NodeLabel::Function);
         let mut result = make_result("a.rs", vec![foo_node]);
         result.calls.push(CallInfo {
-            caller_qn: Some("proj.a.foo".to_string()),
+            caller_qn: Some("proj.a.rs.foo".to_string()),
             callee_name: "foo".to_string(),
             line: 5,
             args: vec!["x".to_string()],
@@ -697,7 +697,7 @@ mod tests {
         let edges = resolver.resolve_dataflows(&results, &mut graph);
 
         assert_eq!(edges.len(), 1, "should create 1 arg-pass edge");
-        let param_qn = "proj.a.foo.param0";
+        let param_qn = "proj.a.rs.foo.param0";
         assert_eq!(edges[0].target, param_qn);
 
         let param_nodes = graph.nodes_by_label(NodeLabel::Parameter);
@@ -716,7 +716,7 @@ mod tests {
         let foo_node = make_node("foo", "a.rs", "proj", NodeLabel::Function);
         let mut result = make_result("a.rs", vec![foo_node]);
         result.calls.push(CallInfo {
-            caller_qn: Some("proj.a.foo".to_string()),
+            caller_qn: Some("proj.a.rs.foo".to_string()),
             callee_name: "foo".to_string(),
             line: 5,
             args: vec!["42".to_string(), "\"hello\"".to_string(), "x".to_string()],
@@ -732,14 +732,14 @@ mod tests {
         // Only "x" is a valid identifier; "42" and "\"hello\"" are literals.
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].source, "a.x");
-        assert_eq!(edges[0].target, "proj.a.foo.param2");
+        assert_eq!(edges[0].target, "proj.a.rs.foo.param2");
     }
 
     #[test]
     fn resolve_dataflows_skips_calls_with_unresolvable_callee() {
         let mut result = make_result("a.rs", vec![]);
         result.calls.push(CallInfo {
-            caller_qn: Some("proj.a.foo".to_string()),
+            caller_qn: Some("proj.a.rs.foo".to_string()),
             callee_name: "nonexistent".to_string(),
             line: 5,
             args: vec!["x".to_string()],
@@ -811,7 +811,7 @@ mod tests {
 
         let mut a_result = make_result("a.rs", vec![x_node]);
         a_result.calls.push(CallInfo {
-            caller_qn: Some("proj.a.bar".to_string()),
+            caller_qn: Some("proj.a.rs.bar".to_string()),
             callee_name: "foo".to_string(),
             line: 5,
             args: vec!["x".to_string()],
@@ -860,7 +860,7 @@ mod tests {
         assert_eq!(edges.len(), 1, "should create 1 Reads edge");
         let edge = &edges[0];
         assert_eq!(edge.edge_type, EdgeType::Reads);
-        assert_eq!(edge.source, "proj.a.foo");
+        assert_eq!(edge.source, "proj.a.rs.foo");
         assert_eq!(edge.target, "a.x");
         assert!(
             (edge.confidence - 0.75).abs() < 1e-6,
@@ -936,7 +936,7 @@ mod tests {
         let edges = resolver.resolve_reads(&results, &mut graph);
 
         assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].target, "proj.a.x");
+        assert_eq!(edges[0].target, "proj.a.rs.x");
     }
 
     // --- resolve_writes (BR-TRACE-006) ---
@@ -962,7 +962,7 @@ mod tests {
         assert_eq!(edges.len(), 1, "should create 1 Writes edge");
         let edge = &edges[0];
         assert_eq!(edge.edge_type, EdgeType::Writes);
-        assert_eq!(edge.source, "proj.a.foo");
+        assert_eq!(edge.source, "proj.a.rs.foo");
         assert_eq!(edge.target, "a.y");
         assert!(
             (edge.confidence - 0.75).abs() < 1e-6,
@@ -1058,12 +1058,12 @@ mod tests {
         assert_eq!(writes_edges.len(), 1, "expected 1 Writes edge");
 
         let reads_edge = reads_edges[0];
-        assert_eq!(reads_edge.source, "proj.a.foo");
+        assert_eq!(reads_edge.source, "proj.a.rs.foo");
         assert_eq!(reads_edge.target, "a.x");
         assert!((reads_edge.confidence - 0.75).abs() < 1e-6);
 
         let writes_edge = writes_edges[0];
-        assert_eq!(writes_edge.source, "proj.a.foo");
+        assert_eq!(writes_edge.source, "proj.a.rs.foo");
         assert_eq!(writes_edge.target, "a.y");
         assert!((writes_edge.confidence - 0.75).abs() < 1e-6);
 

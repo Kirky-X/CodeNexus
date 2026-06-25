@@ -111,23 +111,30 @@ fn visit_node(
             );
         }
         "struct_item" => {
-            extract_named_item(node, NodeLabel::Struct, source, file_path, project, result);
+            extract_named_item(node, NodeLabel::Struct, source, file_path, project, result, current_parent);
         }
         "enum_item" => {
-            extract_named_item(node, NodeLabel::Enum, source, file_path, project, result);
+            extract_named_item(node, NodeLabel::Enum, source, file_path, project, result, current_parent);
             visit_children(node, source, file_path, project, result, current_func, current_parent);
         }
         "trait_item" => {
-            extract_named_item(node, NodeLabel::Trait, source, file_path, project, result);
+            extract_named_item(node, NodeLabel::Trait, source, file_path, project, result, current_parent);
             visit_children(node, source, file_path, project, result, current_func, current_parent);
         }
-        "impl_item" => {
-            extract_impl(node, source, file_path, project, result);
-            // Extract the impl's target type name and pass it as current_parent
-            // so methods inside the impl can disambiguate their FQN (ADR-003).
-            let impl_type = node
-                .child_by_field_name("type")
+        "mod_item" => {
+            extract_named_item(node, NodeLabel::Module, source, file_path, project, result, current_parent);
+            // Extract the module name and pass it as current_parent so
+            // entities inside the module can be disambiguated (ADR-003).
+            // Combine with any existing parent for nested modules (a::b).
+            let mod_name = node
+                .child_by_field_name("name")
                 .and_then(|n| node_text(n, source).map(String::from));
+            let combined = match (current_parent, mod_name.as_deref()) {
+                (Some(p), Some(m)) => Some(format!("{p}_{m}")),
+                (None, Some(m)) => Some(m.to_string()),
+                (Some(p), None) => Some(p.to_string()),
+                (None, None) => None,
+            };
             visit_children(
                 node,
                 source,
@@ -135,14 +142,39 @@ fn visit_node(
                 project,
                 result,
                 current_func,
-                impl_type.as_deref(),
+                combined.as_deref(),
+            );
+        }
+        "impl_item" => {
+            extract_impl(node, source, file_path, project, result, current_parent);
+            // Extract the impl's target type name and pass it as current_parent
+            // so methods inside the impl can disambiguate their FQN (ADR-003).
+            // Combine with module context so methods in `mod a { impl X }` and
+            // `mod b { impl X }` get distinct FQNs.
+            let impl_type = node
+                .child_by_field_name("type")
+                .and_then(|n| node_text(n, source).map(String::from));
+            let combined = match (current_parent, impl_type.as_deref()) {
+                (Some(p), Some(t)) => Some(format!("{p}_{t}")),
+                (None, Some(t)) => Some(t.to_string()),
+                (Some(p), None) => Some(p.to_string()),
+                (None, None) => None,
+            };
+            visit_children(
+                node,
+                source,
+                file_path,
+                project,
+                result,
+                current_func,
+                combined.as_deref(),
             );
         }
         "const_item" => {
-            extract_named_item(node, NodeLabel::Const, source, file_path, project, result);
+            extract_named_item(node, NodeLabel::Const, source, file_path, project, result, current_parent);
         }
         "static_item" => {
-            extract_named_item(node, NodeLabel::Static, source, file_path, project, result);
+            extract_named_item(node, NodeLabel::Static, source, file_path, project, result, current_parent);
         }
         "type_item" => {
             extract_named_item(
@@ -152,10 +184,11 @@ fn visit_node(
                 file_path,
                 project,
                 result,
+                current_parent,
             );
         }
         "macro_definition" => {
-            extract_named_item(node, NodeLabel::Macro, source, file_path, project, result);
+            extract_named_item(node, NodeLabel::Macro, source, file_path, project, result, current_parent);
         }
         "use_declaration" => {
             extract_use(node, source, result);
@@ -258,6 +291,7 @@ fn extract_named_item(
     file_path: &str,
     project: &str,
     result: &mut ExtractResult,
+    parent: Option<&str>,
 ) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
@@ -266,7 +300,7 @@ fn extract_named_item(
         return;
     };
     let is_exported = is_pub(node);
-    let qn = make_qn(file_path, &name, project, None);
+    let qn = make_qn(file_path, &name, project, parent);
     let model_node = ModelNode::builder(label, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -286,6 +320,7 @@ fn extract_impl(
     file_path: &str,
     project: &str,
     result: &mut ExtractResult,
+    module_parent: Option<&str>,
 ) {
     // impl_item has a `type` field (the type being implemented) and an
     // optional `trait` field (the trait being implemented).
@@ -298,7 +333,19 @@ fn extract_impl(
     let trait_name = node
         .child_by_field_name("trait")
         .and_then(|n| node_text(n, source).map(String::from));
-    let qn = make_qn(file_path, &name, project, None);
+    // ADR-003: disambiguate impl blocks from the struct/enum they implement
+    // (same name, same file → Type A collision). Trait impls use the trait
+    // name as disambiguator; inherent impls use the fixed marker "impl".
+    // When inside a module, combine module path with the impl marker so
+    // `mod a { impl X }` and `mod b { impl X }` get distinct FQNs.
+    let impl_marker = trait_name.as_deref().or(Some("impl"));
+    let disambiguator = match (module_parent, impl_marker) {
+        (Some(m), Some(im)) => Some(format!("{m}_{im}")),
+        (None, Some(im)) => Some(im.to_string()),
+        (Some(m), None) => Some(m.to_string()),
+        (None, None) => None,
+    };
+    let qn = make_qn(file_path, &name, project, disambiguator.as_deref());
     let mut builder = ModelNode::builder(NodeLabel::Impl, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -1199,7 +1246,7 @@ fn main() {
         for read in &result.reads {
             assert_eq!(
                 read.reader_qn.as_deref(),
-                Some("add"),
+                Some("proj.test.rs.add"),
                 "reader should be the enclosing function"
             );
         }
@@ -1215,7 +1262,7 @@ fn main() {
         for write in &result.writes {
             assert_eq!(
                 write.writer_qn.as_deref(),
-                Some("main"),
+                Some("proj.test.rs.main"),
                 "writer should be the enclosing function"
             );
         }
@@ -1251,7 +1298,7 @@ fn main() {
         let main_reads: Vec<_> = result
             .reads
             .iter()
-            .filter(|r| r.reader_qn.as_deref() == Some("main"))
+            .filter(|r| r.reader_qn.as_deref() == Some("proj.test.rs.main"))
             .collect();
         assert!(
             main_reads.is_empty(),
@@ -1261,7 +1308,7 @@ fn main() {
         let main_writes: Vec<_> = result
             .writes
             .iter()
-            .filter(|w| w.writer_qn.as_deref() == Some("main"))
+            .filter(|w| w.writer_qn.as_deref() == Some("proj.test.rs.main"))
             .collect();
         assert_eq!(main_writes.len(), 1);
         assert_eq!(main_writes[0].var_name, "result");

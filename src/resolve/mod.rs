@@ -309,12 +309,12 @@ mod tests {
         let r1 = make_result(
             "a.rs",
             Language::Rust,
-            vec![make_node("foo", NodeLabel::Function, Language::Rust)],
+            vec![make_node("foo", NodeLabel::Function, Language::Rust, "a.rs", "proj")],
         );
         let r2 = make_result(
             "b.rs",
             Language::Rust,
-            vec![make_node("foo", NodeLabel::Function, Language::Rust)],
+            vec![make_node("foo", NodeLabel::Function, Language::Rust, "b.rs", "proj")],
         );
         let table = build_symbol_table(&[r1, r2], "proj");
         let results = table.lookup("foo");
@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn build_uses_result_language_when_node_has_none() {
-        let mut node = make_node("foo", NodeLabel::Function, Language::Rust);
+        let mut node = make_node("foo", NodeLabel::Function, Language::Rust, "src/main.rs", "proj");
         node.language = None;
         let result = make_result("src/main.rs", Language::Rust, vec![node]);
         let table = build_symbol_table(&[result], "proj");
@@ -336,7 +336,7 @@ mod tests {
         let mut result = ExtractResult::new("src/main.rs", Language::Rust);
         result
             .nodes
-            .push(make_node("foo", NodeLabel::Function, Language::Rust));
+            .push(make_node("foo", NodeLabel::Function, Language::Rust, "src/main.rs", "proj"));
         result.imports.push(ImportInfo {
             source_file: "std::io".to_string(),
             imported_names: vec!["println".to_string()],
@@ -360,11 +360,11 @@ mod tests {
         let r = make_result(
             "src/components/Button.tsx",
             Language::TypeScript,
-            vec![make_node("Button", NodeLabel::Class, Language::TypeScript)],
+            vec![make_node("Button", NodeLabel::Class, Language::TypeScript, "src/components/Button.tsx", "proj")],
         );
         let table = build_symbol_table(&[r], "proj");
         let entry = table.lookup_exact("Button").unwrap();
-        assert_eq!(entry.qn, "proj.src.components.Button.Button");
+        assert_eq!(entry.qn, "proj.src.components.Button.tsx.Button");
     }
 
     #[test]
@@ -372,11 +372,11 @@ mod tests {
         let r = make_result(
             "./src/main.rs",
             Language::Rust,
-            vec![make_node("foo", NodeLabel::Function, Language::Rust)],
+            vec![make_node("foo", NodeLabel::Function, Language::Rust, "./src/main.rs", "proj")],
         );
         let table = build_symbol_table(&[r], "proj");
         let entry = table.lookup_exact("foo").unwrap();
-        assert_eq!(entry.qn, "proj.src.main.foo");
+        assert_eq!(entry.qn, "proj.src.main.rs.foo");
     }
 
     #[test]
@@ -397,8 +397,8 @@ mod tests {
             "src/main.rs",
             Language::Rust,
             vec![
-                make_node("foo", NodeLabel::Function, Language::Rust),
-                make_node("bar", NodeLabel::Function, Language::Rust),
+                make_node("foo", NodeLabel::Function, Language::Rust, "src/main.rs", "proj"),
+                make_node("bar", NodeLabel::Function, Language::Rust, "src/main.rs", "proj"),
             ],
         );
         let table = build_symbol_table(&[r], "proj");
@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn build_preserves_project_field() {
-        let node = make_node("foo", NodeLabel::Function, Language::Rust);
+        let node = make_node("foo", NodeLabel::Function, Language::Rust, "src/main.rs", "myproject");
         let result = make_result("src/main.rs", Language::Rust, vec![node]);
         let table = build_symbol_table(&[result], "myproject");
         let entry = table.lookup_exact("foo").unwrap();

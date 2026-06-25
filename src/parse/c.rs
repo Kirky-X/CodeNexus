@@ -85,15 +85,63 @@ fn visit_node(
 ) {
     match node.kind() {
         "function_definition" => {
-            extract_function(node, source, file_path, project, result);
-            // Pass the function's name as the enclosing function for body
-            // traversal, so calls/reads/writes inside it can be attributed.
-            let func_name = function_name(node, source);
-            // Recurse into the body to find calls/reads/writes.
-            for i in 0..node.named_child_count() as u32 {
-                if let Some(child) = node.named_child(i) {
-                    if child.kind() == "compound_statement" {
-                        visit_children(child, source, file_path, project, result, func_name.as_deref(), current_parent);
+            // Tree-sitter C misparses C++ `namespace X { ... }` and
+            // `class X { ... }` as function_definition nodes (type field is
+            // "namespace" or "class"). Detect these and track the scope name
+            // as current_parent so same-name entities in different namespaces
+            // get distinct FQNs (ADR-003, Type A collision).
+            let type_kind = node
+                .child_by_field_name("type")
+                .map(|n| n.kind() == "type_identifier")
+                .unwrap_or(false);
+            let type_text = if type_kind {
+                node.child_by_field_name("type")
+                    .and_then(|n| node_text(n, source).map(String::from))
+            } else {
+                None
+            };
+            match type_text.as_deref() {
+                Some("namespace") | Some("class") | Some("struct") => {
+                    // C++ scope block misparsed as function_definition.
+                    // Extract the scope name (the declarator/identifier) and
+                    // pass it as current_parent. Combine with existing parent
+                    // for nested scopes.
+                    let scope_name = node
+                        .child_by_field_name("declarator")
+                        .and_then(|n| node_text(n, source).map(String::from));
+                    let combined = match (current_parent, scope_name.as_deref()) {
+                        (Some(p), Some(s)) => Some(format!("{p}_{s}")),
+                        (None, Some(s)) => Some(s.to_string()),
+                        (Some(p), None) => Some(p.to_string()),
+                        (None, None) => None,
+                    };
+                    for i in 0..node.named_child_count() as u32 {
+                        if let Some(child) = node.named_child(i) {
+                            if child.kind() == "compound_statement" {
+                                visit_children(child, source, file_path, project, result, None, combined.as_deref());
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    // ADR-003 (overload disambiguation): when the function is
+                    // inside a struct/class/namespace (current_parent is Some),
+                    // append the line number to the parent so overloaded
+                    // methods (e.g. `end()` vs `end() const`) get distinct
+                    // FQNs. The same disambiguator is threaded to children so
+                    // caller_qn/reader_qn/writer_qn stay consistent with the
+                    // function's own FQN. Top-level functions (None parent)
+                    // keep a clean FQN.
+                    let start_line = node.start_position().row as u32 + 1;
+                    let method_parent = current_parent.map(|p| format!("{p}_L{start_line}"));
+                    extract_function(node, source, file_path, project, result, method_parent.as_deref());
+                    let func_name = function_name(node, source);
+                    for i in 0..node.named_child_count() as u32 {
+                        if let Some(child) = node.named_child(i) {
+                            if child.kind() == "compound_statement" {
+                                visit_children(child, source, file_path, project, result, func_name.as_deref(), method_parent.as_deref());
+                            }
+                        }
                     }
                 }
             }
@@ -108,10 +156,10 @@ fn visit_node(
             extract_include(node, source, result);
         }
         "type_definition" => {
-            extract_typedef(node, source, file_path, project, result);
+            extract_typedef(node, source, file_path, project, result, current_parent);
         }
         "struct_specifier" => {
-            extract_struct(node, source, file_path, project, result);
+            extract_struct(node, source, file_path, project, result, current_parent);
             if node.child_by_field_name("body").is_some() {
                 // Extract the struct name and pass it as current_parent so
                 // any nested entities can disambiguate their FQN (ADR-005).
@@ -122,7 +170,7 @@ fn visit_node(
             }
         }
         "enum_specifier" => {
-            extract_enum(node, source, file_path, project, result);
+            extract_enum(node, source, file_path, project, result, current_parent);
         }
         "call_expression" => {
             extract_call(node, source, file_path, project, current_func, current_parent, result);
@@ -215,6 +263,7 @@ fn extract_function(
     file_path: &str,
     project: &str,
     result: &mut ExtractResult,
+    parent: Option<&str>,
 ) {
     let Some(name) = function_name(node, source) else {
         return;
@@ -222,7 +271,7 @@ fn extract_function(
     let start_line = node.start_position().row as u32 + 1;
     let end_line = node.end_position().row as u32 + 1;
     let signature = declarator_signature(node, source);
-    let qn = make_qn(file_path, &name, project, None);
+    let qn = make_qn(file_path, &name, project, parent);
     let mut builder = ModelNode::builder(NodeLabel::Function, name.clone(), qn.clone())
         .file_path(file_path)
         .start_line(start_line)
@@ -294,14 +343,14 @@ fn push_global_var(name: &str, line: u32, file_path: &str, project: &str, result
     result.nodes.push(model_node);
 }
 
-fn extract_typedef(node: Node, source: &str, file_path: &str, project: &str, result: &mut ExtractResult) {
+fn extract_typedef(node: Node, source: &str, file_path: &str, project: &str, result: &mut ExtractResult, parent: Option<&str>) {
     // type_definition has a `type` field and a `declarator` field (type_identifier).
     // Walk all children for type_identifier nodes.
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
             if child.kind() == "type_identifier" {
                 if let Some(name) = node_text(child, source).map(String::from) {
-                    let qn = make_qn(file_path, &name, project, None);
+                    let qn = make_qn(file_path, &name, project, parent);
                     let model_node = ModelNode::builder(NodeLabel::Typedef, name, qn)
                         .file_path(file_path)
                         .start_line(node.start_position().row as u32 + 1)
@@ -317,7 +366,7 @@ fn extract_typedef(node: Node, source: &str, file_path: &str, project: &str, res
     }
 }
 
-fn extract_struct(node: Node, source: &str, file_path: &str, project: &str, result: &mut ExtractResult) {
+fn extract_struct(node: Node, source: &str, file_path: &str, project: &str, result: &mut ExtractResult, parent: Option<&str>) {
     // Only extract if the struct has a name and a body.
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
@@ -328,7 +377,7 @@ fn extract_struct(node: Node, source: &str, file_path: &str, project: &str, resu
     let Some(name) = node_text(name_node, source).map(String::from) else {
         return;
     };
-    let qn = make_qn(file_path, &name, project, None);
+    let qn = make_qn(file_path, &name, project, parent);
     let model_node = ModelNode::builder(NodeLabel::Struct, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -341,7 +390,7 @@ fn extract_struct(node: Node, source: &str, file_path: &str, project: &str, resu
     result.nodes.push(model_node);
 }
 
-fn extract_enum(node: Node, source: &str, file_path: &str, project: &str, result: &mut ExtractResult) {
+fn extract_enum(node: Node, source: &str, file_path: &str, project: &str, result: &mut ExtractResult, parent: Option<&str>) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
     };
@@ -351,7 +400,7 @@ fn extract_enum(node: Node, source: &str, file_path: &str, project: &str, result
     let Some(name) = node_text(name_node, source).map(String::from) else {
         return;
     };
-    let qn = make_qn(file_path, &name, project, None);
+    let qn = make_qn(file_path, &name, project, parent);
     let model_node = ModelNode::builder(NodeLabel::Enum, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -732,6 +781,45 @@ int main() {
             !point.qualified_name.contains('#'),
             "struct FQN must not contain a disambiguator"
         );
+    }
+
+    #[test]
+    fn cpp_overloaded_methods_get_line_disambiguator() {
+        // ADR-003 (overload disambiguation): C++ const-overloaded methods
+        // (same name, same class) must get distinct FQNs by appending the
+        // line number to the parent class disambiguator. Without this, both
+        // `end()` and `end() const` collide on `end#Container`.
+        let src = "\
+class Container {
+public:
+    int* begin() { return data_; }
+    const int* begin() const { return data_; }
+    int* end() { return data_ + size_; }
+    const int* end() const { return data_ + size_; }
+private:
+    int data_[10];
+    int size_ = 0;
+};
+";
+        let result = extract(src);
+        let ends: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.name == "end")
+            .collect();
+        assert_eq!(ends.len(), 2, "should extract two `end` methods");
+        assert_ne!(
+            ends[0].qualified_name, ends[1].qualified_name,
+            "overloaded `end` methods must have distinct FQNs: {:?}",
+            ends.iter().map(|n| &n.qualified_name).collect::<Vec<_>>()
+        );
+        for e in &ends {
+            assert!(
+                e.qualified_name.contains("#Container_L"),
+                "expected `#Container_L<line>` disambiguator in FQN: {}",
+                e.qualified_name
+            );
+        }
     }
 
     #[test]

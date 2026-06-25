@@ -163,6 +163,17 @@ fn visit_node(
             extract_variable_declaration(node, source, result);
             visit_children(node, source, file_path, project, result, current_func, current_parent);
         }
+        "variable_declarator" => {
+            // When a const/let is assigned an object literal with methods
+            // (e.g. `const config = { extractType() {...} }`), pass the
+            // variable name as current_parent so methods inside get
+            // disambiguated FQNs (ADR-003, Type A collision).
+            let var_name = node
+                .child_by_field_name("name")
+                .and_then(|n| node_text(n, source).map(String::from));
+            let parent = var_name.as_deref().or(current_parent);
+            visit_children(node, source, file_path, project, result, current_func, parent);
+        }
         "assignment_expression" => {
             extract_assignment(node, source, result);
             visit_children(node, source, file_path, project, result, current_func, current_parent);
@@ -208,7 +219,22 @@ fn extract_function(
     };
     let is_exported = is_exported(node);
     let signature = node_text(node, source).map(String::from);
-    let qn = make_qn(file_path, &name, project, None);
+    // ADR-003 (positional fallback): top-level functions (parent is `program`
+    // or `export_statement`) use no disambiguator — clean FQN. Nested function
+    // declarations (e.g. helper functions inside test callbacks like
+    // `describe(() => { function walk() {...} })`) use the line number as a
+    // positional disambiguator so same-name nested functions do not collide.
+    let is_top_level = matches!(
+        node.parent().map(|p| p.kind()),
+        Some("program") | Some("export_statement") | None
+    );
+    let disambiguator = if is_top_level {
+        None
+    } else {
+        let line = node.start_position().row as u32 + 1;
+        Some(format!("L{line}"))
+    };
+    let qn = make_qn(file_path, &name, project, disambiguator.as_deref());
     let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -267,7 +293,19 @@ fn extract_method(
     let Some(name) = node_text(name_node, source).map(String::from) else {
         return;
     };
-    let qn = make_qn(file_path, &name, project, parent);
+    // ADR-003 (positional fallback): when no semantic parent context is
+    // available — e.g. methods inside anonymous object literals passed as
+    // function arguments like `Object.defineProperty(el, 'boom', { get() {…} })`
+    // — use the line number as a positional disambiguator so same-name
+    // methods in different anonymous objects get distinct FQNs.
+    let disambiguator = match parent {
+        Some(p) => Some(p.to_string()),
+        None => {
+            let line = node.start_position().row as u32 + 1;
+            Some(format!("L{line}"))
+        }
+    };
+    let qn = make_qn(file_path, &name, project, disambiguator.as_deref());
     let model_node = ModelNode::builder(NodeLabel::Method, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -760,6 +798,90 @@ const result = add(1, 2);
             "Bar.greet FQN missing: {fqns:?}"
         );
         assert_ne!(greets[0].qualified_name, greets[1].qualified_name);
+    }
+
+    #[test]
+    fn method_without_parent_uses_line_disambiguator() {
+        // ADR-003 (positional fallback): methods in anonymous object literals
+        // that are NOT assigned to a variable (e.g. arguments to
+        // `Object.defineProperty`) have no semantic parent context. They must
+        // be disambiguated by line number so same-name methods (like multiple
+        // `get()` getters) do not collide on the primary key.
+        let src = "\
+Object.defineProperty(el, 'boom', {
+  enumerable: true,
+  get() { throw new Error('a'); },
+});
+Object.defineProperty(el2, 'boom', {
+  enumerable: true,
+  get() { throw new Error('b'); },
+});
+";
+        let result = extract(src);
+        let gets: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.name == "get")
+            .collect();
+        assert_eq!(gets.len(), 2, "should extract two `get` methods");
+        assert_ne!(
+            gets[0].qualified_name, gets[1].qualified_name,
+            "line-disambiguated FQNs must be distinct: {:?}",
+            gets.iter().map(|n| &n.qualified_name).collect::<Vec<_>>()
+        );
+        // Each FQN must carry a `#L<line>` suffix.
+        for g in &gets {
+            assert!(
+                g.qualified_name.contains("#L"),
+                "expected line disambiguator in FQN: {}",
+                g.qualified_name
+            );
+        }
+    }
+
+    #[test]
+    fn nested_function_declaration_uses_line_disambiguator() {
+        // ADR-003 (positional fallback): nested function declarations (e.g.
+        // helper functions inside test callbacks) must use a line-based
+        // disambiguator so same-name nested functions do not collide. Top-level
+        // functions keep a clean FQN (no disambiguator).
+        let src = "\
+export function topLevel(): void {}
+describe('suite', () => {
+  function helper(): void {}
+  it('test', () => {
+    function helper(): void {}
+  });
+});
+";
+        let result = extract(src);
+        let toplevel = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "topLevel")
+            .expect("topLevel function should be extracted");
+        assert_eq!(
+            toplevel.qualified_name, "proj.test.ts.topLevel",
+            "top-level function must have clean FQN (no disambiguator)"
+        );
+        let helpers: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.name == "helper")
+            .collect();
+        assert_eq!(helpers.len(), 2, "should extract two `helper` functions");
+        assert_ne!(
+            helpers[0].qualified_name, helpers[1].qualified_name,
+            "line-disambiguated FQNs must be distinct: {:?}",
+            helpers.iter().map(|n| &n.qualified_name).collect::<Vec<_>>()
+        );
+        for h in &helpers {
+            assert!(
+                h.qualified_name.contains("#L"),
+                "expected line disambiguator in nested function FQN: {}",
+                h.qualified_name
+            );
+        }
     }
 
     #[test]

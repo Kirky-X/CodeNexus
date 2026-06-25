@@ -251,7 +251,7 @@ mod tests {
 
         assert!(resolved.is_some());
         let (qn, confidence) = resolved.unwrap();
-        assert_eq!(qn, "proj.a.foo");
+        assert_eq!(qn, "proj.a.rs.foo");
         assert!((confidence - 0.95).abs() < 1e-6);
     }
 
@@ -267,7 +267,7 @@ mod tests {
 
         assert!(resolved.is_some());
         let (qn, _) = resolved.unwrap();
-        assert_eq!(qn, "proj.src.deep.file.bar");
+        assert_eq!(qn, "proj.src.deep.file.rs.bar");
     }
 
     // --- resolve_call: import lookup ---
@@ -291,7 +291,7 @@ mod tests {
 
         assert!(resolved.is_some());
         let (qn, confidence) = resolved.unwrap();
-        assert_eq!(qn, "proj.b.bar");
+        assert_eq!(qn, "proj.b.rs.bar");
         assert!((confidence - 0.90).abs() < 1e-6);
     }
 
@@ -332,7 +332,7 @@ mod tests {
 
         assert!(resolved.is_some());
         let (qn, confidence) = resolved.unwrap();
-        assert_eq!(qn, "proj.b.bar");
+        assert_eq!(qn, "proj.b.rs.bar");
         assert!((confidence - 0.80).abs() < 1e-6);
     }
 
@@ -352,7 +352,7 @@ mod tests {
 
         assert!(resolved.is_some());
         let (qn, confidence) = resolved.unwrap();
-        assert_eq!(qn, "proj.b.bar");
+        assert_eq!(qn, "proj.b.rs.bar");
         assert!((confidence - 0.80).abs() < 1e-6);
     }
 
@@ -434,7 +434,7 @@ mod tests {
         assert_eq!(edges.len(), 1);
         let edge = &edges[0];
         assert_eq!(edge.source, foo_qn);
-        assert_eq!(edge.target, "proj.a.bar");
+        assert_eq!(edge.target, "proj.a.rs.bar");
         assert_eq!(edge.edge_type, EdgeType::Calls);
         assert!((edge.confidence - 0.95).abs() < 1e-6);
         assert_eq!(edge.start_line, Some(5));
@@ -511,7 +511,7 @@ mod tests {
 
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].source, a_qn);
-        assert_eq!(edges[0].target, "proj.b.func_b");
+        assert_eq!(edges[0].target, "proj.b.rs.func_b");
         assert!((edges[0].confidence - 0.80).abs() < 1e-6);
     }
 

@@ -696,7 +696,7 @@ end program
         );
         assert_eq!(
             call.caller_qn.as_deref(),
-            Some("proj.main.main"),
+            Some("proj.main.f90.main"),
             "caller_qn should be the dotted FQN of the enclosing program"
         );
     }

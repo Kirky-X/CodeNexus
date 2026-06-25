@@ -50,8 +50,20 @@ impl FqnGenerator {
         let mut fqn = parts.join(".");
         if let Some(d) = disambiguator {
             // ADR-003: sanitize the disambiguator so special characters do
-            // not corrupt the FQN's dot/hash structure.
-            let sanitized = d.replace(['.', '/', '#'], "_");
+            // not corrupt the FQN's dot/hash structure or downstream CSV
+            // serialization. Only alphanumeric and underscore are retained;
+            // all other characters (including generic-lifetime syntax like
+            // `<'a, C>`, spaces, commas) are replaced with underscores.
+            let sanitized: String = d
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
             fqn.push('#');
             fqn.push_str(&sanitized);
         }
@@ -76,7 +88,16 @@ impl FqnGenerator {
         parts.push(entity_name.to_string());
         let mut fqn = parts.join(".");
         if let Some(d) = disambiguator {
-            let sanitized = d.replace(['.', '/', '#'], "_");
+            let sanitized: String = d
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
             fqn.push('#');
             fqn.push_str(&sanitized);
         }
@@ -329,8 +350,10 @@ mod tests {
     fn strips_leading_dot_slash_only_once() {
         // Per spec: "remove leading ./" — only one occurrence is stripped.
         // "././src/main.rs" -> "./src/main.rs" -> segments [".", "src", "main.rs"]
+        // ADR-002: directory segments have dots replaced with underscores,
+        // so the leading "." segment becomes "_".
         let fqn = FqnGenerator::generate("proj", "././src/main.rs", "foo", Language::Rust, None);
-        assert_eq!(fqn, "proj...src.main.rs.foo");
+        assert_eq!(fqn, "proj._.src.main.rs.foo");
     }
 
     // --- ADR-001: Extension retention (formerly "removes_*_extension") ---
@@ -499,14 +522,17 @@ mod tests {
     #[test]
     fn disambiguator_sanitizes_special_chars() {
         // ADR-003: special characters in the disambiguator are replaced with
-        // underscores so they cannot corrupt the FQN's dot/hash structure.
+        // underscores so they cannot corrupt the FQN's dot/hash structure or
+        // downstream CSV serialization. Only alphanumeric + underscore are
+        // retained; all other chars (including generic-lifetime syntax like
+        // `<'a, C>`) become underscores.
         let fqn = FqnGenerator::generate(
             "p",
             "src/main.rs",
             "new",
             Language::Rust,
-            Some("a.b/c#d"),
+            Some("a.b/c#d<'a, C>"),
         );
-        assert_eq!(fqn, "p.src.main.rs.new#a_b_c_d");
+        assert_eq!(fqn, "p.src.main.rs.new#a_b_c_d__a__C_");
     }
 }
