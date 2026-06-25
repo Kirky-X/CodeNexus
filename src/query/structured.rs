@@ -174,14 +174,8 @@ fn rows_to_search_results(
     rows.into_iter()
         .filter_map(|row| {
             let name = row.first().and_then(|v| v.as_str())?.to_string();
-            let qualified_name = row
-                .get(1)
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let file_path = row
-                .get(2)
-                .and_then(|v| v.as_str())
-                .map(String::from);
+            let qualified_name = row.get(1).and_then(|v| v.as_str()).map(String::from);
+            let file_path = row.get(2).and_then(|v| v.as_str()).map(String::from);
             let start_line = row
                 .get(3)
                 .and_then(|v| v.as_i64())
@@ -249,7 +243,14 @@ mod tests {
         Repository::in_memory().expect("in_memory repository")
     }
 
-    fn sample_function(id: &str, project: &str, name: &str, qn: &str, file: &str, line: u32) -> Node {
+    fn sample_function(
+        id: &str,
+        project: &str,
+        name: &str,
+        qn: &str,
+        file: &str,
+        line: u32,
+    ) -> Node {
         Node::builder(NodeLabel::Function, name, qn)
             .id(id)
             .project(project)
@@ -312,9 +313,7 @@ mod tests {
         .expect("save_nodes");
 
         let searcher = StructuredSearcher::new(repo.connection());
-        let results = searcher
-            .search_by_name("parse", None, 100)
-            .expect("search");
+        let results = searcher.search_by_name("parse", None, 100).expect("search");
         assert!(results.iter().all(|r| r.name.contains("parse")));
         assert!(results.iter().any(|r| r.name == "parse"));
         assert!(results.iter().any(|r| r.name == "parse_token"));
@@ -324,12 +323,26 @@ mod tests {
     fn search_by_name_filters_by_project() {
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function("f1", "alpha", "parse", "alpha.parse", "/a.rs", 1)],
+            &[sample_function(
+                "f1",
+                "alpha",
+                "parse",
+                "alpha.parse",
+                "/a.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes alpha");
         repo.save_nodes(
-            &[sample_function("f2", "beta", "parse", "beta.parse", "/b.rs", 1)],
+            &[sample_function(
+                "f2",
+                "beta",
+                "parse",
+                "beta.parse",
+                "/b.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes beta");
@@ -356,12 +369,11 @@ mod tests {
                 i + 1,
             ));
         }
-        repo.save_nodes(&nodes, NodeLabel::Function).expect("save_nodes");
+        repo.save_nodes(&nodes, NodeLabel::Function)
+            .expect("save_nodes");
 
         let searcher = StructuredSearcher::new(repo.connection());
-        let results = searcher
-            .search_by_name("parse", None, 3)
-            .expect("search");
+        let results = searcher.search_by_name("parse", None, 3).expect("search");
         assert_eq!(results.len(), 3);
     }
 
@@ -379,7 +391,14 @@ mod tests {
     fn search_by_name_returns_empty_when_no_match() {
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function("f1", "demo", "main", "demo.main", "/a.rs", 1)],
+            &[sample_function(
+                "f1",
+                "demo",
+                "main",
+                "demo.main",
+                "/a.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes");
@@ -394,20 +413,32 @@ mod tests {
     fn search_by_name_searches_across_multiple_labels() {
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function("f1", "demo", "parse", "demo.parse", "/a.rs", 1)],
+            &[sample_function(
+                "f1",
+                "demo",
+                "parse",
+                "demo.parse",
+                "/a.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes function");
         repo.save_nodes(
-            &[sample_class("c1", "demo", "Parser", "demo.Parser", "/a.rs", 20)],
+            &[sample_class(
+                "c1",
+                "demo",
+                "Parser",
+                "demo.Parser",
+                "/a.rs",
+                20,
+            )],
             NodeLabel::Class,
         )
         .expect("save_nodes class");
 
         let searcher = StructuredSearcher::new(repo.connection());
-        let results = searcher
-            .search_by_name("parse", None, 100)
-            .expect("search");
+        let results = searcher.search_by_name("parse", None, 100).expect("search");
         // Case-insensitive substring: "Parser" contains "parse" lowercased.
         let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
         assert!(names.contains(&"parse"));
@@ -427,9 +458,7 @@ mod tests {
         .expect("save_nodes");
 
         let searcher = StructuredSearcher::new(repo.connection());
-        let results = searcher
-            .search_by_name("parse", None, 100)
-            .expect("search");
+        let results = searcher.search_by_name("parse", None, 100).expect("search");
         // Exact match should be first (highest score).
         assert_eq!(results[0].name, "parse");
         assert!(results[0].score > results[1].score);
@@ -449,7 +478,14 @@ mod tests {
         )
         .expect("save_nodes");
         repo.save_nodes(
-            &[sample_class("c1", "demo", "Gamma", "demo.Gamma", "/a.rs", 10)],
+            &[sample_class(
+                "c1",
+                "demo",
+                "Gamma",
+                "demo.Gamma",
+                "/a.rs",
+                10,
+            )],
             NodeLabel::Class,
         )
         .expect("save_nodes class");
@@ -486,7 +522,14 @@ mod tests {
     fn search_by_type_filters_by_project() {
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function("f1", "alpha", "main", "alpha.main", "/a.rs", 1)],
+            &[sample_function(
+                "f1",
+                "alpha",
+                "main",
+                "alpha.main",
+                "/a.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes alpha");
@@ -504,7 +547,9 @@ mod tests {
             .search_by_type(NodeLabel::Function, Some("beta"), 100)
             .expect("search_by_type");
         assert_eq!(results.len(), 2);
-        assert!(results.iter().all(|r| r.qualified_name.as_ref().unwrap().starts_with("beta.")));
+        assert!(results
+            .iter()
+            .all(|r| r.qualified_name.as_ref().unwrap().starts_with("beta.")));
     }
 
     #[test]
@@ -521,7 +566,8 @@ mod tests {
                 i + 1,
             ));
         }
-        repo.save_nodes(&nodes, NodeLabel::Function).expect("save_nodes");
+        repo.save_nodes(&nodes, NodeLabel::Function)
+            .expect("save_nodes");
 
         let searcher = StructuredSearcher::new(repo.connection());
         let results = searcher
@@ -554,13 +600,27 @@ mod tests {
         )
         .expect("save_nodes");
         repo.save_nodes(
-            &[sample_class("c1", "demo", "Gamma", "demo.Gamma", "/src/main.rs", 20)],
+            &[sample_class(
+                "c1",
+                "demo",
+                "Gamma",
+                "demo.Gamma",
+                "/src/main.rs",
+                20,
+            )],
             NodeLabel::Class,
         )
         .expect("save_nodes class");
         // A symbol in a different file should not appear.
         repo.save_nodes(
-            &[sample_function("f3", "demo", "delta", "demo.delta", "/src/lib.rs", 1)],
+            &[sample_function(
+                "f3",
+                "demo",
+                "delta",
+                "demo.delta",
+                "/src/lib.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes other file");
@@ -570,19 +630,35 @@ mod tests {
             .search_by_file("/src/main.rs", None)
             .expect("search_by_file");
         assert_eq!(results.len(), 3);
-        assert!(results.iter().all(|r| r.file_path.as_deref() == Some("/src/main.rs")));
+        assert!(results
+            .iter()
+            .all(|r| r.file_path.as_deref() == Some("/src/main.rs")));
     }
 
     #[test]
     fn search_by_file_filters_by_project() {
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function("f1", "alpha", "main", "alpha.main", "/src/main.rs", 1)],
+            &[sample_function(
+                "f1",
+                "alpha",
+                "main",
+                "alpha.main",
+                "/src/main.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes alpha");
         repo.save_nodes(
-            &[sample_function("f2", "beta", "main", "beta.main", "/src/main.rs", 1)],
+            &[sample_function(
+                "f2",
+                "beta",
+                "main",
+                "beta.main",
+                "/src/main.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes beta");
@@ -609,7 +685,14 @@ mod tests {
     fn search_by_file_returns_empty_when_no_match() {
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function("f1", "demo", "main", "demo.main", "/a.rs", 1)],
+            &[sample_function(
+                "f1",
+                "demo",
+                "main",
+                "demo.main",
+                "/a.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes");
@@ -626,15 +709,20 @@ mod tests {
     fn search_delegates_to_search_by_name() {
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function("f1", "demo", "parse_file", "demo.parse_file", "/a.rs", 1)],
+            &[sample_function(
+                "f1",
+                "demo",
+                "parse_file",
+                "demo.parse_file",
+                "/a.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes");
 
         let searcher = StructuredSearcher::new(repo.connection());
-        let results = searcher
-            .search("parse", None, 100)
-            .expect("search");
+        let results = searcher.search("parse", None, 100).expect("search");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "parse_file");
     }

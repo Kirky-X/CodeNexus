@@ -116,7 +116,8 @@ mod tests {
                 &format!("demo.func_{i}"),
             ));
         }
-        repo.save_nodes(&nodes, NodeLabel::Function).expect("save_nodes");
+        repo.save_nodes(&nodes, NodeLabel::Function)
+            .expect("save_nodes");
 
         let executor = CypherExecutor::new(repo.connection());
         let result = executor

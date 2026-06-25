@@ -26,7 +26,7 @@ use crate::query::{FullTextSearcher, SearchResult};
 use crate::storage::StorageConnection;
 
 use super::client::EmbedClient;
-use super::storage::{EmbeddingStorage, EmbeddingHit};
+use super::storage::{EmbeddingHit, EmbeddingStorage};
 use super::{EmbedError, Result, EMBEDDING_DIM};
 
 /// RRF constant (standard value from the original paper).
@@ -102,12 +102,8 @@ pub trait SearchStrategy: Send + Sync {
     ///
     /// Returns [`EmbedError`] on failure. Strategies that degrade to BM25
     /// return [`EmbedError::Storage`] wrapped errors.
-    fn search(
-        &self,
-        query: &str,
-        project: Option<&str>,
-        limit: usize,
-    ) -> Result<Vec<SearchResult>>;
+    fn search(&self, query: &str, project: Option<&str>, limit: usize)
+        -> Result<Vec<SearchResult>>;
 }
 
 /// BM25 full-text search strategy.
@@ -173,10 +169,9 @@ impl<'a, C: EmbedClient> SearchStrategy for SemanticStrategy<'a, C> {
 
         // Embed the query text.
         let embeddings = self.client.embed(&[query])?;
-        let query_vec = embeddings
-            .into_iter()
-            .next()
-            .ok_or_else(|| EmbedError::Unavailable("embedding service returned no vectors".to_string()))?;
+        let query_vec = embeddings.into_iter().next().ok_or_else(|| {
+            EmbedError::Unavailable("embedding service returned no vectors".to_string())
+        })?;
 
         if query_vec.len() != EMBEDDING_DIM {
             return Err(EmbedError::DimensionMismatch {
@@ -240,16 +235,15 @@ impl<'a, C: EmbedClient> SearchStrategy for HybridStrategy<'a, C> {
         let bm25_results = Bm25Strategy::new(self.conn).search(query, project, limit * 2)?;
 
         // Run semantic search (may degrade if table missing).
-        let semantic_results = match SemanticStrategy::new(self.conn, self.client)
-            .search(query, project, limit * 2)
-        {
-            Ok(results) => results,
-            Err(EmbedError::EmbeddingTableNotAvailable) | Err(EmbedError::Unavailable(_)) => {
-                // Semantic unavailable — return BM25 only.
-                return Ok(bm25_results.into_iter().take(limit).collect());
-            }
-            Err(e) => return Err(e),
-        };
+        let semantic_results =
+            match SemanticStrategy::new(self.conn, self.client).search(query, project, limit * 2) {
+                Ok(results) => results,
+                Err(EmbedError::EmbeddingTableNotAvailable) | Err(EmbedError::Unavailable(_)) => {
+                    // Semantic unavailable — return BM25 only.
+                    return Ok(bm25_results.into_iter().take(limit).collect());
+                }
+                Err(e) => return Err(e),
+            };
 
         // Fuse via RRF.
         let fused = rrf_fuse(bm25_results, semantic_results, limit);
@@ -297,9 +291,7 @@ pub fn rrf_fuse_multi(lists: Vec<Vec<SearchResult>>, limit: usize) -> Vec<Search
         })
         .collect();
 
-    fused.sort_by(|a, b| {
-        b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    fused.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     fused.truncate(limit);
     fused.into_iter().map(|(_, r)| r).collect()
 }
@@ -336,12 +328,13 @@ fn lookup_node_metadata(conn: &StorageConnection, hit: &EmbeddingHit) -> Option<
         );
         if let Ok(rows) = conn.query(&cypher) {
             if let Some(row) = rows.first() {
-                let name = row.get(0).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let name = row
+                    .get(0)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let file_path = row.get(1).and_then(|v| v.as_str()).map(|s| s.to_string());
-                let start_line = row
-                    .get(2)
-                    .and_then(|v| v.as_i64())
-                    .map(|n| n as u32);
+                let start_line = row.get(2).and_then(|v| v.as_i64()).map(|n| n as u32);
                 let qualified_name = row.get(3).and_then(|v| v.as_str()).map(|s| s.to_string());
                 return Some(SearchResult {
                     name,
@@ -382,9 +375,18 @@ mod tests {
 
     #[test]
     fn strategy_type_from_str() {
-        assert_eq!(SearchStrategyType::from_str("bm25"), Some(SearchStrategyType::Bm25));
-        assert_eq!(SearchStrategyType::from_str("SEMANTIC"), Some(SearchStrategyType::Semantic));
-        assert_eq!(SearchStrategyType::from_str("Hybrid"), Some(SearchStrategyType::Hybrid));
+        assert_eq!(
+            SearchStrategyType::from_str("bm25"),
+            Some(SearchStrategyType::Bm25)
+        );
+        assert_eq!(
+            SearchStrategyType::from_str("SEMANTIC"),
+            Some(SearchStrategyType::Semantic)
+        );
+        assert_eq!(
+            SearchStrategyType::from_str("Hybrid"),
+            Some(SearchStrategyType::Hybrid)
+        );
         assert_eq!(SearchStrategyType::from_str("unknown"), None);
     }
 
@@ -418,26 +420,71 @@ mod tests {
     #[test]
     fn rrf_fuse_combines_two_lists() {
         let list_a = vec![
-            SearchResult { name: "a".into(), label: "Function".into(), file_path: None, start_line: None, qualified_name: Some("a".into()), score: 1.0 },
-            SearchResult { name: "b".into(), label: "Function".into(), file_path: None, start_line: None, qualified_name: Some("b".into()), score: 0.8 },
+            SearchResult {
+                name: "a".into(),
+                label: "Function".into(),
+                file_path: None,
+                start_line: None,
+                qualified_name: Some("a".into()),
+                score: 1.0,
+            },
+            SearchResult {
+                name: "b".into(),
+                label: "Function".into(),
+                file_path: None,
+                start_line: None,
+                qualified_name: Some("b".into()),
+                score: 0.8,
+            },
         ];
         let list_b = vec![
-            SearchResult { name: "b".into(), label: "Function".into(), file_path: None, start_line: None, qualified_name: Some("b".into()), score: 1.0 },
-            SearchResult { name: "c".into(), label: "Function".into(), file_path: None, start_line: None, qualified_name: Some("c".into()), score: 0.9 },
+            SearchResult {
+                name: "b".into(),
+                label: "Function".into(),
+                file_path: None,
+                start_line: None,
+                qualified_name: Some("b".into()),
+                score: 1.0,
+            },
+            SearchResult {
+                name: "c".into(),
+                label: "Function".into(),
+                file_path: None,
+                start_line: None,
+                qualified_name: Some("c".into()),
+                score: 0.9,
+            },
         ];
         let fused = rrf_fuse(list_a, list_b, 10);
         assert_eq!(fused.len(), 3, "should have 3 unique results");
         // "b" appears in both lists → higher RRF score.
-        assert_eq!(fused[0].name, "b", "b should rank first (appears in both lists)");
+        assert_eq!(
+            fused[0].name, "b",
+            "b should rank first (appears in both lists)"
+        );
     }
 
     #[test]
     fn rrf_fuse_respects_limit() {
         let list_a: Vec<_> = (0..5)
-            .map(|i| SearchResult { name: format!("a{i}"), label: "Function".into(), file_path: None, start_line: None, qualified_name: Some(format!("a{i}")), score: 1.0 })
+            .map(|i| SearchResult {
+                name: format!("a{i}"),
+                label: "Function".into(),
+                file_path: None,
+                start_line: None,
+                qualified_name: Some(format!("a{i}")),
+                score: 1.0,
+            })
             .collect();
         let list_b: Vec<_> = (0..5)
-            .map(|i| SearchResult { name: format!("b{i}"), label: "Function".into(), file_path: None, start_line: None, qualified_name: Some(format!("b{i}")), score: 1.0 })
+            .map(|i| SearchResult {
+                name: format!("b{i}"),
+                label: "Function".into(),
+                file_path: None,
+                start_line: None,
+                qualified_name: Some(format!("b{i}")),
+                score: 1.0,
+            })
             .collect();
         let fused = rrf_fuse(list_a, list_b, 3);
         assert_eq!(fused.len(), 3, "should respect limit");
@@ -451,9 +498,14 @@ mod tests {
 
     #[test]
     fn rrf_fuse_one_empty_list() {
-        let list_a = vec![
-            SearchResult { name: "a".into(), label: "Function".into(), file_path: None, start_line: None, qualified_name: Some("a".into()), score: 1.0 },
-        ];
+        let list_a = vec![SearchResult {
+            name: "a".into(),
+            label: "Function".into(),
+            file_path: None,
+            start_line: None,
+            qualified_name: Some("a".into()),
+            score: 1.0,
+        }];
         let fused = rrf_fuse(list_a, vec![], 10);
         assert_eq!(fused.len(), 1);
         assert_eq!(fused[0].name, "a");
@@ -461,24 +513,44 @@ mod tests {
 
     #[test]
     fn rrf_fuse_deduplicates_by_qualified_name() {
-        let list_a = vec![
-            SearchResult { name: "parse".into(), label: "Function".into(), file_path: None, start_line: None, qualified_name: Some("demo.parse".into()), score: 1.0 },
-        ];
-        let list_b = vec![
-            SearchResult { name: "parse".into(), label: "Function".into(), file_path: None, start_line: None, qualified_name: Some("demo.parse".into()), score: 0.9 },
-        ];
+        let list_a = vec![SearchResult {
+            name: "parse".into(),
+            label: "Function".into(),
+            file_path: None,
+            start_line: None,
+            qualified_name: Some("demo.parse".into()),
+            score: 1.0,
+        }];
+        let list_b = vec![SearchResult {
+            name: "parse".into(),
+            label: "Function".into(),
+            file_path: None,
+            start_line: None,
+            qualified_name: Some("demo.parse".into()),
+            score: 0.9,
+        }];
         let fused = rrf_fuse(list_a, list_b, 10);
         assert_eq!(fused.len(), 1, "should deduplicate by qualified_name");
     }
 
     #[test]
     fn rrf_fuse_deduplicates_by_name_when_no_qn() {
-        let list_a = vec![
-            SearchResult { name: "parse".into(), label: "Function".into(), file_path: None, start_line: None, qualified_name: None, score: 1.0 },
-        ];
-        let list_b = vec![
-            SearchResult { name: "parse".into(), label: "Function".into(), file_path: None, start_line: None, qualified_name: None, score: 0.9 },
-        ];
+        let list_a = vec![SearchResult {
+            name: "parse".into(),
+            label: "Function".into(),
+            file_path: None,
+            start_line: None,
+            qualified_name: None,
+            score: 1.0,
+        }];
+        let list_b = vec![SearchResult {
+            name: "parse".into(),
+            label: "Function".into(),
+            file_path: None,
+            start_line: None,
+            qualified_name: None,
+            score: 0.9,
+        }];
         let fused = rrf_fuse(list_a, list_b, 10);
         assert_eq!(fused.len(), 1, "should deduplicate by name when no QN");
     }
@@ -486,16 +558,23 @@ mod tests {
     #[test]
     fn rrf_fuse_multi_three_lists() {
         let make = |names: &[&str]| -> Vec<SearchResult> {
-            names.iter().map(|n| SearchResult {
-                name: n.to_string(),
-                label: "Function".into(),
-                file_path: None,
-                start_line: None,
-                qualified_name: Some(n.to_string()),
-                score: 1.0,
-            }).collect()
+            names
+                .iter()
+                .map(|n| SearchResult {
+                    name: n.to_string(),
+                    label: "Function".into(),
+                    file_path: None,
+                    start_line: None,
+                    qualified_name: Some(n.to_string()),
+                    score: 1.0,
+                })
+                .collect()
         };
-        let lists = vec![make(&["a", "b", "c"]), make(&["b", "c", "d"]), make(&["c", "e"])];
+        let lists = vec![
+            make(&["a", "b", "c"]),
+            make(&["b", "c", "d"]),
+            make(&["c", "e"]),
+        ];
         let fused = rrf_fuse_multi(lists, 10);
         // "c" appears in all 3 lists → highest RRF score.
         assert_eq!(fused[0].name, "c", "c should rank first (in all 3 lists)");
@@ -504,9 +583,14 @@ mod tests {
 
     #[test]
     fn rrf_fuse_score_is_updated() {
-        let list_a = vec![
-            SearchResult { name: "a".into(), label: "Function".into(), file_path: None, start_line: None, qualified_name: Some("a".into()), score: 0.99 },
-        ];
+        let list_a = vec![SearchResult {
+            name: "a".into(),
+            label: "Function".into(),
+            file_path: None,
+            start_line: None,
+            qualified_name: Some("a".into()),
+            score: 0.99,
+        }];
         let fused = rrf_fuse(list_a, vec![], 10);
         // RRF score for rank 1 in one list: 1/(60+1) ≈ 0.0164
         assert!(
@@ -525,7 +609,9 @@ mod tests {
         let strategy = Bm25Strategy::new(&conn);
         let results = strategy.search("parse", None, 10).expect("search");
         assert!(!results.is_empty(), "should find results for 'parse'");
-        assert!(results.iter().all(|r| r.name.to_ascii_lowercase().contains("parse")));
+        assert!(results
+            .iter()
+            .all(|r| r.name.to_ascii_lowercase().contains("parse")));
     }
 
     #[test]
@@ -542,7 +628,9 @@ mod tests {
         let conn = fresh_conn();
         seed_fixture(&conn);
         let strategy = Bm25Strategy::new(&conn);
-        let results = strategy.search("zzz_nonexistent", None, 10).expect("search");
+        let results = strategy
+            .search("zzz_nonexistent", None, 10)
+            .expect("search");
         assert!(results.is_empty());
     }
 
@@ -710,7 +798,8 @@ mod tests {
         // SubTask 16.4: embedding service unavailable → skip embedding, continue.
         let conn = fresh_conn();
         seed_fixture(&conn);
-        let client = MockEmbedClient::with_error(EmbedError::Unavailable("service down".to_string()));
+        let client =
+            MockEmbedClient::with_error(EmbedError::Unavailable("service down".to_string()));
         let strategy = HybridStrategy::new(&conn, &client);
         // Should not panic; should either degrade to BM25 or return error.
         let _ = strategy.search("parse", None, 10);

@@ -10,6 +10,7 @@ use super::SearchResult;
 use crate::model::NodeLabel;
 use crate::storage::schema::escape_identifier;
 use crate::storage::StorageConnection;
+use tracing::warn;
 
 /// Symbol-bearing node labels searched by [`FullTextSearcher`] when falling
 /// back to `CONTAINS`. Mirrors [`super::structured::SYMBOL_LABELS`].
@@ -48,7 +49,13 @@ impl<'a> FullTextSearcher<'a> {
     }
 
     /// Searches for `text` using BM25 (FTS) when available, falling back to a
-    /// `CONTAINS` scan. Results are sorted by descending relevance score.
+    /// `CONTAINS` scan when the FTS extension is unavailable. Results are sorted
+    /// by descending relevance score.
+    ///
+    /// Only FTS errors that indicate the extension/index is unsupported (parser
+    /// exceptions, "not supported", "does not exist", "already exists") trigger
+    /// the fallback. Any other error (e.g. a genuine runtime failure) is
+    /// propagated to the caller.
     pub fn search(
         &self,
         text: &str,
@@ -64,7 +71,11 @@ impl<'a> FullTextSearcher<'a> {
         // does not exist), fall back to a CONTAINS-based scan.
         match self.try_fts_search(text, project, limit) {
             Ok(results) => Ok(results),
-            Err(_) => self.fallback_contains_search(text, project, limit),
+            Err(e) if is_fts_unsupported_error(&e) => {
+                warn!(error = %e, "FTS not supported, falling back to CONTAINS scan");
+                self.fallback_contains_search(text, project, limit)
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -205,6 +216,22 @@ fn sort_and_truncate(results: &mut Vec<SearchResult>, limit: usize) {
 /// Escapes a string for safe interpolation into a Cypher single-quoted string.
 fn escape_cypher_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+/// Returns `true` when `err` indicates the FTS extension or FTS index is
+/// unavailable in the linked LadybugDB build.
+///
+/// Mirrors the "unsupported DDL" classification in
+/// [`crate::storage::connection::StorageConnection::run_init_ddl`]: parser
+/// exceptions, "not supported", "does not exist", and "already exists" all
+/// signal that the feature is absent rather than genuinely broken. Any other
+/// error (e.g. "connection refused") is a real failure that should propagate.
+fn is_fts_unsupported_error(err: &QueryError) -> bool {
+    let msg = err.to_string().to_ascii_lowercase();
+    msg.contains("not supported")
+        || msg.contains("parser exception")
+        || msg.contains("does not exist")
+        || msg.contains("already exists")
 }
 
 #[cfg(test)]
@@ -390,6 +417,50 @@ mod tests {
     fn escape_cypher_string_handles_special_chars() {
         assert_eq!(escape_cypher_string("it's"), "it\\'s");
         assert_eq!(escape_cypher_string("a\\b"), "a\\\\b");
+    }
+
+    #[test]
+    fn is_fts_unsupported_error_detects_unsupported_patterns() {
+        // Mirrors the unsupported-DDL patterns from storage::connection::run_init_ddl.
+        assert!(is_fts_unsupported_error(&QueryError::Query(
+            "Parser exception: syntax error near CALL".to_string()
+        )));
+        assert!(is_fts_unsupported_error(&QueryError::Query(
+            "feature not supported in this build".to_string()
+        )));
+        assert!(is_fts_unsupported_error(&QueryError::Query(
+            "Catalog exception: function fts_search does not exist".to_string()
+        )));
+        assert!(is_fts_unsupported_error(&QueryError::Query(
+            "table already exists".to_string()
+        )));
+        // Case-insensitive matching.
+        assert!(is_fts_unsupported_error(&QueryError::Query(
+            "NOT SUPPORTED".to_string()
+        )));
+        assert!(is_fts_unsupported_error(&QueryError::Query(
+            "PARSER EXCEPTION".to_string()
+        )));
+    }
+
+    #[test]
+    fn is_fts_unsupported_error_rejects_genuine_errors() {
+        // Errors that are NOT "unsupported" signals must propagate, not fall back.
+        assert!(!is_fts_unsupported_error(&QueryError::Query(
+            "connection refused".to_string()
+        )));
+        assert!(!is_fts_unsupported_error(&QueryError::Query(
+            "permission denied".to_string()
+        )));
+        assert!(!is_fts_unsupported_error(&QueryError::Query(
+            "out of memory".to_string()
+        )));
+        assert!(!is_fts_unsupported_error(&QueryError::InvalidQuery(
+            "empty query".to_string()
+        )));
+        assert!(!is_fts_unsupported_error(&QueryError::FullText(
+            "index corrupted".to_string()
+        )));
     }
 
     #[test]

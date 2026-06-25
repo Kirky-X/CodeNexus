@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::discover::{FileInfo, Walker};
 use crate::index::error::{IndexError, Result};
@@ -31,7 +31,65 @@ use crate::index::incremental::{diff_files, FileDiff};
 use crate::model::{Edge, Graph, Language, Node, NodeLabel, new_file_id, new_project_id};
 use crate::parse::parallel_parse;
 use crate::resolve::{build_symbol_table, resolve_all};
-use crate::storage::Repository;
+use crate::storage::{Repository, StorageError};
+
+/// Maximum number of retry attempts for database-locked errors (Task 5).
+///
+/// A database operation that fails with a "locked" error is retried up to
+/// `DEFAULT_MAX_RETRIES` times with exponential backoff
+/// (100ms, 200ms, 400ms). If it still fails, [`IndexError::DatabaseLocked`] is
+/// returned (PRD §4.1.6, exit code 2).
+const DEFAULT_MAX_RETRIES: u32 = 3;
+
+/// Executes a database operation with retry on lock (Task 5).
+///
+/// Retries up to `max_retries` times with exponential backoff
+/// (100ms, 200ms, 400ms, ...). A failure whose error message contains
+/// "locked" or "Lock" (case-sensitive) is treated as a transient lock and
+/// retried; any other error is propagated immediately. When all attempts are
+/// exhausted on a lock error, [`IndexError::DatabaseLocked`] is returned.
+///
+/// # Arguments
+///
+/// * `max_retries` - Maximum number of retries (in addition to the initial
+///   attempt). `max_retries = 3` means up to 4 total attempts.
+/// * `f` - The operation to attempt. Called repeatedly until it succeeds or a
+///   non-lock error is returned.
+///
+/// # Errors
+///
+/// - Returns `Ok(v)` if `f` eventually succeeds.
+/// - Returns [`IndexError::DatabaseLocked`] if `f` keeps returning lock errors
+///   for `max_retries + 1` attempts.
+/// - Returns any other `IndexError` immediately (no retry).
+fn with_retry<T, F>(max_retries: u32, mut f: F) -> Result<T>
+where
+    F: FnMut() -> Result<T>,
+{
+    let mut delay_ms = 100u64;
+    for attempt in 0..=max_retries {
+        match f() {
+            Ok(v) => return Ok(v),
+            Err(IndexError::Storage(StorageError::Query(ref msg)))
+                if msg.contains("locked") || msg.contains("Lock") =>
+            {
+                if attempt < max_retries {
+                    warn!(
+                        attempt = attempt + 1,
+                        max_retries, delay_ms,
+                        "database locked, retrying"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                    delay_ms *= 2;
+                    continue;
+                }
+                return Err(IndexError::DatabaseLocked);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(IndexError::DatabaseLocked)
+}
 
 /// The outcome of a single indexing run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,7 +159,11 @@ impl IndexFacade {
     /// Equivalent to `index_incremental` with `force=true` for the parse
     /// phase, but always (re)creates the project node.
     pub fn index(&self, path: &Path, project_name: &str, force: bool) -> Result<IndexResult> {
-        let repository = Repository::open(&self.db_path)?;
+        // Repository::open runs init_schema internally; retry on transient
+        // database locks (Task 5).
+        let repository = with_retry(DEFAULT_MAX_RETRIES, || {
+            Repository::open(&self.db_path).map_err(IndexError::from)
+        })?;
         let pipeline = Pipeline::new(repository);
         pipeline.run(path, project_name, force)
     }
@@ -152,6 +214,13 @@ impl Pipeline {
     pub fn run(&self, path: &Path, project_name: &str, force: bool) -> Result<IndexResult> {
         let start = Instant::now();
 
+        info!(
+            event = "index_started",
+            project = %project_name,
+            path = %path.display(),
+            "indexing started"
+        );
+
         // PRD §4.1.6: path not found → exit code 1.
         if !path.exists() {
             return Err(IndexError::PathNotFound(path.display().to_string()));
@@ -164,11 +233,13 @@ impl Pipeline {
         // for this name (incremental re-index); otherwise generate a new one.
         let project_id = self.lookup_or_create_project_id(project_name, path, &disk_files)?;
 
-        // Step 2: query existing hashes from the DB.
-        let db_hashes = self
-            .repository
-            .get_all_file_hashes(&project_id)
-            .unwrap_or_default();
+        // Step 2: query existing hashes from the DB (with retry on lock).
+        let db_hashes = with_retry(DEFAULT_MAX_RETRIES, || {
+            self.repository
+                .get_all_file_hashes(&project_id)
+                .map_err(IndexError::from)
+        })
+        .unwrap_or_default();
 
         // Step 3: diff hashes → changed/added/deleted (or all changed if force).
         let diff = diff_files(&disk_files, &db_hashes, force)?;
@@ -250,7 +321,9 @@ impl Pipeline {
         self.save_project_node(&project_id, project_name, path, &disk_files)?;
         self.save_nodes_by_label(&all_nodes)?;
         if !all_edges.is_empty() {
-            self.repository.save_edges(&all_edges)?;
+            with_retry(DEFAULT_MAX_RETRIES, || {
+                self.repository.save_edges(&all_edges).map_err(IndexError::from)
+            })?;
         }
 
         // Step 9: build the IndexResult.
@@ -259,6 +332,31 @@ impl Pipeline {
         let files_skipped = diff.unchanged.len();
         let nodes_created = all_nodes.len();
         let edges_created = all_edges.len();
+
+        info!(
+            event = "index_completed",
+            project = %project_name,
+            path = %path.display(),
+            files_indexed = files_indexed,
+            files_skipped = files_skipped,
+            nodes_created = nodes_created,
+            edges_created = edges_created,
+            duration_ms = duration_ms,
+            "indexing completed"
+        );
+
+        let files_per_second = if duration_ms > 0 {
+            (files_indexed as f64 * 1000.0 / duration_ms as f64).round() as u64
+        } else {
+            0
+        };
+        info!(
+            event = "performance",
+            files_per_second = files_per_second,
+            files_indexed = files_indexed,
+            duration_ms = duration_ms,
+            "indexing performance metrics"
+        );
 
         Ok(IndexResult::new(
             project_id,
@@ -343,7 +441,11 @@ impl Pipeline {
             if label == NodeLabel::Project {
                 continue;
             }
-            self.repository.save_nodes(&group, label)?;
+            with_retry(DEFAULT_MAX_RETRIES, || {
+                self.repository
+                    .save_nodes(&group, label)
+                    .map_err(IndexError::from)
+            })?;
         }
         Ok(())
     }
@@ -401,7 +503,10 @@ mod tests {
     use super::*;
     use crate::model::Language;
     use std::fs;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
+    use tracing_subscriber::fmt::MakeWriter;
 
     /// Writes a file at `dir/rel` (creating parent directories as needed).
     fn write_file(dir: &Path, rel: &str, content: &str) {
@@ -878,5 +983,197 @@ mod tests {
             .expect("second");
         // On the second run, all 2 files are skipped.
         assert_eq!(second.files_indexed + second.files_skipped, 2);
+    }
+
+    // --- LOG-001 / LOG-006: tracing event emission ---
+
+    /// A `MakeWriter` that buffers emitted events into a shared `Vec<u8>` so a
+    /// test can assert on what the subscriber actually wrote (mirrors the
+    /// pattern in `main.rs`).
+    struct CapturingMakeWriter {
+        buf: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl MakeWriter for CapturingMakeWriter {
+        type Writer = CapturingWriter;
+
+        fn make_writer(&self) -> Self::Writer {
+            CapturingWriter {
+                buf: self.buf.clone(),
+            }
+        }
+    }
+
+    struct CapturingWriter {
+        buf: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for CapturingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.buf.lock().unwrap().write_all(bytes)?;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Runs `f` inside a scoped tracing subscriber that captures all event
+    /// output into a string, returning that string.
+    fn capture_tracing<R>(f: impl FnOnce() -> R) -> String {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::FmtSubscriber::builder()
+            .with_target(false)
+            .with_writer(CapturingMakeWriter { buf: buf.clone() })
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        let bytes = buf.lock().unwrap().clone();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn log_001_index_started_event_emitted() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "a.rs", "fn a() {}\n");
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+
+        let captured = capture_tracing(|| {
+            facade.index(tmp.path(), "log_001_started", false).expect("index");
+        });
+
+        assert!(
+            captured.contains("index_started"),
+            "LOG-001: index_started event should be emitted, got: {captured:?}"
+        );
+        assert!(
+            captured.contains("log_001_started"),
+            "index_started should carry the project name"
+        );
+    }
+
+    #[test]
+    fn log_001_index_completed_event_emitted() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "a.rs", "fn a() {}\n");
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+
+        let captured = capture_tracing(|| {
+            facade.index(tmp.path(), "log_001_completed", false).expect("index");
+        });
+
+        assert!(
+            captured.contains("index_completed"),
+            "LOG-001: index_completed event should be emitted, got: {captured:?}"
+        );
+        assert!(
+            captured.contains("files_indexed"),
+            "index_completed should carry files_indexed field"
+        );
+        assert!(
+            captured.contains("duration_ms"),
+            "index_completed should carry duration_ms field"
+        );
+    }
+
+    #[test]
+    fn log_006_performance_event_emitted() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "a.rs", "fn a() {}\n");
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+
+        let captured = capture_tracing(|| {
+            facade.index(tmp.path(), "log_006_perf", false).expect("index");
+        });
+
+        assert!(
+            captured.contains("performance"),
+            "LOG-006: performance event should be emitted, got: {captured:?}"
+        );
+        assert!(
+            captured.contains("files_per_second"),
+            "performance event should carry files_per_second field"
+        );
+    }
+
+    // --- SubTask 17.4: with_retry database-lock retry behavior (Task 5) ---
+
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// Constructs a lock error (message contains "locked") that `with_retry`
+    /// treats as a transient lock and retries.
+    fn lock_error() -> IndexError {
+        IndexError::Storage(StorageError::Query("database is locked".to_string()))
+    }
+
+    #[test]
+    fn with_retry_returns_value_on_first_success() {
+        let calls = AtomicU32::new(0);
+        let result: Result<u32> = with_retry(3, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(42)
+        });
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "should not retry on success");
+    }
+
+    #[test]
+    fn with_retry_retries_on_lock_then_succeeds() {
+        let calls = AtomicU32::new(0);
+        let result: Result<u32> = with_retry(3, || {
+            let n = calls.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                Err(lock_error())
+            } else {
+                Ok(7)
+            }
+        });
+        assert_eq!(result.unwrap(), 7);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "should retry once then succeed"
+        );
+    }
+
+    #[test]
+    fn with_retry_returns_database_locked_after_all_retries_exhausted() {
+        let calls = AtomicU32::new(0);
+        let max_retries = 3u32;
+        let result: Result<u32> = with_retry(max_retries, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err(lock_error())
+        });
+        assert!(
+            matches!(result, Err(IndexError::DatabaseLocked)),
+            "should return DatabaseLocked after exhausting retries, got: {result:?}"
+        );
+        // max_retries=3 means 1 initial + 3 retries = 4 total attempts.
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            max_retries + 1,
+            "should attempt max_retries+1 times"
+        );
+    }
+
+    #[test]
+    fn with_retry_propagates_non_lock_error_immediately() {
+        let calls = AtomicU32::new(0);
+        let result: Result<u32> = with_retry(3, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err(IndexError::Parse("syntax error".to_string()))
+        });
+        assert!(
+            matches!(result, Err(IndexError::Parse(_))),
+            "should propagate non-lock error immediately, got: {result:?}"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "should not retry on non-lock error"
+        );
     }
 }

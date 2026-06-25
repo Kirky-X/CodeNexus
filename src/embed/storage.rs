@@ -276,18 +276,17 @@ impl<'a> EmbeddingStorage<'a> {
 
     /// Formats a vector as a Cypher list literal: `[0.1, 0.2, ...]`.
     fn format_embedding(vec: &[f32]) -> String {
-        let items: Vec<String> = vec
-            .iter()
-            .map(|f| format!("{f:.6}"))
-            .collect();
+        let items: Vec<String> = vec.iter().map(|f| format!("{f:.6}")).collect();
         format!("[{}]", items.join(", "))
     }
 
     /// Parses a JSON array value into a `Vec<f32>`.
     fn parse_embedding(value: &serde_json::Value) -> Option<Vec<f32>> {
-        value
-            .as_array()
-            .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+        value.as_array().map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect()
+        })
     }
 
     /// Escapes single quotes in a string for safe Cypher interpolation.
@@ -343,7 +342,9 @@ mod tests {
     }
 
     fn make_embedding(seed: f32) -> Vec<f32> {
-        (0..EMBEDDING_DIM).map(|i| seed + i as f32 * 0.001).collect()
+        (0..EMBEDDING_DIM)
+            .map(|i| seed + i as f32 * 0.001)
+            .collect()
     }
 
     fn make_record(id: &str, node_id: &str, project: &str, embedding: Vec<f32>) -> EmbeddingRecord {
@@ -365,7 +366,11 @@ mod tests {
     fn record_new_generates_id() {
         let emb = make_embedding(0.1);
         let rec = EmbeddingRecord::new("node1", "demo", 1, 10, emb, "hash123");
-        assert!(rec.id.starts_with("emb_"), "id should start with emb_: {}", rec.id);
+        assert!(
+            rec.id.starts_with("emb_"),
+            "id should start with emb_: {}",
+            rec.id
+        );
         assert_eq!(rec.node_id, "node1");
         assert_eq!(rec.project, "demo");
         assert_eq!(rec.chunk_index, 0);
@@ -396,7 +401,10 @@ mod tests {
     fn cosine_similarity_identical_vectors() {
         let v = vec![1.0, 2.0, 3.0];
         let sim = cosine_similarity(&v, &v);
-        assert!((sim - 1.0).abs() < 1e-5, "identical vectors should have sim=1.0, got {sim}");
+        assert!(
+            (sim - 1.0).abs() < 1e-5,
+            "identical vectors should have sim=1.0, got {sim}"
+        );
     }
 
     #[test]
@@ -404,7 +412,10 @@ mod tests {
         let a = vec![1.0, 0.0];
         let b = vec![0.0, 1.0];
         let sim = cosine_similarity(&a, &b);
-        assert!(sim.abs() < 1e-5, "orthogonal vectors should have sim=0.0, got {sim}");
+        assert!(
+            sim.abs() < 1e-5,
+            "orthogonal vectors should have sim=0.0, got {sim}"
+        );
     }
 
     #[test]
@@ -412,7 +423,10 @@ mod tests {
         let a = vec![0.0, 0.0, 0.0];
         let b = vec![1.0, 2.0, 3.0];
         let sim = cosine_similarity(&a, &b);
-        assert!(sim.abs() < 1e-5, "zero vector should have sim=0.0, got {sim}");
+        assert!(
+            sim.abs() < 1e-5,
+            "zero vector should have sim=0.0, got {sim}"
+        );
     }
 
     #[test]
@@ -434,7 +448,10 @@ mod tests {
         let a = vec![1.0, 0.0];
         let b = vec![-1.0, 0.0];
         let sim = cosine_similarity(&a, &b);
-        assert!((sim + 1.0).abs() < 1e-5, "opposite vectors should have sim=-1.0, got {sim}");
+        assert!(
+            (sim + 1.0).abs() < 1e-5,
+            "opposite vectors should have sim=-1.0, got {sim}"
+        );
     }
 
     // --- EmbeddingStorage::store ---
@@ -495,7 +512,10 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            EmbedError::DimensionMismatch { expected: 384, actual: 128 }
+            EmbedError::DimensionMismatch {
+                expected: 384,
+                actual: 128
+            }
         ));
     }
 
@@ -541,11 +561,20 @@ mod tests {
         let conn = fresh_conn();
         let storage = EmbeddingStorage::new(&conn);
         let recs: Vec<_> = (0..5)
-            .map(|i| make_record(&format!("e{i}"), &format!("n{i}"), "demo", make_embedding(i as f32 * 0.1)))
+            .map(|i| {
+                make_record(
+                    &format!("e{i}"),
+                    &format!("n{i}"),
+                    "demo",
+                    make_embedding(i as f32 * 0.1),
+                )
+            })
             .collect();
         match storage.store(&recs) {
             Ok(()) => {
-                let hits = storage.search(&make_embedding(0.0), Some("demo"), 2).expect("search");
+                let hits = storage
+                    .search(&make_embedding(0.0), Some("demo"), 2)
+                    .expect("search");
                 assert!(hits.len() <= 2, "should respect limit");
             }
             Err(EmbedError::EmbeddingTableNotAvailable) => {}
@@ -563,8 +592,13 @@ mod tests {
         ];
         match storage.store(&recs) {
             Ok(()) => {
-                let hits = storage.search(&make_embedding(0.1), Some("alpha"), 10).expect("search");
-                assert!(hits.iter().all(|h| h.project == "alpha"), "should only return alpha");
+                let hits = storage
+                    .search(&make_embedding(0.1), Some("alpha"), 10)
+                    .expect("search");
+                assert!(
+                    hits.iter().all(|h| h.project == "alpha"),
+                    "should only return alpha"
+                );
             }
             Err(EmbedError::EmbeddingTableNotAvailable) => {}
             Err(e) => panic!("unexpected: {e}"),
@@ -620,7 +654,10 @@ mod tests {
         let conn = fresh_conn();
         let storage = EmbeddingStorage::new(&conn);
         let result = storage.delete_for_project("nonexistent");
-        assert!(result.is_ok(), "deleting nonexistent project should succeed");
+        assert!(
+            result.is_ok(),
+            "deleting nonexistent project should succeed"
+        );
     }
 
     // --- EmbeddingStorage::count ---
@@ -662,7 +699,10 @@ mod tests {
         let s = EmbeddingStorage::format_embedding(&[0.1, 0.2, 0.3]);
         assert!(s.starts_with('['), "should start with [: {s}");
         assert!(s.ends_with(']'), "should end with ]: {s}");
-        assert!(s.contains("0.100000"), "should contain formatted float: {s}");
+        assert!(
+            s.contains("0.100000"),
+            "should contain formatted float: {s}"
+        );
     }
 
     #[test]
@@ -689,9 +729,15 @@ mod tests {
 
     #[test]
     fn is_table_missing_error_detects_patterns() {
-        assert!(EmbeddingStorage::is_table_missing_error("Table Embedding does not exist"));
-        assert!(EmbeddingStorage::is_table_missing_error("embedding not found"));
-        assert!(!EmbeddingStorage::is_table_missing_error("syntax error near CREATE"));
+        assert!(EmbeddingStorage::is_table_missing_error(
+            "Table Embedding does not exist"
+        ));
+        assert!(EmbeddingStorage::is_table_missing_error(
+            "embedding not found"
+        ));
+        assert!(!EmbeddingStorage::is_table_missing_error(
+            "syntax error near CREATE"
+        ));
     }
 
     // --- open_storage ---

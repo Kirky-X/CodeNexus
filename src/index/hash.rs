@@ -49,7 +49,8 @@ mod tests {
         let hash = compute_content_hash(b"hello world");
         assert_eq!(hash.len(), 64, "SHA-256 hex digest must be 64 chars");
         assert!(
-            hash.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            hash.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
             "hash must be lowercase hex: {hash}"
         );
     }
@@ -112,7 +113,8 @@ mod tests {
         let hash = compute_file_hash(tmp.path()).expect("hash should succeed");
         assert_eq!(hash.len(), 64);
         assert!(
-            hash.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            hash.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
             "hash must be lowercase hex: {hash}"
         );
     }

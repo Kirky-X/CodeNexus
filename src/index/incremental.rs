@@ -61,10 +61,7 @@ impl FileDiff {
     /// Returns the files that need to be parsed (changed + added).
     #[must_use]
     pub fn to_parse(&self) -> Vec<&FileInfo> {
-        self.changed
-            .iter()
-            .chain(self.added.iter())
-            .collect()
+        self.changed.iter().chain(self.added.iter()).collect()
     }
 }
 
@@ -282,7 +279,11 @@ mod tests {
 
         let diff = diff_files(&disk, &db, false).unwrap();
 
-        assert_eq!(diff.unchanged.len(), 1, "matching hash → unchanged (BR-INDEX-001)");
+        assert_eq!(
+            diff.unchanged.len(),
+            1,
+            "matching hash → unchanged (BR-INDEX-001)"
+        );
         assert!(diff.changed.is_empty());
         assert!(diff.added.is_empty());
         assert!(diff.deleted.is_empty());
@@ -293,7 +294,12 @@ mod tests {
     #[test]
     fn diff_files_different_hash_goes_to_changed() {
         let tmp = TempDir::new().unwrap();
-        let f = make_file(tmp.path(), "a.rs", "fn a() { /* modified */ }", Language::Rust);
+        let f = make_file(
+            tmp.path(),
+            "a.rs",
+            "fn a() { /* modified */ }",
+            Language::Rust,
+        );
         let disk = vec![f];
         // DB hash is for the OLD content, so it differs from the current hash.
         let db = vec![("a.rs".to_string(), "0".repeat(64))];
@@ -320,7 +326,11 @@ mod tests {
 
         let diff = diff_files(&disk, &db, false).unwrap();
 
-        assert_eq!(diff.deleted.len(), 1, "BR-INDEX-002: in DB not on disk → deleted");
+        assert_eq!(
+            diff.deleted.len(),
+            1,
+            "BR-INDEX-002: in DB not on disk → deleted"
+        );
         assert_eq!(diff.deleted[0], "deleted.rs");
         assert_eq!(diff.unchanged.len(), 1);
     }
@@ -342,9 +352,15 @@ mod tests {
         let diff = diff_files(&disk, &db, true).unwrap();
 
         assert_eq!(diff.changed.len(), 2, "BR-INDEX-003: force → all changed");
-        assert!(diff.unchanged.is_empty(), "force must skip the unchanged bucket");
+        assert!(
+            diff.unchanged.is_empty(),
+            "force must skip the unchanged bucket"
+        );
         assert!(diff.added.is_empty());
-        assert!(diff.deleted.is_empty(), "force does not affect deleted detection");
+        assert!(
+            diff.deleted.is_empty(),
+            "force does not affect deleted detection"
+        );
     }
 
     #[test]
@@ -423,12 +439,21 @@ mod tests {
         assert_eq!(diff.added.len(), 1, "c.rs added");
         assert_eq!(diff.deleted.len(), 1, "deleted.rs deleted");
 
-        let unchanged_paths: Vec<&str> =
-            diff.unchanged.iter().map(|f| f.relative_path.as_str()).collect();
-        let changed_paths: Vec<&str> =
-            diff.changed.iter().map(|f| f.relative_path.as_str()).collect();
-        let added_paths: Vec<&str> =
-            diff.added.iter().map(|f| f.relative_path.as_str()).collect();
+        let unchanged_paths: Vec<&str> = diff
+            .unchanged
+            .iter()
+            .map(|f| f.relative_path.as_str())
+            .collect();
+        let changed_paths: Vec<&str> = diff
+            .changed
+            .iter()
+            .map(|f| f.relative_path.as_str())
+            .collect();
+        let added_paths: Vec<&str> = diff
+            .added
+            .iter()
+            .map(|f| f.relative_path.as_str())
+            .collect();
         assert!(unchanged_paths.contains(&"a.rs"));
         assert!(changed_paths.contains(&"b.rs"));
         assert!(added_paths.contains(&"c.rs"));
@@ -481,10 +506,18 @@ mod tests {
     fn diff_files_handles_nested_paths() {
         let tmp = TempDir::new().unwrap();
         let f1 = make_file(tmp.path(), "src/main.rs", "fn main() {}", Language::Rust);
-        let f2 = make_file(tmp.path(), "src/sub/mod.rs", "fn mod_fn() {}", Language::Rust);
+        let f2 = make_file(
+            tmp.path(),
+            "src/sub/mod.rs",
+            "fn mod_fn() {}",
+            Language::Rust,
+        );
         let disk = vec![f1, f2];
         let db = vec![
-            ("src/main.rs".to_string(), hash_of(tmp.path(), "src/main.rs")),
+            (
+                "src/main.rs".to_string(),
+                hash_of(tmp.path(), "src/main.rs"),
+            ),
             // src/sub/mod.rs is new
         ];
 
@@ -492,8 +525,11 @@ mod tests {
 
         assert_eq!(diff.unchanged.len(), 1);
         assert_eq!(diff.added.len(), 1);
-        let added_paths: Vec<&str> =
-            diff.added.iter().map(|f| f.relative_path.as_str()).collect();
+        let added_paths: Vec<&str> = diff
+            .added
+            .iter()
+            .map(|f| f.relative_path.as_str())
+            .collect();
         assert!(added_paths.contains(&"src/sub/mod.rs"));
     }
 

@@ -20,7 +20,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{EmbedError, EmbeddingConfig, EMBEDDING_DIM, Result};
+use super::{EmbedError, EmbeddingConfig, Result, EMBEDDING_DIM};
 
 /// Trait for embedding text into dense vectors.
 ///
@@ -223,7 +223,9 @@ impl EmbedClient for MockEmbedClient {
             let mut state = seed;
             for _ in 0..self.dim {
                 // Simple LCG for deterministic pseudo-random floats in [0, 1).
-                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 let val = ((state >> 33) as f32) / (1u64 << 31) as f32;
                 vec.push(val);
             }
@@ -326,10 +328,7 @@ mod tests {
         let cfg = EmbeddingConfig::from_env();
         let result = OpenAIEmbedClient::new(cfg);
         assert!(result.is_err(), "should error without API key");
-        assert!(matches!(
-            result.unwrap_err(),
-            EmbedError::MissingApiKey
-        ));
+        assert!(matches!(result.unwrap_err(), EmbedError::MissingApiKey));
     }
 
     #[test]

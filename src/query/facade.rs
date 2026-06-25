@@ -6,6 +6,8 @@
 //! sub-components.
 
 use std::path::Path;
+use std::time::Instant;
+use tracing::debug;
 
 use super::cypher::CypherExecutor;
 use super::error::Result;
@@ -56,12 +58,32 @@ impl QueryFacade {
     /// Returns [`QueryError::InvalidQuery`] for empty input, or
     /// [`QueryError::Storage`] on database failure.
     pub fn cypher(&self, query: &str) -> Result<QueryResult> {
-        CypherExecutor::new(&self.conn).execute(query)
+        let start = Instant::now();
+        let result = CypherExecutor::new(&self.conn).execute(query);
+        let duration_ms = start.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        debug!(
+            event = "query_executed",
+            query_type = "cypher",
+            duration_ms = duration_ms,
+            results = result.as_ref().map(|r| r.rows.len()).unwrap_or(0),
+            "query executed"
+        );
+        result
     }
 
     /// General structured search by name (CONTAINS), sorted by relevance.
     pub fn search(&self, text: &str, project: Option<&str>, limit: usize) -> Result<Vec<SearchResult>> {
-        StructuredSearcher::new(&self.conn).search(text, project, limit)
+        let start = Instant::now();
+        let result = StructuredSearcher::new(&self.conn).search(text, project, limit);
+        let duration_ms = start.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        debug!(
+            event = "query_executed",
+            query_type = "search_name",
+            duration_ms = duration_ms,
+            results = result.as_ref().map(|r| r.len()).unwrap_or(0),
+            "query executed"
+        );
+        result
     }
 
     /// Returns all nodes of the given `label`, optionally filtered by project.
@@ -71,7 +93,17 @@ impl QueryFacade {
         project: Option<&str>,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
-        StructuredSearcher::new(&self.conn).search_by_type(label, project, limit)
+        let start = Instant::now();
+        let result = StructuredSearcher::new(&self.conn).search_by_type(label, project, limit);
+        let duration_ms = start.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        debug!(
+            event = "query_executed",
+            query_type = "search_type",
+            duration_ms = duration_ms,
+            results = result.as_ref().map(|r| r.len()).unwrap_or(0),
+            "query executed"
+        );
+        result
     }
 
     /// Returns all symbols located in `file_path`, optionally filtered by project.
@@ -80,7 +112,17 @@ impl QueryFacade {
         file_path: &str,
         project: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
-        StructuredSearcher::new(&self.conn).search_by_file(file_path, project)
+        let start = Instant::now();
+        let result = StructuredSearcher::new(&self.conn).search_by_file(file_path, project);
+        let duration_ms = start.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        debug!(
+            event = "query_executed",
+            query_type = "search_file",
+            duration_ms = duration_ms,
+            results = result.as_ref().map(|r| r.len()).unwrap_or(0),
+            "query executed"
+        );
+        result
     }
 
     /// BM25 full-text search (FTS extension when available, CONTAINS fallback).
@@ -90,7 +132,17 @@ impl QueryFacade {
         project: Option<&str>,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
-        FullTextSearcher::new(&self.conn).search(text, project, limit)
+        let start = Instant::now();
+        let result = FullTextSearcher::new(&self.conn).search(text, project, limit);
+        let duration_ms = start.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        debug!(
+            event = "query_executed",
+            query_type = "fulltext",
+            duration_ms = duration_ms,
+            results = result.as_ref().map(|r| r.len()).unwrap_or(0),
+            "query executed"
+        );
+        result
     }
 }
 
@@ -107,6 +159,9 @@ mod tests {
     use super::*;
     use crate::model::NodeLabel;
     use crate::query::error::QueryError;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::fmt::MakeWriter;
 
     /// Builds a facade backed by an in-memory database with the schema
     /// initialized.
@@ -303,5 +358,115 @@ mod tests {
         let facade = fresh_facade();
         let s = format!("{facade:?}");
         assert!(s.contains("QueryFacade"));
+    }
+
+    // --- LOG-003: query_executed event emission ---
+
+    /// A `MakeWriter` that buffers emitted events into a shared `Vec<u8>` so a
+    /// test can assert on what the subscriber actually wrote.
+    struct CapturingMakeWriter {
+        buf: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl MakeWriter for CapturingMakeWriter {
+        type Writer = CapturingWriter;
+
+        fn make_writer(&self) -> Self::Writer {
+            CapturingWriter {
+                buf: self.buf.clone(),
+            }
+        }
+    }
+
+    struct CapturingWriter {
+        buf: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for CapturingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.buf.lock().unwrap().write_all(bytes)?;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Runs `f` inside a scoped tracing subscriber (with DEBUG level) that
+    /// captures all event output into a string, returning that string.
+    fn capture_tracing_debug<R>(f: impl FnOnce() -> R) -> String {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::FmtSubscriber::builder()
+            .with_target(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(CapturingMakeWriter { buf: buf.clone() })
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        let bytes = buf.lock().unwrap().clone();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn log_003_cypher_emits_query_executed() {
+        let facade = fresh_facade();
+        seed_fixture(&facade);
+
+        let captured = capture_tracing_debug(|| {
+            let _ = facade
+                .cypher("MATCH (f:Function) RETURN f.name AS name LIMIT 10;")
+                .expect("cypher");
+        });
+
+        assert!(
+            captured.contains("query_executed"),
+            "LOG-003: query_executed event should be emitted, got: {captured:?}"
+        );
+        assert!(
+            captured.contains("query_type") && captured.contains("cypher"),
+            "query_executed should carry query_type=cypher"
+        );
+        assert!(
+            captured.contains("duration_ms"),
+            "query_executed should carry duration_ms field"
+        );
+    }
+
+    #[test]
+    fn log_003_search_emits_query_executed() {
+        let facade = fresh_facade();
+        seed_fixture(&facade);
+
+        let captured = capture_tracing_debug(|| {
+            let _ = facade.search("parse", None, 100).expect("search");
+        });
+
+        assert!(
+            captured.contains("query_executed"),
+            "LOG-003: search should emit query_executed, got: {captured:?}"
+        );
+        assert!(
+            captured.contains("search_name"),
+            "search should carry query_type=search_name"
+        );
+    }
+
+    #[test]
+    fn log_003_fulltext_emits_query_executed() {
+        let facade = fresh_facade();
+        seed_fixture(&facade);
+
+        let captured = capture_tracing_debug(|| {
+            let _ = facade.fulltext_search("parse", None, 100).expect("fulltext");
+        });
+
+        assert!(
+            captured.contains("query_executed"),
+            "LOG-003: fulltext_search should emit query_executed, got: {captured:?}"
+        );
+        assert!(
+            captured.contains("fulltext"),
+            "fulltext_search should carry query_type=fulltext"
+        );
     }
 }

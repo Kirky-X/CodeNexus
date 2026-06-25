@@ -112,10 +112,7 @@ mod tests {
 
     #[test]
     fn io_displays_message() {
-        let err = IndexError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "missing",
-        ));
+        let err = IndexError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "missing"));
         let msg = err.to_string();
         assert!(msg.contains("io error"), "got: {msg}");
         assert!(msg.contains("missing"), "got: {msg}");
@@ -166,10 +163,7 @@ mod tests {
 
     #[test]
     fn exit_code_database_corrupt_is_4() {
-        assert_eq!(
-            IndexError::DatabaseCorrupt("x".to_string()).exit_code(),
-            4
-        );
+        assert_eq!(IndexError::DatabaseCorrupt("x".to_string()).exit_code(), 4);
     }
 
     #[test]
@@ -180,8 +174,7 @@ mod tests {
 
     #[test]
     fn exit_code_discover_is_1() {
-        let err: IndexError =
-            DiscoverError::from(std::io::Error::other("x")).into();
+        let err: IndexError = DiscoverError::from(std::io::Error::other("x")).into();
         assert_eq!(err.exit_code(), 1);
     }
 
@@ -193,8 +186,7 @@ mod tests {
 
     #[test]
     fn exit_code_io_is_3() {
-        let err: IndexError =
-            std::io::Error::other("x").into();
+        let err: IndexError = std::io::Error::other("x").into();
         assert_eq!(err.exit_code(), 3);
     }
 
