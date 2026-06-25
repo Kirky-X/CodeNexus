@@ -77,6 +77,38 @@ pub struct ExternInfo {
     pub signature: Option<String>,
 }
 
+/// Information about a variable read within a function body.
+///
+/// Captured for later resolution of Reads edges (Function -> Variable,
+/// BR-TRACE-005). `reader_qn` holds the name of the enclosing function/
+/// method (resolved against the symbol table during resolution).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ReadInfo {
+    /// The function/method that reads the variable (function name; the
+    /// resolver looks it up in the symbol table to obtain its FQN).
+    pub reader_qn: Option<String>,
+    /// The name of the variable being read.
+    pub var_name: String,
+    /// The 1-based line number.
+    pub line: u32,
+}
+
+/// Information about a variable write within a function body.
+///
+/// Captured for later resolution of Writes edges (Function -> Variable,
+/// BR-TRACE-006). `writer_qn` holds the name of the enclosing function/
+/// method (resolved against the symbol table during resolution).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WriteInfo {
+    /// The function/method that writes the variable (function name; the
+    /// resolver looks it up in the symbol table to obtain its FQN).
+    pub writer_qn: Option<String>,
+    /// The name of the variable being written.
+    pub var_name: String,
+    /// The 1-based line number.
+    pub line: u32,
+}
+
 // ---------------------------------------------------------------------------
 // ExtractResult: the output of extracting symbols from a single file.
 // ---------------------------------------------------------------------------
@@ -104,6 +136,10 @@ pub struct ExtractResult {
     pub assignments: Vec<AssignInfo>,
     /// Extern/FFI declarations (for cross-language analysis).
     pub externs: Vec<ExternInfo>,
+    /// Variable reads within function bodies (BR-TRACE-005).
+    pub reads: Vec<ReadInfo>,
+    /// Variable writes within function bodies (BR-TRACE-006).
+    pub writes: Vec<WriteInfo>,
 }
 
 impl ExtractResult {
@@ -119,6 +155,8 @@ impl ExtractResult {
             calls: Vec::new(),
             assignments: Vec::new(),
             externs: Vec::new(),
+            reads: Vec::new(),
+            writes: Vec::new(),
         }
     }
 
@@ -131,6 +169,8 @@ impl ExtractResult {
             && self.calls.is_empty()
             && self.assignments.is_empty()
             && self.externs.is_empty()
+            && self.reads.is_empty()
+            && self.writes.is_empty()
     }
 }
 
@@ -346,6 +386,74 @@ mod tests {
         assert_eq!(info, info.clone());
     }
 
+    // --- ReadInfo tests ---
+
+    #[test]
+    fn read_info_can_be_constructed() {
+        let info = ReadInfo {
+            reader_qn: Some("main".to_string()),
+            var_name: "x".to_string(),
+            line: 5,
+        };
+        assert_eq!(info.reader_qn.as_deref(), Some("main"));
+        assert_eq!(info.var_name, "x");
+        assert_eq!(info.line, 5);
+    }
+
+    #[test]
+    fn read_info_with_no_reader() {
+        let info = ReadInfo {
+            reader_qn: None,
+            var_name: "y".to_string(),
+            line: 3,
+        };
+        assert!(info.reader_qn.is_none());
+    }
+
+    #[test]
+    fn read_info_clone_and_eq() {
+        let info = ReadInfo {
+            reader_qn: Some("foo".to_string()),
+            var_name: "bar".to_string(),
+            line: 1,
+        };
+        assert_eq!(info, info.clone());
+    }
+
+    // --- WriteInfo tests ---
+
+    #[test]
+    fn write_info_can_be_constructed() {
+        let info = WriteInfo {
+            writer_qn: Some("main".to_string()),
+            var_name: "y".to_string(),
+            line: 7,
+        };
+        assert_eq!(info.writer_qn.as_deref(), Some("main"));
+        assert_eq!(info.var_name, "y");
+        assert_eq!(info.line, 7);
+    }
+
+    #[test]
+    fn write_info_with_no_writer() {
+        let info = WriteInfo {
+            writer_qn: None,
+            var_name: "z".to_string(),
+            line: 4,
+        };
+        assert!(info.writer_qn.is_none());
+    }
+
+    #[test]
+    fn write_info_clone_and_eq() {
+        let info = WriteInfo {
+            writer_qn: Some("foo".to_string()),
+            var_name: "baz".to_string(),
+            line: 2,
+        };
+        assert_eq!(info, info.clone());
+    }
+
     // --- ExtractResult tests ---
 
     #[test]
@@ -359,6 +467,8 @@ mod tests {
         assert!(result.calls.is_empty());
         assert!(result.assignments.is_empty());
         assert!(result.externs.is_empty());
+        assert!(result.reads.is_empty());
+        assert!(result.writes.is_empty());
         assert!(result.is_empty());
     }
 
@@ -400,6 +510,16 @@ mod tests {
                 line: 7,
                 signature: None,
             }],
+            reads: vec![ReadInfo {
+                reader_qn: Some("main".to_string()),
+                var_name: "x".to_string(),
+                line: 8,
+            }],
+            writes: vec![WriteInfo {
+                writer_qn: Some("main".to_string()),
+                var_name: "y".to_string(),
+                line: 9,
+            }],
         };
         assert_eq!(result.file_path, "test.rs");
         assert_eq!(result.language, Language::Rust);
@@ -409,6 +529,8 @@ mod tests {
         assert_eq!(result.calls.len(), 1);
         assert_eq!(result.assignments.len(), 1);
         assert_eq!(result.externs.len(), 1);
+        assert_eq!(result.reads.len(), 1);
+        assert_eq!(result.writes.len(), 1);
         assert!(!result.is_empty());
     }
 

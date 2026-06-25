@@ -6,21 +6,25 @@
 //! # Business rules
 //!
 //! - BR-TRACE-008: Cross-language call -> FFI_CALLS edge.
-//! - Confidence: signature match 0.85, name-only match 0.70.
+//! - Confidence: signature match 0.85 (lowered by up to 0.15 when parameter
+//!   types mismatch), name-only match 0.70.
 //! - C↔Rust: Rust extern "C" calls C functions.
 //! - C↔Fortran: Fortran ISO_C_BINDING calls C functions (or vice versa).
+//! - Type matching uses [`TypeMapper`] to canonicalize C/Rust type names
+//!   (e.g. `int` ↔ `i32`, `double` ↔ `f64`, `char*` ↔ `*const c_char`).
 //!
 //! # Resolution flow (ADD §7.4)
 //!
 //! ```text
 //! Rust extern "C" block -> extract function names -> search C file definitions
-//!   -> name match? -> signature match (param count/types)?
-//!     -> yes -> FfiCalls edge, confidence 0.85
-//!     -> no (name only) -> FfiCalls edge, confidence 0.70
-//!     -> no name match -> unresolved
+//!   -> name match? -> signature match (param count + types)?
+//!     -> count match, types match   -> FfiCalls edge, confidence 0.85
+//!     -> count match, types differ  -> FfiCalls edge, confidence 0.70..0.85
+//!     -> no (name only)             -> FfiCalls edge, confidence 0.70
+//!     -> no name match              -> unresolved
 //! ```
 
-use crate::model::{Edge, EdgeType, Graph, NodeLabel};
+use crate::model::{Edge, EdgeType, Graph, Language, NodeLabel};
 use crate::parse::{ExternInfo, ExtractResult};
 use crate::resolve::ProjectSymbolTable;
 
@@ -28,6 +32,228 @@ use crate::resolve::ProjectSymbolTable;
 const CONFIDENCE_NAME_AND_SIG: f32 = 0.85;
 /// Confidence for a name-only FFI match (ADD §7.4).
 const CONFIDENCE_NAME_ONLY: f32 = 0.70;
+/// Confidence penalty applied per unmatched parameter type (ADD §7.4).
+/// When all parameter types mismatch, the total penalty is 0.15, lowering
+/// the signature-match confidence from 0.85 to 0.70.
+const CONFIDENCE_TYPE_MISMATCH_PENALTY: f32 = 0.15;
+
+/// Maps type names across languages for FFI signature matching (ADD §7.4).
+///
+/// Each type name is canonicalized to a stable identifier (e.g. `"int32"`,
+/// `"float64"`, `"string"`, `"void"`) so that equivalent types in C and Rust
+/// compare equal. Unknown types canonicalize to `None` and are treated as
+/// incompatible with everything (including other unknowns), which lowers the
+/// match confidence rather than silently treating them as compatible.
+struct TypeMapper;
+
+impl TypeMapper {
+    /// Returns the canonical type ID for a type name, or `None` if unknown.
+    ///
+    /// Canonical types: `"int32"`, `"int64"`, `"float32"`, `"float64"`,
+    /// `"string"`, `"void"`, `"ptr"`.
+    #[must_use]
+    fn canonical_type(type_name: &str, language: Language) -> Option<&'static str> {
+        let normalized = type_name.trim();
+        match (language, normalized) {
+            (Language::C, "int") | (Language::Rust, "i32") => Some("int32"),
+            (Language::C, "long") | (Language::Rust, "i64") => Some("int64"),
+            (Language::C, "float") | (Language::Rust, "f32") => Some("float32"),
+            (Language::C, "double") | (Language::Rust, "f64") => Some("float64"),
+            (Language::C, "char*") | (Language::C, "char *") => Some("string"),
+            (Language::Rust, "*const c_char") | (Language::Rust, "CString") => Some("string"),
+            (Language::C, "void") | (Language::Rust, "()") => Some("void"),
+            _ => None,
+        }
+    }
+
+    /// Returns `true` if two type names are compatible across languages.
+    ///
+    /// Two types are compatible when they canonicalize to the same identifier.
+    /// Unknown types (`None`) are never compatible, even with each other, so a
+    /// missing mapping is treated as a mismatch rather than a silent match.
+    #[must_use]
+    fn types_compatible(type_a: &str, lang_a: Language, type_b: &str, lang_b: Language) -> bool {
+        Self::canonical_type(type_a, lang_a) == Self::canonical_type(type_b, lang_b)
+    }
+}
+
+/// Extracts parameter type names from a signature string.
+///
+/// Parses the content between the first matching pair of parentheses and
+/// splits it by top-level commas (ignoring commas nested inside `()`, `[]`,
+/// or `<>`). For each parameter, extracts just the type name:
+///
+/// - **Rust** (`"fn foo(x: i32, y: f64)"`): the type is the part after the
+///   last `:` that is not part of a `::` path separator.
+/// - **C** (`"void foo(int x, double y)"`): the type is everything before the
+///   trailing parameter name (when the last identifier is not a type keyword).
+///
+/// Returns an empty vector when the signature has no parentheses, no
+/// parameters, or is otherwise unparseable.
+///
+/// # Examples
+///
+/// - `"fn foo(x: i32, y: f64)"` (Rust) -> `["i32", "f64"]`
+/// - `"void foo(int x, double y)"` (C) -> `["int", "double"]`
+/// - `"int foo(int, double)"` (C) -> `["int", "double"]`
+/// - `"fn foo()"` -> `[]`
+fn parse_params(signature: &str, language: Language) -> Vec<String> {
+    let start = match signature.find('(') {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+
+    // Find the matching ')' for the first '(' (handles nested parens).
+    let mut depth: i32 = 0;
+    let mut end = None;
+    for (i, ch) in signature[start..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(start + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let end = match end {
+        Some(e) => e,
+        None => return Vec::new(),
+    };
+
+    let params_str = signature[start + 1..end].trim();
+    if params_str.is_empty() {
+        return Vec::new();
+    }
+
+    // Split by top-level commas (not inside nested parens/brackets/angles).
+    let mut params: Vec<String> = Vec::new();
+    let mut depth: i32 = 0;
+    let mut current = String::new();
+    for ch in params_str.chars() {
+        match ch {
+            '(' | '[' | '<' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' | ']' | '>' => {
+                depth -= 1;
+                current.push(ch);
+            }
+            ',' if depth == 0 => {
+                let trimmed = current.trim();
+                if !trimmed.is_empty() {
+                    params.push(extract_type(trimmed, language));
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        params.push(extract_type(trimmed, language));
+    }
+    params
+}
+
+/// Extracts the type name from a single parameter string.
+///
+/// - Rust: `"x: i32"` -> `"i32"` (type follows the `:` separator, skipping
+///   `::` path separators).
+/// - C: `"int x"` -> `"int"`, `"char *x"` -> `"char *"`, `"int"` -> `"int"`
+///   (type precedes the parameter name; a trailing identifier that is not a
+///   C type keyword is treated as the name and stripped).
+fn extract_type(param: &str, language: Language) -> String {
+    match language {
+        Language::Rust => extract_rust_type(param),
+        Language::C => extract_c_type(param),
+        // For languages without a known parameter syntax, return the param
+        // as-is. TypeMapper will canonicalize it to None (unknown).
+        _ => param.trim().to_string(),
+    }
+}
+
+/// Extracts the type from a Rust parameter like `"x: i32"` -> `"i32"`.
+///
+/// Finds the first `:` that is not part of a `::` path separator and returns
+/// everything after it, trimmed.
+fn extract_rust_type(param: &str) -> String {
+    let bytes = param.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b':' {
+            // A `::` is a path separator, not the name/type separator.
+            if i + 1 < bytes.len() && bytes[i + 1] == b':' {
+                i += 2;
+                continue;
+            }
+            return param[i + 1..].trim().to_string();
+        }
+        i += 1;
+    }
+    // No `:` found: no name, treat the whole string as the type.
+    param.trim().to_string()
+}
+
+/// C type keywords used to distinguish a type from a parameter name.
+const C_TYPE_KEYWORDS: &[&str] = &[
+    "int", "long", "short", "char", "float", "double", "void", "unsigned", "signed", "const",
+    "struct", "union", "enum",
+];
+
+/// Extracts the type from a C parameter like `"int x"` -> `"int"`,
+/// `"char *x"` -> `"char *"`, or `"int"` -> `"int"`.
+///
+/// If the last identifier in the string is a C type keyword (or there is no
+/// trailing identifier), the whole string is the type. Otherwise the trailing
+/// identifier is treated as the parameter name and stripped.
+fn extract_c_type(param: &str) -> String {
+    let trimmed = param.trim();
+    let bytes = trimmed.as_bytes();
+
+    // Skip trailing whitespace to find the end of the last token.
+    let mut end = bytes.len();
+    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    if end == 0 {
+        return String::new();
+    }
+
+    // Find the start of the last identifier ([a-zA-Z_][a-zA-Z0-9_]*).
+    let mut id_start = end;
+    while id_start > 0
+        && (bytes[id_start - 1].is_ascii_alphanumeric() || bytes[id_start - 1] == b'_')
+    {
+        id_start -= 1;
+    }
+
+    // No trailing identifier (e.g. "char*"): the whole string is the type.
+    if id_start == end {
+        return trimmed.to_string();
+    }
+
+    let last_id = &trimmed[id_start..end];
+
+    // The last identifier is a type keyword (e.g. "int" in "unsigned int"):
+    // the whole string is the type.
+    if C_TYPE_KEYWORDS.contains(&last_id) {
+        return trimmed.to_string();
+    }
+
+    // The last identifier is the parameter name: strip it.
+    let type_part = trimmed[..id_start].trim_end();
+    if type_part.is_empty() {
+        trimmed.to_string()
+    } else {
+        type_part.to_string()
+    }
+}
 
 /// Match strategy for FFI resolution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,8 +339,10 @@ impl<'a> FfiResolver<'a> {
     /// table filtered by the target language (`extern_info.language`). Returns
     /// the best match:
     ///
-    /// - **NameAndSignature** (confidence 0.85): name match with matching
-    ///   parameter count.
+    /// - **NameAndSignature** (confidence 0.85 minus type-mismatch penalty):
+    ///   name match with matching parameter count. When parameter types also
+    ///   match, confidence is 0.85; each unmatched type lowers it by up to
+    ///   0.15 total (ADD §7.4, BR-TRACE-008).
     /// - **NameOnly** (confidence 0.70): name match without signature match
     ///   (or when either signature is unavailable).
     /// - **NoMatch**: no name match in the target language.
@@ -148,17 +376,22 @@ impl<'a> FfiResolver<'a> {
                 continue;
             }
 
-            // Try to find a signature match first (NameAndSignature, 0.85).
-            for candidate in &candidates {
-                if Self::signatures_match(
-                    extern_info.signature.as_deref(),
-                    candidate.signature.as_deref(),
-                ) {
-                    let reason = format!(
-                        "FFI name+signature match for '{}' ({} -> {})",
-                        name, caller_file, candidate.qn
-                    );
-                    return Some((candidate.qn.clone(), CONFIDENCE_NAME_AND_SIG, reason));
+            // Try to find a signature match first (NameAndSignature). The
+            // confidence is 0.85 when types match, lowered by up to 0.15 when
+            // they do not. Requires both signatures to be present.
+            if let Some(extern_sig) = extern_info.signature.as_deref() {
+                for candidate in &candidates {
+                    if let Some(c_sig) = candidate.signature.as_deref() {
+                        if let Some(confidence) =
+                            Self::match_by_signature(extern_sig, c_sig)
+                        {
+                            let reason = format!(
+                                "FFI name+signature match for '{}' ({} -> {})",
+                                name, caller_file, candidate.qn
+                            );
+                            return Some((candidate.qn.clone(), confidence, reason));
+                        }
+                    }
                 }
             }
 
@@ -186,6 +419,53 @@ impl<'a> FfiResolver<'a> {
             (Some(s1), Some(s2)) => Self::param_count(s1) == Self::param_count(s2),
             _ => false,
         }
+    }
+
+    /// Matches two FFI signatures and returns a confidence score.
+    ///
+    /// The first signature is parsed as Rust (the extern declaration side) and
+    /// the second as C (the target definition side). Returns `None` when the
+    /// parameter counts differ. Otherwise returns `Some(confidence)` where:
+    ///
+    /// - Base confidence is [`CONFIDENCE_NAME_AND_SIG`] (0.85).
+    /// - For each parameter whose types are incompatible (per [`TypeMapper`]),
+    ///   the confidence is lowered proportionally, up to a total penalty of
+    ///   [`CONFIDENCE_TYPE_MISMATCH_PENALTY`] (0.15) when all types mismatch.
+    ///
+    /// A function with no parameters has a type-match ratio of 1.0, so its
+    /// confidence is 0.85.
+    ///
+    /// # Examples
+    ///
+    /// - `"fn foo(x: i32)"` vs `"void foo(int x)"` -> `Some(0.85)` (types match)
+    /// - `"fn foo(x: i32)"` vs `"void foo(double x)"` -> `Some(0.70)` (mismatch)
+    /// - `"fn foo(x: i32)"` vs `"void foo(int, int)"` -> `None` (count differs)
+    #[must_use]
+    pub fn match_by_signature(rust_sig: &str, c_sig: &str) -> Option<f32> {
+        let rust_params = parse_params(rust_sig, Language::Rust);
+        let c_params = parse_params(c_sig, Language::C);
+
+        if rust_params.len() != c_params.len() {
+            return None;
+        }
+
+        let total_params = rust_params.len();
+        let type_match_count = rust_params
+            .iter()
+            .zip(c_params.iter())
+            .filter(|(r, c)| TypeMapper::types_compatible(r, Language::Rust, c, Language::C))
+            .count();
+
+        let type_match_ratio = if total_params > 0 {
+            type_match_count as f32 / total_params as f32
+        } else {
+            // No parameters: treat as a full type match.
+            1.0
+        };
+
+        let confidence =
+            CONFIDENCE_NAME_AND_SIG - (1.0 - type_match_ratio) * CONFIDENCE_TYPE_MISMATCH_PENALTY;
+        Some(confidence)
     }
 
     /// Extracts the parameter count from a signature string.
@@ -1058,5 +1338,345 @@ mod tests {
         let mut graph = Graph::new();
         let edges = resolver.resolve_ffi(&[], &mut graph);
         assert!(edges.is_empty());
+    }
+
+    // --- TypeMapper tests (ADD §7.4, BR-TRACE-008) ---
+
+    #[test]
+    fn type_mapper_canonical_type_c_int_maps_to_int32() {
+        assert_eq!(TypeMapper::canonical_type("int", Language::C), Some("int32"));
+    }
+
+    #[test]
+    fn type_mapper_canonical_type_rust_i32_maps_to_int32() {
+        assert_eq!(TypeMapper::canonical_type("i32", Language::Rust), Some("int32"));
+    }
+
+    #[test]
+    fn type_mapper_canonical_type_c_long_maps_to_int64() {
+        assert_eq!(TypeMapper::canonical_type("long", Language::C), Some("int64"));
+    }
+
+    #[test]
+    fn type_mapper_canonical_type_rust_i64_maps_to_int64() {
+        assert_eq!(TypeMapper::canonical_type("i64", Language::Rust), Some("int64"));
+    }
+
+    #[test]
+    fn type_mapper_canonical_type_c_float_maps_to_float32() {
+        assert_eq!(TypeMapper::canonical_type("float", Language::C), Some("float32"));
+    }
+
+    #[test]
+    fn type_mapper_canonical_type_rust_f32_maps_to_float32() {
+        assert_eq!(TypeMapper::canonical_type("f32", Language::Rust), Some("float32"));
+    }
+
+    #[test]
+    fn type_mapper_canonical_type_c_double_maps_to_float64() {
+        assert_eq!(TypeMapper::canonical_type("double", Language::C), Some("float64"));
+    }
+
+    #[test]
+    fn type_mapper_canonical_type_rust_f64_maps_to_float64() {
+        assert_eq!(TypeMapper::canonical_type("f64", Language::Rust), Some("float64"));
+    }
+
+    #[test]
+    fn type_mapper_canonical_type_c_char_star_maps_to_string() {
+        assert_eq!(TypeMapper::canonical_type("char*", Language::C), Some("string"));
+        assert_eq!(TypeMapper::canonical_type("char *", Language::C), Some("string"));
+    }
+
+    #[test]
+    fn type_mapper_canonical_type_rust_c_char_ptr_maps_to_string() {
+        assert_eq!(
+            TypeMapper::canonical_type("*const c_char", Language::Rust),
+            Some("string")
+        );
+        assert_eq!(
+            TypeMapper::canonical_type("CString", Language::Rust),
+            Some("string")
+        );
+    }
+
+    #[test]
+    fn type_mapper_canonical_type_c_void_maps_to_void() {
+        assert_eq!(TypeMapper::canonical_type("void", Language::C), Some("void"));
+    }
+
+    #[test]
+    fn type_mapper_canonical_type_rust_unit_maps_to_void() {
+        assert_eq!(TypeMapper::canonical_type("()", Language::Rust), Some("void"));
+    }
+
+    #[test]
+    fn type_mapper_canonical_type_unknown_returns_none() {
+        assert_eq!(TypeMapper::canonical_type("unknown_type", Language::C), None);
+        assert_eq!(TypeMapper::canonical_type("Vec<i32>", Language::Rust), None);
+    }
+
+    #[test]
+    fn type_mapper_types_compatible_int_and_i32() {
+        assert!(TypeMapper::types_compatible(
+            "int", Language::C, "i32", Language::Rust
+        ));
+    }
+
+    #[test]
+    fn type_mapper_types_compatible_double_and_f64() {
+        assert!(TypeMapper::types_compatible(
+            "double", Language::C, "f64", Language::Rust
+        ));
+    }
+
+    #[test]
+    fn type_mapper_types_compatible_char_star_and_c_char_ptr() {
+        assert!(TypeMapper::types_compatible(
+            "char*", Language::C, "*const c_char", Language::Rust
+        ));
+        assert!(TypeMapper::types_compatible(
+            "char *", Language::C, "CString", Language::Rust
+        ));
+    }
+
+    #[test]
+    fn type_mapper_types_incompatible_int_and_double() {
+        assert!(!TypeMapper::types_compatible(
+            "int", Language::C, "double", Language::C
+        ));
+    }
+
+    #[test]
+    fn type_mapper_types_incompatible_i32_and_f64() {
+        assert!(!TypeMapper::types_compatible(
+            "i32", Language::Rust, "f64", Language::Rust
+        ));
+    }
+
+    #[test]
+    fn type_mapper_types_incompatible_when_one_unknown() {
+        // Unknown type canonicalizes to None, which won't match a known type.
+        assert!(!TypeMapper::types_compatible(
+            "unknown", Language::C, "i32", Language::Rust
+        ));
+    }
+
+    // --- parse_params tests ---
+
+    #[test]
+    fn parse_params_rust_two_params() {
+        let params = parse_params("fn foo(x: i32, y: f64)", Language::Rust);
+        assert_eq!(params, vec!["i32", "f64"]);
+    }
+
+    #[test]
+    fn parse_params_c_two_named_params() {
+        let params = parse_params("void foo(int x, double y)", Language::C);
+        assert_eq!(params, vec!["int", "double"]);
+    }
+
+    #[test]
+    fn parse_params_c_two_unnamed_params() {
+        let params = parse_params("int foo(int, double)", Language::C);
+        assert_eq!(params, vec!["int", "double"]);
+    }
+
+    #[test]
+    fn parse_params_rust_no_params() {
+        assert!(parse_params("fn foo()", Language::Rust).is_empty());
+    }
+
+    #[test]
+    fn parse_params_c_no_params() {
+        assert!(parse_params("void foo()", Language::C).is_empty());
+    }
+
+    #[test]
+    fn parse_params_rust_one_param() {
+        let params = parse_params("fn foo(x: i32)", Language::Rust);
+        assert_eq!(params, vec!["i32"]);
+    }
+
+    #[test]
+    fn parse_params_c_one_named_param() {
+        let params = parse_params("void foo(int x)", Language::C);
+        assert_eq!(params, vec!["int"]);
+    }
+
+    #[test]
+    fn parse_params_c_char_star_named_param() {
+        let params = parse_params("void foo(char* x)", Language::C);
+        assert_eq!(params, vec!["char*"]);
+    }
+
+    #[test]
+    fn parse_params_c_char_space_star_named_param() {
+        let params = parse_params("void foo(char *x)", Language::C);
+        assert_eq!(params, vec!["char *"]);
+    }
+
+    #[test]
+    fn parse_params_no_parens_returns_empty() {
+        assert!(parse_params("int x", Language::C).is_empty());
+        assert!(parse_params("fn x", Language::Rust).is_empty());
+    }
+
+    #[test]
+    fn parse_params_rust_c_char_ptr_param() {
+        let params = parse_params("fn foo(x: *const c_char)", Language::Rust);
+        assert_eq!(params, vec!["*const c_char"]);
+    }
+
+    // --- match_by_signature tests ---
+
+    #[test]
+    fn match_by_signature_type_match_returns_high_confidence() {
+        // Rust i32 vs C int: types match, confidence = 0.85.
+        let confidence =
+            FfiResolver::match_by_signature("fn foo(x: i32)", "void foo(int x)");
+        assert!(confidence.is_some());
+        let conf = confidence.unwrap();
+        assert!(
+            conf >= 0.80,
+            "expected confidence >= 0.80 for type match, got {}",
+            conf
+        );
+        assert!((conf - 0.85).abs() < 1e-6, "expected 0.85, got {}", conf);
+    }
+
+    #[test]
+    fn match_by_signature_type_mismatch_lowers_confidence_by_0_15() {
+        // Rust i32 vs C double: same param count, different types.
+        // confidence = 0.85 - (1.0 - 0.0) * 0.15 = 0.70 (reduced by 0.15).
+        let confidence =
+            FfiResolver::match_by_signature("fn foo(x: i32)", "void foo(double x)");
+        assert!(confidence.is_some());
+        let conf = confidence.unwrap();
+        // The confidence should be exactly 0.15 lower than the full type-match
+        // confidence (0.85).
+        assert!(
+            (conf - 0.70).abs() < 1e-6,
+            "expected 0.70 (0.85 - 0.15), got {}",
+            conf
+        );
+    }
+
+    #[test]
+    fn match_by_signature_param_count_mismatch_returns_none() {
+        // 1 Rust param vs 2 C params -> None.
+        let confidence =
+            FfiResolver::match_by_signature("fn foo(x: i32)", "void foo(int, int)");
+        assert!(confidence.is_none());
+    }
+
+    #[test]
+    fn match_by_signature_no_params_returns_high_confidence() {
+        // No params: type_match_ratio = 1.0, confidence = 0.85.
+        let confidence = FfiResolver::match_by_signature("fn foo()", "void foo()");
+        assert!(confidence.is_some());
+        let conf = confidence.unwrap();
+        assert!((conf - 0.85).abs() < 1e-6, "expected 0.85, got {}", conf);
+    }
+
+    #[test]
+    fn match_by_signature_partial_type_match() {
+        // 2 params: first matches (i32/int), second mismatches (f64/double vs... wait)
+        // Rust: (i32, f64), C: (int, int) -> 1/2 match, ratio = 0.5
+        // confidence = 0.85 - (1.0 - 0.5) * 0.15 = 0.85 - 0.075 = 0.775
+        let confidence = FfiResolver::match_by_signature(
+            "fn foo(a: i32, b: f64)",
+            "void foo(int a, int b)",
+        );
+        assert!(confidence.is_some());
+        let conf = confidence.unwrap();
+        assert!(
+            (conf - 0.775).abs() < 1e-6,
+            "expected 0.775 for 50% type match, got {}",
+            conf
+        );
+    }
+
+    #[test]
+    fn match_by_signature_all_types_match_two_params() {
+        // Rust (i32, f64) vs C (int, double): both match, confidence = 0.85.
+        let confidence = FfiResolver::match_by_signature(
+            "fn foo(a: i32, b: f64)",
+            "void foo(int a, double b)",
+        );
+        assert!(confidence.is_some());
+        let conf = confidence.unwrap();
+        assert!((conf - 0.85).abs() < 1e-6, "expected 0.85, got {}", conf);
+    }
+
+    #[test]
+    fn match_by_signature_string_type_match() {
+        // Rust *const c_char vs C char*: both map to "string".
+        let confidence = FfiResolver::match_by_signature(
+            "fn foo(s: *const c_char)",
+            "void foo(char* s)",
+        );
+        assert!(confidence.is_some());
+        let conf = confidence.unwrap();
+        assert!((conf - 0.85).abs() < 1e-6, "expected 0.85, got {}", conf);
+    }
+
+    // --- resolve_extern integration with type matching ---
+
+    #[test]
+    fn resolve_extern_type_mismatch_lowers_confidence() {
+        // Rust i32 vs C double: param count matches, types differ.
+        // Confidence should be 0.70 (0.85 - 0.15), not 0.85.
+        let mut table = ProjectSymbolTable::new();
+        table.add_symbol(
+            SymbolEntry::new("c_function", "proj.c.c_function", NodeLabel::Function, "c.c", "proj")
+                .with_language(Language::C)
+                .with_signature("void c_function(double x)"),
+        );
+
+        let resolver = FfiResolver::new(&table, "proj");
+        let extern_info = ExternInfo {
+            language: Language::C,
+            names: vec!["c_function".to_string()],
+            line: 1,
+            signature: Some("fn c_function(x: i32)".to_string()),
+        };
+
+        let result = resolver.resolve_extern(&extern_info, "main.rs");
+        assert!(result.is_some());
+        let (_, confidence, _) = result.unwrap();
+        assert!(
+            (confidence - 0.70).abs() < 1e-6,
+            "expected 0.70 for type mismatch, got {}",
+            confidence
+        );
+    }
+
+    #[test]
+    fn resolve_extern_type_match_keeps_high_confidence() {
+        // Rust i32 vs C int: types match, confidence = 0.85.
+        let mut table = ProjectSymbolTable::new();
+        table.add_symbol(
+            SymbolEntry::new("c_function", "proj.c.c_function", NodeLabel::Function, "c.c", "proj")
+                .with_language(Language::C)
+                .with_signature("void c_function(int x)"),
+        );
+
+        let resolver = FfiResolver::new(&table, "proj");
+        let extern_info = ExternInfo {
+            language: Language::C,
+            names: vec!["c_function".to_string()],
+            line: 1,
+            signature: Some("fn c_function(x: i32)".to_string()),
+        };
+
+        let result = resolver.resolve_extern(&extern_info, "main.rs");
+        assert!(result.is_some());
+        let (_, confidence, _) = result.unwrap();
+        assert!(
+            (confidence - 0.85).abs() < 1e-6,
+            "expected 0.85 for type match, got {}",
+            confidence
+        );
     }
 }

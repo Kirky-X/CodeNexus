@@ -336,15 +336,19 @@ mod tests {
 
     #[test]
     fn scope_accepts_string_and_str() {
-        let scope = Scope::new(String::from("foo"), String::from("proj.foo"), NodeLabel::Function);
+        let scope = Scope::new(
+            String::from("foo"),
+            String::from("proj.foo"),
+            NodeLabel::Function,
+        );
         assert_eq!(scope.name, "foo");
         assert_eq!(scope.qn, "proj.foo");
     }
 
     #[test]
     fn scope_with_parent_accepts_string_and_str() {
-        let scope = Scope::new("foo", "proj.foo", NodeLabel::Function)
-            .with_parent(String::from("proj"));
+        let scope =
+            Scope::new("foo", "proj.foo", NodeLabel::Function).with_parent(String::from("proj"));
         assert_eq!(scope.parent.as_deref(), Some("proj"));
     }
 

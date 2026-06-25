@@ -106,10 +106,11 @@ impl<'a> CallResolver<'a> {
                 else {
                     continue;
                 };
-                let edge = Edge::builder(caller_qn.clone(), callee_qn, EdgeType::Calls, self.project)
-                    .confidence(confidence)
-                    .start_line(call.line)
-                    .build();
+                let edge =
+                    Edge::builder(caller_qn.clone(), callee_qn, EdgeType::Calls, self.project)
+                        .confidence(confidence)
+                        .start_line(call.line)
+                        .build();
                 graph.add_edge(edge.clone());
                 edges.push(edge);
             }
@@ -136,7 +137,11 @@ impl<'a> CallResolver<'a> {
     /// otherwise.
     #[must_use]
     pub fn resolve_call(&self, caller_file: &str, callee_name: &str) -> Option<(String, f32)> {
-        let imports = self.imports.get(caller_file).map(Vec::as_slice).unwrap_or(&[]);
+        let imports = self
+            .imports
+            .get(caller_file)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         self.resolve_call_internal(caller_file, callee_name, imports)
     }
 
@@ -152,7 +157,11 @@ impl<'a> CallResolver<'a> {
         imports: &[ImportInfo],
     ) -> Option<(String, f32)> {
         // 1. File-level lookup (confidence 0.95)
-        if let Some(entry) = self.symbol_table.lookup_in_file(caller_file, callee_name).first() {
+        if let Some(entry) = self
+            .symbol_table
+            .lookup_in_file(caller_file, callee_name)
+            .first()
+        {
             return Some((entry.qn.clone(), CONFIDENCE_EXACT));
         }
 
@@ -594,7 +603,10 @@ mod tests {
             args: vec![],
         });
         // Make B exported so it can be resolved from a.rs
-        let b_result = make_result("b.rs", vec![make_exported_node("B", "b.rs", "proj", NodeLabel::Function)]);
+        let b_result = make_result(
+            "b.rs",
+            vec![make_exported_node("B", "b.rs", "proj", NodeLabel::Function)],
+        );
 
         let results = vec![a_result, b_result];
         let table = build_symbol_table(&results, "proj");
@@ -608,7 +620,11 @@ mod tests {
         let neighbors = graph.neighbors(&a_qn, Some(EdgeType::Calls));
 
         // Then: return A->B call path
-        assert_eq!(neighbors.len(), 1, "A should have exactly one CALLS neighbor");
+        assert_eq!(
+            neighbors.len(),
+            1,
+            "A should have exactly one CALLS neighbor"
+        );
         assert_eq!(neighbors[0].id, b_qn, "A's CALLS neighbor should be B");
         assert_eq!(neighbors[0].name, "B");
     }
@@ -651,6 +667,9 @@ mod tests {
         let resolver = CallResolver::new(&table, "proj");
         let edges = resolver.resolve_calls(&results, &mut graph);
 
-        assert!(edges.is_empty(), "CallResolver should not process assignments");
+        assert!(
+            edges.is_empty(),
+            "CallResolver should not process assignments"
+        );
     }
 }

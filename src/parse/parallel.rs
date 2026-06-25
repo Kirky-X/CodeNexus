@@ -12,6 +12,7 @@
 //! alongside the successful [`ParallelParseResult::results`].
 
 use rayon::prelude::*;
+use tracing::debug;
 
 use crate::discover::FileInfo;
 use crate::parse::error::ParseError;
@@ -77,8 +78,16 @@ pub fn parallel_parse(files: &[FileInfo], project: &str) -> ParallelParseResult 
             let lang = file.language.ok_or_else(|| {
                 (file.relative_path.clone(), "unknown language".to_string())
             })?;
-            extract_file(&file.path, lang, project)
-                .map_err(|e| (file.relative_path.clone(), e.to_string()))
+            let result = extract_file(&file.path, lang, project)
+                .map_err(|e| (file.relative_path.clone(), e.to_string()))?;
+            debug!(
+                event = "file_parsed",
+                path = %file.relative_path,
+                language = %lang,
+                nodes = result.nodes.len(),
+                "file parsed successfully"
+            );
+            Ok(result)
         })
         .collect();
 
@@ -125,6 +134,11 @@ pub fn parse_single(file: &FileInfo, project: &str) -> Result<ExtractResult, Par
 mod tests {
     use super::*;
     use crate::model::Language;
+    use rayon::ThreadPoolBuilder;
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::fmt::MakeWriter;
 
     /// Builds a `FileInfo` for a file written to `dir/name` with `content`
     /// and the given language.
@@ -422,5 +436,148 @@ mod tests {
         // Every input file produced exactly one outcome (success or failure).
         assert_eq!(result.results.len() + result.errors.len(), files.len());
         assert_eq!(result.files_parsed + result.files_failed, files.len());
+    }
+
+    // -----------------------------------------------------------------------
+    // LOG-002: file_parsed event emission
+    // -----------------------------------------------------------------------
+
+    /// A `MakeWriter` that buffers emitted events into a shared `Vec<u8>` so a
+    /// test can assert on what the subscriber actually wrote.
+    struct CapturingMakeWriter {
+        buf: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl MakeWriter for CapturingMakeWriter {
+        type Writer = CapturingWriter;
+
+        fn make_writer(&self) -> Self::Writer {
+            CapturingWriter {
+                buf: self.buf.clone(),
+            }
+        }
+    }
+
+    struct CapturingWriter {
+        buf: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for CapturingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.buf.lock().unwrap().write_all(bytes)?;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    // Thread-local storage for the tracing `DefaultGuard` on rayon worker
+    // threads. Each worker thread sets its own subscriber via
+    // `tracing::subscriber::set_default` and stores the guard here so it
+    // stays alive for the thread's lifetime.
+    thread_local! {
+        static TRACING_GUARD: RefCell<Option<tracing::subscriber::DefaultGuard>> =
+            const { RefCell::new(None) };
+    }
+
+    /// Runs `f` inside a scoped tracing subscriber (with DEBUG level) that
+    /// captures all event output into a string, returning that string.
+    ///
+    /// Because `parallel_parse` uses rayon worker threads that do NOT inherit
+    /// the current thread's tracing subscriber, this helper builds a custom
+    /// rayon thread pool whose `start_handler` installs the same capturing
+    /// subscriber on each worker thread. The test function `f` is then run via
+    /// `pool.install()` so that `par_iter` calls inside `f` use worker threads
+    /// that have the subscriber set.
+    fn capture_tracing_debug<R: Send>(f: impl FnOnce() -> R + Send) -> String {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+
+        // Build the subscriber for the main thread.
+        let subscriber = tracing_subscriber::FmtSubscriber::builder()
+            .with_target(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(CapturingMakeWriter { buf: buf.clone() })
+            .finish();
+
+        // Build a custom rayon thread pool that installs a capturing subscriber
+        // (sharing the same buffer) on each worker thread.
+        let buf_for_handler = buf.clone();
+        let pool = ThreadPoolBuilder::new()
+            .start_handler(move |_idx| {
+                let worker_subscriber = tracing_subscriber::FmtSubscriber::builder()
+                    .with_target(false)
+                    .with_max_level(tracing::Level::DEBUG)
+                    .with_writer(CapturingMakeWriter {
+                        buf: buf_for_handler.clone(),
+                    })
+                    .finish();
+                let guard = tracing::subscriber::set_default(worker_subscriber);
+                TRACING_GUARD.with(|g| *g.borrow_mut() = Some(guard));
+            })
+            .build()
+            .expect("rayon thread pool");
+
+        tracing::subscriber::with_default(subscriber, || {
+            pool.install(f);
+        });
+
+        let bytes = buf.lock().unwrap().clone();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn log_002_file_parsed_event_emitted_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = vec![
+            make_file(dir.path(), "a.rs", "fn foo() {}", Some(Language::Rust)),
+            make_file(dir.path(), "b.rs", "fn bar() {}", Some(Language::Rust)),
+        ];
+
+        let captured = capture_tracing_debug(|| {
+            let _ = parallel_parse(&files, "proj");
+        });
+
+        assert!(
+            captured.contains("file_parsed"),
+            "LOG-002: file_parsed event should be emitted, got: {captured:?}"
+        );
+        // Each successfully parsed file should emit an event.
+        // Count occurrences of "file_parsed" in the captured output.
+        let count = captured.matches("file_parsed").count();
+        assert_eq!(
+            count, 2,
+            "LOG-002: one file_parsed event per parsed file, got {count}"
+        );
+        assert!(
+            captured.contains("a.rs"),
+            "file_parsed event should carry the file path"
+        );
+        assert!(
+            captured.contains("nodes"),
+            "file_parsed event should carry the nodes field"
+        );
+    }
+
+    #[test]
+    fn log_002_file_parsed_not_emitted_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        // A file that does not exist on disk triggers an Io error.
+        let files = vec![FileInfo {
+            path: dir.path().join("does_not_exist.rs"),
+            relative_path: "does_not_exist.rs".to_string(),
+            language: Some(Language::Rust),
+            size: 0,
+        }];
+
+        let captured = capture_tracing_debug(|| {
+            let _ = parallel_parse(&files, "proj");
+        });
+
+        assert!(
+            !captured.contains("file_parsed"),
+            "LOG-002: file_parsed should NOT be emitted on parse failure, got: {captured:?}"
+        );
     }
 }

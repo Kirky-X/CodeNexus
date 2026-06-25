@@ -52,6 +52,9 @@ impl Extractor for TypeScriptExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::TypeScript);
+        // TODO: implement reads/writes extraction for TypeScript (BR-TRACE-005/006).
+        // `result.reads` and `result.writes` are left empty for now; downstream
+        // resolution gracefully produces no Reads/Writes edges when absent.
         let mut parser = ParserFactory::create_parser(Language::TypeScript)?;
         let tree = parser
             .parse(source, None)

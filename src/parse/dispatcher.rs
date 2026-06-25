@@ -91,8 +91,10 @@ mod tests {
 
     #[test]
     fn get_extractor_can_be_used_in_collection() {
-        let extractors: Vec<Box<dyn Extractor>> =
-            Language::all().iter().map(|&lang| get_extractor(lang)).collect();
+        let extractors: Vec<Box<dyn Extractor>> = Language::all()
+            .iter()
+            .map(|&lang| get_extractor(lang))
+            .collect();
         assert_eq!(extractors.len(), 5);
         for (i, lang) in Language::all().iter().enumerate() {
             assert_eq!(extractors[i].language(), *lang);

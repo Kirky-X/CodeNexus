@@ -91,10 +91,7 @@ mod tests {
     fn create_language_all_variants_succeed() {
         for lang in Language::all() {
             let result = ParserFactory::create_language(lang);
-            assert!(
-                result.is_ok(),
-                "create_language should succeed for {lang}"
-            );
+            assert!(result.is_ok(), "create_language should succeed for {lang}");
         }
     }
 
@@ -132,10 +129,7 @@ mod tests {
     fn create_parser_all_languages_succeed() {
         for lang in Language::all() {
             let result = ParserFactory::create_parser(lang);
-            assert!(
-                result.is_ok(),
-                "create_parser should succeed for {lang}"
-            );
+            assert!(result.is_ok(), "create_parser should succeed for {lang}");
         }
     }
 
@@ -151,7 +145,9 @@ mod tests {
     #[test]
     fn parse_simple_rust_file() {
         let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
-        let tree = parser.parse("fn main() {}", None).expect("Rust parse failed");
+        let tree = parser
+            .parse("fn main() {}", None)
+            .expect("Rust parse failed");
         assert!(
             !tree.root_node().has_error(),
             "Rust source should parse without errors"

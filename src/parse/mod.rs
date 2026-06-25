@@ -16,7 +16,7 @@
 //!   (ADR-010), with a thread-local instance via [`with_thread_pool`].
 //! - [`extractor`]: [`Extractor`] trait (Adapter pattern), [`ExtractResult`],
 //!   and intermediate record types ([`ImportInfo`], [`CallInfo`],
-//!   [`AssignInfo`], [`ExternInfo`]).
+//!   [`AssignInfo`], [`ExternInfo`], [`ReadInfo`], [`WriteInfo`]).
 //! - [`c`], [`rust_extractor`], [`fortran`], [`python`], [`typescript`]:
 //!   language-specific [`Extractor`] implementations.
 //! - [`dispatcher`]: [`get_extractor`] dispatches by [`Language`].
@@ -40,6 +40,7 @@ pub use dispatcher::get_extractor;
 pub use error::{ParseError, Result};
 pub use extractor::{
     extract_file, AssignInfo, CallInfo, ExternInfo, ExtractResult, Extractor, ImportInfo,
+    ReadInfo, WriteInfo,
 };
 pub use fortran::FortranExtractor;
 pub use parallel::{parallel_parse, parse_single, ParallelParseResult};

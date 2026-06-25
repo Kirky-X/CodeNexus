@@ -329,7 +329,9 @@ mod tests {
     #[test]
     fn build_ignores_imports_and_calls() {
         let mut result = ExtractResult::new("src/main.rs", Language::Rust);
-        result.nodes.push(make_node("foo", NodeLabel::Function, Language::Rust));
+        result
+            .nodes
+            .push(make_node("foo", NodeLabel::Function, Language::Rust));
         result.imports.push(ImportInfo {
             source_file: "std::io".to_string(),
             imported_names: vec!["println".to_string()],
@@ -460,7 +462,10 @@ mod tests {
         assert_eq!(edges.len(), 2);
         assert_eq!(graph.edge_count(), 2);
 
-        let calls_count = edges.iter().filter(|e| e.edge_type == crate::model::EdgeType::Calls).count();
+        let calls_count = edges
+            .iter()
+            .filter(|e| e.edge_type == crate::model::EdgeType::Calls)
+            .count();
         let dataflows_count = edges
             .iter()
             .filter(|e| e.edge_type == crate::model::EdgeType::DataFlows)
@@ -469,7 +474,10 @@ mod tests {
         assert_eq!(dataflows_count, 1);
 
         // Verify CALLS edge: foo -> bar
-        let call_edge = edges.iter().find(|e| e.edge_type == crate::model::EdgeType::Calls).unwrap();
+        let call_edge = edges
+            .iter()
+            .find(|e| e.edge_type == crate::model::EdgeType::Calls)
+            .unwrap();
         assert_eq!(call_edge.source, foo_qn);
         assert_eq!(call_edge.target, bar_qn);
     }

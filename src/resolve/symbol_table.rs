@@ -98,7 +98,10 @@ impl FileSymbolTable {
 
     /// Adds a symbol entry to the table.
     pub fn add(&mut self, entry: SymbolEntry) {
-        self.symbols.entry(entry.name.clone()).or_default().push(entry);
+        self.symbols
+            .entry(entry.name.clone())
+            .or_default()
+            .push(entry);
     }
 
     /// Returns all entries matching the given name.
@@ -288,8 +291,8 @@ mod tests {
 
     #[test]
     fn symbol_entry_with_signature_opt_none() {
-        let entry = SymbolEntry::new("foo", "qn", NodeLabel::Function, "f", "p")
-            .with_signature_opt(None);
+        let entry =
+            SymbolEntry::new("foo", "qn", NodeLabel::Function, "f", "p").with_signature_opt(None);
         assert!(entry.signature.is_none());
     }
 

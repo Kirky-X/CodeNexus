@@ -23,7 +23,12 @@ impl FqnGenerator {
     /// - Path normalization: leading `./` is stripped and backslashes are
     ///   converted to forward slashes.
     #[must_use]
-    pub fn generate(project: &str, file_path: &str, entity_name: &str, language: Language) -> String {
+    pub fn generate(
+        project: &str,
+        file_path: &str,
+        entity_name: &str,
+        language: Language,
+    ) -> String {
         let segments = Self::path_segments(file_path, language);
         let mut parts: Vec<String> = vec![project.to_string()];
         parts.extend(segments);
@@ -88,9 +93,7 @@ impl FqnGenerator {
 
         // Python __init__.py: drop the "__init__" segment so the FQN uses
         // the package path directly.
-        if language == Language::Python
-            && segments.last().is_some_and(|s| s == "__init__")
-        {
+        if language == Language::Python && segments.last().is_some_and(|s| s == "__init__") {
             segments.pop();
         }
 
@@ -153,12 +156,7 @@ mod tests {
 
     #[test]
     fn python_init_py_in_nested_dir() {
-        let fqn = FqnGenerator::generate(
-            "proj",
-            "src/a/b/__init__.py",
-            "Y",
-            Language::Python,
-        );
+        let fqn = FqnGenerator::generate("proj", "src/a/b/__init__.py", "Y", Language::Python);
         assert_eq!(fqn, "proj.src.a.b.Y");
     }
 
@@ -166,12 +164,7 @@ mod tests {
 
     #[test]
     fn c_header_file() {
-        let fqn = FqnGenerator::generate(
-            "myproject",
-            "include/header.h",
-            "MY_DEFINE",
-            Language::C,
-        );
+        let fqn = FqnGenerator::generate("myproject", "include/header.h", "MY_DEFINE", Language::C);
         assert_eq!(fqn, "myproject.include.header.MY_DEFINE");
     }
 
@@ -202,12 +195,7 @@ mod tests {
 
     #[test]
     fn fortran_module_with_backslash_path() {
-        let fqn = FqnGenerator::generate_for_module(
-            "proj",
-            "src\\physics\\solver.f90",
-            "m",
-            "e",
-        );
+        let fqn = FqnGenerator::generate_for_module("proj", "src\\physics\\solver.f90", "m", "e");
         assert_eq!(fqn, "proj.src.physics.solver.m.e");
     }
 
@@ -259,12 +247,8 @@ mod tests {
 
     #[test]
     fn normalizes_mixed_separators() {
-        let fqn = FqnGenerator::generate(
-            "proj",
-            "src\\deep/nested\\file.rs",
-            "foo",
-            Language::Rust,
-        );
+        let fqn =
+            FqnGenerator::generate("proj", "src\\deep/nested\\file.rs", "foo", Language::Rust);
         assert_eq!(fqn, "proj.src.deep.nested.file.foo");
     }
 

@@ -54,7 +54,10 @@ mod tests {
             source: tree_sitter::LanguageError::Version(99),
         };
         let msg = err.to_string();
-        assert!(msg.contains("rust"), "message should contain language: {msg}");
+        assert!(
+            msg.contains("rust"),
+            "message should contain language: {msg}"
+        );
         assert!(
             msg.contains("parser"),
             "message should mention parser: {msg}"

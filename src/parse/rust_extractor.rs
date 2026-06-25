@@ -21,13 +21,18 @@
 //! - `call_expression` → [`CallInfo`]
 //! - `let_declaration` → [`AssignInfo`]
 //! - `extern_item` / `extern_block` → [`ExternInfo`]
+//! - identifier in expression position → [`ReadInfo`] (BR-TRACE-005)
+//! - `let_declaration` pattern / `assignment_expression` left → [`WriteInfo`]
+//!   (BR-TRACE-006)
 
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
 
 use super::error::{ParseError, Result};
-use super::extractor::{AssignInfo, CallInfo, ExternInfo, ExtractResult, Extractor, ImportInfo};
+use super::extractor::{
+    AssignInfo, CallInfo, ExternInfo, ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo,
+};
 use super::parser_factory::ParserFactory;
 
 /// Rust language tree-sitter extractor (Adapter pattern).
@@ -66,7 +71,7 @@ impl Extractor for RustExtractor {
         // source_file is the root for Rust.
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
-                visit_node(child, source, file_path, project, &mut result);
+                visit_node(child, source, file_path, project, &mut result, None);
             }
         }
         Ok(result)
@@ -83,26 +88,39 @@ fn visit_node(
     file_path: &str,
     project: &str,
     result: &mut ExtractResult,
+    current_func: Option<&str>,
 ) {
     match node.kind() {
         "function_item" => {
             extract_function(node, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result);
+            // Pass the function's name as the enclosing function for body
+            // traversal, so reads/writes can be attributed to it.
+            let func_name = node
+                .child_by_field_name("name")
+                .and_then(|n| node_text(n, source).map(String::from));
+            visit_children(
+                node,
+                source,
+                file_path,
+                project,
+                result,
+                func_name.as_deref(),
+            );
         }
         "struct_item" => {
             extract_named_item(node, NodeLabel::Struct, source, file_path, project, result);
         }
         "enum_item" => {
             extract_named_item(node, NodeLabel::Enum, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         "trait_item" => {
             extract_named_item(node, NodeLabel::Trait, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         "impl_item" => {
             extract_impl(node, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         "const_item" => {
             extract_named_item(node, NodeLabel::Const, source, file_path, project, result);
@@ -111,7 +129,14 @@ fn visit_node(
             extract_named_item(node, NodeLabel::Static, source, file_path, project, result);
         }
         "type_item" => {
-            extract_named_item(node, NodeLabel::TypeAlias, source, file_path, project, result);
+            extract_named_item(
+                node,
+                NodeLabel::TypeAlias,
+                source,
+                file_path,
+                project,
+                result,
+            );
         }
         "macro_definition" => {
             extract_named_item(node, NodeLabel::Macro, source, file_path, project, result);
@@ -121,18 +146,38 @@ fn visit_node(
         }
         "call_expression" => {
             extract_call(node, source, result);
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         "let_declaration" => {
-            extract_let(node, source, result);
-            visit_children(node, source, file_path, project, result);
+            extract_let(node, source, result, current_func);
+            visit_children(node, source, file_path, project, result, current_func);
+        }
+        "assignment_expression" => {
+            extract_assignment(node, source, result, current_func);
+            visit_children(node, source, file_path, project, result, current_func);
+        }
+        "identifier" => {
+            // A bare identifier in an expression position is a variable read
+            // (BR-TRACE-005). Name-defining positions (patterns, call
+            // functions, field names) are excluded by `is_read_position`.
+            if let Some(func) = current_func {
+                if is_read_position(node) {
+                    if let Some(name) = node_text(node, source).map(String::from) {
+                        result.reads.push(ReadInfo {
+                            reader_qn: Some(func.to_string()),
+                            var_name: name,
+                            line: node.start_position().row as u32 + 1,
+                        });
+                    }
+                }
+            }
         }
         "extern_item" | "extern_block" | "foreign_mod_item" => {
             extract_extern_block(node, source, result);
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         _ => {
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
     }
 }
@@ -143,10 +188,11 @@ fn visit_children(
     file_path: &str,
     project: &str,
     result: &mut ExtractResult,
+    current_func: Option<&str>,
 ) {
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
-            visit_node(child, source, file_path, project, result);
+            visit_node(child, source, file_path, project, result, current_func);
         }
     }
 }
@@ -216,7 +262,13 @@ fn extract_named_item(
     result.nodes.push(model_node);
 }
 
-fn extract_impl(node: Node, source: &str, file_path: &str, project: &str, result: &mut ExtractResult) {
+fn extract_impl(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    project: &str,
+    result: &mut ExtractResult,
+) {
     // impl_item has a `type` field (the type being implemented) and an
     // optional `trait` field (the trait being implemented).
     let Some(type_node) = node.child_by_field_name("type") else {
@@ -283,7 +335,7 @@ fn extract_call(node: Node, source: &str, result: &mut ExtractResult) {
     });
 }
 
-fn extract_let(node: Node, source: &str, result: &mut ExtractResult) {
+fn extract_let(node: Node, source: &str, result: &mut ExtractResult, current_func: Option<&str>) {
     // let_declaration has a `pattern` field and an optional `value` field.
     let Some(pattern_node) = node.child_by_field_name("pattern") else {
         return;
@@ -301,18 +353,115 @@ fn extract_let(node: Node, source: &str, result: &mut ExtractResult) {
                     .and_then(|f| callee_name(f, source))
                     .unwrap_or_default()
             } else {
-                node_text(v, source).map(String::from).unwrap_or_default()
+                // Only capture simple identifier values for data flow
+                // tracking. Complex expressions (match, if, block, etc.)
+                // produce multi-line text that would corrupt CSV output.
+                if v.kind() == "identifier" {
+                    node_text(v, source).map(String::from).unwrap_or_default()
+                } else {
+                    String::new()
+                }
             };
             (name, is_call)
         }
         None => (String::new(), false),
     };
     result.assignments.push(AssignInfo {
-        target_name: target,
+        target_name: target.clone(),
         source_name,
         line: node.start_position().row as u32 + 1,
         is_return_assign,
     });
+    // A let binding also writes the bound variable (BR-TRACE-006). Only
+    // attribute the write when inside a function body.
+    if let Some(func) = current_func {
+        result.writes.push(WriteInfo {
+            writer_qn: Some(func.to_string()),
+            var_name: target,
+            line: node.start_position().row as u32 + 1,
+        });
+    }
+}
+
+/// Extracts a `WriteInfo` from the left-hand side of an `assignment_expression`
+/// (e.g. `x = ...`), attributing the write to `current_func` (BR-TRACE-006).
+/// Only simple identifier targets are captured; field/index writes are
+/// ignored.
+fn extract_assignment(
+    node: Node,
+    source: &str,
+    result: &mut ExtractResult,
+    current_func: Option<&str>,
+) {
+    let Some(left) = node.child_by_field_name("left") else {
+        return;
+    };
+    let Some(name) = identifier_text(left, source) else {
+        return;
+    };
+    if let Some(func) = current_func {
+        result.writes.push(WriteInfo {
+            writer_qn: Some(func.to_string()),
+            var_name: name,
+            line: node.start_position().row as u32 + 1,
+        });
+    }
+}
+
+/// Returns the text of `node` if it is a plain `identifier`, else `None`.
+fn identifier_text(node: Node, source: &str) -> Option<String> {
+    if node.kind() == "identifier" {
+        node_text(node, source).map(String::from)
+    } else {
+        None
+    }
+}
+
+/// Returns `true` if the identifier `node` is in a value-read position within
+/// its parent expression (BR-TRACE-005).
+///
+/// Name-defining positions (let patterns, call functions, field names,
+/// assignment left-hand sides) are excluded so only genuine variable reads
+/// produce edges.
+fn is_read_position(node: Node) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    match parent.kind() {
+        // Identifiers directly inside these containers/expressions are reads.
+        "binary_expression"
+        | "unary_expression"
+        | "parenthesized_expression"
+        | "return_expression"
+        | "if_condition"
+        | "while_condition"
+        | "arguments"
+        | "tuple_expression"
+        | "array_expression"
+        | "index_expression"
+        | "reference_expression"
+        | "deref_expression"
+        | "closure_expression"
+        | "format_args" => true,
+        // `let x = y;` -> `y` (the value) is a read; `x` (the pattern) is not.
+        "let_declaration" => !is_at_field(node, parent, "pattern"),
+        // `foo(x)` -> the callee `foo` is not a read; arguments are handled
+        // above via the `arguments` parent.
+        "call_expression" => !is_at_field(node, parent, "function"),
+        // `obj.field` -> `obj` (the value) is a read; the field name is not.
+        "field_expression" => is_at_field(node, parent, "value"),
+        // `x = y;` -> `y` (the right side) is a read; `x` (the left) is not.
+        "assignment_expression" => !is_at_field(node, parent, "left"),
+        _ => false,
+    }
+}
+
+/// Returns `true` if `node` occupies the given named `field` of `parent`,
+/// compared by byte range.
+fn is_at_field(node: Node, parent: Node, field: &str) -> bool {
+    parent
+        .child_by_field_name(field)
+        .is_some_and(|f| f.byte_range() == node.byte_range())
 }
 
 fn extract_extern_block(node: Node, source: &str, result: &mut ExtractResult) {
@@ -448,9 +597,7 @@ fn use_path(node: Node, source: &str) -> Option<String> {
                 (None, None) => None,
             }
         }
-        "identifier" | "crate" | "self" | "super" => {
-            node_text(node, source).map(String::from)
-        }
+        "identifier" | "crate" | "self" | "super" => node_text(node, source).map(String::from),
         "use_as_clause" => {
             // `use foo as bar;` -> path is "foo"
             node.child_by_field_name("path")
@@ -503,9 +650,10 @@ fn use_imported_names(node: Node, source: &str) -> Vec<String> {
                 .into_iter()
                 .collect()
         }
-        "identifier" | "type_identifier" => {
-            node_text(node, source).map(String::from).into_iter().collect()
-        }
+        "identifier" | "type_identifier" => node_text(node, source)
+            .map(String::from)
+            .into_iter()
+            .collect(),
         "use_wildcard" => Vec::new(),
         "scoped_use_list" | "scoped_identifier" | "scoped_type_list" => {
             // For `std::io`, the imported name is the last component.
@@ -562,10 +710,9 @@ fn pattern_name(node: Node, source: &str) -> Option<String> {
             }
             None
         }
-        "struct_pattern" => {
-            node.child_by_field_name("type")
-                .and_then(|n| node_text(n, source).map(String::from))
-        }
+        "struct_pattern" => node
+            .child_by_field_name("type")
+            .and_then(|n| node_text(n, source).map(String::from)),
         "reference_pattern" | "mut_pattern" => {
             let inner = node.named_child(0)?;
             pattern_name(inner, source)
@@ -643,7 +790,8 @@ fn main() {
 
     fn extract(source: &str) -> ExtractResult {
         let ext = RustExtractor::new();
-        ext.extract(source, "test.rs", "proj").expect("extraction should succeed")
+        ext.extract(source, "test.rs", "proj")
+            .expect("extraction should succeed")
     }
 
     #[test]
@@ -689,7 +837,11 @@ fn main() {
     #[test]
     fn extracts_struct() {
         let result = extract(RUST_SOURCE);
-        let structs: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Struct).collect();
+        let structs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Struct)
+            .collect();
         assert_eq!(structs.len(), 1);
         assert_eq!(structs[0].name, "Point");
         assert!(structs[0].is_exported, "Point should be exported (pub)");
@@ -698,7 +850,11 @@ fn main() {
     #[test]
     fn extracts_enum() {
         let result = extract(RUST_SOURCE);
-        let enums: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Enum).collect();
+        let enums: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Enum)
+            .collect();
         assert_eq!(enums.len(), 1);
         assert_eq!(enums[0].name, "Color");
         assert!(!enums[0].is_exported, "Color should not be exported");
@@ -707,7 +863,11 @@ fn main() {
     #[test]
     fn extracts_trait() {
         let result = extract(RUST_SOURCE);
-        let traits: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Trait).collect();
+        let traits: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Trait)
+            .collect();
         assert_eq!(traits.len(), 1);
         assert_eq!(traits[0].name, "Drawable");
     }
@@ -715,7 +875,11 @@ fn main() {
     #[test]
     fn extracts_impl() {
         let result = extract(RUST_SOURCE);
-        let impls: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Impl).collect();
+        let impls: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Impl)
+            .collect();
         assert_eq!(impls.len(), 1);
         assert_eq!(impls[0].name, "Point");
     }
@@ -723,7 +887,11 @@ fn main() {
     #[test]
     fn extracts_functions() {
         let result = extract(RUST_SOURCE);
-        let funcs: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Function).collect();
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
         // add, main, and draw (inside impl) are functions.
         let names: Vec<_> = funcs.iter().map(|n| n.name.as_str()).collect();
         assert!(names.contains(&"add"), "should extract add function");
@@ -734,7 +902,11 @@ fn main() {
     fn function_is_exported_when_pub() {
         let result = extract("pub fn public_fn() {} fn private_fn() {}");
         let public = result.nodes.iter().find(|n| n.name == "public_fn").unwrap();
-        let private = result.nodes.iter().find(|n| n.name == "private_fn").unwrap();
+        let private = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "private_fn")
+            .unwrap();
         assert!(public.is_exported, "pub fn should be exported");
         assert!(!private.is_exported, "private fn should not be exported");
     }
@@ -750,7 +922,11 @@ fn main() {
     #[test]
     fn extracts_calls() {
         let result = extract(RUST_SOURCE);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             callees.contains(&"add"),
             "should extract call to add: {:?}",
@@ -788,8 +964,16 @@ fn main() {
     #[test]
     fn creates_contains_and_defines_edges() {
         let result = extract(RUST_SOURCE);
-        let contains_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Contains).count();
-        let defines_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Defines).count();
+        let contains_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Contains)
+            .count();
+        let defines_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Defines)
+            .count();
         let node_count = result.nodes.len();
         assert_eq!(contains_count, node_count);
         assert_eq!(defines_count, node_count);
@@ -812,8 +996,16 @@ fn main() {
     fn extracts_const_and_static() {
         let src = "const MAX: i32 = 100; static GLOBAL: i32 = 0;";
         let result = extract(src);
-        let consts: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Const).collect();
-        let statics: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Static).collect();
+        let consts: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Const)
+            .collect();
+        let statics: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Static)
+            .collect();
         assert_eq!(consts.len(), 1);
         assert_eq!(consts[0].name, "MAX");
         assert_eq!(statics.len(), 1);
@@ -824,7 +1016,11 @@ fn main() {
     fn extracts_type_alias() {
         let src = "type Score = i32;";
         let result = extract(src);
-        let aliases: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::TypeAlias).collect();
+        let aliases: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::TypeAlias)
+            .collect();
         assert_eq!(aliases.len(), 1);
         assert_eq!(aliases[0].name, "Score");
     }
@@ -833,7 +1029,11 @@ fn main() {
     fn extracts_macro_definition() {
         let src = "macro_rules! say_hello { () => { println!(\"hello\"); } }";
         let result = extract(src);
-        let macros: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Macro).collect();
+        let macros: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Macro)
+            .collect();
         assert_eq!(macros.len(), 1);
         assert_eq!(macros[0].name, "say_hello");
     }
@@ -842,17 +1042,31 @@ fn main() {
     fn handles_method_calls() {
         let src = "fn main() { let s = String::new(); s.push_str(\"hi\"); }";
         let result = extract(src);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(callees.contains(&"new"), "should extract String::new call");
-        assert!(callees.contains(&"push_str"), "should extract s.push_str call");
+        assert!(
+            callees.contains(&"push_str"),
+            "should extract s.push_str call"
+        );
     }
 
     #[test]
     fn handles_generic_function_calls() {
         let src = "fn main() { let v = Vec::<i32>::new(); }";
         let result = extract(src);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
-        assert!(callees.contains(&"new"), "should extract generic function call");
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
+        assert!(
+            callees.contains(&"new"),
+            "should extract generic function call"
+        );
     }
 
     #[test]
@@ -869,7 +1083,9 @@ fn main() {
         let src = "use std::io as ioo;";
         let result = extract(src);
         assert_eq!(result.imports.len(), 1);
-        assert!(result.imports[0].imported_names.contains(&"ioo".to_string()));
+        assert!(result.imports[0]
+            .imported_names
+            .contains(&"ioo".to_string()));
     }
 
     #[test]
@@ -882,7 +1098,11 @@ fn main() {
     #[test]
     fn impl_stores_trait_in_properties() {
         let result = extract(RUST_SOURCE);
-        let impls: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Impl).collect();
+        let impls: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Impl)
+            .collect();
         assert_eq!(impls.len(), 1);
         let props = &impls[0].properties;
         assert!(
@@ -890,5 +1110,123 @@ fn main() {
             "impl should store trait name in properties: {props}"
         );
         assert_eq!(props.get("trait").unwrap(), "Drawable");
+    }
+
+    // --- reads/writes extraction (BR-TRACE-005 / BR-TRACE-006) ---
+
+    #[test]
+    fn extracts_reads_from_binary_expression() {
+        // `a + b` reads both operands.
+        let src = "fn add(a: i32, b: i32) -> i32 { a + b }";
+        let result = extract(src);
+        let read_vars: Vec<_> = result.reads.iter().map(|r| r.var_name.as_str()).collect();
+        assert!(
+            read_vars.contains(&"a"),
+            "should read operand a: {read_vars:?}"
+        );
+        assert!(
+            read_vars.contains(&"b"),
+            "should read operand b: {read_vars:?}"
+        );
+        for read in &result.reads {
+            assert_eq!(
+                read.reader_qn.as_deref(),
+                Some("add"),
+                "reader should be the enclosing function"
+            );
+        }
+    }
+
+    #[test]
+    fn extracts_writes_from_let_declarations() {
+        let src = "fn main() { let x = 1; let y = 2; }";
+        let result = extract(src);
+        let write_vars: Vec<_> = result.writes.iter().map(|w| w.var_name.as_str()).collect();
+        assert!(write_vars.contains(&"x"), "should write x: {write_vars:?}");
+        assert!(write_vars.contains(&"y"), "should write y: {write_vars:?}");
+        for write in &result.writes {
+            assert_eq!(
+                write.writer_qn.as_deref(),
+                Some("main"),
+                "writer should be the enclosing function"
+            );
+        }
+    }
+
+    #[test]
+    fn extracts_writes_from_assignment_expression() {
+        // `x = 5;` reassigns x -> WriteInfo(x). `y` is read on the right side.
+        let src = "fn main() { let mut x = 0; let y = 1; x = y; }";
+        let result = extract(src);
+        let x_writes: Vec<_> = result.writes.iter().filter(|w| w.var_name == "x").collect();
+        // One write from `let mut x = 0` and one from `x = y`.
+        assert_eq!(
+            x_writes.len(),
+            2,
+            "x should be written twice: {:?}",
+            x_writes
+        );
+
+        let read_vars: Vec<_> = result.reads.iter().map(|r| r.var_name.as_str()).collect();
+        assert!(
+            read_vars.contains(&"y"),
+            "right-hand side of assignment should be a read: {read_vars:?}"
+        );
+    }
+
+    #[test]
+    fn reads_exclude_callee_and_pattern_positions() {
+        // `let result = add(1, 2);` -> `result` is a write (pattern), `add` is
+        // the callee (function field), `1`/`2` are literals. No reads expected.
+        let src = "fn main() { let result = add(1, 2); } fn add(a: i32, b: i32) -> i32 { a + b }";
+        let result = extract(src);
+        let main_reads: Vec<_> = result
+            .reads
+            .iter()
+            .filter(|r| r.reader_qn.as_deref() == Some("main"))
+            .collect();
+        assert!(
+            main_reads.is_empty(),
+            "main should produce no reads (only a write + a call): {main_reads:?}"
+        );
+        // `result` is written, not read.
+        let main_writes: Vec<_> = result
+            .writes
+            .iter()
+            .filter(|w| w.writer_qn.as_deref() == Some("main"))
+            .collect();
+        assert_eq!(main_writes.len(), 1);
+        assert_eq!(main_writes[0].var_name, "result");
+    }
+
+    #[test]
+    fn reads_from_field_expression_object() {
+        // `obj.field` -> `obj` (the value) is read; `field` is a property name.
+        let src = "fn main() { let obj = make(); let v = obj.field; }";
+        let result = extract(src);
+        let read_vars: Vec<_> = result.reads.iter().map(|r| r.var_name.as_str()).collect();
+        assert!(
+            read_vars.contains(&"obj"),
+            "object of field access should be a read: {read_vars:?}"
+        );
+        assert!(
+            !read_vars.contains(&"field"),
+            "field name should not be a variable read: {read_vars:?}"
+        );
+    }
+
+    #[test]
+    fn no_reads_or_writes_outside_function() {
+        // Top-level const has no enclosing function -> no reads/writes.
+        let src = "const MAX: i32 = 100;";
+        let result = extract(src);
+        assert!(
+            result.reads.is_empty(),
+            "top-level const should produce no reads"
+        );
+        assert!(
+            result.writes.is_empty(),
+            "top-level const should produce no writes"
+        );
     }
 }

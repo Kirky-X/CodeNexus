@@ -60,9 +60,7 @@ impl ParserPool {
             e.insert(parser);
         }
         Ok(ParserGuard {
-            inner: RefMut::map(map, |m| {
-                m.get_mut(&lang).expect("parser was just inserted")
-            }),
+            inner: RefMut::map(map, |m| m.get_mut(&lang).expect("parser was just inserted")),
         })
     }
 
@@ -234,9 +232,7 @@ mod tests {
     fn get_parser_parses_typescript() {
         let pool = ParserPool::new();
         let mut parser = pool.get_parser(Language::TypeScript).unwrap();
-        let tree = parser
-            .parse("function foo(): void {}", None)
-            .unwrap();
+        let tree = parser.parse("function foo(): void {}", None).unwrap();
         assert!(!tree.root_node().has_error());
     }
 

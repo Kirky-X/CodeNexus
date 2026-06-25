@@ -50,6 +50,9 @@ impl Extractor for CExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::C);
+        // TODO: implement reads/writes extraction for C (BR-TRACE-005/006).
+        // `result.reads` and `result.writes` are left empty for now; downstream
+        // resolution gracefully produces no Reads/Writes edges when absent.
         let mut parser = ParserFactory::create_parser(Language::C)?;
         let tree = parser
             .parse(source, None)
