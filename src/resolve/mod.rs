@@ -57,7 +57,11 @@ pub fn build_symbol_table(results: &[ExtractResult], project: &str) -> ProjectSy
         for node in &result.nodes {
             let entity_name = &node.name;
             let language = node.language.unwrap_or(result.language);
-            let fqn = FqnGenerator::generate(project, &result.file_path, entity_name, language);
+            // Use the extractor-computed qualified_name directly. The
+            // extractor already applied the disambiguator suffix (ADR-003),
+            // so regenerating here would drop the suffix and re-introduce
+            // FQN collisions for same-name entities in the same file.
+            let fqn = node.qualified_name.clone();
             let entry = SymbolEntry::new(
                 entity_name.clone(),
                 fqn,
@@ -116,8 +120,9 @@ mod tests {
     use crate::model::{Language, Node, NodeLabel};
     use crate::parse::{CallInfo, ImportInfo};
 
-    fn make_node(name: &str, label: NodeLabel, language: Language) -> Node {
-        Node::builder(label, name, "placeholder")
+    fn make_node(name: &str, label: NodeLabel, language: Language, file_path: &str, project: &str) -> Node {
+        let qn = FqnGenerator::generate(project, file_path, name, language, None);
+        Node::builder(label, name, qn)
             .language(language)
             .build()
     }
@@ -139,14 +144,14 @@ mod tests {
 
     #[test]
     fn build_from_single_result_single_node() {
-        let node = make_node("parse", NodeLabel::Function, Language::Rust);
+        let node = make_node("parse", NodeLabel::Function, Language::Rust, "src/main.rs", "myproject");
         let result = make_result("src/main.rs", Language::Rust, vec![node]);
         let table = build_symbol_table(&[result], "myproject");
         assert_eq!(table.file_count(), 1);
         assert_eq!(table.symbol_count(), 1);
         let entries = table.lookup("parse");
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].qn, "myproject.src.main.parse");
+        assert_eq!(entries[0].qn, "myproject.src.main.rs.parse");
         assert_eq!(entries[0].file_path, "src/main.rs");
         assert_eq!(entries[0].language, Some(Language::Rust));
     }
@@ -156,18 +161,18 @@ mod tests {
         let r1 = make_result(
             "src/main.rs",
             Language::Rust,
-            vec![make_node("main", NodeLabel::Function, Language::Rust)],
+            vec![make_node("main", NodeLabel::Function, Language::Rust, "src/main.rs", "proj")],
         );
         let r2 = make_result(
             "src/utils.rs",
             Language::Rust,
-            vec![make_node("helper", NodeLabel::Function, Language::Rust)],
+            vec![make_node("helper", NodeLabel::Function, Language::Rust, "src/utils.rs", "proj")],
         );
         let table = build_symbol_table(&[r1, r2], "proj");
         assert_eq!(table.file_count(), 2);
         assert_eq!(table.symbol_count(), 2);
-        assert_eq!(table.lookup("main")[0].qn, "proj.src.main.main");
-        assert_eq!(table.lookup("helper")[0].qn, "proj.src.utils.helper");
+        assert_eq!(table.lookup("main")[0].qn, "proj.src.main.rs.main");
+        assert_eq!(table.lookup("helper")[0].qn, "proj.src.utils.rs.helper");
     }
 
     #[test]
@@ -175,11 +180,11 @@ mod tests {
         let r1 = make_result(
             "src/deep/file.rs",
             Language::Rust,
-            vec![make_node("foo", NodeLabel::Function, Language::Rust)],
+            vec![make_node("foo", NodeLabel::Function, Language::Rust, "src/deep/file.rs", "proj")],
         );
         let table = build_symbol_table(&[r1], "proj");
         let entry = table.lookup_exact("foo").unwrap();
-        assert_eq!(entry.qn, "proj.src.deep.file.foo");
+        assert_eq!(entry.qn, "proj.src.deep.file.rs.foo");
     }
 
     #[test]
@@ -187,7 +192,7 @@ mod tests {
         let r = make_result(
             "src/pkg/__init__.py",
             Language::Python,
-            vec![make_node("MyClass", NodeLabel::Class, Language::Python)],
+            vec![make_node("MyClass", NodeLabel::Class, Language::Python, "src/pkg/__init__.py", "proj")],
         );
         let table = build_symbol_table(&[r], "proj");
         let entry = table.lookup_exact("MyClass").unwrap();
@@ -199,11 +204,11 @@ mod tests {
         let r = make_result(
             "include/header.h",
             Language::C,
-            vec![make_node("MY_DEFINE", NodeLabel::Const, Language::C)],
+            vec![make_node("MY_DEFINE", NodeLabel::Const, Language::C, "include/header.h", "proj")],
         );
         let table = build_symbol_table(&[r], "proj");
         let entry = table.lookup_exact("MY_DEFINE").unwrap();
-        assert_eq!(entry.qn, "proj.include.header.MY_DEFINE");
+        assert_eq!(entry.qn, "proj.include.header.h.MY_DEFINE");
     }
 
     #[test]
@@ -211,8 +216,8 @@ mod tests {
         // Direct test of generate_for_module since build_symbol_table uses
         // generate() (top-level entities). Module-nested entities would be
         // handled by a higher-level resolver.
-        let fqn = FqnGenerator::generate_for_module("proj", "src/mod.f90", "mymod", "my_func");
-        assert_eq!(fqn, "proj.src.mod.mymod.my_func");
+        let fqn = FqnGenerator::generate_for_module("proj", "src/mod.f90", "mymod", "my_func", None);
+        assert_eq!(fqn, "proj.src.mod.f90.mymod.my_func");
     }
 
     #[test]
@@ -220,12 +225,12 @@ mod tests {
         let r1 = make_result(
             "a.rs",
             Language::Rust,
-            vec![make_node("foo", NodeLabel::Function, Language::Rust)],
+            vec![make_node("foo", NodeLabel::Function, Language::Rust, "a.rs", "proj")],
         );
         let r2 = make_result(
             "b.rs",
             Language::Rust,
-            vec![make_node("bar", NodeLabel::Function, Language::Rust)],
+            vec![make_node("bar", NodeLabel::Function, Language::Rust, "b.rs", "proj")],
         );
         let table = build_symbol_table(&[r1, r2], "proj");
         assert_eq!(table.lookup_in_file("a.rs", "foo").len(), 1);
@@ -260,7 +265,7 @@ mod tests {
 
     #[test]
     fn build_preserves_label() {
-        let node = make_node("MyClass", NodeLabel::Class, Language::Rust);
+        let node = make_node("MyClass", NodeLabel::Class, Language::Rust, "src/main.rs", "proj");
         let result = make_result("src/main.rs", Language::Rust, vec![node]);
         let table = build_symbol_table(&[result], "proj");
         let entry = table.lookup_exact("MyClass").unwrap();
@@ -273,7 +278,7 @@ mod tests {
         let r2 = make_result(
             "b.rs",
             Language::Rust,
-            vec![make_node("foo", NodeLabel::Function, Language::Rust)],
+            vec![make_node("foo", NodeLabel::Function, Language::Rust, "b.rs", "proj")],
         );
         let table = build_symbol_table(&[r1, r2], "proj");
         assert_eq!(table.file_count(), 1);
@@ -286,9 +291,9 @@ mod tests {
             "src/main.rs",
             Language::Rust,
             vec![
-                make_node("foo", NodeLabel::Function, Language::Rust),
-                make_node("bar", NodeLabel::Function, Language::Rust),
-                make_node("MyClass", NodeLabel::Class, Language::Rust),
+                make_node("foo", NodeLabel::Function, Language::Rust, "src/main.rs", "proj"),
+                make_node("bar", NodeLabel::Function, Language::Rust, "src/main.rs", "proj"),
+                make_node("MyClass", NodeLabel::Class, Language::Rust, "src/main.rs", "proj"),
             ],
         );
         let table = build_symbol_table(&[r], "proj");
@@ -414,18 +419,18 @@ mod tests {
 
     #[test]
     fn resolve_all_combines_calls_and_dataflows() {
-        let foo_node = Node::builder(NodeLabel::Function, "foo", "qn")
+        let foo_qn = FqnGenerator::generate("proj", "a.rs", "foo", Language::Rust, None);
+        let bar_qn = FqnGenerator::generate("proj", "a.rs", "bar", Language::Rust, None);
+        let foo_node = Node::builder(NodeLabel::Function, "foo", foo_qn.clone())
             .language(Language::Rust)
             .file_path("a.rs")
             .is_exported(true)
             .build();
-        let bar_node = Node::builder(NodeLabel::Function, "bar", "qn")
+        let bar_node = Node::builder(NodeLabel::Function, "bar", bar_qn.clone())
             .language(Language::Rust)
             .file_path("a.rs")
             .is_exported(true)
             .build();
-        let foo_qn = FqnGenerator::generate("proj", "a.rs", "foo", Language::Rust);
-        let bar_qn = FqnGenerator::generate("proj", "a.rs", "bar", Language::Rust);
 
         let mut result = ExtractResult::new("a.rs", Language::Rust);
         result.nodes = vec![foo_node, bar_node];
@@ -448,7 +453,7 @@ mod tests {
         // Add nodes to graph with qn as id.
         for r in &results {
             for node in &r.nodes {
-                let qn = FqnGenerator::generate("proj", &r.file_path, &node.name, Language::Rust);
+                let qn = node.qualified_name.clone();
                 let mut g = node.clone();
                 g.id = qn.clone();
                 g.qualified_name = qn;
@@ -493,12 +498,12 @@ mod tests {
 
     #[test]
     fn resolve_all_adds_edges_to_graph() {
-        let foo_node = Node::builder(NodeLabel::Function, "foo", "qn")
+        let foo_qn = FqnGenerator::generate("proj", "a.rs", "foo", Language::Rust, None);
+        let foo_node = Node::builder(NodeLabel::Function, "foo", foo_qn.clone())
             .language(Language::Rust)
             .file_path("a.rs")
             .is_exported(true)
             .build();
-        let foo_qn = FqnGenerator::generate("proj", "a.rs", "foo", Language::Rust);
 
         let mut result = ExtractResult::new("a.rs", Language::Rust);
         result.nodes = vec![foo_node];
@@ -514,7 +519,7 @@ mod tests {
         let mut graph = Graph::new();
         for r in &results {
             for node in &r.nodes {
-                let qn = FqnGenerator::generate("proj", &r.file_path, &node.name, Language::Rust);
+                let qn = node.qualified_name.clone();
                 let mut g = node.clone();
                 g.id = qn.clone();
                 g.qualified_name = qn;

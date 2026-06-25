@@ -62,7 +62,7 @@ impl Extractor for PythonExtractor {
         let root = tree.root_node();
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
-                visit_node(child, source, file_path, project, &mut result, None);
+                visit_node(child, source, file_path, project, &mut result, None, None);
             }
         }
         Ok(result)
@@ -80,20 +80,42 @@ fn visit_node(
     project: &str,
     result: &mut ExtractResult,
     current_func: Option<&str>,
+    current_parent: Option<&str>,
 ) {
     match node.kind() {
         "function_definition" => {
-            extract_function(node, source, file_path, project, result);
+            extract_function(node, source, file_path, project, result, current_parent);
             // Pass the function's name as the enclosing function for body
             // traversal, so calls inside it can be attributed to it.
             let func_name = node
                 .child_by_field_name("name")
                 .and_then(|n| node_text(n, source).map(String::from));
-            visit_children(node, source, file_path, project, result, func_name.as_deref());
+            visit_children(
+                node,
+                source,
+                file_path,
+                project,
+                result,
+                func_name.as_deref(),
+                current_parent,
+            );
         }
         "class_definition" => {
             extract_class(node, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result, current_func);
+            // Extract the class name and pass it as current_parent so methods
+            // inside the class can disambiguate their FQN (ADR-003).
+            let class_name = node
+                .child_by_field_name("name")
+                .and_then(|n| node_text(n, source).map(String::from));
+            visit_children(
+                node,
+                source,
+                file_path,
+                project,
+                result,
+                current_func,
+                class_name.as_deref(),
+            );
         }
         "import_statement" => {
             extract_import(node, source, result);
@@ -102,15 +124,15 @@ fn visit_node(
             extract_import_from(node, source, result);
         }
         "call" => {
-            extract_call(node, source, file_path, project, current_func, result);
-            visit_children(node, source, file_path, project, result, current_func);
+            extract_call(node, source, file_path, project, current_func, current_parent, result);
+            visit_children(node, source, file_path, project, result, current_func, current_parent);
         }
         "assignment" => {
             extract_assignment(node, source, result);
-            visit_children(node, source, file_path, project, result, current_func);
+            visit_children(node, source, file_path, project, result, current_func, current_parent);
         }
         _ => {
-            visit_children(node, source, file_path, project, result, current_func);
+            visit_children(node, source, file_path, project, result, current_func, current_parent);
         }
     }
 }
@@ -122,10 +144,11 @@ fn visit_children(
     project: &str,
     result: &mut ExtractResult,
     current_func: Option<&str>,
+    current_parent: Option<&str>,
 ) {
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
-            visit_node(child, source, file_path, project, result, current_func);
+            visit_node(child, source, file_path, project, result, current_func, current_parent);
         }
     }
 }
@@ -140,6 +163,7 @@ fn extract_function(
     file_path: &str,
     project: &str,
     result: &mut ExtractResult,
+    parent: Option<&str>,
 ) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
@@ -154,7 +178,7 @@ fn extract_function(
     } else {
         NodeLabel::Function
     };
-    let qn = make_qn(file_path, &name, project);
+    let qn = make_qn(file_path, &name, project, parent);
     let signature = function_signature(node, source);
     let mut builder = ModelNode::builder(label, name, qn)
         .file_path(file_path)
@@ -184,7 +208,7 @@ fn extract_class(
     let Some(name) = node_text(name_node, source).map(String::from) else {
         return;
     };
-    let qn = make_qn(file_path, &name, project);
+    let qn = make_qn(file_path, &name, project, None);
     let model_node = ModelNode::builder(NodeLabel::Class, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -260,6 +284,7 @@ fn extract_call(
     file_path: &str,
     project: &str,
     current_func: Option<&str>,
+    current_parent: Option<&str>,
     result: &mut ExtractResult,
 ) {
     let Some(func_node) = node.child_by_field_name("function") else {
@@ -269,7 +294,7 @@ fn extract_call(
         return;
     };
     let args = call_arguments(node, source);
-    let caller_qn = current_func.map(|name| make_qn(file_path, name, project));
+    let caller_qn = current_func.map(|name| make_qn(file_path, name, project, current_parent));
     result.calls.push(CallInfo {
         caller_qn,
         callee_name: callee,
@@ -432,8 +457,8 @@ fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
     node.utf8_text(source.as_bytes()).ok()
 }
 
-fn make_qn(file_path: &str, name: &str, project: &str) -> String {
-    FqnGenerator::generate(project, file_path, name, Language::Python)
+fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> String {
+    FqnGenerator::generate(project, file_path, name, Language::Python, parent)
 }
 
 fn add_definition_edges(
@@ -598,7 +623,32 @@ result = add(1, 2)
     fn qualified_name_uses_file_path_and_name() {
         let result = extract(PYTHON_SOURCE);
         let add = result.nodes.iter().find(|n| n.name == "add").unwrap();
-        assert_eq!(add.qualified_name, "proj.test.add");
+        assert_eq!(add.qualified_name, "proj.test.py.add");
+    }
+
+    #[test]
+    fn method_has_parent_disambiguator() {
+        // ADR-003: class methods must carry the parent class name as a
+        // disambiguator so same-name methods in different classes do not
+        // collide (e.g. Foo.greet vs Bar.greet).
+        let src = "class Foo:\n    def greet(self):\n        pass\nclass Bar:\n    def greet(self):\n        pass\n";
+        let result = extract(src);
+        let greets: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.name == "greet")
+            .collect();
+        assert_eq!(greets.len(), 2, "should extract two `greet` methods");
+        let fqns: Vec<_> = greets.iter().map(|n| n.qualified_name.as_str()).collect();
+        assert!(
+            fqns.contains(&"proj.test.py.greet#Foo"),
+            "Foo.greet FQN missing: {fqns:?}"
+        );
+        assert!(
+            fqns.contains(&"proj.test.py.greet#Bar"),
+            "Bar.greet FQN missing: {fqns:?}"
+        );
+        assert_ne!(greets[0].qualified_name, greets[1].qualified_name);
     }
 
     #[test]
@@ -700,7 +750,7 @@ result = add(1, 2)
             .expect("should find call to callee");
         assert_eq!(
             call.caller_qn.as_deref(),
-            Some("proj.tmp.demo.main.caller"),
+            Some("proj.tmp.demo.main.py.caller"),
             "caller_qn should be the dotted FQN of the enclosing function"
         );
         // The caller FQN must match the enclosing function's node id.

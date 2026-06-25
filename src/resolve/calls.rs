@@ -193,7 +193,7 @@ mod tests {
 
     /// Generates the FQN for a top-level entity, matching `build_symbol_table`.
     fn fqn(project: &str, file: &str, name: &str, language: Language) -> String {
-        FqnGenerator::generate(project, file, name, language)
+        FqnGenerator::generate(project, file, name, language, None)
     }
 
     /// Creates a definition node with the FQN as both `id` and `qualified_name`.

@@ -63,7 +63,7 @@ impl Extractor for FortranExtractor {
         let root = tree.root_node();
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
-                visit_node(child, source, file_path, project, &mut result, None);
+                visit_node(child, source, file_path, project, &mut result, None, None);
             }
         }
         Ok(result)
@@ -81,38 +81,90 @@ fn visit_node(
     project: &str,
     result: &mut ExtractResult,
     current_func: Option<&str>,
+    current_parent: Option<&str>,
 ) {
     match node.kind() {
         "module" => {
             extract_module(node, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result, current_func);
+            // Extract the module name and pass it as current_parent so
+            // entities inside the module can disambiguate their FQN (ADR-005).
+            let module_name = statement_name(node, "module_statement", source);
+            visit_children(
+                node,
+                source,
+                file_path,
+                project,
+                result,
+                current_func,
+                module_name.as_deref(),
+            );
         }
         "subroutine" => {
-            extract_subroutine_or_function(node, source, file_path, project, result, "subroutine_statement");
+            extract_subroutine_or_function(
+                node,
+                source,
+                file_path,
+                project,
+                result,
+                "subroutine_statement",
+                current_parent,
+            );
             // Pass the subroutine's name as the enclosing function for body
             // traversal, so calls inside it can be attributed to it.
             let func_name = statement_name(node, "subroutine_statement", source);
-            visit_children(node, source, file_path, project, result, func_name.as_deref());
+            visit_children(
+                node,
+                source,
+                file_path,
+                project,
+                result,
+                func_name.as_deref(),
+                current_parent,
+            );
         }
         "function" => {
-            extract_subroutine_or_function(node, source, file_path, project, result, "function_statement");
+            extract_subroutine_or_function(
+                node,
+                source,
+                file_path,
+                project,
+                result,
+                "function_statement",
+                current_parent,
+            );
             let func_name = statement_name(node, "function_statement", source);
-            visit_children(node, source, file_path, project, result, func_name.as_deref());
+            visit_children(
+                node,
+                source,
+                file_path,
+                project,
+                result,
+                func_name.as_deref(),
+                current_parent,
+            );
         }
         "program" => {
             extract_program(node, source, file_path, project, result);
             let func_name = statement_name(node, "program_statement", source);
-            visit_children(node, source, file_path, project, result, func_name.as_deref());
+            visit_children(
+                node,
+                source,
+                file_path,
+                project,
+                result,
+                func_name.as_deref(),
+                current_parent,
+            );
         }
         "use_statement" => {
             extract_use(node, source, result);
         }
         "subroutine_call" | "call_statement" => {
-            extract_call(node, source, file_path, project, current_func, result);
-            visit_children(node, source, file_path, project, result, current_func);
+            extract_call(node, source, file_path, project, current_func, current_parent, result);
+            visit_children(node, source, file_path, project, result, current_func, current_parent);
         }
         _ => {
-            visit_children(node, source, file_path, project, result, current_func);
+            visit_children(node, source, file_path, project, result, current_func, current_parent);
         }
     }
 }
@@ -124,10 +176,11 @@ fn visit_children(
     project: &str,
     result: &mut ExtractResult,
     current_func: Option<&str>,
+    current_parent: Option<&str>,
 ) {
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
-            visit_node(child, source, file_path, project, result, current_func);
+            visit_node(child, source, file_path, project, result, current_func, current_parent);
         }
     }
 }
@@ -146,7 +199,7 @@ fn extract_module(
     let Some(name) = statement_name(node, "module_statement", source) else {
         return;
     };
-    let qn = make_qn(file_path, &name, project);
+    let qn = make_qn(file_path, &name, project, None);
     let model_node = ModelNode::builder(NodeLabel::Module, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -166,11 +219,12 @@ fn extract_subroutine_or_function(
     project: &str,
     result: &mut ExtractResult,
     statement_kind: &str,
+    parent: Option<&str>,
 ) {
     let Some(name) = statement_name(node, statement_kind, source) else {
         return;
     };
-    let qn = make_qn(file_path, &name, project);
+    let qn = make_qn(file_path, &name, project, parent);
     let signature = node_text(node, source).map(String::from);
     let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
         .file_path(file_path)
@@ -197,7 +251,7 @@ fn extract_program(
     let Some(name) = statement_name(node, "program_statement", source) else {
         return;
     };
-    let qn = make_qn(file_path, &name, project);
+    let qn = make_qn(file_path, &name, project, None);
     let model_node = ModelNode::builder(NodeLabel::Function, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -251,6 +305,7 @@ fn extract_call(
     file_path: &str,
     project: &str,
     current_func: Option<&str>,
+    current_parent: Option<&str>,
     result: &mut ExtractResult,
 ) {
     // subroutine_call has an identifier child (the callee) and an argument_list.
@@ -280,7 +335,7 @@ fn extract_call(
     let Some(callee) = callee else {
         return;
     };
-    let caller_qn = current_func.map(|name| make_qn(file_path, name, project));
+    let caller_qn = current_func.map(|name| make_qn(file_path, name, project, current_parent));
     result.calls.push(CallInfo {
         caller_qn,
         callee_name: callee,
@@ -326,8 +381,8 @@ fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
     node.utf8_text(source.as_bytes()).ok()
 }
 
-fn make_qn(file_path: &str, name: &str, project: &str) -> String {
-    FqnGenerator::generate(project, file_path, name, Language::Fortran)
+fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> String {
+    FqnGenerator::generate(project, file_path, name, Language::Fortran, parent)
 }
 
 fn add_definition_edges(
@@ -502,7 +557,33 @@ end program
     fn qualified_name_uses_file_path_and_name() {
         let result = extract(FORTRAN_SOURCE);
         let mymod = result.nodes.iter().find(|n| n.name == "mymod").unwrap();
-        assert_eq!(mymod.qualified_name, "proj.test.mymod");
+        assert_eq!(mymod.qualified_name, "proj.test.f90.mymod");
+    }
+
+    #[test]
+    fn module_entity_has_module_disambiguator() {
+        // ADR-005: entities inside a Fortran module must carry the module
+        // name as a disambiguator so same-name subroutines in different
+        // modules do not collide.
+        let result = extract(FORTRAN_SOURCE);
+        let my_sub = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "my_sub")
+            .expect("should find my_sub");
+        assert_eq!(
+            my_sub.qualified_name, "proj.test.f90.my_sub#mymod",
+            "module-internal subroutine should carry #module disambiguator"
+        );
+        let my_func = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "my_func")
+            .expect("should find my_func");
+        assert_eq!(
+            my_func.qualified_name, "proj.test.f90.my_func#mymod",
+            "module-internal function should carry #module disambiguator"
+        );
     }
 
     #[test]
@@ -569,7 +650,7 @@ end program
             .expect("should find call to callee");
         assert_eq!(
             call.caller_qn.as_deref(),
-            Some("proj.tmp.demo.main.caller"),
+            Some("proj.tmp.demo.main.f90.caller"),
             "caller_qn should be the dotted FQN of the enclosing subroutine"
         );
         // The caller FQN must match the enclosing subroutine's node id.
