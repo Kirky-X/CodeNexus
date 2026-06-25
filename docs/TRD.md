@@ -1,4 +1,4 @@
-﻿# CodeNexus - 技术需求文档（TRD）
+# CodeNexus - 技术需求文档（TRD）
 
 > **文档状态：** 🟡 评审中
 >
@@ -106,7 +106,7 @@ graph LR
 | :------------- | :---------------------------- | :------------------------------------ | :--- | :-------: |
 | **编程语言** | Rust 1.81+ | C++ / Go | 性能 + 内存安全 + tree-sitter 原生支持 | ADR-001 |
 | **图数据库** | LadybugDB（官方 lbug crate v0.17） | Neo4j / SurrealDB | 嵌入式无需部署、Cypher 支持、FTS+VECTOR 扩展、官方 Rust crate | ADR-002 |
-| **解析器** | tree-sitter 0.22 | 自研解析器 / LSP only | 多语言支持、增量解析、Rust 原生绑定、生态成熟 | ADR-003 |
+| **解析器** | tree-sitter 0.26（语法包：c 0.24 / rust 0.24 / fortran 0.6 / python 0.25 / typescript 0.23） | 自研解析器 / LSP only | 多语言支持、增量解析、Rust 原生绑定、生态成熟 | ADR-003 |
 | **并行框架** | rayon 1 | tokio / 自研线程池 | 数据并行标准方案、文件级无锁、API 简洁 | — |
 | **文件发现** | ignore 0.4（ripgrep 同源） | walkdir + globset / 自研 gitignore | 内置完整 gitignore 语义、1.32 亿下载验证、消除自研匹配引擎 bug 风险 | ADR-012 |
 | **文件监视** | notify 6 + notify-debouncer-full 0.7 | inotify 直接调用 / 轮询 / 自写防抖 | 跨平台、事件驱动、官方防抖器消除竞态风险 | ADR-006/013 |
@@ -142,6 +142,8 @@ graph LR
 | ADR-012 | 用 ignore crate 替代自研 gitignore | 🟢 通过 | 2026-06-24 |
 | ADR-013 | 用 notify-debouncer-full 替代自写防抖 | 🟢 通过 | 2026-06-24 |
 | ADR-014 | 用 csv crate 替代自写 CSV 生成 | 🟢 通过 | 2026-06-24 |
+
+> **ADR-003 说明**：当前版本未实现 LSP，feature gate 为空，--lsp 标志保留为预留。
 
 ---
 

@@ -1,1 +1,16 @@
+# Build artifacts
+target/
+
+# Configuration directories
+.claude
+.trae
+
+# Project documentation (auto-generated or sensitive)
+CLAUDE.md
+AGENTS.md
+
+# Temporary files
 temp/
+
+# GitNexus index
+.gitnexus

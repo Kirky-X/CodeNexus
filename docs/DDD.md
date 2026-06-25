@@ -635,26 +635,37 @@ CREATE NODE TABLE Namespace (
 | **业务定义** | 存储所有代码元素之间的关系，通过 type 属性区分 |
 | **预估行数** | 1000-1000000 |
 
+> **设计说明**: LadybugDB 的 REL TABLE 要求 FROM/TO 子句指定具体的节点表名，
+> 不支持通用的 `FROM Node TO Node` 语法。为支持 20 种节点表之间的异构边，
+> CodeRelation 采用 NODE TABLE 实现，通过 `source`/`target` 字符串列引用节点主键。
+> 查询时需使用 `MATCH (a),(b),(r:CodeRelation) WHERE r.source=a.id AND r.target=b.id` 语法。
+
 #### 字段清单
 
 | 序号 | 字段名 | 数据类型 | 可空 | 约束 | 中文名 | 业务说明 | 示例值 |
 | :--: | :--- | :--- | :--: | :--- | :--- | :--- | :--- |
-| 1 | `type` | `STRING` | 否 | `IDX` | 关系类型 | 枚举 | `CALLS` |
-| 2 | `confidence` | `DOUBLE` | 否 | — | 置信度 | 0.0-1.0 | `0.95` |
-| 3 | `reason` | `STRING` | 是 | — | 原因 | 附加信息 | `arg_index=0` |
-| 4 | `startLine` | `INT64` | 是 | — | 起始行 | 源码行号 | `25` |
-| 5 | `project` | `STRING` | 否 | `IDX` | 所属项目 | 多项目隔离 | `myproject` |
+| 1 | `id` | `STRING` | 否 | `PK` | 关系 ID | UUIDv7 | `rel_0190a3b5` |
+| 2 | `source` | `STRING` | 否 | — | 源节点 ID | 引用源节点主键 | `func_0190a3b5` |
+| 3 | `target` | `STRING` | 否 | — | 目标节点 ID | 引用目标节点主键 | `func_0190c4d6` |
+| 4 | `type` | `STRING` | 否 | `IDX` | 关系类型 | 枚举 | `CALLS` |
+| 5 | `confidence` | `DOUBLE` | 否 | — | 置信度 | 0.0-1.0 | `0.95` |
+| 6 | `reason` | `STRING` | 是 | — | 原因 | 附加信息 | `arg_index=0` |
+| 7 | `startLine` | `INT64` | 是 | — | 起始行 | 源码行号 | `25` |
+| 8 | `project` | `STRING` | 否 | `IDX` | 所属项目 | 多项目隔离 | `myproject` |
 
 #### DDL
 
 ```cypher
-CREATE REL TABLE CodeRelation (
-    FROM Node TO Node,
+CREATE NODE TABLE CodeRelation (
+    id STRING,
+    source STRING,
+    target STRING,
     type STRING,
     confidence DOUBLE,
     reason STRING,
     startLine INT64,
-    project STRING
+    project STRING,
+    PRIMARY KEY (id)
 );
 ```
 
@@ -1118,16 +1129,19 @@ CREATE NODE TABLE Namespace (
 );
 
 -- ============================================================================
--- 关系表（REL TABLE）
+-- 关系表（NODE TABLE 实现，详见 §5.8 设计说明）
 -- ============================================================================
 
-CREATE REL TABLE CodeRelation (
-    FROM Node TO Node,
+CREATE NODE TABLE CodeRelation (
+    id STRING,
+    source STRING,
+    target STRING,
     type STRING,
     confidence DOUBLE,
     reason STRING,
     startLine INT64,
-    project STRING
+    project STRING,
+    PRIMARY KEY (id)
 );
 
 -- ============================================================================
@@ -1194,7 +1208,8 @@ MATCH (f:Function {qualifiedName: 'myproject.src.main.parse'})
 RETURN f.name, f.signature, f.startLine, f.endLine;
 
 -- 查询文件包含的所有符号
-MATCH (file:File {filePath: 'src/main.rs'})-[r:CodeRelation {type: 'DEFINES'}]->(n)
+MATCH (file:File {filePath: 'src/main.rs'}),(n),(r:CodeRelation)
+WHERE r.source=file.id AND r.target=n.id AND r.type='DEFINES'
 RETURN labels(n), n.name, n.startLine;
 ```
 
@@ -1202,15 +1217,18 @@ RETURN labels(n), n.name, n.startLine;
 
 ```cypher
 -- 查询函数调用的所有函数
-MATCH (f:Function {name: 'main'})-[r:CodeRelation {type: 'CALLS'}]->(g:Function)
+MATCH (f:Function {name: 'main'}),(g:Function),(r:CodeRelation)
+WHERE r.source=f.id AND r.target=g.id AND r.type='CALLS'
 RETURN g.name, g.qualifiedName, r.confidence, r.startLine;
 
 -- 查询谁调用了某函数
-MATCH (caller:Function)-[r:CodeRelation {type: 'CALLS'}]->(f:Function {name: 'parse'})
+MATCH (caller:Function),(f:Function {name: 'parse'}),(r:CodeRelation)
+WHERE r.source=caller.id AND r.target=f.id AND r.type='CALLS'
 RETURN caller.name, caller.qualifiedName, r.startLine;
 
 -- 查询跨语言 FFI 调用
-MATCH (f:Function)-[r:CodeRelation {type: 'FFI_CALLS'}]->(g:Function)
+MATCH (f:Function),(g:Function),(r:CodeRelation)
+WHERE r.source=f.id AND r.target=g.id AND r.type='FFI_CALLS'
 RETURN f.name, g.name, r.confidence, r.reason;
 ```
 
@@ -1218,11 +1236,13 @@ RETURN f.name, g.name, r.confidence, r.reason;
 
 ```cypher
 -- 查询变量传递给的函数参数
-MATCH (v:Variable {name: 'input'})-[r:CodeRelation {type: 'DATAFLOWS'}]->(p:Parameter)
+MATCH (v:Variable {name: 'input'}),(p:Parameter),(r:CodeRelation)
+WHERE r.source=v.id AND r.target=p.id AND r.type='DATAFLOWS'
 RETURN p.name, p.qualifiedName, r.reason;
 
 -- 查询变量被谁赋值
-MATCH (src)-[r:CodeRelation {type: 'DATAFLOWS'}]->(v:Variable {name: 'result'})
+MATCH (src),(v:Variable {name: 'result'}),(r:CodeRelation)
+WHERE r.source=src.id AND r.target=v.id AND r.type='DATAFLOWS'
 RETURN labels(src), src.name, r.reason;
 ```
 
@@ -1230,11 +1250,13 @@ RETURN labels(src), src.name, r.reason;
 
 ```cypher
 -- 查询类包含的所有方法
-MATCH (c:Class {name: 'Parser'})-[r:CodeRelation {type: 'CONTAINS'}]->(m:Method)
+MATCH (c:Class {name: 'Parser'}),(m:Method),(r:CodeRelation)
+WHERE r.source=c.id AND r.target=m.id AND r.type='CONTAINS'
 RETURN m.name, m.signature, m.startLine;
 
 -- 查询函数包含的局部变量
-MATCH (f:Function {name: 'parse'})-[r:CodeRelation {type: 'CONTAINS'}]->(v:Variable)
+MATCH (f:Function {name: 'parse'}),(v:Variable),(r:CodeRelation)
+WHERE r.source=f.id AND r.target=v.id AND r.type='CONTAINS'
 RETURN v.name, v.varType, v.startLine;
 ```
 

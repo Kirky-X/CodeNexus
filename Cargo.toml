@@ -76,3 +76,16 @@ uuid = { version = "1", features = ["v7"] }
 
 [dev-dependencies]
 assert_matches = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "index_bench"
+harness = false
+
+[[bench]]
+name = "query_bench"
+harness = false
+
+[[bench]]
+name = "trace_bench"
+harness = false
