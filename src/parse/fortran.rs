@@ -19,6 +19,7 @@
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
+use crate::resolve::FqnGenerator;
 
 use super::error::{ParseError, Result};
 use super::extractor::{CallInfo, ExternInfo, ExtractResult, Extractor, ImportInfo};
@@ -62,7 +63,7 @@ impl Extractor for FortranExtractor {
         let root = tree.root_node();
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
-                visit_node(child, source, file_path, project, &mut result);
+                visit_node(child, source, file_path, project, &mut result, None);
             }
         }
         Ok(result)
@@ -79,33 +80,39 @@ fn visit_node(
     file_path: &str,
     project: &str,
     result: &mut ExtractResult,
+    current_func: Option<&str>,
 ) {
     match node.kind() {
         "module" => {
             extract_module(node, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         "subroutine" => {
             extract_subroutine_or_function(node, source, file_path, project, result, "subroutine_statement");
-            visit_children(node, source, file_path, project, result);
+            // Pass the subroutine's name as the enclosing function for body
+            // traversal, so calls inside it can be attributed to it.
+            let func_name = statement_name(node, "subroutine_statement", source);
+            visit_children(node, source, file_path, project, result, func_name.as_deref());
         }
         "function" => {
             extract_subroutine_or_function(node, source, file_path, project, result, "function_statement");
-            visit_children(node, source, file_path, project, result);
+            let func_name = statement_name(node, "function_statement", source);
+            visit_children(node, source, file_path, project, result, func_name.as_deref());
         }
         "program" => {
             extract_program(node, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result);
+            let func_name = statement_name(node, "program_statement", source);
+            visit_children(node, source, file_path, project, result, func_name.as_deref());
         }
         "use_statement" => {
             extract_use(node, source, result);
         }
         "subroutine_call" | "call_statement" => {
-            extract_call(node, source, result);
-            visit_children(node, source, file_path, project, result);
+            extract_call(node, source, file_path, project, current_func, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         _ => {
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
     }
 }
@@ -116,10 +123,11 @@ fn visit_children(
     file_path: &str,
     project: &str,
     result: &mut ExtractResult,
+    current_func: Option<&str>,
 ) {
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
-            visit_node(child, source, file_path, project, result);
+            visit_node(child, source, file_path, project, result, current_func);
         }
     }
 }
@@ -138,7 +146,7 @@ fn extract_module(
     let Some(name) = statement_name(node, "module_statement", source) else {
         return;
     };
-    let qn = make_qn(file_path, &name);
+    let qn = make_qn(file_path, &name, project);
     let model_node = ModelNode::builder(NodeLabel::Module, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -162,7 +170,7 @@ fn extract_subroutine_or_function(
     let Some(name) = statement_name(node, statement_kind, source) else {
         return;
     };
-    let qn = make_qn(file_path, &name);
+    let qn = make_qn(file_path, &name, project);
     let signature = node_text(node, source).map(String::from);
     let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
         .file_path(file_path)
@@ -189,7 +197,7 @@ fn extract_program(
     let Some(name) = statement_name(node, "program_statement", source) else {
         return;
     };
-    let qn = make_qn(file_path, &name);
+    let qn = make_qn(file_path, &name, project);
     let model_node = ModelNode::builder(NodeLabel::Function, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -237,7 +245,14 @@ fn extract_use(node: Node, source: &str, result: &mut ExtractResult) {
     });
 }
 
-fn extract_call(node: Node, source: &str, result: &mut ExtractResult) {
+fn extract_call(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    project: &str,
+    current_func: Option<&str>,
+    result: &mut ExtractResult,
+) {
     // subroutine_call has an identifier child (the callee) and an argument_list.
     let mut callee = None;
     let mut args = Vec::new();
@@ -265,8 +280,9 @@ fn extract_call(node: Node, source: &str, result: &mut ExtractResult) {
     let Some(callee) = callee else {
         return;
     };
+    let caller_qn = current_func.map(|name| make_qn(file_path, name, project));
     result.calls.push(CallInfo {
-        caller_qn: None,
+        caller_qn,
         callee_name: callee,
         line: node.start_position().row as u32 + 1,
         args,
@@ -310,8 +326,8 @@ fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
     node.utf8_text(source.as_bytes()).ok()
 }
 
-fn make_qn(file_path: &str, name: &str) -> String {
-    format!("{file_path}::{name}")
+fn make_qn(file_path: &str, name: &str, project: &str) -> String {
+    FqnGenerator::generate(project, file_path, name, Language::Fortran)
 }
 
 fn add_definition_edges(
@@ -486,7 +502,7 @@ end program
     fn qualified_name_uses_file_path_and_name() {
         let result = extract(FORTRAN_SOURCE);
         let mymod = result.nodes.iter().find(|n| n.name == "mymod").unwrap();
-        assert_eq!(mymod.qualified_name, "test.f90::mymod");
+        assert_eq!(mymod.qualified_name, "proj.test.mymod");
     }
 
     #[test]
@@ -535,6 +551,72 @@ end program
         assert!(
             result.externs.is_empty(),
             "non-iso_c_binding use should not create extern"
+        );
+    }
+
+    #[test]
+    fn call_in_function_has_dotted_fqn_caller_qn() {
+        // Spec: Fortran 函数内调用生成非 None caller_qn (点分 FQN 格式)。
+        let src = "subroutine caller()\n    call callee()\nend subroutine\n";
+        let ext = FortranExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.f90", "proj")
+            .expect("extraction should succeed");
+        let call = result
+            .calls
+            .iter()
+            .find(|c| c.callee_name == "callee")
+            .expect("should find call to callee");
+        assert_eq!(
+            call.caller_qn.as_deref(),
+            Some("proj.tmp.demo.main.caller"),
+            "caller_qn should be the dotted FQN of the enclosing subroutine"
+        );
+        // The caller FQN must match the enclosing subroutine's node id.
+        let caller_node = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "caller")
+            .expect("should find caller subroutine node");
+        assert_eq!(
+            call.caller_qn.as_deref(),
+            Some(caller_node.qualified_name.as_str()),
+            "caller_qn must match the caller subroutine node id"
+        );
+    }
+
+    #[test]
+    fn call_in_program_has_program_caller_qn() {
+        // Spec intent: 顶层调用 caller_qn 为 None。Fortran 语义冲突 surfaced
+        // (Rule 7/12): Fortran 要求每条可执行语句必须位于 program/subroutine/
+        // function 内，且 program 被当作 NodeLabel::Function（见模块文档第 11
+        // 行）。因此 Fortran 不存在 Python/TypeScript 意义上的"模块顶层调用"。
+        // 这里验证等价语义：program 内的调用 caller_qn 应为 program 自身的
+        // 点分 FQN，且与 program 节点的 qualified_name 一致。
+        let src = "program main\n    call callee()\nend program\n";
+        let ext = FortranExtractor::new();
+        let result = ext
+            .extract(src, "main.f90", "proj")
+            .expect("extraction should succeed");
+        let call = result
+            .calls
+            .iter()
+            .find(|c| c.callee_name == "callee")
+            .expect("should find call to callee inside program");
+        let program_node = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "main")
+            .expect("should find program main node");
+        assert_eq!(
+            call.caller_qn.as_deref(),
+            Some(program_node.qualified_name.as_str()),
+            "call inside program should have caller_qn matching the program's FQN"
+        );
+        assert_eq!(
+            call.caller_qn.as_deref(),
+            Some("proj.main.main"),
+            "caller_qn should be the dotted FQN of the enclosing program"
         );
     }
 }

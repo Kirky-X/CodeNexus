@@ -21,6 +21,7 @@
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
+use crate::resolve::FqnGenerator;
 
 use super::error::{ParseError, Result};
 use super::extractor::{AssignInfo, CallInfo, ExtractResult, Extractor, ImportInfo};
@@ -64,7 +65,7 @@ impl Extractor for TypeScriptExtractor {
         let root = tree.root_node();
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
-                visit_node(child, source, file_path, project, &mut result);
+                visit_node(child, source, file_path, project, &mut result, None);
             }
         }
         Ok(result)
@@ -81,27 +82,38 @@ fn visit_node(
     file_path: &str,
     project: &str,
     result: &mut ExtractResult,
+    current_func: Option<&str>,
 ) {
     match node.kind() {
         "function_declaration" => {
             extract_function(node, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result);
+            // Pass the function's name as the enclosing function for body
+            // traversal, so calls inside it can be attributed to it.
+            let func_name = node
+                .child_by_field_name("name")
+                .and_then(|n| node_text(n, source).map(String::from));
+            visit_children(node, source, file_path, project, result, func_name.as_deref());
         }
         "class_declaration" => {
             extract_class(node, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         "method_definition" => {
             extract_method(node, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result);
+            // Pass the method's name as the enclosing function for body
+            // traversal, so calls inside it can be attributed to it.
+            let func_name = node
+                .child_by_field_name("name")
+                .and_then(|n| node_text(n, source).map(String::from));
+            visit_children(node, source, file_path, project, result, func_name.as_deref());
         }
         "interface_declaration" => {
             extract_named_item(node, NodeLabel::Trait, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         "enum_declaration" => {
             extract_named_item(node, NodeLabel::Enum, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         "type_alias_declaration" => {
             extract_named_item(node, NodeLabel::TypeAlias, source, file_path, project, result);
@@ -111,22 +123,22 @@ fn visit_node(
         }
         "export_statement" => {
             // Recurse into the export to find the declaration inside.
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         "call_expression" => {
-            extract_call(node, source, result);
-            visit_children(node, source, file_path, project, result);
+            extract_call(node, source, file_path, project, current_func, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         "lexical_declaration" | "variable_declaration" => {
             extract_variable_declaration(node, source, result);
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         "assignment_expression" => {
             extract_assignment(node, source, result);
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         _ => {
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
     }
 }
@@ -137,10 +149,11 @@ fn visit_children(
     file_path: &str,
     project: &str,
     result: &mut ExtractResult,
+    current_func: Option<&str>,
 ) {
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
-            visit_node(child, source, file_path, project, result);
+            visit_node(child, source, file_path, project, result, current_func);
         }
     }
 }
@@ -164,7 +177,7 @@ fn extract_function(
     };
     let is_exported = is_exported(node);
     let signature = node_text(node, source).map(String::from);
-    let qn = make_qn(file_path, &name);
+    let qn = make_qn(file_path, &name, project);
     let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -195,7 +208,7 @@ fn extract_class(
         return;
     };
     let is_exported = is_exported(node);
-    let qn = make_qn(file_path, &name);
+    let qn = make_qn(file_path, &name, project);
     let model_node = ModelNode::builder(NodeLabel::Class, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -222,7 +235,7 @@ fn extract_method(
     let Some(name) = node_text(name_node, source).map(String::from) else {
         return;
     };
-    let qn = make_qn(file_path, &name);
+    let qn = make_qn(file_path, &name, project);
     let model_node = ModelNode::builder(NodeLabel::Method, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -250,7 +263,7 @@ fn extract_named_item(
         return;
     };
     let is_exported = is_exported(node);
-    let qn = make_qn(file_path, &name);
+    let qn = make_qn(file_path, &name, project);
     let model_node = ModelNode::builder(label, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -349,7 +362,14 @@ fn collect_imported_names(node: Node, source: &str, names: &mut Vec<String>) {
     }
 }
 
-fn extract_call(node: Node, source: &str, result: &mut ExtractResult) {
+fn extract_call(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    project: &str,
+    current_func: Option<&str>,
+    result: &mut ExtractResult,
+) {
     let Some(func_node) = node.child_by_field_name("function") else {
         return;
     };
@@ -357,8 +377,9 @@ fn extract_call(node: Node, source: &str, result: &mut ExtractResult) {
         return;
     };
     let args = call_arguments(node, source);
+    let caller_qn = current_func.map(|name| make_qn(file_path, name, project));
     result.calls.push(CallInfo {
-        caller_qn: None,
+        caller_qn,
         callee_name: callee,
         line: node.start_position().row as u32 + 1,
         args,
@@ -513,8 +534,8 @@ fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
     node.utf8_text(source.as_bytes()).ok()
 }
 
-fn make_qn(file_path: &str, name: &str) -> String {
-    format!("{file_path}::{name}")
+fn make_qn(file_path: &str, name: &str, project: &str) -> String {
+    FqnGenerator::generate(project, file_path, name, Language::TypeScript)
 }
 
 fn add_definition_edges(
@@ -680,7 +701,7 @@ const result = add(1, 2);
     fn qualified_name_uses_file_path_and_name() {
         let result = extract(TS_SOURCE);
         let add = result.nodes.iter().find(|n| n.name == "add").unwrap();
-        assert_eq!(add.qualified_name, "test.ts::add");
+        assert_eq!(add.qualified_name, "proj.test.add");
     }
 
     #[test]
@@ -785,5 +806,50 @@ const result = add(1, 2);
         let traits: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Trait).collect();
         assert_eq!(traits.len(), 1);
         assert!(traits[0].is_exported, "exported interface should be marked exported");
+    }
+
+    #[test]
+    fn call_in_function_has_dotted_fqn_caller_qn() {
+        // Spec: TypeScript 函数内调用生成非 None caller_qn (点分 FQN 格式)。
+        let src = "function caller(): void {\n    callee();\n}\n";
+        let ext = TypeScriptExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.ts", "proj")
+            .expect("extraction should succeed");
+        let call = result
+            .calls
+            .iter()
+            .find(|c| c.callee_name == "callee")
+            .expect("should find call to callee");
+        assert_eq!(
+            call.caller_qn.as_deref(),
+            Some("proj.tmp.demo.main.caller"),
+            "caller_qn should be the dotted FQN of the enclosing function"
+        );
+        // The caller FQN must match the enclosing function's node id.
+        let caller_node = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "caller")
+            .expect("should find caller function node");
+        assert_eq!(
+            call.caller_qn.as_deref(),
+            Some(caller_node.qualified_name.as_str()),
+            "caller_qn must match the caller function node id"
+        );
+    }
+
+    #[test]
+    fn top_level_call_has_none_caller_qn() {
+        // Spec: 顶层调用（无函数上下文）caller_qn 为 None。
+        let src = "callee();\n";
+        let ext = TypeScriptExtractor::new();
+        let result = ext.extract(src, "main.ts", "proj").expect("extraction should succeed");
+        let call = result
+            .calls
+            .iter()
+            .find(|c| c.callee_name == "callee")
+            .expect("should find top-level call to callee");
+        assert!(call.caller_qn.is_none(), "top-level call should have None caller_qn");
     }
 }

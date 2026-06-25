@@ -18,6 +18,7 @@
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
+use crate::resolve::FqnGenerator;
 
 use super::error::{ParseError, Result};
 use super::extractor::{AssignInfo, CallInfo, ExtractResult, Extractor, ImportInfo};
@@ -61,7 +62,7 @@ impl Extractor for PythonExtractor {
         let root = tree.root_node();
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
-                visit_node(child, source, file_path, project, &mut result);
+                visit_node(child, source, file_path, project, &mut result, None);
             }
         }
         Ok(result)
@@ -78,15 +79,21 @@ fn visit_node(
     file_path: &str,
     project: &str,
     result: &mut ExtractResult,
+    current_func: Option<&str>,
 ) {
     match node.kind() {
         "function_definition" => {
             extract_function(node, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result);
+            // Pass the function's name as the enclosing function for body
+            // traversal, so calls inside it can be attributed to it.
+            let func_name = node
+                .child_by_field_name("name")
+                .and_then(|n| node_text(n, source).map(String::from));
+            visit_children(node, source, file_path, project, result, func_name.as_deref());
         }
         "class_definition" => {
             extract_class(node, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         "import_statement" => {
             extract_import(node, source, result);
@@ -95,15 +102,15 @@ fn visit_node(
             extract_import_from(node, source, result);
         }
         "call" => {
-            extract_call(node, source, result);
-            visit_children(node, source, file_path, project, result);
+            extract_call(node, source, file_path, project, current_func, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         "assignment" => {
             extract_assignment(node, source, result);
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         _ => {
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
     }
 }
@@ -114,10 +121,11 @@ fn visit_children(
     file_path: &str,
     project: &str,
     result: &mut ExtractResult,
+    current_func: Option<&str>,
 ) {
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
-            visit_node(child, source, file_path, project, result);
+            visit_node(child, source, file_path, project, result, current_func);
         }
     }
 }
@@ -146,7 +154,7 @@ fn extract_function(
     } else {
         NodeLabel::Function
     };
-    let qn = make_qn(file_path, &name);
+    let qn = make_qn(file_path, &name, project);
     let signature = function_signature(node, source);
     let mut builder = ModelNode::builder(label, name, qn)
         .file_path(file_path)
@@ -176,7 +184,7 @@ fn extract_class(
     let Some(name) = node_text(name_node, source).map(String::from) else {
         return;
     };
-    let qn = make_qn(file_path, &name);
+    let qn = make_qn(file_path, &name, project);
     let model_node = ModelNode::builder(NodeLabel::Class, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -246,7 +254,14 @@ fn extract_import_from(node: Node, source: &str, result: &mut ExtractResult) {
     });
 }
 
-fn extract_call(node: Node, source: &str, result: &mut ExtractResult) {
+fn extract_call(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    project: &str,
+    current_func: Option<&str>,
+    result: &mut ExtractResult,
+) {
     let Some(func_node) = node.child_by_field_name("function") else {
         return;
     };
@@ -254,8 +269,9 @@ fn extract_call(node: Node, source: &str, result: &mut ExtractResult) {
         return;
     };
     let args = call_arguments(node, source);
+    let caller_qn = current_func.map(|name| make_qn(file_path, name, project));
     result.calls.push(CallInfo {
-        caller_qn: None,
+        caller_qn,
         callee_name: callee,
         line: node.start_position().row as u32 + 1,
         args,
@@ -416,8 +432,8 @@ fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
     node.utf8_text(source.as_bytes()).ok()
 }
 
-fn make_qn(file_path: &str, name: &str) -> String {
-    format!("{file_path}::{name}")
+fn make_qn(file_path: &str, name: &str, project: &str) -> String {
+    FqnGenerator::generate(project, file_path, name, Language::Python)
 }
 
 fn add_definition_edges(
@@ -582,7 +598,7 @@ result = add(1, 2)
     fn qualified_name_uses_file_path_and_name() {
         let result = extract(PYTHON_SOURCE);
         let add = result.nodes.iter().find(|n| n.name == "add").unwrap();
-        assert_eq!(add.qualified_name, "test.py::add");
+        assert_eq!(add.qualified_name, "proj.test.add");
     }
 
     #[test]
@@ -667,5 +683,50 @@ result = add(1, 2)
         let names: Vec<_> = funcs.iter().map(|n| n.name.as_str()).collect();
         assert!(names.contains(&"outer"), "should extract outer function");
         assert!(names.contains(&"inner"), "should extract nested inner function");
+    }
+
+    #[test]
+    fn call_in_function_has_dotted_fqn_caller_qn() {
+        // Spec: Python 函数内调用生成非 None caller_qn (点分 FQN 格式)。
+        let src = "def caller():\n    callee()\n";
+        let ext = PythonExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.py", "proj")
+            .expect("extraction should succeed");
+        let call = result
+            .calls
+            .iter()
+            .find(|c| c.callee_name == "callee")
+            .expect("should find call to callee");
+        assert_eq!(
+            call.caller_qn.as_deref(),
+            Some("proj.tmp.demo.main.caller"),
+            "caller_qn should be the dotted FQN of the enclosing function"
+        );
+        // The caller FQN must match the enclosing function's node id.
+        let caller_node = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "caller")
+            .expect("should find caller function node");
+        assert_eq!(
+            call.caller_qn.as_deref(),
+            Some(caller_node.qualified_name.as_str()),
+            "caller_qn must match the caller function node id"
+        );
+    }
+
+    #[test]
+    fn top_level_call_has_none_caller_qn() {
+        // Spec: 顶层调用（无函数上下文）caller_qn 为 None。
+        let src = "callee()\n";
+        let ext = PythonExtractor::new();
+        let result = ext.extract(src, "main.py", "proj").expect("extraction should succeed");
+        let call = result
+            .calls
+            .iter()
+            .find(|c| c.callee_name == "callee")
+            .expect("should find top-level call to callee");
+        assert!(call.caller_qn.is_none(), "top-level call should have None caller_qn");
     }
 }
