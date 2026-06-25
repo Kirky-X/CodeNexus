@@ -69,6 +69,40 @@ impl EdgeType {
             EdgeType::Includes => "INCLUDES",
         }
     }
+
+    /// Returns the default confidence range `(min, max)` for this edge type.
+    ///
+    /// Structural edges derived directly from syntax (e.g. `Contains`,
+    /// `Defines`, `Imports`) carry the highest confidence. Edges requiring
+    /// cross-language or data-flow inference (e.g. `FfiCalls`, `Reads`,
+    /// `Writes`) carry lower confidence. Resolver implementations may pick any
+    /// point within this range depending on match strength.
+    #[must_use]
+    pub fn confidence_range(&self) -> (f32, f32) {
+        match self {
+            // Structural / syntactic edges — explicit in source.
+            EdgeType::Contains => (0.95, 1.0),
+            EdgeType::Defines => (0.95, 1.0),
+            EdgeType::MemberOf => (0.95, 1.0),
+            EdgeType::Imports => (0.95, 1.0),
+            EdgeType::Includes => (0.95, 1.0),
+            // Type-system edges — resolved with high certainty.
+            EdgeType::Implements => (0.90, 1.0),
+            EdgeType::Extends => (0.90, 1.0),
+            // Call edges — same-language resolution (BR-TRACE-007).
+            EdgeType::Calls => (0.90, 1.0),
+            // Type / reference usage — requires symbol resolution.
+            EdgeType::UsesType => (0.80, 0.90),
+            EdgeType::References => (0.75, 0.85),
+            // Data flow edges — inferred from assignments and arg passing.
+            EdgeType::DataFlows => (0.80, 0.90),
+            // Cross-language FFI calls — name and/or signature matching.
+            EdgeType::FfiCalls => (0.70, 0.85),
+            // Variable read / write access — inferred from usage.
+            EdgeType::Reads => (0.70, 0.80),
+            EdgeType::Writes => (0.70, 0.80),
+        }
+    }
 }
 
 impl fmt::Display for EdgeType {
@@ -211,5 +245,33 @@ mod tests {
         let edge = EdgeType::Calls;
         let copied = edge;
         assert_eq!(edge, copied);
+    }
+
+    #[test]
+    fn confidence_range_returns_expected_ranges() {
+        assert_eq!(EdgeType::Calls.confidence_range(), (0.90, 1.0));
+        assert_eq!(EdgeType::FfiCalls.confidence_range(), (0.70, 0.85));
+        assert_eq!(EdgeType::DataFlows.confidence_range(), (0.80, 0.90));
+        assert_eq!(EdgeType::Reads.confidence_range(), (0.70, 0.80));
+        assert_eq!(EdgeType::Writes.confidence_range(), (0.70, 0.80));
+    }
+
+    #[test]
+    fn confidence_range_all_variants_have_valid_bounds() {
+        for edge in EdgeType::all() {
+            let (min, max) = edge.confidence_range();
+            assert!(
+                (0.0..=1.0).contains(&min),
+                "{edge}: min {min} out of [0.0, 1.0]"
+            );
+            assert!(
+                (0.0..=1.0).contains(&max),
+                "{edge}: max {max} out of [0.0, 1.0]"
+            );
+            assert!(
+                min <= max,
+                "{edge}: min {min} > max {max}"
+            );
+        }
     }
 }

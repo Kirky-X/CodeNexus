@@ -175,26 +175,53 @@ mod tests {
     #[test]
     fn from_str_parses_lowercase() {
         assert_eq!("project".parse::<NodeLabel>().unwrap(), NodeLabel::Project);
-        assert_eq!("function".parse::<NodeLabel>().unwrap(), NodeLabel::Function);
-        assert_eq!("globalvar".parse::<NodeLabel>().unwrap(), NodeLabel::GlobalVar);
-        assert_eq!("typealias".parse::<NodeLabel>().unwrap(), NodeLabel::TypeAlias);
+        assert_eq!(
+            "function".parse::<NodeLabel>().unwrap(),
+            NodeLabel::Function
+        );
+        assert_eq!(
+            "globalvar".parse::<NodeLabel>().unwrap(),
+            NodeLabel::GlobalVar
+        );
+        assert_eq!(
+            "typealias".parse::<NodeLabel>().unwrap(),
+            NodeLabel::TypeAlias
+        );
         assert_eq!("typedef".parse::<NodeLabel>().unwrap(), NodeLabel::Typedef);
-        assert_eq!("namespace".parse::<NodeLabel>().unwrap(), NodeLabel::Namespace);
+        assert_eq!(
+            "namespace".parse::<NodeLabel>().unwrap(),
+            NodeLabel::Namespace
+        );
     }
 
     #[test]
     fn from_str_parses_uppercase() {
         assert_eq!("PROJECT".parse::<NodeLabel>().unwrap(), NodeLabel::Project);
-        assert_eq!("FUNCTION".parse::<NodeLabel>().unwrap(), NodeLabel::Function);
-        assert_eq!("GLOBALVAR".parse::<NodeLabel>().unwrap(), NodeLabel::GlobalVar);
+        assert_eq!(
+            "FUNCTION".parse::<NodeLabel>().unwrap(),
+            NodeLabel::Function
+        );
+        assert_eq!(
+            "GLOBALVAR".parse::<NodeLabel>().unwrap(),
+            NodeLabel::GlobalVar
+        );
     }
 
     #[test]
     fn from_str_parses_mixed_case() {
         assert_eq!("Project".parse::<NodeLabel>().unwrap(), NodeLabel::Project);
-        assert_eq!("Function".parse::<NodeLabel>().unwrap(), NodeLabel::Function);
-        assert_eq!("FuNcTiOn".parse::<NodeLabel>().unwrap(), NodeLabel::Function);
-        assert_eq!("GlobalVar".parse::<NodeLabel>().unwrap(), NodeLabel::GlobalVar);
+        assert_eq!(
+            "Function".parse::<NodeLabel>().unwrap(),
+            NodeLabel::Function
+        );
+        assert_eq!(
+            "FuNcTiOn".parse::<NodeLabel>().unwrap(),
+            NodeLabel::Function
+        );
+        assert_eq!(
+            "GlobalVar".parse::<NodeLabel>().unwrap(),
+            NodeLabel::GlobalVar
+        );
     }
 
     #[test]
@@ -242,9 +269,18 @@ mod tests {
 
     #[test]
     fn serde_serializes_as_variant_name() {
-        assert_eq!(serde_json::to_string(&NodeLabel::Function).unwrap(), "\"Function\"");
-        assert_eq!(serde_json::to_string(&NodeLabel::GlobalVar).unwrap(), "\"GlobalVar\"");
-        assert_eq!(serde_json::to_string(&NodeLabel::TypeAlias).unwrap(), "\"TypeAlias\"");
+        assert_eq!(
+            serde_json::to_string(&NodeLabel::Function).unwrap(),
+            "\"Function\""
+        );
+        assert_eq!(
+            serde_json::to_string(&NodeLabel::GlobalVar).unwrap(),
+            "\"GlobalVar\""
+        );
+        assert_eq!(
+            serde_json::to_string(&NodeLabel::TypeAlias).unwrap(),
+            "\"TypeAlias\""
+        );
     }
 
     #[test]

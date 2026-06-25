@@ -17,7 +17,7 @@ pub use flow_type::FlowType;
 pub use graph::Graph;
 pub use language::Language;
 pub use node::{
-    new_file_id, new_func_id, new_node_id, new_node_id_with_prefix, new_project_id, Node, NodeBuilder,
-    NodeId,
+    new_file_id, new_func_id, new_node_id, new_node_id_with_prefix, new_project_id, Node,
+    NodeBuilder, NodeId,
 };
 pub use node_label::NodeLabel;

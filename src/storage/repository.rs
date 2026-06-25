@@ -11,7 +11,7 @@
 //! read/delete methods accept a `project` parameter and filter on it, ensuring
 //! that data from one project never leaks into another (BR-INDEX-004).
 
-use super::connection::StorageConnection;
+use super::connection::{SchemaInitReport, StorageConnection};
 use super::error::{Result, StorageError};
 use super::loader::{load_from_csv, write_csv_temp, write_edges_csv, write_nodes_csv};
 use super::schema::escape_identifier;
@@ -92,7 +92,11 @@ impl Repository {
     }
 
     /// Initializes the schema on the underlying connection. Idempotent.
-    pub fn init_schema(&self) -> Result<()> {
+    ///
+    /// Returns a [`SchemaInitReport`] describing any DDL statements that were
+    /// skipped (unsupported by the linked LadybugDB build, or already present
+    /// on re-init).
+    pub fn init_schema(&self) -> Result<SchemaInitReport> {
         self.conn.init_schema()
     }
 

@@ -107,7 +107,10 @@ mod tests {
         assert_eq!("rust".parse::<Language>().unwrap(), Language::Rust);
         assert_eq!("fortran".parse::<Language>().unwrap(), Language::Fortran);
         assert_eq!("python".parse::<Language>().unwrap(), Language::Python);
-        assert_eq!("typescript".parse::<Language>().unwrap(), Language::TypeScript);
+        assert_eq!(
+            "typescript".parse::<Language>().unwrap(),
+            Language::TypeScript
+        );
     }
 
     #[test]
@@ -116,14 +119,20 @@ mod tests {
         assert_eq!("RUST".parse::<Language>().unwrap(), Language::Rust);
         assert_eq!("FORTRAN".parse::<Language>().unwrap(), Language::Fortran);
         assert_eq!("PYTHON".parse::<Language>().unwrap(), Language::Python);
-        assert_eq!("TYPESCRIPT".parse::<Language>().unwrap(), Language::TypeScript);
+        assert_eq!(
+            "TYPESCRIPT".parse::<Language>().unwrap(),
+            Language::TypeScript
+        );
     }
 
     #[test]
     fn from_str_parses_mixed_case() {
         assert_eq!("Rust".parse::<Language>().unwrap(), Language::Rust);
         assert_eq!("Fortran".parse::<Language>().unwrap(), Language::Fortran);
-        assert_eq!("TyPeScRiPt".parse::<Language>().unwrap(), Language::TypeScript);
+        assert_eq!(
+            "TyPeScRiPt".parse::<Language>().unwrap(),
+            Language::TypeScript
+        );
     }
 
     #[test]

@@ -96,13 +96,19 @@ pub fn embedding_table_ddl() -> String {
         .to_string()
 }
 
-/// Returns all secondary index creation statements (DDD §12.2).
+/// Returns all secondary index creation statements (DDD §12.2, §6).
+///
+/// Includes 18 B-tree secondary indexes, 3 FTS (full-text search) indexes on
+/// the `content` columns of `Function`, `Class`, and `Method` (DDD §6), and 1
+/// VECTOR index on `Embedding.embedding` with cosine distance (DDD §6).
 ///
 /// LadybugDB may not support every index type; [`crate::storage::connection`]
-/// skips unsupported statements at init time.
+/// skips unsupported statements at init time, recording each skip in the
+/// [`SchemaInitReport`].
 #[must_use]
 pub fn index_ddl() -> Vec<String> {
     vec![
+        // --- Secondary indexes (DDD §12.2) ---
         "CREATE INDEX idx_project_name ON Project(name);".to_string(),
         "CREATE INDEX idx_file_project ON File(project);".to_string(),
         "CREATE INDEX idx_file_name ON File(name);".to_string(),
@@ -121,6 +127,13 @@ pub fn index_ddl() -> Vec<String> {
         "CREATE INDEX idx_var_global ON Variable(isGlobal);".to_string(),
         "CREATE INDEX idx_rel_type ON CodeRelation(type);".to_string(),
         "CREATE INDEX idx_rel_project ON CodeRelation(project);".to_string(),
+        // --- FTS indexes (DDD §6): BM25 over symbol `content` columns ---
+        "CREATE FTS INDEX fts_function_content ON Function(content);".to_string(),
+        "CREATE FTS INDEX fts_class_content ON Class(content);".to_string(),
+        "CREATE FTS INDEX fts_method_content ON Method(content);".to_string(),
+        // --- VECTOR index (DDD §6): cosine similarity over embeddings ---
+        "CREATE VECTOR INDEX vec_embedding ON Embedding(embedding) WITH (metric=cosine);"
+            .to_string(),
     ]
 }
 
@@ -577,18 +590,86 @@ mod tests {
     #[test]
     fn index_ddl_count_matches_spec() {
         let indexes = index_ddl();
-        assert_eq!(indexes.len(), 18, "expected 18 index statements");
+        // 18 secondary indexes + 3 FTS indexes + 1 VECTOR index = 22
+        assert_eq!(indexes.len(), 22, "expected 22 index statements");
+    }
+
+    #[test]
+    fn index_ddl_contains_fts_indexes_for_content_columns() {
+        // DDD §6: FTS indexes on Function.content, Class.content, Method.content.
+        let indexes = index_ddl();
+        let fts_indexes: Vec<&String> = indexes
+            .iter()
+            .filter(|s| s.to_ascii_uppercase().contains("FTS"))
+            .collect();
+        assert_eq!(
+            fts_indexes.len(),
+            3,
+            "expected exactly 3 FTS index statements, got {}: {fts_indexes:?}",
+            fts_indexes.len()
+        );
+        // Each FTS statement must target the `content` column of its table.
+        assert!(
+            indexes.iter().any(|s| {
+                let up = s.to_ascii_uppercase();
+                up.contains("FTS") && up.contains("FUNCTION") && up.contains("CONTENT")
+            }),
+            "missing FTS index on Function(content): {indexes:?}"
+        );
+        assert!(
+            indexes.iter().any(|s| {
+                let up = s.to_ascii_uppercase();
+                up.contains("FTS") && up.contains("CLASS") && up.contains("CONTENT")
+            }),
+            "missing FTS index on Class(content): {indexes:?}"
+        );
+        assert!(
+            indexes.iter().any(|s| {
+                let up = s.to_ascii_uppercase();
+                up.contains("FTS") && up.contains("METHOD") && up.contains("CONTENT")
+            }),
+            "missing FTS index on Method(content): {indexes:?}"
+        );
+    }
+
+    #[test]
+    fn index_ddl_contains_vector_index_for_embedding() {
+        // DDD §6: VECTOR index on Embedding.embedding with cosine distance.
+        let indexes = index_ddl();
+        let vec_indexes: Vec<&String> = indexes
+            .iter()
+            .filter(|s| s.to_ascii_uppercase().contains("VECTOR"))
+            .collect();
+        assert_eq!(
+            vec_indexes.len(),
+            1,
+            "expected exactly 1 VECTOR index statement, got {}: {vec_indexes:?}",
+            vec_indexes.len()
+        );
+        let stmt = vec_indexes[0];
+        let up = stmt.to_ascii_uppercase();
+        assert!(
+            up.contains("EMBEDDING"),
+            "VECTOR index must target the Embedding table: {stmt}"
+        );
+        assert!(
+            up.contains("COSINE"),
+            "VECTOR index must use cosine metric: {stmt}"
+        );
     }
 
     #[test]
     fn all_init_ddl_includes_node_tables_relation_embedding_and_indexes() {
         let ddl = all_init_ddl();
-        // 20 node tables + 1 relation + 1 embedding + 18 indexes = 40
-        assert_eq!(ddl.len(), 40, "expected 40 DDL statements total");
+        // 20 node tables + 1 relation + 1 embedding + 22 indexes (18 secondary
+        // + 3 FTS + 1 VECTOR) = 44
+        assert_eq!(ddl.len(), 44, "expected 44 DDL statements total");
         assert!(ddl.iter().any(|s| s.contains("CREATE NODE TABLE Project")));
         assert!(ddl.iter().any(|s| s.contains("CodeRelation")));
         assert!(ddl.iter().any(|s| s.contains("Embedding")));
         assert!(ddl.iter().any(|s| s.contains("CREATE INDEX")));
+        assert!(ddl.iter().any(|s| s.to_ascii_uppercase().contains("FTS")));
+        assert!(ddl.iter().any(|s| s.to_ascii_uppercase().contains("VECTOR")));
     }
 
     #[test]

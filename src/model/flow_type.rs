@@ -65,7 +65,10 @@ mod tests {
 
     #[test]
     fn serde_serializes_as_variant_name() {
-        assert_eq!(serde_json::to_string(&FlowType::ArgPass).unwrap(), "\"ArgPass\"");
+        assert_eq!(
+            serde_json::to_string(&FlowType::ArgPass).unwrap(),
+            "\"ArgPass\""
+        );
         assert_eq!(
             serde_json::to_string(&FlowType::ReturnAssign).unwrap(),
             "\"ReturnAssign\""

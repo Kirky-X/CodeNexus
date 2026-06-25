@@ -15,6 +15,21 @@ use tracing::warn;
 use super::error::{Result, StorageError};
 use super::schema::all_init_ddl;
 
+/// Report of schema initialization outcome.
+///
+/// Returned by [`StorageConnection::init_schema`] to make skipped DDL
+/// statements visible to callers instead of silently swallowing them.
+/// A non-empty `skipped_reasons` indicates DDL the linked LadybugDB build
+/// could not execute (e.g. unsupported index syntax, or a table that
+/// already exists on re-init).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SchemaInitReport {
+    /// Number of DDL statements skipped (unsupported or already exists).
+    pub skipped_count: u32,
+    /// Reasons for skipping, one per skipped statement.
+    pub skipped_reasons: Vec<String>,
+}
+
 /// A wrapper around a LadybugDB [`Database`] providing schema initialization,
 /// DDL/DML execution, and JSON-valued query helpers.
 ///
@@ -45,20 +60,43 @@ impl StorageConnection {
     /// `CodeRelation` table, the optional `Embedding` table, and all secondary
     /// indexes (DDD §12.1, §12.2).
     ///
-    /// Statements that LadybugDB cannot execute (e.g. unsupported index types
-    /// or the optional `Embedding` table when the VECTOR extension is absent)
-    /// are logged as warnings and skipped rather than aborting initialization.
-    pub fn init_schema(&self) -> Result<()> {
-        for stmt in all_init_ddl() {
-            if let Err(err) = self.execute(&stmt) {
-                // Indexes and the optional Embedding table may be unsupported
-                // by the linked LadybugDB build; skip them with a warning.
+    /// Statements that LadybugDB cannot execute (e.g. unsupported index syntax
+    /// or a table that already exists on re-init) are logged as warnings,
+    /// recorded in the returned [`SchemaInitReport`], and skipped — they do
+    /// not abort initialization. Genuine failures (e.g. an invalid column
+    /// type) do abort initialization by returning [`StorageError::Schema`].
+    pub fn init_schema(&self) -> Result<SchemaInitReport> {
+        let ddl = all_init_ddl();
+        self.run_init_ddl(&ddl)
+    }
+
+    /// Executes a list of DDL statements, classifying each failure as either
+    /// "unsupported" (skipped and recorded) or a real error (returned).
+    ///
+    /// A failure is treated as "unsupported" when its error message indicates
+    /// the database cannot handle the statement:
+    /// - `not supported` / `already exists` / `does not exist` — semantic
+    ///   signals from the binder/catalog.
+    /// - `Parser exception` — the parser does not recognize the DDL syntax
+    ///   (e.g. `CREATE INDEX ... ON` is unsupported by this LadybugDB build).
+    ///   In `init_schema` every statement originates from [`all_init_ddl`],
+    ///   so a parse failure means "unsupported feature", not "invalid SQL".
+    ///
+    /// Any other failure (e.g. `Catalog exception` for an unknown type) is a
+    /// real error and is propagated as [`StorageError::Schema`].
+    fn run_init_ddl(&self, ddl: &[String]) -> Result<SchemaInitReport> {
+        let mut report = SchemaInitReport::default();
+        for stmt in ddl {
+            if let Err(err) = self.execute(stmt) {
                 let msg = err.to_string();
-                let is_optional = stmt.starts_with("CREATE INDEX")
-                    || stmt.contains("Embedding")
-                    || msg.contains("already exists");
-                if is_optional {
-                    warn!(statement = %stmt, error = %msg, "skipping optional DDL statement");
+                let is_unsupported = msg.contains("not supported")
+                    || msg.contains("already exists")
+                    || msg.contains("does not exist")
+                    || msg.contains("Parser exception");
+                if is_unsupported {
+                    warn!(statement = %stmt, error = %msg, "skipping unsupported DDL statement");
+                    report.skipped_count += 1;
+                    report.skipped_reasons.push(format!("`{stmt}`: {msg}"));
                 } else {
                     return Err(StorageError::Schema(format!(
                         "failed to execute DDL `{stmt}`: {msg}"
@@ -66,7 +104,7 @@ impl StorageConnection {
                 }
             }
         }
-        Ok(())
+        Ok(report)
     }
 
     /// Executes a single Cypher statement that does not return rows (DDL/DML).
@@ -260,6 +298,88 @@ mod tests {
         // Second invocation should not error on the node tables (they're skipped
         // as "already exists" warnings).
         conn.init_schema().expect("second init failed");
+    }
+
+    #[test]
+    fn init_schema_returns_report_with_skip_stats() {
+        // AC: init_schema returns a SchemaInitReport exposing skipped_count and
+        // skipped_reasons. On a fresh DB the 18 CREATE INDEX statements plus
+        // the 3 FTS and 1 VECTOR index statements are unsupported by
+        // LadybugDB's parser, so skipped_count must be > 0 and
+        // skipped_reasons must mirror it.
+        let conn = StorageConnection::in_memory().expect("open");
+        let report = conn.init_schema().expect("init_schema should succeed");
+
+        assert!(
+            report.skipped_count > 0,
+            "expected at least one skipped DDL statement (CREATE INDEX), got 0"
+        );
+        assert_eq!(
+            report.skipped_reasons.len(),
+            report.skipped_count as usize,
+            "skipped_reasons length must match skipped_count"
+        );
+        // Each reason should mention the statement and the error.
+        for reason in &report.skipped_reasons {
+            assert!(
+                reason.starts_with('`'),
+                "reason should start with the statement in backticks: {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn init_schema_records_unsupported_and_continues() {
+        // AC: when a DDL statement fails with an "unsupported" error (parser
+        // exception, already exists, does not exist, not supported), the
+        // statement is recorded in the report and init_schema does NOT error.
+        let conn = StorageConnection::in_memory().expect("open");
+
+        // First init: CREATE INDEX statements fail with "Parser exception".
+        let first = conn.init_schema().expect("first init should succeed");
+        let first_skipped = first.skipped_count;
+        assert!(
+            first_skipped > 0,
+            "first init should skip unsupported CREATE INDEX statements"
+        );
+
+        // Second init: tables now fail with "already exists" — also skipped.
+        let second = conn.init_schema().expect("second init should succeed");
+        assert!(
+            second.skipped_count > first_skipped,
+            "second init should skip more statements (tables already exist): \
+             first={first_skipped}, second={}",
+            second.skipped_count
+        );
+    }
+
+    #[test]
+    fn init_schema_returns_error_on_real_failure() {
+        // AC: when a DDL statement fails with an error that is NOT an
+        // "unsupported" signal (not supported / already exists / does not
+        // exist / Parser exception), init_schema returns StorageError::Schema.
+        let conn = StorageConnection::in_memory().expect("open");
+
+        // NOTAREALTYPE triggers a "Catalog exception" — a genuine schema error
+        // that is none of the unsupported signals above.
+        let bad_ddl = vec![
+            "CREATE NODE TABLE Project (id STRING, PRIMARY KEY (id));".to_string(),
+            "CREATE NODE TABLE BadTbl (id NOTAREALTYPE, PRIMARY KEY (id));".to_string(),
+        ];
+        let result = conn.run_init_ddl(&bad_ddl);
+        assert!(
+            result.is_err(),
+            "a real DDL failure must return an error, not be skipped"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, StorageError::Schema(_)),
+            "expected StorageError::Schema, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("BadTbl"),
+            "error should mention the failing statement: {err}"
+        );
     }
 
     #[test]

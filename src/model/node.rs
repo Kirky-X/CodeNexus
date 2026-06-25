@@ -294,8 +294,7 @@ mod tests {
 
     #[test]
     fn builder_sets_required_fields() {
-        let node = Node::builder(NodeLabel::Function, "foo", "proj.src.foo")
-            .build();
+        let node = Node::builder(NodeLabel::Function, "foo", "proj.src.foo").build();
         assert_eq!(node.label, NodeLabel::Function);
         assert_eq!(node.name, "foo");
         assert_eq!(node.qualified_name, "proj.src.foo");

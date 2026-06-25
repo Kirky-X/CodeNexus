@@ -37,12 +37,7 @@ impl CsvLoader {
 
     /// Convenience wrapper around [`write_nodes_csv`] that writes the CSV to
     /// `path` on disk.
-    pub fn write_nodes_file(
-        &self,
-        nodes: &[Node],
-        label: NodeLabel,
-        path: &Path,
-    ) -> Result<()> {
+    pub fn write_nodes_file(&self, nodes: &[Node], label: NodeLabel, path: &Path) -> Result<()> {
         let csv = write_nodes_csv(nodes, label);
         std::fs::write(path, csv)?;
         Ok(())
@@ -80,14 +75,35 @@ pub fn write_nodes_csv(nodes: &[Node], label: NodeLabel) -> String {
 
 /// Generates a CSV string for the `CodeRelation` table (header + one row per
 /// edge).
+///
+/// Deduplicates edges by their primary-key id ([`edge_id`]) to prevent
+/// primary-key conflicts during `COPY FROM`. Duplicate edges arise when
+/// distinct call sites resolve to the same `{source, target, type, line}`
+/// tuple (e.g. chained `.project(project)` calls in different files sharing
+/// the same start line). When duplicates are skipped, a warning is printed
+/// to stderr reporting the count (BR-INDEX-005, fail-loud principle).
 #[must_use]
 pub fn write_edges_csv(edges: &[Edge]) -> String {
     let columns = relation_table_columns();
     let mut writer = Writer::from_writer(Vec::new());
     writer.write_record(columns).expect("csv header write");
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut skipped = 0usize;
     for edge in edges {
+        let id = edge_id(edge);
+        if !seen.insert(id) {
+            skipped += 1;
+            continue;
+        }
         let row = edge_to_row(edge);
         writer.write_record(&row).expect("csv row write");
+    }
+    if skipped > 0 {
+        eprintln!(
+            "warning: skipped {skipped} duplicate edge(s) during CSV generation (edges: {}, unique: {})",
+            edges.len(),
+            edges.len() - skipped
+        );
     }
     let bytes = writer.into_inner().expect("csv flush");
     String::from_utf8(bytes).expect("csv utf8")
@@ -333,17 +349,27 @@ pub fn node_to_row(node: &Node, label: NodeLabel) -> Vec<String> {
     }
 }
 
-/// Builds the column-value vector for an edge, in the order specified by
-/// [`relation_table_columns`].
+/// Generates the primary-key id for an edge.
+///
+/// The id is `{source}_{target}_{type}_{start_line}`, with `start_line`
+/// defaulting to 0 when `None`. Callers that batch-insert edges must dedup
+/// by this id to avoid primary-key conflicts (ADR-014).
 #[must_use]
-pub fn edge_to_row(edge: &Edge) -> Vec<String> {
-    let id = format!(
+pub fn edge_id(edge: &Edge) -> String {
+    format!(
         "{}_{}_{}_{}",
         edge.source,
         edge.target,
         edge.edge_type.as_db_type(),
         edge.start_line.unwrap_or(0)
-    );
+    )
+}
+
+/// Builds the column-value vector for an edge, in the order specified by
+/// [`relation_table_columns`].
+#[must_use]
+pub fn edge_to_row(edge: &Edge) -> Vec<String> {
+    let id = edge_id(edge);
     vec![
         id,
         edge.source.clone(),
@@ -480,10 +506,7 @@ mod tests {
             .build();
         let csv = write_nodes_csv(&[node], NodeLabel::Project);
         let lines: Vec<&str> = csv.lines().collect();
-        assert_eq!(
-            lines[0],
-            "id,name,rootPath,language,fileCount,indexedAt"
-        );
+        assert_eq!(lines[0], "id,name,rootPath,language,fileCount,indexedAt");
         assert!(lines[1].contains("proj_001"));
         assert!(lines[1].contains("demo"));
         assert!(lines[1].contains("/repo/demo"));
@@ -669,5 +692,54 @@ mod tests {
     fn csv_loader_new_returns_default() {
         let loader = CsvLoader::new();
         let _ = format!("{loader:?}");
+    }
+
+    #[test]
+    fn edge_id_generates_correct_format() {
+        let edge = Edge::builder("src", "tgt", EdgeType::Calls, "p")
+            .start_line(42)
+            .build();
+        assert_eq!(edge_id(&edge), "src_tgt_CALLS_42");
+    }
+
+    #[test]
+    fn edge_id_defaults_line_to_zero_when_none() {
+        let edge = Edge::new("s", "t", EdgeType::Reads, "p");
+        assert_eq!(edge_id(&edge), "s_t_READS_0");
+    }
+
+    #[test]
+    fn write_edges_csv_deduplicates_by_edge_id() {
+        // Two edges with the same {source, target, type, start_line} produce
+        // the same primary-key id. Only the first should appear in the CSV.
+        let edge1 = Edge::builder("a", "b", EdgeType::Calls, "p")
+            .confidence(0.9)
+            .start_line(10)
+            .build();
+        let edge2 = Edge::builder("a", "b", EdgeType::Calls, "p")
+            .confidence(0.5) // different confidence, same id
+            .start_line(10)
+            .build();
+        let edge3 = Edge::builder("a", "b", EdgeType::Calls, "p")
+            .start_line(20) // different line -> different id
+            .build();
+        let csv = write_edges_csv(&[edge1, edge2, edge3]);
+        let lines: Vec<&str> = csv.lines().collect();
+        // 1 header + 2 unique data rows (edge1 and edge3; edge2 is dup of edge1)
+        assert_eq!(lines.len(), 3);
+        assert!(lines[1].contains("0.900000"));
+        assert!(lines[2].contains("20"));
+    }
+
+    #[test]
+    fn write_edges_csv_preserves_all_unique_edges() {
+        let edges = vec![
+            Edge::new("a", "b", EdgeType::Calls, "p"),
+            Edge::new("b", "c", EdgeType::Calls, "p"),
+            Edge::new("c", "d", EdgeType::Reads, "p"),
+        ];
+        let csv = write_edges_csv(&edges);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), 4); // header + 3 edges
     }
 }

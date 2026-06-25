@@ -167,7 +167,10 @@ mod tests {
         assert_eq!(edge.target, "t2");
         assert_eq!(edge.edge_type, EdgeType::FfiCalls);
         assert!((edge.confidence - 0.85).abs() < f32::EPSILON);
-        assert_eq!(edge.reason.as_deref(), Some("extern \"C\" declaration match"));
+        assert_eq!(
+            edge.reason.as_deref(),
+            Some("extern \"C\" declaration match")
+        );
         assert_eq!(edge.start_line, Some(42));
         assert_eq!(edge.project, "proj2");
     }

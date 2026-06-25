@@ -80,7 +80,10 @@ impl Graph {
     /// guaranteed.
     #[must_use]
     pub fn nodes_by_project(&self, project: &str) -> Vec<&Node> {
-        self.nodes.values().filter(|n| n.project == project).collect()
+        self.nodes
+            .values()
+            .filter(|n| n.project == project)
+            .collect()
     }
 
     /// Returns the number of nodes in the graph.
@@ -119,8 +122,8 @@ impl Graph {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::{Language, NodeLabel};
+    use super::*;
 
     fn make_node(id: &str, label: NodeLabel, name: &str, project: &str) -> Node {
         Node::builder(label, name, format!("{project}.{name}"))
@@ -507,12 +510,42 @@ mod tests {
     fn full_graph_scenario() {
         let mut g = Graph::new();
         // proj1: a -> b -> c (Calls)
-        g.add_node(make_node_with_lang("a", NodeLabel::Function, "a", "proj1", Language::Rust));
-        g.add_node(make_node_with_lang("b", NodeLabel::Function, "b", "proj1", Language::Rust));
-        g.add_node(make_node_with_lang("c", NodeLabel::Function, "c", "proj1", Language::Rust));
+        g.add_node(make_node_with_lang(
+            "a",
+            NodeLabel::Function,
+            "a",
+            "proj1",
+            Language::Rust,
+        ));
+        g.add_node(make_node_with_lang(
+            "b",
+            NodeLabel::Function,
+            "b",
+            "proj1",
+            Language::Rust,
+        ));
+        g.add_node(make_node_with_lang(
+            "c",
+            NodeLabel::Function,
+            "c",
+            "proj1",
+            Language::Rust,
+        ));
         // proj2: x -> y (Calls) - isolated
-        g.add_node(make_node_with_lang("x", NodeLabel::Function, "x", "proj2", Language::C));
-        g.add_node(make_node_with_lang("y", NodeLabel::Function, "y", "proj2", Language::C));
+        g.add_node(make_node_with_lang(
+            "x",
+            NodeLabel::Function,
+            "x",
+            "proj2",
+            Language::C,
+        ));
+        g.add_node(make_node_with_lang(
+            "y",
+            NodeLabel::Function,
+            "y",
+            "proj2",
+            Language::C,
+        ));
 
         g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj1"));
         g.add_edge(Edge::new("b", "c", EdgeType::Calls, "proj1"));
@@ -531,7 +564,9 @@ mod tests {
         assert_eq!(b_neighbors[0].id, "c");
 
         // c has no outgoing Calls
-        assert!(g.neighbors(&"c".to_string(), Some(EdgeType::Calls)).is_empty());
+        assert!(g
+            .neighbors(&"c".to_string(), Some(EdgeType::Calls))
+            .is_empty());
 
         // reverse: c <- b <- a
         let c_rev = g.reverse_neighbors(&"c".to_string(), Some(EdgeType::Calls));
