@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust 1.81 (stable) with clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.81"
+          components: clippy
+      - name: Install nightly toolchain with rustfmt
+        # rustfmt.toml uses the nightly-only options `imports_granularity`
+        # and `group_imports`, so `cargo fmt` must run on nightly.
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Check formatting
+        run: cargo +nightly fmt --check
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+      - name: Tests
+        run: cargo test --verbose
+      - name: Install tarpaulin
+        run: cargo install cargo-tarpaulin
+      - name: Coverage
+        run: cargo tarpaulin --fail-under 89 --exclude-files "src/embed/*" "src/main.rs" --out Lcov --output-path coverage.lcov
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.lcov

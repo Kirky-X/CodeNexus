@@ -12,6 +12,12 @@ use codenexus::model::NodeLabel;
 use codenexus::query::QueryFacade;
 use tempfile::TempDir;
 
+// SubTask 17.3: tracing capture helpers (used by index_emits_all_log_events).
+use std::cell::RefCell;
+use std::io::Write;
+use std::sync::{Arc, Mutex};
+use tracing_subscriber::fmt::MakeWriter;
+
 /// 在 `dir/rel` 写入文件（自动创建父目录）。
 fn write_file(dir: &Path, rel: &str, content: &str) {
     let path = dir.join(rel);
@@ -87,8 +93,16 @@ fn index_multilang_repo_succeeds() {
     let result = facade.index(tmp.path(), "demo", false).expect("index");
 
     assert!(!result.project_id.is_empty(), "project_id 应非空");
-    assert!(result.files_indexed >= 2, "至少索引 2 个文件，got {}", result.files_indexed);
-    assert!(result.nodes_created > 0, "应创建节点，got {}", result.nodes_created);
+    assert!(
+        result.files_indexed >= 2,
+        "至少索引 2 个文件，got {}",
+        result.files_indexed
+    );
+    assert!(
+        result.nodes_created > 0,
+        "应创建节点，got {}",
+        result.nodes_created
+    );
 }
 
 #[test]
@@ -98,7 +112,9 @@ fn index_creates_project_node() {
     let db = fresh_db_path();
 
     let facade = IndexFacade::new(&db).expect("IndexFacade::new");
-    facade.index(tmp.path(), "my_project", false).expect("index");
+    facade
+        .index(tmp.path(), "my_project", false)
+        .expect("index");
 
     // 通过 Cypher 查询验证 Project 节点存在（Project 表无 qualifiedName/filePath
     // 等列，故不能使用 search_by_type）。
@@ -133,8 +149,12 @@ fn multi_project_isolation() {
 
     let facade = IndexFacade::new(&db).expect("IndexFacade::new");
     // 管线将 project_id（UUID）写入节点的 project 列，故过滤时需使用 project_id。
-    let result_a = facade.index(tmp1.path(), "project_a", false).expect("index a");
-    let result_b = facade.index(tmp2.path(), "project_b", false).expect("index b");
+    let result_a = facade
+        .index(tmp1.path(), "project_a", false)
+        .expect("index a");
+    let result_b = facade
+        .index(tmp2.path(), "project_b", false)
+        .expect("index b");
 
     let query = QueryFacade::new(&db).expect("QueryFacade::new");
 
@@ -274,10 +294,7 @@ fn fulltext_search_finds_matches() {
     let query = QueryFacade::new(&db).expect("QueryFacade::new");
     let results = query.fulltext_search("parse", None, 10).expect("fulltext");
 
-    assert!(
-        !results.is_empty(),
-        "全文搜索 parse 应返回结果"
-    );
+    assert!(!results.is_empty(), "全文搜索 parse 应返回结果");
 }
 
 // --- 增量索引 ---
@@ -296,10 +313,7 @@ fn incremental_index_skips_unchanged_files() {
 
     // 第二次索引：a.rs 哈希未变，应跳过。
     let result2 = facade.index(tmp.path(), "demo", false).expect("index 2");
-    assert_eq!(
-        result2.files_skipped, 1,
-        "第二次应跳过未变更文件"
-    );
+    assert_eq!(result2.files_skipped, 1, "第二次应跳过未变更文件");
 }
 
 #[test]
@@ -335,10 +349,7 @@ fn force_reindexes_all_files() {
 
     // --force 应忽略哈希，全量重解析。
     let result2 = facade.index(tmp.path(), "demo", true).expect("index force");
-    assert_eq!(
-        result2.files_indexed, 1,
-        "--force 应重解析所有文件"
-    );
+    assert_eq!(result2.files_indexed, 1, "--force 应重解析所有文件");
 }
 
 // --- 异常处理 ---
@@ -427,4 +438,136 @@ end module math_utils
     let result = facade.index(tmp.path(), "f90_demo", false).expect("index");
 
     assert!(result.files_indexed >= 1, "应索引 Fortran 文件");
+}
+
+// --- SubTask 17.3: end-to-end LOG event verification (LOG-001/002/006) ---
+
+/// A `MakeWriter` that buffers emitted tracing events into a shared `Vec<u8>`.
+struct CapturingMakeWriter {
+    buf: Arc<Mutex<Vec<u8>>>,
+}
+
+impl MakeWriter for CapturingMakeWriter {
+    type Writer = CapturingWriter;
+
+    fn make_writer(&self) -> Self::Writer {
+        CapturingWriter {
+            buf: self.buf.clone(),
+        }
+    }
+}
+
+struct CapturingWriter {
+    buf: Arc<Mutex<Vec<u8>>>,
+}
+
+impl Write for CapturingWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.buf.lock().unwrap().write_all(bytes)?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+// Thread-local storage for the tracing `DefaultGuard` on rayon worker
+// threads. Each worker thread sets its own subscriber via
+// `tracing::subscriber::set_default` and stores the guard here so it stays
+// alive for the thread's lifetime (mirrors the pattern in `parallel.rs`).
+thread_local! {
+    static TRACING_GUARD: RefCell<Option<tracing::subscriber::DefaultGuard>> =
+        const { RefCell::new(None) };
+}
+
+/// Verifies that `codenexus index` emits all LOG events defined in the spec
+/// when run with RUST_LOG=debug:
+/// - LOG-001: `index_started` and `index_completed` (info, main thread)
+/// - LOG-002: `file_parsed` (debug, rayon worker thread — one per file)
+/// - LOG-006: `performance` with `files_per_second` (info, main thread)
+///
+/// Because `parallel_parse` uses rayon worker threads that do NOT inherit the
+/// current thread's tracing subscriber, this test builds a custom rayon thread
+/// pool whose `start_handler` installs the same capturing subscriber on each
+/// worker thread. The index call is run via `pool.install()` so that `par_iter`
+/// inside the pipeline uses worker threads that have the subscriber set.
+#[test]
+fn index_emits_all_log_events() {
+    use rayon::ThreadPoolBuilder;
+
+    let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+
+    // Subscriber for the main thread (captures LOG-001 and LOG-006).
+    let main_subscriber = tracing_subscriber::FmtSubscriber::builder()
+        .with_target(false)
+        .with_max_level(tracing::Level::DEBUG)
+        .with_writer(CapturingMakeWriter { buf: buf.clone() })
+        .finish();
+
+    // Custom rayon pool: each worker installs a capturing subscriber sharing
+    // the same buffer, so LOG-002 file_parsed events on worker threads are
+    // captured too.
+    let buf_for_handler = buf.clone();
+    let pool = ThreadPoolBuilder::new()
+        .start_handler(move |_idx| {
+            let worker_subscriber = tracing_subscriber::FmtSubscriber::builder()
+                .with_target(false)
+                .with_max_level(tracing::Level::DEBUG)
+                .with_writer(CapturingMakeWriter {
+                    buf: buf_for_handler.clone(),
+                })
+                .finish();
+            let guard = tracing::subscriber::set_default(worker_subscriber);
+            TRACING_GUARD.with(|g| *g.borrow_mut() = Some(guard));
+        })
+        .build()
+        .expect("rayon thread pool");
+
+    // Prepare a small repo with 2 Rust files.
+    let tmp = TempDir::new().unwrap();
+    write_file(tmp.path(), "a.rs", "fn a() {}\n");
+    write_file(tmp.path(), "b.rs", "fn b() {}\n");
+    let db = fresh_db_path();
+    let src_path = tmp.path().to_path_buf();
+
+    tracing::subscriber::with_default(main_subscriber, || {
+        pool.install(|| {
+            let facade = IndexFacade::new(&db).expect("IndexFacade::new");
+            facade.index(&src_path, "log_e2e", false).expect("index");
+        });
+    });
+
+    let bytes = buf.lock().unwrap().clone();
+    let captured = String::from_utf8(bytes).unwrap();
+
+    // LOG-001: index_started
+    assert!(
+        captured.contains("index_started"),
+        "LOG-001: index_started event missing, got: {captured:?}"
+    );
+    // LOG-001: index_completed
+    assert!(
+        captured.contains("index_completed"),
+        "LOG-001: index_completed event missing, got: {captured:?}"
+    );
+    // LOG-002: file_parsed (at least one per parsed file)
+    assert!(
+        captured.contains("file_parsed"),
+        "LOG-002: file_parsed event missing, got: {captured:?}"
+    );
+    let file_parsed_count = captured.matches("file_parsed").count();
+    assert!(
+        file_parsed_count >= 2,
+        "LOG-002: expected at least 2 file_parsed events (one per file), got {file_parsed_count}"
+    );
+    // LOG-006: performance
+    assert!(
+        captured.contains("performance"),
+        "LOG-006: performance event missing, got: {captured:?}"
+    );
+    assert!(
+        captured.contains("files_per_second"),
+        "LOG-006: performance event should carry files_per_second field, got: {captured:?}"
+    );
 }
