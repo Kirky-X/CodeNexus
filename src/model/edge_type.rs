@@ -90,7 +90,7 @@ impl EdgeType {
             EdgeType::Implements => (0.90, 1.0),
             EdgeType::Extends => (0.90, 1.0),
             // Call edges — same-language resolution (BR-TRACE-007).
-            EdgeType::Calls => (0.90, 1.0),
+            EdgeType::Calls => (0.80, 0.95),
             // Type / reference usage — requires symbol resolution.
             EdgeType::UsesType => (0.80, 0.90),
             EdgeType::References => (0.75, 0.85),
@@ -249,11 +249,21 @@ mod tests {
 
     #[test]
     fn confidence_range_returns_expected_ranges() {
-        assert_eq!(EdgeType::Calls.confidence_range(), (0.90, 1.0));
+        assert_eq!(EdgeType::Calls.confidence_range(), (0.80, 0.95));
         assert_eq!(EdgeType::FfiCalls.confidence_range(), (0.70, 0.85));
         assert_eq!(EdgeType::DataFlows.confidence_range(), (0.80, 0.90));
         assert_eq!(EdgeType::Reads.confidence_range(), (0.70, 0.80));
         assert_eq!(EdgeType::Writes.confidence_range(), (0.70, 0.80));
+    }
+
+    #[test]
+    fn calls_confidence_range_includes_project_confidence() {
+        // BR-TRACE-007: Calls confidence range is 0.80-0.95.
+        // CONFIDENCE_PROJECT = 0.80 should be within range.
+        let (min, max) = EdgeType::Calls.confidence_range();
+        let confidence_project: f32 = 0.80;
+        assert!(confidence_project >= min, "CONFIDENCE_PROJECT {} < min {}", confidence_project, min);
+        assert!(confidence_project <= max, "CONFIDENCE_PROJECT {} > max {}", confidence_project, max);
     }
 
     #[test]
