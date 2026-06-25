@@ -19,9 +19,10 @@
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
+use crate::resolve::FqnGenerator;
 
 use super::error::{ParseError, Result};
-use super::extractor::{ExtractResult, Extractor, ImportInfo};
+use super::extractor::{ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo};
 use super::parser_factory::ParserFactory;
 
 /// C language tree-sitter extractor (Adapter pattern).
@@ -50,9 +51,6 @@ impl Extractor for CExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::C);
-        // TODO: implement reads/writes extraction for C (BR-TRACE-005/006).
-        // `result.reads` and `result.writes` are left empty for now; downstream
-        // resolution gracefully produces no Reads/Writes edges when absent.
         let mut parser = ParserFactory::create_parser(Language::C)?;
         let tree = parser
             .parse(source, None)
@@ -66,7 +64,7 @@ impl Extractor for CExtractor {
                 Some(c) => c,
                 None => continue,
             };
-            visit_node(child, source, file_path, project, &mut result);
+            visit_node(child, source, file_path, project, &mut result, None);
         }
         Ok(result)
     }
@@ -82,24 +80,28 @@ fn visit_node(
     file_path: &str,
     project: &str,
     result: &mut ExtractResult,
+    current_func: Option<&str>,
 ) {
     match node.kind() {
         "function_definition" => {
             extract_function(node, source, file_path, project, result);
-            // Recurse into the body to find calls.
+            // Pass the function's name as the enclosing function for body
+            // traversal, so calls/reads/writes inside it can be attributed.
+            let func_name = function_name(node, source);
+            // Recurse into the body to find calls/reads/writes.
             for i in 0..node.named_child_count() as u32 {
                 if let Some(child) = node.named_child(i) {
                     if child.kind() == "compound_statement" {
-                        visit_children(child, source, file_path, project, result);
+                        visit_children(child, source, file_path, project, result, func_name.as_deref());
                     }
                 }
             }
         }
         "declaration" => {
             extract_global_var(node, source, file_path, project, result);
-            // Always recurse into declarations to find calls inside
+            // Always recurse into declarations to find calls/reads inside
             // (e.g. `int x = foo();`).
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         "preproc_include" => {
             extract_include(node, source, result);
@@ -110,24 +112,73 @@ fn visit_node(
         "struct_specifier" => {
             extract_struct(node, source, file_path, project, result);
             if node.child_by_field_name("body").is_some() {
-                visit_children(node, source, file_path, project, result);
+                visit_children(node, source, file_path, project, result, current_func);
             }
         }
         "enum_specifier" => {
             extract_enum(node, source, file_path, project, result);
         }
         "call_expression" => {
-            extract_call(node, source, result);
+            extract_call(node, source, file_path, project, current_func, result);
             // Recurse to handle nested calls in arguments.
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
+        }
+        "init_declarator" => {
+            // A local `int x = 1;` writes the declarator's identifier
+            // (BR-TRACE-006). Only attribute the write when inside a function
+            // body (current_func is Some).
+            if let Some(func) = current_func {
+                if let Some(name) = declarator_name(node, source) {
+                    result.writes.push(WriteInfo {
+                        writer_qn: Some(make_qn(file_path, func, project)),
+                        var_name: name,
+                        line: node.start_position().row as u32 + 1,
+                    });
+                }
+            }
+            visit_children(node, source, file_path, project, result, current_func);
+        }
+        "assignment_expression" => {
+            // `x = ...;` writes the left-hand identifier (BR-TRACE-006). Only
+            // simple identifier targets are captured; field/index writes are
+            // ignored.
+            if let Some(func) = current_func {
+                if let Some(left) = node.child_by_field_name("left") {
+                    if let Some(name) = identifier_text(left, source) {
+                        result.writes.push(WriteInfo {
+                            writer_qn: Some(make_qn(file_path, func, project)),
+                            var_name: name,
+                            line: node.start_position().row as u32 + 1,
+                        });
+                    }
+                }
+            }
+            visit_children(node, source, file_path, project, result, current_func);
+        }
+        "identifier" => {
+            // A bare identifier in an expression position is a variable read
+            // (BR-TRACE-005). Name-defining positions (declarators, call
+            // functions, assignment left) are excluded by `is_read_position`.
+            if let Some(func) = current_func {
+                if is_read_position(node) {
+                    if let Some(name) = node_text(node, source).map(String::from) {
+                        result.reads.push(ReadInfo {
+                            reader_qn: Some(make_qn(file_path, func, project)),
+                            var_name: name,
+                            line: node.start_position().row as u32 + 1,
+                        });
+                    }
+                }
+            }
+            visit_children(node, source, file_path, project, result, current_func);
         }
         "linkage_specification" => {
             // extern "C" { ... } blocks: recurse to find function definitions.
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
         _ => {
             // Recurse into other nodes to find nested definitions/calls.
-            visit_children(node, source, file_path, project, result);
+            visit_children(node, source, file_path, project, result, current_func);
         }
     }
 }
@@ -138,10 +189,11 @@ fn visit_children(
     file_path: &str,
     project: &str,
     result: &mut ExtractResult,
+    current_func: Option<&str>,
 ) {
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
-            visit_node(child, source, file_path, project, result);
+            visit_node(child, source, file_path, project, result, current_func);
         }
     }
 }
@@ -163,7 +215,7 @@ fn extract_function(
     let start_line = node.start_position().row as u32 + 1;
     let end_line = node.end_position().row as u32 + 1;
     let signature = declarator_signature(node, source);
-    let qn = make_qn(file_path, &name);
+    let qn = make_qn(file_path, &name, project);
     let mut builder = ModelNode::builder(NodeLabel::Function, name.clone(), qn.clone())
         .file_path(file_path)
         .start_line(start_line)
@@ -223,7 +275,7 @@ fn extract_global_var(
 }
 
 fn push_global_var(name: &str, line: u32, file_path: &str, project: &str, result: &mut ExtractResult) {
-    let qn = make_qn(file_path, name);
+    let qn = make_qn(file_path, name, project);
     let model_node = ModelNode::builder(NodeLabel::GlobalVar, name.to_string(), qn.clone())
         .file_path(file_path)
         .start_line(line)
@@ -242,7 +294,7 @@ fn extract_typedef(node: Node, source: &str, file_path: &str, project: &str, res
         if let Some(child) = node.named_child(i) {
             if child.kind() == "type_identifier" {
                 if let Some(name) = node_text(child, source).map(String::from) {
-                    let qn = make_qn(file_path, &name);
+                    let qn = make_qn(file_path, &name, project);
                     let model_node = ModelNode::builder(NodeLabel::Typedef, name, qn)
                         .file_path(file_path)
                         .start_line(node.start_position().row as u32 + 1)
@@ -269,7 +321,7 @@ fn extract_struct(node: Node, source: &str, file_path: &str, project: &str, resu
     let Some(name) = node_text(name_node, source).map(String::from) else {
         return;
     };
-    let qn = make_qn(file_path, &name);
+    let qn = make_qn(file_path, &name, project);
     let model_node = ModelNode::builder(NodeLabel::Struct, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -292,7 +344,7 @@ fn extract_enum(node: Node, source: &str, file_path: &str, project: &str, result
     let Some(name) = node_text(name_node, source).map(String::from) else {
         return;
     };
-    let qn = make_qn(file_path, &name);
+    let qn = make_qn(file_path, &name, project);
     let model_node = ModelNode::builder(NodeLabel::Enum, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -330,7 +382,14 @@ fn extract_include(node: Node, source: &str, result: &mut ExtractResult) {
     });
 }
 
-fn extract_call(node: Node, source: &str, result: &mut ExtractResult) {
+fn extract_call(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    project: &str,
+    current_func: Option<&str>,
+    result: &mut ExtractResult,
+) {
     let Some(func_node) = node.child_by_field_name("function") else {
         return;
     };
@@ -338,8 +397,9 @@ fn extract_call(node: Node, source: &str, result: &mut ExtractResult) {
         return;
     };
     let args = call_arguments(node, source);
+    let caller_qn = current_func.map(|name| make_qn(file_path, name, project));
     result.calls.push(super::extractor::CallInfo {
-        caller_qn: None,
+        caller_qn,
         callee_name: callee,
         line: node.start_position().row as u32 + 1,
         args,
@@ -418,8 +478,55 @@ fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
     node.utf8_text(source.as_bytes()).ok()
 }
 
-fn make_qn(file_path: &str, name: &str) -> String {
-    format!("{file_path}::{name}")
+/// Returns the text of `node` if it is a plain `identifier`, else `None`.
+fn identifier_text(node: Node, source: &str) -> Option<String> {
+    if node.kind() == "identifier" {
+        node_text(node, source).map(String::from)
+    } else {
+        None
+    }
+}
+
+/// Returns `true` if a bare `identifier` node sits in a read (expression)
+/// position rather than a name-defining position (declarator, callee, write
+/// target). Minimal version: only checks the direct parent kind, matching the
+/// rust_extractor convention (design.md Decision 4, Open Question 2).
+fn is_read_position(node: Node) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    match parent.kind() {
+        // Identifiers directly inside these expression containers are reads.
+        "binary_expression"
+        | "unary_expression"
+        | "parenthesized_expression"
+        | "return_statement"
+        | "argument_list"
+        | "subscript_expression"
+        | "conditional_expression" => true,
+        // `foo(x)` -> the callee `foo` is not a read; arguments are handled
+        // above via the `argument_list` parent.
+        "call_expression" => !is_at_field(node, parent, "function"),
+        // `x = y;` -> `y` (the right side) is a read; `x` (the left) is not.
+        "assignment_expression" => !is_at_field(node, parent, "left"),
+        // `obj.field` -> `obj` (the object) is a read; the field name is a
+        // `field_identifier`, not a plain `identifier`, so it is not reached
+        // here, but guard explicitly for safety.
+        "field_expression" => is_at_field(node, parent, "argument"),
+        _ => false,
+    }
+}
+
+/// Returns `true` if `node` occupies the given named `field` of `parent`,
+/// compared by byte range.
+fn is_at_field(node: Node, parent: Node, field: &str) -> bool {
+    parent
+        .child_by_field_name(field)
+        .is_some_and(|f| f.byte_range() == node.byte_range())
+}
+
+fn make_qn(file_path: &str, name: &str, project: &str) -> String {
+    FqnGenerator::generate(project, file_path, name, Language::C)
 }
 
 fn add_definition_edges(
@@ -592,7 +699,7 @@ int main() {
     fn qualified_name_uses_file_path_and_name() {
         let result = extract(C_SOURCE);
         let add = result.nodes.iter().find(|n| n.name == "add").unwrap();
-        assert_eq!(add.qualified_name, "test.c::add");
+        assert_eq!(add.qualified_name, "proj.test.add");
     }
 
     #[test]
@@ -690,5 +797,163 @@ int main() {
         let result = extract(C_SOURCE);
         assert_eq!(result.language, Language::C);
         assert_eq!(result.file_path, "test.c");
+    }
+
+    #[test]
+    fn call_in_function_has_dotted_fqn_caller_qn() {
+        // Spec: C 函数内调用生成非 None caller_qn (点分 FQN 格式)。
+        let src = "int caller(void) {\n    callee();\n    return 0;\n}\n";
+        let ext = CExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.c", "proj")
+            .expect("extraction should succeed");
+        let call = result
+            .calls
+            .iter()
+            .find(|c| c.callee_name == "callee")
+            .expect("should find call to callee");
+        assert_eq!(
+            call.caller_qn.as_deref(),
+            Some("proj.tmp.demo.main.caller"),
+            "caller_qn should be the dotted FQN of the enclosing function"
+        );
+        // The caller FQN must match the enclosing function's node id.
+        let caller_node = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "caller")
+            .expect("should find caller function node");
+        assert_eq!(
+            call.caller_qn.as_deref(),
+            Some(caller_node.qualified_name.as_str()),
+            "caller_qn must match the caller function node id"
+        );
+    }
+
+    #[test]
+    fn read_in_function_has_dotted_fqn_reader_qn() {
+        // Spec: C 函数内 identifier 读取提取 (BR-TRACE-005)。
+        let src = "int caller(int x) {\n    return x;\n}\n";
+        let ext = CExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.c", "proj")
+            .expect("extraction should succeed");
+        let read = result
+            .reads
+            .iter()
+            .find(|r| r.var_name == "x")
+            .expect("should find a read of x");
+        assert_eq!(
+            read.reader_qn.as_deref(),
+            Some("proj.tmp.demo.main.caller"),
+            "reader_qn should be the dotted FQN of the enclosing function"
+        );
+        let caller_node = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "caller")
+            .expect("should find caller function node");
+        assert_eq!(
+            read.reader_qn.as_deref(),
+            Some(caller_node.qualified_name.as_str()),
+            "reader_qn must match the caller function node id"
+        );
+    }
+
+    #[test]
+    fn write_in_function_init_declarator_has_dotted_fqn_writer_qn() {
+        // Spec: C 函数内 init_declarator 写入提取 (BR-TRACE-006)。
+        let src = "void caller(void) {\n    int y = 1;\n}\n";
+        let ext = CExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.c", "proj")
+            .expect("extraction should succeed");
+        let write = result
+            .writes
+            .iter()
+            .find(|w| w.var_name == "y")
+            .expect("should find a write of y");
+        assert_eq!(write.var_name, "y");
+        assert_eq!(
+            write.writer_qn.as_deref(),
+            Some("proj.tmp.demo.main.caller"),
+            "writer_qn should be the dotted FQN of the enclosing function"
+        );
+        let caller_node = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "caller")
+            .expect("should find caller function node");
+        assert_eq!(
+            write.writer_qn.as_deref(),
+            Some(caller_node.qualified_name.as_str()),
+            "writer_qn must match the caller function node id"
+        );
+    }
+
+    #[test]
+    fn write_in_function_assignment_has_dotted_fqn_writer_qn() {
+        // Spec: C 函数内 assignment_expression 写入提取 (BR-TRACE-006)。
+        let src = "void caller(void) {\n    int y;\n    y = 2;\n}\n";
+        let ext = CExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.c", "proj")
+            .expect("extraction should succeed");
+        // `int y;` declares y (no init_declarator, so no write from declaration);
+        // `y = 2;` is an assignment_expression write.
+        let assignment_write = result
+            .writes
+            .iter()
+            .find(|w| w.var_name == "y")
+            .expect("should find a write of y from assignment");
+        assert_eq!(
+            assignment_write.writer_qn.as_deref(),
+            Some("proj.tmp.demo.main.caller"),
+            "writer_qn should be the dotted FQN of the enclosing function"
+        );
+    }
+
+    #[test]
+    fn declaration_position_identifier_not_a_read() {
+        // Spec: C 声明位置的 identifier 不被误识别为读取。
+        // `int x = 1;` inside a function: x is the declarator (write target),
+        // not a read. x MUST NOT appear in ReadInfo.
+        let src = "void caller(void) {\n    int x = 1;\n}\n";
+        let ext = CExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.c", "proj")
+            .expect("extraction should succeed");
+        let x_reads: Vec<_> = result.reads.iter().filter(|r| r.var_name == "x").collect();
+        assert!(
+            x_reads.is_empty(),
+            "declarator-position x must NOT appear in ReadInfo: {:?}",
+            x_reads
+        );
+        // x should appear as a WriteInfo target (init_declarator write).
+        let x_writes: Vec<_> = result.writes.iter().filter(|w| w.var_name == "x").collect();
+        assert!(
+            !x_writes.is_empty(),
+            "declarator-position x SHOULD appear in WriteInfo"
+        );
+    }
+
+    #[test]
+    fn top_level_declaration_no_reads_or_writes() {
+        // Spec: C 顶层声明的 identifier 不生成读写记录 (current_func 为 None)。
+        let src = "int g = 0;\n";
+        let ext = CExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.c", "proj")
+            .expect("extraction should succeed");
+        assert!(
+            result.reads.is_empty(),
+            "top-level declaration must not produce ReadInfo: {:?}",
+            result.reads
+        );
+        assert!(
+            result.writes.is_empty(),
+            "top-level declaration must not produce WriteInfo: {:?}",
+            result.writes
+        );
     }
 }
