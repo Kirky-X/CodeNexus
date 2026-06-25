@@ -142,7 +142,8 @@ impl Repository {
         }
         let csv = write_nodes_csv(nodes, label);
         let table = label.table_name();
-        let file_name = format!("{table}_{}.csv", nodes[0].id);
+        let safe_id = nodes[0].id.replace(['/', '\\'], "_");
+        let file_name = format!("{table}_{safe_id}.csv");
         let csv_path = write_csv_temp(&csv, &file_name)?;
         load_from_csv(&self.conn, table, &csv_path)
     }

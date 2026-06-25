@@ -498,4 +498,215 @@ mod tests {
         let s = format!("{conn:?}");
         assert!(s.contains("StorageConnection"));
     }
+
+    #[test]
+    fn value_to_json_converts_int8() {
+        assert_eq!(value_to_json(Value::Int8(-1)), serde_json::json!(-1));
+    }
+
+    #[test]
+    fn value_to_json_converts_int16() {
+        assert_eq!(value_to_json(Value::Int16(256)), serde_json::json!(256));
+    }
+
+    #[test]
+    fn value_to_json_converts_int32() {
+        assert_eq!(value_to_json(Value::Int32(70_000)), serde_json::json!(70000));
+    }
+
+    #[test]
+    fn value_to_json_converts_uint8() {
+        assert_eq!(value_to_json(Value::UInt8(200)), serde_json::json!(200));
+    }
+
+    #[test]
+    fn value_to_json_converts_uint16() {
+        assert_eq!(value_to_json(Value::UInt16(40000)), serde_json::json!(40000));
+    }
+
+    #[test]
+    fn value_to_json_converts_uint32() {
+        assert_eq!(
+            value_to_json(Value::UInt32(3_000_000)),
+            serde_json::json!(3000000)
+        );
+    }
+
+    #[test]
+    fn value_to_json_converts_uint64_to_string() {
+        // u64 values exceeding i64::MAX are serialized as strings to avoid
+        // JSON integer overflow.
+        let v = value_to_json(Value::UInt64(u64::MAX));
+        assert_eq!(v, serde_json::json!(u64::MAX.to_string()));
+    }
+
+    #[test]
+    fn value_to_json_converts_int128_to_string() {
+        let v = value_to_json(Value::Int128(i128::MAX));
+        assert_eq!(v, serde_json::json!(i128::MAX.to_string()));
+    }
+
+    #[test]
+    fn value_to_json_converts_float() {
+        let v = value_to_json(Value::Float(1.5));
+        assert_eq!(v, serde_json::json!(1.5));
+    }
+
+    #[test]
+    fn value_to_json_converts_json() {
+        let v = value_to_json(Value::Json(serde_json::json!({"key": 1})));
+        assert_eq!(v, serde_json::json!({"key": 1}));
+    }
+
+    #[test]
+    fn value_to_json_converts_blob_to_string() {
+        let v = value_to_json(Value::Blob(b"hello".to_vec()));
+        assert_eq!(v, serde_json::json!("hello"));
+    }
+
+    #[test]
+    fn value_to_json_converts_date() {
+        use time::macros::date;
+        let v = value_to_json(Value::Date(date!(2023 - 06 - 13)));
+        assert_eq!(v, serde_json::json!("2023-06-13"));
+    }
+
+    #[test]
+    fn value_to_json_converts_timestamp_variants() {
+        use time::macros::datetime;
+        let ts = datetime!(2023-06-13 11:25:30 UTC);
+        assert!(value_to_json(Value::Timestamp(ts)).is_string());
+        assert!(value_to_json(Value::TimestampTz(ts)).is_string());
+        assert!(value_to_json(Value::TimestampNs(ts)).is_string());
+        assert!(value_to_json(Value::TimestampMs(ts)).is_string());
+        assert!(value_to_json(Value::TimestampSec(ts)).is_string());
+    }
+
+    #[test]
+    fn value_to_json_converts_interval() {
+        let v = value_to_json(Value::Interval(time::Duration::hours(5)));
+        assert!(v.is_string());
+    }
+
+    #[test]
+    fn value_to_json_converts_uuid() {
+        let u = uuid::Uuid::nil();
+        let v = value_to_json(Value::UUID(u));
+        assert_eq!(v, serde_json::json!(u.to_string()));
+    }
+
+    #[test]
+    fn value_to_json_converts_decimal() {
+        let d = rust_decimal::Decimal::from_i128_with_scale(1234, 2); // 12.34
+        let v = value_to_json(Value::Decimal(d));
+        assert_eq!(v, serde_json::json!("12.34"));
+    }
+
+    #[test]
+    fn value_to_json_converts_internal_id() {
+        let id = lbug::InternalID {
+            table_id: 3,
+            offset: 7,
+        };
+        let v = value_to_json(Value::InternalID(id));
+        assert_eq!(v, serde_json::json!("3:7"));
+    }
+
+    #[test]
+    fn value_to_json_converts_array() {
+        let v = value_to_json(Value::Array(
+            lbug::LogicalType::Int64,
+            vec![Value::Int64(1), Value::Int64(2)],
+        ));
+        assert_eq!(v, serde_json::json!([1, 2]));
+    }
+
+    #[test]
+    fn value_to_json_converts_struct() {
+        let v = value_to_json(Value::Struct(vec![
+            ("name".to_string(), Value::String("Alice".to_string())),
+            ("age".to_string(), Value::Int64(25)),
+        ]));
+        let obj = v.as_object().expect("should be object");
+        assert_eq!(obj["name"], serde_json::json!("Alice"));
+        assert_eq!(obj["age"], serde_json::json!(25));
+    }
+
+    #[test]
+    fn value_to_json_converts_map() {
+        let v = value_to_json(Value::Map(
+            (lbug::LogicalType::String, lbug::LogicalType::Int64),
+            vec![(Value::String("key".to_string()), Value::Int64(24))],
+        ));
+        let obj = v.as_object().expect("should be object");
+        assert_eq!(obj["key"], serde_json::json!(24));
+    }
+
+    #[test]
+    fn value_to_json_converts_node() {
+        let node = lbug::NodeVal::new(
+            lbug::InternalID {
+                table_id: 0,
+                offset: 0,
+            },
+            "Person",
+        );
+        let v = value_to_json(Value::Node(node));
+        assert!(v.is_string());
+    }
+
+    #[test]
+    fn value_to_json_converts_rel() {
+        let rel = lbug::RelVal::new(
+            lbug::InternalID {
+                table_id: 0,
+                offset: 0,
+            },
+            lbug::InternalID {
+                table_id: 1,
+                offset: 0,
+            },
+            "knows",
+        );
+        let v = value_to_json(Value::Rel(rel));
+        assert!(v.is_string());
+    }
+
+    #[test]
+    fn value_to_json_converts_recursive_rel() {
+        let node = lbug::NodeVal::new(
+            lbug::InternalID {
+                table_id: 0,
+                offset: 0,
+            },
+            "Person",
+        );
+        let rel = lbug::RelVal::new(
+            lbug::InternalID {
+                table_id: 0,
+                offset: 0,
+            },
+            lbug::InternalID {
+                table_id: 1,
+                offset: 0,
+            },
+            "knows",
+        );
+        let v = value_to_json(Value::RecursiveRel {
+            nodes: vec![node],
+            rels: vec![rel],
+        });
+        let obj = v.as_object().expect("should be object");
+        assert!(obj.contains_key("nodes"));
+        assert!(obj.contains_key("rels"));
+    }
+
+    #[test]
+    fn value_to_json_converts_union() {
+        let v = value_to_json(Value::Union {
+            types: vec![("Num".to_string(), lbug::LogicalType::Int8)],
+            value: Box::new(Value::Int8(42)),
+        });
+        assert_eq!(v, serde_json::json!(42));
+    }
 }

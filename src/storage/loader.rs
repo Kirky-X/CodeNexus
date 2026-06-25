@@ -742,4 +742,257 @@ mod tests {
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 4); // header + 3 edges
     }
+
+    #[test]
+    fn node_to_row_folder_has_four_columns() {
+        let node = Node::builder(NodeLabel::Folder, "src", "proj.src")
+            .id("folder_1")
+            .project("demo")
+            .file_path("/src")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Folder);
+        assert_eq!(row.len(), 4);
+        assert_eq!(row[0], "folder_1");
+        assert_eq!(row[1], "demo");
+        assert_eq!(row[2], "src");
+        assert_eq!(row[3], "/src");
+    }
+
+    #[test]
+    fn node_to_row_module_has_six_columns() {
+        let node = Node::builder(NodeLabel::Module, "mymod", "proj.mymod")
+            .id("mod_1")
+            .project("demo")
+            .file_path("/src/mod.rs")
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Module);
+        assert_eq!(row.len(), 6);
+        assert_eq!(row[3], "proj.mymod");
+        assert_eq!(row[5], "proj");
+    }
+
+    #[test]
+    fn node_to_row_namespace_has_six_columns() {
+        let node = Node::builder(NodeLabel::Namespace, "ns", "proj.ns")
+            .id("ns_1")
+            .project("demo")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Namespace);
+        assert_eq!(row.len(), 6);
+    }
+
+    #[test]
+    fn node_to_row_class_has_twelve_columns() {
+        let node = Node::builder(NodeLabel::Class, "MyClass", "proj.MyClass")
+            .id("cls_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .end_line(10)
+            .is_exported(true)
+            .docstring("A class")
+            .properties(serde_json::json!({"content": "class body"}))
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Class);
+        assert_eq!(row.len(), 12);
+        assert_eq!(row[7], "true");
+        assert_eq!(row[8], "A class");
+        assert_eq!(row[9], "class body");
+    }
+
+    #[test]
+    fn node_to_row_struct_has_twelve_columns() {
+        let node = Node::builder(NodeLabel::Struct, "Point", "proj.Point")
+            .id("struct_1")
+            .project("demo")
+            .start_line(1)
+            .end_line(5)
+            .build();
+        let row = node_to_row(&node, NodeLabel::Struct);
+        assert_eq!(row.len(), 12);
+    }
+
+    #[test]
+    fn node_to_row_enum_has_twelve_columns() {
+        let node = Node::builder(NodeLabel::Enum, "Color", "proj.Color")
+            .id("enum_1")
+            .project("demo")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Enum);
+        assert_eq!(row.len(), 12);
+    }
+
+    #[test]
+    fn node_to_row_trait_has_twelve_columns() {
+        let node = Node::builder(NodeLabel::Trait, "Drawable", "proj.Drawable")
+            .id("trait_1")
+            .project("demo")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Trait);
+        assert_eq!(row.len(), 12);
+    }
+
+    #[test]
+    fn node_to_row_impl_has_nine_columns() {
+        let node = Node::builder(NodeLabel::Impl, "impl Point", "proj.Point.impl")
+            .id("impl_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .end_line(10)
+            .properties(serde_json::json!({"implType": "inherent"}))
+            .parent_qn("proj.Point")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Impl);
+        assert_eq!(row.len(), 9);
+        assert_eq!(row[7], "inherent");
+        assert_eq!(row[8], "proj.Point");
+    }
+
+    #[test]
+    fn node_to_row_variable_has_nine_columns() {
+        let node = Node::builder(NodeLabel::Variable, "x", "proj.x")
+            .id("var_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(5)
+            .is_global(false)
+            .return_type("i32")
+            .parent_qn("proj.main")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Variable);
+        assert_eq!(row.len(), 9);
+        assert_eq!(row[6], "false");
+        assert_eq!(row[7], "i32");
+        assert_eq!(row[8], "proj.main");
+    }
+
+    #[test]
+    fn node_to_row_globalvar_has_eight_columns() {
+        let node = Node::builder(NodeLabel::GlobalVar, "PI", "proj.PI")
+            .id("gvar_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .return_type("f64")
+            .is_exported(true)
+            .build();
+        let row = node_to_row(&node, NodeLabel::GlobalVar);
+        assert_eq!(row.len(), 8);
+        assert_eq!(row[6], "f64");
+        assert_eq!(row[7], "true");
+    }
+
+    #[test]
+    fn node_to_row_parameter_has_nine_columns() {
+        let node = Node::builder(NodeLabel::Parameter, "param0", "proj.foo.param0")
+            .id("param_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(3)
+            .properties(serde_json::json!({"paramType": "i32", "paramIndex": 0}))
+            .parent_qn("proj.foo")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Parameter);
+        assert_eq!(row.len(), 9);
+        assert_eq!(row[7], "i32");
+        assert_eq!(row[8], "0");
+    }
+
+    #[test]
+    fn node_to_row_const_has_nine_columns() {
+        let node = Node::builder(NodeLabel::Const, "MAX", "proj.MAX")
+            .id("const_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .properties(serde_json::json!({"constType": "i32", "constValue": "42"}))
+            .is_exported(true)
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Const);
+        assert_eq!(row.len(), 9);
+        assert_eq!(row[6], "i32");
+        assert_eq!(row[7], "42");
+        assert_eq!(row[8], "true");
+    }
+
+    #[test]
+    fn node_to_row_static_has_eight_columns() {
+        let node = Node::builder(NodeLabel::Static, "COUNTER", "proj.COUNTER")
+            .id("static_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .return_type("u32")
+            .is_exported(false)
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Static);
+        assert_eq!(row.len(), 8);
+        assert_eq!(row[6], "u32");
+        assert_eq!(row[7], "false");
+    }
+
+    #[test]
+    fn node_to_row_typealias_has_eight_columns() {
+        let node = Node::builder(NodeLabel::TypeAlias, "Id", "proj.Id")
+            .id("alias_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .properties(serde_json::json!({"aliasType": "u32"}))
+            .is_exported(true)
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::TypeAlias);
+        assert_eq!(row.len(), 8);
+        assert_eq!(row[6], "u32");
+        assert_eq!(row[7], "true");
+    }
+
+    #[test]
+    fn node_to_row_typedef_has_seven_columns() {
+        let node = Node::builder(NodeLabel::Typedef, "MyType", "proj.MyType")
+            .id("typedef_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .properties(serde_json::json!({"typedefType": "int"}))
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Typedef);
+        assert_eq!(row.len(), 7);
+        assert_eq!(row[6], "int");
+    }
+
+    #[test]
+    fn write_nodes_file_writes_csv_to_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nodes.csv");
+        let node = sample_function_node();
+        CsvLoader::new()
+            .write_nodes_file(&[node], NodeLabel::Function, &path)
+            .expect("write_nodes_file");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("func_001"));
+        assert!(content.contains("main"));
+    }
+
+    #[test]
+    fn write_edges_file_writes_csv_to_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("edges.csv");
+        let edge = Edge::builder("s", "t", EdgeType::Calls, "demo")
+            .start_line(1)
+            .build();
+        CsvLoader::new()
+            .write_edges_file(&[edge], &path)
+            .expect("write_edges_file");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("CALLS"));
+        assert!(content.contains("demo"));
+    }
 }
