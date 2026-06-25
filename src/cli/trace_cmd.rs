@@ -767,4 +767,77 @@ mod tests {
             "should have a CALLS edge"
         );
     }
+
+    // --- End-to-end: index a real file, then trace ---
+
+    #[test]
+    fn end_to_end_index_then_trace_returns_non_empty_graph() {
+        use crate::index::IndexFacade;
+        use std::fs;
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::write(
+            root.join("main.rs"),
+            "fn main() { helper(); }\nfn helper() {}\n",
+        )
+        .unwrap();
+
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        facade.index(root, "demo", false).expect("index");
+
+        // Trace "main" — should find the CALLS edge to "helper".
+        let graph =
+            load_graph_for_symbol_pub(&db_path, "main", 3).expect("load_graph_for_symbol");
+
+        assert!(
+            graph.node_count() >= 1,
+            "graph should have at least one node (main)"
+        );
+        assert!(
+            graph.edge_count() >= 1,
+            "graph should have at least one edge (main -> helper CALLS)"
+        );
+        assert!(
+            graph.edges.iter().any(|e| e.edge_type == EdgeType::Calls),
+            "should have a CALLS edge from main to helper"
+        );
+    }
+
+    #[test]
+    fn end_to_end_parameter_node_exists_after_index() {
+        use crate::index::IndexFacade;
+        use std::fs;
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        // main writes x, then passes x to foo -> DataFlows edge x -> foo.param0.
+        fs::write(
+            root.join("main.rs"),
+            "fn main() { let x = 1; foo(x); }\nfn foo(_v: i32) {}\n",
+        )
+        .unwrap();
+
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        facade.index(root, "demo", false).expect("index");
+
+        // DQ-004: trace the Parameter node by its name ("param0") to verify
+        // it exists in the database and is connected via a DataFlows edge.
+        // Variables like "x" are not nodes, so tracing from "x" returns
+        // empty — the trace can only start from definition or Parameter nodes.
+        let graph =
+            load_graph_for_symbol_pub(&db_path, "param0", 3).expect("load_graph_for_symbol");
+
+        let param_nodes = graph.nodes_by_label(NodeLabel::Parameter);
+        assert!(
+            !param_nodes.is_empty(),
+            "DQ-004: Parameter node should exist in graph (not orphaned)"
+        );
+        assert!(
+            graph.edges.iter().any(|e| e.edge_type == EdgeType::DataFlows),
+            "should have a DataFlows edge for parameter passing"
+        );
+    }
 }
