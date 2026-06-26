@@ -10,6 +10,8 @@
 //! - `type_definition` → [`NodeLabel::Typedef`]
 //! - `struct_specifier` (with body) → [`NodeLabel::Struct`]
 //! - `enum_specifier` (with body) → [`NodeLabel::Enum`]
+//! - `preproc_def` → [`NodeLabel::Macro`] (object-like `#define`)
+//! - `preproc_function_def` → [`NodeLabel::Macro`] (function-like `#define`)
 //!
 //! # Extracted records
 //!
@@ -153,6 +155,12 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "preproc_include" => {
             extract_include(node, source, result);
+        }
+        "preproc_def" | "preproc_function_def" => {
+            // #define directives: object-like (`#define FOO 1`) and
+            // function-like (`#define MAX(a,b) ...`). Both produce a
+            // [`NodeLabel::Macro`] node (P1 bugfix: previously missed entirely).
+            extract_macro(node, source, ctx, result);
         }
         "type_definition" => {
             extract_typedef(node, source, ctx, result);
@@ -584,6 +592,47 @@ fn extract_enum(
         .project(ctx.project)
         .is_global(true)
         .build();
+    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
+    result.nodes.push(model_node);
+}
+
+fn extract_macro(
+    node: Node,
+    source: &str,
+    ctx: &VisitContext<'_>,
+    result: &mut ExtractResult,
+) {
+    // Both `preproc_def` (`#define FOO 1`) and `preproc_function_def`
+    // (`#define MAX(a,b) ...`) expose a `name` field pointing to an
+    // `identifier`. Function-like macros additionally carry a `parameters`
+    // field; we capture that as the signature when present.
+    let Some(name_node) = node.child_by_field_name("name") else {
+        return;
+    };
+    let Some(name) = node_text(name_node, source).map(String::from) else {
+        return;
+    };
+    let start_line = node.start_position().row as u32 + 1;
+    let end_line = node.end_position().row as u32 + 1;
+    let signature = node
+        .child_by_field_name("parameters")
+        .and_then(|p| node_text(p, source).map(String::from));
+    let qn = dedupe_qn(
+        make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent),
+        start_line,
+        result,
+    );
+    let mut builder = ModelNode::builder(NodeLabel::Macro, name, qn)
+        .file_path(ctx.file_path)
+        .start_line(start_line)
+        .end_line(end_line)
+        .language(Language::C)
+        .project(ctx.project)
+        .is_global(true);
+    if let Some(sig) = signature {
+        builder = builder.signature(sig);
+    }
+    let model_node = builder.build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.nodes.push(model_node);
 }
@@ -1268,5 +1317,113 @@ private:
                 e.qualified_name
             );
         }
+    }
+
+    // --- P1 bugfix: #define macro extraction (regression tests) ---
+
+    #[test]
+    fn extracts_object_like_macro() {
+        // P1 regression: `#define FOO 1` was previously missed entirely.
+        let src = "#define FOO 1\n";
+        let result = extract(src);
+        let macros: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Macro)
+            .collect();
+        assert_eq!(macros.len(), 1, "should extract 1 object-like macro");
+        assert_eq!(macros[0].name, "FOO");
+        assert_eq!(macros[0].start_line, Some(1));
+        assert_eq!(macros[0].language, Some(Language::C));
+        assert_eq!(macros[0].project, "proj");
+        assert_eq!(macros[0].file_path.as_deref(), Some("test.c"));
+        assert!(
+            macros[0].signature.is_none(),
+            "object-like macro has no parameter signature"
+        );
+    }
+
+    #[test]
+    fn extracts_function_like_macro() {
+        // P1 regression: `#define MAX(a, b) ((a) > (b) ? (a) : (b))` was
+        // previously missed entirely.
+        let src = "#define MAX(a, b) ((a) > (b) ? (a) : (b))\n";
+        let result = extract(src);
+        let macros: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Macro && n.name == "MAX")
+            .collect();
+        assert_eq!(macros.len(), 1, "should extract 1 function-like macro");
+        assert_eq!(macros[0].start_line, Some(1));
+        assert!(
+            macros[0].signature.is_some(),
+            "function-like macro should expose parameter list as signature"
+        );
+        let sig = macros[0].signature.as_deref().unwrap();
+        assert!(sig.contains('a'), "signature should contain param a: {sig}");
+        assert!(sig.contains('b'), "signature should contain param b: {sig}");
+    }
+
+    #[test]
+    fn extracts_mixed_macros_and_functions() {
+        // Reproduces the cJSON-class scenario: many macros mixed with
+        // functions. Macros MUST NOT be silently dropped.
+        let src = r#"#define CJSON_VERSION_MAJOR 1
+#define CJSON_VERSION_MINOR 7
+#define cJSON_min(a, b) ((a) < (b) ? (a) : (b))
+#define cJSON_max(a, b) ((a) > (b) ? (a) : (b))
+
+static void cJSON_skip_whitespace(const char *buffer) {
+    (void)buffer;
+}
+"#;
+        let result = extract(src);
+        let macros: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Macro)
+            .collect();
+        assert_eq!(macros.len(), 4, "should extract all 4 #define macros");
+        let macro_names: Vec<_> = macros.iter().map(|n| n.name.as_str()).collect();
+        assert!(macro_names.contains(&"CJSON_VERSION_MAJOR"));
+        assert!(macro_names.contains(&"CJSON_VERSION_MINOR"));
+        assert!(macro_names.contains(&"cJSON_min"));
+        assert!(macro_names.contains(&"cJSON_max"));
+        // Function extraction must still work alongside macros.
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1, "should still extract the function");
+        assert_eq!(funcs[0].name, "cJSON_skip_whitespace");
+    }
+
+    #[test]
+    fn macro_has_contains_and_defines_edges() {
+        // Spec REQ-LV-004: defect must be reproducible + fixable. Edges are
+        // part of the contract — a Macro node without CONTAINS/DEFINES would
+        // be invisible in the knowledge graph. Edge target is the node id
+        // (UUIDv7), not the qualified_name.
+        let src = "#define FOO 1\n";
+        let result = extract(src);
+        let macro_node = result
+            .nodes
+            .iter()
+            .find(|n| n.label == NodeLabel::Macro)
+            .expect("macro node should exist");
+        let contains_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Contains && e.target == macro_node.id)
+            .count();
+        let defines_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Defines && e.target == macro_node.id)
+            .count();
+        assert_eq!(contains_count, 1, "macro should have 1 CONTAINS edge");
+        assert_eq!(defines_count, 1, "macro should have 1 DEFINES edge");
     }
 }
