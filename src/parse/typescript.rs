@@ -158,6 +158,36 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             extract_import(node, source, result);
         }
         "export_statement" => {
+            // P2-4: `export default function() {}` and `export default () => {}`
+            // store the anonymous function as the `value` field (an expression),
+            // not as a `declaration` field. visit_children won't promote it to
+            // a Function node, so handle it explicitly here.
+            if let Some(value) = node.child_by_field_name("value") {
+                if matches!(value.kind(), "arrow_function" | "function_expression" | "function") {
+                    let start_line = value.start_position().row as u32 + 1;
+                    let end_line = value.end_position().row as u32 + 1;
+                    let qn = dedupe_qn(
+                        make_qn(ctx.file_path, "default", ctx.project, ctx.current_parent),
+                        start_line,
+                        result,
+                    );
+                    let signature = node_text(value, source).map(String::from);
+                    let mut builder = ModelNode::builder(NodeLabel::Function, "default".to_string(), qn)
+                        .file_path(ctx.file_path)
+                        .start_line(start_line)
+                        .end_line(end_line)
+                        .language(Language::TypeScript)
+                        .project(ctx.project)
+                        .is_exported(true)
+                        .is_global(true);
+                    if let Some(sig) = signature {
+                        builder = builder.signature(sig);
+                    }
+                    let model_node = builder.build();
+                    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
+                    result.nodes.push(model_node);
+                }
+            }
             // Recurse into the export to find the declaration inside.
             visit_children(node, source, ctx, result);
         }
@@ -213,11 +243,25 @@ fn extract_function(
     ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
 ) {
-    let Some(name_node) = node.child_by_field_name("name") else {
-        return;
-    };
-    let Some(name) = node_text(name_node, source).map(String::from) else {
-        return;
+    // P2-4: anonymous `export default function() {}` has no name field.
+    // Use "default" as the name (matches gitnexus behavior for default exports).
+    let name = match node.child_by_field_name("name") {
+        Some(n) => match node_text(n, source).map(String::from) {
+            Some(s) => s,
+            None => return,
+        },
+        None => {
+            // Only synthesize "default" when this is an export_statement child;
+            // other anonymous functions (IIFEs etc.) are skipped.
+            let is_default_export = node
+                .parent()
+                .map(|p| p.kind() == "export_statement")
+                .unwrap_or(false);
+            if !is_default_export {
+                return;
+            }
+            "default".to_string()
+        }
     };
     let is_exported = is_exported(node);
     let signature = node_text(node, source).map(String::from);
@@ -1228,5 +1272,29 @@ function setupSecond() {
             .filter(|n| n.label == NodeLabel::Function && n.name == "callback")
             .collect();
         assert_eq!(funcs.len(), 1, "function expression const should be a Function node");
+    }
+
+    #[test]
+    fn extracts_anonymous_export_default_function() {
+        // P2-4: `export default function() {}` (anonymous) was missed because
+        // the function is stored as export_statement's `value` field (an
+        // expression), not as a `declaration`. tree-sitter represents it as
+        // function_expression, not function_declaration.
+        let src = "export default function() { return 42; }";
+        let result = extract(src);
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function && n.name == "default")
+            .collect();
+        assert_eq!(
+            funcs.len(),
+            1,
+            "anonymous export default function should be a Function named 'default'"
+        );
+        assert!(
+            funcs[0].is_exported,
+            "export default function should be marked exported"
+        );
     }
 }
