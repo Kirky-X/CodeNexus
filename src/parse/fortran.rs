@@ -61,9 +61,15 @@ impl Extractor for FortranExtractor {
                 file_path: file_path.to_string(),
             })?;
         let root = tree.root_node();
+        let ctx = VisitContext {
+            file_path,
+            project,
+            current_func: None,
+            current_parent: None,
+        };
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
-                visit_node(child, source, file_path, project, &mut result, None);
+                visit_node(child, source, &ctx, &mut result);
             }
         }
         Ok(result)
@@ -74,60 +80,73 @@ impl Extractor for FortranExtractor {
 // Tree-walking helpers
 // ---------------------------------------------------------------------------
 
-fn visit_node(
-    node: Node,
-    source: &str,
-    file_path: &str,
-    project: &str,
-    result: &mut ExtractResult,
-    current_func: Option<&str>,
-) {
+/// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
+/// 封装 ADR-005 的 current_parent 和 current_func 语义。
+struct VisitContext<'a> {
+    file_path: &'a str,
+    project: &'a str,
+    current_func: Option<&'a str>,
+    current_parent: Option<&'a str>,
+}
+
+fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     match node.kind() {
         "module" => {
-            extract_module(node, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result, current_func);
+            extract_module(node, source, ctx, result);
+            visit_children(node, source, ctx, result);
         }
         "subroutine" => {
-            extract_subroutine_or_function(node, source, file_path, project, result, "subroutine_statement");
+            extract_subroutine_or_function(node, source, ctx, result, "subroutine_statement");
             // Pass the subroutine's name as the enclosing function for body
             // traversal, so calls inside it can be attributed to it.
             let func_name = statement_name(node, "subroutine_statement", source);
-            visit_children(node, source, file_path, project, result, func_name.as_deref());
+            let child_ctx = VisitContext {
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_func: func_name.as_deref(),
+                current_parent: ctx.current_parent,
+            };
+            visit_children(node, source, &child_ctx, result);
         }
         "function" => {
-            extract_subroutine_or_function(node, source, file_path, project, result, "function_statement");
+            extract_subroutine_or_function(node, source, ctx, result, "function_statement");
             let func_name = statement_name(node, "function_statement", source);
-            visit_children(node, source, file_path, project, result, func_name.as_deref());
+            let child_ctx = VisitContext {
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_func: func_name.as_deref(),
+                current_parent: ctx.current_parent,
+            };
+            visit_children(node, source, &child_ctx, result);
         }
         "program" => {
-            extract_program(node, source, file_path, project, result);
+            extract_program(node, source, ctx, result);
             let func_name = statement_name(node, "program_statement", source);
-            visit_children(node, source, file_path, project, result, func_name.as_deref());
+            let child_ctx = VisitContext {
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_func: func_name.as_deref(),
+                current_parent: ctx.current_parent,
+            };
+            visit_children(node, source, &child_ctx, result);
         }
         "use_statement" => {
             extract_use(node, source, result);
         }
         "subroutine_call" | "call_statement" => {
-            extract_call(node, source, file_path, project, current_func, result);
-            visit_children(node, source, file_path, project, result, current_func);
+            extract_call(node, source, ctx, result);
+            visit_children(node, source, ctx, result);
         }
         _ => {
-            visit_children(node, source, file_path, project, result, current_func);
+            visit_children(node, source, ctx, result);
         }
     }
 }
 
-fn visit_children(
-    node: Node,
-    source: &str,
-    file_path: &str,
-    project: &str,
-    result: &mut ExtractResult,
-    current_func: Option<&str>,
-) {
+fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
-            visit_node(child, source, file_path, project, result, current_func);
+            visit_node(child, source, ctx, result);
         }
     }
 }
@@ -139,74 +158,71 @@ fn visit_children(
 fn extract_module(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
 ) {
     let Some(name) = statement_name(node, "module_statement", source) else {
         return;
     };
-    let qn = make_qn(file_path, &name, project, None);
+    let qn = make_qn(ctx.file_path, &name, ctx.project, None);
     let model_node = ModelNode::builder(NodeLabel::Module, name, qn)
-        .file_path(file_path)
+        .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Fortran)
-        .project(project)
+        .project(ctx.project)
         .is_global(true)
         .build();
-    add_definition_edges(file_path, project, &model_node, result);
+    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.nodes.push(model_node);
 }
 
 fn extract_subroutine_or_function(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
     statement_kind: &str,
 ) {
     let Some(name) = statement_name(node, statement_kind, source) else {
         return;
     };
-    let qn = make_qn(file_path, &name, project, None);
+    let qn = make_qn(ctx.file_path, &name, ctx.project, None);
     let signature = node_text(node, source).map(String::from);
     let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
-        .file_path(file_path)
+        .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Fortran)
-        .project(project)
+        .project(ctx.project)
         .is_global(true);
     if let Some(sig) = signature {
         builder = builder.signature(sig);
     }
     let model_node = builder.build();
-    add_definition_edges(file_path, project, &model_node, result);
+    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.nodes.push(model_node);
 }
 
 fn extract_program(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
 ) {
     let Some(name) = statement_name(node, "program_statement", source) else {
         return;
     };
-    let qn = make_qn(file_path, &name, project, None);
+    let qn = make_qn(ctx.file_path, &name, ctx.project, None);
     let model_node = ModelNode::builder(NodeLabel::Function, name, qn)
-        .file_path(file_path)
+        .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Fortran)
-        .project(project)
+        .project(ctx.project)
         .is_global(true)
         .build();
-    add_definition_edges(file_path, project, &model_node, result);
+    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.nodes.push(model_node);
 }
 
@@ -248,9 +264,7 @@ fn extract_use(node: Node, source: &str, result: &mut ExtractResult) {
 fn extract_call(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
-    current_func: Option<&str>,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
 ) {
     // subroutine_call has an identifier child (the callee) and an argument_list.
@@ -280,7 +294,9 @@ fn extract_call(
     let Some(callee) = callee else {
         return;
     };
-    let caller_qn = current_func.map(|name| make_qn(file_path, name, project, None));
+    let caller_qn = ctx
+        .current_func
+        .map(|name| make_qn(ctx.file_path, name, ctx.project, None));
     result.calls.push(CallInfo {
         caller_qn,
         callee_name: callee,

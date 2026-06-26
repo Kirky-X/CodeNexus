@@ -59,12 +59,18 @@ impl Extractor for CExtractor {
             })?;
         let root = tree.root_node();
         // Walk all named children of the translation_unit.
+        let ctx = VisitContext {
+            file_path,
+            project,
+            current_func: None,
+            current_parent: None,
+        };
         for i in 0..root.named_child_count() as u32 {
             let child = match root.named_child(i) {
                 Some(c) => c,
                 None => continue,
             };
-            visit_node(child, source, file_path, project, &mut result, None, None);
+            visit_node(child, source, &ctx, &mut result);
         }
         Ok(result)
     }
@@ -74,15 +80,16 @@ impl Extractor for CExtractor {
 // Tree-walking helpers
 // ---------------------------------------------------------------------------
 
-fn visit_node(
-    node: Node,
-    source: &str,
-    file_path: &str,
-    project: &str,
-    result: &mut ExtractResult,
-    current_func: Option<&str>,
-    current_parent: Option<&str>,
-) {
+/// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
+/// 封装 ADR-005 的 current_parent 和 current_func 语义。
+struct VisitContext<'a> {
+    file_path: &'a str,
+    project: &'a str,
+    current_func: Option<&'a str>,
+    current_parent: Option<&'a str>,
+}
+
+fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     match node.kind() {
         "function_definition" => {
             // C++ `namespace X { }` / `class X { }` / `struct X { }` are
@@ -98,19 +105,17 @@ fn visit_node(
                     let scope_name = node
                         .child_by_field_name("declarator")
                         .and_then(|n| node_text(n, source).map(String::from));
-                    let combined = combine_scope(current_parent, scope_name.as_deref());
+                    let combined = combine_scope(ctx.current_parent, scope_name.as_deref());
                     for i in 0..node.named_child_count() as u32 {
                         if let Some(child) = node.named_child(i) {
                             if child.kind() == "compound_statement" {
-                                visit_children(
-                                    child,
-                                    source,
-                                    file_path,
-                                    project,
-                                    result,
-                                    None,
-                                    combined.as_deref(),
-                                );
+                                let child_ctx = VisitContext {
+                                    file_path: ctx.file_path,
+                                    project: ctx.project,
+                                    current_func: None,
+                                    current_parent: combined.as_deref(),
+                                };
+                                visit_children(child, source, &child_ctx, result);
                             }
                         }
                     }
@@ -120,28 +125,20 @@ fn visit_node(
                     // When inside a struct/class/namespace (current_parent is Some),
                     // append line number to parent so overloaded methods get distinct FQNs.
                     let start_line = node.start_position().row as u32 + 1;
-                    let method_parent = current_parent.map(|p| format!("{p}_L{start_line}"));
-                    extract_function(
-                        node,
-                        source,
-                        file_path,
-                        project,
-                        result,
-                        method_parent.as_deref(),
-                    );
+                    let method_parent =
+                        ctx.current_parent.map(|p| format!("{p}_L{start_line}"));
+                    extract_function(node, source, ctx, method_parent.as_deref(), result);
                     let func_name = function_name(node, source);
                     for i in 0..node.named_child_count() as u32 {
                         if let Some(child) = node.named_child(i) {
                             if child.kind() == "compound_statement" {
-                                visit_children(
-                                    child,
-                                    source,
-                                    file_path,
-                                    project,
-                                    result,
-                                    func_name.as_deref(),
-                                    method_parent.as_deref(),
-                                );
+                                let child_ctx = VisitContext {
+                                    file_path: ctx.file_path,
+                                    project: ctx.project,
+                                    current_func: func_name.as_deref(),
+                                    current_parent: method_parent.as_deref(),
+                                };
+                                visit_children(child, source, &child_ctx, result);
                             }
                         }
                     }
@@ -149,116 +146,121 @@ fn visit_node(
             }
         }
         "declaration" => {
-            extract_global_var(node, source, file_path, project, result);
+            extract_global_var(node, source, ctx, result);
             // Always recurse into declarations to find calls/reads inside
             // (e.g. `int x = foo();`).
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            visit_children(node, source, ctx, result);
         }
         "preproc_include" => {
             extract_include(node, source, result);
         }
         "type_definition" => {
-            extract_typedef(node, source, file_path, project, result, current_parent);
+            extract_typedef(node, source, ctx, result);
         }
         "struct_specifier" => {
-            extract_struct(node, source, file_path, project, result, current_parent);
+            extract_struct(node, source, ctx, result);
             // Pass the struct name as current_parent to children when a body exists.
             if node.child_by_field_name("body").is_some() {
                 let struct_name = node
                     .child_by_field_name("name")
                     .and_then(|n| node_text(n, source).map(String::from));
-                let combined = combine_scope(current_parent, struct_name.as_deref());
-                visit_children(
-                    node,
-                    source,
-                    file_path,
-                    project,
-                    result,
-                    current_func,
-                    combined.as_deref(),
-                );
+                let combined = combine_scope(ctx.current_parent, struct_name.as_deref());
+                let child_ctx = VisitContext {
+                    file_path: ctx.file_path,
+                    project: ctx.project,
+                    current_func: ctx.current_func,
+                    current_parent: combined.as_deref(),
+                };
+                visit_children(node, source, &child_ctx, result);
             }
         }
         "enum_specifier" => {
-            extract_enum(node, source, file_path, project, result, current_parent);
+            extract_enum(node, source, ctx, result);
         }
         "call_expression" => {
-            extract_call(node, source, file_path, project, current_func, current_parent, result);
+            extract_call(node, source, ctx, result);
             // Recurse to handle nested calls in arguments.
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            visit_children(node, source, ctx, result);
         }
         "init_declarator" => {
             // A local `int x = 1;` writes the declarator's identifier
             // (BR-TRACE-006). Only attribute the write when inside a function
             // body (current_func is Some).
-            if let Some(func) = current_func {
+            if let Some(func) = ctx.current_func {
                 if let Some(name) = declarator_name(node, source) {
                     result.writes.push(WriteInfo {
-                        writer_qn: Some(make_qn(file_path, func, project, current_parent)),
+                        writer_qn: Some(make_qn(
+                            ctx.file_path,
+                            func,
+                            ctx.project,
+                            ctx.current_parent,
+                        )),
                         var_name: name,
                         line: node.start_position().row as u32 + 1,
                     });
                 }
             }
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            visit_children(node, source, ctx, result);
         }
         "assignment_expression" => {
             // `x = ...;` writes the left-hand identifier (BR-TRACE-006). Only
             // simple identifier targets are captured; field/index writes are
             // ignored.
-            if let Some(func) = current_func {
+            if let Some(func) = ctx.current_func {
                 if let Some(left) = node.child_by_field_name("left") {
                     if let Some(name) = identifier_text(left, source) {
                         result.writes.push(WriteInfo {
-                            writer_qn: Some(make_qn(file_path, func, project, current_parent)),
+                            writer_qn: Some(make_qn(
+                                ctx.file_path,
+                                func,
+                                ctx.project,
+                                ctx.current_parent,
+                            )),
                             var_name: name,
                             line: node.start_position().row as u32 + 1,
                         });
                     }
                 }
             }
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            visit_children(node, source, ctx, result);
         }
         "identifier" => {
             // A bare identifier in an expression position is a variable read
             // (BR-TRACE-005). Name-defining positions (declarators, call
             // functions, assignment left) are excluded by `is_read_position`.
-            if let Some(func) = current_func {
+            if let Some(func) = ctx.current_func {
                 if is_read_position(node) {
                     if let Some(name) = node_text(node, source).map(String::from) {
                         result.reads.push(ReadInfo {
-                            reader_qn: Some(make_qn(file_path, func, project, current_parent)),
+                            reader_qn: Some(make_qn(
+                                ctx.file_path,
+                                func,
+                                ctx.project,
+                                ctx.current_parent,
+                            )),
                             var_name: name,
                             line: node.start_position().row as u32 + 1,
                         });
                     }
                 }
             }
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            visit_children(node, source, ctx, result);
         }
         "linkage_specification" => {
             // extern "C" { ... } blocks: recurse to find function definitions.
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            visit_children(node, source, ctx, result);
         }
         _ => {
             // Recurse into other nodes to find nested definitions/calls.
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            visit_children(node, source, ctx, result);
         }
     }
 }
 
-fn visit_children(
-    node: Node,
-    source: &str,
-    file_path: &str,
-    project: &str,
-    result: &mut ExtractResult,
-    current_func: Option<&str>,
-    current_parent: Option<&str>,
-) {
+fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
-            visit_node(child, source, file_path, project, result, current_func, current_parent);
+            visit_node(child, source, ctx, result);
         }
     }
 }
@@ -270,10 +272,9 @@ fn visit_children(
 fn extract_function(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
-    result: &mut ExtractResult,
+    ctx: &VisitContext<'_>,
     parent: Option<&str>,
+    result: &mut ExtractResult,
 ) {
     let Some(name) = function_name(node, source) else {
         return;
@@ -281,27 +282,26 @@ fn extract_function(
     let start_line = node.start_position().row as u32 + 1;
     let end_line = node.end_position().row as u32 + 1;
     let signature = declarator_signature(node, source);
-    let qn = make_qn(file_path, &name, project, parent);
+    let qn = make_qn(ctx.file_path, &name, ctx.project, parent);
     let mut builder = ModelNode::builder(NodeLabel::Function, name.clone(), qn.clone())
-        .file_path(file_path)
+        .file_path(ctx.file_path)
         .start_line(start_line)
         .end_line(end_line)
         .language(Language::C)
-        .project(project)
+        .project(ctx.project)
         .is_global(true);
     if let Some(sig) = signature {
         builder = builder.signature(sig);
     }
     let model_node = builder.build();
-    add_definition_edges(file_path, project, &model_node, result);
+    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.nodes.push(model_node);
 }
 
 fn extract_global_var(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
 ) {
     // Only treat as global var if at the top level (parent is translation_unit).
@@ -318,7 +318,13 @@ fn extract_global_var(
         if let Some(child) = node.named_child(i) {
             if child.kind() == "init_declarator" {
                 if let Some(name) = declarator_name(child, source) {
-                    push_global_var(&name, node.start_position().row as u32 + 1, file_path, project, result);
+                    push_global_var(
+                        &name,
+                        node.start_position().row as u32 + 1,
+                        ctx.file_path,
+                        ctx.project,
+                        result,
+                    );
                 }
             }
         }
@@ -332,7 +338,13 @@ fn extract_global_var(
             if let Some(child) = node.named_child(i) {
                 if child.kind() == "identifier" {
                     if let Some(name) = node_text(child, source).map(String::from) {
-                        push_global_var(&name, node.start_position().row as u32 + 1, file_path, project, result);
+                        push_global_var(
+                            &name,
+                            node.start_position().row as u32 + 1,
+                            ctx.file_path,
+                            ctx.project,
+                            result,
+                        );
                     }
                 }
             }
@@ -356,10 +368,8 @@ fn push_global_var(name: &str, line: u32, file_path: &str, project: &str, result
 fn extract_typedef(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
-    parent: Option<&str>,
 ) {
     // type_definition has a `type` field and a `declarator` field (type_identifier).
     // Walk all children for type_identifier nodes.
@@ -367,15 +377,15 @@ fn extract_typedef(
         if let Some(child) = node.named_child(i) {
             if child.kind() == "type_identifier" {
                 if let Some(name) = node_text(child, source).map(String::from) {
-                    let qn = make_qn(file_path, &name, project, parent);
+                    let qn = make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent);
                     let model_node = ModelNode::builder(NodeLabel::Typedef, name, qn)
-                        .file_path(file_path)
+                        .file_path(ctx.file_path)
                         .start_line(node.start_position().row as u32 + 1)
                         .language(Language::C)
-                        .project(project)
+                        .project(ctx.project)
                         .is_global(true)
                         .build();
-                    add_definition_edges(file_path, project, &model_node, result);
+                    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
                     result.nodes.push(model_node);
                 }
             }
@@ -386,10 +396,8 @@ fn extract_typedef(
 fn extract_struct(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
-    parent: Option<&str>,
 ) {
     // Only extract if the struct has a name and a body.
     let Some(name_node) = node.child_by_field_name("name") else {
@@ -401,26 +409,24 @@ fn extract_struct(
     let Some(name) = node_text(name_node, source).map(String::from) else {
         return;
     };
-    let qn = make_qn(file_path, &name, project, parent);
+    let qn = make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent);
     let model_node = ModelNode::builder(NodeLabel::Struct, name, qn)
-        .file_path(file_path)
+        .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::C)
-        .project(project)
+        .project(ctx.project)
         .is_global(true)
         .build();
-    add_definition_edges(file_path, project, &model_node, result);
+    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.nodes.push(model_node);
 }
 
 fn extract_enum(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
-    parent: Option<&str>,
 ) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
@@ -431,16 +437,16 @@ fn extract_enum(
     let Some(name) = node_text(name_node, source).map(String::from) else {
         return;
     };
-    let qn = make_qn(file_path, &name, project, parent);
+    let qn = make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent);
     let model_node = ModelNode::builder(NodeLabel::Enum, name, qn)
-        .file_path(file_path)
+        .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::C)
-        .project(project)
+        .project(ctx.project)
         .is_global(true)
         .build();
-    add_definition_edges(file_path, project, &model_node, result);
+    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.nodes.push(model_node);
 }
 
@@ -472,10 +478,7 @@ fn extract_include(node: Node, source: &str, result: &mut ExtractResult) {
 fn extract_call(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
-    current_func: Option<&str>,
-    current_parent: Option<&str>,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
 ) {
     let Some(func_node) = node.child_by_field_name("function") else {
@@ -485,7 +488,9 @@ fn extract_call(
         return;
     };
     let args = call_arguments(node, source);
-    let caller_qn = current_func.map(|name| make_qn(file_path, name, project, current_parent));
+    let caller_qn = ctx
+        .current_func
+        .map(|name| make_qn(ctx.file_path, name, ctx.project, ctx.current_parent));
     result.calls.push(super::extractor::CallInfo {
         caller_qn,
         callee_name: callee,

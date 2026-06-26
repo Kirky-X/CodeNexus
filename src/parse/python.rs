@@ -60,9 +60,15 @@ impl Extractor for PythonExtractor {
                 file_path: file_path.to_string(),
             })?;
         let root = tree.root_node();
+        let ctx = VisitContext {
+            file_path,
+            project,
+            current_func: None,
+            current_parent: None,
+        };
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
-                visit_node(child, source, file_path, project, &mut result, None);
+                visit_node(child, source, &ctx, &mut result);
             }
         }
         Ok(result)
@@ -73,27 +79,34 @@ impl Extractor for PythonExtractor {
 // Tree-walking helpers
 // ---------------------------------------------------------------------------
 
-fn visit_node(
-    node: Node,
-    source: &str,
-    file_path: &str,
-    project: &str,
-    result: &mut ExtractResult,
-    current_func: Option<&str>,
-) {
+/// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
+struct VisitContext<'a> {
+    file_path: &'a str,
+    project: &'a str,
+    current_func: Option<&'a str>,
+    current_parent: Option<&'a str>,
+}
+
+fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     match node.kind() {
         "function_definition" => {
-            extract_function(node, source, file_path, project, result);
+            extract_function(node, source, ctx, result);
             // Pass the function's name as the enclosing function for body
             // traversal, so calls inside it can be attributed to it.
             let func_name = node
                 .child_by_field_name("name")
                 .and_then(|n| node_text(n, source).map(String::from));
-            visit_children(node, source, file_path, project, result, func_name.as_deref());
+            let child_ctx = VisitContext {
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_func: func_name.as_deref(),
+                current_parent: ctx.current_parent,
+            };
+            visit_children(node, source, &child_ctx, result);
         }
         "class_definition" => {
-            extract_class(node, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result, current_func);
+            extract_class(node, source, ctx, result);
+            visit_children(node, source, ctx, result);
         }
         "import_statement" => {
             extract_import(node, source, result);
@@ -102,30 +115,23 @@ fn visit_node(
             extract_import_from(node, source, result);
         }
         "call" => {
-            extract_call(node, source, file_path, project, current_func, result);
-            visit_children(node, source, file_path, project, result, current_func);
+            extract_call(node, source, ctx, result);
+            visit_children(node, source, ctx, result);
         }
         "assignment" => {
             extract_assignment(node, source, result);
-            visit_children(node, source, file_path, project, result, current_func);
+            visit_children(node, source, ctx, result);
         }
         _ => {
-            visit_children(node, source, file_path, project, result, current_func);
+            visit_children(node, source, ctx, result);
         }
     }
 }
 
-fn visit_children(
-    node: Node,
-    source: &str,
-    file_path: &str,
-    project: &str,
-    result: &mut ExtractResult,
-    current_func: Option<&str>,
-) {
+fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
-            visit_node(child, source, file_path, project, result, current_func);
+            visit_node(child, source, ctx, result);
         }
     }
 }
@@ -137,8 +143,7 @@ fn visit_children(
 fn extract_function(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
 ) {
     let Some(name_node) = node.child_by_field_name("name") else {
@@ -154,28 +159,27 @@ fn extract_function(
     } else {
         NodeLabel::Function
     };
-    let qn = make_qn(file_path, &name, project, None);
+    let qn = make_qn(ctx.file_path, &name, ctx.project, None);
     let signature = function_signature(node, source);
     let mut builder = ModelNode::builder(label, name, qn)
-        .file_path(file_path)
+        .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Python)
-        .project(project)
+        .project(ctx.project)
         .is_global(!is_method);
     if let Some(sig) = signature {
         builder = builder.signature(sig);
     }
     let model_node = builder.build();
-    add_definition_edges(file_path, project, &model_node, result);
+    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.nodes.push(model_node);
 }
 
 fn extract_class(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
 ) {
     let Some(name_node) = node.child_by_field_name("name") else {
@@ -184,16 +188,16 @@ fn extract_class(
     let Some(name) = node_text(name_node, source).map(String::from) else {
         return;
     };
-    let qn = make_qn(file_path, &name, project, None);
+    let qn = make_qn(ctx.file_path, &name, ctx.project, None);
     let model_node = ModelNode::builder(NodeLabel::Class, name, qn)
-        .file_path(file_path)
+        .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Python)
-        .project(project)
+        .project(ctx.project)
         .is_global(true)
         .build();
-    add_definition_edges(file_path, project, &model_node, result);
+    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.nodes.push(model_node);
 }
 
@@ -257,9 +261,7 @@ fn extract_import_from(node: Node, source: &str, result: &mut ExtractResult) {
 fn extract_call(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
-    current_func: Option<&str>,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
 ) {
     let Some(func_node) = node.child_by_field_name("function") else {
@@ -269,7 +271,9 @@ fn extract_call(
         return;
     };
     let args = call_arguments(node, source);
-    let caller_qn = current_func.map(|name| make_qn(file_path, name, project, None));
+    let caller_qn = ctx
+        .current_func
+        .map(|name| make_qn(ctx.file_path, name, ctx.project, None));
     result.calls.push(CallInfo {
         caller_qn,
         callee_name: callee,
