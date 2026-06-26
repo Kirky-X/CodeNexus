@@ -26,6 +26,7 @@ use crate::resolve::FqnGenerator;
 use super::error::{ParseError, Result};
 use super::extractor::{ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo};
 use super::parser_factory::ParserFactory;
+use super::dedupe_qn;
 
 /// C language tree-sitter extractor (Adapter pattern).
 pub struct CExtractor {
@@ -307,7 +308,7 @@ fn extract_function(
     }
     let model_node = builder.build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-    result.nodes.push(model_node);
+    result.push_node(model_node);
 }
 
 fn extract_global_var(
@@ -390,7 +391,7 @@ fn push_global_var(name: &str, line: u32, file_path: &str, project: &str, result
         .is_global(true)
         .build();
     add_definition_edges(file_path, project, &model_node, result);
-    result.nodes.push(model_node);
+    result.push_node(model_node);
 }
 
 /// P1-2: Creates a [`NodeLabel::Function`] node for a function declaration
@@ -427,7 +428,7 @@ fn extract_function_declaration(
     }
     let model_node = builder.build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-    result.nodes.push(model_node);
+    result.push_node(model_node);
 }
 
 /// P1-2: Recursively unwraps declarator wrappers to find a `function_declarator`
@@ -474,7 +475,7 @@ fn extract_typedef(
                         .is_global(true)
                         .build();
                     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-                    result.nodes.push(model_node);
+                    result.push_node(model_node);
                     typedef_name = Some(name);
                 }
             }
@@ -503,7 +504,7 @@ fn extract_typedef(
                             .is_global(true)
                             .build();
                         add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-                        result.nodes.push(model_node);
+                        result.push_node(model_node);
                     }
                     "enum_specifier" if child.child_by_field_name("name").is_none()
                         && child.child_by_field_name("body").is_some() =>
@@ -522,7 +523,7 @@ fn extract_typedef(
                             .is_global(true)
                             .build();
                         add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-                        result.nodes.push(model_node);
+                        result.push_node(model_node);
                     }
                     _ => {}
                 }
@@ -561,7 +562,7 @@ fn extract_struct(
         .is_global(true)
         .build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-    result.nodes.push(model_node);
+    result.push_node(model_node);
 }
 
 fn extract_enum(
@@ -593,7 +594,7 @@ fn extract_enum(
         .is_global(true)
         .build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-    result.nodes.push(model_node);
+    result.push_node(model_node);
 }
 
 fn extract_macro(
@@ -634,7 +635,7 @@ fn extract_macro(
     }
     let model_node = builder.build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-    result.nodes.push(model_node);
+    result.push_node(model_node);
 }
 
 // ---------------------------------------------------------------------------
@@ -809,15 +810,7 @@ fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> 
     FqnGenerator::generate(project, file_path, name, Language::C, parent)
 }
 
-/// 同文件同名定义消歧：若 result.nodes 已有相同 qn，追加行号消歧符 `#L{line}`。
-/// 用于条件编译（#ifdef/#else）导致的同名 typedef/global_var/struct/enum。
-fn dedupe_qn(qn: String, line: u32, result: &ExtractResult) -> String {
-    if result.nodes.iter().any(|n| n.qualified_name == qn) {
-        format!("{qn}#L{line}")
-    } else {
-        qn
-    }
-}
+// `dedupe_qn` is shared across all extractors — see `parse::dedupe_qn` (MED-002).
 
 /// Combines a parent scope context with a child scope name (ADR-005).
 /// Returns `Some("{parent}_{child}")` when both are present, the non-`None`

@@ -367,6 +367,7 @@ mod tests {
                 var_name: "y".to_string(),
                 line: 9,
             }],
+            seen_qns: std::collections::HashSet::new(),
         };
         assert_eq!(result.file_path, "test.rs");
         assert_eq!(result.language, Language::Rust);
@@ -384,7 +385,7 @@ mod tests {
     #[test]
     fn extract_result_is_empty_when_only_some_fields_populated() {
         let mut result = ExtractResult::new("test.rs", Language::Rust);
-        result.nodes.push(
+        result.push_node(
             Node::builder(NodeLabel::Function, "foo", "foo")
                 .build(),
         );
@@ -405,7 +406,7 @@ mod tests {
     #[test]
     fn extract_result_clone_preserves_data() {
         let mut result = ExtractResult::new("test.rs", Language::Rust);
-        result.nodes.push(
+        result.push_node(
             Node::builder(NodeLabel::Function, "foo", "foo")
                 .build(),
         );
@@ -472,7 +473,7 @@ mod tests {
         fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
             let mut result = ExtractResult::new(file_path, self.lang);
             if !source.is_empty() {
-                result.nodes.push(
+                result.push_node(
                     Node::builder(NodeLabel::Function, "dummy", format!("{project}.dummy"))
                         .language(self.lang)
                         .file_path(file_path)

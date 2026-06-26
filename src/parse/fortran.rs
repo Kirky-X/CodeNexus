@@ -24,6 +24,7 @@ use crate::resolve::FqnGenerator;
 use super::error::{ParseError, Result};
 use super::extractor::{CallInfo, ExternInfo, ExtractResult, Extractor, ImportInfo};
 use super::parser_factory::ParserFactory;
+use super::dedupe_qn;
 
 /// Fortran language tree-sitter extractor (Adapter pattern).
 pub struct FortranExtractor {
@@ -189,7 +190,7 @@ fn extract_module(
         .is_global(true)
         .build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-    result.nodes.push(model_node);
+    result.push_node(model_node);
 }
 
 fn extract_subroutine_or_function(
@@ -221,7 +222,7 @@ fn extract_subroutine_or_function(
     }
     let model_node = builder.build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-    result.nodes.push(model_node);
+    result.push_node(model_node);
 }
 
 fn extract_program(
@@ -248,7 +249,7 @@ fn extract_program(
         .is_global(true)
         .build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-    result.nodes.push(model_node);
+    result.push_node(model_node);
 }
 
 // ---------------------------------------------------------------------------
@@ -465,16 +466,7 @@ fn combine_scope(parent: Option<&str>, child: Option<&str>) -> Option<String> {
     }
 }
 
-/// Disambiguate FQN by appending `#L{line}` when the same FQN already exists
-/// in `result.nodes`. Handles nested/conditional-compilation duplicates.
-/// Mirrors the helper in c.rs.
-fn dedupe_qn(qn: String, line: u32, result: &ExtractResult) -> String {
-    if result.nodes.iter().any(|n| n.qualified_name == qn) {
-        format!("{qn}#L{line}")
-    } else {
-        qn
-    }
-}
+// `dedupe_qn` is shared across all extractors — see `parse::dedupe_qn` (MED-002).
 
 fn add_definition_edges(
     file_path: &str,

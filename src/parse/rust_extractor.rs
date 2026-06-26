@@ -268,7 +268,7 @@ fn extract_function(
     }
     let model_node = builder.build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-    result.nodes.push(model_node);
+    result.push_node(model_node);
 }
 
 fn extract_named_item(
@@ -296,7 +296,7 @@ fn extract_named_item(
         .is_global(true)
         .build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-    result.nodes.push(model_node);
+    result.push_node(model_node);
 }
 
 fn extract_impl(
@@ -338,7 +338,7 @@ fn extract_impl(
     }
     let model_node = builder.build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-    result.nodes.push(model_node);
+    result.push_node(model_node);
 }
 
 // ---------------------------------------------------------------------------

@@ -19,6 +19,15 @@
 //! - `import_statement` / `import_from_statement` → [`ImportInfo`]
 //! - `call` → [`CallInfo`]
 //! - `assignment` → [`AssignInfo`]
+//!
+//! # Known limitations
+//!
+//! - **EXTENDS edges use best-effort FQN**: `class Child(Base)` produces an
+//!   `Extends` edge whose target FQN is constructed from the current file's
+//!   path/scope. For cross-file base classes (`from foo import Bar; class
+//!   Child(Bar)`), the target FQN won't match the actual `Bar` node in `foo.py`,
+//!   leaving the edge dangling. Cross-file resolution requires a future
+//!   resolver enhancement (LOW-003).
 
 use tree_sitter::Node;
 
@@ -28,6 +37,7 @@ use crate::resolve::FqnGenerator;
 use super::error::{ParseError, Result};
 use super::extractor::{AssignInfo, CallInfo, ExtractResult, Extractor, ImportInfo};
 use super::parser_factory::ParserFactory;
+use super::dedupe_qn;
 
 /// Python language tree-sitter extractor (Adapter pattern).
 pub struct PythonExtractor {
@@ -203,7 +213,7 @@ fn extract_function(
     }
     let model_node = builder.build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-    result.nodes.push(model_node);
+    result.push_node(model_node);
 }
 
 fn extract_class(
@@ -232,7 +242,7 @@ fn extract_class(
         .is_global(true)
         .build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-    result.nodes.push(model_node);
+    result.push_node(model_node);
 
     // P2-2: Create EXTENDS edges for each base class.
     // `class Child(Parent1, Parent2):` → superclasses field is an
@@ -577,16 +587,7 @@ fn combine_scope(parent: Option<&str>, child: Option<&str>) -> Option<String> {
     }
 }
 
-/// Disambiguate FQN by appending `#L{line}` when the same FQN already exists
-/// in `result.nodes`. Handles same-name methods/functions in the same scope.
-/// Mirrors the helper in c.rs / fortran.rs.
-fn dedupe_qn(qn: String, line: u32, result: &ExtractResult) -> String {
-    if result.nodes.iter().any(|n| n.qualified_name == qn) {
-        format!("{qn}#L{line}")
-    } else {
-        qn
-    }
-}
+// `dedupe_qn` is shared across all extractors — see `parse::dedupe_qn` (MED-002).
 
 fn add_definition_edges(
     file_path: &str,

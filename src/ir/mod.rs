@@ -12,6 +12,8 @@
 //!   [`ReadInfo`], [`WriteInfo`]: intermediate extraction records.
 //! - [`ExtractResult`]: the per-file extraction output aggregating all records.
 
+use std::collections::HashSet;
+
 use crate::model::{Edge, Language, Node};
 
 // ---------------------------------------------------------------------------
@@ -144,6 +146,11 @@ pub struct ExtractResult {
     pub reads: Vec<ReadInfo>,
     /// Variable writes within function bodies (BR-TRACE-006).
     pub writes: Vec<WriteInfo>,
+    /// Set of `qualified_name`s already inserted into `nodes` (MED-002).
+    /// Maintained by [`push_node`](Self::push_node); used by
+    /// `dedupe_qn` for O(1) duplicate-FQN detection instead of an O(N)
+    /// linear scan over `nodes`.
+    pub seen_qns: HashSet<String>,
 }
 
 impl ExtractResult {
@@ -161,6 +168,7 @@ impl ExtractResult {
             externs: Vec::new(),
             reads: Vec::new(),
             writes: Vec::new(),
+            seen_qns: HashSet::new(),
         }
     }
 
@@ -175,5 +183,16 @@ impl ExtractResult {
             && self.externs.is_empty()
             && self.reads.is_empty()
             && self.writes.is_empty()
+    }
+
+    /// Pushes a node and registers its `qualified_name` in [`seen_qns`](Self::seen_qns).
+    ///
+    /// All extractors should use this instead of `self.nodes.push(...)` so that
+    /// `dedupe_qn` can detect duplicate FQNs in O(1) (MED-002). The set is
+    /// consulted by `dedupe_qn` to decide whether to append a `#L{line}`
+    /// disambiguator suffix.
+    pub fn push_node(&mut self, node: Node) {
+        self.seen_qns.insert(node.qualified_name.clone());
+        self.nodes.push(node);
     }
 }
