@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Data flow type enum (DDD §7.4).
 
 use std::fmt;

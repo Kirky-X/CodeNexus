@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! `status` subcommand handler.
 //!
 //! Lists all indexed projects in the database and prints them as a JSON

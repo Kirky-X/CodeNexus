@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Embedding service client (SubTask 16.1).
 //!
 //! Defines the [`EmbedClient`] trait and two implementations:

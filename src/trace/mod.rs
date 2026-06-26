@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Tracing engine (PRD §4.2, ADD §3.4).
 //!
 //! Performs BFS traversal over `Calls`/`FfiCalls` (call graph) and

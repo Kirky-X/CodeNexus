@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Trace engine benchmarks (Task 15).
 //!
 //! Measures [`TraceFacade::trace`] latency over an in-memory call chain. The

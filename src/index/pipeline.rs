@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Index pipeline orchestration (Facade pattern, ADD §4.1).
 //!
 //! [`IndexFacade`] is the single entry point for the indexing workflow. It

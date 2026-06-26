@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Node label enum representing the 21 node types in the CodeNexus graph (DDD §7.1, extended with Interface for TS/Java/C#).
 
 use std::fmt;

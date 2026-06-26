@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Cross-language FFI resolution (resolve/cross_lang.rs).
 //!
 //! Provides [`FfiResolver`] for resolving cross-language FFI calls to

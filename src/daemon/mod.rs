@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! File-watching daemon (Observer pattern).
 //!
 //! Uses [`notify_debouncer_full`] (ADR-013) to watch repositories and trigger

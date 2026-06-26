@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Intermediate Representation (IR): shared data types.
 //!
 //! Defines the pure data structures produced by the parse phase and consumed

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Language enum representing the 5 supported source languages (DDD §7.3).
 
 use std::fmt;

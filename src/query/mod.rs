@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Query engine (Facade pattern).
 //!
 //! Provides Cypher execution, structured search, and BM25 full-text search

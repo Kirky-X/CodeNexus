@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Fully-qualified name (FQN) generation (ADD §7.1).
 //!
 //! Generates dot-separated FQNs in the format

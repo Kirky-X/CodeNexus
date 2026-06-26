@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! `trace` subcommand handler (PRD §4.2.3).
 //!
 //! Loads the relevant subgraph from the database, builds an in-memory

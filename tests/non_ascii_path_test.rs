@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Integration tests for non-ASCII file path support (Task 12, 🔴-05).
 //!
 //! Verifies that the indexing pipeline correctly handles file paths

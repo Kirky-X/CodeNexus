@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! `daemon` subcommand handler (PRD §4.3, Task 15).
 //!
 //! 启动文件监视守护进程，监视代码仓库并在代码文件变更时触发增量索引

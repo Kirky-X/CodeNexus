@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Parallel file parsing using rayon (ADR-010).
 //!
 //! Provides file-level parallelism for the extraction phase: each file is

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Error types for the indexing pipeline (PRD §4.1.6).
 //!
 //! Maps each failure mode of the indexing pipeline to a distinct

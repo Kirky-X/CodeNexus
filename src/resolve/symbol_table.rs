@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! File-level and project-level symbol tables (resolve/symbol_table.rs).
 //!
 //! The file-level table indexes symbols by name within a single file. The

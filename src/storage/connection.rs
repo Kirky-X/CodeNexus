@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Connection wrapper around [`lbug::Database`] / [`lbug::Connection`].
 //!
 //! [`lbug::Connection`] borrows [`lbug::Database`] for its entire lifetime, so

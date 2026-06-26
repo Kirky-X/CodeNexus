@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! `search` subcommand handler (PRD §4.4).
 //!
 //! Calls [`QueryFacade::search`] (or [`QueryFacade::fulltext_search`] when

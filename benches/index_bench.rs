@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Indexing pipeline benchmarks (Task 15).
 //!
 //! Measures [`IndexFacade::index`] throughput on a fixture of small Rust

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Thread-local pool of tree-sitter parsers (ADR-010).
 //!
 //! [`ParserPool`] caches one [`Parser`] per [`Language`] to avoid the overhead

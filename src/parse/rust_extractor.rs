@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Rust language extractor (Adapter pattern, ADR-003, ADR-011).
 //!
 //! Adapts tree-sitter-rust's syntax tree into CodeNexus nodes, edges, and

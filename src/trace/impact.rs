@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Impact analyzer (trace/impact.rs) — P1 explosion-radius analysis.
 //!
 //! Provides [`ImpactAnalyzer`] for computing the set of nodes affected by a

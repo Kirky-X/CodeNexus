@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Structured search by name / type / file (PRD §4.4.2).
 //!
 //! [`StructuredSearcher`] runs Cypher `MATCH` queries against specific node

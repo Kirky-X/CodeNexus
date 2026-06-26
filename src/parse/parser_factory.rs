@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Factory for creating tree-sitter parsers per language (Factory pattern, ADR-003).
 //!
 //! [`ParserFactory`] maps each CodeNexus [`Language`] to its tree-sitter grammar

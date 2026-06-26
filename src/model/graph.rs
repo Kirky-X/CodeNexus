@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! In-memory graph structure (ADD §3.4).
 
 use std::collections::HashMap;

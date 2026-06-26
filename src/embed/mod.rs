@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Optional vector embedding subsystem (Strategy pattern).
 //!
 //! Gated behind the `embed` feature (ADR-004). Provides an HTTP client for

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Incremental indexing via SHA-256 hash diffing (BR-INDEX-001~003, ADR-009).
 //!
 //! Compares the set of source files on disk against the `(path, hash)` pairs

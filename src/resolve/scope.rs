@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Scope chain for nested scope resolution (resolve/scope.rs).
 //!
 //! A scope chain represents the nesting of scopes

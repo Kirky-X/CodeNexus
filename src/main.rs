@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! CodeNexus binary entry point.
 //!
 //! Parses CLI arguments via [`clap`] and dispatches to the matching handler
@@ -35,6 +38,7 @@ fn main() {
         Command::Trace(args) => codenexus::cli::trace_cmd::run(&args),
         Command::Impact(args) => codenexus::cli::impact_cmd::run(&args),
         Command::Search(args) => codenexus::cli::search_cmd::run(&args),
+        #[cfg(feature = "daemon")]
         Command::Daemon(args) => codenexus::cli::daemon_cmd::run(&args),
         Command::Status(args) => codenexus::cli::status_cmd::run(&args),
         Command::List(args) => codenexus::cli::list_cmd::run(&args),

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Extractor trait (Adapter pattern) and extraction result types.
 //!
 //! Defines the unified [`Extractor`] trait that each language-specific

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Trace facade (trace/facade.rs) — Facade pattern (PRD §4.2, ADD §3.4).
 //!
 //! Provides [`TraceFacade`] which hides the [`CallGraphTracer`] /

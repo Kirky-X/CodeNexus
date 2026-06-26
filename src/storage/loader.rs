@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! CSV batch loading (ADR-014).
 //!
 //! Generates RFC 4180-compliant CSV for node and edge tables using the [`csv`]

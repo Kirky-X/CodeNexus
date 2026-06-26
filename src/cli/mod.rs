@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Command-line interface.
 //!
 //! Built on [`clap`] with subcommands for index/query/trace/impact/search/
@@ -19,6 +22,7 @@
 
 pub mod args;
 pub mod clean_cmd;
+#[cfg(feature = "daemon")]
 pub mod daemon_cmd;
 pub mod error;
 pub mod impact_cmd;
@@ -36,9 +40,10 @@ pub use error::{CliError, Result};
 mod dispatch_tests {
     use super::*;
     use crate::cli::args::{
-        CleanArgs, DaemonArgs, ImpactArgs, IndexArgs, ListArgs, QueryArgs, SearchArgs, StatusArgs,
-        TraceArgs,
+        CleanArgs, ImpactArgs, IndexArgs, ListArgs, QueryArgs, SearchArgs, StatusArgs, TraceArgs,
     };
+    #[cfg(feature = "daemon")]
+    use crate::cli::args::DaemonArgs;
     use clap::Parser;
 
     /// Builds a `Cli` from a list of arguments and dispatches to the matching
@@ -53,6 +58,7 @@ mod dispatch_tests {
             Command::Trace(args) => trace_cmd::run(&args),
             Command::Impact(args) => impact_cmd::run(&args),
             Command::Search(args) => search_cmd::run(&args),
+            #[cfg(feature = "daemon")]
             Command::Daemon(args) => daemon_cmd::run(&args),
             Command::Status(args) => status_cmd::run(&args),
             Command::List(args) => list_cmd::run(&args),
@@ -117,6 +123,7 @@ mod dispatch_tests {
     }
 
     #[test]
+    #[cfg(feature = "daemon")]
     fn dispatch_daemon_calls_daemon_cmd() {
         // 使用不存在的路径，使 daemon_cmd::run 在路径校验阶段返回错误。
         // 这验证了 dispatch 正确调用了 daemon_cmd::run，且不会阻塞。
@@ -347,6 +354,7 @@ mod dispatch_tests {
             limit: 10,
             db: "./x.lbug".into(),
         };
+        #[cfg(feature = "daemon")]
         let _ = DaemonArgs {
             path: "/r".into(),
             name: "d".into(),

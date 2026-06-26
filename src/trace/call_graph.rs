@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Call-graph tracer (trace/call_graph.rs) implementing PRD §4.2 / AC-TRACE-001.
 //!
 //! Provides [`CallGraphTracer`] for performing BFS traversal over `Calls` and

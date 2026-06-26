@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! SHA-256 file content hashing (ADR-009).
 //!
 //! Provides deterministic SHA-256 digests used by the incremental indexer to

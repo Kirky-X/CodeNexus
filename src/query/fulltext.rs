@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! BM25 full-text search (PRD §4.4.3).
 //!
 //! [`FullTextSearcher`] attempts to use the LadybugDB FTS extension

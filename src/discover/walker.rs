@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! File discovery walker (ADR-012, BR-INDEX-006).
 //!
 //! Wraps the [`ignore`] crate to walk a repository tree while honoring

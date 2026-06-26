@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Data quality validation (DQ-002/004/005/006).
 //!
 //! Provides [`QualityChecker`] to run post-indexing data quality checks

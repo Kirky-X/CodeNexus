@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Storage layer error types (ADD §3.5).
 //!
 //! Uses [`thiserror`] for ergonomic, type-safe error propagation. Wraps errors

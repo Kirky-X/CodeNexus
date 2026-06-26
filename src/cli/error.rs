@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! CLI error types with PRD §4.1.6 exit-code mapping.
 //!
 //! [`CliError`] wraps the underlying subsystem errors ([`IndexError`],
@@ -18,6 +21,7 @@
 use thiserror::Error;
 use tracing::error;
 
+#[cfg(feature = "daemon")]
 use crate::daemon::DaemonError;
 use crate::index::IndexError;
 use crate::query::QueryError;
@@ -49,6 +53,7 @@ pub enum CliError {
     Storage(#[from] StorageError),
 
     /// A daemon-mode error (file watcher / IO).
+    #[cfg(feature = "daemon")]
     #[error("{0}")]
     Daemon(#[from] DaemonError),
 
@@ -90,6 +95,7 @@ impl CliError {
             CliError::Trace(_) => 2,
             CliError::Storage(_) => 2,
             // Daemon errors (notify watcher / IO) are system errors → exit 3.
+            #[cfg(feature = "daemon")]
             CliError::Daemon(_) => 3,
         };
         error!(
@@ -176,6 +182,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "daemon")]
     fn daemon_error_wraps_display() {
         let err: CliError = DaemonError::Io(std::io::Error::other("watcher down")).into();
         let msg = err.to_string();
@@ -253,6 +260,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "daemon")]
     fn exit_code_daemon_is_3() {
         let err: CliError = DaemonError::Io(std::io::Error::other("x")).into();
         assert_eq!(err.exit_code(), 3, "daemon error → exit 3 (system error)");
@@ -285,6 +293,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "daemon")]
     fn from_daemon_error() {
         let err: CliError = DaemonError::Io(std::io::Error::other("x")).into();
         assert!(matches!(err, CliError::Daemon(_)));

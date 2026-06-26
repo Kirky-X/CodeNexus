@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! `clean` subcommand handler.
 //!
 //! Removes a project and all its nodes/edges from the database.

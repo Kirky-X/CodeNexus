@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Edge type enum representing the 14 relation types in the CodeNexus graph (DDD §7.2).
 
 use std::fmt;

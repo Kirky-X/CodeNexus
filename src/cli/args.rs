@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! CLI argument definitions (clap derive, PRD §4.1.3 / §4.2.3 / §4.4).
 //!
 //! Defines [`Cli`] (top-level parser) and [`Command`] (the 9 subcommands).
@@ -33,6 +36,7 @@ pub enum Command {
     /// Search for symbols by name or content.
     Search(SearchArgs),
     /// Start the file-watching daemon (Task 15).
+    #[cfg(feature = "daemon")]
     Daemon(DaemonArgs),
     /// Show indexing status for one or all projects.
     Status(StatusArgs),
@@ -123,6 +127,7 @@ pub struct SearchArgs {
 }
 
 /// Arguments for the `daemon` subcommand (PRD §4.3, Task 15).
+#[cfg(feature = "daemon")]
 #[derive(Parser, Debug, Clone, PartialEq, Eq)]
 pub struct DaemonArgs {
     /// Path to the codebase root to watch.
@@ -335,6 +340,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "daemon")]
     fn cli_parses_daemon_subcommand() {
         let cli = Cli::parse_from([
             "codenexus", "daemon", "/repo", "--name", "demo",
@@ -351,6 +357,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "daemon")]
     fn cli_parses_daemon_with_debounce() {
         let cli = Cli::parse_from([
             "codenexus", "daemon", "/repo", "--name", "demo", "--debounce-ms", "500",
@@ -520,6 +527,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "daemon")]
     fn daemon_args_clone_eq() {
         let a = DaemonArgs {
             path: "/r".into(),

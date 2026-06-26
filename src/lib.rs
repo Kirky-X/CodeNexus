@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! CodeNexus: A queryable code knowledge graph tool.
 //!
 //! Builds a queryable code knowledge graph from source repositories using
@@ -19,6 +22,7 @@
 //! - [`query`]: query engine.
 
 pub mod cli;
+#[cfg(feature = "daemon")]
 pub mod daemon;
 pub mod discover;
 pub mod index;

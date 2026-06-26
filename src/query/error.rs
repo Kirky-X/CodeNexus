@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Query engine error types (PRD §4.4).
 //!
 //! Uses [`thiserror`] for ergonomic, type-safe error propagation. Wraps errors

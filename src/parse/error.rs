@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Error types for the parse subsystem.
 //!
 //! Defines [`ParseError`] and a specialized [`Result`] alias used throughout

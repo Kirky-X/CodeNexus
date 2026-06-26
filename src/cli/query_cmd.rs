@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! `query` subcommand handler (PRD §4.4).
 //!
 //! Calls [`QueryFacade::cypher`] and prints the [`QueryResult`] as a JSON

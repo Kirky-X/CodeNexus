@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! DDL string generation for the LadybugDB schema (DDD §12.1).
 //!
 //! Produces the exact DDL strings for the 21 node tables, the `CodeRelation`

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! `index` subcommand handler (PRD §4.1.3).
 //!
 //! Calls [`IndexFacade::index`] and prints the resulting [`IndexResult`] as

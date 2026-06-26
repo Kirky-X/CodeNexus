@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Query facade (Facade pattern, PRD §4.4).
 //!
 //! [`QueryFacade`] is the single entry point for the CLI `query` and `search`

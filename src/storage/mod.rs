@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! LadybugDB persistence layer.
 //!
 //! Encapsulates the [`lbug`] connection, schema DDL generation (DDD §12.1),

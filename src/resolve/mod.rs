@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Symbol resolution and data-flow analysis.
 //!
 //! Generates fully-qualified names (ADD §7.1), maintains scope chains and

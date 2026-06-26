@@ -4,7 +4,14 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.81"
 description = "A queryable code knowledge graph tool built on LadybugDB and tree-sitter"
+authors = ["Kirky.X"]
 license = "MIT"
+repository = "https://github.com/Kirky-X/codenexus"
+readme = "README.md"
+keywords = ["code-analysis", "knowledge-graph", "tree-sitter", "ladybugdb", "code-indexing"]
+categories = ["command-line-utilities", "development-tools", "parsing"]
+homepage = "https://github.com/Kirky-X/codenexus"
+documentation = "https://github.com/Kirky-X/codenexus#readme"
 
 [lib]
 name = "codenexus"
@@ -14,9 +21,19 @@ path = "src/lib.rs"
 name = "codenexus"
 path = "src/main.rs"
 
+# ============================================================================
+# FEATURES
+# ============================================================================
+# Default: daemon enabled (file-watching). Use --no-default-features to build
+# a leaner binary without the daemon (T8: feature-gated dependencies reduce
+# binary size).
 [features]
-default = []
+default = ["daemon"]
+# Vector embedding via HTTP (ADR-004). Pulls in reqwest.
 embed = ["dep:reqwest"]
+# File-watching daemon (ADR-013). Pulls in notify + notify-debouncer-full.
+daemon = ["dep:notify", "dep:notify-debouncer-full"]
+# LSP-enhanced extraction (reserved for future use, ADR-003).
 lsp = []
 
 [dependencies]
@@ -37,12 +54,12 @@ rayon = "1"
 # File discovery (ADR-012)
 ignore = "0.4"
 
-# File watching (ADR-013)
+# File watching (ADR-013) — feature-gated behind `daemon` (T8).
 # NOTE: notify-debouncer-full 0.8 is only available as a release candidate that
 # requires notify 7. We pin 0.7, the latest stable release compatible with
 # notify 6 (the version required by ADR-013).
-notify = "6"
-notify-debouncer-full = "0.7"
+notify = { version = "6", optional = true }
+notify-debouncer-full = { version = "0.7", optional = true }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -50,8 +67,8 @@ clap = { version = "4", features = ["derive"] }
 # Hashing (ADR-009)
 sha2 = "0.10"
 
-# HTTP for embed feature (ADR-004)
-reqwest = { version = "0.12", features = ["json", "blocking"], optional = true }
+# HTTP for embed feature (ADR-004) — feature-gated behind `embed`.
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"], optional = true }
 
 # Error handling
 thiserror = "2"
@@ -59,7 +76,7 @@ anyhow = "1"
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = "0.1"
+tracing-subscriber = { version = "0.1", default-features = false, features = ["env-filter", "fmt"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -80,6 +97,9 @@ criterion = { version = "0.5", features = ["html_reports"] }
 time = { version = "0.3", features = ["macros"] }
 rust_decimal = "1.37"
 
+# ============================================================================
+# BENCHMARKS
+# ============================================================================
 [[bench]]
 name = "index_bench"
 harness = false
@@ -91,3 +111,40 @@ harness = false
 [[bench]]
 name = "trace_bench"
 harness = false
+
+# ============================================================================
+# COMPILER OPTIMIZATIONS (T8: reduce binary size)
+# ============================================================================
+# Release profile: maximum performance + smallest binary.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+overflow-checks = false
+
+# Optimize all dependencies equally in release.
+[profile.release.package."*"]
+opt-level = 3
+
+# Dev profile: fast compilation for development iteration.
+[profile.dev]
+opt-level = 0
+debug = true
+incremental = true
+
+# Test profile.
+[profile.test]
+opt-level = 0
+debug = true
+
+# Benchmark profile: use release optimizations.
+[profile.bench]
+inherits = "release"
+
+# ============================================================================
+# LINTS
+# ============================================================================
+[lints.rust]
+unexpected_cfgs = "allow"

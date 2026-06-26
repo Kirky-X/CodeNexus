@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Error types for the resolve subsystem.
 //!
 //! Uses [`thiserror`] for ergonomic, type-safe error propagation during

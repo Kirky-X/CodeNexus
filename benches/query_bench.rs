@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Query engine benchmarks (Task 15).
 //!
 //! Measures [`QueryFacade`] Cypher execution and structured search latency

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Language extractor dispatcher (Factory pattern, ADR-003).
 //!
 //! Maps a [`Language`] to the corresponding [`Extractor`] implementation,

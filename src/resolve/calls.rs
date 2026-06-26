@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Call resolution (resolve/calls.rs) implementing ADR-011.
 //!
 //! Provides [`CallResolver`] for resolving function/method calls to CALLS

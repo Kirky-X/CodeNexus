@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! `impact` subcommand handler.
 //!
 //! Loads the subgraph reachable from `symbol` (in reverse — i.e. callers and

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Data-flow tracer (trace/data_flow.rs) implementing PRD §4.2 / AC-TRACE-002.
 //!
 //! Provides [`DataFlowTracer`] for performing BFS traversal over `DataFlows`,

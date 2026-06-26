@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Domain model entities: nodes, edges, languages, and the in-memory graph.
 //!
 //! Implements the Builder pattern for [`Node`]/[`Edge`] construction and the

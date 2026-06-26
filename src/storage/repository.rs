@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Repository pattern over [`StorageConnection`] (ADD §3.5).
 //!
 //! Provides CRUD operations on the code knowledge graph, abstracting away the

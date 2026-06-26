@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! tree-sitter based multi-language parsing.
 //!
 //! Provides the [`Extractor`] adapter trait, a [`ParserFactory`] (Factory

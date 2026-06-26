@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! 端到端集成测试：索引 → 查询 → 追踪全流程（SubTask 17.1）。
 //!
 //! 本测试覆盖 AC-INDEX-001（C/Rust/Fortran 代码库端到端索引）、

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 //! Node entity, NodeId type, and UUIDv7 ID generators (ADD §3.4, DDD §5).
 
 use serde::{Deserialize, Serialize};
