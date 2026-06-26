@@ -98,12 +98,7 @@ fn visit_node(
                     let scope_name = node
                         .child_by_field_name("declarator")
                         .and_then(|n| node_text(n, source).map(String::from));
-                    let combined = match (current_parent, scope_name.as_deref()) {
-                        (Some(p), Some(s)) => Some(format!("{p}_{s}")),
-                        (None, Some(s)) => Some(s.to_string()),
-                        (Some(p), None) => Some(p.to_string()),
-                        (None, None) => None,
-                    };
+                    let combined = combine_scope(current_parent, scope_name.as_deref());
                     for i in 0..node.named_child_count() as u32 {
                         if let Some(child) = node.named_child(i) {
                             if child.kind() == "compound_statement" {
@@ -172,12 +167,7 @@ fn visit_node(
                 let struct_name = node
                     .child_by_field_name("name")
                     .and_then(|n| node_text(n, source).map(String::from));
-                let combined = match (current_parent, struct_name.as_deref()) {
-                    (Some(p), Some(s)) => Some(format!("{p}_{s}")),
-                    (None, Some(s)) => Some(s.to_string()),
-                    (Some(p), None) => Some(p.to_string()),
-                    (None, None) => None,
-                };
+                let combined = combine_scope(current_parent, struct_name.as_deref());
                 visit_children(
                     node,
                     source,
@@ -625,6 +615,18 @@ fn is_at_field(node: Node, parent: Node, field: &str) -> bool {
 
 fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> String {
     FqnGenerator::generate(project, file_path, name, Language::C, parent)
+}
+
+/// Combines a parent scope context with a child scope name (ADR-005).
+/// Returns `Some("{parent}_{child}")` when both are present, the non-`None`
+/// value when only one is, or `None` when neither is.
+fn combine_scope(parent: Option<&str>, child: Option<&str>) -> Option<String> {
+    match (parent, child) {
+        (Some(p), Some(c)) => Some(format!("{p}_{c}")),
+        (None, Some(c)) => Some(c.to_string()),
+        (Some(p), None) => Some(p.to_string()),
+        (None, None) => None,
+    }
 }
 
 fn add_definition_edges(
