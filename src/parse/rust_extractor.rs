@@ -203,6 +203,21 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             extract_extern_block(node, source, result);
             visit_children(node, source, ctx, result);
         }
+        "mod_item" => {
+            // `mod name { ... }` 块：把模块名纳入 current_parent，使不同模块下
+            // 的同名 impl 生成不同 FQN（修复 P0-1 rust-nested-tail-collision）。
+            let mod_name = node
+                .child_by_field_name("name")
+                .and_then(|n| node_text(n, source).map(String::from));
+            let combined = combine_scope(ctx.current_parent, mod_name.as_deref());
+            let child_ctx = VisitContext {
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_func: None,
+                current_parent: combined.as_deref(),
+            };
+            visit_children(node, source, &child_ctx, result);
+        }
         _ => {
             visit_children(node, source, ctx, result);
         }
@@ -776,6 +791,18 @@ fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
 
 fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> String {
     FqnGenerator::generate(project, file_path, name, Language::Rust, parent)
+}
+
+/// Combines a parent scope context with a child scope name (ADR-005).
+/// Returns `Some("{parent}_{child}")` when both are present, the non-`None`
+/// value when only one is, or `None` when neither is.
+fn combine_scope(parent: Option<&str>, child: Option<&str>) -> Option<String> {
+    match (parent, child) {
+        (Some(p), Some(c)) => Some(format!("{p}_{c}")),
+        (None, Some(c)) => Some(c.to_string()),
+        (Some(p), None) => Some(p.to_string()),
+        (None, None) => None,
+    }
 }
 
 fn add_definition_edges(
@@ -1368,6 +1395,64 @@ fn main() {
                 .contains(&"HashMap".to_string()),
             "should import HashMap: {:?}",
             result.imports[0].imported_names
+        );
+    }
+
+    #[test]
+    fn mod_block_includes_module_in_parent() {
+        // 两个不同 mod 块各有同名 struct + impl，模块名应纳入 parent，
+        // 使两个 impl 的 FQN 不同（修复 P0-1 rust-nested-tail-collision）。
+        let src = r#"pub mod outer {
+    pub struct Inner;
+    impl Inner { pub fn from_outer(&self) {} }
+}
+pub mod other {
+    pub struct Inner;
+    impl Inner { pub fn from_other(&self) {} }
+}
+"#;
+        let result = extract(src);
+        let impl_qns: Vec<&str> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function && n.name.contains("from_"))
+            .map(|n| n.qualified_name.as_str())
+            .collect();
+        // 两个 impl 方法的 FQN 应分别含 outer 和 other
+        assert!(
+            impl_qns.iter().any(|q| q.contains("outer")),
+            "outer impl FQN should contain 'outer': {impl_qns:?}"
+        );
+        assert!(
+            impl_qns.iter().any(|q| q.contains("other")),
+            "other impl FQN should contain 'other': {impl_qns:?}"
+        );
+        // 无 FQN 碰撞
+        let mut sorted = impl_qns.clone();
+        sorted.sort();
+        let before = sorted.len();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            before,
+            "FQN collision detected: {impl_qns:?}"
+        );
+    }
+
+    #[test]
+    fn mod_block_nested() {
+        // 嵌套 mod：parent 链应含 a_b
+        let src = "pub mod a { pub mod b { pub struct X; } }";
+        let result = extract(src);
+        let x_qn = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "X")
+            .map(|n| n.qualified_name.as_str())
+            .expect("X struct should be extracted");
+        assert!(
+            x_qn.contains("a_b"),
+            "nested mod FQN should contain 'a_b': {x_qn}"
         );
     }
 }

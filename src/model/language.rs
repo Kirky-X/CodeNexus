@@ -45,7 +45,7 @@ impl Language {
     /// Returns `None` for unsupported extensions.
     #[must_use]
     pub fn from_extension(ext: &str) -> Option<Language> {
-        match ext {
+        match ext.to_lowercase().as_str() {
             "c" | "h" => Some(Language::C),
             "rs" => Some(Language::Rust),
             "f90" | "f" | "f95" => Some(Language::Fortran),
@@ -174,6 +174,20 @@ mod tests {
         assert_eq!(Language::from_extension("f90"), Some(Language::Fortran));
         assert_eq!(Language::from_extension("f"), Some(Language::Fortran));
         assert_eq!(Language::from_extension("f95"), Some(Language::Fortran));
+        // 大写扩展名（WRF 等科学计算项目使用 .F/.F90/.F95）
+        assert_eq!(Language::from_extension("F"), Some(Language::Fortran));
+        assert_eq!(Language::from_extension("F90"), Some(Language::Fortran));
+        assert_eq!(Language::from_extension("F95"), Some(Language::Fortran));
+    }
+
+    #[test]
+    fn from_extension_is_case_insensitive() {
+        assert_eq!(Language::from_extension("RS"), Some(Language::Rust));
+        assert_eq!(Language::from_extension("Py"), Some(Language::Python));
+        assert_eq!(Language::from_extension("TS"), Some(Language::TypeScript));
+        assert_eq!(Language::from_extension("TSX"), Some(Language::TypeScript));
+        assert_eq!(Language::from_extension("C"), Some(Language::C));
+        assert_eq!(Language::from_extension("H"), Some(Language::C));
     }
 
     #[test]

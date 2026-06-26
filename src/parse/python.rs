@@ -106,7 +106,19 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "class_definition" => {
             extract_class(node, source, ctx, result);
-            visit_children(node, source, ctx, result);
+            // 把类名纳入 current_parent，使不同类的同名方法生成不同 FQN
+            // （修复 P0 python-static-class-methods 碰撞）。
+            let class_name = node
+                .child_by_field_name("name")
+                .and_then(|n| node_text(n, source).map(String::from));
+            let combined = combine_scope(ctx.current_parent, class_name.as_deref());
+            let child_ctx = VisitContext {
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_func: None,
+                current_parent: combined.as_deref(),
+            };
+            visit_children(node, source, &child_ctx, result);
         }
         "import_statement" => {
             extract_import(node, source, result);
@@ -159,7 +171,11 @@ fn extract_function(
     } else {
         NodeLabel::Function
     };
-    let qn = make_qn(ctx.file_path, &name, ctx.project, None);
+    let qn = dedupe_qn(
+        make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent),
+        node.start_position().row as u32 + 1,
+        result,
+    );
     let signature = function_signature(node, source);
     let mut builder = ModelNode::builder(label, name, qn)
         .file_path(ctx.file_path)
@@ -188,7 +204,11 @@ fn extract_class(
     let Some(name) = node_text(name_node, source).map(String::from) else {
         return;
     };
-    let qn = make_qn(ctx.file_path, &name, ctx.project, None);
+    let qn = dedupe_qn(
+        make_qn(ctx.file_path, &name, ctx.project, None),
+        node.start_position().row as u32 + 1,
+        result,
+    );
     let model_node = ModelNode::builder(NodeLabel::Class, name, qn)
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -298,7 +318,10 @@ fn extract_assignment(node: Node, source: &str, result: &mut ExtractResult) {
                     .and_then(|f| callee_name(f, source))
                     .unwrap_or_default()
             } else {
-                node_text(v, source).map(String::from).unwrap_or_default()
+                // Only capture simple identifiers/attributes as source names.
+                // Complex expressions (subscripts, binary ops, etc.) would
+                // produce FQNs with invalid characters (brackets, quotes).
+                callee_name(v, source).unwrap_or_default()
             };
             (name, is_call)
         }
@@ -438,6 +461,29 @@ fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
 
 fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> String {
     FqnGenerator::generate(project, file_path, name, Language::Python, parent)
+}
+
+/// Combines a parent scope context with a child scope name (ADR-005).
+/// Returns `Some("{parent}_{child}")` when both are present, the non-`None`
+/// value when only one is, or `None` when neither is.
+fn combine_scope(parent: Option<&str>, child: Option<&str>) -> Option<String> {
+    match (parent, child) {
+        (Some(p), Some(c)) => Some(format!("{p}_{c}")),
+        (None, Some(c)) => Some(c.to_string()),
+        (Some(p), None) => Some(p.to_string()),
+        (None, None) => None,
+    }
+}
+
+/// Disambiguate FQN by appending `#L{line}` when the same FQN already exists
+/// in `result.nodes`. Handles same-name methods/functions in the same scope.
+/// Mirrors the helper in c.rs / fortran.rs.
+fn dedupe_qn(qn: String, line: u32, result: &ExtractResult) -> String {
+    if result.nodes.iter().any(|n| n.qualified_name == qn) {
+        format!("{qn}#L{line}")
+    } else {
+        qn
+    }
 }
 
 fn add_definition_edges(

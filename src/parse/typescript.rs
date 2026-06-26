@@ -222,7 +222,11 @@ fn extract_function(
         let line = node.start_position().row as u32 + 1;
         Some(format!("L{line}"))
     };
-    let qn = make_qn(ctx.file_path, &name, ctx.project, disambiguator.as_deref());
+    let qn = dedupe_qn(
+        make_qn(ctx.file_path, &name, ctx.project, disambiguator.as_deref()),
+        node.start_position().row as u32 + 1,
+        result,
+    );
     let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -289,7 +293,11 @@ fn extract_method(
             Some(format!("L{line}"))
         }
     };
-    let qn = make_qn(ctx.file_path, &name, ctx.project, disambiguator.as_deref());
+    let qn = dedupe_qn(
+        make_qn(ctx.file_path, &name, ctx.project, disambiguator.as_deref()),
+        node.start_position().row as u32 + 1,
+        result,
+    );
     let model_node = ModelNode::builder(NodeLabel::Method, name, qn)
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -455,7 +463,7 @@ fn extract_variable_declarator(node: Node, source: &str, result: &mut ExtractRes
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
     };
-    let Some(target) = node_text(name_node, source).map(String::from) else {
+    let Some(target) = assignment_target_name(name_node, source) else {
         return;
     };
     let value_node = node.child_by_field_name("value");
@@ -467,7 +475,11 @@ fn extract_variable_declarator(node: Node, source: &str, result: &mut ExtractRes
                     .and_then(|f| callee_name(f, source))
                     .unwrap_or_default()
             } else {
-                node_text(v, source).map(String::from).unwrap_or_default()
+                // Only capture simple identifiers/attributes as source names.
+                // Complex expressions (await, binary ops, arrays, etc.) would
+                // produce FQNs with invalid characters (brackets, quotes,
+                // newlines) that corrupt CSV imports.
+                callee_name(v, source).unwrap_or_default()
             };
             (name, is_call)
         }
@@ -498,7 +510,11 @@ fn extract_assignment(node: Node, source: &str, result: &mut ExtractResult) {
                     .and_then(|f| callee_name(f, source))
                     .unwrap_or_default()
             } else {
-                node_text(v, source).map(String::from).unwrap_or_default()
+                // Only capture simple identifiers/attributes as source names.
+                // Complex expressions (await, binary ops, arrays, etc.) would
+                // produce FQNs with invalid characters (brackets, quotes,
+                // newlines) that corrupt CSV imports.
+                callee_name(v, source).unwrap_or_default()
             };
             (name, is_call)
         }
@@ -590,6 +606,17 @@ fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
 
 fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> String {
     FqnGenerator::generate(project, file_path, name, Language::TypeScript, parent)
+}
+
+/// 同文件同名定义消歧：若 result.nodes 已有相同 qn，追加行号消歧符 `#L{line}`。
+/// 用于匿名对象字面量内同名方法（共享同一 parent 名）等场景。
+/// 与 c.rs / fortran.rs / python.rs 的 dedupe_qn 保持一致。
+fn dedupe_qn(qn: String, line: u32, result: &ExtractResult) -> String {
+    if result.nodes.iter().any(|n| n.qualified_name == qn) {
+        format!("{qn}#L{line}")
+    } else {
+        qn
+    }
 }
 
 fn add_definition_edges(
@@ -948,5 +975,33 @@ describe('suite', () => {
         for h in &helpers {
             assert!(h.qualified_name.contains("#L"), "expected line disambiguator: {}", h.qualified_name);
         }
+    }
+
+    #[test]
+    fn same_name_method_in_same_parent_scope_disambiguated() {
+        // 模拟 GitNexus pipeline-runner.test.ts 场景：多个回调内各自定义
+        // 同名变量 `phases`，其对象字面量内含同名方法 `execute`。
+        // 两处 current_parent 均为 "phases"，产生相同 FQN → dedupe_qn 消歧。
+        let src = "\
+function setupFirst() {
+  const phases = {
+    execute() { return 1; }
+  };
+}
+function setupSecond() {
+  const phases = {
+    execute() { return 2; }
+  };
+}
+";
+        let result = extract(src);
+        let executes: Vec<_> = result.nodes.iter().filter(|n| n.name == "execute").collect();
+        assert_eq!(executes.len(), 2, "should extract two `execute` methods");
+        assert_ne!(executes[0].qualified_name, executes[1].qualified_name);
+        // 第一个保留原 FQN（含 #phases parent 消歧符），第二个追加 #L{line}
+        let (first, second) = (&executes[0], &executes[1]);
+        assert!(first.qualified_name.contains("#phases"), "first qn: {}", first.qualified_name);
+        assert!(second.qualified_name.contains("#phases"), "second qn: {}", second.qualified_name);
+        assert!(second.qualified_name.contains("#L"), "second should have line dedupe: {}", second.qualified_name);
     }
 }

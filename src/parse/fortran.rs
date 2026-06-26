@@ -93,12 +93,24 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
     match node.kind() {
         "module" => {
             extract_module(node, source, ctx, result);
-            visit_children(node, source, ctx, result);
+            // 把模块名纳入 current_parent，使模块内子程序/函数生成不同 FQN
+            // （与 c.rs / rust_extractor.rs / python.rs 的 parent 传递一致）。
+            let mod_name = statement_name(node, "module_statement", source);
+            let combined = combine_scope(ctx.current_parent, mod_name.as_deref());
+            let child_ctx = VisitContext {
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_func: None,
+                current_parent: combined.as_deref(),
+            };
+            visit_children(node, source, &child_ctx, result);
         }
         "subroutine" => {
             extract_subroutine_or_function(node, source, ctx, result, "subroutine_statement");
             // Pass the subroutine's name as the enclosing function for body
             // traversal, so calls inside it can be attributed to it.
+            // NOTE: 不把子程序名纳入 current_parent —— 否则 caller_qn 会与
+            // 子程序自身 FQN 不匹配。嵌套同名子程序由 dedupe_qn 消歧。
             let func_name = statement_name(node, "subroutine_statement", source);
             let child_ctx = VisitContext {
                 file_path: ctx.file_path,
@@ -164,7 +176,8 @@ fn extract_module(
     let Some(name) = statement_name(node, "module_statement", source) else {
         return;
     };
-    let qn = make_qn(ctx.file_path, &name, ctx.project, None);
+    let line = node.start_position().row as u32 + 1;
+    let qn = dedupe_qn(make_qn(ctx.file_path, &name, ctx.project, None), line, result);
     let model_node = ModelNode::builder(NodeLabel::Module, name, qn)
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -187,7 +200,12 @@ fn extract_subroutine_or_function(
     let Some(name) = statement_name(node, statement_kind, source) else {
         return;
     };
-    let qn = make_qn(ctx.file_path, &name, ctx.project, None);
+    let line = node.start_position().row as u32 + 1;
+    let qn = dedupe_qn(
+        make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent),
+        line,
+        result,
+    );
     let signature = node_text(node, source).map(String::from);
     let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
         .file_path(ctx.file_path)
@@ -213,7 +231,12 @@ fn extract_program(
     let Some(name) = statement_name(node, "program_statement", source) else {
         return;
     };
-    let qn = make_qn(ctx.file_path, &name, ctx.project, None);
+    let line = node.start_position().row as u32 + 1;
+    let qn = dedupe_qn(
+        make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent),
+        line,
+        result,
+    );
     let model_node = ModelNode::builder(NodeLabel::Function, name, qn)
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -296,7 +319,7 @@ fn extract_call(
     };
     let caller_qn = ctx
         .current_func
-        .map(|name| make_qn(ctx.file_path, name, ctx.project, None));
+        .map(|name| make_qn(ctx.file_path, name, ctx.project, ctx.current_parent));
     result.calls.push(CallInfo {
         caller_qn,
         callee_name: callee,
@@ -344,6 +367,28 @@ fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
 
 fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> String {
     FqnGenerator::generate(project, file_path, name, Language::Fortran, parent)
+}
+
+/// Combine parent scope with child name using `{parent}_{child}` pattern.
+/// Mirrors the helper in c.rs / rust_extractor.rs / python.rs.
+fn combine_scope(parent: Option<&str>, child: Option<&str>) -> Option<String> {
+    match (parent, child) {
+        (Some(p), Some(c)) => Some(format!("{p}_{c}")),
+        (None, Some(c)) => Some(c.to_string()),
+        (Some(p), None) => Some(p.to_string()),
+        (None, None) => None,
+    }
+}
+
+/// Disambiguate FQN by appending `#L{line}` when the same FQN already exists
+/// in `result.nodes`. Handles nested/conditional-compilation duplicates.
+/// Mirrors the helper in c.rs.
+fn dedupe_qn(qn: String, line: u32, result: &ExtractResult) -> String {
+    if result.nodes.iter().any(|n| n.qualified_name == qn) {
+        format!("{qn}#L{line}")
+    } else {
+        qn
+    }
 }
 
 fn add_definition_edges(
@@ -633,6 +678,55 @@ end program
             call.caller_qn.as_deref(),
             Some("proj.main.f90.main"),
             "caller_qn should be the dotted FQN of the enclosing program"
+        );
+    }
+
+    #[test]
+    fn nested_subroutine_duplicate_name_disambiguated() {
+        // 模拟 WRF share/dfi.F 场景：顶层子程序实现 + INTERFACE 块内同名声明。
+        // tree-sitter-fortran 把 INTERFACE 内的 SUBROUTINE 也解析为 subroutine
+        // 节点，导致与顶层实现生成相同 FQN。dedupe_qn 用 #L{line} 消歧。
+        let src = r#"   SUBROUTINE dfi_array_reset(grid)
+      INTEGER :: grid
+   END SUBROUTINE dfi_array_reset
+
+   RECURSIVE SUBROUTINE dfi_array_reset_recurse(grid)
+      INTERFACE
+         SUBROUTINE dfi_array_reset(grid)
+            INTEGER :: grid
+         END SUBROUTINE dfi_array_reset
+      END INTERFACE
+   END SUBROUTINE dfi_array_reset_recurse
+"#;
+        let result = extract(src);
+        let resets: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.name == "dfi_array_reset")
+            .collect();
+        assert_eq!(
+            resets.len(),
+            2,
+            "should extract 2 dfi_array_reset subroutines, got: {:?}",
+            result.nodes.iter().map(|n| &n.name).collect::<Vec<_>>()
+        );
+        // FQNs must be unique (no primary key collision).
+        assert_ne!(
+            resets[0].qualified_name, resets[1].qualified_name,
+            "FQNs must be unique: {} vs {}",
+            resets[0].qualified_name, resets[1].qualified_name
+        );
+        // First occurrence: no disambiguator.
+        assert!(
+            !resets[0].qualified_name.contains('#'),
+            "first occurrence should have no disambiguator: {}",
+            resets[0].qualified_name
+        );
+        // Second occurrence: disambiguated with #L{line}.
+        assert!(
+            resets[1].qualified_name.contains("#L"),
+            "duplicate should be disambiguated with #L: {}",
+            resets[1].qualified_name
         );
     }
 }

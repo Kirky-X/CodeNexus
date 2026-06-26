@@ -282,7 +282,11 @@ fn extract_function(
     let start_line = node.start_position().row as u32 + 1;
     let end_line = node.end_position().row as u32 + 1;
     let signature = declarator_signature(node, source);
-    let qn = make_qn(ctx.file_path, &name, ctx.project, parent);
+    let qn = dedupe_qn(
+        make_qn(ctx.file_path, &name, ctx.project, parent),
+        start_line,
+        result,
+    );
     let mut builder = ModelNode::builder(NodeLabel::Function, name.clone(), qn.clone())
         .file_path(ctx.file_path)
         .start_line(start_line)
@@ -353,7 +357,7 @@ fn extract_global_var(
 }
 
 fn push_global_var(name: &str, line: u32, file_path: &str, project: &str, result: &mut ExtractResult) {
-    let qn = make_qn(file_path, name, project, None);
+    let qn = dedupe_qn(make_qn(file_path, name, project, None), line, result);
     let model_node = ModelNode::builder(NodeLabel::GlobalVar, name.to_string(), qn.clone())
         .file_path(file_path)
         .start_line(line)
@@ -377,10 +381,15 @@ fn extract_typedef(
         if let Some(child) = node.named_child(i) {
             if child.kind() == "type_identifier" {
                 if let Some(name) = node_text(child, source).map(String::from) {
-                    let qn = make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent);
+                    let line = node.start_position().row as u32 + 1;
+                    let qn = dedupe_qn(
+                        make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent),
+                        line,
+                        result,
+                    );
                     let model_node = ModelNode::builder(NodeLabel::Typedef, name, qn)
                         .file_path(ctx.file_path)
-                        .start_line(node.start_position().row as u32 + 1)
+                        .start_line(line)
                         .language(Language::C)
                         .project(ctx.project)
                         .is_global(true)
@@ -409,7 +418,11 @@ fn extract_struct(
     let Some(name) = node_text(name_node, source).map(String::from) else {
         return;
     };
-    let qn = make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent);
+    let qn = dedupe_qn(
+        make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent),
+        node.start_position().row as u32 + 1,
+        result,
+    );
     let model_node = ModelNode::builder(NodeLabel::Struct, name, qn)
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -437,7 +450,11 @@ fn extract_enum(
     let Some(name) = node_text(name_node, source).map(String::from) else {
         return;
     };
-    let qn = make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent);
+    let qn = dedupe_qn(
+        make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent),
+        node.start_position().row as u32 + 1,
+        result,
+    );
     let model_node = ModelNode::builder(NodeLabel::Enum, name, qn)
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -622,6 +639,16 @@ fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> 
     FqnGenerator::generate(project, file_path, name, Language::C, parent)
 }
 
+/// 同文件同名定义消歧：若 result.nodes 已有相同 qn，追加行号消歧符 `#L{line}`。
+/// 用于条件编译（#ifdef/#else）导致的同名 typedef/global_var/struct/enum。
+fn dedupe_qn(qn: String, line: u32, result: &ExtractResult) -> String {
+    if result.nodes.iter().any(|n| n.qualified_name == qn) {
+        format!("{qn}#L{line}")
+    } else {
+        qn
+    }
+}
+
 /// Combines a parent scope context with a child scope name (ADR-005).
 /// Returns `Some("{parent}_{child}")` when both are present, the non-`None`
 /// value when only one is, or `None` when neither is.
@@ -716,6 +743,39 @@ int main() {
         assert_eq!(typedefs[0].project, "proj");
         assert_eq!(typedefs[0].file_path.as_deref(), Some("test.c"));
         assert!(typedefs[0].is_global);
+    }
+
+    #[test]
+    fn typedef_duplicate_name_disambiguated() {
+        // 模拟 flex 生成代码的 #ifdef/#else 同名 typedef（WRF lexer.c 碰撞）。
+        // tree-sitter 不处理预处理器，会同时看到两个 typedef 节点。
+        let src = r#"typedef int flex_uint16_t;
+typedef unsigned short int flex_uint16_t;
+"#;
+        let result = extract(src);
+        let typedefs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Typedef && n.name == "flex_uint16_t")
+            .collect();
+        assert_eq!(typedefs.len(), 2, "should extract 2 typedefs");
+        // 第一个无消歧符
+        assert!(
+            !typedefs[0].qualified_name.contains('#'),
+            "first typedef should have no disambiguator: {}",
+            typedefs[0].qualified_name
+        );
+        // 第二个含 #L 行号消歧符
+        assert!(
+            typedefs[1].qualified_name.contains("#L"),
+            "second typedef should have #L disambiguator: {}",
+            typedefs[1].qualified_name
+        );
+        // 两个 FQN 不同
+        assert_ne!(
+            typedefs[0].qualified_name, typedefs[1].qualified_name,
+            "FQNs must differ to avoid collision"
+        );
     }
 
     #[test]
