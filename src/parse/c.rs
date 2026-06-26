@@ -316,6 +316,22 @@ fn extract_global_var(
     if !is_top_level {
         return;
     }
+    // P1-2: Detect function declarations in headers (e.g. `int foo(int x);`).
+    // Walk named children for `function_declarator` (direct or wrapped in
+    // `pointer_declarator`). If found, create Function nodes and skip global
+    // var extraction to avoid double-counting the same declarator.
+    let mut has_function_decl = false;
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(child) = node.named_child(i) {
+            if let Some(fd) = find_function_declarator(child) {
+                extract_function_declaration(fd, node, source, ctx, result);
+                has_function_decl = true;
+            }
+        }
+    }
+    if has_function_decl {
+        return;
+    }
     // A declaration may declare multiple variables; extract each declarator.
     let mut i: u32 = 0;
     while i < node.named_child_count() as u32 {
@@ -369,6 +385,57 @@ fn push_global_var(name: &str, line: u32, file_path: &str, project: &str, result
     result.nodes.push(model_node);
 }
 
+/// P1-2: Creates a [`NodeLabel::Function`] node for a function declaration
+/// found in a header (e.g. `int foo(int x);`). The `fd_node` is the
+/// `function_declarator` child of the parent `declaration` node; `decl_node`
+/// is the parent `declaration` (used for line range and signature text).
+fn extract_function_declaration(
+    fd_node: Node,
+    decl_node: Node,
+    source: &str,
+    ctx: &VisitContext<'_>,
+    result: &mut ExtractResult,
+) {
+    let Some(name) = declarator_name(fd_node, source) else {
+        return;
+    };
+    let start_line = decl_node.start_position().row as u32 + 1;
+    let end_line = decl_node.end_position().row as u32 + 1;
+    let signature = node_text(fd_node, source).map(String::from);
+    let qn = dedupe_qn(
+        make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent),
+        start_line,
+        result,
+    );
+    let mut builder = ModelNode::builder(NodeLabel::Function, name.clone(), qn)
+        .file_path(ctx.file_path)
+        .start_line(start_line)
+        .end_line(end_line)
+        .language(Language::C)
+        .project(ctx.project)
+        .is_global(true);
+    if let Some(sig) = signature {
+        builder = builder.signature(sig);
+    }
+    let model_node = builder.build();
+    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
+    result.nodes.push(model_node);
+}
+
+/// P1-2: Recursively unwraps declarator wrappers to find a `function_declarator`
+/// child, if any. Handles `int *foo(int x);` (pointer_declarator wrapping
+/// function_declarator) and `int (foo)(int x);` (parenthesized_declarator).
+fn find_function_declarator(node: Node) -> Option<Node> {
+    match node.kind() {
+        "function_declarator" => Some(node),
+        "pointer_declarator" | "parenthesized_declarator" => {
+            let inner = node.child_by_field_name("declarator")?;
+            find_function_declarator(inner)
+        }
+        _ => None,
+    }
+}
+
 fn extract_typedef(
     node: Node,
     source: &str,
@@ -377,6 +444,10 @@ fn extract_typedef(
 ) {
     // type_definition has a `type` field and a `declarator` field (type_identifier).
     // Walk all children for type_identifier nodes.
+    // Also detect anonymous struct/enum unions inside typedef (P1-1):
+    //   typedef struct { int x; } Name;  → create Struct node "Name"
+    //   typedef enum { A, B } Name;       → create Enum node "Name"
+    let mut typedef_name: Option<String> = None;
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
             if child.kind() == "type_identifier" {
@@ -387,7 +458,7 @@ fn extract_typedef(
                         line,
                         result,
                     );
-                    let model_node = ModelNode::builder(NodeLabel::Typedef, name, qn)
+                    let model_node = ModelNode::builder(NodeLabel::Typedef, name.clone(), qn)
                         .file_path(ctx.file_path)
                         .start_line(line)
                         .language(Language::C)
@@ -396,6 +467,56 @@ fn extract_typedef(
                         .build();
                     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
                     result.nodes.push(model_node);
+                    typedef_name = Some(name);
+                }
+            }
+        }
+    }
+    // If there is an anonymous struct/enum inside, create a Struct/Enum node
+    // using the typedef name (P1-1).
+    if let Some(name) = typedef_name {
+        for i in 0..node.named_child_count() as u32 {
+            if let Some(child) = node.named_child(i) {
+                match child.kind() {
+                    "struct_specifier" if child.child_by_field_name("name").is_none()
+                        && child.child_by_field_name("body").is_some() =>
+                    {
+                        let qn = dedupe_qn(
+                            make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent),
+                            child.start_position().row as u32 + 1,
+                            result,
+                        );
+                        let model_node = ModelNode::builder(NodeLabel::Struct, name.clone(), qn)
+                            .file_path(ctx.file_path)
+                            .start_line(child.start_position().row as u32 + 1)
+                            .end_line(child.end_position().row as u32 + 1)
+                            .language(Language::C)
+                            .project(ctx.project)
+                            .is_global(true)
+                            .build();
+                        add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
+                        result.nodes.push(model_node);
+                    }
+                    "enum_specifier" if child.child_by_field_name("name").is_none()
+                        && child.child_by_field_name("body").is_some() =>
+                    {
+                        let qn = dedupe_qn(
+                            make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent),
+                            child.start_position().row as u32 + 1,
+                            result,
+                        );
+                        let model_node = ModelNode::builder(NodeLabel::Enum, name.clone(), qn)
+                            .file_path(ctx.file_path)
+                            .start_line(child.start_position().row as u32 + 1)
+                            .end_line(child.end_position().row as u32 + 1)
+                            .language(Language::C)
+                            .project(ctx.project)
+                            .is_global(true)
+                            .build();
+                        add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
+                        result.nodes.push(model_node);
+                    }
+                    _ => {}
                 }
             }
         }
