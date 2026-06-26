@@ -10,7 +10,7 @@ use crate::model::Language;
 
 /// Generates fully-qualified names following ADD §7.1.
 ///
-/// Format: `project.dir.subdir.filename.entity_name` (dot-separated).
+/// Format: `project.dir.file_full.entity_name[#disambiguator]` (dot-separated).
 pub struct FqnGenerator;
 
 impl FqnGenerator {
@@ -48,31 +48,21 @@ impl FqnGenerator {
         parts.extend(segments);
         parts.push(entity_name.to_string());
         let mut fqn = parts.join(".");
-        if let Some(d) = disambiguator {
-            // ADR-003: sanitize the disambiguator so special characters do
-            // not corrupt the FQN's dot/hash structure or downstream CSV
-            // serialization. Only alphanumeric and underscore are retained;
-            // all other characters (including generic-lifetime syntax like
-            // `<'a, C>`, spaces, commas) are replaced with underscores.
-            let sanitized: String = d
-                .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() || c == '_' {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
-                .collect();
-            fqn.push('#');
-            fqn.push_str(&sanitized);
-        }
+        Self::append_disambiguator(&mut fqn, disambiguator);
         fqn
     }
 
     /// Generates an FQN for an entity nested inside a module (Fortran).
     ///
     /// Format: `project.file.module.entity[#disambiguator]`.
+    ///
+    /// # Reserved
+    ///
+    /// The `disambiguator` parameter is currently unused by any production
+    /// caller (Fortran module extraction does not yet require disambiguation).
+    /// It is retained for API symmetry with [`generate`] and to avoid a
+    /// future breaking change if Fortran module-level disambiguation becomes
+    /// necessary.
     #[must_use]
     pub fn generate_for_module(
         project: &str,
@@ -87,21 +77,22 @@ impl FqnGenerator {
         parts.push(module_name.to_string());
         parts.push(entity_name.to_string());
         let mut fqn = parts.join(".");
-        if let Some(d) = disambiguator {
-            let sanitized: String = d
-                .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() || c == '_' {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
-                .collect();
-            fqn.push('#');
-            fqn.push_str(&sanitized);
-        }
+        Self::append_disambiguator(&mut fqn, disambiguator);
         fqn
+    }
+
+    /// Appends `#sanitized_disambiguator` to `fqn` when `disambiguator` is
+    /// `Some` (ADR-003). Only alphanumeric and underscore are retained; all
+    /// other characters (including generic-lifetime syntax like `<'a, C>`,
+    /// spaces, commas) become underscores so they cannot corrupt the FQN's
+    /// dot/hash structure or downstream CSV serialization.
+    fn append_disambiguator(fqn: &mut String, disambiguator: Option<&str>) {
+        if let Some(d) = disambiguator {
+            fqn.push('#');
+            for c in d.chars() {
+                fqn.push(if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' });
+            }
+        }
     }
 
     /// Returns the parent qualified name (FQN without the last segment).

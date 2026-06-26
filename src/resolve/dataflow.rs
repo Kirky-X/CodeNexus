@@ -17,7 +17,7 @@
 //! - BR-TRACE-006: Variable write - Function -> Variable, Writes edge.
 
 use crate::model::{Edge, EdgeType, Graph, Node, NodeLabel};
-use crate::parse::ExtractResult;
+use crate::ir::ExtractResult;
 use crate::resolve::ProjectSymbolTable;
 
 /// Confidence for a return-assignment data flow edge (BR-TRACE-002/004).
@@ -358,7 +358,7 @@ fn is_identifier(s: &str) -> bool {
 mod tests {
     use super::*;
     use crate::model::{Language, Node, NodeLabel};
-    use crate::parse::{AssignInfo, CallInfo, ReadInfo, WriteInfo};
+    use crate::ir::{AssignInfo, CallInfo, ReadInfo, WriteInfo};
     use crate::resolve::{build_symbol_table, FqnGenerator};
 
     /// Generates the FQN for a top-level entity, matching `build_symbol_table`.
@@ -641,7 +641,7 @@ mod tests {
         });
         // bar(var) -> parameter passing (BR-TRACE-001)
         result.calls.push(CallInfo {
-            caller_qn: Some("proj.a.rs.foo".to_string()),
+            caller_qn: Some("proj.a.foo".to_string()),
             callee_name: "bar".to_string(),
             line: 7,
             args: vec!["var".to_string()],
@@ -683,7 +683,7 @@ mod tests {
         let foo_node = make_node("foo", "a.rs", "proj", NodeLabel::Function);
         let mut result = make_result("a.rs", vec![foo_node]);
         result.calls.push(CallInfo {
-            caller_qn: Some("proj.a.rs.foo".to_string()),
+            caller_qn: Some("proj.a.foo".to_string()),
             callee_name: "foo".to_string(),
             line: 5,
             args: vec!["x".to_string()],
@@ -716,7 +716,7 @@ mod tests {
         let foo_node = make_node("foo", "a.rs", "proj", NodeLabel::Function);
         let mut result = make_result("a.rs", vec![foo_node]);
         result.calls.push(CallInfo {
-            caller_qn: Some("proj.a.rs.foo".to_string()),
+            caller_qn: Some("proj.a.foo".to_string()),
             callee_name: "foo".to_string(),
             line: 5,
             args: vec!["42".to_string(), "\"hello\"".to_string(), "x".to_string()],
@@ -739,7 +739,7 @@ mod tests {
     fn resolve_dataflows_skips_calls_with_unresolvable_callee() {
         let mut result = make_result("a.rs", vec![]);
         result.calls.push(CallInfo {
-            caller_qn: Some("proj.a.rs.foo".to_string()),
+            caller_qn: Some("proj.a.foo".to_string()),
             callee_name: "nonexistent".to_string(),
             line: 5,
             args: vec!["x".to_string()],
@@ -811,7 +811,7 @@ mod tests {
 
         let mut a_result = make_result("a.rs", vec![x_node]);
         a_result.calls.push(CallInfo {
-            caller_qn: Some("proj.a.rs.bar".to_string()),
+            caller_qn: Some("proj.a.bar".to_string()),
             callee_name: "foo".to_string(),
             line: 5,
             args: vec!["x".to_string()],

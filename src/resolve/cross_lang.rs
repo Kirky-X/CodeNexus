@@ -25,7 +25,7 @@
 //! ```
 
 use crate::model::{Edge, EdgeType, Graph, Language, NodeLabel};
-use crate::parse::{ExternInfo, ExtractResult};
+use crate::ir::{ExternInfo, ExtractResult};
 use crate::resolve::ProjectSymbolTable;
 
 /// Confidence for a name+signature FFI match (ADD §7.4).
@@ -544,7 +544,7 @@ impl<'a> FfiResolver<'a> {
 mod tests {
     use super::*;
     use crate::model::{Language, Node, NodeLabel};
-    use crate::parse::ExternInfo;
+    use crate::ir::ExternInfo;
     use crate::resolve::{build_symbol_table, FqnGenerator, ProjectSymbolTable, SymbolEntry};
 
     // --- helper functions ---

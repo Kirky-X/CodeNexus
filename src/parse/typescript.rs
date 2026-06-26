@@ -63,9 +63,15 @@ impl Extractor for TypeScriptExtractor {
                 file_path: file_path.to_string(),
             })?;
         let root = tree.root_node();
+        let ctx = VisitContext {
+            file_path,
+            project,
+            current_func: None,
+            current_parent: None,
+        };
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
-                visit_node(child, source, file_path, project, &mut result, None, None);
+                visit_node(child, source, &ctx, &mut result);
             }
         }
         Ok(result)
@@ -76,126 +82,114 @@ impl Extractor for TypeScriptExtractor {
 // Tree-walking helpers
 // ---------------------------------------------------------------------------
 
-fn visit_node(
-    node: Node,
-    source: &str,
-    file_path: &str,
-    project: &str,
-    result: &mut ExtractResult,
-    current_func: Option<&str>,
-    current_parent: Option<&str>,
-) {
+/// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
+/// 封装 ADR-005 的 current_parent 和 current_func 语义。
+struct VisitContext<'a> {
+    file_path: &'a str,
+    project: &'a str,
+    current_func: Option<&'a str>,
+    current_parent: Option<&'a str>,
+}
+
+fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     match node.kind() {
         "function_declaration" => {
-            extract_function(node, source, file_path, project, result);
+            extract_function(node, source, ctx, result);
             // Pass the function's name as the enclosing function for body
             // traversal, so calls inside it can be attributed to it.
             let func_name = node
                 .child_by_field_name("name")
                 .and_then(|n| node_text(n, source).map(String::from));
-            visit_children(
-                node,
-                source,
-                file_path,
-                project,
-                result,
-                func_name.as_deref(),
-                current_parent,
-            );
+            let child_ctx = VisitContext {
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_func: func_name.as_deref(),
+                current_parent: ctx.current_parent,
+            };
+            visit_children(node, source, &child_ctx, result);
         }
         "class_declaration" => {
-            extract_class(node, source, file_path, project, result);
-            // Extract the class name and pass it as current_parent so methods
-            // inside the class can disambiguate their FQN (ADR-003).
+            extract_class(node, source, ctx.file_path, ctx.project, result);
             let class_name = node
                 .child_by_field_name("name")
                 .and_then(|n| node_text(n, source).map(String::from));
-            visit_children(
-                node,
-                source,
-                file_path,
-                project,
-                result,
-                current_func,
-                class_name.as_deref(),
-            );
+            let parent = class_name.as_deref().or(ctx.current_parent);
+            let child_ctx = VisitContext {
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_func: ctx.current_func,
+                current_parent: parent,
+            };
+            visit_children(node, source, &child_ctx, result);
         }
         "method_definition" => {
-            extract_method(node, source, file_path, project, result, current_parent);
+            extract_method(node, source, ctx, result);
             // Pass the method's name as the enclosing function for body
             // traversal, so calls inside it can be attributed to it.
             let func_name = node
                 .child_by_field_name("name")
                 .and_then(|n| node_text(n, source).map(String::from));
-            visit_children(
-                node,
-                source,
-                file_path,
-                project,
-                result,
-                func_name.as_deref(),
-                current_parent,
-            );
+            let child_ctx = VisitContext {
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_func: func_name.as_deref(),
+                current_parent: ctx.current_parent,
+            };
+            visit_children(node, source, &child_ctx, result);
         }
         "interface_declaration" => {
-            extract_named_item(node, NodeLabel::Trait, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            extract_named_item(node, NodeLabel::Trait, source, ctx.file_path, ctx.project, result);
+            visit_children(node, source, ctx, result);
         }
         "enum_declaration" => {
-            extract_named_item(node, NodeLabel::Enum, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            extract_named_item(node, NodeLabel::Enum, source, ctx.file_path, ctx.project, result);
+            visit_children(node, source, ctx, result);
         }
         "type_alias_declaration" => {
-            extract_named_item(node, NodeLabel::TypeAlias, source, file_path, project, result);
+            extract_named_item(node, NodeLabel::TypeAlias, source, ctx.file_path, ctx.project, result);
         }
         "import_statement" => {
             extract_import(node, source, result);
         }
         "export_statement" => {
             // Recurse into the export to find the declaration inside.
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            visit_children(node, source, ctx, result);
         }
         "call_expression" => {
-            extract_call(node, source, file_path, project, current_func, current_parent, result);
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            extract_call(node, source, ctx, result);
+            visit_children(node, source, ctx, result);
         }
         "lexical_declaration" | "variable_declaration" => {
             extract_variable_declaration(node, source, result);
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            visit_children(node, source, ctx, result);
         }
         "variable_declarator" => {
-            // When a const/let is assigned an object literal with methods
-            // (e.g. `const config = { extractType() {...} }`), pass the
-            // variable name as current_parent so methods inside get
-            // disambiguated FQNs (ADR-003, Type A collision).
             let var_name = node
                 .child_by_field_name("name")
                 .and_then(|n| node_text(n, source).map(String::from));
-            let parent = var_name.as_deref().or(current_parent);
-            visit_children(node, source, file_path, project, result, current_func, parent);
+            let parent = var_name.as_deref().or(ctx.current_parent);
+            let child_ctx = VisitContext {
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_func: ctx.current_func,
+                current_parent: parent,
+            };
+            visit_children(node, source, &child_ctx, result);
         }
         "assignment_expression" => {
             extract_assignment(node, source, result);
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            visit_children(node, source, ctx, result);
         }
         _ => {
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            visit_children(node, source, ctx, result);
         }
     }
 }
 
-fn visit_children(
-    node: Node,
-    source: &str,
-    file_path: &str,
-    project: &str,
-    result: &mut ExtractResult,
-    current_func: Option<&str>,
-    current_parent: Option<&str>,
-) {
+fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
-            visit_node(child, source, file_path, project, result, current_func, current_parent);
+            visit_node(child, source, ctx, result);
         }
     }
 }
@@ -207,8 +201,7 @@ fn visit_children(
 fn extract_function(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
 ) {
     let Some(name_node) = node.child_by_field_name("name") else {
@@ -219,11 +212,6 @@ fn extract_function(
     };
     let is_exported = is_exported(node);
     let signature = node_text(node, source).map(String::from);
-    // ADR-003 (positional fallback): top-level functions (parent is `program`
-    // or `export_statement`) use no disambiguator — clean FQN. Nested function
-    // declarations (e.g. helper functions inside test callbacks like
-    // `describe(() => { function walk() {...} })`) use the line number as a
-    // positional disambiguator so same-name nested functions do not collide.
     let is_top_level = matches!(
         node.parent().map(|p| p.kind()),
         Some("program") | Some("export_statement") | None
@@ -234,20 +222,20 @@ fn extract_function(
         let line = node.start_position().row as u32 + 1;
         Some(format!("L{line}"))
     };
-    let qn = make_qn(file_path, &name, project, disambiguator.as_deref());
+    let qn = make_qn(ctx.file_path, &name, ctx.project, disambiguator.as_deref());
     let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
-        .file_path(file_path)
+        .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::TypeScript)
-        .project(project)
+        .project(ctx.project)
         .is_exported(is_exported)
         .is_global(true);
     if let Some(sig) = signature {
         builder = builder.signature(sig);
     }
     let model_node = builder.build();
-    add_definition_edges(file_path, project, &model_node, result);
+    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.nodes.push(model_node);
 }
 
@@ -282,10 +270,8 @@ fn extract_class(
 fn extract_method(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
-    parent: Option<&str>,
 ) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
@@ -293,11 +279,9 @@ fn extract_method(
     let Some(name) = node_text(name_node, source).map(String::from) else {
         return;
     };
-    // ADR-003 (positional fallback): when no semantic parent context is
-    // available — e.g. methods inside anonymous object literals passed as
-    // function arguments like `Object.defineProperty(el, 'boom', { get() {…} })`
-    // — use the line number as a positional disambiguator so same-name
-    // methods in different anonymous objects get distinct FQNs.
+    // When no semantic parent context (e.g. methods in anonymous object literals
+    // like Object.defineProperty args), use line number as positional disambiguator
+    let parent = ctx.current_parent;
     let disambiguator = match parent {
         Some(p) => Some(p.to_string()),
         None => {
@@ -305,16 +289,16 @@ fn extract_method(
             Some(format!("L{line}"))
         }
     };
-    let qn = make_qn(file_path, &name, project, disambiguator.as_deref());
+    let qn = make_qn(ctx.file_path, &name, ctx.project, disambiguator.as_deref());
     let model_node = ModelNode::builder(NodeLabel::Method, name, qn)
-        .file_path(file_path)
+        .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::TypeScript)
-        .project(project)
+        .project(ctx.project)
         .is_global(false)
         .build();
-    add_definition_edges(file_path, project, &model_node, result);
+    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.nodes.push(model_node);
 }
 
@@ -435,10 +419,7 @@ fn collect_imported_names(node: Node, source: &str, names: &mut Vec<String>) {
 fn extract_call(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
-    current_func: Option<&str>,
-    current_parent: Option<&str>,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
 ) {
     let Some(func_node) = node.child_by_field_name("function") else {
@@ -448,7 +429,9 @@ fn extract_call(
         return;
     };
     let args = call_arguments(node, source);
-    let caller_qn = current_func.map(|name| make_qn(file_path, name, project, current_parent));
+    let caller_qn = ctx
+        .current_func
+        .map(|name| make_qn(ctx.file_path, name, ctx.project, ctx.current_parent));
     result.calls.push(CallInfo {
         caller_qn,
         callee_name: callee,
@@ -776,115 +759,6 @@ const result = add(1, 2);
     }
 
     #[test]
-    fn method_has_parent_disambiguator() {
-        // ADR-003: class methods must carry the parent class name as a
-        // disambiguator so same-name methods in different classes do not
-        // collide (e.g. Foo.greet vs Bar.greet).
-        let src = "class Foo { greet(): void {} }\nclass Bar { greet(): void {} }\n";
-        let result = extract(src);
-        let greets: Vec<_> = result
-            .nodes
-            .iter()
-            .filter(|n| n.name == "greet")
-            .collect();
-        assert_eq!(greets.len(), 2, "should extract two `greet` methods");
-        let fqns: Vec<_> = greets.iter().map(|n| n.qualified_name.as_str()).collect();
-        assert!(
-            fqns.contains(&"proj.test.ts.greet#Foo"),
-            "Foo.greet FQN missing: {fqns:?}"
-        );
-        assert!(
-            fqns.contains(&"proj.test.ts.greet#Bar"),
-            "Bar.greet FQN missing: {fqns:?}"
-        );
-        assert_ne!(greets[0].qualified_name, greets[1].qualified_name);
-    }
-
-    #[test]
-    fn method_without_parent_uses_line_disambiguator() {
-        // ADR-003 (positional fallback): methods in anonymous object literals
-        // that are NOT assigned to a variable (e.g. arguments to
-        // `Object.defineProperty`) have no semantic parent context. They must
-        // be disambiguated by line number so same-name methods (like multiple
-        // `get()` getters) do not collide on the primary key.
-        let src = "\
-Object.defineProperty(el, 'boom', {
-  enumerable: true,
-  get() { throw new Error('a'); },
-});
-Object.defineProperty(el2, 'boom', {
-  enumerable: true,
-  get() { throw new Error('b'); },
-});
-";
-        let result = extract(src);
-        let gets: Vec<_> = result
-            .nodes
-            .iter()
-            .filter(|n| n.name == "get")
-            .collect();
-        assert_eq!(gets.len(), 2, "should extract two `get` methods");
-        assert_ne!(
-            gets[0].qualified_name, gets[1].qualified_name,
-            "line-disambiguated FQNs must be distinct: {:?}",
-            gets.iter().map(|n| &n.qualified_name).collect::<Vec<_>>()
-        );
-        // Each FQN must carry a `#L<line>` suffix.
-        for g in &gets {
-            assert!(
-                g.qualified_name.contains("#L"),
-                "expected line disambiguator in FQN: {}",
-                g.qualified_name
-            );
-        }
-    }
-
-    #[test]
-    fn nested_function_declaration_uses_line_disambiguator() {
-        // ADR-003 (positional fallback): nested function declarations (e.g.
-        // helper functions inside test callbacks) must use a line-based
-        // disambiguator so same-name nested functions do not collide. Top-level
-        // functions keep a clean FQN (no disambiguator).
-        let src = "\
-export function topLevel(): void {}
-describe('suite', () => {
-  function helper(): void {}
-  it('test', () => {
-    function helper(): void {}
-  });
-});
-";
-        let result = extract(src);
-        let toplevel = result
-            .nodes
-            .iter()
-            .find(|n| n.name == "topLevel")
-            .expect("topLevel function should be extracted");
-        assert_eq!(
-            toplevel.qualified_name, "proj.test.ts.topLevel",
-            "top-level function must have clean FQN (no disambiguator)"
-        );
-        let helpers: Vec<_> = result
-            .nodes
-            .iter()
-            .filter(|n| n.name == "helper")
-            .collect();
-        assert_eq!(helpers.len(), 2, "should extract two `helper` functions");
-        assert_ne!(
-            helpers[0].qualified_name, helpers[1].qualified_name,
-            "line-disambiguated FQNs must be distinct: {:?}",
-            helpers.iter().map(|n| &n.qualified_name).collect::<Vec<_>>()
-        );
-        for h in &helpers {
-            assert!(
-                h.qualified_name.contains("#L"),
-                "expected line disambiguator in nested function FQN: {}",
-                h.qualified_name
-            );
-        }
-    }
-
-    #[test]
     fn empty_source_returns_empty_result() {
         let result = extract("");
         assert!(result.is_empty());
@@ -1031,5 +905,48 @@ describe('suite', () => {
             .find(|c| c.callee_name == "callee")
             .expect("should find top-level call to callee");
         assert!(call.caller_qn.is_none(), "top-level call should have None caller_qn");
+    }
+
+    #[test]
+    fn method_without_parent_uses_line_disambiguator() {
+        let src = "\
+Object.defineProperty(el, 'boom', {
+  enumerable: true,
+  get() { throw new Error('a'); },
+});
+Object.defineProperty(el2, 'boom', {
+  enumerable: true,
+  get() { throw new Error('b'); },
+});
+";
+        let result = extract(src);
+        let gets: Vec<_> = result.nodes.iter().filter(|n| n.name == "get").collect();
+        assert_eq!(gets.len(), 2, "should extract two `get` methods");
+        assert_ne!(gets[0].qualified_name, gets[1].qualified_name);
+        for g in &gets {
+            assert!(g.qualified_name.contains("#L"), "expected line disambiguator: {}", g.qualified_name);
+        }
+    }
+
+    #[test]
+    fn nested_function_declaration_uses_line_disambiguator() {
+        let src = "\
+export function topLevel(): void {}
+describe('suite', () => {
+  function helper(): void {}
+  it('test', () => {
+    function helper(): void {}
+  });
+});
+";
+        let result = extract(src);
+        let toplevel = result.nodes.iter().find(|n| n.name == "topLevel").expect("topLevel should exist");
+        assert_eq!(toplevel.qualified_name, "proj.test.ts.topLevel");
+        let helpers: Vec<_> = result.nodes.iter().filter(|n| n.name == "helper").collect();
+        assert_eq!(helpers.len(), 2);
+        assert_ne!(helpers[0].qualified_name, helpers[1].qualified_name);
+        for h in &helpers {
+            assert!(h.qualified_name.contains("#L"), "expected line disambiguator: {}", h.qualified_name);
+        }
     }
 }

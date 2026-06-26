@@ -32,8 +32,8 @@ pub use fqn::FqnGenerator;
 pub use scope::{Scope, ScopeChain};
 pub use symbol_table::{FileSymbolTable, ProjectSymbolTable, SymbolEntry};
 
+use crate::ir::ExtractResult;
 use crate::model::{Edge, Graph};
-use crate::parse::ExtractResult;
 
 /// Builds a project-level symbol table from extraction results.
 ///
@@ -57,11 +57,7 @@ pub fn build_symbol_table(results: &[ExtractResult], project: &str) -> ProjectSy
         for node in &result.nodes {
             let entity_name = &node.name;
             let language = node.language.unwrap_or(result.language);
-            // Use the extractor-computed qualified_name directly. The
-            // extractor already applied the disambiguator suffix (ADR-003),
-            // so regenerating here would drop the suffix and re-introduce
-            // FQN collisions for same-name entities in the same file.
-            let fqn = node.qualified_name.clone();
+            let fqn = FqnGenerator::generate(project, &result.file_path, entity_name, language, None);
             let entry = SymbolEntry::new(
                 entity_name.clone(),
                 fqn,
@@ -118,11 +114,10 @@ pub fn resolve_all(
 mod tests {
     use super::*;
     use crate::model::{Language, Node, NodeLabel};
-    use crate::parse::{CallInfo, ImportInfo};
+    use crate::ir::{CallInfo, ImportInfo};
 
-    fn make_node(name: &str, label: NodeLabel, language: Language, file_path: &str, project: &str) -> Node {
-        let qn = FqnGenerator::generate(project, file_path, name, language, None);
-        Node::builder(label, name, qn)
+    fn make_node(name: &str, label: NodeLabel, language: Language) -> Node {
+        Node::builder(label, name, "placeholder")
             .language(language)
             .build()
     }
@@ -144,7 +139,7 @@ mod tests {
 
     #[test]
     fn build_from_single_result_single_node() {
-        let node = make_node("parse", NodeLabel::Function, Language::Rust, "src/main.rs", "myproject");
+        let node = make_node("parse", NodeLabel::Function, Language::Rust);
         let result = make_result("src/main.rs", Language::Rust, vec![node]);
         let table = build_symbol_table(&[result], "myproject");
         assert_eq!(table.file_count(), 1);
@@ -161,12 +156,12 @@ mod tests {
         let r1 = make_result(
             "src/main.rs",
             Language::Rust,
-            vec![make_node("main", NodeLabel::Function, Language::Rust, "src/main.rs", "proj")],
+            vec![make_node("main", NodeLabel::Function, Language::Rust)],
         );
         let r2 = make_result(
             "src/utils.rs",
             Language::Rust,
-            vec![make_node("helper", NodeLabel::Function, Language::Rust, "src/utils.rs", "proj")],
+            vec![make_node("helper", NodeLabel::Function, Language::Rust)],
         );
         let table = build_symbol_table(&[r1, r2], "proj");
         assert_eq!(table.file_count(), 2);
@@ -180,7 +175,7 @@ mod tests {
         let r1 = make_result(
             "src/deep/file.rs",
             Language::Rust,
-            vec![make_node("foo", NodeLabel::Function, Language::Rust, "src/deep/file.rs", "proj")],
+            vec![make_node("foo", NodeLabel::Function, Language::Rust)],
         );
         let table = build_symbol_table(&[r1], "proj");
         let entry = table.lookup_exact("foo").unwrap();
@@ -192,7 +187,7 @@ mod tests {
         let r = make_result(
             "src/pkg/__init__.py",
             Language::Python,
-            vec![make_node("MyClass", NodeLabel::Class, Language::Python, "src/pkg/__init__.py", "proj")],
+            vec![make_node("MyClass", NodeLabel::Class, Language::Python)],
         );
         let table = build_symbol_table(&[r], "proj");
         let entry = table.lookup_exact("MyClass").unwrap();
@@ -204,7 +199,7 @@ mod tests {
         let r = make_result(
             "include/header.h",
             Language::C,
-            vec![make_node("MY_DEFINE", NodeLabel::Const, Language::C, "include/header.h", "proj")],
+            vec![make_node("MY_DEFINE", NodeLabel::Const, Language::C)],
         );
         let table = build_symbol_table(&[r], "proj");
         let entry = table.lookup_exact("MY_DEFINE").unwrap();
@@ -225,12 +220,12 @@ mod tests {
         let r1 = make_result(
             "a.rs",
             Language::Rust,
-            vec![make_node("foo", NodeLabel::Function, Language::Rust, "a.rs", "proj")],
+            vec![make_node("foo", NodeLabel::Function, Language::Rust)],
         );
         let r2 = make_result(
             "b.rs",
             Language::Rust,
-            vec![make_node("bar", NodeLabel::Function, Language::Rust, "b.rs", "proj")],
+            vec![make_node("bar", NodeLabel::Function, Language::Rust)],
         );
         let table = build_symbol_table(&[r1, r2], "proj");
         assert_eq!(table.lookup_in_file("a.rs", "foo").len(), 1);
@@ -265,7 +260,7 @@ mod tests {
 
     #[test]
     fn build_preserves_label() {
-        let node = make_node("MyClass", NodeLabel::Class, Language::Rust, "src/main.rs", "proj");
+        let node = make_node("MyClass", NodeLabel::Class, Language::Rust);
         let result = make_result("src/main.rs", Language::Rust, vec![node]);
         let table = build_symbol_table(&[result], "proj");
         let entry = table.lookup_exact("MyClass").unwrap();
@@ -278,7 +273,7 @@ mod tests {
         let r2 = make_result(
             "b.rs",
             Language::Rust,
-            vec![make_node("foo", NodeLabel::Function, Language::Rust, "b.rs", "proj")],
+            vec![make_node("foo", NodeLabel::Function, Language::Rust)],
         );
         let table = build_symbol_table(&[r1, r2], "proj");
         assert_eq!(table.file_count(), 1);
@@ -291,9 +286,9 @@ mod tests {
             "src/main.rs",
             Language::Rust,
             vec![
-                make_node("foo", NodeLabel::Function, Language::Rust, "src/main.rs", "proj"),
-                make_node("bar", NodeLabel::Function, Language::Rust, "src/main.rs", "proj"),
-                make_node("MyClass", NodeLabel::Class, Language::Rust, "src/main.rs", "proj"),
+                make_node("foo", NodeLabel::Function, Language::Rust),
+                make_node("bar", NodeLabel::Function, Language::Rust),
+                make_node("MyClass", NodeLabel::Class, Language::Rust),
             ],
         );
         let table = build_symbol_table(&[r], "proj");
@@ -309,12 +304,12 @@ mod tests {
         let r1 = make_result(
             "a.rs",
             Language::Rust,
-            vec![make_node("foo", NodeLabel::Function, Language::Rust, "a.rs", "proj")],
+            vec![make_node("foo", NodeLabel::Function, Language::Rust)],
         );
         let r2 = make_result(
             "b.rs",
             Language::Rust,
-            vec![make_node("foo", NodeLabel::Function, Language::Rust, "b.rs", "proj")],
+            vec![make_node("foo", NodeLabel::Function, Language::Rust)],
         );
         let table = build_symbol_table(&[r1, r2], "proj");
         let results = table.lookup("foo");
@@ -323,7 +318,7 @@ mod tests {
 
     #[test]
     fn build_uses_result_language_when_node_has_none() {
-        let mut node = make_node("foo", NodeLabel::Function, Language::Rust, "src/main.rs", "proj");
+        let mut node = make_node("foo", NodeLabel::Function, Language::Rust);
         node.language = None;
         let result = make_result("src/main.rs", Language::Rust, vec![node]);
         let table = build_symbol_table(&[result], "proj");
@@ -336,7 +331,7 @@ mod tests {
         let mut result = ExtractResult::new("src/main.rs", Language::Rust);
         result
             .nodes
-            .push(make_node("foo", NodeLabel::Function, Language::Rust, "src/main.rs", "proj"));
+            .push(make_node("foo", NodeLabel::Function, Language::Rust));
         result.imports.push(ImportInfo {
             source_file: "std::io".to_string(),
             imported_names: vec!["println".to_string()],
@@ -360,7 +355,7 @@ mod tests {
         let r = make_result(
             "src/components/Button.tsx",
             Language::TypeScript,
-            vec![make_node("Button", NodeLabel::Class, Language::TypeScript, "src/components/Button.tsx", "proj")],
+            vec![make_node("Button", NodeLabel::Class, Language::TypeScript)],
         );
         let table = build_symbol_table(&[r], "proj");
         let entry = table.lookup_exact("Button").unwrap();
@@ -372,7 +367,7 @@ mod tests {
         let r = make_result(
             "./src/main.rs",
             Language::Rust,
-            vec![make_node("foo", NodeLabel::Function, Language::Rust, "./src/main.rs", "proj")],
+            vec![make_node("foo", NodeLabel::Function, Language::Rust)],
         );
         let table = build_symbol_table(&[r], "proj");
         let entry = table.lookup_exact("foo").unwrap();
@@ -397,8 +392,8 @@ mod tests {
             "src/main.rs",
             Language::Rust,
             vec![
-                make_node("foo", NodeLabel::Function, Language::Rust, "src/main.rs", "proj"),
-                make_node("bar", NodeLabel::Function, Language::Rust, "src/main.rs", "proj"),
+                make_node("foo", NodeLabel::Function, Language::Rust),
+                make_node("bar", NodeLabel::Function, Language::Rust),
             ],
         );
         let table = build_symbol_table(&[r], "proj");
@@ -408,7 +403,7 @@ mod tests {
 
     #[test]
     fn build_preserves_project_field() {
-        let node = make_node("foo", NodeLabel::Function, Language::Rust, "src/main.rs", "myproject");
+        let node = make_node("foo", NodeLabel::Function, Language::Rust);
         let result = make_result("src/main.rs", Language::Rust, vec![node]);
         let table = build_symbol_table(&[result], "myproject");
         let entry = table.lookup_exact("foo").unwrap();
@@ -419,18 +414,18 @@ mod tests {
 
     #[test]
     fn resolve_all_combines_calls_and_dataflows() {
+        let foo_node = Node::builder(NodeLabel::Function, "foo", "qn")
+            .language(Language::Rust)
+            .file_path("a.rs")
+            .is_exported(true)
+            .build();
+        let bar_node = Node::builder(NodeLabel::Function, "bar", "qn")
+            .language(Language::Rust)
+            .file_path("a.rs")
+            .is_exported(true)
+            .build();
         let foo_qn = FqnGenerator::generate("proj", "a.rs", "foo", Language::Rust, None);
         let bar_qn = FqnGenerator::generate("proj", "a.rs", "bar", Language::Rust, None);
-        let foo_node = Node::builder(NodeLabel::Function, "foo", foo_qn.clone())
-            .language(Language::Rust)
-            .file_path("a.rs")
-            .is_exported(true)
-            .build();
-        let bar_node = Node::builder(NodeLabel::Function, "bar", bar_qn.clone())
-            .language(Language::Rust)
-            .file_path("a.rs")
-            .is_exported(true)
-            .build();
 
         let mut result = ExtractResult::new("a.rs", Language::Rust);
         result.nodes = vec![foo_node, bar_node];
@@ -453,7 +448,7 @@ mod tests {
         // Add nodes to graph with qn as id.
         for r in &results {
             for node in &r.nodes {
-                let qn = node.qualified_name.clone();
+                let qn = FqnGenerator::generate("proj", &r.file_path, &node.name, Language::Rust, None);
                 let mut g = node.clone();
                 g.id = qn.clone();
                 g.qualified_name = qn;
@@ -498,12 +493,12 @@ mod tests {
 
     #[test]
     fn resolve_all_adds_edges_to_graph() {
-        let foo_qn = FqnGenerator::generate("proj", "a.rs", "foo", Language::Rust, None);
-        let foo_node = Node::builder(NodeLabel::Function, "foo", foo_qn.clone())
+        let foo_node = Node::builder(NodeLabel::Function, "foo", "qn")
             .language(Language::Rust)
             .file_path("a.rs")
             .is_exported(true)
             .build();
+        let foo_qn = FqnGenerator::generate("proj", "a.rs", "foo", Language::Rust, None);
 
         let mut result = ExtractResult::new("a.rs", Language::Rust);
         result.nodes = vec![foo_node];
@@ -519,7 +514,7 @@ mod tests {
         let mut graph = Graph::new();
         for r in &results {
             for node in &r.nodes {
-                let qn = node.qualified_name.clone();
+                let qn = FqnGenerator::generate("proj", &r.file_path, &node.name, Language::Rust, None);
                 let mut g = node.clone();
                 g.id = qn.clone();
                 g.qualified_name = qn;

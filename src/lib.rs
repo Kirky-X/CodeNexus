@@ -22,6 +22,7 @@ pub mod cli;
 pub mod daemon;
 pub mod discover;
 pub mod index;
+pub mod ir;
 pub mod model;
 pub mod parse;
 pub mod query;

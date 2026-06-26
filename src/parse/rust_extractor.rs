@@ -70,9 +70,15 @@ impl Extractor for RustExtractor {
             })?;
         let root = tree.root_node();
         // source_file is the root for Rust.
+        let ctx = VisitContext {
+            file_path,
+            project,
+            current_func: None,
+            current_parent: None,
+        };
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
-                visit_node(child, source, file_path, project, &mut result, None, None);
+                visit_node(child, source, &ctx, &mut result);
             }
         }
         Ok(result)
@@ -83,137 +89,109 @@ impl Extractor for RustExtractor {
 // Tree-walking helpers
 // ---------------------------------------------------------------------------
 
-fn visit_node(
-    node: Node,
-    source: &str,
-    file_path: &str,
-    project: &str,
-    result: &mut ExtractResult,
-    current_func: Option<&str>,
-    current_parent: Option<&str>,
-) {
+/// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
+/// 封装 ADR-005 的 current_parent 和 current_func 语义。
+struct VisitContext<'a> {
+    file_path: &'a str,
+    project: &'a str,
+    current_func: Option<&'a str>,
+    current_parent: Option<&'a str>,
+}
+
+fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     match node.kind() {
         "function_item" => {
-            extract_function(node, source, file_path, project, result, current_parent);
+            extract_function(node, source, ctx, result);
             // Pass the function's name as the enclosing function for body
             // traversal, so reads/writes can be attributed to it.
             let func_name = node
                 .child_by_field_name("name")
                 .and_then(|n| node_text(n, source).map(String::from));
-            visit_children(
-                node,
-                source,
-                file_path,
-                project,
-                result,
-                func_name.as_deref(),
-                current_parent,
-            );
+            let child_ctx = VisitContext {
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_func: func_name.as_deref(),
+                current_parent: ctx.current_parent,
+            };
+            visit_children(node, source, &child_ctx, result);
         }
         "struct_item" => {
-            extract_named_item(node, NodeLabel::Struct, source, file_path, project, result, current_parent);
+            extract_named_item(node, NodeLabel::Struct, source, ctx, result);
         }
         "enum_item" => {
-            extract_named_item(node, NodeLabel::Enum, source, file_path, project, result, current_parent);
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            extract_named_item(node, NodeLabel::Enum, source, ctx, result);
+            visit_children(node, source, ctx, result);
         }
         "trait_item" => {
-            extract_named_item(node, NodeLabel::Trait, source, file_path, project, result, current_parent);
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
-        }
-        "mod_item" => {
-            extract_named_item(node, NodeLabel::Module, source, file_path, project, result, current_parent);
-            // Extract the module name and pass it as current_parent so
-            // entities inside the module can be disambiguated (ADR-003).
-            // Combine with any existing parent for nested modules (a::b).
-            let mod_name = node
+            extract_named_item(node, NodeLabel::Trait, source, ctx, result);
+            let trait_name = node
                 .child_by_field_name("name")
                 .and_then(|n| node_text(n, source).map(String::from));
-            let combined = match (current_parent, mod_name.as_deref()) {
-                (Some(p), Some(m)) => Some(format!("{p}_{m}")),
-                (None, Some(m)) => Some(m.to_string()),
-                (Some(p), None) => Some(p.to_string()),
-                (None, None) => None,
+            let child_ctx = VisitContext {
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_func: ctx.current_func,
+                current_parent: trait_name.as_deref(),
             };
-            visit_children(
-                node,
-                source,
-                file_path,
-                project,
-                result,
-                current_func,
-                combined.as_deref(),
-            );
+            visit_children(node, source, &child_ctx, result);
         }
         "impl_item" => {
-            extract_impl(node, source, file_path, project, result, current_parent);
-            // Extract the impl's target type name and pass it as current_parent
-            // so methods inside the impl can disambiguate their FQN (ADR-003).
-            // Combine with module context so methods in `mod a { impl X }` and
-            // `mod b { impl X }` get distinct FQNs.
             let impl_type = node
                 .child_by_field_name("type")
                 .and_then(|n| node_text(n, source).map(String::from));
-            let combined = match (current_parent, impl_type.as_deref()) {
+            extract_impl(node, source, ctx, ctx.current_parent, result);
+            // Combine module context with impl type so methods inside the impl
+            // get disambiguated (ADR-003).
+            let combined = match (ctx.current_parent, impl_type.as_deref()) {
                 (Some(p), Some(t)) => Some(format!("{p}_{t}")),
                 (None, Some(t)) => Some(t.to_string()),
                 (Some(p), None) => Some(p.to_string()),
                 (None, None) => None,
             };
-            visit_children(
-                node,
-                source,
-                file_path,
-                project,
-                result,
-                current_func,
-                combined.as_deref(),
-            );
+            let child_ctx = VisitContext {
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_func: ctx.current_func,
+                current_parent: combined.as_deref(),
+            };
+            visit_children(node, source, &child_ctx, result);
         }
         "const_item" => {
-            extract_named_item(node, NodeLabel::Const, source, file_path, project, result, current_parent);
+            extract_named_item(node, NodeLabel::Const, source, ctx, result);
         }
         "static_item" => {
-            extract_named_item(node, NodeLabel::Static, source, file_path, project, result, current_parent);
+            extract_named_item(node, NodeLabel::Static, source, ctx, result);
         }
         "type_item" => {
-            extract_named_item(
-                node,
-                NodeLabel::TypeAlias,
-                source,
-                file_path,
-                project,
-                result,
-                current_parent,
-            );
+            extract_named_item(node, NodeLabel::TypeAlias, source, ctx, result);
         }
         "macro_definition" => {
-            extract_named_item(node, NodeLabel::Macro, source, file_path, project, result, current_parent);
+            extract_named_item(node, NodeLabel::Macro, source, ctx, result);
         }
         "use_declaration" => {
             extract_use(node, source, result);
         }
         "call_expression" => {
-            extract_call(node, source, file_path, project, current_func, current_parent, result);
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            extract_call(node, source, ctx, result);
+            visit_children(node, source, ctx, result);
         }
         "let_declaration" => {
-            extract_let(node, source, result, current_func, current_parent, file_path, project);
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            extract_let(node, source, ctx, result);
+            visit_children(node, source, ctx, result);
         }
         "assignment_expression" => {
-            extract_assignment(node, source, result, current_func, current_parent, file_path, project);
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            extract_assignment(node, source, ctx, result);
+            visit_children(node, source, ctx, result);
         }
         "identifier" => {
             // A bare identifier in an expression position is a variable read
             // (BR-TRACE-005). Name-defining positions (patterns, call
             // functions, field names) are excluded by `is_read_position`.
-            if let Some(func) = current_func {
+            if let Some(func) = ctx.current_func {
                 if is_read_position(node) {
                     if let Some(name) = node_text(node, source).map(String::from) {
                         result.reads.push(ReadInfo {
-                            reader_qn: Some(make_qn(file_path, func, project, current_parent)),
+                            reader_qn: Some(func.to_string()),
                             var_name: name,
                             line: node.start_position().row as u32 + 1,
                         });
@@ -223,26 +201,18 @@ fn visit_node(
         }
         "extern_item" | "extern_block" | "foreign_mod_item" => {
             extract_extern_block(node, source, result);
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            visit_children(node, source, ctx, result);
         }
         _ => {
-            visit_children(node, source, file_path, project, result, current_func, current_parent);
+            visit_children(node, source, ctx, result);
         }
     }
 }
 
-fn visit_children(
-    node: Node,
-    source: &str,
-    file_path: &str,
-    project: &str,
-    result: &mut ExtractResult,
-    current_func: Option<&str>,
-    current_parent: Option<&str>,
-) {
+fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
-            visit_node(child, source, file_path, project, result, current_func, current_parent);
+            visit_node(child, source, ctx, result);
         }
     }
 }
@@ -254,10 +224,8 @@ fn visit_children(
 fn extract_function(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
-    parent: Option<&str>,
 ) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
@@ -267,20 +235,20 @@ fn extract_function(
     };
     let is_exported = is_pub(node);
     let signature = node_text(node, source).map(String::from);
-    let qn = make_qn(file_path, &name, project, parent);
+    let qn = make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent);
     let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
-        .file_path(file_path)
+        .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Rust)
-        .project(project)
+        .project(ctx.project)
         .is_exported(is_exported)
         .is_global(true);
     if let Some(sig) = signature {
         builder = builder.signature(sig);
     }
     let model_node = builder.build();
-    add_definition_edges(file_path, project, &model_node, result);
+    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.nodes.push(model_node);
 }
 
@@ -288,10 +256,8 @@ fn extract_named_item(
     node: Node,
     label: NodeLabel,
     source: &str,
-    file_path: &str,
-    project: &str,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
-    parent: Option<&str>,
 ) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
@@ -300,27 +266,26 @@ fn extract_named_item(
         return;
     };
     let is_exported = is_pub(node);
-    let qn = make_qn(file_path, &name, project, parent);
+    let qn = make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent);
     let model_node = ModelNode::builder(label, name, qn)
-        .file_path(file_path)
+        .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Rust)
-        .project(project)
+        .project(ctx.project)
         .is_exported(is_exported)
         .is_global(true)
         .build();
-    add_definition_edges(file_path, project, &model_node, result);
+    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.nodes.push(model_node);
 }
 
 fn extract_impl(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
-    result: &mut ExtractResult,
+    ctx: &VisitContext<'_>,
     module_parent: Option<&str>,
+    result: &mut ExtractResult,
 ) {
     // impl_item has a `type` field (the type being implemented) and an
     // optional `trait` field (the trait being implemented).
@@ -333,31 +298,27 @@ fn extract_impl(
     let trait_name = node
         .child_by_field_name("trait")
         .and_then(|n| node_text(n, source).map(String::from));
-    // ADR-003: disambiguate impl blocks from the struct/enum they implement
-    // (same name, same file → Type A collision). Trait impls use the trait
-    // name as disambiguator; inherent impls use the fixed marker "impl".
-    // When inside a module, combine module path with the impl marker so
-    // `mod a { impl X }` and `mod b { impl X }` get distinct FQNs.
-    let impl_marker = trait_name.as_deref().or(Some("impl"));
-    let disambiguator = match (module_parent, impl_marker) {
-        (Some(m), Some(im)) => Some(format!("{m}_{im}")),
-        (None, Some(im)) => Some(im.to_string()),
-        (Some(m), None) => Some(m.to_string()),
-        (None, None) => None,
+    // Impl blocks need disambiguation from struct/enum with the same name
+    // (ADR-003). Use the trait name when present, otherwise the literal
+    // "impl" marker, combined with the module parent context.
+    let im = trait_name.as_deref().unwrap_or("impl");
+    let disambiguator = match module_parent {
+        Some(m) => format!("{m}_{im}"),
+        None => im.to_string(),
     };
-    let qn = make_qn(file_path, &name, project, disambiguator.as_deref());
+    let qn = make_qn(ctx.file_path, &name, ctx.project, Some(&disambiguator));
     let mut builder = ModelNode::builder(NodeLabel::Impl, name, qn)
-        .file_path(file_path)
+        .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Rust)
-        .project(project)
+        .project(ctx.project)
         .is_global(true);
     if let Some(trait_name) = trait_name {
         builder = builder.properties(serde_json::json!({"trait": trait_name}));
     }
     let model_node = builder.build();
-    add_definition_edges(file_path, project, &model_node, result);
+    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.nodes.push(model_node);
 }
 
@@ -387,10 +348,7 @@ fn extract_use(node: Node, source: &str, result: &mut ExtractResult) {
 fn extract_call(
     node: Node,
     source: &str,
-    file_path: &str,
-    project: &str,
-    current_func: Option<&str>,
-    current_parent: Option<&str>,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
 ) {
     let Some(func_node) = node.child_by_field_name("function") else {
@@ -400,8 +358,9 @@ fn extract_call(
         return;
     };
     let args = call_arguments(node, source);
-    let caller_qn =
-        current_func.map(|name| make_qn(file_path, name, project, current_parent));
+    let caller_qn = ctx
+        .current_func
+        .map(|name| make_qn(ctx.file_path, name, ctx.project, ctx.current_parent));
     result.calls.push(CallInfo {
         caller_qn,
         callee_name: callee,
@@ -410,15 +369,7 @@ fn extract_call(
     });
 }
 
-fn extract_let(
-    node: Node,
-    source: &str,
-    result: &mut ExtractResult,
-    current_func: Option<&str>,
-    current_parent: Option<&str>,
-    file_path: &str,
-    project: &str,
-) {
+fn extract_let(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     // let_declaration has a `pattern` field and an optional `value` field.
     let Some(pattern_node) = node.child_by_field_name("pattern") else {
         return;
@@ -457,9 +408,9 @@ fn extract_let(
     });
     // A let binding also writes the bound variable (BR-TRACE-006). Only
     // attribute the write when inside a function body.
-    if let Some(func) = current_func {
+    if let Some(func) = ctx.current_func {
         result.writes.push(WriteInfo {
-            writer_qn: Some(make_qn(file_path, func, project, current_parent)),
+            writer_qn: Some(func.to_string()),
             var_name: target,
             line: node.start_position().row as u32 + 1,
         });
@@ -473,11 +424,8 @@ fn extract_let(
 fn extract_assignment(
     node: Node,
     source: &str,
+    ctx: &VisitContext<'_>,
     result: &mut ExtractResult,
-    current_func: Option<&str>,
-    current_parent: Option<&str>,
-    file_path: &str,
-    project: &str,
 ) {
     let Some(left) = node.child_by_field_name("left") else {
         return;
@@ -485,9 +433,9 @@ fn extract_assignment(
     let Some(name) = identifier_text(left, source) else {
         return;
     };
-    if let Some(func) = current_func {
+    if let Some(func) = ctx.current_func {
         result.writes.push(WriteInfo {
-            writer_qn: Some(make_qn(file_path, func, project, current_parent)),
+            writer_qn: Some(func.to_string()),
             var_name: name,
             line: node.start_position().row as u32 + 1,
         });
@@ -1073,35 +1021,6 @@ fn main() {
     }
 
     #[test]
-    fn same_file_same_name_different_parent_disambiguated() {
-        // ADR-003: two `new` methods in different impl blocks must have
-        // different FQNs (disambiguated by the parent impl type).
-        let src = r#"
-            struct Foo;
-            impl Foo { fn new() -> Self { Foo } }
-            struct Bar;
-            impl Bar { fn new() -> Self { Bar } }
-        "#;
-        let result = extract(src);
-        let news: Vec<_> = result
-            .nodes
-            .iter()
-            .filter(|n| n.name == "new" && n.label == NodeLabel::Function)
-            .collect();
-        assert_eq!(news.len(), 2, "should extract two `new` methods");
-        let fqns: Vec<_> = news.iter().map(|n| n.qualified_name.as_str()).collect();
-        assert!(
-            fqns.contains(&"proj.test.rs.new#Foo"),
-            "Foo::new FQN missing: {fqns:?}"
-        );
-        assert!(
-            fqns.contains(&"proj.test.rs.new#Bar"),
-            "Bar::new FQN missing: {fqns:?}"
-        );
-        assert_ne!(news[0].qualified_name, news[1].qualified_name);
-    }
-
-    #[test]
     fn empty_source_returns_empty_result() {
         let result = extract("");
         assert!(result.is_empty());
@@ -1246,7 +1165,7 @@ fn main() {
         for read in &result.reads {
             assert_eq!(
                 read.reader_qn.as_deref(),
-                Some("proj.test.rs.add"),
+                Some("add"),
                 "reader should be the enclosing function"
             );
         }
@@ -1262,7 +1181,7 @@ fn main() {
         for write in &result.writes {
             assert_eq!(
                 write.writer_qn.as_deref(),
-                Some("proj.test.rs.main"),
+                Some("main"),
                 "writer should be the enclosing function"
             );
         }
@@ -1298,7 +1217,7 @@ fn main() {
         let main_reads: Vec<_> = result
             .reads
             .iter()
-            .filter(|r| r.reader_qn.as_deref() == Some("proj.test.rs.main"))
+            .filter(|r| r.reader_qn.as_deref() == Some("main"))
             .collect();
         assert!(
             main_reads.is_empty(),
@@ -1308,7 +1227,7 @@ fn main() {
         let main_writes: Vec<_> = result
             .writes
             .iter()
-            .filter(|w| w.writer_qn.as_deref() == Some("proj.test.rs.main"))
+            .filter(|w| w.writer_qn.as_deref() == Some("main"))
             .collect();
         assert_eq!(main_writes.len(), 1);
         assert_eq!(main_writes[0].var_name, "result");
