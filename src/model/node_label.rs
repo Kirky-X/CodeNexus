@@ -1,11 +1,11 @@
-//! Node label enum representing the 20 node types in the CodeNexus graph (DDD §7.1).
+//! Node label enum representing the 21 node types in the CodeNexus graph (DDD §7.1, extended with Interface for TS/Java/C#).
 
 use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// The 20 node label variants defined in DDD §7.1.
+/// The 21 node label variants.
 ///
 /// Each variant corresponds to a node table in the LadybugDB schema and is
 /// used as the `label` field on [`crate::model::Node`].
@@ -31,12 +31,13 @@ pub enum NodeLabel {
     TypeAlias,
     Typedef,
     Namespace,
+    Interface,
 }
 
 impl NodeLabel {
     /// Returns all variants in declaration order.
     #[must_use]
-    pub const fn all() -> [NodeLabel; 20] {
+    pub const fn all() -> [NodeLabel; 21] {
         [
             NodeLabel::Project,
             NodeLabel::Folder,
@@ -58,6 +59,7 @@ impl NodeLabel {
             NodeLabel::TypeAlias,
             NodeLabel::Typedef,
             NodeLabel::Namespace,
+            NodeLabel::Interface,
         ]
     }
 
@@ -86,6 +88,7 @@ impl NodeLabel {
             NodeLabel::TypeAlias => "TypeAlias",
             NodeLabel::Typedef => "Typedef",
             NodeLabel::Namespace => "Namespace",
+            NodeLabel::Interface => "Interface",
         }
     }
 }
@@ -121,6 +124,7 @@ impl FromStr for NodeLabel {
             "typealias" => Ok(NodeLabel::TypeAlias),
             "typedef" => Ok(NodeLabel::Typedef),
             "namespace" => Ok(NodeLabel::Namespace),
+            "interface" => Ok(NodeLabel::Interface),
             other => Err(format!("unknown NodeLabel: {other}")),
         }
     }
@@ -131,8 +135,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn has_twenty_variants() {
-        assert_eq!(NodeLabel::all().len(), 20);
+    fn has_twenty_one_variants() {
+        assert_eq!(NodeLabel::all().len(), 21);
     }
 
     #[test]
@@ -157,6 +161,7 @@ mod tests {
         assert_eq!(NodeLabel::TypeAlias.to_string(), "TypeAlias");
         assert_eq!(NodeLabel::Typedef.to_string(), "Typedef");
         assert_eq!(NodeLabel::Namespace.to_string(), "Namespace");
+        assert_eq!(NodeLabel::Interface.to_string(), "Interface");
     }
 
     #[test]

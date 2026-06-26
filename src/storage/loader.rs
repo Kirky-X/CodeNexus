@@ -209,7 +209,7 @@ pub fn node_to_row(node: &Node, label: NodeLabel) -> Vec<String> {
             opt_str(&node.file_path),
             opt_str(&node.parent_qn),
         ],
-        NodeLabel::Class | NodeLabel::Struct | NodeLabel::Enum | NodeLabel::Trait => vec![
+        NodeLabel::Class | NodeLabel::Struct | NodeLabel::Enum | NodeLabel::Trait | NodeLabel::Interface => vec![
             node.id.clone(),
             node.project.clone(),
             node.name.clone(),

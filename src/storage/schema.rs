@@ -171,7 +171,7 @@ pub fn node_table_columns(label: NodeLabel) -> &'static [&'static str] {
             "lineCount",
         ],
         NodeLabel::Module => &["id", "project", "name", "qualifiedName", "filePath", "parentQn"],
-        NodeLabel::Class | NodeLabel::Struct | NodeLabel::Enum | NodeLabel::Trait => &[
+        NodeLabel::Class | NodeLabel::Struct | NodeLabel::Enum | NodeLabel::Trait | NodeLabel::Interface => &[
             "id",
             "project",
             "name",
@@ -413,6 +413,11 @@ fn ddl_for_label(label: NodeLabel) -> String {
         NodeLabel::Namespace => "CREATE NODE TABLE Namespace (id STRING, project STRING, name \
              STRING, qualifiedName STRING, filePath STRING, parentQn STRING, PRIMARY KEY (id));"
             .to_string(),
+        NodeLabel::Interface => "CREATE NODE TABLE Interface (id STRING, project STRING, name \
+             STRING, qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, \
+             isExported BOOLEAN, docstring STRING, content STRING, parentQn STRING, PRIMARY KEY \
+             (id));"
+            .to_string(),
     }
 }
 
@@ -421,9 +426,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn node_table_ddl_returns_twenty_entries() {
+    fn node_table_ddl_returns_twenty_one_entries() {
         let ddl = node_table_ddl();
-        assert_eq!(ddl.len(), 20, "expected 20 node table DDL entries");
+        assert_eq!(ddl.len(), 21, "expected 21 node table DDL entries");
     }
 
     #[test]
@@ -661,9 +666,9 @@ mod tests {
     #[test]
     fn all_init_ddl_includes_node_tables_relation_embedding_and_indexes() {
         let ddl = all_init_ddl();
-        // 20 node tables + 1 relation + 1 embedding + 22 indexes (18 secondary
-        // + 3 FTS + 1 VECTOR) = 44
-        assert_eq!(ddl.len(), 44, "expected 44 DDL statements total");
+        // 21 node tables + 1 relation + 1 embedding + 22 indexes (18 secondary
+        // + 3 FTS + 1 VECTOR) = 45
+        assert_eq!(ddl.len(), 45, "expected 45 DDL statements total");
         assert!(ddl.iter().any(|s| s.contains("CREATE NODE TABLE Project")));
         assert!(ddl.iter().any(|s| s.contains("CodeRelation")));
         assert!(ddl.iter().any(|s| s.contains("Embedding")));
