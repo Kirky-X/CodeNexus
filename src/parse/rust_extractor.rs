@@ -766,7 +766,22 @@ fn pattern_name(node: Node, source: &str) -> Option<String> {
             let inner = node.named_child(0)?;
             pattern_name(inner, source)
         }
-        _ => node_text(node, source).map(String::from),
+        _ => {
+            // Fallback: only accept simple identifier text. Complex
+            // patterns (array patterns, slices, etc.) would produce FQNs
+            // with invalid characters (brackets, commas) that corrupt CSV
+            // imports.
+            let text = node_text(node, source)?;
+            if text
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_')
+                && text.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
+            {
+                Some(text.to_string())
+            } else {
+                None
+            }
+        }
     }
 }
 
