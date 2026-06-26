@@ -8,9 +8,11 @@
 //! - `function_declaration` → [`NodeLabel::Function`]
 //! - `class_declaration` → [`NodeLabel::Class`]
 //! - `method_definition` → [`NodeLabel::Method`]
-//! - `interface_declaration` → [`NodeLabel::Trait`] (TS interfaces map to traits)
+//! - `interface_declaration` → [`NodeLabel::Interface`] (P2-3: was Trait, now Interface for semantic alignment)
 //! - `enum_declaration` → [`NodeLabel::Enum`]
 //! - `type_alias_declaration` → [`NodeLabel::TypeAlias`]
+//! - `lexical_declaration` (`const`, top-level) → [`NodeLabel::Const`] (P2-2: was AssignInfo-only)
+//! - `lexical_declaration` with `arrow_function` / `function` value → [`NodeLabel::Function`] (P2-4: arrow/function expressions)
 //!
 //! # Extracted records
 //!
@@ -93,7 +95,9 @@ struct VisitContext<'a> {
 
 fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     match node.kind() {
-        "function_declaration" => {
+        "function_declaration" | "generator_function_declaration" => {
+            // P2-4: also handle `function* foo() {}` (generator_function_declaration)
+            // which was previously missed.
             extract_function(node, source, ctx, result);
             // Pass the function's name as the enclosing function for body
             // traversal, so calls inside it can be attributed to it.
@@ -138,7 +142,9 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             visit_children(node, source, &child_ctx, result);
         }
         "interface_declaration" => {
-            extract_named_item(node, NodeLabel::Trait, source, ctx.file_path, ctx.project, result);
+            // P2-3: TS interface → Interface (was Trait). Semantic alignment
+            // with gitnexus which uses Interface for TS `interface Foo {}`.
+            extract_named_item(node, NodeLabel::Interface, source, ctx.file_path, ctx.project, result);
             visit_children(node, source, ctx, result);
         }
         "enum_declaration" => {
@@ -160,7 +166,10 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             visit_children(node, source, ctx, result);
         }
         "lexical_declaration" | "variable_declaration" => {
-            extract_variable_declaration(node, source, result);
+            // P2-2/P2-4: extract Const nodes (top-level const) and Function
+            // nodes (arrow_function / function expression values) in addition
+            // to the existing AssignInfo records.
+            extract_lexical_declaration(node, source, ctx, result);
             visit_children(node, source, ctx, result);
         }
         "variable_declarator" => {
@@ -456,6 +465,130 @@ fn extract_variable_declaration(node: Node, source: &str, result: &mut ExtractRe
                 extract_variable_declarator(child, source, result);
             }
         }
+    }
+}
+
+/// Returns true if the lexical_declaration / variable_declaration uses the
+/// `const` keyword (first unnamed child is the `const` token).
+fn is_const_declaration(node: Node) -> bool {
+    // tree-sitter-typescript: lexical_declaration := choice('const','let','var') + declarators
+    // The keyword is the first child (unnamed token with kind "const"/"let"/"var").
+    for i in 0..node.child_count() as u32 {
+        if let Some(child) = node.child(i) {
+            if child.is_named() {
+                // First unnamed token already passed; no keyword found.
+                return false;
+            }
+            return child.kind() == "const";
+        }
+    }
+    false
+}
+
+/// Returns true if the declaration is at the top level (program or export_statement).
+fn is_top_level_declaration(node: Node) -> bool {
+    matches!(
+        node.parent().map(|p| p.kind()),
+        Some("program") | Some("export_statement") | None
+    )
+}
+
+/// P2-2/P2-4: extract Const nodes (top-level `const`) and Function nodes
+/// (arrow_function / function expression values) in addition to AssignInfo.
+fn extract_lexical_declaration(
+    node: Node,
+    source: &str,
+    ctx: &VisitContext<'_>,
+    result: &mut ExtractResult,
+) {
+    // Preserve original AssignInfo extraction.
+    extract_variable_declaration(node, source, result);
+
+    let is_const = is_const_declaration(node);
+    let is_top_level = is_top_level_declaration(node);
+    if !is_const {
+        return;
+    }
+
+    for i in 0..node.named_child_count() as u32 {
+        let Some(child) = node.named_child(i) else { continue };
+        if child.kind() != "variable_declarator" {
+            continue;
+        }
+        let Some(name_node) = child.child_by_field_name("name") else { continue };
+        // Only simple identifier names produce Const/Function nodes. Object/array
+        // destructuring (`const { a, b } = ...`) produces pattern nodes whose
+        // text contains braces/commas that corrupt CSV imports — gitnexus also
+        // skips destructuring for Const nodes.
+        if name_node.kind() != "identifier" {
+            continue;
+        }
+        let Some(name) = node_text(name_node, source).map(String::from) else {
+            continue;
+        };
+        let start_line = child.start_position().row as u32 + 1;
+        let end_line = child.end_position().row as u32 + 1;
+        let value_node = child.child_by_field_name("value");
+        let value_kind = value_node.map(|v| v.kind());
+
+        // P2-4: arrow_function / function_expression → Function node.
+        // `const f = () => {}` and `const g = function() {}` are function
+        // definitions gitnexus captures; codenexus previously missed them.
+        if matches!(value_kind, Some("arrow_function") | Some("function_expression")) {
+            let is_exported = is_exported(node);
+            let qn = dedupe_qn(
+                make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent),
+                start_line,
+                result,
+            );
+            let signature = node_text(child, source).map(String::from);
+            let mut builder = ModelNode::builder(NodeLabel::Function, name.clone(), qn)
+                .file_path(ctx.file_path)
+                .start_line(start_line)
+                .end_line(end_line)
+                .language(Language::TypeScript)
+                .project(ctx.project)
+                .is_exported(is_exported)
+                .is_global(true);
+            if let Some(sig) = signature {
+                builder = builder.signature(sig);
+            }
+            let model_node = builder.build();
+            add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
+            result.nodes.push(model_node);
+            // Don't also create a Const node for the same declarator — a
+            // function-typed const is modeled as a Function, not a Const.
+            continue;
+        }
+
+        // P2-4 sub-case: only create a Const node when at the top level.
+        // Nested consts (inside functions/blocks) are local variables, not
+        // module-level constants — gitnexus applies the same rule.
+        if !is_top_level {
+            continue;
+        }
+
+        let is_exported = is_exported(node);
+        let qn = dedupe_qn(
+            make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent),
+            start_line,
+            result,
+        );
+        let signature = value_node.and_then(|v| node_text(v, source).map(String::from));
+        let mut builder = ModelNode::builder(NodeLabel::Const, name, qn)
+            .file_path(ctx.file_path)
+            .start_line(start_line)
+            .end_line(end_line)
+            .language(Language::TypeScript)
+            .project(ctx.project)
+            .is_exported(is_exported)
+            .is_global(true);
+        if let Some(sig) = signature {
+            builder = builder.signature(sig);
+        }
+        let model_node = builder.build();
+        add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
+        result.nodes.push(model_node);
     }
 }
 
@@ -826,12 +959,17 @@ const result = add(1, 2);
     }
 
     #[test]
-    fn extracts_interface_as_trait() {
+    fn extracts_interface_as_interface_node() {
+        // P2-3: TS interface → Interface (was Trait, now Interface for semantic
+        // alignment with gitnexus).
         let src = "interface Drawable { draw(): void; }";
         let result = extract(src);
+        let interfaces: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Interface).collect();
+        assert_eq!(interfaces.len(), 1, "interface should map to Interface");
+        assert_eq!(interfaces[0].name, "Drawable");
+        // No Trait node should be created for an interface anymore.
         let traits: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Trait).collect();
-        assert_eq!(traits.len(), 1, "interface should map to Trait");
-        assert_eq!(traits[0].name, "Drawable");
+        assert!(traits.is_empty(), "interface must not map to Trait");
     }
 
     #[test]
@@ -900,11 +1038,12 @@ const result = add(1, 2);
 
     #[test]
     fn exported_interface_is_marked_exported() {
+        // P2-3: interface → Interface (not Trait).
         let src = "export interface Drawable { draw(): void; }";
         let result = extract(src);
-        let traits: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Trait).collect();
-        assert_eq!(traits.len(), 1);
-        assert!(traits[0].is_exported, "exported interface should be marked exported");
+        let interfaces: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Interface).collect();
+        assert_eq!(interfaces.len(), 1);
+        assert!(interfaces[0].is_exported, "exported interface should be marked exported");
     }
 
     #[test]
@@ -1021,5 +1160,73 @@ function setupSecond() {
         assert!(first.qualified_name.contains("#phases"), "first qn: {}", first.qualified_name);
         assert!(second.qualified_name.contains("#phases"), "second qn: {}", second.qualified_name);
         assert!(second.qualified_name.contains("#L"), "second should have line dedupe: {}", second.qualified_name);
+    }
+
+    // --- P2-2 regression: top-level `const` → Const node ---
+
+    #[test]
+    fn extracts_top_level_const_as_const_node() {
+        // P2-2 regression: `export const z = ...` previously only produced an
+        // AssignInfo, no Const node (0 vs gitnexus 1384 in zod).
+        let src = "export const MAX_RETRIES = 3;";
+        let result = extract(src);
+        let consts: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Const).collect();
+        assert_eq!(consts.len(), 1, "should extract 1 Const node");
+        assert_eq!(consts[0].name, "MAX_RETRIES");
+        assert_eq!(consts[0].language, Some(Language::TypeScript));
+        assert!(consts[0].is_exported, "exported const should be marked exported");
+        assert!(consts[0].is_global, "top-level const should be global");
+    }
+
+    #[test]
+    fn does_not_extract_nested_const_as_const_node() {
+        // P2-2: nested const (inside a function) is a local variable, not a
+        // module-level constant — gitnexus applies the same rule.
+        let src = "function f() { const local = 1; return local; }";
+        let result = extract(src);
+        let consts: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Const).collect();
+        assert!(consts.is_empty(), "nested const must NOT be a Const node");
+    }
+
+    #[test]
+    fn does_not_extract_let_as_const_node() {
+        // P2-2: only `const` declarations become Const nodes, not `let`/`var`.
+        let src = "export let mutable = 1;";
+        let result = extract(src);
+        let consts: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Const).collect();
+        assert!(consts.is_empty(), "`let` must NOT produce a Const node");
+    }
+
+    // --- P2-4 regression: arrow function / function expression → Function node ---
+
+    #[test]
+    fn extracts_arrow_function_const_as_function_node() {
+        // P2-4 regression: `const f = () => {}` was missed entirely.
+        let src = "export const handler = () => { return 42; };";
+        let result = extract(src);
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function && n.name == "handler")
+            .collect();
+        assert_eq!(funcs.len(), 1, "arrow function const should be a Function node");
+        assert_eq!(funcs[0].language, Some(Language::TypeScript));
+        assert!(funcs[0].is_exported, "exported arrow function should be marked exported");
+        // Must NOT also be a Const node (function-typed const → Function, not Const).
+        let consts: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Const && n.name == "handler").collect();
+        assert!(consts.is_empty(), "arrow function const must not double-count as Const");
+    }
+
+    #[test]
+    fn extracts_function_expression_const_as_function_node() {
+        // P2-4: `const g = function() {}` (named function expression).
+        let src = "const callback = function() { return 0; };";
+        let result = extract(src);
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function && n.name == "callback")
+            .collect();
+        assert_eq!(funcs.len(), 1, "function expression const should be a Function node");
     }
 }
