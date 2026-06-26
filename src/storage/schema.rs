@@ -1,6 +1,6 @@
 //! DDL string generation for the LadybugDB schema (DDD §12.1).
 //!
-//! Produces the exact DDL strings for the 20 node tables, the `CodeRelation`
+//! Produces the exact DDL strings for the 21 node tables, the `CodeRelation`
 //! relationship table, the optional `Embedding` table, and all secondary
 //! indexes (DDD §12.2).
 //!
@@ -9,7 +9,7 @@
 //! DDD §5.8 specifies `CREATE REL TABLE CodeRelation (FROM Node TO Node, ...)`,
 //! but LadybugDB's `REL TABLE` requires concrete node-table names in the
 //! `FROM`/`TO` clauses — there is no generic `Node` union type. To support
-//! heterogeneous edges between any of the 20 node tables we materialize
+//! heterogeneous edges between any of the 21 node tables we materialize
 //! `CodeRelation` as a `NODE TABLE` with explicit `source`/`target` string
 //! columns (holding node primary keys) plus a synthetic `id` primary key. This
 //! preserves every field from the spec while remaining queryable with plain
@@ -27,7 +27,7 @@ use crate::model::NodeLabel;
 /// LadybugDB reserved keywords that conflict with CodeNexus table names.
 ///
 /// Sourced from `lbug-src/src/antlr4/keywords.txt`. Only keywords that collide
-/// with our 20 node-table names or `CodeRelation` need to be listed here.
+/// with our 21 node-table names or `CodeRelation` need to be listed here.
 const RESERVED_KEYWORDS: &[&str] = &["MACRO"];
 
 /// Returns `true` if `name` collides with a LadybugDB reserved keyword
@@ -50,7 +50,7 @@ pub fn escape_identifier(name: &str) -> String {
     }
 }
 
-/// Returns `(table_name, ddl)` pairs for all 20 node tables, in declaration
+/// Returns `(table_name, ddl)` pairs for all 21 node tables, in declaration
 /// order matching [`NodeLabel::all`].
 ///
 /// The DDL strings are the exact statements from DDD §12.1.

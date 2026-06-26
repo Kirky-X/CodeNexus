@@ -128,9 +128,13 @@ pub fn load_from_csv(conn: &StorageConnection, table: &str, csv_path: &Path) -> 
         .to_str()
         .ok_or_else(|| StorageError::InvalidData(format!("non-utf8 csv path: {csv_path:?}")))?
         .replace('\\', "/");
+    // Escape single quotes for safe interpolation into a Cypher string literal.
+    // Paths are internally generated (not user-controlled), but this guards
+    // against pathological paths containing quotes.
+    let escaped_path = path_str.replace('\'', "''");
     let escaped_table = escape_identifier(table);
     let cypher = format!(
-        "COPY {escaped_table} FROM '{path_str}' (HEADER, PARALLEL=FALSE);"
+        "COPY {escaped_table} FROM '{escaped_path}' (HEADER, PARALLEL=FALSE);"
     );
     conn.execute(&cypher)?;
     Ok(())

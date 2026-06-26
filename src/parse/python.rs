@@ -954,4 +954,42 @@ class Foo(metaclass=Meta):
             .expect("should find top-level call to callee");
         assert!(call.caller_qn.is_none(), "top-level call should have None caller_qn");
     }
+
+    #[test]
+    fn function_in_if_block_at_module_scope_is_indexed() {
+        // P2-5 edge case: functions inside if/try/with blocks at module scope
+        // ARE still indexed (only direct function_definition ancestors trigger
+        // the nested-def skip). The function_scope() walk stops at the first
+        // class_definition or function_definition ancestor — control-flow
+        // blocks (if/try/with/for) are transparent.
+        let src = "if True:\n    def conditional_fn():\n        return 1\n";
+        let result = extract(src);
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function && n.name == "conditional_fn")
+            .collect();
+        assert_eq!(
+            funcs.len(),
+            1,
+            "function inside if-block at module scope should be indexed (P2-5)"
+        );
+    }
+
+    #[test]
+    fn function_in_try_block_at_module_scope_is_indexed() {
+        // P2-5 edge case: try/except blocks at module scope are also transparent.
+        let src = "try:\n    def try_fn():\n        return 1\nexcept Exception:\n    pass\n";
+        let result = extract(src);
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function && n.name == "try_fn")
+            .collect();
+        assert_eq!(
+            funcs.len(),
+            1,
+            "function inside try-block at module scope should be indexed (P2-5)"
+        );
+    }
 }

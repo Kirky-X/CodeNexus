@@ -245,6 +245,13 @@ fn extract_function(
 ) {
     // P2-4: anonymous `export default function() {}` has no name field.
     // Use "default" as the name (matches gitnexus behavior for default exports).
+    //
+    // NOTE: This None branch is currently defensive — extract_function is only
+    // called from visit_node for function_declaration/generator_function_declaration,
+    // both of which always have a name field per the tree-sitter grammar. The
+    // anonymous export default case is handled inline in the export_statement
+    // branch. This branch guards against future grammar evolution and is kept
+    // intentionally.
     let name = match node.child_by_field_name("name") {
         Some(n) => match node_text(n, source).map(String::from) {
             Some(s) => s,
@@ -1295,6 +1302,62 @@ function setupSecond() {
         assert!(
             funcs[0].is_exported,
             "export default function should be marked exported"
+        );
+    }
+
+    #[test]
+    fn extracts_anonymous_export_default_arrow_function() {
+        // P2-4 edge case: `export default () => {}` — anonymous arrow function
+        // as default export. tree-sitter stores it as export_statement's value
+        // field with kind arrow_function.
+        let src = "export default () => { return 42; }";
+        let result = extract(src);
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function && n.name == "default")
+            .collect();
+        assert_eq!(
+            funcs.len(),
+            1,
+            "anonymous export default arrow function should be a Function named 'default'"
+        );
+        assert!(
+            funcs[0].is_exported,
+            "export default arrow function should be marked exported"
+        );
+    }
+
+    #[test]
+    fn named_export_default_function_not_double_extracted() {
+        // P2-4 edge case: `export default function foo() {}` (NAMED default
+        // export) goes through the declaration field, not the value field.
+        // It should produce exactly ONE Function node named "foo", not a
+        // duplicate "default" node from the export_statement value handler.
+        let src = "export default function foo() { return 42; }";
+        let result = extract(src);
+        let foo_funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function && n.name == "foo")
+            .collect();
+        let default_funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function && n.name == "default")
+            .collect();
+        assert_eq!(
+            foo_funcs.len(),
+            1,
+            "named default export should produce one Function named 'foo'"
+        );
+        assert!(
+            default_funcs.is_empty(),
+            "named default export must NOT produce a synthetic 'default' Function"
+        );
+        assert!(
+            foo_funcs[0].is_exported,
+            "named default export should be marked exported"
         );
     }
 }
