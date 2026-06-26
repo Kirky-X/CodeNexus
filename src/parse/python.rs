@@ -9,6 +9,11 @@
 //! - `function_definition` (inside class) → [`NodeLabel::Method`]
 //! - `class_definition` → [`NodeLabel::Class`]
 //!
+//! Note: nested `function_definition` (def inside another def) is NOT promoted
+//! to a Function node — its body is still traversed for calls/reads. This
+//! aligns with gitnexus which only indexes module-level functions as Function
+//! (P2-5 fix: previously over-extracted 280 vs gitnexus 170).
+//!
 //! # Extracted records
 //!
 //! - `import_statement` / `import_from_statement` → [`ImportInfo`]
@@ -166,6 +171,15 @@ fn extract_function(
     };
     // Determine if this is a method (inside a class) or a function.
     let is_method = is_inside_class(node);
+    // P2-5: skip nested `def` (def inside another def) — its body is still
+    // traversed by visit_children, but no Function node is created. This
+    // aligns with gitnexus which does not index nested defs (codenexus
+    // previously over-extracted 280 vs gitnexus 170). Functions inside
+    // if/try/with blocks at module scope ARE still indexed (only direct
+    // function_definition ancestors trigger the skip).
+    if !is_method && has_ancestor_function(node) {
+        return;
+    }
     let label = if is_method {
         NodeLabel::Method
     } else {
@@ -389,19 +403,42 @@ fn extract_assignment(node: Node, source: &str, result: &mut ExtractResult) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Returns true if the function_definition is inside a class_definition
-/// (i.e. its grandparent is a class_definition).
-fn is_inside_class(node: Node) -> bool {
-    let Some(parent) = node.parent() else {
-        return false;
-    };
-    // The function is inside a `block` which is inside a `class_definition`.
-    if parent.kind() == "block" {
-        if let Some(grandparent) = parent.parent() {
-            return grandparent.kind() == "class_definition";
+/// Returns the enclosing scope kind for a function_definition:
+/// - `Class` if the function is (anywhere) inside a class_definition body
+///   (methods, including those nested in if/try/with blocks inside a class).
+/// - `Function` if the function is nested inside another function_definition.
+/// - `Module` if the function is at module top level.
+///
+/// The walk stops at the first `class_definition` or `function_definition`
+/// ancestor encountered — a function inside a method counts as nested
+/// (Function scope), not as a class method.
+enum FunctionScope {
+    Class,
+    Function,
+    Module,
+}
+
+fn function_scope(node: Node) -> FunctionScope {
+    let mut cur = node.parent();
+    while let Some(p) = cur {
+        match p.kind() {
+            "class_definition" => return FunctionScope::Class,
+            "function_definition" => return FunctionScope::Function,
+            _ => cur = p.parent(),
         }
     }
-    false
+    FunctionScope::Module
+}
+
+/// Backwards-compatible predicate kept for any external callers.
+fn is_inside_class(node: Node) -> bool {
+    matches!(function_scope(node), FunctionScope::Class)
+}
+
+/// Returns true if the node has a `function_definition` ancestor (i.e. it is
+/// nested inside another function). Used by P2-5 to skip nested defs.
+fn has_ancestor_function(node: Node) -> bool {
+    matches!(function_scope(node), FunctionScope::Function)
 }
 
 fn function_signature(node: Node, source: &str) -> Option<String> {
@@ -851,6 +888,10 @@ class Foo(metaclass=Meta):
 
     #[test]
     fn nested_function_definitions() {
+        // P2-5: nested `def inner` (def inside another def) is NOT promoted to
+        // a Function node — only the top-level `outer` is. gitnexus applies
+        // the same rule (codenexus previously over-extracted 280 vs 170).
+        // The inner function's body is still traversed for calls/reads.
         let src = "def outer():\n    def inner():\n        return 1\n    return inner()\n";
         let result = extract(src);
         let funcs: Vec<_> = result
@@ -859,8 +900,14 @@ class Foo(metaclass=Meta):
             .filter(|n| n.label == NodeLabel::Function)
             .collect();
         let names: Vec<_> = funcs.iter().map(|n| n.name.as_str()).collect();
-        assert!(names.contains(&"outer"), "should extract outer function");
-        assert!(names.contains(&"inner"), "should extract nested inner function");
+        assert!(names.contains(&"outer"), "should extract top-level outer function");
+        assert!(
+            !names.contains(&"inner"),
+            "nested inner function must NOT be promoted to a Function node (P2-5)"
+        );
+        // The call to inner() inside outer() must still be captured.
+        let inner_call = result.calls.iter().find(|c| c.callee_name == "inner");
+        assert!(inner_call.is_some(), "call to inner() should still be recorded");
     }
 
     #[test]

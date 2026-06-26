@@ -14,6 +14,7 @@
 //! - `static_item` → [`NodeLabel::Static`]
 //! - `type_item` → [`NodeLabel::TypeAlias`]
 //! - `macro_definition` → [`NodeLabel::Macro`]
+//! - `mod_item` → [`NodeLabel::Module`] (P2-1: `mod foo;` / `mod foo {}`)
 //!
 //! # Extracted records
 //!
@@ -206,6 +207,9 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         "mod_item" => {
             // `mod name { ... }` 块：把模块名纳入 current_parent，使不同模块下
             // 的同名 impl 生成不同 FQN（修复 P0-1 rust-nested-tail-collision）。
+            // P2-1: 同时创建 Module 节点（`mod foo;` 和 `mod foo {}` 都创建），
+            // 之前只更新 current_parent 导致 Module 节点完全丢失（0 vs gitnexus 24）。
+            extract_named_item(node, NodeLabel::Module, source, ctx, result);
             let mod_name = node
                 .child_by_field_name("name")
                 .and_then(|n| node_text(n, source).map(String::from));
@@ -1469,5 +1473,53 @@ pub mod other {
             x_qn.contains("a_b"),
             "nested mod FQN should contain 'a_b': {x_qn}"
         );
+    }
+
+    // --- P2-1 regression: mod_item MUST create Module nodes ---
+
+    #[test]
+    fn extracts_mod_item_as_module_node() {
+        // P2-1 regression: `mod foo;` and `mod foo {}` previously only updated
+        // current_parent without creating a Module node, causing 100% loss of
+        // Rust module declarations (0 vs gitnexus 24 in tokei).
+        let src = "pub mod network;\nmod parser {}";
+        let result = extract(src);
+        let modules: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Module)
+            .collect();
+        assert_eq!(modules.len(), 2, "should extract 2 Module nodes");
+        let names: Vec<_> = modules.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"network"), "mod network; should be a Module");
+        assert!(names.contains(&"parser"), "mod parser {{}} should be a Module");
+        for m in &modules {
+            assert_eq!(m.language, Some(Language::Rust));
+            assert!(m.is_global, "top-level mod should be global");
+        }
+    }
+
+    #[test]
+    fn mod_item_has_contains_and_defines_edges() {
+        // P2-1: Module node must have CONTAINS/DEFINES edges or it's invisible.
+        let src = "pub mod foo;";
+        let result = extract(src);
+        let module_node = result
+            .nodes
+            .iter()
+            .find(|n| n.label == NodeLabel::Module)
+            .expect("Module node should exist");
+        let contains_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Contains && e.target == module_node.id)
+            .count();
+        let defines_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Defines && e.target == module_node.id)
+            .count();
+        assert_eq!(contains_count, 1, "Module should have 1 CONTAINS edge");
+        assert_eq!(defines_count, 1, "Module should have 1 DEFINES edge");
     }
 }
