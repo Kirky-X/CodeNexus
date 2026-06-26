@@ -55,6 +55,14 @@ impl FqnGenerator {
     /// Generates an FQN for an entity nested inside a module (Fortran).
     ///
     /// Format: `project.file.module.entity[#disambiguator]`.
+    ///
+    /// # Reserved
+    ///
+    /// The `disambiguator` parameter is currently unused by any production
+    /// caller (Fortran module extraction does not yet require disambiguation).
+    /// It is retained for API symmetry with [`generate`] and to avoid a
+    /// future breaking change if Fortran module-level disambiguation becomes
+    /// necessary.
     #[must_use]
     pub fn generate_for_module(
         project: &str,
