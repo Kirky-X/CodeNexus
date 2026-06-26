@@ -264,7 +264,26 @@ impl Pipeline {
         for file_node in &file_nodes {
             graph.add_node(file_node.clone());
         }
-        all_nodes.extend(file_nodes);
+        all_nodes.extend(file_nodes.iter().cloned());
+
+        // Build mapping from absolute file path → File node id (file_<uuid>).
+        // Parser-created DEFINES/CONTAINS edges use the absolute file path as
+        // `source`; we must rewrite it to the File node's id so the edge is not
+        // orphaned (DQ-004).
+        let mut path_to_file_id: HashMap<&str, &str> = HashMap::new();
+        for file in to_parse.iter() {
+            if let Some(abs) = file.path.to_str() {
+                let rel = file.relative_path.as_str();
+                // File node id is looked up by relative_path (File nodes use
+                // relative_path as their name/qualified_name).
+                for fn_node in &file_nodes {
+                    if fn_node.name == rel {
+                        path_to_file_id.insert(abs, &fn_node.id);
+                        break;
+                    }
+                }
+            }
+        }
 
         // Merge per-file extraction results into the graph.
         // Build a mapping from absolute file paths to relative paths so
@@ -279,13 +298,23 @@ impl Pipeline {
                 .get(result.file_path.as_str())
                 .copied()
                 .unwrap_or(result.file_path.as_str());
+            // Build a per-file remap: old node id (UUID) → new id (FQN) so
+            // edges whose `target` points at the pre-rewrite UUID can be
+            // rewritten to the FQN. This eliminates the orphan-edge class of
+            // bugs (DQ-004) where DEFINES/CONTAINS edges referenced the
+            // pre-rewrite UUID target.
+            let mut id_remap: HashMap<String, String> = HashMap::new();
             for node in &result.nodes {
                 let mut g = node.clone();
                 // Definition nodes (Class, Function, etc.) use FQN as id so
                 // resolve_all and trace can look them up by qualified_name.
                 // Project/File/Folder keep their UUIDv7 ids.
                 if !matches!(g.label, NodeLabel::Project | NodeLabel::File | NodeLabel::Folder) {
+                    let old_id = g.id.clone();
                     g.id = node.qualified_name.clone();
+                    if old_id != g.id {
+                        id_remap.insert(old_id, g.id.clone());
+                    }
                 }
                 // Normalize filePath to relative for consistency with File
                 // nodes, so delete_file_nodes matches all nodes by relative
@@ -301,8 +330,22 @@ impl Pipeline {
                 all_nodes.push(g);
             }
             for edge in &result.edges {
-                graph.add_edge(edge.clone());
-                all_edges.push(edge.clone());
+                let mut e = edge.clone();
+                // Rewrite parser-created edge endpoints so they match the
+                // stored node ids:
+                //  - `source` (absolute file path) → File node id (file_<uuid>)
+                //  - `target` (pre-rewrite UUID) → FQN
+                // Resolver-created edges (CALLS/DataFlows/Reads/Writes) already
+                // use FQN endpoints and are not in the remap, so they are left
+                // unchanged.
+                if let Some(file_id) = path_to_file_id.get(e.source.as_str()) {
+                    e.source = (*file_id).to_string();
+                }
+                if let Some(new_target) = id_remap.get(&e.target) {
+                    e.target = new_target.clone();
+                }
+                graph.add_edge(e.clone());
+                all_edges.push(e);
             }
         }
 
