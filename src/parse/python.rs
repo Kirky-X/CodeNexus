@@ -436,7 +436,22 @@ fn assignment_target_name(node: Node, source: &str) -> Option<String> {
             let value = node.child_by_field_name("value")?;
             assignment_target_name(value, source)
         }
-        _ => node_text(node, source).map(String::from),
+        _ => {
+            // Fallback: only accept simple identifier text. Complex
+            // expressions (calls, binary ops, etc.) would produce FQNs
+            // with invalid characters (brackets, quotes, commas) that
+            // corrupt CSV imports.
+            let text = node_text(node, source)?;
+            if text
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_')
+                && text.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
+            {
+                Some(text.to_string())
+            } else {
+                None
+            }
+        }
     }
 }
 
