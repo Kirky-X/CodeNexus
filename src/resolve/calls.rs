@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use crate::model::{Edge, EdgeType, Graph};
-use crate::parse::{ExtractResult, ImportInfo};
+use crate::ir::{ExtractResult, ImportInfo};
 use crate::resolve::ProjectSymbolTable;
 
 /// Confidence for an exact (file-level) call match.
@@ -188,7 +188,7 @@ impl<'a> CallResolver<'a> {
 mod tests {
     use super::*;
     use crate::model::{Language, Node, NodeLabel};
-    use crate::parse::{AssignInfo, CallInfo};
+    use crate::ir::{AssignInfo, CallInfo};
     use crate::resolve::{build_symbol_table, FqnGenerator};
 
     /// Generates the FQN for a top-level entity, matching `build_symbol_table`.

@@ -17,7 +17,7 @@
 //! - BR-TRACE-006: Variable write - Function -> Variable, Writes edge.
 
 use crate::model::{Edge, EdgeType, Graph, Node, NodeLabel};
-use crate::parse::ExtractResult;
+use crate::ir::ExtractResult;
 use crate::resolve::ProjectSymbolTable;
 
 /// Confidence for a return-assignment data flow edge (BR-TRACE-002/004).
@@ -358,7 +358,7 @@ fn is_identifier(s: &str) -> bool {
 mod tests {
     use super::*;
     use crate::model::{Language, Node, NodeLabel};
-    use crate::parse::{AssignInfo, CallInfo, ReadInfo, WriteInfo};
+    use crate::ir::{AssignInfo, CallInfo, ReadInfo, WriteInfo};
     use crate::resolve::{build_symbol_table, FqnGenerator};
 
     /// Generates the FQN for a top-level entity, matching `build_symbol_table`.

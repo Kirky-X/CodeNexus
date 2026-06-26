@@ -32,8 +32,8 @@ pub use fqn::FqnGenerator;
 pub use scope::{Scope, ScopeChain};
 pub use symbol_table::{FileSymbolTable, ProjectSymbolTable, SymbolEntry};
 
+use crate::ir::ExtractResult;
 use crate::model::{Edge, Graph};
-use crate::parse::ExtractResult;
 
 /// Builds a project-level symbol table from extraction results.
 ///
@@ -114,7 +114,7 @@ pub fn resolve_all(
 mod tests {
     use super::*;
     use crate::model::{Language, Node, NodeLabel};
-    use crate::parse::{CallInfo, ImportInfo};
+    use crate::ir::{CallInfo, ImportInfo};
 
     fn make_node(name: &str, label: NodeLabel, language: Language) -> Node {
         Node::builder(label, name, "placeholder")
