@@ -581,7 +581,25 @@ fn assignment_target_name(node: Node, source: &str) -> Option<String> {
             }
             None
         }
-        _ => node_text(node, source).map(String::from),
+        _ => {
+            // Fallback: only accept simple identifier text. Complex
+            // expressions (await, JSX, ternary, multi-statement blocks)
+            // would produce FQNs with invalid characters (brackets, quotes,
+            // newlines, semicolons) that corrupt CSV imports.
+            let text = node_text(node, source)?;
+            if text
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                && text
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_alphabetic() || c == '_' || c == '$')
+            {
+                Some(text.to_string())
+            } else {
+                None
+            }
+        }
     }
 }
 
