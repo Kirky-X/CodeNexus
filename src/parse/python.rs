@@ -209,7 +209,7 @@ fn extract_class(
         node.start_position().row as u32 + 1,
         result,
     );
-    let model_node = ModelNode::builder(NodeLabel::Class, name, qn)
+    let model_node = ModelNode::builder(NodeLabel::Class, name, qn.clone())
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
@@ -219,6 +219,56 @@ fn extract_class(
         .build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.nodes.push(model_node);
+
+    // P2-2: Create EXTENDS edges for each base class.
+    // `class Child(Parent1, Parent2):` → superclasses field is an
+    // argument_list whose named children are the base expressions.
+    // Target is a best-effort FQN based on the current file/scope; cross-file
+    // base classes may not resolve until a future resolver enhancement.
+    if let Some(superclasses) = node.child_by_field_name("superclasses") {
+        for i in 0..superclasses.named_child_count() as u32 {
+            if let Some(base) = superclasses.named_child(i) {
+                // Skip keyword arguments like `metaclass=Meta`.
+                if base.kind() == "keyword_argument" {
+                    continue;
+                }
+                if let Some(parent_name) = base_class_name(base, source) {
+                    let parent_qn = make_qn(
+                        ctx.file_path,
+                        &parent_name,
+                        ctx.project,
+                        ctx.current_parent,
+                    );
+                    result.edges.push(Edge::new(
+                        qn.clone(),
+                        parent_qn,
+                        EdgeType::Extends,
+                        ctx.project,
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// P2-2: Extracts the base class name from a `superclasses` entry.
+/// Handles plain identifiers (`Foo`), attribute access (`module.Foo`), and
+/// call expressions (`Meta()` used as a base).
+fn base_class_name(node: Node, source: &str) -> Option<String> {
+    match node.kind() {
+        "identifier" => node_text(node, source).map(String::from),
+        "attribute" => {
+            // `module.BaseClass` → use the attribute (rightmost) name.
+            let attr = node.child_by_field_name("attribute")?;
+            node_text(attr, source).map(String::from)
+        }
+        "call" => {
+            // `Meta()` as a base — unwrap to the function identifier.
+            let func = node.child_by_field_name("function")?;
+            base_class_name(func, source)
+        }
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -599,6 +649,69 @@ result = add(1, 2)
         let classes: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Class).collect();
         assert_eq!(classes.len(), 1);
         assert_eq!(classes[0].name, "Point");
+    }
+
+    #[test]
+    fn p2_2_extends_edge_for_single_inheritance() {
+        let src = r#"class Parent:
+    pass
+
+class Child(Parent):
+    pass
+"#;
+        let result = extract(src);
+        let extends: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Extends)
+            .collect();
+        assert_eq!(extends.len(), 1, "should create 1 EXTENDS edge: {:?}", extends);
+        // Source = Child FQN, Target = Parent FQN (best-effort, same file).
+        assert!(
+            extends[0].source.contains("Child"),
+            "EXTENDS source should be Child FQN: {}",
+            extends[0].source
+        );
+        assert!(
+            extends[0].target.contains("Parent"),
+            "EXTENDS target should be Parent FQN: {}",
+            extends[0].target
+        );
+    }
+
+    #[test]
+    fn p2_2_extends_edge_for_multiple_bases() {
+        let src = r#"class Base1:
+    pass
+class Base2:
+    pass
+class Derived(Base1, Base2):
+    pass
+"#;
+        let result = extract(src);
+        let extends: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Extends)
+            .collect();
+        assert_eq!(extends.len(), 2, "should create 2 EXTENDS edges: {:?}", extends);
+    }
+
+    #[test]
+    fn p2_2_extends_edge_skips_keyword_argument() {
+        let src = r#"class Meta:
+    pass
+class Foo(metaclass=Meta):
+    pass
+"#;
+        let result = extract(src);
+        let extends: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Extends)
+            .collect();
+        // `metaclass=Meta` is a keyword_argument, not a base class.
+        assert_eq!(extends.len(), 0, "should skip keyword_argument: {:?}", extends);
     }
 
     #[test]
