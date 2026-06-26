@@ -16,9 +16,9 @@
 //! - BR-TRACE-005: Variable read - Function -> Variable, Reads edge.
 //! - BR-TRACE-006: Variable write - Function -> Variable, Writes edge.
 
-use crate::model::{Edge, EdgeType, Graph, Node, NodeLabel};
+use crate::model::{Edge, EdgeType, Graph, Language, Node, NodeLabel};
 use crate::ir::ExtractResult;
-use crate::resolve::ProjectSymbolTable;
+use crate::resolve::{fqn::FqnGenerator, ProjectSymbolTable};
 
 /// Confidence for a return-assignment data flow edge (BR-TRACE-002/004).
 const CONFIDENCE_RETURN_ASSIGN: f32 = 0.90;
@@ -76,15 +76,28 @@ impl<'a> DataFlowResolver<'a> {
         let mut edges = Vec::new();
         for result in results {
             let file = &result.file_path;
+            let language = result.language;
 
             // Process assignments (BR-TRACE-002, BR-TRACE-003, BR-TRACE-004).
             for assign in &result.assignments {
                 let edge = if assign.is_return_assign {
                     // x = foo() -> DataFlows edge foo -> x
-                    self.resolve_return_assign(file, &assign.source_name, &assign.target_name)
+                    self.resolve_return_assign(
+                        file,
+                        &assign.source_name,
+                        &assign.target_name,
+                        graph,
+                        language,
+                    )
                 } else {
                     // x = y -> DataFlows edge y -> x
-                    self.resolve_var_assign(file, &assign.target_name, &assign.source_name)
+                    self.resolve_var_assign(
+                        file,
+                        &assign.target_name,
+                        &assign.source_name,
+                        graph,
+                        language,
+                    )
                 };
                 if let Some(mut edge) = edge {
                     edge.start_line = Some(assign.line);
@@ -101,9 +114,14 @@ impl<'a> DataFlowResolver<'a> {
                     if !is_identifier(arg) {
                         continue;
                     }
-                    if let Some(mut edge) =
-                        self.resolve_arg_pass(file, arg, &call.callee_name, arg_index)
-                    {
+                    if let Some(mut edge) = self.resolve_arg_pass(
+                        file,
+                        arg,
+                        &call.callee_name,
+                        arg_index,
+                        graph,
+                        language,
+                    ) {
                         edge.start_line = Some(call.line);
                         // Create the Parameter node so the edge target is not
                         // orphaned (DQ-004).
@@ -116,6 +134,7 @@ impl<'a> DataFlowResolver<'a> {
                         .id(param_qn)
                         .project(self.project)
                         .file_path(file)
+                        .language(language)
                         .build();
                         graph.add_node(param_node);
                         graph.add_edge(edge.clone());
@@ -142,6 +161,8 @@ impl<'a> DataFlowResolver<'a> {
     /// * `func_name` - The name of the function whose return value is
     ///   assigned.
     /// * `var_name` - The name of the variable receiving the return value.
+    /// * `graph` - The graph to add the fallback `Variable` node to.
+    /// * `language` - The source language, used for FQN generation.
     ///
     /// # Returns
     ///
@@ -153,9 +174,11 @@ impl<'a> DataFlowResolver<'a> {
         file: &str,
         func_name: &str,
         var_name: &str,
+        graph: &mut Graph,
+        language: Language,
     ) -> Option<Edge> {
         let func_qn = self.lookup_symbol_qn(file, func_name)?;
-        let var_qn = self.resolve_var_identifier(file, var_name);
+        let var_qn = self.resolve_var_identifier(file, var_name, graph, language);
         let edge = Edge::builder(func_qn, var_qn, EdgeType::DataFlows, self.project)
             .confidence(CONFIDENCE_RETURN_ASSIGN)
             .build();
@@ -171,15 +194,24 @@ impl<'a> DataFlowResolver<'a> {
     /// * `file` - The source file path.
     /// * `target` - The name of the variable being assigned.
     /// * `source` - The name of the source variable.
+    /// * `graph` - The graph to add the fallback `Variable` node to.
+    /// * `language` - The source language, used for FQN generation.
     ///
     /// # Returns
     ///
     /// `Some(Edge)` with edge type DataFlows. Always returns `Some` since
     /// variable assignments are always valid.
     #[must_use]
-    pub fn resolve_var_assign(&self, file: &str, target: &str, source: &str) -> Option<Edge> {
-        let source_qn = self.resolve_var_identifier(file, source);
-        let target_qn = self.resolve_var_identifier(file, target);
+    pub fn resolve_var_assign(
+        &self,
+        file: &str,
+        target: &str,
+        source: &str,
+        graph: &mut Graph,
+        language: Language,
+    ) -> Option<Edge> {
+        let source_qn = self.resolve_var_identifier(file, source, graph, language);
+        let target_qn = self.resolve_var_identifier(file, target, graph, language);
         let edge = Edge::builder(source_qn, target_qn, EdgeType::DataFlows, self.project)
             .confidence(CONFIDENCE_VAR_ASSIGN)
             .build();
@@ -197,6 +229,8 @@ impl<'a> DataFlowResolver<'a> {
     /// * `var_name` - The name of the argument variable.
     /// * `callee` - The name of the called function.
     /// * `arg_index` - The zero-based index of the argument.
+    /// * `graph` - The graph to add the fallback `Variable` node to.
+    /// * `language` - The source language, used for FQN generation.
     ///
     /// # Returns
     ///
@@ -210,9 +244,11 @@ impl<'a> DataFlowResolver<'a> {
         var_name: &str,
         callee: &str,
         arg_index: usize,
+        graph: &mut Graph,
+        language: Language,
     ) -> Option<Edge> {
         let callee_qn = self.lookup_symbol_qn(file, callee)?;
-        let var_qn = self.resolve_var_identifier(file, var_name);
+        let var_qn = self.resolve_var_identifier(file, var_name, graph, language);
         let param_qn = format!("{callee_qn}.param{arg_index}");
         let edge = Edge::builder(var_qn, param_qn, EdgeType::DataFlows, self.project)
             .confidence(CONFIDENCE_ARG_PASS)
@@ -241,6 +277,7 @@ impl<'a> DataFlowResolver<'a> {
         let mut edges = Vec::new();
         for result in results {
             let file = &result.file_path;
+            let language = result.language;
             for read in &result.reads {
                 let Some(reader_name) = read.reader_qn.as_deref() else {
                     continue;
@@ -248,7 +285,7 @@ impl<'a> DataFlowResolver<'a> {
                 let Some(func_qn) = self.lookup_symbol_qn(file, reader_name) else {
                     continue;
                 };
-                let var_qn = self.resolve_var_identifier(file, &read.var_name);
+                let var_qn = self.resolve_var_identifier(file, &read.var_name, graph, language);
                 let mut edge = Edge::builder(func_qn, var_qn, EdgeType::Reads, self.project)
                     .confidence(CONFIDENCE_READS)
                     .build();
@@ -281,6 +318,7 @@ impl<'a> DataFlowResolver<'a> {
         let mut edges = Vec::new();
         for result in results {
             let file = &result.file_path;
+            let language = result.language;
             for write in &result.writes {
                 let Some(writer_name) = write.writer_qn.as_deref() else {
                     continue;
@@ -288,7 +326,7 @@ impl<'a> DataFlowResolver<'a> {
                 let Some(func_qn) = self.lookup_symbol_qn(file, writer_name) else {
                     continue;
                 };
-                let var_qn = self.resolve_var_identifier(file, &write.var_name);
+                let var_qn = self.resolve_var_identifier(file, &write.var_name, graph, language);
                 let mut edge = Edge::builder(func_qn, var_qn, EdgeType::Writes, self.project)
                     .confidence(CONFIDENCE_WRITES)
                     .build();
@@ -316,28 +354,44 @@ impl<'a> DataFlowResolver<'a> {
     /// Resolves a variable identifier to a qualified name.
     ///
     /// If the variable is in the symbol table, returns its qn. Otherwise,
-    /// returns a file-qualified fallback `{file_stem}.{name}` where
-    /// `file_stem` is the file path with the extension removed and slashes
-    /// converted to dots (matching FQN conventions).
-    fn resolve_var_identifier(&self, file: &str, name: &str) -> String {
+    /// generates a project-qualified FQN via [`FqnGenerator::generate`]
+    /// (matching node-table ID conventions: `project.dir.file_full.name`)
+    /// and materializes a `Variable` node in `graph` so the edge endpoint is
+    /// not orphaned.
+    ///
+    /// # Arguments
+    ///
+    /// * `file` - The source file path.
+    /// * `name` - The variable name.
+    /// * `graph` - The graph to add the fallback `Variable` node to.
+    /// * `language` - The source language, used for FQN generation.
+    fn resolve_var_identifier(
+        &self,
+        file: &str,
+        name: &str,
+        graph: &mut Graph,
+        language: Language,
+    ) -> String {
         if let Some(entry) = self.symbol_table.lookup_in_file(file, name).first() {
             return entry.qn.clone();
         }
         if let Some(entry) = self.symbol_table.lookup(name).first() {
             return entry.qn.clone();
         }
-        // Fallback: file-qualified name with extension stripped, matching FQN
-        // path-segment conventions. A leading "./" is stripped first so that
-        // relative paths like "./src/foo.rs" produce "src.foo.x" rather than
-        // "..src.foo.x".
-        let normalized = file.replace('\\', "/");
-        let normalized = normalized.strip_prefix("./").unwrap_or(&normalized);
-        let file_stem = normalized
-            .rsplit_once('.')
-            .map(|(stem, _)| stem)
-            .unwrap_or(normalized);
-        let file_dotted = file_stem.replace('/', ".");
-        format!("{file_dotted}.{name}")
+        // Fallback: use FqnGenerator so the ID matches node-table conventions
+        // (project.dir.file_full.entity, with extension preserved). Also
+        // create a Variable node so the edge endpoint is not orphaned.
+        let qn = FqnGenerator::generate(self.project, file, name, language, None);
+        if graph.get_node(&qn).is_none() {
+            let node = Node::builder(NodeLabel::Variable, name, qn.clone())
+                .id(qn.clone())
+                .project(self.project)
+                .file_path(file.to_string())
+                .language(language)
+                .build();
+            graph.add_node(node);
+        }
+        qn
     }
 }
 
@@ -428,14 +482,22 @@ mod tests {
         let table = build_symbol_table(&results, "proj");
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edge = resolver.resolve_return_assign("a.rs", "foo", "x");
+        let mut graph = Graph::new();
+        let edge = resolver.resolve_return_assign("a.rs", "foo", "x", &mut graph, Language::Rust);
 
         assert!(edge.is_some());
         let edge = edge.unwrap();
         assert_eq!(edge.edge_type, EdgeType::DataFlows);
         assert_eq!(edge.source, "proj.a.rs.foo");
-        assert_eq!(edge.target, "a.x");
+        // Fallback now uses FqnGenerator: project.dir.file_full.name
+        assert_eq!(edge.target, "proj.a.rs.x");
         assert!((edge.confidence - 0.90).abs() < 1e-6);
+        // Fallback should create a Variable node for x.
+        assert!(graph.get_node(&"proj.a.rs.x".to_string()).is_some());
+        assert_eq!(
+            graph.get_node(&"proj.a.rs.x".to_string()).unwrap().label,
+            NodeLabel::Variable
+        );
     }
 
     #[test]
@@ -444,7 +506,8 @@ mod tests {
         let table = build_symbol_table(&results, "proj");
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edge = resolver.resolve_return_assign("a.rs", "nonexistent", "x");
+        let mut graph = Graph::new();
+        let edge = resolver.resolve_return_assign("a.rs", "nonexistent", "x", &mut graph, Language::Rust);
         assert!(edge.is_none());
     }
 
@@ -457,7 +520,8 @@ mod tests {
         let table = build_symbol_table(&results, "proj");
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edge = resolver.resolve_return_assign("a.rs", "foo", "x").unwrap();
+        let mut graph = Graph::new();
+        let edge = resolver.resolve_return_assign("a.rs", "foo", "x", &mut graph, Language::Rust).unwrap();
 
         assert_eq!(edge.source, "proj.a.rs.foo");
         assert_eq!(edge.target, "proj.a.rs.x");
@@ -474,7 +538,8 @@ mod tests {
         let table = build_symbol_table(&results, "proj");
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edge = resolver.resolve_return_assign("a.rs", "foo", "x");
+        let mut graph = Graph::new();
+        let edge = resolver.resolve_return_assign("a.rs", "foo", "x", &mut graph, Language::Rust);
 
         assert!(edge.is_some());
         let edge = edge.unwrap();
@@ -490,13 +555,15 @@ mod tests {
         let table = build_symbol_table(&results, "proj");
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edge = resolver.resolve_var_assign("a.rs", "x", "y");
+        let mut graph = Graph::new();
+        let edge = resolver.resolve_var_assign("a.rs", "x", "y", &mut graph, Language::Rust);
 
         assert!(edge.is_some());
         let edge = edge.unwrap();
         assert_eq!(edge.edge_type, EdgeType::DataFlows);
-        assert_eq!(edge.source, "a.y");
-        assert_eq!(edge.target, "a.x");
+        // Fallback now uses FqnGenerator: project.dir.file_full.name
+        assert_eq!(edge.source, "proj.a.rs.y");
+        assert_eq!(edge.target, "proj.a.rs.x");
         assert!((edge.confidence - 0.85).abs() < 1e-6);
     }
 
@@ -508,7 +575,8 @@ mod tests {
         let table = build_symbol_table(&results, "proj");
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edge = resolver.resolve_var_assign("a.rs", "x", "y").unwrap();
+        let mut graph = Graph::new();
+        let edge = resolver.resolve_var_assign("a.rs", "x", "y", &mut graph, Language::Rust).unwrap();
 
         assert_eq!(edge.source, "proj.a.rs.y");
         assert_eq!(edge.target, "proj.a.rs.x");
@@ -520,23 +588,28 @@ mod tests {
         // variable is in the symbol table.
         let table = ProjectSymbolTable::new();
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edge = resolver.resolve_var_assign("a.rs", "x", "y");
+        let mut graph = Graph::new();
+        let edge = resolver.resolve_var_assign("a.rs", "x", "y", &mut graph, Language::Rust);
         assert!(edge.is_some());
     }
 
     // --- resolve_var_identifier fallback FQN format ---
 
     #[test]
-    fn resolve_var_identifier_fallback_strips_leading_dot_slash() {
-        // Relative path "./src/foo.rs" must not produce a leading ".." in the
-        // FQN. Expected: src.foo.{name}, not ..src.foo.{name}.
+    fn resolve_var_identifier_fallback_uses_fqn_generator() {
+        // Fallback must use FqnGenerator: project.dir.file_full.name (with
+        // extension preserved, project prefix included).
         let table = ProjectSymbolTable::new();
         let resolver = DataFlowResolver::new(&table, "proj");
+        let mut graph = Graph::new();
         let edge = resolver
-            .resolve_var_assign("./src/foo.rs", "x", "y")
+            .resolve_var_assign("./src/foo.rs", "x", "y", &mut graph, Language::Rust)
             .unwrap();
-        assert_eq!(edge.source, "src.foo.y");
-        assert_eq!(edge.target, "src.foo.x");
+        assert_eq!(edge.source, "proj.src.foo.rs.y");
+        assert_eq!(edge.target, "proj.src.foo.rs.x");
+        // Fallback should create Variable nodes for both x and y.
+        assert!(graph.get_node(&"proj.src.foo.rs.y".to_string()).is_some());
+        assert!(graph.get_node(&"proj.src.foo.rs.x".to_string()).is_some());
     }
 
     #[test]
@@ -544,9 +617,10 @@ mod tests {
         // Path without a leading "./" must keep working unchanged.
         let table = ProjectSymbolTable::new();
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edge = resolver.resolve_var_assign("src/foo.rs", "x", "y").unwrap();
-        assert_eq!(edge.source, "src.foo.y");
-        assert_eq!(edge.target, "src.foo.x");
+        let mut graph = Graph::new();
+        let edge = resolver.resolve_var_assign("src/foo.rs", "x", "y", &mut graph, Language::Rust).unwrap();
+        assert_eq!(edge.source, "proj.src.foo.rs.y");
+        assert_eq!(edge.target, "proj.src.foo.rs.x");
     }
 
     #[test]
@@ -554,11 +628,33 @@ mod tests {
         // Backslash separators must be normalised to dots, no leading dot.
         let table = ProjectSymbolTable::new();
         let resolver = DataFlowResolver::new(&table, "proj");
+        let mut graph = Graph::new();
         let edge = resolver
-            .resolve_var_assign("src\\foo.rs", "x", "y")
+            .resolve_var_assign("src\\foo.rs", "x", "y", &mut graph, Language::Rust)
             .unwrap();
-        assert_eq!(edge.source, "src.foo.y");
-        assert_eq!(edge.target, "src.foo.x");
+        assert_eq!(edge.source, "proj.src.foo.rs.y");
+        assert_eq!(edge.target, "proj.src.foo.rs.x");
+    }
+
+    #[test]
+    fn resolve_var_identifier_fallback_is_idempotent() {
+        // Same variable resolved twice should only create one Variable node.
+        let table = ProjectSymbolTable::new();
+        let resolver = DataFlowResolver::new(&table, "proj");
+        let mut graph = Graph::new();
+        let qn1 = resolver.resolve_var_identifier("a.rs", "x", &mut graph, Language::Rust);
+        let qn2 = resolver.resolve_var_identifier("a.rs", "x", &mut graph, Language::Rust);
+        assert_eq!(qn1, qn2);
+        assert_eq!(qn1, "proj.a.rs.x");
+        // Only one Variable node should exist.
+        assert_eq!(
+            graph
+                .nodes
+                .values()
+                .filter(|n| n.label == NodeLabel::Variable && n.id == "proj.a.rs.x")
+                .count(),
+            1
+        );
     }
 
     // --- resolve_arg_pass (BR-TRACE-001) ---
@@ -571,12 +667,14 @@ mod tests {
         let table = build_symbol_table(&results, "proj");
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edge = resolver.resolve_arg_pass("a.rs", "var", "foo", 0);
+        let mut graph = Graph::new();
+        let edge = resolver.resolve_arg_pass("a.rs", "var", "foo", 0, &mut graph, Language::Rust);
 
         assert!(edge.is_some());
         let edge = edge.unwrap();
         assert_eq!(edge.edge_type, EdgeType::DataFlows);
-        assert_eq!(edge.source, "a.var");
+        // Fallback now uses FqnGenerator: project.dir.file_full.name
+        assert_eq!(edge.source, "proj.a.rs.var");
         assert_eq!(edge.target, "proj.a.rs.foo.param0");
         assert!((edge.confidence - 0.80).abs() < 1e-6);
     }
@@ -587,7 +685,8 @@ mod tests {
         let table = build_symbol_table(&results, "proj");
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edge = resolver.resolve_arg_pass("a.rs", "var", "nonexistent", 0);
+        let mut graph = Graph::new();
+        let edge = resolver.resolve_arg_pass("a.rs", "var", "nonexistent", 0, &mut graph, Language::Rust);
         assert!(edge.is_none());
     }
 
@@ -598,7 +697,8 @@ mod tests {
         let table = build_symbol_table(&results, "proj");
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edge = resolver.resolve_arg_pass("a.rs", "var", "foo", 2).unwrap();
+        let mut graph = Graph::new();
+        let edge = resolver.resolve_arg_pass("a.rs", "var", "foo", 2, &mut graph, Language::Rust).unwrap();
 
         assert_eq!(edge.target, "proj.a.rs.foo.param2");
     }
@@ -611,7 +711,8 @@ mod tests {
         let table = build_symbol_table(&results, "proj");
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edge = resolver.resolve_arg_pass("a.rs", "var", "foo", 0).unwrap();
+        let mut graph = Graph::new();
+        let edge = resolver.resolve_arg_pass("a.rs", "var", "foo", 0, &mut graph, Language::Rust).unwrap();
 
         assert_eq!(edge.source, "proj.a.rs.var");
         assert_eq!(edge.target, "proj.a.rs.foo.param0");
@@ -662,18 +763,18 @@ mod tests {
 
         // Verify return assignment edge: foo -> x
         let return_edge = edges.iter().find(|e| e.source == "proj.a.rs.foo").unwrap();
-        assert_eq!(return_edge.target, "a.x");
+        assert_eq!(return_edge.target, "proj.a.rs.x");
 
         // Verify variable assignment edge: z -> y
-        let var_edge = edges.iter().find(|e| e.source == "a.z").unwrap();
-        assert_eq!(var_edge.target, "a.y");
+        let var_edge = edges.iter().find(|e| e.source == "proj.a.rs.z").unwrap();
+        assert_eq!(var_edge.target, "proj.a.rs.y");
 
         // Verify arg pass edge: var -> bar.param0
         let arg_edge = edges
             .iter()
             .find(|e| e.target == "proj.a.rs.bar.param0")
             .unwrap();
-        assert_eq!(arg_edge.source, "a.var");
+        assert_eq!(arg_edge.source, "proj.a.rs.var");
     }
 
     #[test]
@@ -731,7 +832,7 @@ mod tests {
 
         // Only "x" is a valid identifier; "42" and "\"hello\"" are literals.
         assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].source, "a.x");
+        assert_eq!(edges[0].source, "proj.a.rs.x");
         assert_eq!(edges[0].target, "proj.a.rs.foo.param2");
     }
 
@@ -861,7 +962,7 @@ mod tests {
         let edge = &edges[0];
         assert_eq!(edge.edge_type, EdgeType::Reads);
         assert_eq!(edge.source, "proj.a.rs.foo");
-        assert_eq!(edge.target, "a.x");
+        assert_eq!(edge.target, "proj.a.rs.x");
         assert!(
             (edge.confidence - 0.75).abs() < 1e-6,
             "Reads confidence should be 0.75, got {}",
@@ -963,7 +1064,7 @@ mod tests {
         let edge = &edges[0];
         assert_eq!(edge.edge_type, EdgeType::Writes);
         assert_eq!(edge.source, "proj.a.rs.foo");
-        assert_eq!(edge.target, "a.y");
+        assert_eq!(edge.target, "proj.a.rs.y");
         assert!(
             (edge.confidence - 0.75).abs() < 1e-6,
             "Writes confidence should be 0.75, got {}",
@@ -1059,12 +1160,12 @@ mod tests {
 
         let reads_edge = reads_edges[0];
         assert_eq!(reads_edge.source, "proj.a.rs.foo");
-        assert_eq!(reads_edge.target, "a.x");
+        assert_eq!(reads_edge.target, "proj.a.rs.x");
         assert!((reads_edge.confidence - 0.75).abs() < 1e-6);
 
         let writes_edge = writes_edges[0];
         assert_eq!(writes_edge.source, "proj.a.rs.foo");
-        assert_eq!(writes_edge.target, "a.y");
+        assert_eq!(writes_edge.target, "proj.a.rs.y");
         assert!((writes_edge.confidence - 0.75).abs() < 1e-6);
 
         assert_eq!(

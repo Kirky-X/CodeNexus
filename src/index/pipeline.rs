@@ -316,18 +316,26 @@ impl Pipeline {
         );
         all_edges.extend(resolved_edges);
 
-        // Collect Parameter nodes created during dataflow resolution (DQ-004)
-        // so they are persisted to the database alongside other nodes.
-        for node in graph.nodes_by_label(NodeLabel::Parameter) {
-            let mut param = node.clone();
-            // Normalize filePath to relative for consistency with File nodes,
-            // so delete_file_nodes matches during incremental re-indexing.
-            if let Some(fp) = param.file_path.as_mut() {
-                if let Some(&rel) = path_to_rel.get(fp.as_str()) {
-                    *fp = rel.to_string();
+        // Collect Parameter and Variable nodes created during dataflow
+        // resolution (DQ-004) so they are persisted to the database alongside
+        // other nodes. Variable nodes are created by `resolve_var_identifier`
+        // fallback when a referenced variable isn't in the symbol table (P0-1);
+        // Parameter nodes are created by `resolve_arg_pass` (BR-TRACE-001).
+        // Without this, DataFlows edges become orphans pointing at
+        // never-persisted Variable/Parameter nodes.
+        for label in [NodeLabel::Parameter, NodeLabel::Variable] {
+            for node in graph.nodes_by_label(label) {
+                let mut n = node.clone();
+                // Normalize filePath to relative for consistency with File
+                // nodes, so delete_file_nodes matches during incremental
+                // re-indexing.
+                if let Some(fp) = n.file_path.as_mut() {
+                    if let Some(&rel) = path_to_rel.get(fp.as_str()) {
+                        *fp = rel.to_string();
+                    }
                 }
+                all_nodes.push(n);
             }
-            all_nodes.push(param);
         }
 
         // Step 7: delete old nodes for deleted files (BR-INDEX-002) and for
@@ -474,9 +482,26 @@ impl Pipeline {
             if label == NodeLabel::Project {
                 continue;
             }
+            // Deduplicate by id within this label group. The same node can
+            // appear more than once in `all_nodes` when a definition node
+            // extracted by the parser happens to share its id (FQN) with a
+            // Variable/Parameter node created during dataflow resolution, or
+            // when incremental re-indexing hasn't yet cleared stale rows.
+            // LadybugDB's COPY rejects duplicate primary keys, so we keep the
+            // last occurrence per id.
+            let mut seen: HashMap<String, usize> = HashMap::new();
+            let mut deduped: Vec<Node> = Vec::with_capacity(group.len());
+            for node in group {
+                if let Some(&idx) = seen.get(&node.id) {
+                    deduped[idx] = node;
+                } else {
+                    seen.insert(node.id.clone(), deduped.len());
+                    deduped.push(node);
+                }
+            }
             with_retry(DEFAULT_MAX_RETRIES, || {
                 self.repository
-                    .save_nodes(&group, label)
+                    .save_nodes(&deduped, label)
                     .map_err(IndexError::from)
             })?;
         }

@@ -107,6 +107,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "subroutine" => {
             extract_subroutine_or_function(node, source, ctx, result, "subroutine_statement");
+            extract_bind_c(node, source, ctx, result, "subroutine_statement");
             // Pass the subroutine's name as the enclosing function for body
             // traversal, so calls inside it can be attributed to it.
             // NOTE: 不把子程序名纳入 current_parent —— 否则 caller_qn 会与
@@ -122,6 +123,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "function" => {
             extract_subroutine_or_function(node, source, ctx, result, "function_statement");
+            extract_bind_c(node, source, ctx, result, "function_statement");
             let func_name = statement_name(node, "function_statement", source);
             let child_ctx = VisitContext {
                 file_path: ctx.file_path,
@@ -253,6 +255,93 @@ fn extract_program(
 // Record extractors
 // ---------------------------------------------------------------------------
 
+/// Extracts FFI binding names from `bind(C)` declarations on subroutines and
+/// functions (BR-TRACE-008).
+///
+/// Scans the `language_binding` child of a subroutine/function statement for
+/// the `bind(C)` attribute. If present, collects the Fortran symbol name and
+/// the optional C alias specified via `name="..."`.
+///
+/// # Arguments
+///
+/// * `node` - The `subroutine` or `function` node.
+/// * `source` - The source text.
+/// * `ctx` - The visit context (for file path / project).
+/// * `result` - The extraction result to push `ExternInfo` into.
+/// * `statement_kind` - `"subroutine_statement"` or `"function_statement"`.
+fn extract_bind_c(
+    node: Node,
+    source: &str,
+    _ctx: &VisitContext<'_>,
+    result: &mut ExtractResult,
+    statement_kind: &str,
+) {
+    // Find the statement child (subroutine_statement / function_statement).
+    let Some(stmt) = find_child(node, source, statement_kind) else {
+        return;
+    };
+    // Find the language_binding child of the statement.
+    let Some(binding) = find_child(stmt, source, "language_binding") else {
+        return;
+    };
+    // Verify it binds to C (identifier child == "C").
+    let binds_c = (0..binding.named_child_count() as u32)
+        .filter_map(|i| binding.named_child(i))
+        .any(|c| c.kind() == "identifier" && node_text(c, source) == Some("C"));
+    if !binds_c {
+        return;
+    }
+    // Get the subroutine/function name.
+    let Some(symbol_name) = statement_name(node, statement_kind, source) else {
+        return;
+    };
+    // Look for an optional `name="c_alias"` keyword argument.
+    let mut c_name = symbol_name.clone();
+    for i in 0..binding.named_child_count() as u32 {
+        if let Some(kw) = binding.named_child(i) {
+            if kw.kind() == "keyword_argument" {
+                // keyword_argument has identifier + string_literal children.
+                let mut is_name_kw = false;
+                let mut alias = None;
+                for j in 0..kw.named_child_count() as u32 {
+                    if let Some(child) = kw.named_child(j) {
+                        match child.kind() {
+                            "identifier" if node_text(child, source) == Some("name") => {
+                                is_name_kw = true;
+                            }
+                            "string_literal" => {
+                                alias = node_text(child, source).map(String::from);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if is_name_kw {
+                    if let Some(a) = alias {
+                        // Strip surrounding quotes from the string literal.
+                        c_name = a.trim_matches('"').to_string();
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    let line = node.start_position().row as u32 + 1;
+    result.externs.push(ExternInfo {
+        language: Language::C,
+        names: vec![c_name],
+        line,
+        signature: Some(symbol_name),
+    });
+}
+
+/// Returns the first named child of `node` matching `kind`.
+fn find_child<'a>(node: Node<'a>, _source: &'a str, kind: &str) -> Option<Node<'a>> {
+    (0..node.named_child_count() as u32)
+        .filter_map(|i| node.named_child(i))
+        .find(|c| c.kind() == kind)
+}
+
 fn extract_use(node: Node, source: &str, result: &mut ExtractResult) {
     // use_statement has a module_name child.
     let mut module_name = None;
@@ -268,15 +357,11 @@ fn extract_use(node: Node, source: &str, result: &mut ExtractResult) {
         return;
     };
     let line = node.start_position().row as u32 + 1;
-    // Detect iso_c_binding for FFI.
-    if name.eq_ignore_ascii_case("iso_c_binding") {
-        result.externs.push(ExternInfo {
-            language: Language::C,
-            names: Vec::new(),
-            line,
-            signature: Some(name.clone()),
-        });
-    }
+    // Note: `use iso_c_binding` is an implicit module import that does not
+    // list specific FFI symbol names. Actual FFI bindings are declared via
+    // `bind(C)` attributes on subroutines/functions, handled by
+    // `extract_bind_c`. We no longer push an empty-names ExternInfo here —
+    // it produced 0 FfiCalls edges and obscured the real FFI mechanism.
     result.imports.push(ImportInfo {
         source_file: name,
         imported_names: Vec::new(),
@@ -539,14 +624,65 @@ end program
     }
 
     #[test]
-    fn detects_iso_c_binding_ffi() {
+    fn iso_c_binding_use_does_not_create_empty_extern() {
+        // After the fix, `use iso_c_binding` no longer pushes an empty-names
+        // ExternInfo — only `bind(C)` declarations produce ExternInfo with
+        // actual symbol names.
         let result = extract(FORTRAN_SOURCE);
         assert!(
-            !result.externs.is_empty(),
-            "should detect iso_c_binding as FFI"
+            result.externs.is_empty(),
+            "use iso_c_binding without bind(C) should not create extern"
         );
+    }
+
+    #[test]
+    fn extract_bind_c_collects_symbol_name_with_alias() {
+        // subroutine my_func(a) bind(C, name="my_func_c") -> names=["my_func_c"]
+        let src = r#"subroutine my_func(a) bind(C, name="my_func_c")
+    use iso_c_binding
+    integer(c_int), value :: a
+end subroutine"#;
+        let result = extract(src);
+        assert_eq!(result.externs.len(), 1, "should detect 1 bind(C) FFI");
         let ext = &result.externs[0];
-        assert_eq!(ext.language, Language::C, "iso_c_binding should map to C");
+        assert_eq!(ext.language, Language::C);
+        assert_eq!(ext.names, vec!["my_func_c"], "should use the C alias");
+        assert_eq!(ext.signature.as_deref(), Some("my_func"));
+    }
+
+    #[test]
+    fn extract_bind_c_without_name_uses_fortran_name() {
+        // subroutine my_func(a) bind(C) -> names=["my_func"]
+        let src = r#"subroutine my_func(a) bind(C)
+    use iso_c_binding
+    integer(c_int), value :: a
+end subroutine"#;
+        let result = extract(src);
+        assert_eq!(result.externs.len(), 1, "should detect 1 bind(C) FFI");
+        let ext = &result.externs[0];
+        assert_eq!(ext.names, vec!["my_func"], "should use the Fortran name");
+    }
+
+    #[test]
+    fn extract_bind_c_skips_non_bind_c_subroutines() {
+        // Plain subroutine without bind(C) -> no externs
+        let src = "subroutine my_func(a)\n    integer :: a\nend subroutine\n";
+        let result = extract(src);
+        assert!(result.externs.is_empty(), "non-bind(C) should not create extern");
+    }
+
+    #[test]
+    fn extract_bind_c_works_for_functions() {
+        // function with bind(C) should also be detected
+        let src = r#"function my_func(x) bind(C, name="my_func_c") result(y)
+    use iso_c_binding
+    integer(c_int), value :: x
+    integer(c_int) :: y
+end function"#;
+        let result = extract(src);
+        assert_eq!(result.externs.len(), 1, "should detect 1 bind(C) FFI on function");
+        let ext = &result.externs[0];
+        assert_eq!(ext.names, vec!["my_func_c"]);
     }
 
     #[test]

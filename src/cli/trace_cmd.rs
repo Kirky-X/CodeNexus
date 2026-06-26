@@ -840,4 +840,42 @@ mod tests {
             "should have a DataFlows edge for parameter passing"
         );
     }
+
+    #[test]
+    fn end_to_end_variable_node_persisted_after_index() {
+        // P0-1 regression: Variable nodes created by resolve_var_identifier
+        // fallback must be persisted to the database. Before the pipeline fix,
+        // Variable nodes were added to the in-memory graph but never collected
+        // into all_nodes for persistence — leaving DataFlows edges as orphans
+        // pointing at non-existent Variable nodes (Variable count = 0 in db).
+        use crate::index::IndexFacade;
+        use std::fs;
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        // `let y = x;` triggers resolve_var_assign -> resolve_var_identifier
+        // fallback for both "x" and "y" (neither is a definition node), which
+        // creates Variable nodes in the graph.
+        fs::write(
+            root.join("main.rs"),
+            "fn main() { let x = 1; let y = x; }\n",
+        )
+        .unwrap();
+
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        facade.index(root, "demo", false).expect("index");
+
+        // Query the Variable table directly — there must be at least one
+        // Variable node persisted (for "x" or "y").
+        let graph =
+            load_graph_for_symbol_pub(&db_path, "x", 3).expect("load_graph_for_symbol");
+        let var_nodes = graph.nodes_by_label(NodeLabel::Variable);
+        assert!(
+            !var_nodes.is_empty(),
+            "P0-1: Variable node should be persisted to db (not just in-memory). \
+             Got {} Variable nodes in subgraph for 'x'",
+            var_nodes.len()
+        );
+    }
 }

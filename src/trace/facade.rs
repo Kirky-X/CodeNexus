@@ -102,7 +102,10 @@ impl<'a> TraceFacade<'a> {
     /// Resolves a symbol name (or qualified name) to a single node id.
     ///
     /// Matches `name` first, then `qualified_name`. Returns an error if zero
-    /// or more than one node matches.
+    /// or more than one node matches. When ambiguous, the returned
+    /// [`TraceError::AmbiguousSymbol`] carries the fully-qualified names of
+    /// every candidate so the CLI can surface them for disambiguation
+    /// (P1-1, GitNexus UX).
     fn resolve_symbol(&self, symbol: &str) -> Result<NodeId> {
         let by_name: Vec<&crate::model::Node> = self
             .graph
@@ -114,10 +117,12 @@ impl<'a> TraceFacade<'a> {
             return Ok(by_name[0].id.clone());
         }
         if by_name.len() > 1 {
-            return Err(TraceError::AmbiguousSymbol(
-                symbol.to_string(),
-                by_name.len(),
-            ));
+            let candidates: Vec<String> =
+                by_name.iter().map(|n| n.qualified_name.clone()).collect();
+            return Err(TraceError::AmbiguousSymbol {
+                symbol: symbol.to_string(),
+                candidates,
+            });
         }
         // Fall back to qualified_name match.
         let by_qn: Vec<&crate::model::Node> = self
@@ -130,7 +135,12 @@ impl<'a> TraceFacade<'a> {
             return Ok(by_qn[0].id.clone());
         }
         if by_qn.len() > 1 {
-            return Err(TraceError::AmbiguousSymbol(symbol.to_string(), by_qn.len()));
+            let candidates: Vec<String> =
+                by_qn.iter().map(|n| n.qualified_name.clone()).collect();
+            return Err(TraceError::AmbiguousSymbol {
+                symbol: symbol.to_string(),
+                candidates,
+            });
         }
         Err(TraceError::SymbolNotFound(symbol.to_string()))
     }
@@ -295,14 +305,60 @@ mod tests {
     }
 
     #[test]
-    fn facade_trace_ambiguous_symbol_returns_error() {
-        // Two nodes named "a" -> ambiguous.
+    fn facade_trace_ambiguous_symbol_returns_error_with_candidates() {
+        // Two nodes named "a" -> ambiguous. P1-1: error must carry both
+        // candidate FQNs so the CLI can list them.
         let mut g = Graph::new();
         g.add_node(make_func("a1", "a"));
         g.add_node(make_func("a2", "a"));
         let facade = TraceFacade::new(&g);
         let result = facade.trace("a", TraceType::Calls, 3);
-        assert!(matches!(result, Err(TraceError::AmbiguousSymbol(_, 2))));
+        match result {
+            Err(TraceError::AmbiguousSymbol { symbol, candidates }) => {
+                assert_eq!(symbol, "a");
+                assert_eq!(
+                    candidates.len(),
+                    2,
+                    "expected 2 candidate FQNs, got {candidates:?}"
+                );
+                // make_func sets qualified_name = format!("proj.{name}") = "proj.a"
+                // for both. Verify both candidate FQNs are present (order is not
+                // guaranteed by HashMap iteration).
+                assert!(
+                    candidates.iter().any(|q| q == "proj.a"),
+                    "candidates should contain proj.a: {candidates:?}"
+                );
+            }
+            other => panic!("expected AmbiguousSymbol with candidates, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn facade_trace_ambiguous_symbol_by_qualified_name_returns_candidates() {
+        // Two nodes with the same qualified_name "proj.dup" matched via the
+        // qualified_name fallback branch. P1-1: candidates must still be
+        // populated.
+        let mut g = Graph::new();
+        let n1 = Node::builder(NodeLabel::Function, "first", "proj.dup".to_string())
+            .id("dup1")
+            .project("proj")
+            .build();
+        let n2 = Node::builder(NodeLabel::Function, "second", "proj.dup".to_string())
+            .id("dup2")
+            .project("proj")
+            .build();
+        g.add_node(n1);
+        g.add_node(n2);
+        let facade = TraceFacade::new(&g);
+        let result = facade.trace("proj.dup", TraceType::Calls, 3);
+        match result {
+            Err(TraceError::AmbiguousSymbol { symbol, candidates }) => {
+                assert_eq!(symbol, "proj.dup");
+                assert_eq!(candidates.len(), 2, "got {candidates:?}");
+                assert!(candidates.iter().all(|q| q == "proj.dup"));
+            }
+            other => panic!("expected AmbiguousSymbol, got {other:?}"),
+        }
     }
 
     #[test]
