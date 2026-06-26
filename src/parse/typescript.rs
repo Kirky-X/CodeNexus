@@ -28,6 +28,7 @@ use crate::resolve::FqnGenerator;
 use super::error::{ParseError, Result};
 use super::extractor::{AssignInfo, CallInfo, ExtractResult, Extractor, ImportInfo};
 use super::parser_factory::ParserFactory;
+use super::dedupe_qn;
 
 /// TypeScript language tree-sitter extractor (Adapter pattern).
 pub struct TypeScriptExtractor {
@@ -172,20 +173,16 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
                         result,
                     );
                     let signature = node_text(value, source).map(String::from);
-                    let mut builder = ModelNode::builder(NodeLabel::Function, "default".to_string(), qn)
-                        .file_path(ctx.file_path)
-                        .start_line(start_line)
-                        .end_line(end_line)
-                        .language(Language::TypeScript)
-                        .project(ctx.project)
-                        .is_exported(true)
-                        .is_global(true);
-                    if let Some(sig) = signature {
-                        builder = builder.signature(sig);
-                    }
-                    let model_node = builder.build();
-                    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-                    result.nodes.push(model_node);
+                    build_and_push_function(
+                        "default".to_string(),
+                        qn,
+                        start_line,
+                        end_line,
+                        signature,
+                        true,
+                        ctx,
+                        result,
+                    );
                 }
             }
             // Recurse into the export to find the declaration inside.
@@ -231,6 +228,36 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
             visit_node(child, source, ctx, result);
         }
     }
+}
+
+/// Builds a TypeScript `Function` node, emits its `Defines`/`Contains` edges,
+/// and pushes it into `result` (MED-003: shared by `extract_function` and the
+/// `export_statement` anonymous-default-export handler).
+#[allow(clippy::too_many_arguments)]
+fn build_and_push_function(
+    name: String,
+    qn: String,
+    start_line: u32,
+    end_line: u32,
+    signature: Option<String>,
+    is_exported: bool,
+    ctx: &VisitContext<'_>,
+    result: &mut ExtractResult,
+) {
+    let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
+        .file_path(ctx.file_path)
+        .start_line(start_line)
+        .end_line(end_line)
+        .language(Language::TypeScript)
+        .project(ctx.project)
+        .is_exported(is_exported)
+        .is_global(true);
+    if let Some(sig) = signature {
+        builder = builder.signature(sig);
+    }
+    let model_node = builder.build();
+    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
+    result.push_node(model_node);
 }
 
 // ---------------------------------------------------------------------------
@@ -287,20 +314,16 @@ fn extract_function(
         node.start_position().row as u32 + 1,
         result,
     );
-    let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
-        .file_path(ctx.file_path)
-        .start_line(node.start_position().row as u32 + 1)
-        .end_line(node.end_position().row as u32 + 1)
-        .language(Language::TypeScript)
-        .project(ctx.project)
-        .is_exported(is_exported)
-        .is_global(true);
-    if let Some(sig) = signature {
-        builder = builder.signature(sig);
-    }
-    let model_node = builder.build();
-    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-    result.nodes.push(model_node);
+    build_and_push_function(
+        name,
+        qn,
+        node.start_position().row as u32 + 1,
+        node.end_position().row as u32 + 1,
+        signature,
+        is_exported,
+        ctx,
+        result,
+    );
 }
 
 fn extract_class(
@@ -328,7 +351,7 @@ fn extract_class(
         .is_global(true)
         .build();
     add_definition_edges(file_path, project, &model_node, result);
-    result.nodes.push(model_node);
+    result.push_node(model_node);
 }
 
 fn extract_method(
@@ -367,7 +390,7 @@ fn extract_method(
         .is_global(false)
         .build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-    result.nodes.push(model_node);
+    result.push_node(model_node);
 }
 
 fn extract_named_item(
@@ -396,7 +419,7 @@ fn extract_named_item(
         .is_global(true)
         .build();
     add_definition_edges(file_path, project, &model_node, result);
-    result.nodes.push(model_node);
+    result.push_node(model_node);
 }
 
 // ---------------------------------------------------------------------------
@@ -606,7 +629,7 @@ fn extract_lexical_declaration(
             }
             let model_node = builder.build();
             add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-            result.nodes.push(model_node);
+            result.push_node(model_node);
             // Don't also create a Const node for the same declarator — a
             // function-typed const is modeled as a Function, not a Const.
             continue;
@@ -639,7 +662,7 @@ fn extract_lexical_declaration(
         }
         let model_node = builder.build();
         add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
-        result.nodes.push(model_node);
+        result.push_node(model_node);
     }
 }
 
@@ -810,16 +833,7 @@ fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> 
     FqnGenerator::generate(project, file_path, name, Language::TypeScript, parent)
 }
 
-/// 同文件同名定义消歧：若 result.nodes 已有相同 qn，追加行号消歧符 `#L{line}`。
-/// 用于匿名对象字面量内同名方法（共享同一 parent 名）等场景。
-/// 与 c.rs / fortran.rs / python.rs 的 dedupe_qn 保持一致。
-fn dedupe_qn(qn: String, line: u32, result: &ExtractResult) -> String {
-    if result.nodes.iter().any(|n| n.qualified_name == qn) {
-        format!("{qn}#L{line}")
-    } else {
-        qn
-    }
-}
+// `dedupe_qn` is shared across all extractors — see `parse::dedupe_qn` (MED-002).
 
 fn add_definition_edges(
     file_path: &str,
