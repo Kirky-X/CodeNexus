@@ -558,7 +558,7 @@ mod tests {
         label: NodeLabel,
         language: Language,
     ) -> Node {
-        let qn = FqnGenerator::generate(project, file, name, language);
+        let qn = FqnGenerator::generate(project, file, name, language, None);
         Node::builder(label, name, qn)
             .file_path(file)
             .project(project)
@@ -578,7 +578,7 @@ mod tests {
         for result in results {
             for node in &result.nodes {
                 let qn =
-                    FqnGenerator::generate(project, &result.file_path, &node.name, result.language);
+                    FqnGenerator::generate(project, &result.file_path, &node.name, result.language, None);
                 let mut graph_node = node.clone();
                 graph_node.id = qn.clone();
                 graph_node.qualified_name = qn;
@@ -1084,7 +1084,7 @@ mod tests {
     #[test]
     fn resolve_ffi_uses_function_qn_as_source_when_function_found() {
         let rust_node = make_node("rust_func", "main.rs", "proj", NodeLabel::Function, Language::Rust);
-        let rust_qn = FqnGenerator::generate("proj", "main.rs", "rust_func", Language::Rust);
+        let rust_qn = FqnGenerator::generate("proj", "main.rs", "rust_func", Language::Rust, None);
 
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
@@ -1203,9 +1203,9 @@ mod tests {
         // Given: Rust function with extern "C" block declaring c_function,
         //        C file defining c_function.
         let rust_func_qn =
-            FqnGenerator::generate("proj", "src/main.rs", "rust_func", Language::Rust);
+            FqnGenerator::generate("proj", "src/main.rs", "rust_func", Language::Rust, None);
         let c_func_qn =
-            FqnGenerator::generate("proj", "src/c_code.c", "c_function", Language::C);
+            FqnGenerator::generate("proj", "src/c_code.c", "c_function", Language::C, None);
 
         let rust_node = make_node(
             "rust_func",
@@ -1259,9 +1259,9 @@ mod tests {
         // Variant of AC-TRACE-003 where the extern signature matches the C
         // definition signature, yielding confidence 0.85.
         let rust_func_qn =
-            FqnGenerator::generate("proj", "src/main.rs", "rust_func", Language::Rust);
+            FqnGenerator::generate("proj", "src/main.rs", "rust_func", Language::Rust, None);
         let c_func_qn =
-            FqnGenerator::generate("proj", "src/c_code.c", "c_function", Language::C);
+            FqnGenerator::generate("proj", "src/c_code.c", "c_function", Language::C, None);
 
         let rust_node = make_node(
             "rust_func",

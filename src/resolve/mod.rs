@@ -57,7 +57,7 @@ pub fn build_symbol_table(results: &[ExtractResult], project: &str) -> ProjectSy
         for node in &result.nodes {
             let entity_name = &node.name;
             let language = node.language.unwrap_or(result.language);
-            let fqn = FqnGenerator::generate(project, &result.file_path, entity_name, language);
+            let fqn = FqnGenerator::generate(project, &result.file_path, entity_name, language, None);
             let entry = SymbolEntry::new(
                 entity_name.clone(),
                 fqn,
@@ -146,7 +146,7 @@ mod tests {
         assert_eq!(table.symbol_count(), 1);
         let entries = table.lookup("parse");
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].qn, "myproject.src.main.parse");
+        assert_eq!(entries[0].qn, "myproject.src.main.rs.parse");
         assert_eq!(entries[0].file_path, "src/main.rs");
         assert_eq!(entries[0].language, Some(Language::Rust));
     }
@@ -166,8 +166,8 @@ mod tests {
         let table = build_symbol_table(&[r1, r2], "proj");
         assert_eq!(table.file_count(), 2);
         assert_eq!(table.symbol_count(), 2);
-        assert_eq!(table.lookup("main")[0].qn, "proj.src.main.main");
-        assert_eq!(table.lookup("helper")[0].qn, "proj.src.utils.helper");
+        assert_eq!(table.lookup("main")[0].qn, "proj.src.main.rs.main");
+        assert_eq!(table.lookup("helper")[0].qn, "proj.src.utils.rs.helper");
     }
 
     #[test]
@@ -179,7 +179,7 @@ mod tests {
         );
         let table = build_symbol_table(&[r1], "proj");
         let entry = table.lookup_exact("foo").unwrap();
-        assert_eq!(entry.qn, "proj.src.deep.file.foo");
+        assert_eq!(entry.qn, "proj.src.deep.file.rs.foo");
     }
 
     #[test]
@@ -203,7 +203,7 @@ mod tests {
         );
         let table = build_symbol_table(&[r], "proj");
         let entry = table.lookup_exact("MY_DEFINE").unwrap();
-        assert_eq!(entry.qn, "proj.include.header.MY_DEFINE");
+        assert_eq!(entry.qn, "proj.include.header.h.MY_DEFINE");
     }
 
     #[test]
@@ -211,8 +211,8 @@ mod tests {
         // Direct test of generate_for_module since build_symbol_table uses
         // generate() (top-level entities). Module-nested entities would be
         // handled by a higher-level resolver.
-        let fqn = FqnGenerator::generate_for_module("proj", "src/mod.f90", "mymod", "my_func");
-        assert_eq!(fqn, "proj.src.mod.mymod.my_func");
+        let fqn = FqnGenerator::generate_for_module("proj", "src/mod.f90", "mymod", "my_func", None);
+        assert_eq!(fqn, "proj.src.mod.f90.mymod.my_func");
     }
 
     #[test]
@@ -359,7 +359,7 @@ mod tests {
         );
         let table = build_symbol_table(&[r], "proj");
         let entry = table.lookup_exact("Button").unwrap();
-        assert_eq!(entry.qn, "proj.src.components.Button.Button");
+        assert_eq!(entry.qn, "proj.src.components.Button.tsx.Button");
     }
 
     #[test]
@@ -371,7 +371,7 @@ mod tests {
         );
         let table = build_symbol_table(&[r], "proj");
         let entry = table.lookup_exact("foo").unwrap();
-        assert_eq!(entry.qn, "proj.src.main.foo");
+        assert_eq!(entry.qn, "proj.src.main.rs.foo");
     }
 
     #[test]
@@ -424,8 +424,8 @@ mod tests {
             .file_path("a.rs")
             .is_exported(true)
             .build();
-        let foo_qn = FqnGenerator::generate("proj", "a.rs", "foo", Language::Rust);
-        let bar_qn = FqnGenerator::generate("proj", "a.rs", "bar", Language::Rust);
+        let foo_qn = FqnGenerator::generate("proj", "a.rs", "foo", Language::Rust, None);
+        let bar_qn = FqnGenerator::generate("proj", "a.rs", "bar", Language::Rust, None);
 
         let mut result = ExtractResult::new("a.rs", Language::Rust);
         result.nodes = vec![foo_node, bar_node];
@@ -448,7 +448,7 @@ mod tests {
         // Add nodes to graph with qn as id.
         for r in &results {
             for node in &r.nodes {
-                let qn = FqnGenerator::generate("proj", &r.file_path, &node.name, Language::Rust);
+                let qn = FqnGenerator::generate("proj", &r.file_path, &node.name, Language::Rust, None);
                 let mut g = node.clone();
                 g.id = qn.clone();
                 g.qualified_name = qn;
@@ -498,7 +498,7 @@ mod tests {
             .file_path("a.rs")
             .is_exported(true)
             .build();
-        let foo_qn = FqnGenerator::generate("proj", "a.rs", "foo", Language::Rust);
+        let foo_qn = FqnGenerator::generate("proj", "a.rs", "foo", Language::Rust, None);
 
         let mut result = ExtractResult::new("a.rs", Language::Rust);
         result.nodes = vec![foo_node];
@@ -514,7 +514,7 @@ mod tests {
         let mut graph = Graph::new();
         for r in &results {
             for node in &r.nodes {
-                let qn = FqnGenerator::generate("proj", &r.file_path, &node.name, Language::Rust);
+                let qn = FqnGenerator::generate("proj", &r.file_path, &node.name, Language::Rust, None);
                 let mut g = node.clone();
                 g.id = qn.clone();
                 g.qualified_name = qn;

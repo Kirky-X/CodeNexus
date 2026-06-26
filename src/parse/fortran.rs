@@ -146,7 +146,7 @@ fn extract_module(
     let Some(name) = statement_name(node, "module_statement", source) else {
         return;
     };
-    let qn = make_qn(file_path, &name, project);
+    let qn = make_qn(file_path, &name, project, None);
     let model_node = ModelNode::builder(NodeLabel::Module, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -170,7 +170,7 @@ fn extract_subroutine_or_function(
     let Some(name) = statement_name(node, statement_kind, source) else {
         return;
     };
-    let qn = make_qn(file_path, &name, project);
+    let qn = make_qn(file_path, &name, project, None);
     let signature = node_text(node, source).map(String::from);
     let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
         .file_path(file_path)
@@ -197,7 +197,7 @@ fn extract_program(
     let Some(name) = statement_name(node, "program_statement", source) else {
         return;
     };
-    let qn = make_qn(file_path, &name, project);
+    let qn = make_qn(file_path, &name, project, None);
     let model_node = ModelNode::builder(NodeLabel::Function, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -280,7 +280,7 @@ fn extract_call(
     let Some(callee) = callee else {
         return;
     };
-    let caller_qn = current_func.map(|name| make_qn(file_path, name, project));
+    let caller_qn = current_func.map(|name| make_qn(file_path, name, project, None));
     result.calls.push(CallInfo {
         caller_qn,
         callee_name: callee,
@@ -326,8 +326,8 @@ fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
     node.utf8_text(source.as_bytes()).ok()
 }
 
-fn make_qn(file_path: &str, name: &str, project: &str) -> String {
-    FqnGenerator::generate(project, file_path, name, Language::Fortran)
+fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> String {
+    FqnGenerator::generate(project, file_path, name, Language::Fortran, parent)
 }
 
 fn add_definition_edges(
@@ -502,7 +502,7 @@ end program
     fn qualified_name_uses_file_path_and_name() {
         let result = extract(FORTRAN_SOURCE);
         let mymod = result.nodes.iter().find(|n| n.name == "mymod").unwrap();
-        assert_eq!(mymod.qualified_name, "proj.test.mymod");
+        assert_eq!(mymod.qualified_name, "proj.test.f90.mymod");
     }
 
     #[test]
@@ -569,7 +569,7 @@ end program
             .expect("should find call to callee");
         assert_eq!(
             call.caller_qn.as_deref(),
-            Some("proj.tmp.demo.main.caller"),
+            Some("proj.tmp.demo.main.f90.caller"),
             "caller_qn should be the dotted FQN of the enclosing subroutine"
         );
         // The caller FQN must match the enclosing subroutine's node id.
@@ -615,7 +615,7 @@ end program
         );
         assert_eq!(
             call.caller_qn.as_deref(),
-            Some("proj.main.main"),
+            Some("proj.main.f90.main"),
             "caller_qn should be the dotted FQN of the enclosing program"
         );
     }

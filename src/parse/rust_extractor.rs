@@ -72,7 +72,7 @@ impl Extractor for RustExtractor {
         // source_file is the root for Rust.
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
-                visit_node(child, source, file_path, project, &mut result, None);
+                visit_node(child, source, file_path, project, &mut result, None, None);
             }
         }
         Ok(result)
@@ -90,10 +90,11 @@ fn visit_node(
     project: &str,
     result: &mut ExtractResult,
     current_func: Option<&str>,
+    current_parent: Option<&str>,
 ) {
     match node.kind() {
         "function_item" => {
-            extract_function(node, source, file_path, project, result);
+            extract_function(node, source, file_path, project, result, current_parent);
             // Pass the function's name as the enclosing function for body
             // traversal, so reads/writes can be attributed to it.
             let func_name = node
@@ -106,28 +107,99 @@ fn visit_node(
                 project,
                 result,
                 func_name.as_deref(),
+                current_parent,
             );
         }
         "struct_item" => {
-            extract_named_item(node, NodeLabel::Struct, source, file_path, project, result);
+            extract_named_item(
+                node,
+                NodeLabel::Struct,
+                source,
+                file_path,
+                project,
+                result,
+                current_parent,
+            );
         }
         "enum_item" => {
-            extract_named_item(node, NodeLabel::Enum, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result, current_func);
+            extract_named_item(
+                node,
+                NodeLabel::Enum,
+                source,
+                file_path,
+                project,
+                result,
+                current_parent,
+            );
+            visit_children(node, source, file_path, project, result, current_func, current_parent);
         }
         "trait_item" => {
-            extract_named_item(node, NodeLabel::Trait, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result, current_func);
+            extract_named_item(
+                node,
+                NodeLabel::Trait,
+                source,
+                file_path,
+                project,
+                result,
+                current_parent,
+            );
+            let trait_name = node
+                .child_by_field_name("name")
+                .and_then(|n| node_text(n, source).map(String::from));
+            visit_children(
+                node,
+                source,
+                file_path,
+                project,
+                result,
+                current_func,
+                trait_name.as_deref(),
+            );
         }
         "impl_item" => {
-            extract_impl(node, source, file_path, project, result);
-            visit_children(node, source, file_path, project, result, current_func);
+            let impl_type = node
+                .child_by_field_name("type")
+                .and_then(|n| node_text(n, source).map(String::from));
+            extract_impl(node, source, file_path, project, result, current_parent);
+            // Combine module context with impl type so methods inside the impl
+            // get disambiguated (ADR-003).
+            let combined = match (current_parent, impl_type.as_deref()) {
+                (Some(p), Some(t)) => Some(format!("{p}_{t}")),
+                (None, Some(t)) => Some(t.to_string()),
+                (Some(p), None) => Some(p.to_string()),
+                (None, None) => None,
+            };
+            visit_children(
+                node,
+                source,
+                file_path,
+                project,
+                result,
+                current_func,
+                combined.as_deref(),
+            );
         }
         "const_item" => {
-            extract_named_item(node, NodeLabel::Const, source, file_path, project, result);
+            extract_named_item(
+                node,
+                NodeLabel::Const,
+                source,
+                file_path,
+                project,
+                result,
+                current_parent,
+            );
         }
         "static_item" => {
-            extract_named_item(node, NodeLabel::Static, source, file_path, project, result);
+            extract_named_item(
+                node,
+                NodeLabel::Static,
+                source,
+                file_path,
+                project,
+                result,
+                current_parent,
+            );
         }
         "type_item" => {
             extract_named_item(
@@ -137,25 +209,42 @@ fn visit_node(
                 file_path,
                 project,
                 result,
+                current_parent,
             );
         }
         "macro_definition" => {
-            extract_named_item(node, NodeLabel::Macro, source, file_path, project, result);
+            extract_named_item(
+                node,
+                NodeLabel::Macro,
+                source,
+                file_path,
+                project,
+                result,
+                current_parent,
+            );
         }
         "use_declaration" => {
             extract_use(node, source, result);
         }
         "call_expression" => {
-            extract_call(node, source, file_path, project, current_func, result);
-            visit_children(node, source, file_path, project, result, current_func);
+            extract_call(
+                node,
+                source,
+                file_path,
+                project,
+                current_func,
+                current_parent,
+                result,
+            );
+            visit_children(node, source, file_path, project, result, current_func, current_parent);
         }
         "let_declaration" => {
             extract_let(node, source, result, current_func);
-            visit_children(node, source, file_path, project, result, current_func);
+            visit_children(node, source, file_path, project, result, current_func, current_parent);
         }
         "assignment_expression" => {
             extract_assignment(node, source, result, current_func);
-            visit_children(node, source, file_path, project, result, current_func);
+            visit_children(node, source, file_path, project, result, current_func, current_parent);
         }
         "identifier" => {
             // A bare identifier in an expression position is a variable read
@@ -175,10 +264,10 @@ fn visit_node(
         }
         "extern_item" | "extern_block" | "foreign_mod_item" => {
             extract_extern_block(node, source, result);
-            visit_children(node, source, file_path, project, result, current_func);
+            visit_children(node, source, file_path, project, result, current_func, current_parent);
         }
         _ => {
-            visit_children(node, source, file_path, project, result, current_func);
+            visit_children(node, source, file_path, project, result, current_func, current_parent);
         }
     }
 }
@@ -190,10 +279,11 @@ fn visit_children(
     project: &str,
     result: &mut ExtractResult,
     current_func: Option<&str>,
+    current_parent: Option<&str>,
 ) {
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
-            visit_node(child, source, file_path, project, result, current_func);
+            visit_node(child, source, file_path, project, result, current_func, current_parent);
         }
     }
 }
@@ -208,6 +298,7 @@ fn extract_function(
     file_path: &str,
     project: &str,
     result: &mut ExtractResult,
+    parent: Option<&str>,
 ) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
@@ -217,7 +308,7 @@ fn extract_function(
     };
     let is_exported = is_pub(node);
     let signature = node_text(node, source).map(String::from);
-    let qn = make_qn(file_path, &name, project);
+    let qn = make_qn(file_path, &name, project, parent);
     let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -241,6 +332,7 @@ fn extract_named_item(
     file_path: &str,
     project: &str,
     result: &mut ExtractResult,
+    parent: Option<&str>,
 ) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
@@ -249,7 +341,7 @@ fn extract_named_item(
         return;
     };
     let is_exported = is_pub(node);
-    let qn = make_qn(file_path, &name, project);
+    let qn = make_qn(file_path, &name, project, parent);
     let model_node = ModelNode::builder(label, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -269,6 +361,7 @@ fn extract_impl(
     file_path: &str,
     project: &str,
     result: &mut ExtractResult,
+    module_parent: Option<&str>,
 ) {
     // impl_item has a `type` field (the type being implemented) and an
     // optional `trait` field (the trait being implemented).
@@ -281,7 +374,15 @@ fn extract_impl(
     let trait_name = node
         .child_by_field_name("trait")
         .and_then(|n| node_text(n, source).map(String::from));
-    let qn = make_qn(file_path, &name, project);
+    // Impl blocks need disambiguation from struct/enum with the same name
+    // (ADR-003). Use the trait name when present, otherwise the literal
+    // "impl" marker, combined with the module parent context.
+    let im = trait_name.as_deref().unwrap_or("impl");
+    let disambiguator = match module_parent {
+        Some(m) => format!("{m}_{im}"),
+        None => im.to_string(),
+    };
+    let qn = make_qn(file_path, &name, project, Some(&disambiguator));
     let mut builder = ModelNode::builder(NodeLabel::Impl, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -326,6 +427,7 @@ fn extract_call(
     file_path: &str,
     project: &str,
     current_func: Option<&str>,
+    current_parent: Option<&str>,
     result: &mut ExtractResult,
 ) {
     let Some(func_node) = node.child_by_field_name("function") else {
@@ -335,7 +437,7 @@ fn extract_call(
         return;
     };
     let args = call_arguments(node, source);
-    let caller_qn = current_func.map(|name| make_qn(file_path, name, project));
+    let caller_qn = current_func.map(|name| make_qn(file_path, name, project, current_parent));
     result.calls.push(CallInfo {
         caller_qn,
         callee_name: callee,
@@ -749,8 +851,8 @@ fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
     node.utf8_text(source.as_bytes()).ok()
 }
 
-fn make_qn(file_path: &str, name: &str, project: &str) -> String {
-    FqnGenerator::generate(project, file_path, name, Language::Rust)
+fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> String {
+    FqnGenerator::generate(project, file_path, name, Language::Rust, parent)
 }
 
 fn add_definition_edges(
@@ -992,7 +1094,7 @@ fn main() {
     fn qualified_name_uses_file_path_and_name() {
         let result = extract(RUST_SOURCE);
         let add = result.nodes.iter().find(|n| n.name == "add").unwrap();
-        assert_eq!(add.qualified_name, "proj.test.add");
+        assert_eq!(add.qualified_name, "proj.test.rs.add");
     }
 
     #[test]

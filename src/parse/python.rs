@@ -154,7 +154,7 @@ fn extract_function(
     } else {
         NodeLabel::Function
     };
-    let qn = make_qn(file_path, &name, project);
+    let qn = make_qn(file_path, &name, project, None);
     let signature = function_signature(node, source);
     let mut builder = ModelNode::builder(label, name, qn)
         .file_path(file_path)
@@ -184,7 +184,7 @@ fn extract_class(
     let Some(name) = node_text(name_node, source).map(String::from) else {
         return;
     };
-    let qn = make_qn(file_path, &name, project);
+    let qn = make_qn(file_path, &name, project, None);
     let model_node = ModelNode::builder(NodeLabel::Class, name, qn)
         .file_path(file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -269,7 +269,7 @@ fn extract_call(
         return;
     };
     let args = call_arguments(node, source);
-    let caller_qn = current_func.map(|name| make_qn(file_path, name, project));
+    let caller_qn = current_func.map(|name| make_qn(file_path, name, project, None));
     result.calls.push(CallInfo {
         caller_qn,
         callee_name: callee,
@@ -432,8 +432,8 @@ fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
     node.utf8_text(source.as_bytes()).ok()
 }
 
-fn make_qn(file_path: &str, name: &str, project: &str) -> String {
-    FqnGenerator::generate(project, file_path, name, Language::Python)
+fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> String {
+    FqnGenerator::generate(project, file_path, name, Language::Python, parent)
 }
 
 fn add_definition_edges(
@@ -598,7 +598,7 @@ result = add(1, 2)
     fn qualified_name_uses_file_path_and_name() {
         let result = extract(PYTHON_SOURCE);
         let add = result.nodes.iter().find(|n| n.name == "add").unwrap();
-        assert_eq!(add.qualified_name, "proj.test.add");
+        assert_eq!(add.qualified_name, "proj.test.py.add");
     }
 
     #[test]
@@ -700,7 +700,7 @@ result = add(1, 2)
             .expect("should find call to callee");
         assert_eq!(
             call.caller_qn.as_deref(),
-            Some("proj.tmp.demo.main.caller"),
+            Some("proj.tmp.demo.main.py.caller"),
             "caller_qn should be the dotted FQN of the enclosing function"
         );
         // The caller FQN must match the enclosing function's node id.
