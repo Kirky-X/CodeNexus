@@ -4,8 +4,85 @@
 //! Edge entity and builder (DDD §5.8).
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::str::FromStr;
 
 use super::{EdgeType, NodeId};
+
+/// Confidence tier classifying the strength of an edge based on the
+/// caller↔callee file/import scope (design.md D4, T9 H4).
+///
+/// The tier is a categorical classification complementing the numeric
+/// `Edge::confidence` score. Resolvers populate the tier during resolution;
+/// `--min-confidence` filtering uses the tier's `default_score()` to map
+/// categorical filters to numeric thresholds.
+///
+/// # Variants
+///
+/// - [`SameFile`](Self::SameFile): caller and callee are in the same file
+///   (highest confidence, default score 0.95).
+/// - [`ImportScoped`](Self::ImportScoped): caller imports the callee's module
+///   (medium confidence, default score 0.90).
+/// - [`Global`](Self::Global): no file/import relationship — global resolution
+///   (lowest confidence, default score 0.50).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ConfidenceTier {
+    /// Caller and callee are in the same file.
+    SameFile,
+    /// Caller imports the callee's module (import-scoped resolution).
+    ImportScoped,
+    /// No file/import relationship — global resolution.
+    #[default]
+    Global,
+}
+
+impl ConfidenceTier {
+    /// Returns the default confidence score for this tier (design.md D4).
+    ///
+    /// - [`SameFile`](Self::SameFile) → 0.95
+    /// - [`ImportScoped`](Self::ImportScoped) → 0.90
+    /// - [`Global`](Self::Global) → 0.50
+    #[must_use]
+    pub fn default_score(&self) -> f32 {
+        match self {
+            Self::SameFile => 0.95,
+            Self::ImportScoped => 0.90,
+            Self::Global => 0.50,
+        }
+    }
+}
+
+impl ConfidenceTier {
+    /// Returns the database representation of this tier (UPPER_SNAKE_CASE),
+    /// matching the convention used by [`EdgeType::as_db_type`].
+    #[must_use]
+    pub fn as_db_type(&self) -> &'static str {
+        match self {
+            Self::SameFile => "SAME_FILE",
+            Self::ImportScoped => "IMPORT_SCOPED",
+            Self::Global => "GLOBAL",
+        }
+    }
+}
+
+impl fmt::Display for ConfidenceTier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_db_type())
+    }
+}
+
+impl FromStr for ConfidenceTier {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "SAME_FILE" => Ok(Self::SameFile),
+            "IMPORT_SCOPED" => Ok(Self::ImportScoped),
+            "GLOBAL" => Ok(Self::Global),
+            other => Err(format!("unknown ConfidenceTier: {other}")),
+        }
+    }
+}
 
 /// An edge in the code knowledge graph (DDD §5.8).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -18,6 +95,10 @@ pub struct Edge {
     pub edge_type: EdgeType,
     /// Confidence score in `[0.0, 1.0]`.
     pub confidence: f32,
+    /// Confidence tier classifying the edge by caller↔callee scope (design.md D4).
+    /// Defaults to [`ConfidenceTier::Global`]; resolvers override during resolution.
+    #[serde(default)]
+    pub confidence_tier: ConfidenceTier,
     /// Human-readable reason for the edge (e.g. evidence).
     pub reason: Option<String>,
     /// Source line where the relation originates.
@@ -27,7 +108,8 @@ pub struct Edge {
 }
 
 impl Edge {
-    /// Creates a new edge with default confidence (1.0).
+    /// Creates a new edge with default confidence (1.0) and tier
+    /// ([`ConfidenceTier::Global`]).
     #[must_use]
     pub fn new(
         source: impl Into<String>,
@@ -40,6 +122,7 @@ impl Edge {
             target: target.into(),
             edge_type,
             confidence: 1.0,
+            confidence_tier: ConfidenceTier::Global,
             reason: None,
             start_line: None,
             project: project.into(),
@@ -89,6 +172,12 @@ impl EdgeBuilder {
     /// Sets the confidence score.
     pub fn confidence(mut self, confidence: f32) -> Self {
         self.edge.confidence = confidence;
+        self
+    }
+
+    /// Sets the confidence tier.
+    pub fn confidence_tier(mut self, tier: ConfidenceTier) -> Self {
+        self.edge.confidence_tier = tier;
         self
     }
 

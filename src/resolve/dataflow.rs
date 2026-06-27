@@ -19,7 +19,7 @@
 //! - BR-TRACE-005: Variable read - Function -> Variable, Reads edge.
 //! - BR-TRACE-006: Variable write - Function -> Variable, Writes edge.
 
-use crate::model::{Edge, EdgeType, Graph, Language, Node, NodeLabel};
+use crate::model::{ConfidenceTier, Edge, EdgeType, Graph, Language, Node, NodeLabel};
 use crate::ir::ExtractResult;
 use crate::resolve::{fqn::FqnGenerator, ProjectSymbolTable};
 
@@ -184,6 +184,7 @@ impl<'a> DataFlowResolver<'a> {
         let var_qn = self.resolve_var_identifier(file, var_name, graph, language);
         let edge = Edge::builder(func_qn, var_qn, EdgeType::DataFlows, self.project)
             .confidence(CONFIDENCE_RETURN_ASSIGN)
+            .confidence_tier(ConfidenceTier::SameFile)
             .build();
         Some(edge)
     }
@@ -217,6 +218,7 @@ impl<'a> DataFlowResolver<'a> {
         let target_qn = self.resolve_var_identifier(file, target, graph, language);
         let edge = Edge::builder(source_qn, target_qn, EdgeType::DataFlows, self.project)
             .confidence(CONFIDENCE_VAR_ASSIGN)
+            .confidence_tier(ConfidenceTier::SameFile)
             .build();
         Some(edge)
     }
@@ -255,6 +257,7 @@ impl<'a> DataFlowResolver<'a> {
         let param_qn = format!("{callee_qn}.param{arg_index}");
         let edge = Edge::builder(var_qn, param_qn, EdgeType::DataFlows, self.project)
             .confidence(CONFIDENCE_ARG_PASS)
+            .confidence_tier(ConfidenceTier::SameFile)
             .build();
         Some(edge)
     }
@@ -291,6 +294,7 @@ impl<'a> DataFlowResolver<'a> {
                 let var_qn = self.resolve_var_identifier(file, &read.var_name, graph, language);
                 let mut edge = Edge::builder(func_qn, var_qn, EdgeType::Reads, self.project)
                     .confidence(CONFIDENCE_READS)
+                    .confidence_tier(ConfidenceTier::SameFile)
                     .build();
                 edge.start_line = Some(read.line);
                 graph.add_edge(edge.clone());
@@ -332,6 +336,7 @@ impl<'a> DataFlowResolver<'a> {
                 let var_qn = self.resolve_var_identifier(file, &write.var_name, graph, language);
                 let mut edge = Edge::builder(func_qn, var_qn, EdgeType::Writes, self.project)
                     .confidence(CONFIDENCE_WRITES)
+                    .confidence_tier(ConfidenceTier::SameFile)
                     .build();
                 edge.start_line = Some(write.line);
                 graph.add_edge(edge.clone());
@@ -495,6 +500,7 @@ mod tests {
         // Fallback now uses FqnGenerator: project.dir.file_full.name
         assert_eq!(edge.target, "proj.a.rs.x");
         assert!((edge.confidence - 0.90).abs() < 1e-6);
+        assert_eq!(edge.confidence_tier, ConfidenceTier::SameFile);
         // Fallback should create a Variable node for x.
         assert!(graph.get_node(&"proj.a.rs.x".to_string()).is_some());
         assert_eq!(
@@ -568,6 +574,7 @@ mod tests {
         assert_eq!(edge.source, "proj.a.rs.y");
         assert_eq!(edge.target, "proj.a.rs.x");
         assert!((edge.confidence - 0.85).abs() < 1e-6);
+        assert_eq!(edge.confidence_tier, ConfidenceTier::SameFile);
     }
 
     #[test]
@@ -680,6 +687,7 @@ mod tests {
         assert_eq!(edge.source, "proj.a.rs.var");
         assert_eq!(edge.target, "proj.a.rs.foo.param0");
         assert!((edge.confidence - 0.80).abs() < 1e-6);
+        assert_eq!(edge.confidence_tier, ConfidenceTier::SameFile);
     }
 
     #[test]
@@ -971,6 +979,7 @@ mod tests {
             "Reads confidence should be 0.75, got {}",
             edge.confidence
         );
+        assert_eq!(edge.confidence_tier, ConfidenceTier::SameFile);
         assert_eq!(graph.edge_count(), 1, "edge should be added to graph");
     }
 
@@ -1073,6 +1082,7 @@ mod tests {
             "Writes confidence should be 0.75, got {}",
             edge.confidence
         );
+        assert_eq!(edge.confidence_tier, ConfidenceTier::SameFile);
         assert_eq!(graph.edge_count(), 1, "edge should be added to graph");
     }
 

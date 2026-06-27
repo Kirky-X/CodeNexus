@@ -32,7 +32,12 @@ use crate::trace::TraceNode;
 /// `impacted` array is empty (impact analysis is best-effort, not an error).
 pub fn run(kit: &Kit, args: &ImpactArgs) -> Result<()> {
     let trace = kit.require::<TraceKey>()?;
-    let graph = trace.load_graph(&args.symbol, args.depth)?;
+    let mut graph = trace.load_graph(&args.symbol, args.depth)?;
+    // design.md D4: --min-confidence filters edges by score before analysis.
+    if let Some(min_conf) = args.min_confidence {
+        let min_conf = min_conf as f32;
+        graph.retain_edges(|e| e.confidence >= min_conf);
+    }
     let analyzer = ImpactAnalyzer::new(&graph);
     // Resolve the start node id by name (mirrors TraceFacade's resolution).
     let start_id = resolve_start_id(&graph, &args.symbol);
@@ -144,6 +149,7 @@ mod tests {
             symbol: symbol.to_string(),
             depth,
             db: db.to_string(),
+            min_confidence: None,
         }
     }
 

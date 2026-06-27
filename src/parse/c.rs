@@ -24,7 +24,7 @@
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
-use crate::resolve::FqnGenerator;
+use crate::resolve::{FqnGenerator, ScopeContext, ScopeResolverRegistry};
 
 use super::error::{ParseError, Result};
 use super::extractor::{ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo};
@@ -65,11 +65,13 @@ impl Extractor for CExtractor {
             })?;
         let root = tree.root_node();
         // Walk all named children of the translation_unit.
+        let registry = ScopeResolverRegistry::new();
         let ctx = VisitContext {
             file_path,
             project,
             current_func: None,
             current_parent: None,
+            resolver: &registry,
         };
         for i in 0..root.named_child_count() as u32 {
             let child = match root.named_child(i) {
@@ -93,25 +95,31 @@ struct VisitContext<'a> {
     project: &'a str,
     current_func: Option<&'a str>,
     current_parent: Option<&'a str>,
+    /// Scope resolver registry (design.md D3).
+    resolver: &'a ScopeResolverRegistry,
 }
 
 fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     match node.kind() {
         "function_definition" => {
-            // C++ `namespace X { }` / `class X { }` / `struct X { }` are
-            // misparsed by tree-sitter-c as function_definition whose `type`
-            // field is a `type_identifier` whose text is the keyword.
-            let type_text = node
-                .child_by_field_name("type")
-                .filter(|n| n.kind() == "type_identifier")
-                .and_then(|n| node_text(n, source).map(String::from));
-            match type_text.as_deref() {
-                Some("namespace") | Some("class") | Some("struct") => {
+            // Use ScopeResolver to detect C++ namespace/class/struct blocks
+            // misparsed as function_definition (design.md D3). The resolver
+            // returns the appropriate NodeLabel, centralizing the quirk.
+            let scope_ctx = ScopeContext {
+                source,
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_parent: ctx.current_parent,
+            };
+            let scope = ctx
+                .resolver
+                .get(Language::C)
+                .and_then(|r| r.resolve(node, &scope_ctx));
+            match scope.as_ref().map(|s| s.label) {
+                Some(NodeLabel::Namespace) | Some(NodeLabel::Class) | Some(NodeLabel::Struct) => {
                     // C++ scope block misparsed as function_definition.
-                    let scope_name = node
-                        .child_by_field_name("declarator")
-                        .and_then(|n| node_text(n, source).map(String::from));
-                    let combined = combine_scope(ctx.current_parent, scope_name.as_deref());
+                    let scope_name = scope.as_ref().map(|s| s.name.as_str());
+                    let combined = combine_scope(ctx.current_parent, scope_name);
                     for i in 0..node.named_child_count() as u32 {
                         if let Some(child) = node.named_child(i) {
                             if child.kind() == "compound_statement" {
@@ -120,6 +128,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
                                     project: ctx.project,
                                     current_func: None,
                                     current_parent: combined.as_deref(),
+                                    resolver: ctx.resolver,
                                 };
                                 visit_children(child, source, &child_ctx, result);
                             }
@@ -134,15 +143,16 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
                     let method_parent =
                         ctx.current_parent.map(|p| format!("{p}_L{start_line}"));
                     extract_function(node, source, ctx, method_parent.as_deref(), result);
-                    let func_name = function_name(node, source);
+                    let func_name = scope.as_ref().map(|s| s.name.as_str());
                     for i in 0..node.named_child_count() as u32 {
                         if let Some(child) = node.named_child(i) {
                             if child.kind() == "compound_statement" {
                                 let child_ctx = VisitContext {
                                     file_path: ctx.file_path,
                                     project: ctx.project,
-                                    current_func: func_name.as_deref(),
+                                    current_func: func_name,
                                     current_parent: method_parent.as_deref(),
+                                    resolver: ctx.resolver,
                                 };
                                 visit_children(child, source, &child_ctx, result);
                             }
@@ -173,15 +183,25 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             extract_struct(node, source, ctx, result);
             // Pass the struct name as current_parent to children when a body exists.
             if node.child_by_field_name("body").is_some() {
-                let struct_name = node
-                    .child_by_field_name("name")
-                    .and_then(|n| node_text(n, source).map(String::from));
-                let combined = combine_scope(ctx.current_parent, struct_name.as_deref());
+                // Use ScopeResolver to get the struct name (design.md D3).
+                let scope_ctx = ScopeContext {
+                    source,
+                    file_path: ctx.file_path,
+                    project: ctx.project,
+                    current_parent: ctx.current_parent,
+                };
+                let scope = ctx
+                    .resolver
+                    .get(Language::C)
+                    .and_then(|r| r.resolve(node, &scope_ctx));
+                let struct_name = scope.as_ref().map(|s| s.name.as_str());
+                let combined = combine_scope(ctx.current_parent, struct_name);
                 let child_ctx = VisitContext {
                     file_path: ctx.file_path,
                     project: ctx.project,
                     current_func: ctx.current_func,
                     current_parent: combined.as_deref(),
+                    resolver: ctx.resolver,
                 };
                 visit_children(node, source, &child_ctx, result);
             }

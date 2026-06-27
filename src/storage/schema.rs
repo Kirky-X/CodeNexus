@@ -3,7 +3,7 @@
 
 //! DDL string generation for the LadybugDB schema (DDD §12.1).
 //!
-//! Produces the exact DDL strings for the 21 node tables, the `CodeRelation`
+//! Produces the exact DDL strings for the 44 node tables, the `CodeRelation`
 //! relationship table, the optional `Embedding` table, and all secondary
 //! indexes (DDD §12.2).
 //!
@@ -12,7 +12,7 @@
 //! DDD §5.8 specifies `CREATE REL TABLE CodeRelation (FROM Node TO Node, ...)`,
 //! but LadybugDB's `REL TABLE` requires concrete node-table names in the
 //! `FROM`/`TO` clauses — there is no generic `Node` union type. To support
-//! heterogeneous edges between any of the 21 node tables we materialize
+//! heterogeneous edges between any of the 44 node tables we materialize
 //! `CodeRelation` as a `NODE TABLE` with explicit `source`/`target` string
 //! columns (holding node primary keys) plus a synthetic `id` primary key. This
 //! preserves every field from the spec while remaining queryable with plain
@@ -29,9 +29,12 @@ use crate::model::NodeLabel;
 
 /// LadybugDB reserved keywords that conflict with CodeNexus table names.
 ///
-/// Sourced from `lbug-src/src/antlr4/keywords.txt`. Only keywords that collide
-/// with our 21 node-table names or `CodeRelation` need to be listed here.
-const RESERVED_KEYWORDS: &[&str] = &["MACRO"];
+/// Sourced from `lbug-src/src/antlr4/Cypher.g4` — a keyword is reserved (needs
+/// backtick escaping) when it appears in `keywords.txt` but NOT in the
+/// `iC_NonReservedKeywords` rule (which lists keywords still usable as
+/// identifiers). `PROJECT`/`STRUCT`/`DATABASE` are non-reserved and need no
+/// escaping; `MACRO`/`UNION` are reserved and MUST be backtick-escaped.
+const RESERVED_KEYWORDS: &[&str] = &["MACRO", "UNION"];
 
 /// Returns `true` if `name` collides with a LadybugDB reserved keyword
 /// (case-insensitive comparison).
@@ -53,7 +56,7 @@ pub fn escape_identifier(name: &str) -> String {
     }
 }
 
-/// Returns `(table_name, ddl)` pairs for all 21 node tables, in declaration
+/// Returns `(table_name, ddl)` pairs for all 44 node tables, in declaration
 /// order matching [`NodeLabel::all`].
 ///
 /// The DDL strings are the exact statements from DDD §12.1.
@@ -76,6 +79,7 @@ pub fn relation_table_ddl() -> String {
      target STRING, \
      type STRING, \
      confidence DOUBLE, \
+     confidenceTier STRING, \
      reason STRING, \
      startLine INT64, \
      project STRING, \
@@ -142,7 +146,13 @@ pub fn index_ddl() -> Vec<String> {
 
 /// Returns the combined DDL statements used to initialize a fresh database.
 ///
-/// Order: node tables → `CodeRelation` → `Embedding` → indexes.
+/// Order: node tables (including `Embedding`, sourced from
+/// [`embedding_table_ddl`] via [`ddl_for_label`]) → `CodeRelation` → indexes.
+///
+/// Note: `embedding_table_ddl()` is NOT pushed separately here — it is already
+/// included in [`node_table_ddl`] through the `Embedding` variant. Pushing it
+/// again would emit a duplicate `CREATE NODE TABLE Embedding` statement and
+/// break schema init (Task 2.1 regression).
 #[must_use]
 pub fn all_init_ddl() -> Vec<String> {
     let mut ddl: Vec<String> = node_table_ddl()
@@ -150,7 +160,6 @@ pub fn all_init_ddl() -> Vec<String> {
         .map(|(_, stmt)| stmt)
         .collect();
     ddl.push(relation_table_ddl());
-    ddl.push(embedding_table_ddl());
     ddl.extend(index_ddl());
     ddl
 }
@@ -318,6 +327,126 @@ pub fn node_table_columns(label: NodeLabel) -> &'static [&'static str] {
             "parentQn",
         ],
         NodeLabel::Namespace => &["id", "project", "name", "qualifiedName", "filePath", "parentQn"],
+        NodeLabel::Constructor | NodeLabel::Handler | NodeLabel::Middleware | NodeLabel::Test => &[
+            "id",
+            "project",
+            "name",
+            "qualifiedName",
+            "filePath",
+            "startLine",
+            "endLine",
+            "signature",
+            "returnType",
+            "isExported",
+            "docstring",
+            "content",
+            "parentQn",
+        ],
+        NodeLabel::Record | NodeLabel::Delegate | NodeLabel::Union | NodeLabel::Service => &[
+            "id",
+            "project",
+            "name",
+            "qualifiedName",
+            "filePath",
+            "startLine",
+            "endLine",
+            "isExported",
+            "docstring",
+            "content",
+            "parentQn",
+        ],
+        NodeLabel::Property | NodeLabel::Field => &[
+            "id",
+            "project",
+            "name",
+            "qualifiedName",
+            "filePath",
+            "startLine",
+            "endLine",
+            "returnType",
+            "isExported",
+            "parentQn",
+        ],
+        NodeLabel::Annotation | NodeLabel::Variant | NodeLabel::Event | NodeLabel::Section => &[
+            "id",
+            "project",
+            "name",
+            "qualifiedName",
+            "filePath",
+            "startLine",
+            "endLine",
+            "docstring",
+            "parentQn",
+        ],
+        NodeLabel::Template => &[
+            "id",
+            "project",
+            "name",
+            "qualifiedName",
+            "filePath",
+            "startLine",
+            "endLine",
+            "templateParams",
+            "parentQn",
+        ],
+        NodeLabel::Endpoint | NodeLabel::Route => &[
+            "id",
+            "project",
+            "name",
+            "qualifiedName",
+            "filePath",
+            "startLine",
+            "endLine",
+            "httpMethod",
+            "path",
+            "parentQn",
+        ],
+        NodeLabel::Process | NodeLabel::Community => &[
+            "id",
+            "project",
+            "name",
+            "qualifiedName",
+            "docstring",
+        ],
+        NodeLabel::Database => &[
+            "id",
+            "project",
+            "name",
+            "qualifiedName",
+            "filePath",
+            "dbType",
+            "parentQn",
+        ],
+        NodeLabel::Config => &[
+            "id",
+            "project",
+            "name",
+            "qualifiedName",
+            "filePath",
+            "configType",
+            "parentQn",
+        ],
+        NodeLabel::Tool => &[
+            "id",
+            "project",
+            "name",
+            "qualifiedName",
+            "filePath",
+            "toolType",
+            "parentQn",
+        ],
+        // Embedding columns match the vector-store schema (DDD §5.9), not the
+        // code-symbol layout. See [`embedding_table_ddl`].
+        NodeLabel::Embedding => &[
+            "id",
+            "nodeId",
+            "project",
+            "chunkIndex",
+            "startLine",
+            "endLine",
+            "embedding",
+            "contentHash",
+        ],
     }
 }
 
@@ -330,6 +459,7 @@ pub fn relation_table_columns() -> &'static [&'static str] {
         "target",
         "type",
         "confidence",
+        "confidenceTier",
         "reason",
         "startLine",
         "project",
@@ -421,6 +551,103 @@ fn ddl_for_label(label: NodeLabel) -> String {
              isExported BOOLEAN, docstring STRING, content STRING, parentQn STRING, PRIMARY KEY \
              (id));"
             .to_string(),
+        NodeLabel::Constructor => "CREATE NODE TABLE Constructor (id STRING, project STRING, \
+             name STRING, qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, \
+             signature STRING, returnType STRING, isExported BOOLEAN, docstring STRING, content \
+             STRING, parentQn STRING, PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Property => "CREATE NODE TABLE Property (id STRING, project STRING, name \
+             STRING, qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, \
+             returnType STRING, isExported BOOLEAN, parentQn STRING, PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Record => "CREATE NODE TABLE Record (id STRING, project STRING, name STRING, \
+             qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, isExported \
+             BOOLEAN, docstring STRING, content STRING, parentQn STRING, PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Delegate => "CREATE NODE TABLE Delegate (id STRING, project STRING, name \
+             STRING, qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, \
+             isExported BOOLEAN, docstring STRING, content STRING, parentQn STRING, PRIMARY KEY \
+             (id));"
+            .to_string(),
+        NodeLabel::Annotation => "CREATE NODE TABLE Annotation (id STRING, project STRING, \
+             name STRING, qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, \
+             docstring STRING, parentQn STRING, PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Template => "CREATE NODE TABLE Template (id STRING, project STRING, name \
+             STRING, qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, \
+             templateParams STRING, parentQn STRING, PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Union => "CREATE NODE TABLE `Union` (id STRING, project STRING, name STRING, \
+             qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, isExported \
+             BOOLEAN, docstring STRING, content STRING, parentQn STRING, PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Variant => "CREATE NODE TABLE Variant (id STRING, project STRING, name \
+             STRING, qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, \
+             docstring STRING, parentQn STRING, PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Field => "CREATE NODE TABLE Field (id STRING, project STRING, name STRING, \
+             qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, returnType \
+             STRING, isExported BOOLEAN, parentQn STRING, PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Event => "CREATE NODE TABLE Event (id STRING, project STRING, name STRING, \
+             qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, docstring \
+             STRING, parentQn STRING, PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Handler => "CREATE NODE TABLE Handler (id STRING, project STRING, name \
+             STRING, qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, \
+             signature STRING, returnType STRING, isExported BOOLEAN, docstring STRING, content \
+             STRING, parentQn STRING, PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Middleware => "CREATE NODE TABLE Middleware (id STRING, project STRING, \
+             name STRING, qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, \
+             signature STRING, returnType STRING, isExported BOOLEAN, docstring STRING, content \
+             STRING, parentQn STRING, PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Service => "CREATE NODE TABLE Service (id STRING, project STRING, name \
+             STRING, qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, \
+             isExported BOOLEAN, docstring STRING, content STRING, parentQn STRING, PRIMARY KEY \
+             (id));"
+            .to_string(),
+        NodeLabel::Endpoint => "CREATE NODE TABLE Endpoint (id STRING, project STRING, name \
+             STRING, qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, \
+             httpMethod STRING, path STRING, parentQn STRING, PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Route => "CREATE NODE TABLE Route (id STRING, project STRING, name STRING, \
+             qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, httpMethod \
+             STRING, path STRING, parentQn STRING, PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Process => "CREATE NODE TABLE Process (id STRING, project STRING, name \
+             STRING, qualifiedName STRING, docstring STRING, PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Database => "CREATE NODE TABLE Database (id STRING, project STRING, name \
+             STRING, qualifiedName STRING, filePath STRING, dbType STRING, parentQn STRING, \
+             PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Config => "CREATE NODE TABLE Config (id STRING, project STRING, name STRING, \
+             qualifiedName STRING, filePath STRING, configType STRING, parentQn STRING, PRIMARY \
+             KEY (id));"
+            .to_string(),
+        NodeLabel::Test => "CREATE NODE TABLE Test (id STRING, project STRING, name STRING, \
+             qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, signature \
+             STRING, returnType STRING, isExported BOOLEAN, docstring STRING, content STRING, \
+             parentQn STRING, PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Section => "CREATE NODE TABLE Section (id STRING, project STRING, name \
+             STRING, qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, \
+             docstring STRING, parentQn STRING, PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Community => "CREATE NODE TABLE Community (id STRING, project STRING, name \
+             STRING, qualifiedName STRING, docstring STRING, PRIMARY KEY (id));"
+            .to_string(),
+        NodeLabel::Tool => "CREATE NODE TABLE Tool (id STRING, project STRING, name STRING, \
+             qualifiedName STRING, filePath STRING, toolType STRING, parentQn STRING, PRIMARY KEY \
+             (id));"
+            .to_string(),
+        // Embedding is the vector-store table (DDD §5.9 / §12.1), not a code
+        // symbol. Its DDL is the canonical source in [`embedding_table_ddl`];
+        // delegating here keeps `node_table_ddl()` exhaustive without emitting
+        // a duplicate CREATE TABLE in [`all_init_ddl`].
+        NodeLabel::Embedding => embedding_table_ddl(),
     }
 }
 
@@ -429,9 +656,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn node_table_ddl_returns_twenty_one_entries() {
+    fn node_table_ddl_returns_forty_four_entries() {
         let ddl = node_table_ddl();
-        assert_eq!(ddl.len(), 21, "expected 21 node table DDL entries");
+        assert_eq!(ddl.len(), 44, "expected 44 node table DDL entries");
     }
 
     #[test]
@@ -669,9 +896,9 @@ mod tests {
     #[test]
     fn all_init_ddl_includes_node_tables_relation_embedding_and_indexes() {
         let ddl = all_init_ddl();
-        // 21 node tables + 1 relation + 1 embedding + 22 indexes (18 secondary
-        // + 3 FTS + 1 VECTOR) = 45
-        assert_eq!(ddl.len(), 45, "expected 45 DDL statements total");
+        // 44 node tables (incl. Embedding via ddl_for_label) + 1 relation
+        // + 22 indexes (18 secondary + 3 FTS + 1 VECTOR) = 67
+        assert_eq!(ddl.len(), 67, "expected 67 DDL statements total");
         assert!(ddl.iter().any(|s| s.contains("CREATE NODE TABLE Project")));
         assert!(ddl.iter().any(|s| s.contains("CodeRelation")));
         assert!(ddl.iter().any(|s| s.contains("Embedding")));
@@ -722,7 +949,7 @@ mod tests {
     }
 
     #[test]
-    fn relation_table_columns_has_eight_columns() {
+    fn relation_table_columns_has_nine_columns() {
         let cols = relation_table_columns();
         assert_eq!(
             cols,
@@ -732,6 +959,7 @@ mod tests {
                 "target",
                 "type",
                 "confidence",
+                "confidenceTier",
                 "reason",
                 "startLine",
                 "project",

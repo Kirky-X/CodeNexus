@@ -113,6 +113,18 @@ impl Graph {
         self.edges.iter().filter(|e| &e.target == id).collect()
     }
 
+    /// Retains only edges for which `f` returns `true`, dropping the rest.
+    ///
+    /// Nodes are NOT removed — only edges. This is used by the CLI
+    /// `--min-confidence` filter to drop low-confidence edges before trace /
+    /// impact analysis (design.md D4).
+    pub fn retain_edges<F>(&mut self, f: F)
+    where
+        F: FnMut(&Edge) -> bool,
+    {
+        self.edges.retain(f);
+    }
+
     /// Returns `true` if `edge` matches the optional `filter` (or if the
     /// filter is `None`).
     fn type_matches(edge: EdgeType, filter: Option<EdgeType>) -> bool {
@@ -507,6 +519,31 @@ mod tests {
     fn edges_to_empty_for_missing_node() {
         let g = Graph::new();
         assert!(g.edges_to(&"missing".to_string()).is_empty());
+    }
+
+    #[test]
+    fn retain_edges_drops_low_confidence_edges() {
+        let mut g = Graph::new();
+        // confidence defaults to 1.0 via Edge::new
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        // Build a low-confidence edge manually
+        let mut low = Edge::new("c", "d", EdgeType::Calls, "proj");
+        low.confidence = 0.5;
+        g.add_edge(low);
+
+        assert_eq!(g.edge_count(), 2);
+        g.retain_edges(|e| e.confidence >= 0.8);
+        assert_eq!(g.edge_count(), 1);
+        assert_eq!(g.edges[0].source, "a");
+    }
+
+    #[test]
+    fn retain_edges_keeps_all_when_predicate_true() {
+        let mut g = Graph::new();
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c", "d", EdgeType::Reads, "proj"));
+        g.retain_edges(|_| true);
+        assert_eq!(g.edge_count(), 2);
     }
 
     #[test]

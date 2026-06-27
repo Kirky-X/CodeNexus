@@ -82,7 +82,7 @@ pub struct QueryArgs {
 }
 
 /// Arguments for the `trace` subcommand (PRD §4.2.3).
-#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+#[derive(Parser, Debug, Clone, PartialEq)]
 pub struct TraceArgs {
     /// Symbol name or FQN to trace.
     pub symbol: String,
@@ -95,10 +95,16 @@ pub struct TraceArgs {
     /// Database path.
     #[arg(long, default_value = "./codenexus.lbug")]
     pub db: String,
+    /// Minimum edge confidence to include in trace (0.0–1.0).
+    /// Edges with `confidence < min_confidence` are dropped before analysis.
+    /// `--min-confidence 0.85` keeps only SameFile + ImportScoped edges
+    /// (design.md D4).
+    #[arg(long)]
+    pub min_confidence: Option<f64>,
 }
 
 /// Arguments for the `impact` subcommand.
-#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+#[derive(Parser, Debug, Clone, PartialEq)]
 pub struct ImpactArgs {
     /// Symbol name or FQN to analyze.
     pub symbol: String,
@@ -108,6 +114,12 @@ pub struct ImpactArgs {
     /// Database path.
     #[arg(long, default_value = "./codenexus.lbug")]
     pub db: String,
+    /// Minimum edge confidence to include in impact analysis (0.0–1.0).
+    /// Edges with `confidence < min_confidence` are dropped before analysis.
+    /// `--min-confidence 0.85` keeps only SameFile + ImportScoped edges
+    /// (design.md D4).
+    #[arg(long)]
+    pub min_confidence: Option<f64>,
 }
 
 /// Arguments for the `search` subcommand (PRD §4.4).
@@ -312,6 +324,43 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_trace_with_min_confidence() {
+        let cli = Cli::parse_from([
+            "codenexus", "trace", "main", "--min-confidence", "0.85",
+        ]);
+        match cli.command {
+            Command::Trace(args) => {
+                assert!((args.min_confidence.unwrap() - 0.85).abs() < f64::EPSILON);
+            }
+            other => panic!("expected Trace, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_impact_with_min_confidence() {
+        let cli = Cli::parse_from([
+            "codenexus", "impact", "helper", "--min-confidence", "0.90",
+        ]);
+        match cli.command {
+            Command::Impact(args) => {
+                assert!((args.min_confidence.unwrap() - 0.90).abs() < f64::EPSILON);
+            }
+            other => panic!("expected Impact, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_trace_min_confidence_defaults_to_none() {
+        let cli = Cli::parse_from(["codenexus", "trace", "main"]);
+        match cli.command {
+            Command::Trace(args) => {
+                assert!(args.min_confidence.is_none());
+            }
+            other => panic!("expected Trace, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn cli_parses_search_subcommand_defaults() {
         let cli = Cli::parse_from(["codenexus", "search", "parse"]);
         match cli.command {
@@ -501,6 +550,7 @@ mod tests {
             trace_type: "calls".into(),
             depth: 5,
             db: "./x.lbug".into(),
+            min_confidence: None,
         };
         assert_eq!(a, a.clone());
     }
@@ -511,6 +561,7 @@ mod tests {
             symbol: "x".into(),
             depth: 2,
             db: "./x.lbug".into(),
+            min_confidence: None,
         };
         assert_eq!(a, a.clone());
     }

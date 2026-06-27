@@ -14,7 +14,7 @@ pub mod language;
 pub mod node;
 pub mod node_label;
 
-pub use edge::{Edge, EdgeBuilder};
+pub use edge::{ConfidenceTier, Edge, EdgeBuilder};
 pub use edge_type::EdgeType;
 pub use flow_type::FlowType;
 pub use graph::Graph;

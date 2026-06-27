@@ -5,36 +5,40 @@
 //!
 //! [`IndexFacade`] is the single entry point for the indexing workflow. It
 //! owns a [`Pipeline`] which orchestrates the full discover → parse → resolve
-//! → storage sequence, computing SHA-256 file hashes for incremental indexing
-//! (ADR-009) and applying the diff logic from [`super::incremental`].
+//! → storage sequence via the typed [`Phase`] DAG runner
+//! ([`super::pipeline_dag`]), computing SHA-256 file hashes for incremental
+//! indexing (ADR-009) and applying the diff logic from [`super::incremental`].
 //!
-//! # Pipeline steps (ADD §4.1)
+//! # Pipeline phases (Task 2.5, design.md D2)
 //!
-//! 1. `discover_files(path)` → `Vec<FileInfo>` via [`Walker`].
-//! 2. `query_existing_hashes(project)` from the database.
-//! 3. `diff_hashes()` → `changed`/`added`/`deleted` (or all `changed` if
-//!    `force`).
-//! 4. `parallel_parse(changed + added)` → `Vec<ExtractResult>`.
-//! 5. `build_in_memory_graph(results)` (nodes + per-file edges).
-//! 6. `resolve_symbols(graph)` — calls + dataflow + FFI edges.
-//! 7. `delete_old_nodes(deleted_files)` from the database.
-//! 8. `load_csv(resolved_graph)` to the database (nodes + edges).
-//! 9. Return [`IndexResult`].
+//! The 9-step sequence from ADD §4.1 is now split into 6 typed phases
+//! (defined in [`super::phases`]), executed by the [`DagPipeline`] runner in
+//! topological order:
+//!
+//! 1. [`ScanPhase`] — discover files, lookup/create project, diff hashes.
+//! 2. [`ParsePhase`] — parallel-parse changed+added files.
+//! 3. [`ScopeResolutionPhase`] — build in-memory graph (nodes + per-file edges).
+//! 4. [`ResolvePhase`] — resolve calls/dataflow/FFI edges.
+//! 5. [`ConfidencePhase`] — pass-through (Task 2.8 adds real confidence).
+//! 6. [`LoadPhase`] — persist nodes/edges to the database, build [`IndexResult`].
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 use tracing::{info, warn};
 
-use crate::discover::{FileInfo, Walker};
 use crate::index::error::{IndexError, Result};
 use crate::index::hash::compute_file_hash;
-use crate::index::incremental::{diff_files, FileDiff};
-use crate::model::{Edge, Graph, Language, Node, NodeLabel, new_file_id, new_project_id};
-use crate::parse::parallel_parse;
-use crate::resolve::{build_symbol_table, resolve_all};
+use crate::index::incremental::FileDiff;
+use crate::model::{Language, Node, NodeLabel, new_file_id};
 use crate::storage::{Repository, StorageError};
+
+use super::phases::{
+    ConfidencePhase, LoadOutput, LoadPhase, ParsePhase, ResolvePhase, ScanInput, ScanPhase,
+    ScopeResolutionPhase,
+};
+use super::pipeline_dag::{Phase, Pipeline as DagPipeline, PipelineCtx};
 
 /// Maximum number of retry attempts for database-locked errors (Task 5).
 ///
@@ -42,7 +46,7 @@ use crate::storage::{Repository, StorageError};
 /// `DEFAULT_MAX_RETRIES` times with exponential backoff
 /// (100ms, 200ms, 400ms). If it still fails, [`IndexError::DatabaseLocked`] is
 /// returned (PRD §4.1.6, exit code 2).
-const DEFAULT_MAX_RETRIES: u32 = 3;
+pub(crate) const DEFAULT_MAX_RETRIES: u32 = 3;
 
 /// Executes a database operation with retry on lock (Task 5).
 ///
@@ -65,7 +69,7 @@ const DEFAULT_MAX_RETRIES: u32 = 3;
 /// - Returns [`IndexError::DatabaseLocked`] if `f` keeps returning lock errors
 ///   for `max_retries + 1` attempts.
 /// - Returns any other `IndexError` immediately (no retry).
-fn with_retry<T, F>(max_retries: u32, mut f: F) -> Result<T>
+pub(crate) fn with_retry<T, F>(max_retries: u32, mut f: F) -> Result<T>
 where
     F: FnMut() -> Result<T>,
 {
@@ -186,20 +190,24 @@ impl IndexFacade {
 
 /// Internal pipeline orchestration over a [`Repository`].
 ///
-/// Each [`Pipeline::run`] call performs the full ADD §4.1 sequence:
-/// discover → diff → parse → resolve → storage.
+/// Each [`Pipeline::run`] call performs the full ADD §4.1 sequence via the
+/// typed [`DagPipeline`] runner: discover → diff → parse → resolve → storage.
+/// The pipeline holds an [`Arc<Repository>`] so multiple phases can share the
+/// same database connection (Repository is not Clone, ADR-008).
 pub struct Pipeline {
-    repository: Repository,
+    repository: Arc<Repository>,
 }
 
 impl Pipeline {
     /// Creates a new `Pipeline` wrapping `repository`.
     #[must_use]
     pub fn new(repository: Repository) -> Self {
-        Self { repository }
+        Self {
+            repository: Arc::new(repository),
+        }
     }
 
-    /// Runs the full indexing pipeline.
+    /// Runs the full indexing pipeline via the typed DAG runner.
     ///
     /// # Arguments
     ///
@@ -225,339 +233,64 @@ impl Pipeline {
         );
 
         // PRD §4.1.6: path not found → exit code 1.
+        // Checked before the DAG so ScanPhase can assume the path exists.
         if !path.exists() {
             return Err(IndexError::PathNotFound(path.display().to_string()));
         }
 
-        // Step 1: discover files on disk.
-        let disk_files = Walker::new(path).discover()?;
+        // Build the pipeline context with root-phase input.
+        let mut ctx = PipelineCtx::new();
+        ctx.insert(
+            ScanPhase::NAME,
+            ScanInput {
+                path: path.to_path_buf(),
+                project_name: project_name.to_string(),
+                force,
+                start,
+            },
+        );
+        // Derived phases use Input = ().
+        ctx.insert(ParsePhase::NAME, ());
+        ctx.insert(ScopeResolutionPhase::NAME, ());
+        ctx.insert(ResolvePhase::NAME, ());
+        ctx.insert(ConfidencePhase::NAME, ());
+        ctx.insert(LoadPhase::NAME, ());
 
-        // Assign a project id. We reuse an existing project id if one exists
-        // for this name (incremental re-index); otherwise generate a new one.
-        let project_id = self.lookup_or_create_project_id(project_name, path, &disk_files)?;
-
-        // Step 2: query existing hashes from the DB (with retry on lock).
-        let db_hashes = with_retry(DEFAULT_MAX_RETRIES, || {
-            self.repository
-                .get_all_file_hashes(&project_id)
-                .map_err(IndexError::from)
+        // Register all 6 phases and run the DAG.
+        let mut dag = DagPipeline::new();
+        dag.register(ScanPhase {
+            repo: self.repository.clone(),
         })
-        .unwrap_or_default();
+        .map_err(IndexError::from)?;
+        dag.register(ParsePhase).map_err(IndexError::from)?;
+        dag.register(ScopeResolutionPhase)
+            .map_err(IndexError::from)?;
+        dag.register(ResolvePhase).map_err(IndexError::from)?;
+        dag.register(ConfidencePhase)
+            .map_err(IndexError::from)?;
+        dag.register(LoadPhase {
+            repo: self.repository.clone(),
+        })
+        .map_err(IndexError::from)?;
 
-        // Step 3: diff hashes → changed/added/deleted (or all changed if force).
-        let diff = diff_files(&disk_files, &db_hashes, force)?;
+        dag.run(&mut ctx).map_err(IndexError::from)?;
 
-        // Step 4: parallel-parse changed + added files.
-        let mut to_parse: Vec<FileInfo> = diff.changed.clone();
-        to_parse.extend(diff.added.iter().cloned());
-        let parse_result = parallel_parse(&to_parse, &project_id);
-
-        // PRD §4.1.6: parse failures are logged and skipped.
-        for (file_path, error_msg) in &parse_result.errors {
-            warn!(file = %file_path, error = %error_msg, "parse failed, skipping file");
-        }
-
-        // Step 5: build in-memory graph (definition nodes + per-file edges).
-        let mut graph = Graph::new();
-        let mut all_nodes: Vec<Node> = Vec::new();
-        let mut all_edges: Vec<Edge> = Vec::new();
-
-        // Add File nodes for every parsed file (used by incremental indexing).
-        let file_nodes = build_file_nodes(&diff, &project_id);
-        for file_node in &file_nodes {
-            graph.add_node(file_node.clone());
-        }
-        all_nodes.extend(file_nodes.iter().cloned());
-
-        // Build mapping from absolute file path → File node id (file_<uuid>).
-        // Parser-created DEFINES/CONTAINS edges use the absolute file path as
-        // `source`; we must rewrite it to the File node's id so the edge is not
-        // orphaned (DQ-004).
-        let mut path_to_file_id: HashMap<&str, &str> = HashMap::new();
-        for file in to_parse.iter() {
-            if let Some(abs) = file.path.to_str() {
-                let rel = file.relative_path.as_str();
-                // File node id is looked up by relative_path (File nodes use
-                // relative_path as their name/qualified_name).
-                for fn_node in &file_nodes {
-                    if fn_node.name == rel {
-                        path_to_file_id.insert(abs, &fn_node.id);
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Merge per-file extraction results into the graph.
-        // Build a mapping from absolute file paths to relative paths so
-        // definition nodes (which extractors set to the absolute path) can be
-        // normalized to match File nodes (which use relative paths).
-        let path_to_rel: HashMap<&str, &str> = to_parse
-            .iter()
-            .filter_map(|f| f.path.to_str().map(|p| (p, f.relative_path.as_str())))
-            .collect();
-        for result in &parse_result.results {
-            let rel_path = path_to_rel
-                .get(result.file_path.as_str())
-                .copied()
-                .unwrap_or(result.file_path.as_str());
-            // Build a per-file remap: old node id (UUID) → new id (FQN) so
-            // edges whose `target` points at the pre-rewrite UUID can be
-            // rewritten to the FQN. This eliminates the orphan-edge class of
-            // bugs (DQ-004) where DEFINES/CONTAINS edges referenced the
-            // pre-rewrite UUID target.
-            let mut id_remap: HashMap<String, String> = HashMap::new();
-            for node in &result.nodes {
-                let mut g = node.clone();
-                // Definition nodes (Class, Function, etc.) use FQN as id so
-                // resolve_all and trace can look them up by qualified_name.
-                // Project/File/Folder keep their UUIDv7 ids.
-                if !matches!(g.label, NodeLabel::Project | NodeLabel::File | NodeLabel::Folder) {
-                    let old_id = g.id.clone();
-                    g.id = node.qualified_name.clone();
-                    if old_id != g.id {
-                        id_remap.insert(old_id, g.id.clone());
-                    }
-                }
-                // Normalize filePath to relative for consistency with File
-                // nodes, so delete_file_nodes matches all nodes by relative
-                // path during incremental re-indexing.
-                if let Some(fp) = g.file_path.as_mut() {
-                    *fp = rel_path.to_string();
-                }
-                // Ensure the project is set (extractors set it, but be defensive).
-                if g.project.is_empty() {
-                    g.project = project_id.clone();
-                }
-                graph.add_node(g.clone());
-                all_nodes.push(g);
-            }
-            for edge in &result.edges {
-                let mut e = edge.clone();
-                // Rewrite parser-created edge endpoints so they match the
-                // stored node ids:
-                //  - `source` (absolute file path) → File node id (file_<uuid>)
-                //  - `target` (pre-rewrite UUID) → FQN
-                // Resolver-created edges (CALLS/DataFlows/Reads/Writes) already
-                // use FQN endpoints and are not in the remap, so they are left
-                // unchanged.
-                if let Some(file_id) = path_to_file_id.get(e.source.as_str()) {
-                    e.source = (*file_id).to_string();
-                }
-                if let Some(new_target) = id_remap.get(&e.target) {
-                    e.target = new_target.clone();
-                }
-                graph.add_edge(e.clone());
-                all_edges.push(e);
-            }
-        }
-
-        // Step 6: resolve symbols (calls + dataflow + FFI).
-        let symbol_table = build_symbol_table(&parse_result.results, &project_id);
-        let resolved_edges = resolve_all(
-            &parse_result.results,
-            &symbol_table,
-            &project_id,
-            &mut graph,
-        );
-        all_edges.extend(resolved_edges);
-
-        // Collect Parameter and Variable nodes created during dataflow
-        // resolution (DQ-004) so they are persisted to the database alongside
-        // other nodes. Variable nodes are created by `resolve_var_identifier`
-        // fallback when a referenced variable isn't in the symbol table (P0-1);
-        // Parameter nodes are created by `resolve_arg_pass` (BR-TRACE-001).
-        // Without this, DataFlows edges become orphans pointing at
-        // never-persisted Variable/Parameter nodes.
-        for label in [NodeLabel::Parameter, NodeLabel::Variable] {
-            for node in graph.nodes_by_label(label) {
-                let mut n = node.clone();
-                // Normalize filePath to relative for consistency with File
-                // nodes, so delete_file_nodes matches during incremental
-                // re-indexing.
-                if let Some(fp) = n.file_path.as_mut() {
-                    if let Some(&rel) = path_to_rel.get(fp.as_str()) {
-                        *fp = rel.to_string();
-                    }
-                }
-                all_nodes.push(n);
-            }
-        }
-
-        // Step 7: delete old nodes for deleted files (BR-INDEX-002) and for
-        // changed files (we're about to re-insert their nodes).
-        for deleted_path in &diff.deleted {
-            if let Err(err) = self.repository.delete_file_nodes(deleted_path, &project_id) {
-                warn!(file = %deleted_path, error = %err, "failed to delete file nodes");
-            }
-        }
-        for changed_file in &diff.changed {
-            if let Err(err) = self
-                .repository
-                .delete_file_nodes(&changed_file.relative_path, &project_id)
-            {
-                warn!(
-                    file = %changed_file.relative_path,
-                    error = %err,
-                    "failed to delete changed file nodes"
-                );
-            }
-        }
-
-        // Step 8: persist the project node, definition nodes, and edges.
-        self.save_project_node(&project_id, project_name, path, &disk_files)?;
-        self.save_nodes_by_label(&all_nodes)?;
-        if !all_edges.is_empty() {
-            with_retry(DEFAULT_MAX_RETRIES, || {
-                self.repository.save_edges(&all_edges).map_err(IndexError::from)
+        // Extract the final IndexResult from the LoadPhase output.
+        let load_output = ctx
+            .remove::<LoadOutput>(LoadPhase::NAME)
+            .ok_or_else(|| {
+                IndexError::Storage(StorageError::Query(
+                    "load phase did not produce output".to_string(),
+                ))
             })?;
-        }
 
-        // Step 9: build the IndexResult.
-        let duration_ms = start.elapsed().as_millis().min(u64::MAX as u128) as u64;
-        let files_indexed = parse_result.files_parsed;
-        let files_skipped = diff.unchanged.len();
-        let nodes_created = all_nodes.len();
-        let edges_created = all_edges.len();
-
-        info!(
-            event = "index_completed",
-            project = %project_name,
-            path = %path.display(),
-            files_indexed = files_indexed,
-            files_skipped = files_skipped,
-            nodes_created = nodes_created,
-            edges_created = edges_created,
-            duration_ms = duration_ms,
-            "indexing completed"
-        );
-
-        let files_per_second = if duration_ms > 0 {
-            (files_indexed as f64 * 1000.0 / duration_ms as f64).round() as u64
-        } else {
-            0
-        };
-        info!(
-            event = "performance",
-            files_per_second = files_per_second,
-            files_indexed = files_indexed,
-            duration_ms = duration_ms,
-            "indexing performance metrics"
-        );
-
-        Ok(IndexResult::new(
-            project_id,
-            files_indexed,
-            files_skipped,
-            nodes_created,
-            edges_created,
-            duration_ms,
-        ))
-    }
-
-    /// Looks up an existing project id by name, or generates a new one.
-    ///
-    /// We treat the project *name* as the stable identifier across re-indexes.
-    /// If a project with this name already exists in the DB, we reuse its id;
-    /// otherwise we generate a fresh `proj_<uuid>` id.
-    fn lookup_or_create_project_id(
-        &self,
-        project_name: &str,
-        root: &Path,
-        disk_files: &[FileInfo],
-    ) -> Result<String> {
-        // Look for an existing project with this name.
-        let projects = self.repository.list_projects().unwrap_or_default();
-        for project in projects {
-            if project.name == project_name {
-                return Ok(project.id);
-            }
-        }
-        // No existing project; generate a new id.
-        let _ = (root, disk_files); // unused on this branch; kept for clarity.
-        Ok(new_project_id())
-    }
-
-    /// Saves (or re-saves) the project node.
-    ///
-    /// Only saves the project node if it does not already exist — this
-    /// preserves the File nodes (and their hashes) from prior runs, which
-    /// the incremental indexer depends on.
-    fn save_project_node(
-        &self,
-        project_id: &str,
-        project_name: &str,
-        root: &Path,
-        disk_files: &[FileInfo],
-    ) -> Result<()> {
-        // If the project node already exists, update its metadata in place
-        // by deleting only the Project row (not the File/Function nodes).
-        if self.repository.get_project(project_id)?.is_some() {
-            // Delete only the Project node itself.
-            let cypher = format!(
-                "MATCH (p:Project {{id: '{}'}}) DELETE p;",
-                project_id.replace('\'', "\\'"),
-            );
-            // Ignore errors (e.g. table missing) — the project may not exist.
-            let _ = self.repository.connection().execute(&cypher);
-        }
-        let project_node = Node::builder(NodeLabel::Project, project_name, project_name)
-            .id(project_id)
-            .properties(serde_json::json!({
-                "rootPath": root.display().to_string(),
-                "fileCount": disk_files.len() as i64,
-                "indexedAt": now_unix_seconds(),
-            }))
-            .build();
-        self.repository.save_project(&project_node)?;
-        Ok(())
-    }
-
-    /// Groups nodes by label and bulk-saves each group.
-    fn save_nodes_by_label(&self, nodes: &[Node]) -> Result<()> {
-        // Group nodes by label so each label is bulk-loaded in one COPY.
-        let mut by_label: HashMap<NodeLabel, Vec<Node>> = HashMap::new();
-        for node in nodes {
-            by_label.entry(node.label).or_default().push(node.clone());
-        }
-        for (label, group) in by_label {
-            if group.is_empty() {
-                continue;
-            }
-            // Project nodes are saved via save_project_node; skip them here.
-            if label == NodeLabel::Project {
-                continue;
-            }
-            // Deduplicate by id within this label group. The same node can
-            // appear more than once in `all_nodes` when a definition node
-            // extracted by the parser happens to share its id (FQN) with a
-            // Variable/Parameter node created during dataflow resolution, or
-            // when incremental re-indexing hasn't yet cleared stale rows.
-            // LadybugDB's COPY rejects duplicate primary keys, so we keep the
-            // last occurrence per id.
-            let mut seen: HashMap<String, usize> = HashMap::new();
-            let mut deduped: Vec<Node> = Vec::with_capacity(group.len());
-            for node in group {
-                if let Some(&idx) = seen.get(&node.id) {
-                    deduped[idx] = node;
-                } else {
-                    seen.insert(node.id.clone(), deduped.len());
-                    deduped.push(node);
-                }
-            }
-            with_retry(DEFAULT_MAX_RETRIES, || {
-                self.repository
-                    .save_nodes(&deduped, label)
-                    .map_err(IndexError::from)
-            })?;
-        }
-        Ok(())
+        Ok(load_output.index_result)
     }
 }
 
 /// Builds a [`Node`] (label `File`) for each changed/added file, carrying the
 /// SHA-256 hash in `properties.hash` for future incremental runs.
-fn build_file_nodes(diff: &FileDiff, project_id: &str) -> Vec<Node> {
+pub(crate) fn build_file_nodes(diff: &FileDiff, project_id: &str) -> Vec<Node> {
     let mut nodes = Vec::new();
     for file in diff.changed.iter().chain(diff.added.iter()) {
         let hash = match compute_file_hash(&file.path) {
@@ -592,13 +325,13 @@ fn build_file_nodes(diff: &FileDiff, project_id: &str) -> Vec<Node> {
 }
 
 /// Returns the number of lines in `path`, or `None` if it cannot be read.
-fn line_count_of(path: &Path) -> Option<u32> {
+pub(crate) fn line_count_of(path: &Path) -> Option<u32> {
     let content = std::fs::read_to_string(path).ok()?;
     Some(content.lines().count() as u32)
 }
 
 /// Returns the current unix timestamp in seconds.
-fn now_unix_seconds() -> i64 {
+pub(crate) fn now_unix_seconds() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -608,6 +341,7 @@ fn now_unix_seconds() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::discover::FileInfo;
     use crate::model::Language;
     use std::fs;
     use std::io::Write;

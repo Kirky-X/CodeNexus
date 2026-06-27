@@ -1,14 +1,15 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Edge type enum representing the 14 relation types in the CodeNexus graph (DDD §7.2).
+//! Edge type enum representing the 24 relation types in the CodeNexus graph (DDD §7.2).
 
 use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// The 14 edge type variants defined in DDD §7.2.
+/// The 24 edge type variants defined in DDD §7.2 (14 original + 10 added in
+/// T9 H1 unified graph schema).
 ///
 /// Each variant maps to an UPPERCASE DDL type string used in the LadybugDB
 /// `CodeRelation` table.
@@ -28,12 +29,33 @@ pub enum EdgeType {
     References,
     Imports,
     Includes,
+    // --- T9 H1: 10 new edge types for richer graph semantics ---
+    /// Class/struct/trait owns a method (structural, explicit in syntax).
+    HasMethod,
+    /// Class/struct/trait owns a property/field (structural).
+    HasProperty,
+    /// Function/method accesses a variable or field (inferred from usage).
+    Accesses,
+    /// Method overrides a parent method (OOP, type-system resolved).
+    MethodOverrides,
+    /// Method implements an interface/trait method (type-system resolved).
+    MethodImplements,
+    /// Function/handler is a step in a process (structural).
+    StepInProcess,
+    /// Handler processes a route/endpoint (structural).
+    HandlesRoute,
+    /// Function fetches data from a database/service (inferred).
+    Fetches,
+    /// Handler processes a tool invocation (structural).
+    HandlesTool,
+    /// Function is the entry point of a process/service (structural).
+    EntryPointOf,
 }
 
 impl EdgeType {
     /// Returns all variants in declaration order.
     #[must_use]
-    pub const fn all() -> [EdgeType; 14] {
+    pub const fn all() -> [EdgeType; 24] {
         [
             EdgeType::Contains,
             EdgeType::Defines,
@@ -49,6 +71,16 @@ impl EdgeType {
             EdgeType::References,
             EdgeType::Imports,
             EdgeType::Includes,
+            EdgeType::HasMethod,
+            EdgeType::HasProperty,
+            EdgeType::Accesses,
+            EdgeType::MethodOverrides,
+            EdgeType::MethodImplements,
+            EdgeType::StepInProcess,
+            EdgeType::HandlesRoute,
+            EdgeType::Fetches,
+            EdgeType::HandlesTool,
+            EdgeType::EntryPointOf,
         ]
     }
 
@@ -70,6 +102,16 @@ impl EdgeType {
             EdgeType::References => "REFERENCES",
             EdgeType::Imports => "IMPORTS",
             EdgeType::Includes => "INCLUDES",
+            EdgeType::HasMethod => "HAS_METHOD",
+            EdgeType::HasProperty => "HAS_PROPERTY",
+            EdgeType::Accesses => "ACCESSES",
+            EdgeType::MethodOverrides => "METHOD_OVERRIDES",
+            EdgeType::MethodImplements => "METHOD_IMPLEMENTS",
+            EdgeType::StepInProcess => "STEP_IN_PROCESS",
+            EdgeType::HandlesRoute => "HANDLES_ROUTE",
+            EdgeType::Fetches => "FETCHES",
+            EdgeType::HandlesTool => "HANDLES_TOOL",
+            EdgeType::EntryPointOf => "ENTRY_POINT_OF",
         }
     }
 
@@ -104,6 +146,22 @@ impl EdgeType {
             // Variable read / write access — inferred from usage.
             EdgeType::Reads => (0.70, 0.80),
             EdgeType::Writes => (0.70, 0.80),
+            // --- T9 H1: 10 new edge types ---
+            // Structural ownership — explicit in syntax.
+            EdgeType::HasMethod => (0.95, 1.0),
+            EdgeType::HasProperty => (0.95, 1.0),
+            // Variable/field access — inferred from usage (like Reads/Writes).
+            EdgeType::Accesses => (0.70, 0.80),
+            // Type-system edges — resolved with high certainty.
+            EdgeType::MethodOverrides => (0.90, 1.0),
+            EdgeType::MethodImplements => (0.90, 1.0),
+            // Process / handler structural edges — explicit in source.
+            EdgeType::StepInProcess => (0.95, 1.0),
+            EdgeType::HandlesRoute => (0.90, 1.0),
+            EdgeType::HandlesTool => (0.90, 1.0),
+            EdgeType::EntryPointOf => (0.95, 1.0),
+            // Data fetch — inferred from call patterns.
+            EdgeType::Fetches => (0.75, 0.85),
         }
     }
 }
@@ -133,6 +191,16 @@ impl FromStr for EdgeType {
             "REFERENCES" => Ok(EdgeType::References),
             "IMPORTS" => Ok(EdgeType::Imports),
             "INCLUDES" => Ok(EdgeType::Includes),
+            "HAS_METHOD" => Ok(EdgeType::HasMethod),
+            "HAS_PROPERTY" => Ok(EdgeType::HasProperty),
+            "ACCESSES" => Ok(EdgeType::Accesses),
+            "METHOD_OVERRIDES" => Ok(EdgeType::MethodOverrides),
+            "METHOD_IMPLEMENTS" => Ok(EdgeType::MethodImplements),
+            "STEP_IN_PROCESS" => Ok(EdgeType::StepInProcess),
+            "HANDLES_ROUTE" => Ok(EdgeType::HandlesRoute),
+            "FETCHES" => Ok(EdgeType::Fetches),
+            "HANDLES_TOOL" => Ok(EdgeType::HandlesTool),
+            "ENTRY_POINT_OF" => Ok(EdgeType::EntryPointOf),
             other => Err(format!("unknown EdgeType: {other}")),
         }
     }
@@ -143,8 +211,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn has_fourteen_variants() {
-        assert_eq!(EdgeType::all().len(), 14);
+    fn has_twenty_four_variants() {
+        assert_eq!(EdgeType::all().len(), 24);
     }
 
     #[test]
@@ -163,6 +231,16 @@ mod tests {
         assert_eq!(EdgeType::References.to_string(), "REFERENCES");
         assert_eq!(EdgeType::Imports.to_string(), "IMPORTS");
         assert_eq!(EdgeType::Includes.to_string(), "INCLUDES");
+        assert_eq!(EdgeType::HasMethod.to_string(), "HAS_METHOD");
+        assert_eq!(EdgeType::HasProperty.to_string(), "HAS_PROPERTY");
+        assert_eq!(EdgeType::Accesses.to_string(), "ACCESSES");
+        assert_eq!(EdgeType::MethodOverrides.to_string(), "METHOD_OVERRIDES");
+        assert_eq!(EdgeType::MethodImplements.to_string(), "METHOD_IMPLEMENTS");
+        assert_eq!(EdgeType::StepInProcess.to_string(), "STEP_IN_PROCESS");
+        assert_eq!(EdgeType::HandlesRoute.to_string(), "HANDLES_ROUTE");
+        assert_eq!(EdgeType::Fetches.to_string(), "FETCHES");
+        assert_eq!(EdgeType::HandlesTool.to_string(), "HANDLES_TOOL");
+        assert_eq!(EdgeType::EntryPointOf.to_string(), "ENTRY_POINT_OF");
     }
 
     #[test]
@@ -257,6 +335,17 @@ mod tests {
         assert_eq!(EdgeType::DataFlows.confidence_range(), (0.80, 0.90));
         assert_eq!(EdgeType::Reads.confidence_range(), (0.70, 0.80));
         assert_eq!(EdgeType::Writes.confidence_range(), (0.70, 0.80));
+        // T9 H1 new edge types
+        assert_eq!(EdgeType::HasMethod.confidence_range(), (0.95, 1.0));
+        assert_eq!(EdgeType::HasProperty.confidence_range(), (0.95, 1.0));
+        assert_eq!(EdgeType::Accesses.confidence_range(), (0.70, 0.80));
+        assert_eq!(EdgeType::MethodOverrides.confidence_range(), (0.90, 1.0));
+        assert_eq!(EdgeType::MethodImplements.confidence_range(), (0.90, 1.0));
+        assert_eq!(EdgeType::StepInProcess.confidence_range(), (0.95, 1.0));
+        assert_eq!(EdgeType::HandlesRoute.confidence_range(), (0.90, 1.0));
+        assert_eq!(EdgeType::Fetches.confidence_range(), (0.75, 0.85));
+        assert_eq!(EdgeType::HandlesTool.confidence_range(), (0.90, 1.0));
+        assert_eq!(EdgeType::EntryPointOf.confidence_range(), (0.95, 1.0));
     }
 
     #[test]

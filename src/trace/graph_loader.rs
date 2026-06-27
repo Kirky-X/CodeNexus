@@ -173,13 +173,13 @@ fn fetch_edges_for_node(
     let escaped = escape_cypher_string(node_id);
     let cypher = match direction {
         EdgeDirection::Outgoing => format!(
-            "MATCH (r:CodeRelation) WHERE r.source = '{escaped}' RETURN r.source AS source, r.target AS target, r.type AS type, r.confidence AS confidence, r.reason AS reason, r.startLine AS startLine, r.project AS project;"
+            "MATCH (r:CodeRelation) WHERE r.source = '{escaped}' RETURN r.source AS source, r.target AS target, r.type AS type, r.confidence AS confidence, r.confidenceTier AS confidenceTier, r.reason AS reason, r.startLine AS startLine, r.project AS project;"
         ),
         EdgeDirection::Incoming => format!(
-            "MATCH (r:CodeRelation) WHERE r.target = '{escaped}' RETURN r.source AS source, r.target AS target, r.type AS type, r.confidence AS confidence, r.reason AS reason, r.startLine AS startLine, r.project AS project;"
+            "MATCH (r:CodeRelation) WHERE r.target = '{escaped}' RETURN r.source AS source, r.target AS target, r.type AS type, r.confidence AS confidence, r.confidenceTier AS confidenceTier, r.reason AS reason, r.startLine AS startLine, r.project AS project;"
         ),
         EdgeDirection::Either => format!(
-            "MATCH (r:CodeRelation) WHERE r.source = '{escaped}' OR r.target = '{escaped}' RETURN r.source AS source, r.target AS target, r.type AS type, r.confidence AS confidence, r.reason AS reason, r.startLine AS startLine, r.project AS project;"
+            "MATCH (r:CodeRelation) WHERE r.source = '{escaped}' OR r.target = '{escaped}' RETURN r.source AS source, r.target AS target, r.type AS type, r.confidence AS confidence, r.confidenceTier AS confidenceTier, r.reason AS reason, r.startLine AS startLine, r.project AS project;"
         ),
     };
     let rows = repo.connection().query(&cypher)?;
@@ -279,13 +279,20 @@ fn row_to_edge(row: &[serde_json::Value]) -> Option<Edge> {
     let target = row.get(1).and_then(|v| v.as_str())?.to_string();
     let type_str = row.get(2).and_then(|v| v.as_str()).unwrap_or("CALLS");
     let confidence = row.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-    let reason = row.get(4).and_then(|v| v.as_str()).map(String::from);
+    // confidenceTier column may be absent in databases created before H4;
+    // default to Global (fail-safe, not fail-loud — old data is unclassified).
+    let confidence_tier = row
+        .get(4)
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(crate::model::ConfidenceTier::Global);
+    let reason = row.get(5).and_then(|v| v.as_str()).map(String::from);
     let start_line = row
-        .get(5)
+        .get(6)
         .and_then(|v| v.as_i64())
         .and_then(|i| u32::try_from(i).ok());
     let project = row
-        .get(6)
+        .get(7)
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
@@ -295,6 +302,7 @@ fn row_to_edge(row: &[serde_json::Value]) -> Option<Edge> {
         target,
         edge_type,
         confidence,
+        confidence_tier,
         reason,
         start_line,
         project,
@@ -408,6 +416,7 @@ mod tests {
             serde_json::json!("f_b"),
             serde_json::json!("CALLS"),
             serde_json::json!(0.95),
+            serde_json::json!("SAME_FILE"),
             serde_json::json!("direct call"),
             serde_json::json!(2),
             serde_json::json!("demo"),
@@ -417,6 +426,7 @@ mod tests {
         assert_eq!(edge.target, "f_b");
         assert_eq!(edge.edge_type, EdgeType::Calls);
         assert!((edge.confidence - 0.95).abs() < f32::EPSILON);
+        assert_eq!(edge.confidence_tier, crate::model::ConfidenceTier::SameFile);
         assert_eq!(edge.reason.as_deref(), Some("direct call"));
         assert_eq!(edge.start_line, Some(2));
         assert_eq!(edge.project, "demo");

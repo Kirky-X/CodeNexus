@@ -14,16 +14,23 @@
 //! - [`incremental`]: [`FileDiff`] and [`diff_files`] for incremental indexing
 //!   (BR-INDEX-001~003).
 //! - [`pipeline`]: [`IndexFacade`] (Facade), [`Pipeline`], [`IndexResult`].
+//! - [`pipeline_dag`]: [`Phase`] trait + [`DagPipeline`] runner with Kahn
+//!   topological sort (T9 H2, design.md D2).
+//! - [`phases`]: 6 typed [`Phase`] implementations (Scan, Parse, ScopeResolution,
+//!   Resolve, Confidence, Load) for Task 2.5.
 
 pub mod capability;
 pub mod module;
 pub mod error;
 pub mod hash;
 pub mod incremental;
+pub mod phases;
 pub mod pipeline;
+pub mod pipeline_dag;
 
 pub use error::{IndexError, Result};
 pub use hash::{compute_content_hash, compute_file_hash};
 pub use incremental::{diff_files, FileDiff};
 pub use pipeline::{IndexFacade, IndexResult, Pipeline};
+pub use pipeline_dag::{Phase, PhaseError, PipelineCtx, Pipeline as DagPipeline};
 pub use module::{IndexConfig, IndexerModule, IndexerModuleBuilder};

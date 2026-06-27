@@ -27,7 +27,7 @@
 //!     -> no name match              -> unresolved
 //! ```
 
-use crate::model::{Edge, EdgeType, Graph, Language, NodeLabel};
+use crate::model::{ConfidenceTier, Edge, EdgeType, Graph, Language, NodeLabel};
 use crate::ir::{ExternInfo, ExtractResult};
 use crate::resolve::ProjectSymbolTable;
 
@@ -332,6 +332,7 @@ impl<'a> FfiResolver<'a> {
                     let edge =
                         Edge::builder(source.clone(), target_qn, EdgeType::FfiCalls, self.project)
                             .confidence(confidence)
+                            .confidence_tier(ConfidenceTier::Global)
                             .reason(reason)
                             .start_line(extern_info.line)
                             .build();
@@ -982,6 +983,7 @@ mod tests {
         assert_eq!(edges[0].edge_type, EdgeType::FfiCalls);
         assert_eq!(edges[0].target, "proj.c.c_function");
         assert!((edges[0].confidence - 0.70).abs() < 1e-6);
+        assert_eq!(edges[0].confidence_tier, ConfidenceTier::Global);
         assert_eq!(edges[0].start_line, Some(5));
         assert_eq!(graph.edge_count(), 1);
     }
@@ -1204,6 +1206,7 @@ mod tests {
 
         assert_eq!(edges.len(), 1);
         assert!((edges[0].confidence - 0.85).abs() < 1e-6);
+        assert_eq!(edges[0].confidence_tier, ConfidenceTier::Global);
     }
 
     // --- AC-TRACE-003: Rust extern "C" -> C function FfiCalls edge ---

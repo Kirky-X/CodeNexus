@@ -359,6 +359,128 @@ pub fn node_to_row(node: &Node, label: NodeLabel) -> Vec<String> {
             prop_str(node, "typedefType"),
             opt_str(&node.parent_qn),
         ],
+        NodeLabel::Constructor | NodeLabel::Handler | NodeLabel::Middleware | NodeLabel::Test => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            opt_line(node.end_line),
+            opt_str(&node.signature),
+            opt_str(&node.return_type),
+            node.is_exported.to_string(),
+            opt_str(&node.docstring),
+            prop_str(node, "content"),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::Record | NodeLabel::Delegate | NodeLabel::Union | NodeLabel::Service => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            opt_line(node.end_line),
+            node.is_exported.to_string(),
+            opt_str(&node.docstring),
+            prop_str(node, "content"),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::Property | NodeLabel::Field => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            opt_line(node.end_line),
+            opt_str(&node.return_type),
+            node.is_exported.to_string(),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::Annotation | NodeLabel::Variant | NodeLabel::Event | NodeLabel::Section => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            opt_line(node.end_line),
+            opt_str(&node.docstring),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::Template => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            opt_line(node.end_line),
+            prop_str(node, "templateParams"),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::Endpoint | NodeLabel::Route => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            opt_line(node.start_line),
+            opt_line(node.end_line),
+            prop_str(node, "httpMethod"),
+            prop_str(node, "path"),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::Process | NodeLabel::Community => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.docstring),
+        ],
+        NodeLabel::Database => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            prop_str(node, "dbType"),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::Config => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            prop_str(node, "configType"),
+            opt_str(&node.parent_qn),
+        ],
+        NodeLabel::Tool => vec![
+            node.id.clone(),
+            node.project.clone(),
+            node.name.clone(),
+            node.qualified_name.clone(),
+            opt_str(&node.file_path),
+            prop_str(node, "toolType"),
+            opt_str(&node.parent_qn),
+        ],
+        // Embedding rows use the vector-store schema (id, nodeId, project,
+        // chunkIndex, startLine, endLine, embedding, contentHash) per DDD §5.9.
+        // In practice Embedding rows are inserted via the embed module's
+        // dedicated path, not CSV batch load; this arm exists for exhaustiveness.
+        NodeLabel::Embedding => vec![
+            node.id.clone(),
+            prop_str(node, "nodeId"),
+            node.project.clone(),
+            prop_int(node, "chunkIndex"),
+            opt_line(node.start_line),
+            opt_line(node.end_line),
+            prop_str(node, "embedding"),
+            prop_str(node, "contentHash"),
+        ],
     }
 }
 
@@ -389,6 +511,7 @@ pub fn edge_to_row(edge: &Edge) -> Vec<String> {
         edge.target.clone(),
         edge.edge_type.as_db_type().to_string(),
         format!("{:.6}", edge.confidence),
+        edge.confidence_tier.as_db_type().to_string(),
         opt_str(&edge.reason),
         opt_line(edge.start_line),
         edge.project.clone(),
@@ -557,7 +680,7 @@ mod tests {
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(
             lines[0],
-            "id,source,target,type,confidence,reason,startLine,project"
+            "id,source,target,type,confidence,confidenceTier,reason,startLine,project"
         );
     }
 
@@ -625,13 +748,14 @@ mod tests {
     }
 
     #[test]
-    fn edge_to_row_has_eight_columns() {
+    fn edge_to_row_has_nine_columns() {
         let edge = Edge::new("s", "t", EdgeType::Calls, "p");
         let row = edge_to_row(&edge);
-        assert_eq!(row.len(), 8);
+        assert_eq!(row.len(), 9);
         assert_eq!(row[1], "s");
         assert_eq!(row[2], "t");
         assert_eq!(row[3], "CALLS");
+        assert_eq!(row[5], "GLOBAL");
     }
 
     #[test]

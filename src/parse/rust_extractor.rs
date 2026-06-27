@@ -32,7 +32,7 @@
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
-use crate::resolve::FqnGenerator;
+use crate::resolve::{FqnGenerator, ScopeContext, ScopeResolverRegistry};
 
 use super::error::{ParseError, Result};
 use super::extractor::{
@@ -74,11 +74,13 @@ impl Extractor for RustExtractor {
             })?;
         let root = tree.root_node();
         // source_file is the root for Rust.
+        let registry = ScopeResolverRegistry::new();
         let ctx = VisitContext {
             file_path,
             project,
             current_func: None,
             current_parent: None,
+            resolver: &registry,
         };
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
@@ -100,22 +102,32 @@ struct VisitContext<'a> {
     project: &'a str,
     current_func: Option<&'a str>,
     current_parent: Option<&'a str>,
+    /// Scope resolver registry (design.md D3).
+    resolver: &'a ScopeResolverRegistry,
 }
 
 fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     match node.kind() {
         "function_item" => {
             extract_function(node, source, ctx, result);
-            // Pass the function's name as the enclosing function for body
-            // traversal, so reads/writes can be attributed to it.
-            let func_name = node
-                .child_by_field_name("name")
-                .and_then(|n| node_text(n, source).map(String::from));
+            // Use ScopeResolver to get the function name (design.md D3).
+            let scope_ctx = ScopeContext {
+                source,
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_parent: ctx.current_parent,
+            };
+            let scope = ctx
+                .resolver
+                .get(Language::Rust)
+                .and_then(|r| r.resolve(node, &scope_ctx));
+            let func_name = scope.as_ref().map(|s| s.name.as_str());
             let child_ctx = VisitContext {
                 file_path: ctx.file_path,
                 project: ctx.project,
-                current_func: func_name.as_deref(),
+                current_func: func_name,
                 current_parent: ctx.current_parent,
+                resolver: ctx.resolver,
             };
             visit_children(node, source, &child_ctx, result);
         }
@@ -128,25 +140,44 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "trait_item" => {
             extract_named_item(node, NodeLabel::Trait, source, ctx, result);
-            let trait_name = node
-                .child_by_field_name("name")
-                .and_then(|n| node_text(n, source).map(String::from));
+            // Use ScopeResolver to get the trait name (design.md D3).
+            let scope_ctx = ScopeContext {
+                source,
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_parent: ctx.current_parent,
+            };
+            let scope = ctx
+                .resolver
+                .get(Language::Rust)
+                .and_then(|r| r.resolve(node, &scope_ctx));
+            let trait_name = scope.as_ref().map(|s| s.name.as_str());
             let child_ctx = VisitContext {
                 file_path: ctx.file_path,
                 project: ctx.project,
                 current_func: ctx.current_func,
-                current_parent: trait_name.as_deref(),
+                current_parent: trait_name,
+                resolver: ctx.resolver,
             };
             visit_children(node, source, &child_ctx, result);
         }
         "impl_item" => {
-            let impl_type = node
-                .child_by_field_name("type")
-                .and_then(|n| node_text(n, source).map(String::from));
+            // Use ScopeResolver to get the impl type name (design.md D3).
+            let scope_ctx = ScopeContext {
+                source,
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_parent: ctx.current_parent,
+            };
+            let scope = ctx
+                .resolver
+                .get(Language::Rust)
+                .and_then(|r| r.resolve(node, &scope_ctx));
+            let impl_type = scope.as_ref().map(|s| s.name.as_str());
             extract_impl(node, source, ctx, ctx.current_parent, result);
             // Combine module context with impl type so methods inside the impl
             // get disambiguated (ADR-003).
-            let combined = match (ctx.current_parent, impl_type.as_deref()) {
+            let combined = match (ctx.current_parent, impl_type) {
                 (Some(p), Some(t)) => Some(format!("{p}_{t}")),
                 (None, Some(t)) => Some(t.to_string()),
                 (Some(p), None) => Some(p.to_string()),
@@ -157,6 +188,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
                 project: ctx.project,
                 current_func: ctx.current_func,
                 current_parent: combined.as_deref(),
+                resolver: ctx.resolver,
             };
             visit_children(node, source, &child_ctx, result);
         }
@@ -213,15 +245,25 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             // P2-1: 同时创建 Module 节点（`mod foo;` 和 `mod foo {}` 都创建），
             // 之前只更新 current_parent 导致 Module 节点完全丢失（0 vs gitnexus 24）。
             extract_named_item(node, NodeLabel::Module, source, ctx, result);
-            let mod_name = node
-                .child_by_field_name("name")
-                .and_then(|n| node_text(n, source).map(String::from));
-            let combined = combine_scope(ctx.current_parent, mod_name.as_deref());
+            // Use ScopeResolver to get the module name (design.md D3).
+            let scope_ctx = ScopeContext {
+                source,
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_parent: ctx.current_parent,
+            };
+            let scope = ctx
+                .resolver
+                .get(Language::Rust)
+                .and_then(|r| r.resolve(node, &scope_ctx));
+            let mod_name = scope.as_ref().map(|s| s.name.as_str());
+            let combined = combine_scope(ctx.current_parent, mod_name);
             let child_ctx = VisitContext {
                 file_path: ctx.file_path,
                 project: ctx.project,
                 current_func: None,
                 current_parent: combined.as_deref(),
+                resolver: ctx.resolver,
             };
             visit_children(node, source, &child_ctx, result);
         }

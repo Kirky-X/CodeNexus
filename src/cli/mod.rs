@@ -356,11 +356,13 @@ mod dispatch_tests {
             trace_type: "all".into(),
             depth: 3,
             db: "./x.lbug".into(),
+            min_confidence: None,
         };
         let _ = ImpactArgs {
             symbol: "s".into(),
             depth: 3,
             db: "./x.lbug".into(),
+            min_confidence: None,
         };
         let _ = SearchArgs {
             text: "t".into(),

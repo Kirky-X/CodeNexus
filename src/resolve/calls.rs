@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 
-use crate::model::{Edge, EdgeType, Graph};
+use crate::model::{ConfidenceTier, Edge, EdgeType, Graph};
 use crate::ir::{ExtractResult, ImportInfo};
 use crate::resolve::ProjectSymbolTable;
 
@@ -104,7 +104,7 @@ impl<'a> CallResolver<'a> {
                 let Some(caller_qn) = &call.caller_qn else {
                     continue;
                 };
-                let Some((callee_qn, confidence)) =
+                let Some((callee_qn, confidence, tier)) =
                     self.resolve_call_internal(caller_file, &call.callee_name, imports)
                 else {
                     continue;
@@ -112,6 +112,7 @@ impl<'a> CallResolver<'a> {
                 let edge =
                     Edge::builder(caller_qn.clone(), callee_qn, EdgeType::Calls, self.project)
                         .confidence(confidence)
+                        .confidence_tier(tier)
                         .start_line(call.line)
                         .build();
                 graph.add_edge(edge.clone());
@@ -124,9 +125,12 @@ impl<'a> CallResolver<'a> {
     /// Resolves a single call: finds the callee by name.
     ///
     /// Resolution strategy (ADR-011 free-call-fallback):
-    /// 1. Look up in the file-level symbol table (confidence 0.95).
-    /// 2. Look up in imported symbols of the caller file (confidence 0.90).
-    /// 3. Look up in project-level exported symbols (confidence 0.80).
+    /// 1. Look up in the file-level symbol table (confidence 0.95, tier
+    ///    [`ConfidenceTier::SameFile`]).
+    /// 2. Look up in imported symbols of the caller file (confidence 0.90,
+    ///    tier [`ConfidenceTier::ImportScoped`]).
+    /// 3. Look up in project-level exported symbols (confidence 0.80, tier
+    ///    [`ConfidenceTier::Global`]).
     /// 4. Return `None` if not found.
     ///
     /// # Arguments
@@ -136,10 +140,14 @@ impl<'a> CallResolver<'a> {
     ///
     /// # Returns
     ///
-    /// `Some((callee_qn, confidence))` if the callee is found, `None`
+    /// `Some((callee_qn, confidence, tier))` if the callee is found, `None`
     /// otherwise.
     #[must_use]
-    pub fn resolve_call(&self, caller_file: &str, callee_name: &str) -> Option<(String, f32)> {
+    pub fn resolve_call(
+        &self,
+        caller_file: &str,
+        callee_name: &str,
+    ) -> Option<(String, f32, ConfidenceTier)> {
         let imports = self
             .imports
             .get(caller_file)
@@ -158,29 +166,29 @@ impl<'a> CallResolver<'a> {
         caller_file: &str,
         callee_name: &str,
         imports: &[ImportInfo],
-    ) -> Option<(String, f32)> {
-        // 1. File-level lookup (confidence 0.95)
+    ) -> Option<(String, f32, ConfidenceTier)> {
+        // 1. File-level lookup (confidence 0.95, SameFile)
         if let Some(entry) = self
             .symbol_table
             .lookup_in_file(caller_file, callee_name)
             .first()
         {
-            return Some((entry.qn.clone(), CONFIDENCE_EXACT));
+            return Some((entry.qn.clone(), CONFIDENCE_EXACT, ConfidenceTier::SameFile));
         }
 
-        // 2. Import lookup (confidence 0.90)
+        // 2. Import lookup (confidence 0.90, ImportScoped)
         let is_imported = imports
             .iter()
             .any(|imp| imp.imported_names.iter().any(|n| n == callee_name));
         if is_imported {
             if let Some(entry) = self.symbol_table.lookup(callee_name).first() {
-                return Some((entry.qn.clone(), CONFIDENCE_IMPORT));
+                return Some((entry.qn.clone(), CONFIDENCE_IMPORT, ConfidenceTier::ImportScoped));
             }
         }
 
-        // 3. Project-level exported lookup (confidence 0.80)
+        // 3. Project-level exported lookup (confidence 0.80, Global)
         if let Some(entry) = self.symbol_table.lookup_exported(callee_name).first() {
-            return Some((entry.qn.clone(), CONFIDENCE_PROJECT));
+            return Some((entry.qn.clone(), CONFIDENCE_PROJECT, ConfidenceTier::Global));
         }
 
         None
@@ -253,9 +261,10 @@ mod tests {
         let resolved = resolver.resolve_call("a.rs", "foo");
 
         assert!(resolved.is_some());
-        let (qn, confidence) = resolved.unwrap();
+        let (qn, confidence, tier) = resolved.unwrap();
         assert_eq!(qn, "proj.a.rs.foo");
         assert!((confidence - 0.95).abs() < 1e-6);
+        assert_eq!(tier, ConfidenceTier::SameFile);
     }
 
     #[test]
@@ -269,8 +278,9 @@ mod tests {
         let resolved = resolver.resolve_call("src/deep/file.rs", "bar");
 
         assert!(resolved.is_some());
-        let (qn, _) = resolved.unwrap();
+        let (qn, _, tier) = resolved.unwrap();
         assert_eq!(qn, "proj.src.deep.file.rs.bar");
+        assert_eq!(tier, ConfidenceTier::SameFile);
     }
 
     // --- resolve_call: import lookup ---
@@ -293,9 +303,10 @@ mod tests {
         let resolved = resolver.resolve_call("a.rs", "bar");
 
         assert!(resolved.is_some());
-        let (qn, confidence) = resolved.unwrap();
+        let (qn, confidence, tier) = resolved.unwrap();
         assert_eq!(qn, "proj.b.rs.bar");
         assert!((confidence - 0.90).abs() < 1e-6);
+        assert_eq!(tier, ConfidenceTier::ImportScoped);
     }
 
     #[test]
@@ -317,6 +328,7 @@ mod tests {
 
         let resolved = resolver.resolve_call("a.rs", "bar").unwrap();
         assert!((resolved.1 - 0.90).abs() < 1e-6);
+        assert_eq!(resolved.2, ConfidenceTier::ImportScoped);
     }
 
     #[test]
@@ -334,9 +346,10 @@ mod tests {
         let resolved = resolver.resolve_call("a.rs", "bar");
 
         assert!(resolved.is_some());
-        let (qn, confidence) = resolved.unwrap();
+        let (qn, confidence, tier) = resolved.unwrap();
         assert_eq!(qn, "proj.b.rs.bar");
         assert!((confidence - 0.80).abs() < 1e-6);
+        assert_eq!(tier, ConfidenceTier::Global);
     }
 
     // --- resolve_call: project-level exported lookup ---
@@ -354,9 +367,10 @@ mod tests {
         let resolved = resolver.resolve_call("a.rs", "bar");
 
         assert!(resolved.is_some());
-        let (qn, confidence) = resolved.unwrap();
+        let (qn, confidence, tier) = resolved.unwrap();
         assert_eq!(qn, "proj.b.rs.bar");
         assert!((confidence - 0.80).abs() < 1e-6);
+        assert_eq!(tier, ConfidenceTier::Global);
     }
 
     #[test]
@@ -440,6 +454,7 @@ mod tests {
         assert_eq!(edge.target, "proj.a.rs.bar");
         assert_eq!(edge.edge_type, EdgeType::Calls);
         assert!((edge.confidence - 0.95).abs() < 1e-6);
+        assert_eq!(edge.confidence_tier, ConfidenceTier::SameFile);
         assert_eq!(edge.start_line, Some(5));
         assert_eq!(graph.edge_count(), 1);
     }
@@ -516,6 +531,7 @@ mod tests {
         assert_eq!(edges[0].source, a_qn);
         assert_eq!(edges[0].target, "proj.b.rs.func_b");
         assert!((edges[0].confidence - 0.80).abs() < 1e-6);
+        assert_eq!(edges[0].confidence_tier, ConfidenceTier::Global);
     }
 
     #[test]

@@ -73,6 +73,28 @@ impl IndexError {
     }
 }
 
+/// Converts a [`PhaseError`] into an [`IndexError`], preserving the original
+/// [`IndexError`] variant when possible (Rule 12: fail loud).
+///
+/// Phases box their [`IndexError`] into [`PhaseError::ExecutionFailed`]; this
+/// impl downcasts it back so the CLI produces the correct exit code.
+/// Non-`IndexError` failures (infrastructure errors like cycles, missing deps)
+/// fall back to [`IndexError::Storage`].
+impl From<super::pipeline_dag::PhaseError> for IndexError {
+    fn from(e: super::pipeline_dag::PhaseError) -> Self {
+        use super::pipeline_dag::PhaseError;
+        match e {
+            PhaseError::ExecutionFailed { inner, .. } => match inner.downcast::<IndexError>() {
+                Ok(boxed) => *boxed,
+                Err(other) => {
+                    IndexError::Storage(crate::storage::StorageError::Query(other.to_string()))
+                }
+            },
+            other => IndexError::Storage(crate::storage::StorageError::Query(other.to_string())),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

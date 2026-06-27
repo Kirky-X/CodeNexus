@@ -31,6 +31,7 @@ pub mod cross_lang;
 pub mod dataflow;
 pub mod error;
 pub mod fqn;
+pub mod mro;
 pub mod scope;
 pub mod symbol_table;
 
@@ -40,7 +41,8 @@ pub use cross_lang::{FfiResolver, MatchStrategy};
 pub use dataflow::DataFlowResolver;
 pub use error::{ResolveError, Result};
 pub use fqn::FqnGenerator;
-pub use scope::{Scope, ScopeChain};
+pub use mro::{mro_for, MroResolver, MroStrategy};
+pub use scope::{Scope, ScopeChain, ScopeContext, ScopeResolver, ScopeResolverRegistry};
 pub use symbol_table::{FileSymbolTable, ProjectSymbolTable, SymbolEntry};
 pub use module::{ResolverModule, ResolverModuleBuilder};
 

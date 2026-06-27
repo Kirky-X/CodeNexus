@@ -39,7 +39,7 @@
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
-use crate::resolve::FqnGenerator;
+use crate::resolve::{FqnGenerator, ScopeContext, ScopeResolverRegistry};
 
 use super::error::{ParseError, Result};
 use super::extractor::{AssignInfo, CallInfo, ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo};
@@ -79,11 +79,13 @@ impl Extractor for PythonExtractor {
                 file_path: file_path.to_string(),
             })?;
         let root = tree.root_node();
+        let registry = ScopeResolverRegistry::new();
         let ctx = VisitContext {
             file_path,
             project,
             current_func: None,
             current_parent: None,
+            resolver: &registry,
         };
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
@@ -104,22 +106,34 @@ struct VisitContext<'a> {
     project: &'a str,
     current_func: Option<&'a str>,
     current_parent: Option<&'a str>,
+    /// Scope resolver registry (design.md D3). Used to identify scope-introducing
+    /// nodes and extract their scope info, replacing manual name extraction.
+    resolver: &'a ScopeResolverRegistry,
 }
 
 fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     match node.kind() {
         "function_definition" => {
             extract_function(node, source, ctx, result);
-            // Pass the function's name as the enclosing function for body
-            // traversal, so calls inside it can be attributed to it.
-            let func_name = node
-                .child_by_field_name("name")
-                .and_then(|n| node_text(n, source).map(String::from));
+            // Use ScopeResolver to get the function name (design.md D3),
+            // replacing manual name-field extraction.
+            let scope_ctx = ScopeContext {
+                source,
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_parent: ctx.current_parent,
+            };
+            let scope = ctx
+                .resolver
+                .get(Language::Python)
+                .and_then(|r| r.resolve(node, &scope_ctx));
+            let func_name = scope.as_ref().map(|s| s.name.as_str());
             let child_ctx = VisitContext {
                 file_path: ctx.file_path,
                 project: ctx.project,
-                current_func: func_name.as_deref(),
+                current_func: func_name,
                 current_parent: ctx.current_parent,
+                resolver: ctx.resolver,
             };
             visit_children(node, source, &child_ctx, result);
         }
@@ -127,15 +141,25 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             extract_class(node, source, ctx, result);
             // 把类名纳入 current_parent，使不同类的同名方法生成不同 FQN
             // （修复 P0 python-static-class-methods 碰撞）。
-            let class_name = node
-                .child_by_field_name("name")
-                .and_then(|n| node_text(n, source).map(String::from));
-            let combined = combine_scope(ctx.current_parent, class_name.as_deref());
+            // Use ScopeResolver to get the class name (design.md D3).
+            let scope_ctx = ScopeContext {
+                source,
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_parent: ctx.current_parent,
+            };
+            let scope = ctx
+                .resolver
+                .get(Language::Python)
+                .and_then(|r| r.resolve(node, &scope_ctx));
+            let class_name = scope.as_ref().map(|s| s.name.as_str());
+            let combined = combine_scope(ctx.current_parent, class_name);
             let child_ctx = VisitContext {
                 file_path: ctx.file_path,
                 project: ctx.project,
                 current_func: None,
                 current_parent: combined.as_deref(),
+                resolver: ctx.resolver,
             };
             visit_children(node, source, &child_ctx, result);
         }

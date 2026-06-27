@@ -17,7 +17,7 @@
 use super::connection::{SchemaInitReport, StorageConnection};
 use super::error::{Result, StorageError};
 use super::loader::{load_from_csv, write_csv_temp, write_edges_csv, write_nodes_csv};
-use super::schema::escape_identifier;
+use super::schema::{escape_identifier, node_table_columns};
 use crate::model::{Edge, Node, NodeLabel};
 
 /// A simplified project record returned by [`Repository::get_project`] and
@@ -268,6 +268,13 @@ impl Repository {
         let mut orphan_ids: Vec<String> = Vec::new();
         for label in NodeLabel::all() {
             if label == NodeLabel::Project {
+                continue;
+            }
+            // Skip tables without a `filePath` column (e.g. Process, Community,
+            // Embedding) — querying `n.filePath` against them raises a binder
+            // error. Deterministic column check per Rule 5 instead of relying
+            // on error-message matching.
+            if !node_table_columns(label).contains(&"filePath") {
                 continue;
             }
             let table = escape_identifier(label.table_name());

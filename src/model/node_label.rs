@@ -1,68 +1,155 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Node label enum representing the 21 node types in the CodeNexus graph (DDD §7.1, extended with Interface for TS/Java/C#).
+//! Node label enum representing the 44 node types in the CodeNexus graph
+//! (DDD §7.1 base 20 + Interface + H1 extension 23).
 
 use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// The 21 node label variants.
+/// The 44 node label variants.
 ///
 /// Each variant corresponds to a node table in the LadybugDB schema and is
 /// used as the `label` field on [`crate::model::Node`].
+///
+/// # Groups
+///
+/// - **Structural (1-4)**: Project, Folder, File, Module
+/// - **Type definitions (5-9, 22-26)**: Class, Struct, Enum, Trait, Impl,
+///   Union, Variant, Field, Record, Typedef
+/// - **Callables (10-11, 27)**: Function, Method, Constructor
+/// - **Variables (12-16, 28)**: Variable, GlobalVar, Parameter, Const,
+///   Static, Property
+/// - **Meta (17-21)**: Macro, TypeAlias, Namespace, Interface, Delegate
+/// - **Annotations/templates (29-30)**: Annotation, Template
+/// - **Runtime/architecture (31-37)**: Event, Handler, Middleware, Service,
+///   Endpoint, Route, Process
+/// - **Data/infra (38-39)**: Database, Config
+/// - **Quality/docs (40-41)**: Test, Section
+/// - **Community/extension (42-44)**: Community, Tool, Embedding
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum NodeLabel {
+    // --- Structural (1-4) ---
     Project,
     Folder,
     File,
     Module,
+    // --- Type definitions (5-9) ---
     Class,
     Struct,
     Enum,
     Trait,
     Impl,
+    // --- Callables (10-11) ---
     Function,
     Method,
+    // --- Variables (12-16) ---
     Variable,
     GlobalVar,
     Parameter,
     Const,
     Static,
+    // --- Meta (17-21) ---
     Macro,
     TypeAlias,
     Typedef,
     Namespace,
     Interface,
+    // --- H1 extension: Type definitions (22-26) ---
+    Constructor,
+    Property,
+    Record,
+    Delegate,
+    Annotation,
+    // --- H1 extension: Templates (27) ---
+    Template,
+    // --- H1 extension: Union/Variant/Field (28-30) ---
+    Union,
+    Variant,
+    Field,
+    // --- H1 extension: Runtime/architecture (31-37) ---
+    Event,
+    Handler,
+    Middleware,
+    Service,
+    Endpoint,
+    Route,
+    Process,
+    // --- H1 extension: Data/infra (38-39) ---
+    Database,
+    Config,
+    // --- H1 extension: Quality/docs (40-41) ---
+    Test,
+    Section,
+    // --- H1 extension: Community/extension (42-44) ---
+    Community,
+    Tool,
+    Embedding,
 }
 
 impl NodeLabel {
     /// Returns all variants in declaration order.
     #[must_use]
-    pub const fn all() -> [NodeLabel; 21] {
+    pub const fn all() -> [NodeLabel; 44] {
         [
+            // Structural
             NodeLabel::Project,
             NodeLabel::Folder,
             NodeLabel::File,
             NodeLabel::Module,
+            // Type definitions
             NodeLabel::Class,
             NodeLabel::Struct,
             NodeLabel::Enum,
             NodeLabel::Trait,
             NodeLabel::Impl,
+            // Callables
             NodeLabel::Function,
             NodeLabel::Method,
+            // Variables
             NodeLabel::Variable,
             NodeLabel::GlobalVar,
             NodeLabel::Parameter,
             NodeLabel::Const,
             NodeLabel::Static,
+            // Meta
             NodeLabel::Macro,
             NodeLabel::TypeAlias,
             NodeLabel::Typedef,
             NodeLabel::Namespace,
             NodeLabel::Interface,
+            // H1 extension: Type definitions
+            NodeLabel::Constructor,
+            NodeLabel::Property,
+            NodeLabel::Record,
+            NodeLabel::Delegate,
+            NodeLabel::Annotation,
+            // H1 extension: Templates
+            NodeLabel::Template,
+            // H1 extension: Union/Variant/Field
+            NodeLabel::Union,
+            NodeLabel::Variant,
+            NodeLabel::Field,
+            // H1 extension: Runtime/architecture
+            NodeLabel::Event,
+            NodeLabel::Handler,
+            NodeLabel::Middleware,
+            NodeLabel::Service,
+            NodeLabel::Endpoint,
+            NodeLabel::Route,
+            NodeLabel::Process,
+            // H1 extension: Data/infra
+            NodeLabel::Database,
+            NodeLabel::Config,
+            // H1 extension: Quality/docs
+            NodeLabel::Test,
+            NodeLabel::Section,
+            // H1 extension: Community/extension
+            NodeLabel::Community,
+            NodeLabel::Tool,
+            NodeLabel::Embedding,
         ]
     }
 
@@ -92,6 +179,29 @@ impl NodeLabel {
             NodeLabel::Typedef => "Typedef",
             NodeLabel::Namespace => "Namespace",
             NodeLabel::Interface => "Interface",
+            NodeLabel::Constructor => "Constructor",
+            NodeLabel::Property => "Property",
+            NodeLabel::Record => "Record",
+            NodeLabel::Delegate => "Delegate",
+            NodeLabel::Annotation => "Annotation",
+            NodeLabel::Template => "Template",
+            NodeLabel::Union => "Union",
+            NodeLabel::Variant => "Variant",
+            NodeLabel::Field => "Field",
+            NodeLabel::Event => "Event",
+            NodeLabel::Handler => "Handler",
+            NodeLabel::Middleware => "Middleware",
+            NodeLabel::Service => "Service",
+            NodeLabel::Endpoint => "Endpoint",
+            NodeLabel::Route => "Route",
+            NodeLabel::Process => "Process",
+            NodeLabel::Database => "Database",
+            NodeLabel::Config => "Config",
+            NodeLabel::Test => "Test",
+            NodeLabel::Section => "Section",
+            NodeLabel::Community => "Community",
+            NodeLabel::Tool => "Tool",
+            NodeLabel::Embedding => "Embedding",
         }
     }
 }
@@ -128,6 +238,29 @@ impl FromStr for NodeLabel {
             "typedef" => Ok(NodeLabel::Typedef),
             "namespace" => Ok(NodeLabel::Namespace),
             "interface" => Ok(NodeLabel::Interface),
+            "constructor" => Ok(NodeLabel::Constructor),
+            "property" => Ok(NodeLabel::Property),
+            "record" => Ok(NodeLabel::Record),
+            "delegate" => Ok(NodeLabel::Delegate),
+            "annotation" => Ok(NodeLabel::Annotation),
+            "template" => Ok(NodeLabel::Template),
+            "union" => Ok(NodeLabel::Union),
+            "variant" => Ok(NodeLabel::Variant),
+            "field" => Ok(NodeLabel::Field),
+            "event" => Ok(NodeLabel::Event),
+            "handler" => Ok(NodeLabel::Handler),
+            "middleware" => Ok(NodeLabel::Middleware),
+            "service" => Ok(NodeLabel::Service),
+            "endpoint" => Ok(NodeLabel::Endpoint),
+            "route" => Ok(NodeLabel::Route),
+            "process" => Ok(NodeLabel::Process),
+            "database" => Ok(NodeLabel::Database),
+            "config" => Ok(NodeLabel::Config),
+            "test" => Ok(NodeLabel::Test),
+            "section" => Ok(NodeLabel::Section),
+            "community" => Ok(NodeLabel::Community),
+            "tool" => Ok(NodeLabel::Tool),
+            "embedding" => Ok(NodeLabel::Embedding),
             other => Err(format!("unknown NodeLabel: {other}")),
         }
     }
@@ -138,8 +271,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn has_twenty_one_variants() {
-        assert_eq!(NodeLabel::all().len(), 21);
+    fn has_forty_four_variants() {
+        assert_eq!(NodeLabel::all().len(), 44);
     }
 
     #[test]
@@ -165,6 +298,30 @@ mod tests {
         assert_eq!(NodeLabel::Typedef.to_string(), "Typedef");
         assert_eq!(NodeLabel::Namespace.to_string(), "Namespace");
         assert_eq!(NodeLabel::Interface.to_string(), "Interface");
+        // H1 extension
+        assert_eq!(NodeLabel::Constructor.to_string(), "Constructor");
+        assert_eq!(NodeLabel::Property.to_string(), "Property");
+        assert_eq!(NodeLabel::Record.to_string(), "Record");
+        assert_eq!(NodeLabel::Delegate.to_string(), "Delegate");
+        assert_eq!(NodeLabel::Annotation.to_string(), "Annotation");
+        assert_eq!(NodeLabel::Template.to_string(), "Template");
+        assert_eq!(NodeLabel::Union.to_string(), "Union");
+        assert_eq!(NodeLabel::Variant.to_string(), "Variant");
+        assert_eq!(NodeLabel::Field.to_string(), "Field");
+        assert_eq!(NodeLabel::Event.to_string(), "Event");
+        assert_eq!(NodeLabel::Handler.to_string(), "Handler");
+        assert_eq!(NodeLabel::Middleware.to_string(), "Middleware");
+        assert_eq!(NodeLabel::Service.to_string(), "Service");
+        assert_eq!(NodeLabel::Endpoint.to_string(), "Endpoint");
+        assert_eq!(NodeLabel::Route.to_string(), "Route");
+        assert_eq!(NodeLabel::Process.to_string(), "Process");
+        assert_eq!(NodeLabel::Database.to_string(), "Database");
+        assert_eq!(NodeLabel::Config.to_string(), "Config");
+        assert_eq!(NodeLabel::Test.to_string(), "Test");
+        assert_eq!(NodeLabel::Section.to_string(), "Section");
+        assert_eq!(NodeLabel::Community.to_string(), "Community");
+        assert_eq!(NodeLabel::Tool.to_string(), "Tool");
+        assert_eq!(NodeLabel::Embedding.to_string(), "Embedding");
     }
 
     #[test]

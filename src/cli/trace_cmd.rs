@@ -12,7 +12,7 @@ use serde::Serialize;
 use super::args::TraceArgs;
 use super::error::{CliError, Result};
 use crate::kit::{Kit, TraceKey};
-use crate::trace::{TraceResult, TraceType};
+use crate::trace::{TraceFacade, TraceResult, TraceType};
 
 /// Runs the `trace` subcommand.
 ///
@@ -35,7 +35,18 @@ pub fn run(kit: &Kit, args: &TraceArgs) -> Result<()> {
     })?;
 
     let trace = kit.require::<TraceKey>()?;
-    let result = trace.trace(&args.symbol, trace_type, args.depth)?;
+    let result = match args.min_confidence {
+        Some(min_conf) => {
+            // Filter path: load graph, drop low-confidence edges, trace via
+            // facade (design.md D4: --min-confidence filters by edge score).
+            let mut graph = trace.load_graph(&args.symbol, args.depth)?;
+            let min_conf = min_conf as f32;
+            graph.retain_edges(|e| e.confidence >= min_conf);
+            let facade = TraceFacade::new(&graph);
+            facade.trace(&args.symbol, trace_type, args.depth)?
+        }
+        None => trace.trace(&args.symbol, trace_type, args.depth)?,
+    };
     let output = TraceOutput::from(result);
     let json = serde_json::to_string(&output)?;
     println!("{json}");
@@ -163,6 +174,7 @@ mod tests {
             trace_type: trace_type.to_string(),
             depth,
             db: db.to_string(),
+            min_confidence: None,
         }
     }
 
@@ -249,6 +261,7 @@ mod tests {
             trace_type: "all".to_string(),
             depth: 3,
             db: db.to_str().unwrap().to_string(),
+            min_confidence: None,
         };
         let result = run(&kit, &args);
         assert!(

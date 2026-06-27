@@ -25,7 +25,7 @@
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
-use crate::resolve::FqnGenerator;
+use crate::resolve::{FqnGenerator, ScopeContext, ScopeResolverRegistry};
 
 use super::error::{ParseError, Result};
 use super::extractor::{CallInfo, ExternInfo, ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo};
@@ -65,11 +65,13 @@ impl Extractor for FortranExtractor {
                 file_path: file_path.to_string(),
             })?;
         let root = tree.root_node();
+        let registry = ScopeResolverRegistry::new();
         let ctx = VisitContext {
             file_path,
             project,
             current_func: None,
             current_parent: None,
+            resolver: &registry,
         };
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
@@ -91,6 +93,7 @@ struct VisitContext<'a> {
     project: &'a str,
     current_func: Option<&'a str>,
     current_parent: Option<&'a str>,
+    resolver: &'a ScopeResolverRegistry,
 }
 
 fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
@@ -99,13 +102,24 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             extract_module(node, source, ctx, result);
             // 把模块名纳入 current_parent，使模块内子程序/函数生成不同 FQN
             // （与 c.rs / rust_extractor.rs / python.rs 的 parent 传递一致）。
-            let mod_name = statement_name(node, "module_statement", source);
-            let combined = combine_scope(ctx.current_parent, mod_name.as_deref());
+            let scope_ctx = ScopeContext {
+                source,
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_parent: ctx.current_parent,
+            };
+            let scope = ctx
+                .resolver
+                .get(Language::Fortran)
+                .and_then(|r| r.resolve(node, &scope_ctx));
+            let mod_name = scope.as_ref().map(|s| s.name.as_str());
+            let combined = combine_scope(ctx.current_parent, mod_name);
             let child_ctx = VisitContext {
                 file_path: ctx.file_path,
                 project: ctx.project,
                 current_func: None,
                 current_parent: combined.as_deref(),
+                resolver: ctx.resolver,
             };
             visit_children(node, source, &child_ctx, result);
         }
@@ -116,35 +130,68 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             // traversal, so calls inside it can be attributed to it.
             // NOTE: 不把子程序名纳入 current_parent —— 否则 caller_qn 会与
             // 子程序自身 FQN 不匹配。嵌套同名子程序由 dedupe_qn 消歧。
-            let func_name = statement_name(node, "subroutine_statement", source);
+            let scope_ctx = ScopeContext {
+                source,
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_parent: ctx.current_parent,
+            };
+            let scope = ctx
+                .resolver
+                .get(Language::Fortran)
+                .and_then(|r| r.resolve(node, &scope_ctx));
+            let func_name = scope.as_ref().map(|s| s.name.as_str());
             let child_ctx = VisitContext {
                 file_path: ctx.file_path,
                 project: ctx.project,
-                current_func: func_name.as_deref(),
+                current_func: func_name,
                 current_parent: ctx.current_parent,
+                resolver: ctx.resolver,
             };
             visit_children(node, source, &child_ctx, result);
         }
         "function" => {
             extract_subroutine_or_function(node, source, ctx, result, "function_statement");
             extract_bind_c(node, source, ctx, result, "function_statement");
-            let func_name = statement_name(node, "function_statement", source);
+            let scope_ctx = ScopeContext {
+                source,
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_parent: ctx.current_parent,
+            };
+            let scope = ctx
+                .resolver
+                .get(Language::Fortran)
+                .and_then(|r| r.resolve(node, &scope_ctx));
+            let func_name = scope.as_ref().map(|s| s.name.as_str());
             let child_ctx = VisitContext {
                 file_path: ctx.file_path,
                 project: ctx.project,
-                current_func: func_name.as_deref(),
+                current_func: func_name,
                 current_parent: ctx.current_parent,
+                resolver: ctx.resolver,
             };
             visit_children(node, source, &child_ctx, result);
         }
         "program" => {
             extract_program(node, source, ctx, result);
-            let func_name = statement_name(node, "program_statement", source);
+            let scope_ctx = ScopeContext {
+                source,
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_parent: ctx.current_parent,
+            };
+            let scope = ctx
+                .resolver
+                .get(Language::Fortran)
+                .and_then(|r| r.resolve(node, &scope_ctx));
+            let func_name = scope.as_ref().map(|s| s.name.as_str());
             let child_ctx = VisitContext {
                 file_path: ctx.file_path,
                 project: ctx.project,
-                current_func: func_name.as_deref(),
+                current_func: func_name,
                 current_parent: ctx.current_parent,
+                resolver: ctx.resolver,
             };
             visit_children(node, source, &child_ctx, result);
         }
