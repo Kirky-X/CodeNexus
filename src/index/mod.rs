@@ -15,6 +15,8 @@
 //!   (BR-INDEX-001~003).
 //! - [`pipeline`]: [`IndexFacade`] (Facade), [`Pipeline`], [`IndexResult`].
 
+pub mod capability;
+pub mod module;
 pub mod error;
 pub mod hash;
 pub mod incremental;
@@ -24,3 +26,4 @@ pub use error::{IndexError, Result};
 pub use hash::{compute_content_hash, compute_file_hash};
 pub use incremental::{diff_files, FileDiff};
 pub use pipeline::{IndexFacade, IndexResult, Pipeline};
+pub use module::{IndexConfig, IndexerModule, IndexerModuleBuilder};

@@ -19,6 +19,8 @@
 //! - [`cross_lang`]: [`FfiResolver`] for resolving FfiCalls edges across
 //!   languages (ADD §7.4, BR-TRACE-008).
 
+pub mod capability;
+pub mod module;
 pub mod calls;
 // Cross-language FFI resolution is only meaningful when both C and Rust are
 // compiled in (Rust extern "C" -> C definitions). Gate the entire module so
@@ -40,6 +42,7 @@ pub use error::{ResolveError, Result};
 pub use fqn::FqnGenerator;
 pub use scope::{Scope, ScopeChain};
 pub use symbol_table::{FileSymbolTable, ProjectSymbolTable, SymbolEntry};
+pub use module::{ResolverModule, ResolverModuleBuilder};
 
 use crate::ir::ExtractResult;
 use crate::model::{Edge, Graph};

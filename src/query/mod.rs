@@ -14,16 +14,19 @@
 //! - [`fulltext`]: [`FullTextSearcher`] for BM25 full-text search.
 //! - [`facade`]: [`QueryFacade`] (Facade pattern) unifying the above.
 
+pub mod capability;
 pub mod cypher;
 pub mod error;
 pub mod facade;
 pub mod fulltext;
+pub mod module;
 pub mod structured;
 
 pub use cypher::CypherExecutor;
 pub use error::{QueryError, Result};
 pub use facade::QueryFacade;
 pub use fulltext::FullTextSearcher;
+pub use module::{QueryConfig, QueryModule, QueryModuleBuilder};
 pub use structured::StructuredSearcher;
 
 /// A single search hit returned by the structured and full-text searchers.

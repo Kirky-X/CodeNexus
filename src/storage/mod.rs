@@ -7,9 +7,11 @@
 //! CSV bulk loading (ADR-014), Cypher query execution, and the Repository
 //! pattern abstraction for data access.
 
+pub mod capability;
 pub mod connection;
 pub mod error;
 pub mod loader;
+pub mod module;
 pub mod quality;
 pub mod repository;
 pub mod schema;
@@ -17,6 +19,7 @@ pub mod schema;
 pub use connection::{SchemaInitReport, StorageConnection};
 pub use error::{Result, StorageError};
 pub use loader::CsvLoader;
+pub use module::{StorageConfig, StorageModule, StorageModuleBuilder};
 pub use quality::{QualityChecker, QualityReport, QualityViolation};
 pub use repository::{FunctionRecord, ProjectRecord, Repository};
 pub use schema::{

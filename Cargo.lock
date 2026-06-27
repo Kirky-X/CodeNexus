@@ -85,6 +85,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "arc-swap"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -343,6 +352,7 @@ dependencies = [
  "time",
  "tracing",
  "tracing-subscriber",
+ "trait-kit",
  "tree-sitter",
  "tree-sitter-c",
  "tree-sitter-fortran",
@@ -1484,7 +1494,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2255,6 +2265,16 @@ dependencies = [
  "owning_ref",
  "regex",
  "tracing-core",
+]
+
+[[package]]
+name = "trait-kit"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9fbcd87854e622cc86b8934d8ef60c8e517000c5bf08ac1a475bba424bbb40ea"
+dependencies = [
+ "arc-swap",
+ "thiserror",
 ]
 
 [[package]]

@@ -44,6 +44,7 @@ pub mod daemon;
 pub mod discover;
 pub mod index;
 pub mod ir;
+pub mod kit;
 pub mod model;
 pub mod parse;
 pub mod query;

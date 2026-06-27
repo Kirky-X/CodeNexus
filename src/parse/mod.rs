@@ -28,6 +28,7 @@
 //! - [`parallel`]: [`parallel_parse`] parses batches of files in parallel with
 //!   rayon (ADR-010), collecting failures without aborting the batch.
 
+pub mod capability;
 #[cfg(feature = "lang-c")]
 pub mod c;
 pub mod dispatcher;
@@ -35,6 +36,7 @@ pub mod error;
 pub mod extractor;
 #[cfg(feature = "lang-fortran")]
 pub mod fortran;
+pub mod module;
 pub mod parallel;
 pub mod parser_factory;
 pub mod parser_pool;
@@ -56,6 +58,10 @@ pub use extractor::{
 #[cfg(feature = "lang-fortran")]
 pub use fortran::FortranExtractor;
 pub use parallel::{parallel_parse, parse_single, ParallelParseResult};
+pub use module::{
+    ExtractorRegistryModule, ExtractorRegistryModuleBuilder, ParserFactoryModule,
+    ParserFactoryModuleBuilder,
+};
 pub use parser_factory::ParserFactory;
 pub use parser_pool::{with_thread_pool, ParserGuard, ParserPool};
 #[cfg(feature = "lang-python")]
