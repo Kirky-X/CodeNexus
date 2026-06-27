@@ -9,23 +9,23 @@ use serde::Serialize;
 
 use super::args::CleanArgs;
 use super::error::{CliError, Result};
-use crate::storage::Repository;
+use crate::kit::{Kit, StorageKey};
 
 /// Runs the `clean` subcommand.
 ///
-/// Opens the database at `args.db`, looks up the project by name (falling
-/// back to id), deletes it, and prints a JSON object with the deleted count.
+/// Resolves the [`Storage`](crate::storage::capability::Storage) capability
+/// from `kit`, looks up the project by name (falling back to id), deletes it,
+/// and prints a JSON object with the deleted count.
 ///
 /// # Errors
 ///
 /// Returns [`CliError::ProjectNotFound`] if no project matches `args.project`.
 /// Returns [`CliError::Storage`] for database failures.
-pub fn run(args: &CleanArgs) -> Result<()> {
-    let db_path = std::path::Path::new(&args.db);
-    let repo = Repository::open(db_path)?;
+pub fn run(kit: &Kit, args: &CleanArgs) -> Result<()> {
+    let storage = kit.require::<StorageKey>()?;
 
     // Find the project by name first, then by id.
-    let projects = repo.list_projects().unwrap_or_default();
+    let projects = storage.list_projects().unwrap_or_default();
     let project_id = projects
         .iter()
         .find(|p| p.name == args.project)
@@ -44,7 +44,7 @@ pub fn run(args: &CleanArgs) -> Result<()> {
         None => return Err(CliError::ProjectNotFound(args.project.clone())),
     };
 
-    repo.delete_project(&project_id)?;
+    storage.delete_project(&project_id)?;
     let output = CleanOutput {
         project: args.project.clone(),
         project_id,
@@ -70,8 +70,9 @@ pub struct CleanOutput {
 mod tests {
     use super::*;
     use crate::cli::args::CleanArgs;
+    use crate::kit::{build_kit, KitBootstrapConfig};
     use crate::model::{Language, Node, NodeLabel};
-    use crate::storage::Repository;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     /// Returns a fresh on-disk database path inside a temp dir.
@@ -80,6 +81,12 @@ mod tests {
         let path = dir.path().join("cli_clean_testdb");
         std::mem::forget(dir);
         path
+    }
+
+    /// Builds a Kit backed by an on-disk database at `db`.
+    fn build_kit_for_db(db: &str) -> Kit {
+        let config = KitBootstrapConfig::new(PathBuf::from(db));
+        build_kit(&config).expect("build_kit")
     }
 
     /// Builds a sample Project node.
@@ -121,21 +128,22 @@ mod tests {
     #[test]
     fn run_clean_by_name_succeeds() {
         let db = fresh_db_path();
-        let repo = Repository::open(&db).expect("repo");
-        repo.save_project(&sample_project("p1", "alpha")).unwrap();
-        repo.save_project(&sample_project("p2", "beta")).unwrap();
-        drop(repo);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage
+            .save_project(&sample_project("p1", "alpha"))
+            .unwrap();
+        storage.save_project(&sample_project("p2", "beta")).unwrap();
         let args = make_args("alpha", db.to_str().unwrap());
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(
             result.is_ok(),
             "clean by name should succeed: {:?}",
             result.err()
         );
 
-        // Verify alpha is gone but beta remains.
-        let repo = Repository::open(&db).expect("repo");
-        let projects = repo.list_projects().unwrap_or_default();
+        // Verify alpha is gone but beta remains (same Kit's storage).
+        let projects = storage.list_projects().unwrap_or_default();
         assert_eq!(projects.len(), 1, "only beta should remain");
         assert_eq!(projects[0].name, "beta");
     }
@@ -143,30 +151,31 @@ mod tests {
     #[test]
     fn run_clean_by_id_succeeds() {
         let db = fresh_db_path();
-        let repo = Repository::open(&db).expect("repo");
-        repo.save_project(&sample_project("p1", "alpha")).unwrap();
-        drop(repo);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage
+            .save_project(&sample_project("p1", "alpha"))
+            .unwrap();
         let args = make_args("p1", db.to_str().unwrap());
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(
             result.is_ok(),
             "clean by id should succeed: {:?}",
             result.err()
         );
 
-        let repo = Repository::open(&db).expect("repo");
-        let projects = repo.list_projects().unwrap_or_default();
+        let projects = storage.list_projects().unwrap_or_default();
         assert!(projects.is_empty(), "project should be gone");
     }
 
     #[test]
     fn run_clean_last_project_succeeds() {
         let db = fresh_db_path();
-        let repo = Repository::open(&db).expect("repo");
-        repo.save_project(&sample_project("p1", "solo")).unwrap();
-        drop(repo);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.save_project(&sample_project("p1", "solo")).unwrap();
         let args = make_args("solo", db.to_str().unwrap());
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(
             result.is_ok(),
             "clean last project should succeed: {:?}",
@@ -179,28 +188,27 @@ mod tests {
     #[test]
     fn run_clean_missing_project_returns_exit_code_1() {
         let db = fresh_db_path();
-        let repo = Repository::open(&db).expect("repo");
-        repo.save_project(&sample_project("p1", "alpha")).unwrap();
-        drop(repo);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage
+            .save_project(&sample_project("p1", "alpha"))
+            .unwrap();
         let args = make_args("nonexistent", db.to_str().unwrap());
-        let err = run(&args).expect_err("missing project should error");
+        let err = run(&kit, &args).expect_err("missing project should error");
         assert_eq!(err.exit_code(), 1, "ProjectNotFound → exit 1");
-    }
-
-    #[test]
-    fn run_clean_missing_db_returns_error() {
-        let args = make_args("demo", "/nonexistent/db.lbug");
-        let result = run(&args);
-        assert!(result.is_err(), "missing db should error");
     }
 
     #[test]
     fn run_clean_empty_db_returns_project_not_found() {
         let db = fresh_db_path();
-        let repo = Repository::open(&db).expect("repo");
-        drop(repo);
+        let kit = build_kit_for_db(db.to_str().unwrap());
         let args = make_args("demo", db.to_str().unwrap());
-        let err = run(&args).expect_err("empty db should error");
+        let err = run(&kit, &args).expect_err("empty db should error");
         assert_eq!(err.exit_code(), 1, "ProjectNotFound → exit 1");
     }
+
+    // Note: `run_clean_missing_db_returns_error` was removed because the
+    // "missing db" error now surfaces at `build_kit` time, not at `run` time.
+    // Covered by `build_kit_invalid_db_path_returns_build_failed_error` in
+    // `kit::bootstrap::tests`.
 }

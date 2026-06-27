@@ -3,34 +3,36 @@
 
 //! `impact` subcommand handler.
 //!
-//! Loads the subgraph reachable from `symbol` (in reverse — i.e. callers and
-//! writers) from the database, then delegates to [`ImpactAnalyzer::analyze`]
-//! and prints the impacted nodes as JSON.
-
-use std::path::Path;
+//! Resolves the [`TraceEngine`](crate::trace::capability::TraceEngine)
+//! capability from the [`Kit`](crate::kit::Kit), loads the reverse-reachable
+//! subgraph via [`TraceEngine::load_graph`], then delegates to
+//! [`ImpactAnalyzer::analyze`] and prints the impacted nodes as JSON.
 
 use serde::Serialize;
 
 use super::args::ImpactArgs;
 use super::error::Result;
+use crate::kit::{Kit, TraceKey};
 use crate::model::Graph;
 use crate::trace::ImpactAnalyzer;
 use crate::trace::TraceNode;
 
 /// Runs the `impact` subcommand.
 ///
-/// Loads the reverse-reachable subgraph from the database, runs
-/// [`ImpactAnalyzer::analyze`], and prints the impacted nodes as a JSON
-/// object `{ symbol, depth, impacted: [...] }`.
+/// Resolves the [`TraceEngine`](crate::trace::capability::TraceEngine)
+/// capability from `kit`, loads the reverse-reachable subgraph via
+/// [`TraceEngine::load_graph`], runs [`ImpactAnalyzer::analyze`], and prints
+/// the impacted nodes as a JSON object `{ symbol, depth, impacted: [...] }`.
 ///
 /// # Errors
 ///
-/// Returns [`crate::cli::error::CliError::Storage`] for database failures.
-/// If the symbol is not found, the `impacted` array is empty (impact analysis
-/// is best-effort, not an error).
-pub fn run(args: &ImpactArgs) -> Result<()> {
-    let db_path = Path::new(&args.db);
-    let graph = super::trace_cmd::load_graph_for_symbol_pub(db_path, &args.symbol, args.depth)?;
+/// Returns [`crate::cli::error::CliError::Kit`] if the Trace capability is
+/// not registered. Returns [`crate::cli::error::CliError::Trace`] for
+/// database failures during graph loading. If the symbol is not found, the
+/// `impacted` array is empty (impact analysis is best-effort, not an error).
+pub fn run(kit: &Kit, args: &ImpactArgs) -> Result<()> {
+    let trace = kit.require::<TraceKey>()?;
+    let graph = trace.load_graph(&args.symbol, args.depth)?;
     let analyzer = ImpactAnalyzer::new(&graph);
     // Resolve the start node id by name (mirrors TraceFacade's resolution).
     let start_id = resolve_start_id(&graph, &args.symbol);
@@ -108,7 +110,8 @@ impl From<TraceNode> for ImpactNodeOutput {
 mod tests {
     use super::*;
     use crate::cli::args::ImpactArgs;
-    use crate::storage::StorageConnection;
+    use crate::kit::{build_kit, KitBootstrapConfig, StorageKey};
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     /// Returns a fresh on-disk database path inside a temp dir.
@@ -119,16 +122,21 @@ mod tests {
         path
     }
 
+    /// Builds a Kit backed by an on-disk database at `db`.
+    fn build_kit_for_db(db: &str) -> Kit {
+        let config = KitBootstrapConfig::new(PathBuf::from(db));
+        build_kit(&config).expect("build_kit")
+    }
+
     /// Seeds the database with three functions in a call chain: c -> b -> a.
-    fn seed_call_chain(db: &Path) {
-        let conn = StorageConnection::open(db).expect("open");
-        conn.init_schema().expect("init_schema");
-        conn.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
-        conn.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
-        conn.execute("CREATE (:Function {id: 'f_c', project: 'demo', name: 'c', qualifiedName: 'demo.c', filePath: '/src/c.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create c");
+    fn seed_call_chain(kit: &Kit) {
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
+        storage.execute("CREATE (:Function {id: 'f_c', project: 'demo', name: 'c', qualifiedName: 'demo.c', filePath: '/src/c.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create c");
         // b calls a; c calls b. So callers of a are b and c.
-        conn.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_b', target: 'f_a', type: 'CALLS', confidence: 1.0, reason: '', startLine: 2, project: 'demo'});").expect("create edge b->a");
-        conn.execute("CREATE (:CodeRelation {id: 'e2', source: 'f_c', target: 'f_b', type: 'CALLS', confidence: 1.0, reason: '', startLine: 2, project: 'demo'});").expect("create edge c->b");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_b', target: 'f_a', type: 'CALLS', confidence: 1.0, reason: '', startLine: 2, project: 'demo'});").expect("create edge b->a");
+        storage.execute("CREATE (:CodeRelation {id: 'e2', source: 'f_c', target: 'f_b', type: 'CALLS', confidence: 1.0, reason: '', startLine: 2, project: 'demo'});").expect("create edge c->b");
     }
 
     fn make_args(symbol: &str, depth: usize, db: &str) -> ImpactArgs {
@@ -178,18 +186,20 @@ mod tests {
     #[test]
     fn run_impact_returns_callers() {
         let db = fresh_db_path();
-        seed_call_chain(&db);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_call_chain(&kit);
         let args = make_args("a", 3, db.to_str().unwrap());
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(result.is_ok(), "impact should succeed: {:?}", result.err());
     }
 
     #[test]
     fn run_impact_depth_1_returns_direct_callers() {
         let db = fresh_db_path();
-        seed_call_chain(&db);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_call_chain(&kit);
         let args = make_args("a", 1, db.to_str().unwrap());
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(
             result.is_ok(),
             "depth 1 impact should succeed: {:?}",
@@ -200,10 +210,11 @@ mod tests {
     #[test]
     fn run_impact_no_callers_succeeds() {
         let db = fresh_db_path();
-        seed_call_chain(&db);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_call_chain(&kit);
         // c has no callers → impacted is empty, but run still succeeds.
         let args = make_args("c", 3, db.to_str().unwrap());
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(
             result.is_ok(),
             "no-callers impact should succeed: {:?}",
@@ -216,23 +227,17 @@ mod tests {
     #[test]
     fn run_impact_missing_symbol_succeeds_with_empty_impacted() {
         let db = fresh_db_path();
-        seed_call_chain(&db);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_call_chain(&kit);
         let args = make_args("nonexistent", 3, db.to_str().unwrap());
         // Missing symbol is NOT an error for impact analysis — it just returns
         // an empty impacted list.
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(
             result.is_ok(),
             "missing symbol should succeed: {:?}",
             result.err()
         );
-    }
-
-    #[test]
-    fn run_impact_missing_db_returns_error() {
-        let args = make_args("a", 3, "/nonexistent/db.lbug");
-        let result = run(&args);
-        assert!(result.is_err(), "missing db should error");
     }
 
     // --- resolve_start_id ---
@@ -285,4 +290,9 @@ mod tests {
         // Ambiguous: returns the first match (best-effort).
         assert!(id.is_some());
     }
+
+    // Note: `run_impact_missing_db_returns_error` was removed because the
+    // "missing db" error now surfaces at `build_kit` time, not at `run` time.
+    // Covered by `build_kit_invalid_db_path_returns_build_failed_error` in
+    // `kit::bootstrap::tests`.
 }

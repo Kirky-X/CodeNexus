@@ -15,8 +15,8 @@
 //! | DQ-005  | Project isolation — per-project node counts sum to the table total.     |
 //! | DQ-006  | Hash integrity — every `File` node has a non-empty `hash`.              |
 
+use super::capability::Storage;
 use super::error::Result;
-use super::repository::Repository;
 use super::schema::escape_identifier;
 use crate::model::NodeLabel;
 
@@ -52,16 +52,20 @@ impl QualityReport {
     }
 }
 
-/// Runs data quality checks against a [`Repository`].
+/// Runs data quality checks against a [`Storage`] capability.
+///
+/// Owned by `index_cmd::run` (T6/Phase-2 Task 2.14) — accepts `&dyn Storage`
+/// so it can resolve the storage capability from a [`Kit`](crate::kit::Kit)
+/// instead of constructing a [`Repository`](super::Repository) ad-hoc.
 pub struct QualityChecker<'a> {
-    repo: &'a Repository,
+    storage: &'a dyn Storage,
 }
 
 impl<'a> QualityChecker<'a> {
-    /// Creates a new `QualityChecker` backed by the given repository.
+    /// Creates a new `QualityChecker` backed by the given storage capability.
     #[must_use]
-    pub fn new(repo: &'a Repository) -> Self {
-        Self { repo }
+    pub fn new(storage: &'a dyn Storage) -> Self {
+        Self { storage }
     }
 
     /// Runs all DQ checks and returns a consolidated report.
@@ -112,7 +116,7 @@ impl<'a> QualityChecker<'a> {
             );
             // Tables without qualifiedName/project columns error here; treat
             // as non-fatal and continue with the next label.
-            let Ok(rows) = self.repo.connection().query(&cypher) else {
+            let Ok(rows) = self.storage.query(&cypher) else {
                 continue;
             };
             for row in rows {
@@ -171,7 +175,7 @@ impl<'a> QualityChecker<'a> {
         for label in NodeLabel::all() {
             let table = escape_identifier(label.table_name());
             let cypher = format!("MATCH (n:{table}) RETURN n.id AS id;");
-            let Ok(rows) = self.repo.connection().query(&cypher) else {
+            let Ok(rows) = self.storage.query(&cypher) else {
                 continue;
             };
             for row in rows {
@@ -184,7 +188,7 @@ impl<'a> QualityChecker<'a> {
         // Query every CodeRelation edge.
         let cypher = "MATCH (r:CodeRelation) \
                       RETURN r.source AS source, r.target AS target, r.project AS project;";
-        let rows = self.repo.connection().query(cypher)?;
+        let rows = self.storage.query(cypher)?;
 
         let mut violations = Vec::new();
         for row in &rows {
@@ -222,7 +226,7 @@ impl<'a> QualityChecker<'a> {
     /// indicates either a node with an unknown `project` value or a node
     /// whose `project` column leaked across projects.
     pub fn check_project_isolation(&self) -> Result<Vec<QualityViolation>> {
-        let projects = self.repo.list_projects()?;
+        let projects = self.storage.list_projects()?;
         let project_ids: Vec<String> = projects.into_iter().map(|p| p.id).collect();
 
         let mut violations = Vec::new();
@@ -239,7 +243,7 @@ impl<'a> QualityChecker<'a> {
                 let cypher = format!(
                     "MATCH (n:{table}) WHERE n.project = '{escaped}' RETURN count(n) AS cnt;"
                 );
-                let Ok(rows) = self.repo.connection().query(&cypher) else {
+                let Ok(rows) = self.storage.query(&cypher) else {
                     // Table has no `project` column → skip.
                     continue;
                 };
@@ -254,7 +258,7 @@ impl<'a> QualityChecker<'a> {
 
             // Total count for the table.
             let cypher = format!("MATCH (n:{table}) RETURN count(n) AS cnt;");
-            let Ok(rows) = self.repo.connection().query(&cypher) else {
+            let Ok(rows) = self.storage.query(&cypher) else {
                 continue;
             };
             if let Some(total) = rows
@@ -285,7 +289,7 @@ impl<'a> QualityChecker<'a> {
     /// violation.
     pub fn check_hash_integrity(&self) -> Result<Vec<QualityViolation>> {
         let cypher = "MATCH (f:File) RETURN f.id AS id, f.project AS project, f.hash AS hash;";
-        let rows = self.repo.connection().query(cypher)?;
+        let rows = self.storage.query(cypher)?;
         let violations: Vec<QualityViolation> = rows
             .iter()
             .filter(|row| {
@@ -324,11 +328,18 @@ fn escape_cypher(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kit::{ModuleBuilder, WithConfig};
     use crate::model::{EdgeType, Language};
+    use std::sync::Arc;
 
-    /// Creates a fresh in-memory repository with the schema initialized.
-    fn fresh_repo() -> Repository {
-        Repository::in_memory().expect("in_memory repository")
+    /// Builds a fresh in-memory `Arc<dyn Storage>` capability with the schema
+    /// initialized. Mirrors the trait-kit bootstrap path so `QualityChecker`
+    /// tests exercise the same `&dyn Storage` interface as `index_cmd::run`.
+    fn fresh_storage() -> Arc<dyn Storage> {
+        crate::storage::StorageModuleBuilder::new()
+            .config(crate::storage::StorageConfig::in_memory())
+            .build()
+            .expect("StorageModuleBuilder::build")
     }
 
     /// Builds a sample Project node.
@@ -371,16 +382,16 @@ mod tests {
 
     #[test]
     fn test_dq002_detects_duplicate_fqn() {
-        let repo = fresh_repo();
+        let storage = fresh_storage();
         // Two Function nodes with the same qualifiedName in the same project.
         let nodes = vec![
             sample_function("f1", "demo", "main", "demo.main"),
             sample_function("f2", "demo", "other", "demo.main"),
         ];
-        repo.save_nodes(&nodes, NodeLabel::Function)
+        storage.save_nodes(&nodes, NodeLabel::Function)
             .expect("save_nodes");
 
-        let checker = QualityChecker::new(&repo);
+        let checker = QualityChecker::new(&*storage);
         let violations = checker.check_fqn_uniqueness().expect("check_fqn_uniqueness");
         assert_eq!(
             violations.len(),
@@ -395,15 +406,15 @@ mod tests {
 
     #[test]
     fn test_dq002_clean_when_unique() {
-        let repo = fresh_repo();
+        let storage = fresh_storage();
         let nodes = vec![
             sample_function("f1", "demo", "main", "demo.main"),
             sample_function("f2", "demo", "helper", "demo.helper"),
         ];
-        repo.save_nodes(&nodes, NodeLabel::Function)
+        storage.save_nodes(&nodes, NodeLabel::Function)
             .expect("save_nodes");
 
-        let checker = QualityChecker::new(&repo);
+        let checker = QualityChecker::new(&*storage);
         let violations = checker.check_fqn_uniqueness().expect("check_fqn_uniqueness");
         assert!(
             violations.is_empty(),
@@ -414,15 +425,15 @@ mod tests {
     #[test]
     fn test_dq002_same_fqn_in_different_projects_is_not_duplicate() {
         // Same FQN across different projects is allowed (project isolation).
-        let repo = fresh_repo();
+        let storage = fresh_storage();
         let nodes = vec![
             sample_function("f1", "alpha", "main", "alpha.main"),
             sample_function("f2", "beta", "main", "alpha.main"),
         ];
-        repo.save_nodes(&nodes, NodeLabel::Function)
+        storage.save_nodes(&nodes, NodeLabel::Function)
             .expect("save_nodes");
 
-        let checker = QualityChecker::new(&repo);
+        let checker = QualityChecker::new(&*storage);
         let violations = checker.check_fqn_uniqueness().expect("check_fqn_uniqueness");
         assert!(violations.is_empty(), "got {violations:?}");
     }
@@ -431,14 +442,14 @@ mod tests {
 
     #[test]
     fn test_dq004_detects_orphan_edge() {
-        let repo = fresh_repo();
+        let storage = fresh_storage();
         // Only f1 exists as a node; f2 is a dangling reference.
-        repo.save_nodes(
+        storage.save_nodes(
             &[sample_function("f1", "demo", "main", "demo.main")],
             NodeLabel::Function,
         )
         .expect("save_nodes");
-        repo.save_edges(&[crate::model::Edge::builder(
+        storage.save_edges(&[crate::model::Edge::builder(
             "f1",
             "f2_missing",
             EdgeType::Calls,
@@ -447,7 +458,7 @@ mod tests {
         .build()])
         .expect("save_edges");
 
-        let checker = QualityChecker::new(&repo);
+        let checker = QualityChecker::new(&*storage);
         let violations = checker.check_edge_integrity().expect("check_edge_integrity");
         assert_eq!(
             violations.len(),
@@ -460,8 +471,8 @@ mod tests {
 
     #[test]
     fn test_dq004_clean_when_all_edges_valid() {
-        let repo = fresh_repo();
-        repo.save_nodes(
+        let storage = fresh_storage();
+        storage.save_nodes(
             &[
                 sample_function("f1", "demo", "main", "demo.main"),
                 sample_function("f2", "demo", "helper", "demo.helper"),
@@ -469,7 +480,7 @@ mod tests {
             NodeLabel::Function,
         )
         .expect("save_nodes");
-        repo.save_edges(&[crate::model::Edge::builder(
+        storage.save_edges(&[crate::model::Edge::builder(
             "f1",
             "f2",
             EdgeType::Calls,
@@ -478,7 +489,7 @@ mod tests {
         .build()])
         .expect("save_edges");
 
-        let checker = QualityChecker::new(&repo);
+        let checker = QualityChecker::new(&*storage);
         let violations = checker.check_edge_integrity().expect("check_edge_integrity");
         assert!(
             violations.is_empty(),
@@ -490,23 +501,23 @@ mod tests {
 
     #[test]
     fn test_dq005_clean_when_projects_isolated() {
-        let repo = fresh_repo();
-        repo.save_project(&sample_project("alpha", "alpha"))
+        let storage = fresh_storage();
+        storage.save_project(&sample_project("alpha", "alpha"))
             .expect("save_project");
-        repo.save_project(&sample_project("beta", "beta"))
+        storage.save_project(&sample_project("beta", "beta"))
             .expect("save_project");
-        repo.save_nodes(
+        storage.save_nodes(
             &[sample_function("a1", "alpha", "main", "alpha.main")],
             NodeLabel::Function,
         )
         .expect("save_nodes alpha");
-        repo.save_nodes(
+        storage.save_nodes(
             &[sample_function("b1", "beta", "main", "beta.main")],
             NodeLabel::Function,
         )
         .expect("save_nodes beta");
 
-        let checker = QualityChecker::new(&repo);
+        let checker = QualityChecker::new(&*storage);
         let violations =
             checker.check_project_isolation().expect("check_project_isolation");
         assert!(
@@ -519,9 +530,9 @@ mod tests {
 
     #[test]
     fn test_dq006_detects_empty_hash() {
-        let repo = fresh_repo();
+        let storage = fresh_storage();
         // One File with a valid hash, one with an empty hash.
-        repo.save_nodes(
+        storage.save_nodes(
             &[
                 sample_file("f1", "demo", "/a.rs", "sha256:abc"),
                 sample_file("f2", "demo", "/b.rs", ""),
@@ -530,7 +541,7 @@ mod tests {
         )
         .expect("save_nodes");
 
-        let checker = QualityChecker::new(&repo);
+        let checker = QualityChecker::new(&*storage);
         let violations = checker.check_hash_integrity().expect("check_hash_integrity");
         assert_eq!(
             violations.len(),
@@ -544,8 +555,8 @@ mod tests {
 
     #[test]
     fn test_dq006_clean_when_all_hashes_present() {
-        let repo = fresh_repo();
-        repo.save_nodes(
+        let storage = fresh_storage();
+        storage.save_nodes(
             &[
                 sample_file("f1", "demo", "/a.rs", "sha256:abc"),
                 sample_file("f2", "demo", "/b.rs", "sha256:def"),
@@ -554,7 +565,7 @@ mod tests {
         )
         .expect("save_nodes");
 
-        let checker = QualityChecker::new(&repo);
+        let checker = QualityChecker::new(&*storage);
         let violations = checker.check_hash_integrity().expect("check_hash_integrity");
         assert!(
             violations.is_empty(),
@@ -609,17 +620,17 @@ mod tests {
 
     #[test]
     fn test_run_all_clean_on_fresh_repo() {
-        let repo = fresh_repo();
-        let checker = QualityChecker::new(&repo);
+        let storage = fresh_storage();
+        let checker = QualityChecker::new(&*storage);
         let report = checker.run_all().expect("run_all");
         assert!(report.is_clean(), "fresh repo should have no violations");
     }
 
     #[test]
     fn test_run_all_aggregates_violations_from_all_checks() {
-        let repo = fresh_repo();
+        let storage = fresh_storage();
         // DQ-002 violation: duplicate FQN.
-        repo.save_nodes(
+        storage.save_nodes(
             &[
                 sample_function("f1", "demo", "main", "demo.main"),
                 sample_function("f2", "demo", "other", "demo.main"),
@@ -628,13 +639,13 @@ mod tests {
         )
         .expect("save_nodes");
         // DQ-006 violation: empty hash.
-        repo.save_nodes(
+        storage.save_nodes(
             &[sample_file("file_1", "demo", "/a.rs", "")],
             NodeLabel::File,
         )
         .expect("save_nodes file");
 
-        let checker = QualityChecker::new(&repo);
+        let checker = QualityChecker::new(&*storage);
         let report = checker.run_all().expect("run_all");
         assert!(!report.is_clean());
         assert!(report.count_for_rule("DQ-002") >= 1);

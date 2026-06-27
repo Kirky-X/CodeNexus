@@ -10,14 +10,13 @@
 //! Embed) are migrated one-by-one in Tasks 2.4–2.12 to expose their facades
 //! as `Module`s registered under these keys.
 //!
-//! ## Feature gating
+//! ## Hard dependency on `trait-kit`
 //!
-//! When the `trait-kit` feature is enabled (default for all presets), the real
-//! [`trait_kit`] crate provides the `Module`/`ModuleBuilder`/`CapabilityKey`/
-//! `ConfigKey`/`Kit`/`ConfigHandle` API. When disabled, the in-tree
-//! [`shim`] module mirrors the same API so the codebase keeps compiling —
-//! this is the escape hatch if `trait-kit` ever stops publishing
-//! (design.md §2.4).
+//! Since Task 2.16, the external [`trait_kit`] crate is a hard dependency
+//! (no longer behind a cargo feature). The in-tree `shim` fallback was
+//! removed once all nine modules migrated to `build_kit`. Every build —
+//! including `--no-default-features --features lang-rust` — wires modules
+//! through the real crate.
 //!
 //! ## Capability vs. Config keys
 //!
@@ -34,22 +33,19 @@
 //! point. Until then, keys use `dyn Send + Sync` as a placeholder so the
 //! module compiles standalone.
 
-// Pull in the real `trait_kit` crate when the feature is on; otherwise defer
-// to the in-tree shim (Task 2.2 populates `shim.rs`). The shim re-exports the
-// same path `trait_kit::...` so downstream code is feature-agnostic.
-#[cfg(feature = "trait-kit")]
+// `trait-kit` is a hard dependency (Task 2.16 removed the in-tree shim once
+// all modules migrated to `build_kit`). No feature gating needed.
 extern crate trait_kit;
 
-#[cfg(not(feature = "trait-kit"))]
-#[doc(hidden)]
-pub mod shim;
-#[cfg(not(feature = "trait-kit"))]
-pub use shim as trait_kit;
+// Bootstrap (Task 2.13) — wires all 9 modules into a fresh Kit in
+// dependency order. Re-exported at the kit module root so callers can
+// write `codenexus::kit::build_kit` and `codenexus::kit::KitBootstrapConfig`.
+pub mod bootstrap;
+pub use bootstrap::{build_kit, KitBootstrapConfig};
 
 // Re-export the most commonly used trait-kit items so call sites can write
 // `use crate::kit::{CapabilityKey, ConfigKey, Kit}` instead of the longer
-// `trait_kit::core::...` path. Both the real crate and the shim expose the
-// same names.
+// `trait_kit::core::...` path.
 pub use trait_kit::core::builder::{ModuleBuilder, WithConfig, WithRequirements};
 pub use trait_kit::core::capability::CapabilityKey;
 pub use trait_kit::core::config::{ConfigHandle, ConfigKey};
@@ -114,24 +110,29 @@ pub struct TraceKey;
 /// Capability key for the Daemon subsystem (file watcher).
 ///
 /// Only available when the `daemon` feature is enabled. Registered by
-/// `DaemonModule` (Task 2.11). Capability will be
-/// `dyn daemon::capability::Daemon`. Requires `StorageKey` + `IndexerKey`.
+/// `DaemonModule` (Task 2.11). Capability is
+/// `dyn daemon::capability::DaemonRunner`. Conceptually requires
+/// `StorageKey` + `IndexerKey` (the concrete impl is self-contained —
+/// see `daemon::module` for the `NoRequirements` rationale).
 #[cfg(feature = "daemon")]
 pub struct DaemonKey;
 
 /// Capability key for the Embed subsystem (vector embeddings).
 ///
 /// Only available when the `embed` feature is enabled. Registered by
-/// `EmbedModule` (Task 2.12). Capability will be
-/// `dyn embed::capability::Embedder`. Requires `StorageKey`.
+/// `EmbedModule` (Task 2.12). Capability is
+/// `dyn embed::client::EmbedClient`. Conceptually requires `StorageKey`
+/// (the concrete impl is self-contained — see `embed::module` for the
+/// `NoRequirements` rationale).
 #[cfg(feature = "embed")]
 pub struct EmbedKey;
 
 // --- CapabilityKey impls --------------------------------------------------
 //
-// NOTE: The 7 core keys now reference real capability traits (Task 2.3).
-// `DaemonKey` and `EmbedKey` retain `dyn Send + Sync` as a placeholder until
-// their capability traits are defined in Tasks 2.11/2.12.
+// NOTE: All 9 keys now reference real capability traits (Tasks 2.3–2.12).
+// The `NoRequirements` at type level for each module is reconciled with the
+// spec's `requirements = ...` by the bootstrap (Task 2.13) enforcing build
+// order — see `design.md` D1.
 
 impl CapabilityKey for StorageKey {
     type Capability = dyn crate::storage::capability::Storage;
@@ -170,13 +171,13 @@ impl CapabilityKey for TraceKey {
 
 #[cfg(feature = "daemon")]
 impl CapabilityKey for DaemonKey {
-    type Capability = dyn Send + Sync;
+    type Capability = dyn crate::daemon::capability::DaemonRunner;
     const NAME: &'static str = "daemon";
 }
 
 #[cfg(feature = "embed")]
 impl CapabilityKey for EmbedKey {
-    type Capability = dyn Send + Sync;
+    type Capability = dyn crate::embed::client::EmbedClient;
     const NAME: &'static str = "embed";
 }
 
@@ -208,27 +209,33 @@ pub struct IndexConfigKey;
 /// Task 2.9 (previously a `()` placeholder).
 pub struct QueryConfigKey;
 
-/// Config key for the Daemon subsystem (`DaemonConfig { debounce_ms }`).
+/// Config key for the Trace subsystem (`TraceConfig { db_path }`).
+///
+/// Registered by `TraceModule` (Task 2.10). Tightened to `TraceConfig` in
+/// Task 2.10 (previously a `()` placeholder).
+pub struct TraceConfigKey;
+
+/// Config key for the Daemon subsystem (`DaemonConfig { db_path, debounce_ms }`).
 ///
 /// Only available when the `daemon` feature is enabled. Registered by
-/// `DaemonModule` (Task 2.11). Updated hot via `ConfigHandle::set` when the
-/// user changes `--debounce-ms`.
+/// `DaemonModule` (Task 2.11). Hot reconfiguration of `debounce_ms` via
+/// `ConfigHandle::set` is future work (see `daemon::module` for rationale).
 #[cfg(feature = "daemon")]
 pub struct DaemonConfigKey;
 
-/// Config key for the Embed subsystem (`EmbedConfig { endpoint }`).
+/// Config key for the Embed subsystem (`EmbeddingConfig { endpoint, model, api_key }`).
 ///
 /// Only available when the `embed` feature is enabled. Registered by
-/// `EmbedModule` (Task 2.12).
+/// `EmbedModule` (Task 2.12). Hot reconfiguration via `ConfigHandle::set`
+/// is future work (see `embed::module` for rationale).
 #[cfg(feature = "embed")]
 pub struct EmbedConfigKey;
 
 // --- ConfigKey impls ------------------------------------------------------
 //
-// NOTE: `StorageConfigKey` is tightened to `StorageConfig` (Task 2.4),
-// `IndexConfigKey` to `IndexConfig` (Task 2.7), and `QueryConfigKey` to
-// `QueryConfig` (Task 2.9). `DaemonConfigKey`/`EmbedConfigKey` retain `()` as
-// a placeholder until Tasks 2.11/2.12 land.
+// NOTE: All 5 config keys (`StorageConfigKey`, `IndexConfigKey`,
+// `QueryConfigKey`, `TraceConfigKey`, `DaemonConfigKey`, `EmbedConfigKey`)
+// are tightened to their real config types (Tasks 2.4–2.12).
 
 impl ConfigKey for StorageConfigKey {
     type Config = crate::storage::module::StorageConfig;
@@ -245,15 +252,20 @@ impl ConfigKey for QueryConfigKey {
     const NAME: &'static str = "query_config";
 }
 
+impl ConfigKey for TraceConfigKey {
+    type Config = crate::trace::module::TraceConfig;
+    const NAME: &'static str = "trace_config";
+}
+
 #[cfg(feature = "daemon")]
 impl ConfigKey for DaemonConfigKey {
-    type Config = ();
+    type Config = crate::daemon::module::DaemonConfig;
     const NAME: &'static str = "daemon_config";
 }
 
 #[cfg(feature = "embed")]
 impl ConfigKey for EmbedConfigKey {
-    type Config = ();
+    type Config = crate::embed::module::EmbedConfig;
     const NAME: &'static str = "embed_config";
 }
 
@@ -298,6 +310,7 @@ mod tests {
         assert_eq!(StorageConfigKey::NAME, "storage_config");
         assert_eq!(IndexConfigKey::NAME, "index_config");
         assert_eq!(QueryConfigKey::NAME, "query_config");
+        assert_eq!(TraceConfigKey::NAME, "trace_config");
     }
 
     #[cfg(feature = "daemon")]
@@ -313,8 +326,7 @@ mod tests {
     }
 
     /// Kit can be instantiated and is empty (no capabilities registered yet).
-    /// This is a smoke test that the trait-kit wiring (real crate or shim)
-    /// loads correctly.
+    /// This is a smoke test that the trait-kit wiring loads correctly.
     #[test]
     fn kit_can_be_created() {
         let kit = Kit::new();

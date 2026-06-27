@@ -12,6 +12,8 @@
 
 use std::fmt;
 
+use crate::storage::StorageError;
+
 /// A specialized [`Result`](std::result::Result) for trace operations.
 pub type Result<T> = std::result::Result<T, TraceError>;
 
@@ -39,6 +41,13 @@ pub enum TraceError {
 
     /// The start node id was not present in the graph.
     StartNodeMissing(String),
+
+    /// A storage-layer error while loading the subgraph for tracing.
+    ///
+    /// Added in T6/Phase-2 Task 2.10 so that [`TraceCapability`](super::module::TraceCapability)
+    /// can propagate database failures from [`load_graph_for_symbol`](super::graph_loader::load_graph_for_symbol)
+    /// without depending on the CLI error type.
+    Storage(StorageError),
 }
 
 impl fmt::Display for TraceError {
@@ -58,11 +67,20 @@ impl fmt::Display for TraceError {
             }
             Self::InvalidDepth(d) => write!(f, "invalid depth: {d} (must be >= 1)"),
             Self::StartNodeMissing(id) => write!(f, "start node not in graph: {id}"),
+            Self::Storage(e) => write!(f, "storage error: {e}"),
         }
     }
 }
 
 impl std::error::Error for TraceError {}
+
+impl From<StorageError> for TraceError {
+    /// Ergonomic conversion so `?` works in code that loads graphs via
+    /// [`load_graph_for_symbol`](super::graph_loader::load_graph_for_symbol).
+    fn from(e: StorageError) -> Self {
+        Self::Storage(e)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -122,6 +140,25 @@ mod tests {
     fn start_node_missing_display() {
         let err = TraceError::StartNodeMissing("node-123".to_string());
         assert_eq!(err.to_string(), "start node not in graph: node-123");
+    }
+
+    #[test]
+    fn storage_error_display_wraps_inner() {
+        let inner = StorageError::Query("boom".to_string());
+        let err = TraceError::Storage(inner);
+        let msg = err.to_string();
+        assert!(
+            msg.contains("storage error"),
+            "should be prefixed with 'storage error': {msg}"
+        );
+        assert!(msg.contains("boom"), "should include inner message: {msg}");
+    }
+
+    #[test]
+    fn from_storage_error_produces_storage_variant() {
+        let inner = StorageError::Query("x".to_string());
+        let err: TraceError = inner.into();
+        assert!(matches!(err, TraceError::Storage(_)), "got {err:?}");
     }
 
     #[test]

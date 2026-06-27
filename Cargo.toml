@@ -31,21 +31,19 @@ path = "src/main.rs"
 # historical all-languages + daemon behavior.
 [features]
 default = ["full"]
-# Tiered presets — each pulls in `trait-kit` (the unified Kit registry, T6)
-# so a default build always wires modules through the real crate. Disabling
-# `trait-kit` (e.g. `--no-default-features --features lang-rust`) falls back
-# to the in-tree `src/kit/shim.rs` implementation (Task 2.2).
-minimal = ["lang-rust", "trait-kit"]
-core = ["lang-c", "lang-rust", "lang-python", "trait-kit"]
-full = ["core", "lang-fortran", "lang-typescript", "daemon", "trait-kit"]
+# Tiered presets — `trait-kit` is a hard dependency (unified Kit registry,
+# T6/unified-architecture Phase 2), so every build wires modules through the
+# real crate. The in-tree `src/kit/shim.rs` fallback was removed in Task 2.16
+# once all modules migrated to `build_kit`.
+minimal = ["lang-rust"]
+core = ["lang-c", "lang-rust", "lang-python"]
+full = ["core", "lang-fortran", "lang-typescript", "daemon"]
 # Per-language features (each pulls its tree-sitter grammar)
 lang-c = ["dep:tree-sitter-c"]
 lang-rust = ["dep:tree-sitter-rust"]
 lang-fortran = ["dep:tree-sitter-fortran"]
 lang-python = ["dep:tree-sitter-python"]
 lang-typescript = ["dep:tree-sitter-typescript"]
-# Unified capability registry (T6/unified-architecture Phase 2).
-trait-kit = ["dep:trait-kit"]
 # Function features
 embed = ["dep:reqwest"]
 daemon = ["dep:notify", "dep:notify-debouncer-full"]
@@ -53,11 +51,10 @@ lsp = []
 
 [dependencies]
 # Unified module interface & Kit capability registry (T6/unified-architecture
-# Phase 2). Exact-pinned to 0.1.0 per design.md §2.4; an in-tree shim
-# (src/kit/shim.rs, Task 2.2) mirrors the API behind
-# `#[cfg(not(feature = "trait-kit"))]` so the codebase is not irreversibly
-# coupled if the crate stops publishing.
-trait-kit = { version = "=0.1.0", optional = true }
+# Phase 2). Exact-pinned to 0.1.0 per design.md §2.4. Hard dependency since
+# Task 2.16 — the in-tree shim was removed once all modules migrated to
+# `build_kit`.
+trait-kit = "=0.1.0"
 
 # Graph database (ADR-002)
 lbug = "0.17.1"

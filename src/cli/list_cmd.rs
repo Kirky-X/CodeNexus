@@ -10,21 +10,23 @@ use serde::Serialize;
 
 use super::args::ListArgs;
 use super::error::Result;
-use crate::storage::{ProjectRecord, Repository};
+use crate::kit::{Kit, StorageKey};
+use crate::storage::ProjectRecord;
 
 /// Runs the `list` subcommand.
 ///
-/// Opens the database at `args.db`, lists all projects, and prints them as a
-/// JSON array of [`ProjectOutput`] objects.
+/// Resolves the [`Storage`](crate::storage::capability::Storage) capability
+/// from `kit` and lists all projects, printing them as a JSON array of
+/// [`ProjectOutput`] objects.
 ///
 /// # Errors
 ///
-/// Returns [`crate::cli::error::CliError::Storage`] if the database cannot be
-/// opened.
-pub fn run(args: &ListArgs) -> Result<()> {
-    let db_path = std::path::Path::new(&args.db);
-    let repo = Repository::open(db_path)?;
-    let projects = repo.list_projects().unwrap_or_default();
+/// Returns [`crate::cli::error::CliError::Kit`] if the Storage capability is
+/// not registered. Returns [`crate::cli::error::CliError::Storage`] for
+/// database failures (surfaces as an empty list via `unwrap_or_default`).
+pub fn run(kit: &Kit, _args: &ListArgs) -> Result<()> {
+    let storage = kit.require::<StorageKey>()?;
+    let projects = storage.list_projects().unwrap_or_default();
     let output: Vec<ProjectOutput> = projects.into_iter().map(ProjectOutput::from).collect();
     let json = serde_json::to_string(&output)?;
     println!("{json}");
@@ -65,8 +67,9 @@ impl From<ProjectRecord> for ProjectOutput {
 mod tests {
     use super::*;
     use crate::cli::args::ListArgs;
+    use crate::kit::{build_kit, KitBootstrapConfig};
     use crate::model::{Language, Node, NodeLabel};
-    use crate::storage::Repository;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     /// Returns a fresh on-disk database path inside a temp dir.
@@ -75,6 +78,12 @@ mod tests {
         let path = dir.path().join("cli_list_testdb");
         std::mem::forget(dir);
         path
+    }
+
+    /// Builds a Kit backed by an on-disk database at `db`.
+    fn build_kit_for_db(db: &str) -> Kit {
+        let config = KitBootstrapConfig::new(PathBuf::from(db));
+        build_kit(&config).expect("build_kit")
     }
 
     /// Builds a sample Project node.
@@ -135,10 +144,9 @@ mod tests {
     #[test]
     fn run_list_empty_db_returns_empty_array() {
         let db = fresh_db_path();
-        let repo = Repository::open(&db).expect("repo");
-        drop(repo);
+        let kit = build_kit_for_db(db.to_str().unwrap());
         let args = make_args(db.to_str().unwrap());
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(
             result.is_ok(),
             "empty-db list should succeed: {:?}",
@@ -149,12 +157,14 @@ mod tests {
     #[test]
     fn run_list_with_projects_succeeds() {
         let db = fresh_db_path();
-        let repo = Repository::open(&db).expect("repo");
-        repo.save_project(&sample_project("p1", "alpha")).unwrap();
-        repo.save_project(&sample_project("p2", "beta")).unwrap();
-        drop(repo);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage
+            .save_project(&sample_project("p1", "alpha"))
+            .unwrap();
+        storage.save_project(&sample_project("p2", "beta")).unwrap();
         let args = make_args(db.to_str().unwrap());
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(
             result.is_ok(),
             "list with projects should succeed: {:?}",
@@ -165,11 +175,11 @@ mod tests {
     #[test]
     fn run_list_single_project_succeeds() {
         let db = fresh_db_path();
-        let repo = Repository::open(&db).expect("repo");
-        repo.save_project(&sample_project("p1", "solo")).unwrap();
-        drop(repo);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.save_project(&sample_project("p1", "solo")).unwrap();
         let args = make_args(db.to_str().unwrap());
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(
             result.is_ok(),
             "list single project should succeed: {:?}",
@@ -178,11 +188,9 @@ mod tests {
     }
 
     // --- run() error cases ---
-
-    #[test]
-    fn run_list_missing_db_returns_error() {
-        let args = make_args("/nonexistent/db.lbug");
-        let result = run(&args);
-        assert!(result.is_err(), "missing db should error");
-    }
+    //
+    // Note: `run_list_missing_db_returns_error` was removed because the
+    // "missing db" error now surfaces at `build_kit` time, not at `run` time.
+    // Covered by `build_kit_invalid_db_path_returns_build_failed_error` in
+    // `kit::bootstrap::tests`.
 }

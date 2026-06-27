@@ -53,6 +53,27 @@ pub trait QueryEngine: Send + Sync {
         project: Option<&str>,
         limit: usize,
     ) -> std::result::Result<Vec<SearchResult>, QueryError>;
+
+    /// Hybrid BM25 + semantic search (requires `embed` feature at compile time).
+    ///
+    /// When the `embed` feature is compiled in, this runs [`HybridStrategy`]
+    /// (BM25 + vector RRF fusion, AC-SEARCH-002) using the supplied
+    /// `embed_client`. The caller is responsible for resolving the embed
+    /// capability from the [`Kit`](crate::kit::Kit) and deciding whether to
+    /// invoke this method (e.g. only when an API key is configured).
+    ///
+    /// When the `embed` feature is off, this method does not exist on the
+    /// trait, so callers must fall back to [`fulltext_search`](Self::fulltext_search).
+    ///
+    /// [`HybridStrategy`]: crate::embed::HybridStrategy
+    #[cfg(feature = "embed")]
+    fn semantic_search(
+        &self,
+        text: &str,
+        project: Option<&str>,
+        limit: usize,
+        embed_client: &dyn crate::embed::EmbedClient,
+    ) -> std::result::Result<Vec<SearchResult>, QueryError>;
 }
 
 /// Compile-time assertion that `QueryEngine` is object-safe and `Send + Sync`.

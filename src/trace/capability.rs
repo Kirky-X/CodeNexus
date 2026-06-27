@@ -11,6 +11,8 @@
 //! [`TraceFacade`]: super::TraceFacade
 //! [`Graph`]: crate::model::Graph
 
+use crate::model::Graph;
+
 use super::error::TraceError;
 use super::facade::TraceType;
 use super::TraceResult;
@@ -31,6 +33,20 @@ pub trait TraceEngine: Send + Sync {
         trace_type: TraceType,
         depth: usize,
     ) -> std::result::Result<TraceResult, TraceError>;
+
+    /// Loads the subgraph reachable from `symbol` within `depth` hops from
+    /// the database.
+    ///
+    /// Used by `impact_cmd::run` (Task 2.14) to obtain the raw [`Graph`] for
+    /// [`ImpactAnalyzer`](super::ImpactAnalyzer), which cannot be expressed
+    /// via [`trace`](Self::trace) (that returns a [`TraceResult`], not the
+    /// graph itself). The concrete impl delegates to
+    /// [`load_graph_for_symbol`](super::graph_loader::load_graph_for_symbol).
+    fn load_graph(
+        &self,
+        symbol: &str,
+        depth: usize,
+    ) -> std::result::Result<Graph, TraceError>;
 }
 
 /// Compile-time assertion that `TraceEngine` is object-safe and `Send + Sync`.

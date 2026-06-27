@@ -3,36 +3,44 @@
 
 //! `search` subcommand handler (PRD §4.4).
 //!
-//! Calls [`QueryFacade::search`] (or [`QueryFacade::fulltext_search`] when
-//! `--semantic` is set) and prints the results as a JSON array.
+//! Calls [`QueryEngine::search`] (or [`QueryEngine::fulltext_search`] /
+//! [`QueryEngine::semantic_search`] when `--semantic` is set) and prints the
+//! results as a JSON array.
 //!
 //! When the `embed` feature is enabled and `--semantic` is set, the command
 //! uses [`HybridStrategy`] (BM25 + vector RRF fusion, AC-SEARCH-002) if an
 //! embedding API key is configured; otherwise it falls back to BM25 full-text
 //! search.
+//!
+//! [`HybridStrategy`]: crate::embed::HybridStrategy
 
 use serde::Serialize;
 
 use super::args::SearchArgs;
 use super::error::Result;
-use crate::query::{QueryFacade, SearchResult};
+use crate::kit::{Kit, QueryKey};
+#[cfg(feature = "embed")]
+use crate::kit::EmbedKey;
+use crate::query::capability::QueryEngine;
+use crate::query::SearchResult;
 
 /// Runs the `search` subcommand.
 ///
-/// Opens the database at `args.db`, runs the search, and prints the results
-/// as a JSON array of [`SearchResultOutput`] objects.
+/// Resolves the [`QueryEngine`](crate::query::capability::QueryEngine)
+/// capability from `kit`, runs the search, and prints the results as a JSON
+/// array of [`SearchResultOutput`] objects.
 ///
 /// # Errors
 ///
-/// Returns [`crate::cli::error::CliError::Query`] for search failures, or
-/// [`crate::cli::error::CliError::Storage`] if the database cannot be opened.
-pub fn run(args: &SearchArgs) -> Result<()> {
-    let db_path = std::path::Path::new(&args.db);
-    let facade = QueryFacade::new(db_path)?;
+/// Returns [`crate::cli::error::CliError::Kit`] if the Query capability is
+/// not registered. Returns [`crate::cli::error::CliError::Query`] for search
+/// failures.
+pub fn run(kit: &Kit, args: &SearchArgs) -> Result<()> {
+    let query = kit.require::<QueryKey>()?;
     let results = if args.semantic {
-        semantic_search(&facade, &args.text, args.limit)?
+        semantic_search(kit, &*query, &args.text, args.limit)?
     } else {
-        facade.search(&args.text, None, args.limit)?
+        query.search(&args.text, None, args.limit)?
     };
     let output: Vec<SearchResultOutput> =
         results.into_iter().map(SearchResultOutput::from).collect();
@@ -43,26 +51,30 @@ pub fn run(args: &SearchArgs) -> Result<()> {
 
 /// Executes a semantic search, using the embed subsystem when available.
 ///
-/// When the `embed` feature is enabled and an API key is configured, this uses
-/// [`HybridStrategy`] (BM25 + vector RRF fusion). Otherwise it falls back to
-/// BM25 full-text search via [`QueryFacade::fulltext_search`].
-fn semantic_search(facade: &QueryFacade, text: &str, limit: usize) -> Result<Vec<SearchResult>> {
+/// When the `embed` feature is enabled and the Embed capability is registered,
+/// this calls [`QueryEngine::semantic_search`] (BM25 + vector RRF fusion via
+/// [`HybridStrategy`]). If the embed capability is unavailable or the semantic
+/// search fails (e.g. no API key, vector extension missing), it falls back to
+/// BM25 full-text search via [`QueryEngine::fulltext_search`].
+///
+/// [`HybridStrategy`]: crate::embed::HybridStrategy
+#[cfg_attr(not(feature = "embed"), allow(unused_variables))]
+fn semantic_search(
+    kit: &Kit,
+    query: &dyn QueryEngine,
+    text: &str,
+    limit: usize,
+) -> Result<Vec<SearchResult>> {
     #[cfg(feature = "embed")]
     {
-        use crate::embed::{EmbeddingConfig, HybridStrategy, OpenAIEmbedClient, SearchStrategy};
-
-        let config = EmbeddingConfig::from_env();
-        if config.has_api_key() {
-            if let Ok(client) = OpenAIEmbedClient::new(config) {
-                let strategy = HybridStrategy::new(facade.connection(), &client);
-                if let Ok(results) = strategy.search(text, None, limit) {
-                    return Ok(results);
-                }
+        if let Ok(embed_client) = kit.require::<EmbedKey>() {
+            if let Ok(results) = query.semantic_search(text, None, limit, &*embed_client) {
+                return Ok(results);
             }
         }
     }
     // Fallback: BM25 full-text search (always available).
-    Ok(facade.fulltext_search(text, None, limit)?)
+    Ok(query.fulltext_search(text, None, limit)?)
 }
 
 /// JSON-serializable view of a single search result.
@@ -99,8 +111,8 @@ impl From<SearchResult> for SearchResultOutput {
 mod tests {
     use super::*;
     use crate::cli::args::SearchArgs;
-    use crate::storage::StorageConnection;
-    use std::path::Path;
+    use crate::kit::{build_kit, KitBootstrapConfig, StorageKey};
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     /// Returns a fresh on-disk database path inside a temp dir.
@@ -111,14 +123,19 @@ mod tests {
         path
     }
 
+    /// Builds a Kit backed by an on-disk database at `db`.
+    fn build_kit_for_db(db: &str) -> Kit {
+        let config = KitBootstrapConfig::new(PathBuf::from(db));
+        build_kit(&config).expect("build_kit")
+    }
+
     /// Seeds the database with functions whose names contain "parse".
-    fn seed_search_fixture(db: &Path) {
-        let conn = StorageConnection::open(db).expect("open");
-        conn.init_schema().expect("init_schema");
-        conn.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/', language: 'rust', fileCount: 2, indexedAt: 0});").expect("create project");
-        conn.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'parse_file', qualifiedName: 'demo.parse_file', filePath: '/src/main.rs', startLine: 1, endLine: 10, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create f1");
-        conn.execute("CREATE (:Function {id: 'f2', project: 'demo', name: 'parse_line', qualifiedName: 'demo.parse_line', filePath: '/src/main.rs', startLine: 11, endLine: 20, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create f2");
-        conn.execute("CREATE (:Function {id: 'f3', project: 'demo', name: 'read_input', qualifiedName: 'demo.read_input', filePath: '/src/lib.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create f3");
+    fn seed_search_fixture(kit: &Kit) {
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/', language: 'rust', fileCount: 2, indexedAt: 0});").expect("create project");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'parse_file', qualifiedName: 'demo.parse_file', filePath: '/src/main.rs', startLine: 1, endLine: 10, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create f1");
+        storage.execute("CREATE (:Function {id: 'f2', project: 'demo', name: 'parse_line', qualifiedName: 'demo.parse_line', filePath: '/src/main.rs', startLine: 11, endLine: 20, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create f2");
+        storage.execute("CREATE (:Function {id: 'f3', project: 'demo', name: 'read_input', qualifiedName: 'demo.read_input', filePath: '/src/lib.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create f3");
     }
 
     fn make_args(text: &str, semantic: bool, limit: usize, db: &str) -> SearchArgs {
@@ -171,18 +188,20 @@ mod tests {
     #[test]
     fn run_search_returns_results() {
         let db = fresh_db_path();
-        seed_search_fixture(&db);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_search_fixture(&kit);
         let args = make_args("parse", false, 10, db.to_str().unwrap());
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(result.is_ok(), "search should succeed: {:?}", result.err());
     }
 
     #[test]
     fn run_search_semantic_uses_fulltext() {
         let db = fresh_db_path();
-        seed_search_fixture(&db);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_search_fixture(&kit);
         let args = make_args("parse", true, 10, db.to_str().unwrap());
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(
             result.is_ok(),
             "semantic search should succeed: {:?}",
@@ -193,9 +212,10 @@ mod tests {
     #[test]
     fn run_search_no_matches_succeeds() {
         let db = fresh_db_path();
-        seed_search_fixture(&db);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_search_fixture(&kit);
         let args = make_args("zzz_nonexistent", false, 10, db.to_str().unwrap());
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(
             result.is_ok(),
             "no-match search should succeed: {:?}",
@@ -206,9 +226,10 @@ mod tests {
     #[test]
     fn run_search_limit_one_succeeds() {
         let db = fresh_db_path();
-        seed_search_fixture(&db);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_search_fixture(&kit);
         let args = make_args("parse", false, 1, db.to_str().unwrap());
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(
             result.is_ok(),
             "limit-1 search should succeed: {:?}",
@@ -219,25 +240,20 @@ mod tests {
     // --- run() error cases ---
 
     #[test]
-    fn run_search_missing_db_returns_error() {
-        let args = make_args("parse", false, 10, "/nonexistent/db.lbug");
-        let result = run(&args);
-        assert!(result.is_err(), "missing db should error");
-    }
-
-    #[test]
     fn run_search_empty_db_returns_empty_array() {
         let db = fresh_db_path();
-        // Initialize schema but seed nothing.
-        let conn = StorageConnection::open(&db).expect("open");
-        conn.init_schema().expect("init_schema");
-        drop(conn);
+        let kit = build_kit_for_db(db.to_str().unwrap());
         let args = make_args("parse", false, 10, db.to_str().unwrap());
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(
             result.is_ok(),
             "empty-db search should succeed: {:?}",
             result.err()
         );
     }
+
+    // Note: `run_search_missing_db_returns_error` was removed because the
+    // "missing db" error now surfaces at `build_kit` time, not at `run` time.
+    // Covered by `build_kit_invalid_db_path_returns_build_failed_error` in
+    // `kit::bootstrap::tests`.
 }

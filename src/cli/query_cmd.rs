@@ -3,28 +3,30 @@
 
 //! `query` subcommand handler (PRD §4.4).
 //!
-//! Calls [`QueryFacade::cypher`] and prints the [`QueryResult`] as a JSON
+//! Calls [`QueryEngine::cypher`] and prints the [`QueryResult`] as a JSON
 //! array of row objects (column name → value).
 
 use serde::Serialize;
 
 use super::args::QueryArgs;
 use super::error::Result;
-use crate::query::{QueryFacade, QueryResult};
+use crate::kit::{Kit, QueryKey};
+use crate::query::QueryResult;
 
 /// Runs the `query` subcommand.
 ///
-/// Opens the database at `args.db`, executes `args.cypher`, and prints the
-/// result as a JSON object with `columns` and `rows` fields.
+/// Resolves the [`QueryEngine`](crate::query::capability::QueryEngine)
+/// capability from `kit`, executes `args.cypher`, and prints the result as a
+/// JSON object with `columns` and `rows` fields.
 ///
 /// # Errors
 ///
-/// Returns [`CliError::Query`] for invalid or failing Cypher, or
-/// [`CliError::Storage`] if the database cannot be opened.
-pub fn run(args: &QueryArgs) -> Result<()> {
-    let db_path = std::path::Path::new(&args.db);
-    let facade = QueryFacade::new(db_path)?;
-    let result = facade.cypher(&args.cypher)?;
+/// Returns [`crate::cli::error::CliError::Kit`] if the Query capability is
+/// not registered. Returns [`crate::cli::error::CliError::Query`] for invalid
+/// or failing Cypher.
+pub fn run(kit: &Kit, args: &QueryArgs) -> Result<()> {
+    let query = kit.require::<QueryKey>()?;
+    let result = query.cypher(&args.cypher)?;
     let output = QueryOutput::from(result);
     let json = serde_json::to_string(&output)?;
     println!("{json}");
@@ -56,7 +58,8 @@ impl From<QueryResult> for QueryOutput {
 mod tests {
     use super::*;
     use crate::cli::args::QueryArgs;
-    use crate::storage::StorageConnection;
+    use crate::kit::{build_kit, KitBootstrapConfig, StorageKey};
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     /// Returns a fresh on-disk database path inside a temp dir.
@@ -67,13 +70,18 @@ mod tests {
         path
     }
 
+    /// Builds a Kit backed by an on-disk database at `db`.
+    fn build_kit_for_db(db: &str) -> Kit {
+        let config = KitBootstrapConfig::new(PathBuf::from(db));
+        build_kit(&config).expect("build_kit")
+    }
+
     /// Seeds the database with a small fixture (one Project + two Functions).
-    fn seed(db: &std::path::Path) {
-        let conn = StorageConnection::open(db).expect("open");
-        conn.init_schema().expect("init_schema");
-        conn.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/', language: 'rust', fileCount: 2, indexedAt: 0});").expect("create project");
-        conn.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'main', qualifiedName: 'demo.main', filePath: '/src/main.rs', startLine: 1, endLine: 10, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create f1");
-        conn.execute("CREATE (:Function {id: 'f2', project: 'demo', name: 'helper', qualifiedName: 'demo.helper', filePath: '/src/main.rs', startLine: 11, endLine: 20, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create f2");
+    fn seed(kit: &Kit) {
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/', language: 'rust', fileCount: 2, indexedAt: 0});").expect("create project");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'main', qualifiedName: 'demo.main', filePath: '/src/main.rs', startLine: 1, endLine: 10, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create f1");
+        storage.execute("CREATE (:Function {id: 'f2', project: 'demo', name: 'helper', qualifiedName: 'demo.helper', filePath: '/src/main.rs', startLine: 11, endLine: 20, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create f2");
     }
 
     fn make_args(cypher: &str, db: &str) -> QueryArgs {
@@ -118,36 +126,39 @@ mod tests {
     #[test]
     fn run_executes_count_query() {
         let db = fresh_db_path();
-        seed(&db);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed(&kit);
         let args = make_args(
             "MATCH (f:Function) RETURN count(f) AS cnt;",
             db.to_str().unwrap(),
         );
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(result.is_ok(), "run should succeed: {:?}", result.err());
     }
 
     #[test]
     fn run_executes_return_query() {
         let db = fresh_db_path();
-        seed(&db);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed(&kit);
         let args = make_args(
             "MATCH (f:Function) RETURN f.name AS name ORDER BY f.name;",
             db.to_str().unwrap(),
         );
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(result.is_ok(), "run should succeed: {:?}", result.err());
     }
 
     #[test]
     fn run_empty_query_result_succeeds() {
         let db = fresh_db_path();
-        seed(&db);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed(&kit);
         let args = make_args(
             "MATCH (f:Function) WHERE f.name = 'nonexistent' RETURN f.name;",
             db.to_str().unwrap(),
         );
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(
             result.is_ok(),
             "empty result should succeed: {:?}",
@@ -160,36 +171,33 @@ mod tests {
     #[test]
     fn run_invalid_cypher_returns_error() {
         let db = fresh_db_path();
-        seed(&db);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed(&kit);
         let args = make_args("MATCH (a RETURN a;", db.to_str().unwrap());
-        let err = run(&args).expect_err("invalid cypher should error");
+        let err = run(&kit, &args).expect_err("invalid cypher should error");
         assert_eq!(err.exit_code(), 2, "query errors → exit 2");
-    }
-
-    #[test]
-    fn run_missing_db_returns_error() {
-        let args = make_args(
-            "MATCH (f:Function) RETURN f.name;",
-            "/nonexistent/path/db.lbug",
-        );
-        let result = run(&args);
-        assert!(result.is_err(), "missing db should error");
     }
 
     #[test]
     fn run_with_project_filter_succeeds() {
         let db = fresh_db_path();
-        seed(&db);
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed(&kit);
         let args = QueryArgs {
             cypher: "MATCH (f:Function) RETURN f.name AS name;".to_string(),
             db: db.to_str().unwrap().to_string(),
             project: Some("demo".to_string()),
         };
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(
             result.is_ok(),
             "run with project should succeed: {:?}",
             result.err()
         );
     }
+
+    // Note: `run_missing_db_returns_error` was removed because the "missing db"
+    // error now surfaces at `build_kit` time, not at `run` time. Covered by
+    // `build_kit_invalid_db_path_returns_build_failed_error` in
+    // `kit::bootstrap::tests`.
 }

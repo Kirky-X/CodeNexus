@@ -14,19 +14,24 @@
 //! - [`data_flow`]: [`DataFlowTracer`] for BFS over `DataFlows`/`Reads`/`Writes`.
 //! - [`impact`]: [`ImpactAnalyzer`] for reverse-BFS impact analysis (P1).
 //! - [`facade`]: [`TraceFacade`] and [`TraceType`] (Facade pattern).
+//! - [`graph_loader`]: subgraph loader (BFS expand from a symbol).
+//! - [`module`]: trait-kit [`TraceModule`] / [`TraceModuleBuilder`] / [`TraceConfig`].
 
 pub mod capability;
 pub mod call_graph;
 pub mod data_flow;
 pub mod error;
 pub mod facade;
+pub mod graph_loader;
 pub mod impact;
+pub mod module;
 
 pub use call_graph::CallGraphTracer;
 pub use data_flow::DataFlowTracer;
 pub use error::{Result, TraceError};
 pub use facade::{TraceFacade, TraceType};
 pub use impact::ImpactAnalyzer;
+pub use module::{TraceConfig, TraceModule, TraceModuleBuilder};
 
 use crate::model::Node;
 

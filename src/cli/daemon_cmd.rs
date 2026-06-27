@@ -6,29 +6,37 @@
 //! 启动文件监视守护进程，监视代码仓库并在代码文件变更时触发增量索引
 //! （BR-DAEMON-001~004，AC-DAEMON-001~003）。
 //!
-//! 该处理器创建 [`Daemon`] 实例，注册 [`IndexObserver`]（观察者模式），
-//! 然后进入阻塞事件循环。守护进程持续运行直到被用户中断（Ctrl+C /
-//! SIGTERM）。
+//! 该处理器从 [`Kit`](crate::kit::Kit) 解析
+//! [`DaemonRunner`](crate::daemon::capability::DaemonRunner) 能力，然后调用
+//! [`DaemonRunner::start`] 进入阻塞事件循环。守护进程持续运行直到被用户
+//! 中断（Ctrl+C / SIGTERM）。
 
 use std::path::Path;
 
 use super::args::DaemonArgs;
 use super::error::{CliError, Result};
-use crate::daemon::{Daemon, IndexObserver};
-use crate::index::IndexFacade;
+use crate::kit::{DaemonKey, Kit};
 
 /// 运行 `daemon` 子命令。
 ///
-/// 打开（或创建）`args.db` 数据库，创建监视 `args.path` 的 [`Daemon`]，
-/// 注册 [`IndexObserver`] 以在代码文件变更时触发增量索引，然后进入
-/// 阻塞事件循环。
+/// 从 `kit` 解析 [`DaemonRunner`](crate::daemon::capability::DaemonRunner)
+/// 能力，校验监视路径存在，然后调用 [`DaemonRunner::start`] 进入阻塞事件
+/// 循环。
 ///
 /// # 工作流程
 ///
 /// 1. 校验监视路径存在（输入错误 → 退出码 1）。
-/// 2. 打开数据库并创建 [`IndexFacade`]（索引错误 → 退出码 1/2/3/4）。
-/// 3. 创建 [`Daemon`] 并注册 [`IndexObserver`]。
-/// 4. 调用 [`Daemon::run`] 进入阻塞事件循环。
+/// 2. 从 `kit` 解析 `DaemonRunner` 能力（能力缺失 → 退出码 3）。
+/// 3. 调用 [`DaemonRunner::start`]，内部构造 `Daemon` + `IndexObserver`
+///    并进入阻塞事件循环。
+///
+/// # 数据库与防抖配置
+///
+/// `args.db` 与 `args.debounce_ms` 在统一 Kit 架构下由
+/// [`KitBootstrapConfig`](crate::kit::KitBootstrapConfig) 在构建 Kit 时
+/// 统一配置，`run` 不再直接读取这两个参数。CLI 仍保留这两个参数以保持
+/// 向后兼容（`main.rs` 在构建 Kit 时使用 `--db`，`KitBootstrapConfig`
+/// 默认使用 `DEFAULT_DEBOUNCE_MS`）。
 ///
 /// # 停止方式
 ///
@@ -39,11 +47,10 @@ use crate::index::IndexFacade;
 /// # Errors
 ///
 /// - [`CliError::InvalidInput`]：监视路径不存在。
-/// - [`CliError::Index`]：无法打开数据库。
+/// - [`CliError::Kit`]：`DaemonRunner` 能力未注册。
 /// - [`CliError::Daemon`]：文件监视器创建或监视失败。
-pub fn run(args: &DaemonArgs) -> Result<()> {
+pub fn run(kit: &Kit, args: &DaemonArgs) -> Result<()> {
     let watch_path = Path::new(&args.path);
-    let db_path = Path::new(&args.db);
 
     // 校验监视路径存在（PRD §4.1.6：输入错误 → 退出码 1）。
     if !watch_path.exists() {
@@ -53,18 +60,12 @@ pub fn run(args: &DaemonArgs) -> Result<()> {
         )));
     }
 
-    // 打开数据库并创建索引门面。
-    let facade = IndexFacade::new(db_path)?;
-
-    // 创建守护进程实例（BR-DAEMON-001/004：防抖窗口可配置）。
-    let mut daemon = Daemon::new(watch_path, &args.name, args.debounce_ms, db_path);
-
-    // 注册索引观察者（观察者模式：主题持有观察者列表）。
-    let observer = IndexObserver::new(facade, args.name.clone(), watch_path.to_path_buf());
-    daemon.add_observer(Box::new(observer));
+    // 从 Kit 解析 DaemonRunner 能力。DaemonConfig（db_path + debounce_ms）
+    // 在 build_kit 时已注入，start() 内部构造 Daemon + IndexObserver。
+    let daemon = kit.require::<DaemonKey>()?;
 
     // 启动阻塞事件循环（状态机：监视中 → 待处理 → 索引中 → 监视中）。
-    daemon.run()?;
+    daemon.start(watch_path, &args.name)?;
 
     Ok(())
 }
@@ -73,7 +74,9 @@ pub fn run(args: &DaemonArgs) -> Result<()> {
 mod tests {
     use super::*;
     use crate::cli::args::DaemonArgs;
+    use crate::kit::{build_kit, KitBootstrapConfig};
     use std::fs;
+    use std::path::PathBuf;
     use std::thread;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -95,6 +98,19 @@ mod tests {
         path
     }
 
+    /// 构建一个由磁盘数据库 `db` 支持的 Kit。
+    fn build_kit_for_db(db: &str) -> Kit {
+        let config = KitBootstrapConfig::new(PathBuf::from(db));
+        build_kit(&config).expect("build_kit")
+    }
+
+    /// 构建一个由磁盘数据库 `db` 支持的 Kit，并指定防抖窗口。
+    fn build_kit_for_db_with_debounce(db: &str, debounce_ms: u64) -> Kit {
+        let config = KitBootstrapConfig::new(PathBuf::from(db))
+            .with_debounce_ms(debounce_ms);
+        build_kit(&config).expect("build_kit")
+    }
+
     /// 构建 `DaemonArgs`。
     fn make_args(path: &str, name: &str, debounce_ms: u64, db: &str) -> DaemonArgs {
         DaemonArgs {
@@ -111,8 +127,9 @@ mod tests {
     fn run_returns_error_for_nonexistent_path() {
         // 不存在的路径应返回 InvalidInput（退出码 1）。
         let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
         let args = make_args("/nonexistent/path/xyz", "demo", 2000, db.to_str().unwrap());
-        let err = run(&args).expect_err("nonexistent path should error");
+        let err = run(&kit, &args).expect_err("nonexistent path should error");
         assert!(
             matches!(err, CliError::InvalidInput(_)),
             "应为 InvalidInput，实际: {err:?}"
@@ -123,8 +140,9 @@ mod tests {
     #[test]
     fn run_invalid_input_message_contains_path() {
         let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
         let args = make_args("/no/such/dir", "demo", 2000, db.to_str().unwrap());
-        let err = run(&args).expect_err("should error");
+        let err = run(&kit, &args).expect_err("should error");
         let msg = err.to_string();
         assert!(msg.contains("/no/such/dir"), "错误消息应包含路径: {msg}");
     }
@@ -146,15 +164,16 @@ mod tests {
         write_file(tmp.path(), "main.rs", "fn main() {}\n");
         let db = fresh_db_path();
 
+        let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 200);
         let args = make_args(
             tmp.path().to_str().unwrap(),
             "demo",
-            200, // 短防抖时间加速测试
+            200, // 短防抖时间加速测试（args.debounce_ms 不再使用，保留以兼容）
             db.to_str().unwrap(),
         );
 
         // 在单独线程中运行 daemon_cmd::run。
-        let handle = thread::spawn(move || run(&args));
+        let handle = thread::spawn(move || run(&kit, &args));
 
         // 等待守护进程初始化并触发首次索引。
         thread::sleep(Duration::from_millis(500));
@@ -183,9 +202,12 @@ mod tests {
     fn run_accepts_custom_debounce() {
         // BR-DAEMON-004：可配置防抖。
         // 验证自定义 debounce_ms 不会导致错误（路径校验阶段就返回）。
+        // 注意：args.debounce_ms 在统一 Kit 架构下不再使用，防抖窗口由
+        // KitBootstrapConfig::with_debounce_ms 在构建 Kit 时配置。
         let db = fresh_db_path();
+        let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 500);
         let args = make_args("/nonexistent/path/xyz", "demo", 500, db.to_str().unwrap());
-        let err = run(&args).expect_err("should error on nonexistent path");
+        let err = run(&kit, &args).expect_err("should error on nonexistent path");
         // 错误应在路径校验阶段产生，与 debounce_ms 无关。
         assert!(matches!(err, CliError::InvalidInput(_)));
     }
@@ -194,8 +216,9 @@ mod tests {
     fn run_accepts_default_debounce() {
         // BR-DAEMON-001：默认防抖 2000ms。
         let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
         let args = make_args("/nonexistent/path/xyz", "demo", 2000, db.to_str().unwrap());
-        let err = run(&args).expect_err("should error on nonexistent path");
+        let err = run(&kit, &args).expect_err("should error on nonexistent path");
         assert!(matches!(err, CliError::InvalidInput(_)));
     }
 
@@ -209,6 +232,7 @@ mod tests {
         write_file(tmp.path(), "main.rs", "fn main() {}\n");
         let db = fresh_db_path();
 
+        let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 200);
         let args = make_args(
             tmp.path().to_str().unwrap(),
             "demo",
@@ -216,7 +240,7 @@ mod tests {
             db.to_str().unwrap(),
         );
 
-        let handle = thread::spawn(move || run(&args));
+        let handle = thread::spawn(move || run(&kit, &args));
 
         // 等待守护进程初始化。
         thread::sleep(Duration::from_millis(500));
@@ -241,6 +265,7 @@ mod tests {
         write_file(tmp.path(), "main.rs", "fn main() {}\n");
         let db = fresh_db_path();
 
+        let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 200);
         let args = make_args(
             tmp.path().to_str().unwrap(),
             "demo",
@@ -248,7 +273,7 @@ mod tests {
             db.to_str().unwrap(),
         );
 
-        let handle = thread::spawn(move || run(&args));
+        let handle = thread::spawn(move || run(&kit, &args));
 
         // 等待守护进程初始化。
         thread::sleep(Duration::from_millis(500));

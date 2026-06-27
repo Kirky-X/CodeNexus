@@ -24,6 +24,22 @@
 //! 结束并收到一批代码文件变更事件后，Daemon 将过滤后的事件通知所有观察者。
 //! [`IndexObserver`] 是内置观察者，收到事件后调用 [`IndexFacade::index_incremental`]
 //! 触发增量索引。
+//!
+//! # trait-kit integration (Task 2.11)
+//!
+//! When the `daemon` feature is enabled, [`capability::DaemonRunner`] is the
+//! capability trait stored in [`Kit`](crate::kit::Kit) under
+//! [`DaemonKey`](crate::kit::DaemonKey). The concrete impl
+//! ([`module::DaemonCapability`]) wraps the existing [`Daemon`] +
+//! [`IndexObserver`] so the unified Kit can hand a pre-configured daemon
+//! handle to `daemon_cmd::run` instead of having the CLI construct
+//! subsystems ad-hoc.
+
+pub mod capability;
+pub mod module;
+
+pub use capability::DaemonRunner;
+pub use module::{DaemonConfig, DaemonModule, DaemonModuleBuilder};
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};

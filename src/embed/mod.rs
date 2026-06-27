@@ -22,12 +22,23 @@
 //! [`search::is_vector_supported`] returns `false` and the search strategy
 //! degrades to BM25-only. If the embedding service is unreachable, indexing
 //! continues without embeddings (SubTask 16.4).
+//!
+//! # trait-kit integration (Task 2.12)
+//!
+//! When the `embed` feature is enabled, [`client::EmbedClient`] is the
+//! capability trait stored in [`Kit`](crate::kit::Kit) under
+//! [`EmbedKey`](crate::kit::EmbedKey). The concrete impl
+//! ([`module::EmbedCapability`]) wraps the existing [`OpenAIEmbedClient`] so
+//! the unified Kit can hand a pre-configured embedder to `search_cmd` instead
+//! of having the CLI construct clients ad-hoc.
 
 pub mod client;
+pub mod module;
 pub mod search;
 pub mod storage;
 
 pub use client::{EmbedClient, MockEmbedClient, OpenAIEmbedClient};
+pub use module::{EmbedConfig, EmbedModule, EmbedModuleBuilder};
 pub use search::{
     Bm25Strategy, HybridStrategy, SearchStrategy, SearchStrategyType, SemanticStrategy,
 };

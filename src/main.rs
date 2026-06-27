@@ -3,14 +3,18 @@
 
 //! CodeNexus binary entry point.
 //!
-//! Parses CLI arguments via [`clap`] and dispatches to the matching handler
-//! in [`codenexus::cli`]. Errors are printed to stderr and the process exits
+//! Parses CLI arguments via [`clap`], builds a unified [`Kit`] from the
+//! command's `--db` path, and dispatches to the matching handler in
+//! [`codenexus::cli`]. Errors are printed to stderr and the process exits
 //! with the PRD §4.1.6 exit code.
+
+use std::path::PathBuf;
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-use codenexus::cli::{Cli, Command};
+use codenexus::cli::{Cli, CliError, Command};
+use codenexus::kit::{build_kit, KitBootstrapConfig};
 
 /// Initialize the global `tracing` subscriber.
 ///
@@ -29,22 +33,66 @@ pub fn init_logging() {
         .init();
 }
 
+/// Dispatches `command` to the matching `*_cmd::run` handler.
+///
+/// Builds a [`Kit`](codenexus::kit::Kit) from the command's `--db` path
+/// (and `--debounce-ms` for the daemon command) before dispatching, so each
+/// handler resolves its capabilities via `kit.require::<Key>()?` instead of
+/// constructing subsystems ad-hoc.
+///
+/// # Errors
+///
+/// Returns [`CliError::Kit`] if the Kit cannot be built (e.g. invalid db
+/// path). Each handler may return its own [`CliError`] variants.
+fn run_command(command: Command) -> Result<(), CliError> {
+    match command {
+        Command::Index(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::index_cmd::run(&kit, &args)
+        }
+        Command::Query(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::query_cmd::run(&kit, &args)
+        }
+        Command::Trace(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::trace_cmd::run(&kit, &args)
+        }
+        Command::Impact(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::impact_cmd::run(&kit, &args)
+        }
+        Command::Search(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::search_cmd::run(&kit, &args)
+        }
+        #[cfg(feature = "daemon")]
+        Command::Daemon(args) => {
+            // Preserve CLI `--debounce-ms` by injecting it into the Kit config.
+            let config = KitBootstrapConfig::new(PathBuf::from(&args.db))
+                .with_debounce_ms(args.debounce_ms);
+            let kit = build_kit(&config)?;
+            codenexus::cli::daemon_cmd::run(&kit, &args)
+        }
+        Command::Status(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::status_cmd::run(&kit, &args)
+        }
+        Command::List(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::list_cmd::run(&kit, &args)
+        }
+        Command::Clean(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::clean_cmd::run(&kit, &args)
+        }
+    }
+}
+
 fn main() {
     init_logging();
     let cli = Cli::parse();
-    let result = match cli.command {
-        Command::Index(args) => codenexus::cli::index_cmd::run(&args),
-        Command::Query(args) => codenexus::cli::query_cmd::run(&args),
-        Command::Trace(args) => codenexus::cli::trace_cmd::run(&args),
-        Command::Impact(args) => codenexus::cli::impact_cmd::run(&args),
-        Command::Search(args) => codenexus::cli::search_cmd::run(&args),
-        #[cfg(feature = "daemon")]
-        Command::Daemon(args) => codenexus::cli::daemon_cmd::run(&args),
-        Command::Status(args) => codenexus::cli::status_cmd::run(&args),
-        Command::List(args) => codenexus::cli::list_cmd::run(&args),
-        Command::Clean(args) => codenexus::cli::clean_cmd::run(&args),
-    };
-    match result {
+    match run_command(cli.command) {
         Ok(()) => std::process::exit(0),
         Err(e) => {
             eprintln!("Error: {e}");

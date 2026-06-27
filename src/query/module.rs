@@ -222,6 +222,34 @@ impl QueryEngine for QueryCapability {
             .expect("query lock poisoned")
             .fulltext_search(text, project, limit)
     }
+
+    /// Hybrid BM25 + semantic search (Task 2.14 / AC-SEARCH-002).
+    ///
+    /// Locks the inner [`QueryFacade`], borrows its [`StorageConnection`] via
+    /// [`QueryFacade::connection`], and constructs a [`HybridStrategy`] with
+    /// the supplied `embed_client`. The strategy internally falls back to
+    /// BM25-only on Windows or when the `Embedding` table is missing, so this
+    /// method never fails due to vector unavailability — only on genuine
+    /// storage errors.
+    ///
+    /// [`HybridStrategy`]: crate::embed::HybridStrategy
+    /// [`StorageConnection`]: crate::storage::StorageConnection
+    #[cfg(feature = "embed")]
+    fn semantic_search(
+        &self,
+        text: &str,
+        project: Option<&str>,
+        limit: usize,
+        embed_client: &dyn crate::embed::EmbedClient,
+    ) -> Result<Vec<SearchResult>, QueryError> {
+        use crate::embed::{HybridStrategy, SearchStrategy};
+
+        let facade = self.inner.lock().expect("query lock poisoned");
+        let strategy = HybridStrategy::new(facade.connection(), embed_client);
+        strategy
+            .search(text, project, limit)
+            .map_err(|e| QueryError::Storage(StorageError::Query(e.to_string())))
+    }
 }
 
 // ---------------------------------------------------------------------------

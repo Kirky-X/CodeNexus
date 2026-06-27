@@ -24,6 +24,7 @@ use tracing::error;
 #[cfg(feature = "daemon")]
 use crate::daemon::DaemonError;
 use crate::index::IndexError;
+use crate::kit::KitError;
 use crate::query::QueryError;
 use crate::storage::StorageError;
 use crate::trace::TraceError;
@@ -72,6 +73,13 @@ pub enum CliError {
     /// A project was not found in the database.
     #[error("project not found: {0}")]
     ProjectNotFound(String),
+
+    /// A Kit registry error (missing capability, build failure, etc.).
+    ///
+    /// Maps to exit code 3 (system error) — Kit failures are programming /
+    /// bootstrap bugs, not user input or database issues.
+    #[error("kit error: {0}")]
+    Kit(#[from] KitError),
 }
 
 impl CliError {
@@ -97,6 +105,8 @@ impl CliError {
             // Daemon errors (notify watcher / IO) are system errors → exit 3.
             #[cfg(feature = "daemon")]
             CliError::Daemon(_) => 3,
+            // Kit errors (missing capability, build failure) → exit 3.
+            CliError::Kit(_) => 3,
         };
         error!(
             event = "error",

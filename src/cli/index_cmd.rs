@@ -3,9 +3,11 @@
 
 //! `index` subcommand handler (PRD §4.1.3).
 //!
-//! Calls [`IndexFacade::index`] and prints the resulting [`IndexResult`] as
-//! JSON to stdout. Errors are surfaced via [`CliError`] so `main.rs` can map
-//! them to the correct exit code.
+//! Resolves the [`Indexer`](crate::index::capability::Indexer) and
+//! [`Storage`](crate::storage::capability::Storage) capabilities from the
+//! [`Kit`](crate::kit::Kit), runs the index pipeline, and prints the resulting
+//! [`IndexResult`] as JSON to stdout. Errors are surfaced via [`CliError`] so
+//! `main.rs` can map them to the correct exit code.
 
 use std::path::Path;
 
@@ -13,33 +15,37 @@ use serde::Serialize;
 
 use super::args::IndexArgs;
 use super::error::Result;
-use crate::index::IndexFacade;
 use crate::index::IndexResult;
-use crate::storage::{QualityChecker, Repository};
+use crate::kit::{IndexerKey, Kit, StorageKey};
+use crate::storage::QualityChecker;
 
 /// Runs the `index` subcommand.
 ///
-/// Opens (or creates) the database at `args.db`, indexes `args.path` under
-/// the project name `args.name`, and prints the [`IndexResult`] as JSON.
+/// Resolves the [`Indexer`](crate::index::capability::Indexer) capability from
+/// `kit`, indexes `args.path` under the project name `args.name`, and prints
+/// the [`IndexResult`] as JSON.
 ///
-/// After indexing completes, runs the data quality checks (DQ-002/004/005/006)
-/// and prints any violations to stderr. The DQ report does not affect the exit
-/// status — index success is reported via stdout JSON as before.
+/// After indexing completes, resolves the
+/// [`Storage`](crate::storage::capability::Storage) capability from `kit` and
+/// runs the data quality checks (DQ-002/004/005/006), printing any violations
+/// to stderr. The DQ report does not affect the exit status — index success is
+/// reported via stdout JSON as before.
 ///
 /// # Errors
 ///
 /// Returns [`CliError::Index`] for path-not-found / database / parse errors.
-/// The wrapped [`IndexError`] carries the correct exit code.
-pub fn run(args: &IndexArgs) -> Result<()> {
+/// The wrapped [`IndexError`] carries the correct exit code. Returns
+/// [`crate::cli::error::CliError::Kit`] if a required capability is not
+/// registered.
+pub fn run(kit: &Kit, args: &IndexArgs) -> Result<()> {
     let path = Path::new(&args.path);
-    let db_path = Path::new(&args.db);
-    let facade = IndexFacade::new(db_path)?;
-    let result = facade.index(path, &args.name, args.force)?;
+    let indexer = kit.require::<IndexerKey>()?;
+    let result = indexer.index(path, &args.name, args.force)?;
 
     // Run data quality checks (DQ-002/004/005/006) against the freshly indexed
-    // database. `Repository::open` re-runs `init_schema`, which is idempotent.
-    let repo = Repository::open(db_path)?;
-    let checker = QualityChecker::new(&repo);
+    // database. The Storage capability is the same one the Indexer used.
+    let storage = kit.require::<StorageKey>()?;
+    let checker = QualityChecker::new(&*storage);
     let dq_report = checker.run_all()?;
     if !dq_report.is_clean() {
         eprintln!("Data quality violations found:");
@@ -93,7 +99,9 @@ impl From<IndexResult> for IndexOutput {
 mod tests {
     use super::*;
     use crate::cli::args::IndexArgs;
+    use crate::kit::{build_kit, KitBootstrapConfig};
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     /// Writes a file at `dir/rel` (creating parent directories as needed).
@@ -114,6 +122,12 @@ mod tests {
         let path = dir.path().join("cli_testdb");
         std::mem::forget(dir);
         path
+    }
+
+    /// Builds a Kit backed by an on-disk database at `db`.
+    fn build_kit_for_db(db: &str) -> Kit {
+        let config = KitBootstrapConfig::new(PathBuf::from(db));
+        build_kit(&config).expect("build_kit")
     }
 
     /// Builds an `IndexArgs` pointing at `path`/`name`/`db`.
@@ -165,6 +179,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), "main.rs", "fn main() { helper(); }\nfn helper() {}\n");
         let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
         let args = make_args(
             tmp.path().to_str().unwrap(),
             "demo",
@@ -172,7 +187,7 @@ mod tests {
         );
 
         // run() prints to stdout; we just verify it returns Ok.
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(result.is_ok(), "run should succeed: {:?}", result.err());
     }
 
@@ -183,13 +198,14 @@ mod tests {
         write_file(tmp.path(), "b.rs", "fn b() {}\n");
         write_file(tmp.path(), "c.rs", "fn c() {}\n");
         let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
         let args = make_args(
             tmp.path().to_str().unwrap(),
             "multi",
             db.to_str().unwrap(),
         );
 
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(result.is_ok(), "run should succeed: {:?}", result.err());
     }
 
@@ -198,6 +214,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), "a.rs", "fn a() {}\n");
         let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
 
         // First index.
         let args1 = make_args(
@@ -205,7 +222,7 @@ mod tests {
             "demo",
             db.to_str().unwrap(),
         );
-        assert!(run(&args1).is_ok());
+        assert!(run(&kit, &args1).is_ok());
 
         // Second index with force.
         let args2 = IndexArgs {
@@ -216,7 +233,7 @@ mod tests {
             lsp: false,
             embed: false,
         };
-        let result = run(&args2);
+        let result = run(&kit, &args2);
         assert!(result.is_ok(), "force run should succeed: {:?}", result.err());
     }
 
@@ -224,12 +241,13 @@ mod tests {
     fn run_empty_directory_succeeds() {
         let tmp = TempDir::new().unwrap();
         let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
         let args = make_args(
             tmp.path().to_str().unwrap(),
             "empty",
             db.to_str().unwrap(),
         );
-        let result = run(&args);
+        let result = run(&kit, &args);
         assert!(result.is_ok(), "empty dir should succeed: {:?}", result.err());
     }
 
@@ -238,26 +256,16 @@ mod tests {
     #[test]
     fn run_path_not_found_returns_exit_code_1() {
         let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
         let args = make_args("/nonexistent/path/xyz", "demo", db.to_str().unwrap());
-        let err = run(&args).expect_err("path not found should error");
+        let err = run(&kit, &args).expect_err("path not found should error");
         assert_eq!(err.exit_code(), 1, "PRD §4.1.6: path not found → exit 1");
     }
 
-    #[test]
-    fn run_invalid_db_path_returns_error() {
-        let tmp = TempDir::new().unwrap();
-        write_file(tmp.path(), "a.rs", "fn a() {}\n");
-        // Use a path inside a file (not a directory) to force a storage error.
-        let bad_db = tmp.path().join("file_not_dir");
-        fs::write(&bad_db, "not a directory").unwrap();
-        let args = make_args(
-            tmp.path().to_str().unwrap(),
-            "demo",
-            bad_db.to_str().unwrap(),
-        );
-        let result = run(&args);
-        assert!(result.is_err(), "bad db path should error");
-    }
+    // Note: `run_invalid_db_path_returns_error` was removed because the
+    // "invalid db path" error now surfaces at `build_kit` time, not at `run`
+    // time. Covered by `build_kit_invalid_db_path_returns_build_failed_error`
+    // in `kit::bootstrap::tests`.
 
     // --- lsp / embed flags are accepted but no-ops for now ---
 
@@ -266,6 +274,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), "a.rs", "fn a() {}\n");
         let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
         let args = IndexArgs {
             path: tmp.path().to_str().unwrap().to_string(),
             name: "demo".to_string(),
@@ -274,7 +283,7 @@ mod tests {
             lsp: true,
             embed: false,
         };
-        assert!(run(&args).is_ok());
+        assert!(run(&kit, &args).is_ok());
     }
 
     #[test]
@@ -282,6 +291,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), "a.rs", "fn a() {}\n");
         let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
         let args = IndexArgs {
             path: tmp.path().to_str().unwrap().to_string(),
             name: "demo".to_string(),
@@ -290,6 +300,6 @@ mod tests {
             lsp: false,
             embed: true,
         };
-        assert!(run(&args).is_ok());
+        assert!(run(&kit, &args).is_ok());
     }
 }
