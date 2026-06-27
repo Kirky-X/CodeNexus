@@ -19,7 +19,14 @@
 //! - [`cross_lang`]: [`FfiResolver`] for resolving FfiCalls edges across
 //!   languages (ADD §7.4, BR-TRACE-008).
 
+pub mod capability;
+pub mod module;
 pub mod calls;
+// Cross-language FFI resolution is only meaningful when both C and Rust are
+// compiled in (Rust extern "C" -> C definitions). Gate the entire module so
+// leaner builds (e.g. `--features minimal`) don't reference unavailable
+// `Language::C` / `Language::Rust` variants (unified-architecture Phase 1).
+#[cfg(all(feature = "lang-c", feature = "lang-rust"))]
 pub mod cross_lang;
 pub mod dataflow;
 pub mod error;
@@ -28,12 +35,14 @@ pub mod scope;
 pub mod symbol_table;
 
 pub use calls::CallResolver;
+#[cfg(all(feature = "lang-c", feature = "lang-rust"))]
 pub use cross_lang::{FfiResolver, MatchStrategy};
 pub use dataflow::DataFlowResolver;
 pub use error::{ResolveError, Result};
 pub use fqn::FqnGenerator;
 pub use scope::{Scope, ScopeChain};
 pub use symbol_table::{FileSymbolTable, ProjectSymbolTable, SymbolEntry};
+pub use module::{ResolverModule, ResolverModuleBuilder};
 
 use crate::ir::ExtractResult;
 use crate::model::{Edge, Graph};
@@ -108,8 +117,13 @@ pub fn resolve_all(
     edges.extend(call_resolver.resolve_calls(results, graph));
     let df_resolver = DataFlowResolver::new(symbol_table, project);
     edges.extend(df_resolver.resolve_dataflows(results, graph));
-    let ffi_resolver = FfiResolver::new(symbol_table, project);
-    edges.extend(ffi_resolver.resolve_ffi(results, graph));
+    // FFI resolution requires both C and Rust to be compiled in (gated with
+    // the `cross_lang` module). Skipped in leaner builds.
+    #[cfg(all(feature = "lang-c", feature = "lang-rust"))]
+    {
+        let ffi_resolver = FfiResolver::new(symbol_table, project);
+        edges.extend(ffi_resolver.resolve_ffi(results, graph));
+    }
     edges
 }
 
@@ -209,6 +223,7 @@ mod tests {
         assert_eq!(entry.qn, "proj.include.header.h.MY_DEFINE");
     }
 
+    #[cfg(feature = "lang-fortran")]
     #[test]
     fn build_fortran_module_fqn_via_generate_for_module() {
         // Direct test of generate_for_module since build_symbol_table uses

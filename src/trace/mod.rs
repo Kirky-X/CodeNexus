@@ -15,6 +15,7 @@
 //! - [`impact`]: [`ImpactAnalyzer`] for reverse-BFS impact analysis (P1).
 //! - [`facade`]: [`TraceFacade`] and [`TraceType`] (Facade pattern).
 
+pub mod capability;
 pub mod call_graph;
 pub mod data_flow;
 pub mod error;

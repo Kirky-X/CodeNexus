@@ -573,12 +573,15 @@ fn extern_language(node: Node, source: &str) -> Language {
                             let text = node_text(grandchild, source).unwrap_or("");
                             let cleaned = text.trim_matches('"').to_ascii_lowercase();
                             if cleaned == "c" {
+                                #[cfg(feature = "lang-c")]
                                 return Language::C;
                             }
                             if cleaned == "fortran" {
+                                #[cfg(feature = "lang-fortran")]
                                 return Language::Fortran;
                             }
                             if cleaned == "python" {
+                                #[cfg(feature = "lang-python")]
                                 return Language::Python;
                             }
                         }
@@ -594,19 +597,25 @@ fn extern_language(node: Node, source: &str) -> Language {
                 let text = node_text(child, source).unwrap_or("");
                 let cleaned = text.trim_matches('"').to_ascii_lowercase();
                 if cleaned == "c" {
+                    #[cfg(feature = "lang-c")]
                     return Language::C;
                 }
                 if cleaned == "fortran" {
+                    #[cfg(feature = "lang-fortran")]
                     return Language::Fortran;
                 }
                 if cleaned == "python" {
+                    #[cfg(feature = "lang-python")]
                     return Language::Python;
                 }
             }
         }
     }
-    // Default to C for unknown extern blocks.
-    Language::C
+    // Default to the first compiled-in language for unknown extern blocks
+    // (previously defaulted to C; now uses Language::all()[0] to avoid
+    // referencing Language::C when lang-c is disabled). The FFI resolver
+    // (gated on both lang-c and lang-rust) will simply fail to match these.
+    Language::all()[0]
 }
 
 // ---------------------------------------------------------------------------

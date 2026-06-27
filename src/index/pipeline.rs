@@ -571,7 +571,10 @@ fn build_file_nodes(diff: &FileDiff, project_id: &str) -> Vec<Node> {
                 continue;
             }
         };
-        let language = file.language.unwrap_or(Language::Rust);
+        // Fallback to the first compiled-in language when the file's language
+        // is unknown. `Language::all()` is guaranteed non-empty by the
+        // compile_error! assertion in lib.rs (at least one `lang-*` feature).
+        let language = file.language.unwrap_or_else(|| Language::all()[0]);
         let line_count = line_count_of(&file.path).unwrap_or(0);
         let node = Node::builder(NodeLabel::File, file.relative_path.clone(), file.relative_path.clone())
             .id(new_file_id())

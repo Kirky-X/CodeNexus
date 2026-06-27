@@ -177,6 +177,13 @@ fn extract_type(param: &str, language: Language) -> String {
         Language::C => extract_c_type(param),
         // For languages without a known parameter syntax, return the param
         // as-is. TypeMapper will canonicalize it to None (unknown).
+        // Only included when other languages may be compiled in; with just
+        // `lang-c` + `lang-rust` the match above is already exhaustive.
+        #[cfg(any(
+            feature = "lang-fortran",
+            feature = "lang-python",
+            feature = "lang-typescript"
+        ))]
         _ => param.trim().to_string(),
     }
 }

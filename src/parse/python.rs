@@ -22,6 +22,10 @@
 //! - `import_statement` / `import_from_statement` → [`ImportInfo`]
 //! - `call` → [`CallInfo`]
 //! - `assignment` → [`AssignInfo`]
+//! - `assignment` left → [`WriteInfo`] (BR-TRACE-006)
+//! - `augmented_assignment` left → [`WriteInfo`] (BR-TRACE-006, `+=` etc.)
+//! - `for_statement` left → [`WriteInfo`] (loop variable, BR-TRACE-006)
+//! - expression-position `identifier` → [`ReadInfo`] (BR-TRACE-005)
 //!
 //! # Known limitations
 //!
@@ -38,7 +42,7 @@ use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
 use crate::resolve::FqnGenerator;
 
 use super::error::{ParseError, Result};
-use super::extractor::{AssignInfo, CallInfo, ExtractResult, Extractor, ImportInfo};
+use super::extractor::{AssignInfo, CallInfo, ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo};
 use super::parser_factory::ParserFactory;
 use super::dedupe_qn;
 
@@ -68,9 +72,6 @@ impl Extractor for PythonExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::Python);
-        // TODO: implement reads/writes extraction for Python (BR-TRACE-005/006).
-        // `result.reads` and `result.writes` are left empty for now; downstream
-        // resolution gracefully produces no Reads/Writes edges when absent.
         let mut parser = ParserFactory::create_parser(Language::Python)?;
         let tree = parser
             .parse(source, None)
@@ -149,7 +150,102 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             visit_children(node, source, ctx, result);
         }
         "assignment" => {
+            // extract_assignment preserves the existing AssignInfo extraction.
+            // BR-TRACE-006: a simple-identifier left-hand side is a write,
+            // captured only inside a function body. Tuple/list destructuring
+            // is skipped (only simple identifiers are captured). The right-hand
+            // expression's identifiers are captured as reads by the
+            // `identifier` branch during `visit_children`.
             extract_assignment(node, source, result);
+            if let Some(func) = ctx.current_func {
+                if let Some(left) = node.child_by_field_name("left") {
+                    if let Some(name) = identifier_text(left, source) {
+                        result.writes.push(WriteInfo {
+                            writer_qn: Some(make_qn(
+                                ctx.file_path,
+                                func,
+                                ctx.project,
+                                ctx.current_parent,
+                            )),
+                            var_name: name,
+                            line: node.start_position().row as u32 + 1,
+                        });
+                    }
+                }
+            }
+            visit_children(node, source, ctx, result);
+        }
+        "augmented_assignment" => {
+            // `x += 1` writes the left-hand identifier (BR-TRACE-006). Per the
+            // simplified spec, only the write is recorded (the implicit read of
+            // `x` is intentionally not double-counted). Only simple-identifier
+            // left sides inside a function body are captured. The right-hand
+            // expression's identifiers are still captured as reads by the
+            // `identifier` branch during `visit_children`.
+            if let Some(func) = ctx.current_func {
+                if let Some(left) = node.child_by_field_name("left") {
+                    if let Some(name) = identifier_text(left, source) {
+                        result.writes.push(WriteInfo {
+                            writer_qn: Some(make_qn(
+                                ctx.file_path,
+                                func,
+                                ctx.project,
+                                ctx.current_parent,
+                            )),
+                            var_name: name,
+                            line: node.start_position().row as u32 + 1,
+                        });
+                    }
+                }
+            }
+            visit_children(node, source, ctx, result);
+        }
+        "for_statement" => {
+            // `for i in iterable:` writes the loop variable (BR-TRACE-006).
+            // Only a simple-identifier left side is captured; tuple unpacking
+            // (`for k, v in ...`) is skipped. The iterable's identifiers are
+            // captured as reads by the `identifier` branch during
+            // `visit_children`.
+            if let Some(func) = ctx.current_func {
+                if let Some(left) = node.child_by_field_name("left") {
+                    if let Some(name) = identifier_text(left, source) {
+                        result.writes.push(WriteInfo {
+                            writer_qn: Some(make_qn(
+                                ctx.file_path,
+                                func,
+                                ctx.project,
+                                ctx.current_parent,
+                            )),
+                            var_name: name,
+                            line: node.start_position().row as u32 + 1,
+                        });
+                    }
+                }
+            }
+            visit_children(node, source, ctx, result);
+        }
+        "identifier" => {
+            // A bare identifier in an expression position is a variable read
+            // (BR-TRACE-005). Name-defining positions (assignment left,
+            // augmented-assignment left, for-loop left, def/class name, callee,
+            // attribute name, import name) are excluded by
+            // `is_python_read_position`.
+            if let Some(func) = ctx.current_func {
+                if is_python_read_position(node) {
+                    if let Some(name) = node_text(node, source).map(String::from) {
+                        result.reads.push(ReadInfo {
+                            reader_qn: Some(make_qn(
+                                ctx.file_path,
+                                func,
+                                ctx.project,
+                                ctx.current_parent,
+                            )),
+                            var_name: name,
+                            line: node.start_position().row as u32 + 1,
+                        });
+                    }
+                }
+            }
             visit_children(node, source, ctx, result);
         }
         _ => {
@@ -574,6 +670,66 @@ fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
     node.utf8_text(source.as_bytes()).ok()
 }
 
+/// Returns the text of `node` if it is a plain `identifier`, else `None`.
+fn identifier_text(node: Node, source: &str) -> Option<String> {
+    if node.kind() == "identifier" {
+        node_text(node, source).map(String::from)
+    } else {
+        None
+    }
+}
+
+/// Returns `true` if a bare `identifier` node sits in a read (expression)
+/// position rather than a name-defining position (assignment left,
+/// augmented-assignment left, for-loop left, def/class name, callee, attribute
+/// name, import name). Mirrors the c.rs convention (design.md Decision 4, Open
+/// Question 2): only the direct parent kind is inspected, plus field checks for
+/// the assignment left / call function / attribute object cases.
+fn is_python_read_position(node: Node) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    match parent.kind() {
+        // Identifiers directly inside these expression containers are reads.
+        "binary_operator"
+        | "boolean_operator"
+        | "comparison_operator"
+        | "parenthesized_expression"
+        | "return_statement"
+        | "argument_list"
+        | "subscript"
+        | "conditional_expression"
+        | "list"
+        | "tuple"
+        | "set"
+        | "keyword_argument" => true,
+        // `foo(x)` -> the callee `foo` (function field) is not a read;
+        // arguments are handled above via the `argument_list` parent.
+        "call" => !is_at_field(node, parent, "function"),
+        // `x = y` -> `y` (the right side) is a read; `x` (the left) is not.
+        "assignment" => !is_at_field(node, parent, "left"),
+        // `obj.attr` -> `obj` (the object) is a read; the attribute name is
+        // an `identifier` reached here, but it is the defined name, not a
+        // read — exclude it explicitly.
+        "attribute" => is_at_field(node, parent, "object"),
+        // Assignment left, augmented-assignment left, for-loop left, def/class
+        // name, parameters, import name — name-defining positions, not reads.
+        "augmented_assignment" | "for_statement" | "function_definition"
+        | "class_definition" | "parameters" | "lambda" | "import_statement"
+        | "import_from_statement" | "dotted_name" | "aliased_import"
+        | "wildcard_import" => false,
+        _ => false,
+    }
+}
+
+/// Returns `true` if `node` occupies the given named `field` of `parent`,
+/// compared by byte range.
+fn is_at_field(node: Node, parent: Node, field: &str) -> bool {
+    parent
+        .child_by_field_name(field)
+        .is_some_and(|f| f.byte_range() == node.byte_range())
+}
+
 fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> String {
     FqnGenerator::generate(project, file_path, name, Language::Python, parent)
 }
@@ -994,6 +1150,122 @@ class Foo(metaclass=Meta):
             funcs.len(),
             1,
             "function inside try-block at module scope should be indexed (P2-5)"
+        );
+    }
+
+    #[test]
+    fn read_in_function_has_dotted_fqn_reader_qn() {
+        // Spec: Python 函数内 identifier 读取提取 (BR-TRACE-005)。
+        let src = "def caller(x):\n    y = x + 1\n    return y\n";
+        let ext = PythonExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.py", "proj")
+            .expect("extraction should succeed");
+        let read = result
+            .reads
+            .iter()
+            .find(|r| r.var_name == "x")
+            .expect("should find a read of x");
+        assert_eq!(
+            read.reader_qn.as_deref(),
+            Some("proj.tmp.demo.main.py.caller"),
+            "reader_qn should be the dotted FQN of the enclosing function"
+        );
+        let caller_node = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "caller")
+            .expect("should find caller function node");
+        assert_eq!(
+            read.reader_qn.as_deref(),
+            Some(caller_node.qualified_name.as_str()),
+            "reader_qn must match the caller function node id"
+        );
+    }
+
+    #[test]
+    fn write_in_function_assignment_has_dotted_fqn_writer_qn() {
+        // Spec: Python 函数内 assignment 写入提取 (BR-TRACE-006)。
+        let src = "def caller(x):\n    y = x + 1\n    return y\n";
+        let ext = PythonExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.py", "proj")
+            .expect("extraction should succeed");
+        let write = result
+            .writes
+            .iter()
+            .find(|w| w.var_name == "y")
+            .expect("should find a write of y");
+        assert_eq!(
+            write.writer_qn.as_deref(),
+            Some("proj.tmp.demo.main.py.caller"),
+            "writer_qn should be the dotted FQN of the enclosing function"
+        );
+        let caller_node = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "caller")
+            .expect("should find caller function node");
+        assert_eq!(
+            write.writer_qn.as_deref(),
+            Some(caller_node.qualified_name.as_str()),
+            "writer_qn must match the caller function node id"
+        );
+    }
+
+    #[test]
+    fn augmented_assignment_is_write() {
+        // Spec: Python augmented_assignment 写入提取 (BR-TRACE-006)。
+        let src = "def caller(x):\n    y = x\n    y += 1\n    return y\n";
+        let ext = PythonExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.py", "proj")
+            .expect("extraction should succeed");
+        let y_writes: Vec<_> = result
+            .writes
+            .iter()
+            .filter(|w| w.var_name == "y")
+            .collect();
+        assert!(
+            y_writes.len() >= 2,
+            "y should be written at least twice (assignment + augmented): {:?}",
+            y_writes
+        );
+        for w in y_writes {
+            assert_eq!(
+                w.writer_qn.as_deref(),
+                Some("proj.tmp.demo.main.py.caller"),
+                "writer_qn should be the dotted FQN of the enclosing function"
+            );
+        }
+    }
+
+    #[test]
+    fn for_loop_target_is_write() {
+        // Spec: Python for_statement 循环变量写入提取 (BR-TRACE-006)。
+        let src = "def looper():\n    s = 0\n    for i in range(10):\n        s = s + i\n    return s\n";
+        let ext = PythonExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.py", "proj")
+            .expect("extraction should succeed");
+        let i_write = result
+            .writes
+            .iter()
+            .find(|w| w.var_name == "i")
+            .expect("should find a write of loop variable i");
+        assert_eq!(
+            i_write.writer_qn.as_deref(),
+            Some("proj.tmp.demo.main.py.looper"),
+            "loop variable writer_qn should be the dotted FQN of the enclosing function"
+        );
+        // The loop body `s = s + i` also writes s and reads s, i.
+        assert!(
+            result.writes.iter().any(|w| w.var_name == "s"),
+            "loop body assignment should write s"
+        );
+        assert!(
+            result.reads.iter().any(|r| r.var_name == "i"),
+            "loop body should read i"
         );
     }
 }

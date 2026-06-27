@@ -21,23 +21,33 @@
 //!   and intermediate record types ([`ImportInfo`], [`CallInfo`],
 //!   [`AssignInfo`], [`ExternInfo`], [`ReadInfo`], [`WriteInfo`]).
 //! - [`c`], [`rust_extractor`], [`fortran`], [`python`], [`typescript`]:
-//!   language-specific [`Extractor`] implementations.
+//!   language-specific [`Extractor`] implementations. Each is gated by its
+//!   `lang-*` Cargo feature (unified-architecture Phase 1); only the
+//!   languages compiled into the current build are available.
 //! - [`dispatcher`]: [`get_extractor`] dispatches by [`Language`].
 //! - [`parallel`]: [`parallel_parse`] parses batches of files in parallel with
 //!   rayon (ADR-010), collecting failures without aborting the batch.
 
+pub mod capability;
+#[cfg(feature = "lang-c")]
 pub mod c;
 pub mod dispatcher;
 pub mod error;
 pub mod extractor;
+#[cfg(feature = "lang-fortran")]
 pub mod fortran;
+pub mod module;
 pub mod parallel;
 pub mod parser_factory;
 pub mod parser_pool;
+#[cfg(feature = "lang-python")]
 pub mod python;
+#[cfg(feature = "lang-rust")]
 pub mod rust_extractor;
+#[cfg(feature = "lang-typescript")]
 pub mod typescript;
 
+#[cfg(feature = "lang-c")]
 pub use c::CExtractor;
 pub use dispatcher::get_extractor;
 pub use error::{ParseError, Result};
@@ -45,12 +55,20 @@ pub use extractor::{
     extract_file, AssignInfo, CallInfo, ExternInfo, ExtractResult, Extractor, ImportInfo,
     ReadInfo, WriteInfo,
 };
+#[cfg(feature = "lang-fortran")]
 pub use fortran::FortranExtractor;
 pub use parallel::{parallel_parse, parse_single, ParallelParseResult};
+pub use module::{
+    ExtractorRegistryModule, ExtractorRegistryModuleBuilder, ParserFactoryModule,
+    ParserFactoryModuleBuilder,
+};
 pub use parser_factory::ParserFactory;
 pub use parser_pool::{with_thread_pool, ParserGuard, ParserPool};
+#[cfg(feature = "lang-python")]
 pub use python::PythonExtractor;
+#[cfg(feature = "lang-rust")]
 pub use rust_extractor::RustExtractor;
+#[cfg(feature = "lang-typescript")]
 pub use typescript::TypeScriptExtractor;
 
 // ---------------------------------------------------------------------------

@@ -8,11 +8,16 @@
 
 use crate::model::Language;
 
-use super::c::CExtractor;
 use super::extractor::Extractor;
+#[cfg(feature = "lang-c")]
+use super::c::CExtractor;
+#[cfg(feature = "lang-fortran")]
 use super::fortran::FortranExtractor;
+#[cfg(feature = "lang-python")]
 use super::python::PythonExtractor;
+#[cfg(feature = "lang-rust")]
 use super::rust_extractor::RustExtractor;
+#[cfg(feature = "lang-typescript")]
 use super::typescript::TypeScriptExtractor;
 
 /// Returns a boxed [`Extractor`] for the given [`Language`].
@@ -23,10 +28,15 @@ use super::typescript::TypeScriptExtractor;
 #[must_use]
 pub fn get_extractor(language: Language) -> Box<dyn Extractor> {
     match language {
+        #[cfg(feature = "lang-c")]
         Language::C => Box::new(CExtractor::new()),
+        #[cfg(feature = "lang-rust")]
         Language::Rust => Box::new(RustExtractor::new()),
+        #[cfg(feature = "lang-fortran")]
         Language::Fortran => Box::new(FortranExtractor::new()),
+        #[cfg(feature = "lang-python")]
         Language::Python => Box::new(PythonExtractor::new()),
+        #[cfg(feature = "lang-typescript")]
         Language::TypeScript => Box::new(TypeScriptExtractor::new()),
     }
 }
@@ -35,30 +45,35 @@ pub fn get_extractor(language: Language) -> Box<dyn Extractor> {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "lang-c")]
     #[test]
     fn get_extractor_returns_c_for_c() {
         let ext = get_extractor(Language::C);
         assert_eq!(ext.language(), Language::C);
     }
 
+    #[cfg(feature = "lang-rust")]
     #[test]
     fn get_extractor_returns_rust_for_rust() {
         let ext = get_extractor(Language::Rust);
         assert_eq!(ext.language(), Language::Rust);
     }
 
+    #[cfg(feature = "lang-fortran")]
     #[test]
     fn get_extractor_returns_fortran_for_fortran() {
         let ext = get_extractor(Language::Fortran);
         assert_eq!(ext.language(), Language::Fortran);
     }
 
+    #[cfg(feature = "lang-python")]
     #[test]
     fn get_extractor_returns_python_for_python() {
         let ext = get_extractor(Language::Python);
         assert_eq!(ext.language(), Language::Python);
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn get_extractor_returns_typescript_for_typescript() {
         let ext = get_extractor(Language::TypeScript);
@@ -77,6 +92,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "lang-rust")]
     #[test]
     fn get_extractor_can_extract_simple_source() {
         let ext = get_extractor(Language::Rust);
@@ -85,6 +101,7 @@ mod tests {
         assert!(!result.nodes.is_empty(), "should extract at least one node");
     }
 
+    #[cfg(feature = "lang-c")]
     #[test]
     fn get_extractor_returns_send_sync_trait_object() {
         fn assert_send_sync<T: Send + Sync>(_: &T) {}
@@ -94,12 +111,13 @@ mod tests {
 
     #[test]
     fn get_extractor_can_be_used_in_collection() {
-        let extractors: Vec<Box<dyn Extractor>> = Language::all()
+        let all_langs = Language::all();
+        let extractors: Vec<Box<dyn Extractor>> = all_langs
             .iter()
             .map(|&lang| get_extractor(lang))
             .collect();
-        assert_eq!(extractors.len(), 5);
-        for (i, lang) in Language::all().iter().enumerate() {
+        assert_eq!(extractors.len(), all_langs.len());
+        for (i, lang) in all_langs.iter().enumerate() {
             assert_eq!(extractors[i].language(), *lang);
         }
     }

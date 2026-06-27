@@ -8,25 +8,44 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// The 5 source languages supported by CodeNexus (DDD §7.3).
+/// The source languages supported by CodeNexus (DDD §7.3).
+///
+/// Each variant is gated by a `lang-*` Cargo feature (unified-architecture
+/// Phase 1). The set of available variants therefore depends on the enabled
+/// features; use [`Language::all()`] to enumerate the variants compiled into
+/// the current build rather than assuming a fixed set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Language {
+    #[cfg(feature = "lang-c")]
     C,
+    #[cfg(feature = "lang-rust")]
     Rust,
+    #[cfg(feature = "lang-fortran")]
     Fortran,
+    #[cfg(feature = "lang-python")]
     Python,
+    #[cfg(feature = "lang-typescript")]
     TypeScript,
 }
 
 impl Language {
-    /// Returns all variants in declaration order.
+    /// Returns all variants compiled into this build, in declaration order.
+    ///
+    /// The length varies with the enabled `lang-*` features (1–5 variants),
+    /// so callers must not assume a fixed length. Returns a `Vec<Language>`
+    /// rather than a fixed-size array for this reason.
     #[must_use]
-    pub const fn all() -> [Language; 5] {
-        [
+    pub fn all() -> Vec<Language> {
+        vec![
+            #[cfg(feature = "lang-c")]
             Language::C,
+            #[cfg(feature = "lang-rust")]
             Language::Rust,
+            #[cfg(feature = "lang-fortran")]
             Language::Fortran,
+            #[cfg(feature = "lang-python")]
             Language::Python,
+            #[cfg(feature = "lang-typescript")]
             Language::TypeScript,
         ]
     }
@@ -35,24 +54,35 @@ impl Language {
     #[must_use]
     pub fn extensions(self) -> &'static [&'static str] {
         match self {
+            #[cfg(feature = "lang-c")]
             Language::C => &["c", "h"],
+            #[cfg(feature = "lang-rust")]
             Language::Rust => &["rs"],
+            #[cfg(feature = "lang-fortran")]
             Language::Fortran => &["f90", "f", "f95"],
+            #[cfg(feature = "lang-python")]
             Language::Python => &["py"],
+            #[cfg(feature = "lang-typescript")]
             Language::TypeScript => &["ts", "tsx"],
         }
     }
 
     /// Maps a file extension (without the leading dot) to a language.
     ///
-    /// Returns `None` for unsupported extensions.
+    /// Returns `None` for unsupported extensions (or extensions whose language
+    /// is not compiled into this build).
     #[must_use]
     pub fn from_extension(ext: &str) -> Option<Language> {
         match ext.to_lowercase().as_str() {
+            #[cfg(feature = "lang-c")]
             "c" | "h" => Some(Language::C),
+            #[cfg(feature = "lang-rust")]
             "rs" => Some(Language::Rust),
+            #[cfg(feature = "lang-fortran")]
             "f90" | "f" | "f95" => Some(Language::Fortran),
+            #[cfg(feature = "lang-python")]
             "py" => Some(Language::Python),
+            #[cfg(feature = "lang-typescript")]
             "ts" | "tsx" => Some(Language::TypeScript),
             _ => None,
         }
@@ -62,10 +92,15 @@ impl Language {
 impl fmt::Display for Language {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(feature = "lang-c")]
             Language::C => f.write_str("c"),
+            #[cfg(feature = "lang-rust")]
             Language::Rust => f.write_str("rust"),
+            #[cfg(feature = "lang-fortran")]
             Language::Fortran => f.write_str("fortran"),
+            #[cfg(feature = "lang-python")]
             Language::Python => f.write_str("python"),
+            #[cfg(feature = "lang-typescript")]
             Language::TypeScript => f.write_str("typescript"),
         }
     }
@@ -76,10 +111,15 @@ impl FromStr for Language {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
+            #[cfg(feature = "lang-c")]
             "c" => Ok(Language::C),
+            #[cfg(feature = "lang-rust")]
             "rust" => Ok(Language::Rust),
+            #[cfg(feature = "lang-fortran")]
             "fortran" => Ok(Language::Fortran),
+            #[cfg(feature = "lang-python")]
             "python" => Ok(Language::Python),
+            #[cfg(feature = "lang-typescript")]
             "typescript" => Ok(Language::TypeScript),
             other => Err(format!("unknown Language: {other}")),
         }
@@ -90,11 +130,20 @@ impl FromStr for Language {
 mod tests {
     use super::*;
 
+    // NOTE: the number of variants depends on the enabled `lang-*` features,
+    // so we only assert non-emptiness (at least one language is compiled in).
     #[test]
-    fn has_five_variants() {
-        assert_eq!(Language::all().len(), 5);
+    fn has_at_least_one_variant() {
+        assert!(!Language::all().is_empty());
     }
 
+    #[cfg(all(
+        feature = "lang-c",
+        feature = "lang-rust",
+        feature = "lang-fortran",
+        feature = "lang-python",
+        feature = "lang-typescript"
+    ))]
     #[test]
     fn display_outputs_lowercase() {
         assert_eq!(Language::C.to_string(), "c");
@@ -104,6 +153,13 @@ mod tests {
         assert_eq!(Language::TypeScript.to_string(), "typescript");
     }
 
+    #[cfg(all(
+        feature = "lang-c",
+        feature = "lang-rust",
+        feature = "lang-fortran",
+        feature = "lang-python",
+        feature = "lang-typescript"
+    ))]
     #[test]
     fn from_str_parses_lowercase() {
         assert_eq!("c".parse::<Language>().unwrap(), Language::C);
@@ -116,6 +172,13 @@ mod tests {
         );
     }
 
+    #[cfg(all(
+        feature = "lang-c",
+        feature = "lang-rust",
+        feature = "lang-fortran",
+        feature = "lang-python",
+        feature = "lang-typescript"
+    ))]
     #[test]
     fn from_str_parses_uppercase() {
         assert_eq!("C".parse::<Language>().unwrap(), Language::C);
@@ -128,6 +191,7 @@ mod tests {
         );
     }
 
+    #[cfg(all(feature = "lang-rust", feature = "lang-fortran", feature = "lang-typescript"))]
     #[test]
     fn from_str_parses_mixed_case() {
         assert_eq!("Rust".parse::<Language>().unwrap(), Language::Rust);
@@ -152,6 +216,13 @@ mod tests {
         assert!(err.contains("java"));
     }
 
+    #[cfg(all(
+        feature = "lang-c",
+        feature = "lang-rust",
+        feature = "lang-fortran",
+        feature = "lang-python",
+        feature = "lang-typescript"
+    ))]
     #[test]
     fn extensions_returns_supported_extensions() {
         assert_eq!(Language::C.extensions(), &["c", "h"]);
@@ -161,17 +232,20 @@ mod tests {
         assert_eq!(Language::TypeScript.extensions(), &["ts", "tsx"]);
     }
 
+    #[cfg(feature = "lang-c")]
     #[test]
     fn from_extension_maps_c_extensions() {
         assert_eq!(Language::from_extension("c"), Some(Language::C));
         assert_eq!(Language::from_extension("h"), Some(Language::C));
     }
 
+    #[cfg(feature = "lang-rust")]
     #[test]
     fn from_extension_maps_rust_extension() {
         assert_eq!(Language::from_extension("rs"), Some(Language::Rust));
     }
 
+    #[cfg(feature = "lang-fortran")]
     #[test]
     fn from_extension_maps_fortran_extensions() {
         assert_eq!(Language::from_extension("f90"), Some(Language::Fortran));
@@ -183,6 +257,12 @@ mod tests {
         assert_eq!(Language::from_extension("F95"), Some(Language::Fortran));
     }
 
+    #[cfg(all(
+        feature = "lang-c",
+        feature = "lang-rust",
+        feature = "lang-python",
+        feature = "lang-typescript"
+    ))]
     #[test]
     fn from_extension_is_case_insensitive() {
         assert_eq!(Language::from_extension("RS"), Some(Language::Rust));
@@ -193,11 +273,13 @@ mod tests {
         assert_eq!(Language::from_extension("H"), Some(Language::C));
     }
 
+    #[cfg(feature = "lang-python")]
     #[test]
     fn from_extension_maps_python_extension() {
         assert_eq!(Language::from_extension("py"), Some(Language::Python));
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn from_extension_maps_typescript_extensions() {
         assert_eq!(Language::from_extension("ts"), Some(Language::TypeScript));
@@ -244,6 +326,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "lang-rust")]
     #[test]
     fn is_copy() {
         let lang = Language::Rust;
