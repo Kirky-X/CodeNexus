@@ -18,6 +18,9 @@
 //! - `use_statement` → [`ImportInfo`]
 //! - `subroutine_call` / `call_statement` → [`CallInfo`]
 //! - `use iso_c_binding` → [`ExternInfo`] (FFI detection)
+//! - `assignment_statement` left → [`WriteInfo`] (BR-TRACE-006)
+//! - `do_loop` loop variable → [`WriteInfo`] (BR-TRACE-006)
+//! - expression-position `identifier` → [`ReadInfo`] (BR-TRACE-005)
 
 use tree_sitter::Node;
 
@@ -25,7 +28,7 @@ use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
 use crate::resolve::FqnGenerator;
 
 use super::error::{ParseError, Result};
-use super::extractor::{CallInfo, ExternInfo, ExtractResult, Extractor, ImportInfo};
+use super::extractor::{CallInfo, ExternInfo, ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo};
 use super::parser_factory::ParserFactory;
 use super::dedupe_qn;
 
@@ -55,9 +58,6 @@ impl Extractor for FortranExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::Fortran);
-        // TODO: implement reads/writes extraction for Fortran (BR-TRACE-005/006).
-        // `result.reads` and `result.writes` are left empty for now; downstream
-        // resolution gracefully produces no Reads/Writes edges when absent.
         let mut parser = ParserFactory::create_parser(Language::Fortran)?;
         let tree = parser
             .parse(source, None)
@@ -153,6 +153,77 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "subroutine_call" | "call_statement" => {
             extract_call(node, source, ctx, result);
+            visit_children(node, source, ctx, result);
+        }
+        "assignment_statement" => {
+            // `x = expr` writes the left-hand identifier (BR-TRACE-006). Only
+            // simple identifier targets are captured; array/struct writes are
+            // ignored. Only attribute a write when inside a function body
+            // (current_func is Some). The right-hand expression's identifiers
+            // are captured as reads by the `identifier` branch during
+            // `visit_children`.
+            if let Some(func) = ctx.current_func {
+                if let Some(left) = node.child_by_field_name("left") {
+                    if let Some(name) = identifier_text(left, source) {
+                        result.writes.push(WriteInfo {
+                            writer_qn: Some(make_qn(
+                                ctx.file_path,
+                                func,
+                                ctx.project,
+                                ctx.current_parent,
+                            )),
+                            var_name: name,
+                            line: node.start_position().row as u32 + 1,
+                        });
+                    }
+                }
+            }
+            visit_children(node, source, ctx, result);
+        }
+        "do_loop" => {
+            // `do i = 1, 10 ... end do` writes the loop variable (BR-TRACE-006).
+            // The loop variable is the first `identifier` inside the
+            // `loop_control_expression` child of the `do_statement`. `do while`
+            // loops have no loop variable and are skipped here. The loop body's
+            // identifiers are captured as reads by the `identifier` branch
+            // during `visit_children`.
+            if let Some(func) = ctx.current_func {
+                if let Some(loop_var) = do_loop_variable(node, source) {
+                    result.writes.push(WriteInfo {
+                        writer_qn: Some(make_qn(
+                            ctx.file_path,
+                            func,
+                            ctx.project,
+                            ctx.current_parent,
+                        )),
+                        var_name: loop_var,
+                        line: node.start_position().row as u32 + 1,
+                    });
+                }
+            }
+            visit_children(node, source, ctx, result);
+        }
+        "identifier" => {
+            // A bare identifier in an expression position is a variable read
+            // (BR-TRACE-005). Name-defining positions (assignment left, loop
+            // control variable, declaration declarator, callee) are excluded by
+            // `is_fortran_read_position`.
+            if let Some(func) = ctx.current_func {
+                if is_fortran_read_position(node) {
+                    if let Some(name) = node_text(node, source).map(String::from) {
+                        result.reads.push(ReadInfo {
+                            reader_qn: Some(make_qn(
+                                ctx.file_path,
+                                func,
+                                ctx.project,
+                                ctx.current_parent,
+                            )),
+                            var_name: name,
+                            line: node.start_position().row as u32 + 1,
+                        });
+                    }
+                }
+            }
             visit_children(node, source, ctx, result);
         }
         _ => {
@@ -452,6 +523,73 @@ fn statement_name(node: Node, statement_kind: &str, source: &str) -> Option<Stri
 
 fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
     node.utf8_text(source.as_bytes()).ok()
+}
+
+/// Returns the text of `node` if it is a plain `identifier`, else `None`.
+fn identifier_text(node: Node, source: &str) -> Option<String> {
+    if node.kind() == "identifier" {
+        node_text(node, source).map(String::from)
+    } else {
+        None
+    }
+}
+
+/// Returns `true` if a bare `identifier` node sits in a read (expression)
+/// position rather than a name-defining position (assignment left, loop control
+/// variable, declaration declarator, callee). Mirrors the c.rs convention
+/// (design.md Decision 4, Open Question 2): only the direct parent kind is
+/// inspected, plus a field check for the assignment left / call function cases.
+fn is_fortran_read_position(node: Node) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    match parent.kind() {
+        // Identifiers directly inside these expression containers are reads.
+        "math_expression"
+        | "relational_expression"
+        | "parenthesized_expression"
+        | "return_statement"
+        | "argument_list"
+        | "subscript_expression"
+        | "conditional_expression" => true,
+        // `call callee(arg)` -> the callee `identifier` (direct child of
+        // subroutine_call / call_statement) is not a read; arguments are
+        // handled above via the `argument_list` parent.
+        "subroutine_call" | "call_statement" => false,
+        // `x = y` -> `y` (the right side) is a read; `x` (the left) is not.
+        "assignment_statement" => !is_at_field(node, parent, "left"),
+        // `obj%field` -> the field identifier is not a read (it is a name, not
+        // a value). The object side is a read.
+        "field_expression" => false,
+        // Loop control variable, declaration declarator, module/use name etc.
+        // are name-defining, not reads.
+        _ => false,
+    }
+}
+
+/// Returns `true` if `node` occupies the given named `field` of `parent`,
+/// compared by byte range.
+fn is_at_field(node: Node, parent: Node, field: &str) -> bool {
+    parent
+        .child_by_field_name(field)
+        .is_some_and(|f| f.byte_range() == node.byte_range())
+}
+
+/// Returns the loop variable name of a `do_loop` node, if any. The loop
+/// variable is the first `identifier` child of the `loop_control_expression`
+/// (which is a child of the `do_statement`). `do while` loops return `None`.
+fn do_loop_variable(node: Node, source: &str) -> Option<String> {
+    // Find the do_statement child, then its loop_control_expression.
+    let do_statement = find_child(node, source, "do_statement")?;
+    let loop_control = find_child(do_statement, source, "loop_control_expression")?;
+    for i in 0..loop_control.named_child_count() as u32 {
+        if let Some(child) = loop_control.named_child(i) {
+            if child.kind() == "identifier" {
+                return node_text(child, source).map(String::from);
+            }
+        }
+    }
+    None
 }
 
 fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> String {
@@ -858,6 +996,115 @@ end function"#;
             resets[1].qualified_name.contains("#L"),
             "duplicate should be disambiguated with #L: {}",
             resets[1].qualified_name
+        );
+    }
+
+    #[test]
+    fn read_in_subroutine_has_dotted_fqn_reader_qn() {
+        // Spec: Fortran 子程序内 identifier 读取提取 (BR-TRACE-005)。
+        let src = "subroutine caller(x)\n    integer, intent(in) :: x\n    integer :: y\n    y = x + 1\nend subroutine\n";
+        let ext = FortranExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.f90", "proj")
+            .expect("extraction should succeed");
+        let read = result
+            .reads
+            .iter()
+            .find(|r| r.var_name == "x")
+            .expect("should find a read of x");
+        assert_eq!(
+            read.reader_qn.as_deref(),
+            Some("proj.tmp.demo.main.f90.caller"),
+            "reader_qn should be the dotted FQN of the enclosing subroutine"
+        );
+        let caller_node = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "caller")
+            .expect("should find caller subroutine node");
+        assert_eq!(
+            read.reader_qn.as_deref(),
+            Some(caller_node.qualified_name.as_str()),
+            "reader_qn must match the caller subroutine node id"
+        );
+    }
+
+    #[test]
+    fn write_in_subroutine_assignment_has_dotted_fqn_writer_qn() {
+        // Spec: Fortran 子程序内 assignment_statement 写入提取 (BR-TRACE-006)。
+        let src = "subroutine caller(x)\n    integer, intent(in) :: x\n    integer :: y\n    y = x + 1\nend subroutine\n";
+        let ext = FortranExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.f90", "proj")
+            .expect("extraction should succeed");
+        let write = result
+            .writes
+            .iter()
+            .find(|w| w.var_name == "y")
+            .expect("should find a write of y");
+        assert_eq!(
+            write.writer_qn.as_deref(),
+            Some("proj.tmp.demo.main.f90.caller"),
+            "writer_qn should be the dotted FQN of the enclosing subroutine"
+        );
+        let caller_node = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "caller")
+            .expect("should find caller subroutine node");
+        assert_eq!(
+            write.writer_qn.as_deref(),
+            Some(caller_node.qualified_name.as_str()),
+            "writer_qn must match the caller subroutine node id"
+        );
+    }
+
+    #[test]
+    fn do_loop_variable_is_captured_as_write() {
+        // Spec: Fortran do_loop 循环变量写入提取 (BR-TRACE-006)。
+        let src = "subroutine looper()\n    integer :: i, s\n    do i = 1, 10\n        s = s + i\n    end do\nend subroutine\n";
+        let ext = FortranExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.f90", "proj")
+            .expect("extraction should succeed");
+        let i_write = result
+            .writes
+            .iter()
+            .find(|w| w.var_name == "i")
+            .expect("should find a write of loop variable i");
+        assert_eq!(
+            i_write.writer_qn.as_deref(),
+            Some("proj.tmp.demo.main.f90.looper"),
+            "loop variable writer_qn should be the dotted FQN of the enclosing subroutine"
+        );
+        // The loop body `s = s + i` also writes s and reads s, i.
+        assert!(
+            result.writes.iter().any(|w| w.var_name == "s"),
+            "loop body assignment should write s"
+        );
+        assert!(
+            result.reads.iter().any(|r| r.var_name == "i"),
+            "loop body should read i"
+        );
+    }
+
+    #[test]
+    fn module_level_declaration_no_reads_or_writes() {
+        // Spec: Fortran 模块级声明不生成读写记录 (current_func 为 None)。
+        let src = "module m\n    integer :: g\nend module\n";
+        let ext = FortranExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.f90", "proj")
+            .expect("extraction should succeed");
+        assert!(
+            result.reads.is_empty(),
+            "module-level declaration must not produce ReadInfo: {:?}",
+            result.reads
+        );
+        assert!(
+            result.writes.is_empty(),
+            "module-level declaration must not produce WriteInfo: {:?}",
+            result.writes
         );
     }
 }

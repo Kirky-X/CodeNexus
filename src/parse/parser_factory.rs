@@ -31,10 +31,15 @@ impl ParserFactory {
     /// [`TsLanguage`] via `.into()` (i.e. [`TsLanguage::new`]).
     pub fn create_language(lang: Language) -> Result<TsLanguage> {
         let ts_lang = match lang {
+            #[cfg(feature = "lang-c")]
             Language::C => tree_sitter_c::LANGUAGE.into(),
+            #[cfg(feature = "lang-rust")]
             Language::Rust => tree_sitter_rust::LANGUAGE.into(),
+            #[cfg(feature = "lang-fortran")]
             Language::Fortran => tree_sitter_fortran::LANGUAGE.into(),
+            #[cfg(feature = "lang-python")]
             Language::Python => tree_sitter_python::LANGUAGE.into(),
+            #[cfg(feature = "lang-typescript")]
             Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         };
         Ok(ts_lang)
@@ -60,30 +65,35 @@ impl ParserFactory {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "lang-c")]
     #[test]
     fn create_language_c_succeeds() {
         let lang = ParserFactory::create_language(Language::C);
         assert!(lang.is_ok(), "C language should be supported");
     }
 
+    #[cfg(feature = "lang-rust")]
     #[test]
     fn create_language_rust_succeeds() {
         let lang = ParserFactory::create_language(Language::Rust);
         assert!(lang.is_ok(), "Rust language should be supported");
     }
 
+    #[cfg(feature = "lang-fortran")]
     #[test]
     fn create_language_fortran_succeeds() {
         let lang = ParserFactory::create_language(Language::Fortran);
         assert!(lang.is_ok(), "Fortran language should be supported");
     }
 
+    #[cfg(feature = "lang-python")]
     #[test]
     fn create_language_python_succeeds() {
         let lang = ParserFactory::create_language(Language::Python);
         assert!(lang.is_ok(), "Python language should be supported");
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn create_language_typescript_succeeds() {
         let lang = ParserFactory::create_language(Language::TypeScript);
@@ -98,30 +108,35 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "lang-c")]
     #[test]
     fn create_parser_c_succeeds() {
         let parser = ParserFactory::create_parser(Language::C);
         assert!(parser.is_ok(), "C parser should be creatable");
     }
 
+    #[cfg(feature = "lang-rust")]
     #[test]
     fn create_parser_rust_succeeds() {
         let parser = ParserFactory::create_parser(Language::Rust);
         assert!(parser.is_ok(), "Rust parser should be creatable");
     }
 
+    #[cfg(feature = "lang-fortran")]
     #[test]
     fn create_parser_fortran_succeeds() {
         let parser = ParserFactory::create_parser(Language::Fortran);
         assert!(parser.is_ok(), "Fortran parser should be creatable");
     }
 
+    #[cfg(feature = "lang-python")]
     #[test]
     fn create_parser_python_succeeds() {
         let parser = ParserFactory::create_parser(Language::Python);
         assert!(parser.is_ok(), "Python parser should be creatable");
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn create_parser_typescript_succeeds() {
         let parser = ParserFactory::create_parser(Language::TypeScript);
@@ -136,6 +151,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "lang-rust")]
     #[test]
     fn create_parser_returns_usable_parser() {
         let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
@@ -145,6 +161,7 @@ mod tests {
 
     // --- Parsing smoke tests for each language ---
 
+    #[cfg(feature = "lang-rust")]
     #[test]
     fn parse_simple_rust_file() {
         let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
@@ -157,6 +174,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "lang-c")]
     #[test]
     fn parse_simple_c_file() {
         let mut parser = ParserFactory::create_parser(Language::C).unwrap();
@@ -169,6 +187,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "lang-python")]
     #[test]
     fn parse_simple_python_file() {
         let mut parser = ParserFactory::create_parser(Language::Python).unwrap();
@@ -181,6 +200,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "lang-fortran")]
     #[test]
     fn parse_simple_fortran_file() {
         let mut parser = ParserFactory::create_parser(Language::Fortran).unwrap();
@@ -193,6 +213,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn parse_simple_typescript_file() {
         let mut parser = ParserFactory::create_parser(Language::TypeScript).unwrap();
@@ -221,6 +242,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "lang-rust")]
     #[test]
     fn create_language_returns_distinct_objects() {
         // Each call to create_language should produce a valid, independent
@@ -231,6 +253,7 @@ mod tests {
         assert_eq!(lang1.name(), lang2.name());
     }
 
+    #[cfg(feature = "lang-c")]
     #[test]
     fn create_parser_produces_independent_parsers() {
         let mut p1 = ParserFactory::create_parser(Language::C).unwrap();

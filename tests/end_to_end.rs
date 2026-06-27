@@ -574,3 +574,63 @@ fn index_emits_all_log_events() {
         "LOG-006: performance event should carry files_per_second field, got: {captured:?}"
     );
 }
+
+// --- BR-TRACE-005/006: Reads/Writes edges in graph (multi-language e2e) ---
+
+/// Verifies that indexing a multi-language repo produces READS and WRITES
+/// edges in the graph (BR-TRACE-005 / BR-TRACE-006). Each language fixture
+/// contains a function that reads a parameter and writes a local variable,
+/// so the resolver should emit at least one of each edge type.
+#[test]
+fn reads_writes_edges_exist_after_multilang_index() {
+    let tmp = TempDir::new().unwrap();
+    // Rust: `let y = x + 1;` reads x, writes y.
+    write_file(
+        tmp.path(),
+        "main.rs",
+        "fn caller(x: i32) -> i32 {\n    let y = x + 1;\n    y\n}\n",
+    );
+    // C: `int y = x + 1;` reads x, writes y (init_declarator).
+    write_file(
+        tmp.path(),
+        "main.c",
+        "int caller(int x) {\n    int y = x + 1;\n    return y;\n}\n",
+    );
+    // Python: `y = x + 1` reads x, writes y (assignment).
+    write_file(
+        tmp.path(),
+        "main.py",
+        "def caller(x):\n    y = x + 1\n    return y\n",
+    );
+    let db = fresh_db_path();
+
+    let facade = IndexFacade::new(&db).expect("IndexFacade::new");
+    facade.index(tmp.path(), "rw_e2e", false).expect("index");
+
+    let query = QueryFacade::new(&db).expect("QueryFacade::new");
+    // Fetch all CodeRelation rows and filter by type in Rust (robust against
+    // Cypher WHERE/count dialect differences across LadybugDB versions).
+    let result = query
+        .cypher("MATCH (r:CodeRelation) RETURN r.type AS type;")
+        .expect("cypher CodeRelation");
+
+    let reads_count = result
+        .rows
+        .iter()
+        .filter(|row| row.first().and_then(|v| v.as_str()) == Some("READS"))
+        .count();
+    let writes_count = result
+        .rows
+        .iter()
+        .filter(|row| row.first().and_then(|v| v.as_str()) == Some("WRITES"))
+        .count();
+
+    assert!(
+        reads_count > 0,
+        "graph should contain at least one READS edge (BR-TRACE-005), got {reads_count}"
+    );
+    assert!(
+        writes_count > 0,
+        "graph should contain at least one WRITES edge (BR-TRACE-006), got {writes_count}"
+    );
+}

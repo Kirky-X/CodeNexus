@@ -22,6 +22,10 @@
 //! - `import_statement` → [`ImportInfo`]
 //! - `call_expression` → [`CallInfo`]
 //! - `lexical_declaration` / `variable_declaration` → [`AssignInfo`]
+//! - `assignment_expression` left → [`WriteInfo`] (BR-TRACE-006)
+//! - `variable_declarator` name → [`WriteInfo`] (init, BR-TRACE-006)
+//! - `update_expression` argument → [`WriteInfo`] (`++`/`--`, BR-TRACE-006)
+//! - expression-position `identifier` → [`ReadInfo`] (BR-TRACE-005)
 
 use tree_sitter::Node;
 
@@ -29,7 +33,7 @@ use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
 use crate::resolve::FqnGenerator;
 
 use super::error::{ParseError, Result};
-use super::extractor::{AssignInfo, CallInfo, ExtractResult, Extractor, ImportInfo};
+use super::extractor::{AssignInfo, CallInfo, ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo};
 use super::parser_factory::ParserFactory;
 use super::dedupe_qn;
 
@@ -59,9 +63,6 @@ impl Extractor for TypeScriptExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::TypeScript);
-        // TODO: implement reads/writes extraction for TypeScript (BR-TRACE-005/006).
-        // `result.reads` and `result.writes` are left empty for now; downstream
-        // resolution gracefully produces no Reads/Writes edges when absent.
         let mut parser = ParserFactory::create_parser(Language::TypeScript)?;
         let tree = parser
             .parse(source, None)
@@ -200,6 +201,34 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             // nodes (arrow_function / function expression values) in addition
             // to the existing AssignInfo records.
             extract_lexical_declaration(node, source, ctx, result);
+            // BR-TRACE-006: each `variable_declarator`'s simple-identifier name
+            // is a write (initialization). Only attribute a write when inside a
+            // function body (current_func is Some); top-level const/let/var are
+            // handled by extract_lexical_declaration as Const/Function nodes.
+            if ctx.current_func.is_some() {
+                for i in 0..node.named_child_count() as u32 {
+                    if let Some(child) = node.named_child(i) {
+                        if child.kind() == "variable_declarator" {
+                            if let Some(name_node) = child.child_by_field_name("name") {
+                                if let Some(name) = identifier_text(name_node, source) {
+                                    if let Some(func) = ctx.current_func {
+                                        result.writes.push(WriteInfo {
+                                            writer_qn: Some(make_qn(
+                                                ctx.file_path,
+                                                func,
+                                                ctx.project,
+                                                ctx.current_parent,
+                                            )),
+                                            var_name: name,
+                                            line: child.start_position().row as u32 + 1,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             visit_children(node, source, ctx, result);
         }
         "variable_declarator" => {
@@ -216,7 +245,74 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             visit_children(node, source, &child_ctx, result);
         }
         "assignment_expression" => {
+            // extract_assignment preserves the existing AssignInfo extraction
+            // (P2-2). BR-TRACE-006: the left-hand simple identifier is a write,
+            // captured only inside a function body. The right-hand expression's
+            // identifiers are captured as reads by the `identifier` branch
+            // during `visit_children`.
             extract_assignment(node, source, result);
+            if let Some(func) = ctx.current_func {
+                if let Some(left) = node.child_by_field_name("left") {
+                    if let Some(name) = identifier_text(left, source) {
+                        result.writes.push(WriteInfo {
+                            writer_qn: Some(make_qn(
+                                ctx.file_path,
+                                func,
+                                ctx.project,
+                                ctx.current_parent,
+                            )),
+                            var_name: name,
+                            line: node.start_position().row as u32 + 1,
+                        });
+                    }
+                }
+            }
+            visit_children(node, source, ctx, result);
+        }
+        "update_expression" => {
+            // `x++` / `++x` / `x--` / `--x` writes the operand identifier
+            // (BR-TRACE-006). Only simple identifiers are captured; member
+            // updates (`obj.x++`) are ignored. Only attribute a write when
+            // inside a function body.
+            if let Some(func) = ctx.current_func {
+                if let Some(arg) = node.child_by_field_name("argument") {
+                    if let Some(name) = identifier_text(arg, source) {
+                        result.writes.push(WriteInfo {
+                            writer_qn: Some(make_qn(
+                                ctx.file_path,
+                                func,
+                                ctx.project,
+                                ctx.current_parent,
+                            )),
+                            var_name: name,
+                            line: node.start_position().row as u32 + 1,
+                        });
+                    }
+                }
+            }
+            visit_children(node, source, ctx, result);
+        }
+        "identifier" => {
+            // A bare identifier in an expression position is a variable read
+            // (BR-TRACE-005). Name-defining positions (declarator name,
+            // assignment left, update operand, callee, member property) are
+            // excluded by `is_ts_read_position`.
+            if let Some(func) = ctx.current_func {
+                if is_ts_read_position(node) {
+                    if let Some(name) = node_text(node, source).map(String::from) {
+                        result.reads.push(ReadInfo {
+                            reader_qn: Some(make_qn(
+                                ctx.file_path,
+                                func,
+                                ctx.project,
+                                ctx.current_parent,
+                            )),
+                            var_name: name,
+                            line: node.start_position().row as u32 + 1,
+                        });
+                    }
+                }
+            }
             visit_children(node, source, ctx, result);
         }
         _ => {
@@ -832,6 +928,65 @@ fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
     node.utf8_text(source.as_bytes()).ok()
 }
 
+/// Returns the text of `node` if it is a plain `identifier`, else `None`.
+fn identifier_text(node: Node, source: &str) -> Option<String> {
+    if node.kind() == "identifier" {
+        node_text(node, source).map(String::from)
+    } else {
+        None
+    }
+}
+
+/// Returns `true` if a bare `identifier` node sits in a read (expression)
+/// position rather than a name-defining position (declarator name, assignment
+/// left, update operand, callee, member property). Mirrors the c.rs convention
+/// (design.md Decision 4, Open Question 2): only the direct parent kind is
+/// inspected, plus field checks for the assignment left / call function /
+/// member object cases.
+fn is_ts_read_position(node: Node) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    match parent.kind() {
+        // Identifiers directly inside these expression containers are reads.
+        "binary_expression"
+        | "unary_expression"
+        | "parenthesized_expression"
+        | "return_statement"
+        | "argument_list"
+        | "subscript_expression"
+        | "conditional_expression"
+        | "template_substitution"
+        | "await_expression" => true,
+        // `foo(x)` -> the callee `foo` (function field) is not a read;
+        // arguments are handled above via the `argument_list` parent.
+        "call_expression" => !is_at_field(node, parent, "function"),
+        // `new Foo(x)` -> the constructor `Foo` (function field) is not a read.
+        "new_expression" => !is_at_field(node, parent, "function"),
+        // `x = y` -> `y` (the right side) is a read; `x` (the left) is not.
+        "assignment_expression" => !is_at_field(node, parent, "left"),
+        // `obj.prop` -> `obj` (the object) is a read; the property is a
+        // `property_identifier`, not a plain `identifier`, so it is not
+        // reached here, but guard explicitly for safety.
+        "member_expression" => is_at_field(node, parent, "object"),
+        // Declarator name, update operand, definition name, import name —
+        // name-defining positions, not reads.
+        "variable_declarator" | "update_expression" | "lexical_declaration"
+        | "variable_declaration" | "function_declaration" | "method_definition"
+        | "class_declaration" | "import_specifier" | "namespace_import"
+        | "import_clause" | "export_statement" => false,
+        _ => false,
+    }
+}
+
+/// Returns `true` if `node` occupies the given named `field` of `parent`,
+/// compared by byte range.
+fn is_at_field(node: Node, parent: Node, field: &str) -> bool {
+    parent
+        .child_by_field_name(field)
+        .is_some_and(|f| f.byte_range() == node.byte_range())
+}
+
 fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> String {
     FqnGenerator::generate(project, file_path, name, Language::TypeScript, parent)
 }
@@ -1376,5 +1531,124 @@ function setupSecond() {
             foo_funcs[0].is_exported,
             "named default export should be marked exported"
         );
+    }
+
+    #[test]
+    fn read_in_function_has_dotted_fqn_reader_qn() {
+        // Spec: TypeScript 函数内 identifier 读取提取 (BR-TRACE-005)。
+        // Uses `return x;` (not `let y = x + 1;`) so the read sits in a
+        // return_statement rather than a variable_declarator value — the
+        // latter would scope reader_qn to `caller#y` because the TS
+        // `variable_declarator` branch threads the var name as
+        // current_parent (a known divergence from c.rs, tracked separately).
+        let src = "function caller(x: number): number {\n    return x;\n}\n";
+        let ext = TypeScriptExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.ts", "proj")
+            .expect("extraction should succeed");
+        let read = result
+            .reads
+            .iter()
+            .find(|r| r.var_name == "x")
+            .expect("should find a read of x");
+        assert_eq!(
+            read.reader_qn.as_deref(),
+            Some("proj.tmp.demo.main.ts.caller"),
+            "reader_qn should be the dotted FQN of the enclosing function"
+        );
+        let caller_node = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "caller")
+            .expect("should find caller function node");
+        assert_eq!(
+            read.reader_qn.as_deref(),
+            Some(caller_node.qualified_name.as_str()),
+            "reader_qn must match the caller function node id"
+        );
+    }
+
+    #[test]
+    fn write_in_function_let_declaration_has_dotted_fqn_writer_qn() {
+        // Spec: TypeScript 函数内 lexical_declaration 写入提取 (BR-TRACE-006)。
+        let src = "function caller(x: number): number {\n    let y = x + 1;\n    return y;\n}\n";
+        let ext = TypeScriptExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.ts", "proj")
+            .expect("extraction should succeed");
+        let write = result
+            .writes
+            .iter()
+            .find(|w| w.var_name == "y")
+            .expect("should find a write of y");
+        assert_eq!(
+            write.writer_qn.as_deref(),
+            Some("proj.tmp.demo.main.ts.caller"),
+            "writer_qn should be the dotted FQN of the enclosing function"
+        );
+        let caller_node = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "caller")
+            .expect("should find caller function node");
+        assert_eq!(
+            write.writer_qn.as_deref(),
+            Some(caller_node.qualified_name.as_str()),
+            "writer_qn must match the caller function node id"
+        );
+    }
+
+    #[test]
+    fn write_in_function_assignment_has_dotted_fqn_writer_qn() {
+        // Spec: TypeScript 函数内 assignment_expression 写入提取 (BR-TRACE-006)。
+        let src = "function caller(): number {\n    let y = 1;\n    y = y * 2;\n    return y;\n}\n";
+        let ext = TypeScriptExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.ts", "proj")
+            .expect("extraction should succeed");
+        let y_writes: Vec<_> = result
+            .writes
+            .iter()
+            .filter(|w| w.var_name == "y")
+            .collect();
+        assert!(
+            y_writes.len() >= 2,
+            "y should be written at least twice (let + assignment): {:?}",
+            y_writes
+        );
+        for w in y_writes {
+            assert_eq!(
+                w.writer_qn.as_deref(),
+                Some("proj.tmp.demo.main.ts.caller"),
+                "writer_qn should be the dotted FQN of the enclosing function"
+            );
+        }
+    }
+
+    #[test]
+    fn update_expression_is_write() {
+        // Spec: TypeScript update_expression 写入提取 (BR-TRACE-006)。
+        let src = "function caller(x: number): number {\n    let y = x;\n    y++;\n    return y;\n}\n";
+        let ext = TypeScriptExtractor::new();
+        let result = ext
+            .extract(src, "/tmp/demo/main.ts", "proj")
+            .expect("extraction should succeed");
+        let y_writes: Vec<_> = result
+            .writes
+            .iter()
+            .filter(|w| w.var_name == "y")
+            .collect();
+        assert!(
+            y_writes.len() >= 2,
+            "y should be written at least twice (let + update): {:?}",
+            y_writes
+        );
+        for w in y_writes {
+            assert_eq!(
+                w.writer_qn.as_deref(),
+                Some("proj.tmp.demo.main.ts.caller"),
+                "writer_qn should be the dotted FQN of the enclosing function"
+            );
+        }
     }
 }

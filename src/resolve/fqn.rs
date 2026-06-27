@@ -66,6 +66,7 @@ impl FqnGenerator {
     /// It is retained for API symmetry with [`generate`] and to avoid a
     /// future breaking change if Fortran module-level disambiguation becomes
     /// necessary.
+    #[cfg(feature = "lang-fortran")]
     #[must_use]
     pub fn generate_for_module(
         project: &str,
@@ -146,11 +147,18 @@ impl FqnGenerator {
         // Python __init__.py: drop the "__init__.py" segment so the FQN uses
         // the package path directly. (ADR-001: full filename is retained, so
         // the comparison is against the full "__init__.py" not "__init__".)
+        // Gated by `lang-python` since it references `Language::Python`
+        // (unified-architecture Phase 1).
+        #[cfg(feature = "lang-python")]
         if language == Language::Python
             && segments.last().is_some_and(|s| s == "__init__.py")
         {
             segments.pop();
         }
+        // Suppress unused-variable warning when lang-python is disabled (the
+        // only use of `language` is the Python __init__.py check above).
+        #[cfg(not(feature = "lang-python"))]
+        let _ = language;
 
         segments
     }
@@ -246,6 +254,7 @@ mod tests {
 
     // --- Fortran module ---
 
+    #[cfg(feature = "lang-fortran")]
     #[test]
     fn fortran_module_entity() {
         let fqn = FqnGenerator::generate_for_module(
@@ -258,6 +267,7 @@ mod tests {
         assert_eq!(fqn, "proj.src.mod.f90.mymod.my_func");
     }
 
+    #[cfg(feature = "lang-fortran")]
     #[test]
     fn fortran_module_nested_path() {
         let fqn = FqnGenerator::generate_for_module(
@@ -270,6 +280,7 @@ mod tests {
         assert_eq!(fqn, "proj.src.physics.solver.f90.solver_mod.solve");
     }
 
+    #[cfg(feature = "lang-fortran")]
     #[test]
     fn fortran_module_with_backslash_path() {
         let fqn = FqnGenerator::generate_for_module(
@@ -434,6 +445,7 @@ mod tests {
         assert_eq!(fqn, "p.src.dir.e");
     }
 
+    #[cfg(feature = "lang-fortran")]
     #[test]
     fn fortran_generate_for_module_does_not_apply_init_rule() {
         // generate_for_module uses Fortran language; __init__ would not be

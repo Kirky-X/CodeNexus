@@ -21,6 +21,23 @@
 //! - [`cli`]: command-line interface.
 //! - [`query`]: query engine.
 
+// Compile-time assertion: at least one language feature must be enabled
+// (unified-architecture Phase 1). Without any `lang-*` feature the crate has
+// no tree-sitter grammars and cannot parse anything; fail fast with a clear
+// message instead of emitting downstream "variant not found" errors.
+#[cfg(not(any(
+    feature = "lang-c",
+    feature = "lang-rust",
+    feature = "lang-fortran",
+    feature = "lang-python",
+    feature = "lang-typescript",
+)))]
+compile_error!(
+    "CodeNexus requires at least one `lang-*` feature enabled. \
+     Use `--features lang-rust` (or lang-c/lang-fortran/lang-python/lang-typescript), \
+     or a preset like `--features minimal`/`core`/`full`."
+);
+
 pub mod cli;
 #[cfg(feature = "daemon")]
 pub mod daemon;

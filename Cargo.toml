@@ -24,29 +24,41 @@ path = "src/main.rs"
 # ============================================================================
 # FEATURES
 # ============================================================================
-# Default: daemon enabled (file-watching). Use --no-default-features to build
-# a leaner binary without the daemon (T8: feature-gated dependencies reduce
-# binary size).
+# Tiered language presets: `minimal` < `core` < `full`. Each `lang-*` feature
+# pulls in its tree-sitter grammar crate. Use `--no-default-features --features
+# minimal` (or core / a la carte `lang-*` combos) to build a leaner binary
+# (T8/unified-architecture Phase 1). `default = ["full"]` preserves the
+# historical all-languages + daemon behavior.
 [features]
-default = ["daemon"]
-# Vector embedding via HTTP (ADR-004). Pulls in reqwest.
+default = ["full"]
+# Tiered presets
+minimal = ["lang-rust"]
+core = ["lang-c", "lang-rust", "lang-python"]
+full = ["core", "lang-fortran", "lang-typescript", "daemon"]
+# Per-language features (each pulls its tree-sitter grammar)
+lang-c = ["dep:tree-sitter-c"]
+lang-rust = ["dep:tree-sitter-rust"]
+lang-fortran = ["dep:tree-sitter-fortran"]
+lang-python = ["dep:tree-sitter-python"]
+lang-typescript = ["dep:tree-sitter-typescript"]
+# Function features
 embed = ["dep:reqwest"]
-# File-watching daemon (ADR-013). Pulls in notify + notify-debouncer-full.
 daemon = ["dep:notify", "dep:notify-debouncer-full"]
-# LSP-enhanced extraction (reserved for future use, ADR-003).
 lsp = []
 
 [dependencies]
 # Graph database (ADR-002)
 lbug = "0.17.1"
 
-# tree-sitter parsing (ADR-003)
+# tree-sitter parsing (ADR-003). `tree-sitter` itself stays required (it is the
+# foundation for every grammar crate); the per-language grammar crates are
+# optional and gated by the `lang-*` features above.
 tree-sitter = "0.26"
-tree-sitter-c = "0.24"
-tree-sitter-rust = "0.24"
-tree-sitter-fortran = "0.6"
-tree-sitter-python = "0.25"
-tree-sitter-typescript = "0.23"
+tree-sitter-c = { version = "0.24", optional = true }
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-fortran = { version = "0.6", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
 
 # Parallel parsing (ADR-010)
 rayon = "1"
