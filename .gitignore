@@ -47,7 +47,12 @@ desktop.ini
 # Project documentation (auto-generated or sensitive)
 CLAUDE.md
 AGENTS.md
-docs/*.md
+# Sensitive/internal docs — keep out of git.
+# Other docs/*.md files ARE tracked (CONTRIBUTING, CHANGELOG, architecture, etc.).
+docs/PRD.md
+docs/ADD.md
+docs/DDD.md
+docs/TRD.md
 
 # Temporary files
 temp/
