@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 use std::fs;
 
 use codenexus::index::IndexFacade;

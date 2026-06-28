@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 use codenexus::model::NodeLabel;
 use codenexus_examples::{index_sample_code, open_query, setup};
 
