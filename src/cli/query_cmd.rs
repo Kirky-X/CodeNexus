@@ -11,6 +11,7 @@ use serde::Serialize;
 use super::args::QueryArgs;
 use super::error::Result;
 use crate::kit::{Kit, QueryKey};
+use crate::query::cypher_subset::validate_cypher_subset;
 use crate::query::QueryResult;
 
 /// Runs the `query` subcommand.
@@ -19,12 +20,20 @@ use crate::query::QueryResult;
 /// capability from `kit`, executes `args.cypher`, and prints the result as a
 /// JSON object with `columns` and `rows` fields.
 ///
+/// Per ADR-021, the user-supplied Cypher is validated against the supported
+/// subset at this CLI boundary before reaching the database; destructive
+/// clauses (`CREATE`/`DELETE`/`SET`/...) are rejected with
+/// [`crate::cli::error::CliError::Query`]. Validation is intentionally at the
+/// CLI layer (not at `QueryFacade`/`CypherExecutor`) so internal/test seeding
+/// via `CREATE` continues to work.
+///
 /// # Errors
 ///
 /// Returns [`crate::cli::error::CliError::Kit`] if the Query capability is
 /// not registered. Returns [`crate::cli::error::CliError::Query`] for invalid
 /// or failing Cypher.
 pub fn run(kit: &Kit, args: &QueryArgs) -> Result<()> {
+    validate_cypher_subset(&args.cypher)?;
     let query = kit.require::<QueryKey>()?;
     let result = query.cypher(&args.cypher)?;
     let output = QueryOutput::from(result);
@@ -176,6 +185,36 @@ mod tests {
         let args = make_args("MATCH (a RETURN a;", db.to_str().unwrap());
         let err = run(&kit, &args).expect_err("invalid cypher should error");
         assert_eq!(err.exit_code(), 2, "query errors → exit 2");
+    }
+
+    // --- ADR-021: CLI-boundary Cypher subset validation ---
+
+    #[test]
+    fn run_rejects_destructive_create() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed(&kit);
+        let args = make_args("CREATE (:Foo {id: 'x'})", db.to_str().unwrap());
+        let err = run(&kit, &args).expect_err("CREATE should be rejected");
+        assert_eq!(err.exit_code(), 2, "destructive Cypher → exit 2");
+        assert!(
+            err.to_string().contains("unsupported Cypher construct"),
+            "error should mention unsupported construct, got: {err}"
+        );
+    }
+
+    #[test]
+    fn run_rejects_destructive_delete() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed(&kit);
+        let args = make_args("MATCH (n) DELETE n", db.to_str().unwrap());
+        let err = run(&kit, &args).expect_err("DELETE should be rejected");
+        assert_eq!(err.exit_code(), 2, "destructive Cypher → exit 2");
+        assert!(
+            err.to_string().contains("unsupported Cypher construct"),
+            "error should mention unsupported construct, got: {err}"
+        );
     }
 
     #[test]
