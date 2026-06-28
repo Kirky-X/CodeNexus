@@ -327,6 +327,97 @@ impl Repository {
         Ok(())
     }
 
+    /// Batch version of [`delete_file_nodes`](Self::delete_file_nodes) that
+    /// removes nodes for multiple file paths in a single pass over the node
+    /// labels, instead of one pass per file.
+    ///
+    /// # Performance motivation
+    ///
+    /// `delete_file_nodes` runs ~21 Cypher queries per file (one SELECT +
+    /// one DELETE per label with a `filePath` column, plus one CodeRelation
+    /// DELETE). For an incremental re-index touching 500 of 1000 files that
+    /// is 10 500 queries — the dominant cost behind the
+    /// `incremental_500_of_1000` bench SLO violation (33 files/s vs the
+    /// PRD ≥100 files/s target).
+    ///
+    /// This batch variant collapses the per-file loop into a single
+    /// `WHERE n.filePath IN [...]` pass, keeping the query count fixed at
+    /// ~21 regardless of how many files are deleted.
+    ///
+    /// # Arguments
+    ///
+    /// * `paths` - Relative file paths whose nodes should be removed.
+    /// * `project` - Project id isolating the delete (BR-INDEX-004).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError`] if a non-"table missing" delete fails. Missing
+    /// tables are tolerated (same tolerance as `delete_file_nodes`) so the
+    /// batch path works on schemas that have not yet created every label
+    /// table.
+    pub fn delete_file_nodes_batch(&self, paths: &[String], project: &str) -> Result<()> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let proj_escaped = escape_cypher_string(project);
+        let path_list = paths
+            .iter()
+            .map(|p| format!("'{}'", escape_cypher_string(p)))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let mut orphan_ids: Vec<String> = Vec::new();
+        for label in NodeLabel::all() {
+            if label == NodeLabel::Project {
+                continue;
+            }
+            if !node_table_columns(label).contains(&"filePath") {
+                continue;
+            }
+            let table = escape_identifier(label.table_name());
+            let select = format!(
+                "MATCH (n:{table}) WHERE n.filePath IN [{path_list}] AND n.project = '{proj_escaped}' RETURN n.id AS id;"
+            );
+            if let Ok(rows) = self.conn.query(&select) {
+                for row in rows {
+                    if let Some(id) = row
+                        .first()
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                    {
+                        orphan_ids.push(id);
+                    }
+                }
+            }
+            let delete = format!(
+                "MATCH (n:{table}) WHERE n.filePath IN [{path_list}] AND n.project = '{proj_escaped}' DELETE n;"
+            );
+            if let Err(err) = self.conn.execute(&delete) {
+                let msg = err.to_string();
+                if !msg.contains("does not exist") && !msg.contains("no such") {
+                    return Err(err);
+                }
+            }
+        }
+        if !orphan_ids.is_empty() {
+            let id_list = orphan_ids
+                .iter()
+                .map(|id| format!("'{}'", escape_cypher_string(id)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let cypher = format!(
+                "MATCH (r:CodeRelation) WHERE r.source IN [{id_list}] OR r.target IN [{id_list}] DELETE r;"
+            );
+            if let Err(err) = self.conn.execute(&cypher) {
+                let msg = err.to_string();
+                if !msg.contains("does not exist") && !msg.contains("no such") {
+                    return Err(err);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Returns all functions in the given project.
     ///
     /// Functions are ordered by `qualifiedName` for deterministic output.
