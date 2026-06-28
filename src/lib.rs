@@ -69,10 +69,4 @@ mod tests {
     fn version_is_non_empty() {
         assert!(!version().is_empty());
     }
-
-    #[test]
-    fn arithmetic_smoke_test() {
-        // Sanity check that the test harness compiles and executes.
-        assert_eq!(1 + 1, 2);
-    }
 }

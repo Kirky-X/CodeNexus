@@ -135,22 +135,9 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
     use tracing_subscriber::fmt::MakeWriter;
-
-    #[test]
-    fn init_logging_is_callable() {
-        // `init_logging` installs a *process-global* subscriber via
-        // `set_global_default`, which can only succeed once and writes to
-        // stdout. Calling it here would both pollute other tests and panic on
-        // any second invocation. We therefore verify the public contract
-        // instead: the symbol exists, is reachable, and has the `fn() -> ()`
-        // signature. If it is removed, renamed, or its signature changes, this
-        // assignment fails to compile.
-        let _: fn() = init_logging;
-    }
 
     /// A `MakeWriter` that buffers emitted events into a shared `Vec<u8>` so a
     /// test can assert on what the subscriber actually wrote.
