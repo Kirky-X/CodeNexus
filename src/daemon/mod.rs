@@ -465,6 +465,49 @@ mod tests {
         }
     }
 
+    /// 带信号和停止句柄的计数观察者：第一次 `on_events` 回调后立即设置
+    /// daemon 的停止标志并发送信号。
+    ///
+    /// 用于 AC-DAEMON-002 严格断言：`run()` 在每次循环迭代顶部检查
+    /// `self.stop`，因此 observer 在第一次回调中同步设置停止标志后，daemon
+    /// 会在处理完当前批次后立即退出循环，防止 notify 后续批次触发更多回调。
+    /// 这是 design.md Decision 1 选项 A "显式等待索引完成事件,不依赖固定
+    /// sleep"的 std 实现。
+    struct SignalingCountingObserver {
+        call_count: Arc<Mutex<usize>>,
+        signal: Arc<Mutex<Option<std::sync::mpsc::Sender<()>>>>,
+        stop: Arc<AtomicBool>,
+    }
+
+    impl SignalingCountingObserver {
+        fn new(
+            stop: Arc<AtomicBool>,
+        ) -> (Self, Arc<Mutex<usize>>, std::sync::mpsc::Receiver<()>) {
+            let call_count = Arc::new(Mutex::new(0));
+            let (tx, rx) = std::sync::mpsc::channel::<()>();
+            let signal = Arc::new(Mutex::new(Some(tx)));
+            let observer = SignalingCountingObserver {
+                call_count: Arc::clone(&call_count),
+                signal,
+                stop,
+            };
+            (observer, call_count, rx)
+        }
+    }
+
+    impl EventObserver for SignalingCountingObserver {
+        fn on_events(&mut self, _events: &[DaemonEvent]) {
+            *self.call_count.lock().unwrap() += 1;
+            // 第一次回调后：同步设置停止标志（防止 run() 处理后续批次），
+            // 然后发送信号通知主线程。后续回调时 signal 已被 take()，发送
+            // 失败被忽略，stop 也已是 true（重复设置无害）。
+            if let Some(tx) = self.signal.lock().unwrap().take() {
+                self.stop.store(true, Ordering::SeqCst);
+                let _ = tx.send(());
+            }
+        }
+    }
+
     // --- DaemonEvent ---
 
     #[test]
@@ -1023,7 +1066,7 @@ mod tests {
         write_file(tmp.path(), "main.rs", "fn main() {}\n");
 
         let db_path = fresh_db_path();
-        let (observer, call_count, _events) = CountingObserver::new();
+        let (observer, _call_count, events) = CountingObserver::new();
 
         let mut daemon = Daemon::new(
             tmp.path(),
@@ -1047,56 +1090,99 @@ mod tests {
         let result = handle.join().expect("thread should join");
         assert!(result.is_ok());
 
-        // 观察者应被调用（因为修改了代码文件），但 events 中不应有 notes.txt。
-        // 这里主要验证非代码文件不产生事件。
-        let count = *call_count.lock().unwrap();
-        // 由于也修改了代码文件，count 应 >= 1，但 notes.txt 不应在事件中。
-        // 这个测试验证守护进程能正确运行并区分文件类型。
-        let _ = count; // 宽松断言：文件系统事件可能不稳定。
+        // AC-DAEMON-003：非代码文件（notes.txt）不应出现在事件中。
+        let received = events.lock().unwrap();
+        let notes_in_events = received.iter().any(|e| match e {
+            DaemonEvent::Create(p) | DaemonEvent::Modify(p) | DaemonEvent::Remove(p) => {
+                p.to_string_lossy().contains("notes.txt")
+            }
+        });
+        assert!(
+            !notes_in_events,
+            "AC-DAEMON-003：notes.txt 不应出现在事件中（非代码文件应被过滤），实际事件: {:?}",
+            received
+        );
     }
 
     #[test]
     fn daemon_merges_consecutive_changes() {
         // AC-DAEMON-002：连续修改多个文件，最后一次修改后防抖结束，仅触发一次。
+        // 严格断言 count == 1（spec：debounce_ms=2000，3 次变更 500ms 间隔）。
+        //
+        // 实现说明（design.md Decision 1 选项 A）：使用 SignalingCountingObserver
+        // 在第一次 on_events 回调中同步设置 daemon 的 stop 标志（通过共享的
+        // Arc<AtomicBool>），并经 mpsc 信号通知主线程。由于 run() 在每次循环
+        // 迭代顶部检查 self.stop，observer 设置 stop 后 daemon 会在处理完当前
+        // 批次后立即退出，防止 notify 后续批次触发更多回调。3 次变更全部落在
+        // 2000ms 防抖窗口内（500ms × 2 = 1000ms 跨度 < 2000ms 窗口），防抖
+        // 应合并为单次 on_events 调用。
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), "a.rs", "fn a() {}\n");
         write_file(tmp.path(), "b.rs", "fn b() {}\n");
 
         let db_path = fresh_db_path();
-        let (observer, call_count, _events) = CountingObserver::new();
-
         let mut daemon = Daemon::new(
             tmp.path(),
             "demo",
-            300,  // 防抖窗口 300ms
+            2000,  // spec：debounce_ms = 2000
             &db_path,
         );
+        let stop = daemon.stop_handle();
+        let (observer, call_count, signal_rx) = SignalingCountingObserver::new(Arc::clone(&stop));
         daemon.add_observer(Box::new(observer));
 
-        let handle = thread::spawn(move || daemon.run_for_duration(Duration::from_secs(2)));
+        let handle = thread::spawn(move || daemon.run());
+
+        // 安全超时线程：10 秒后强制停止 daemon，防止 notify 未触发时测试挂起。
+        let stop_safety = Arc::clone(&stop);
+        let safety_handle = thread::spawn(move || {
+            thread::sleep(Duration::from_secs(10));
+            stop_safety.store(true, Ordering::SeqCst);
+        });
 
         // 等待监视器初始化。
-        thread::sleep(Duration::from_millis(400));
+        thread::sleep(Duration::from_millis(500));
 
-        // 连续快速修改多个文件（在防抖窗口内）。
-        for i in 0..5 {
+        // spec：3 次连续变更，500ms 间隔。全部落在 2000ms 防抖窗口内。
+        for i in 0..3 {
             write_file(tmp.path(), "a.rs", &format!("fn a() {{ /* v{i} */ }}\n"));
             write_file(tmp.path(), "b.rs", &format!("fn b() {{ /* v{i} */ }}\n"));
-            thread::sleep(Duration::from_millis(50));
+            thread::sleep(Duration::from_millis(500));
         }
 
-        // 等待防抖结束 + 处理。
-        thread::sleep(Duration::from_millis(600));
+        // 显式等待第一次 on_events 信号（防抖窗口 2000ms + 处理缓冲）。
+        // observer 已在回调中同步设置 stop=true，run() 会在下一次迭代退出。
+        match signal_rx.recv_timeout(Duration::from_secs(6)) {
+            Ok(()) => {
+                // 信号已收到，stop 已由 observer 设置。等待 daemon 线程退出。
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                stop.store(true, Ordering::SeqCst);
+                let _ = handle.join();
+                panic!(
+                    "AC-DAEMON-002：6 秒内未收到 on_events 信号，daemon 未触发索引"
+                );
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                stop.store(true, Ordering::SeqCst);
+                let _ = handle.join();
+                panic!("AC-DAEMON-002：信号通道断开，observer 未发送信号");
+            }
+        }
 
         let result = handle.join().expect("thread should join");
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "daemon 应正常停止: {:?}", result.err());
 
-        // AC-DAEMON-002：连续修改应合并为一批，观察者应被调用。
+        // 取消安全超时线程（使其尽快退出）。
+        drop(safety_handle);
+
+        // AC-DAEMON-002 严格断言：防抖应合并为单次索引。
         let count = *call_count.lock().unwrap();
-        // notify-debouncer-full 会将防抖窗口内的事件合并为一批。
-        // 由于文件系统事件可能有延迟，使用宽松断言。
-        // 理想情况下 count == 1，但允许更多（如果事件跨越多个防抖窗口）。
-        let _ = count;
+        assert_eq!(
+            count, 1,
+            "AC-DAEMON-002：防抖应合并为单次索引，实际触发 {} 次",
+            count
+        );
     }
 
     #[test]

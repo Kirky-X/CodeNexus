@@ -496,21 +496,22 @@ impl Phase for LoadPhase {
         let all_nodes = &resolve.all_nodes;
         let all_edges = &resolve.all_edges;
 
-        // Step 7: delete old nodes for deleted files and changed files.
-        for deleted_path in &scan.diff.deleted {
-            if let Err(err) = self.repo.delete_file_nodes(deleted_path, project_id) {
-                warn!(file = %deleted_path, error = %err, "failed to delete file nodes");
-            }
-        }
-        for changed_file in &scan.diff.changed {
-            if let Err(err) = self
-                .repo
-                .delete_file_nodes(&changed_file.relative_path, project_id)
-            {
+        // Step 7: batch-delete old nodes for deleted + changed files.
+        //
+        // The batch path collapses N per-file passes (each ~21 Cypher queries
+        // over the node-label set) into a single `WHERE n.filePath IN [...]`
+        // pass, keeping the query count fixed regardless of how many files
+        // changed. This fixes the `incremental_500_of_1000` SLO regression
+        // (33 files/s → target ≥100 files/s) — the per-file delete loop was
+        // the dominant cost on incremental re-index.
+        let mut paths_to_delete: Vec<String> = scan.diff.deleted.clone();
+        paths_to_delete.extend(scan.diff.changed.iter().map(|f| f.relative_path.clone()));
+        if !paths_to_delete.is_empty() {
+            if let Err(err) = self.repo.delete_file_nodes_batch(&paths_to_delete, project_id) {
                 warn!(
-                    file = %changed_file.relative_path,
+                    file_count = paths_to_delete.len(),
                     error = %err,
-                    "failed to delete changed file nodes"
+                    "failed to batch delete file nodes for deleted+changed files"
                 );
             }
         }
