@@ -8,6 +8,7 @@ target/
 # Project documentation (auto-generated or sensitive)
 CLAUDE.md
 AGENTS.md
+docs/*.md
 
 # Temporary files
 temp/
