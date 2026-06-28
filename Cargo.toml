@@ -144,6 +144,8 @@ uuid = { version = "1", features = ["v7"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 time = { version = "0.3", features = ["macros"] }
 rust_decimal = "1.37"
+# Cross-platform RSS sampling for memory benchmarks (design.md Decision 2).
+sysinfo = "0.30"
 
 # ============================================================================
 # BENCHMARKS
@@ -159,6 +161,19 @@ harness = false
 [[bench]]
 name = "trace_bench"
 harness = false
+
+[[bench]]
+name = "incremental_bench"
+harness = false
+
+[[bench]]
+name = "memory_bench"
+harness = false
+
+[[bench]]
+name = "daemon_bench"
+harness = false
+required-features = ["daemon"]
 
 # ============================================================================
 # COMPILER OPTIMIZATIONS (T8: reduce binary size)
