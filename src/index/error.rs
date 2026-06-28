@@ -37,8 +37,13 @@ pub enum IndexError {
     DatabaseCorrupt(String),
 
     /// A storage-layer error (wrapped from [`crate::storage::StorageError`]).
+    ///
+    /// Note: the `From<StorageError>` impl is manual (not `#[from]`) so that
+    /// `StorageError::Corrupt(msg)` is mapped to
+    /// [`IndexError::DatabaseCorrupt`] (exit code 4) rather than
+    /// `IndexError::Storage` (exit code 2).
     #[error("storage error: {0}")]
-    Storage(#[from] crate::storage::error::StorageError),
+    Storage(crate::storage::error::StorageError),
 
     /// A discover-layer error (wrapped from [`crate::discover::DiscoverError`]).
     #[error("discover error: {0}")]
@@ -69,6 +74,22 @@ impl IndexError {
             IndexError::Discover(_) => 1,
             IndexError::Parse(_) => 0,
             IndexError::Io(_) => 3,
+        }
+    }
+}
+
+/// Converts a [`StorageError`] into an [`IndexError`].
+///
+/// Maps [`StorageError::Corrupt`] to [`IndexError::DatabaseCorrupt`] (exit
+/// code 4) so the CLI produces the correct exit code for corrupt databases.
+/// All other variants are wrapped as [`IndexError::Storage`] (exit code 2).
+impl From<crate::storage::error::StorageError> for IndexError {
+    fn from(e: crate::storage::error::StorageError) -> Self {
+        match e {
+            crate::storage::error::StorageError::Corrupt(msg) => {
+                IndexError::DatabaseCorrupt(msg)
+            }
+            other => IndexError::Storage(other),
         }
     }
 }

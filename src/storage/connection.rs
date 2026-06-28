@@ -33,6 +33,30 @@ pub struct SchemaInitReport {
     pub skipped_reasons: Vec<String>,
 }
 
+/// Returns `true` if the error message indicates database corruption.
+///
+/// Detects LadybugDB / SQLite corruption patterns (spec
+/// `test-coverage-completion-spec`):
+/// - `database disk image is malformed` (SQLite)
+/// - `file is encrypted or is not a database` (SQLite)
+/// - `no such table: node_function` (required table missing)
+/// - `database schema has changed` (SQLite)
+/// - `not a valid` + `database` (LadybugDB: "The file is not a valid Lbug
+///   database file!" — observed at runtime; the spec's SQLite-style patterns
+///   do not match LadybugDB's actual message, so this compound check is
+///   added to cover the real error)
+///
+/// Explicitly **excludes** `database is locked` — locking is a transient
+/// condition handled by retry logic, not corruption.
+fn is_corruption_error(e: &StorageError) -> bool {
+    let msg = e.to_string().to_lowercase();
+    msg.contains("database disk image is malformed")
+        || msg.contains("file is encrypted or is not a database")
+        || msg.contains("no such table: node_function")
+        || msg.contains("database schema has changed")
+        || (msg.contains("not a valid") && msg.contains("database"))
+}
+
 /// A wrapper around a LadybugDB [`Database`] providing schema initialization,
 /// DDL/DML execution, and JSON-valued query helpers.
 ///
@@ -49,9 +73,23 @@ impl StorageConnection {
     ///
     /// If `path` does not exist it will be created. Pass `":memory:"` to get
     /// an in-memory database (useful for tests).
+    ///
+    /// When `Database::new` fails with a corruption-pattern error (e.g.
+    /// "database disk image is malformed"), the error is wrapped as
+    /// [`StorageError::Corrupt`] so the upper layer's `From<StorageError>`
+    /// impl maps it to [`IndexError::DatabaseCorrupt`] (exit code 4).
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let db = Database::new(path, SystemConfig::default())?;
-        Ok(Self { db })
+        match Database::new(path, SystemConfig::default()) {
+            Ok(db) => Ok(Self { db }),
+            Err(e) => {
+                let storage_err = StorageError::Database(e);
+                if is_corruption_error(&storage_err) {
+                    Err(StorageError::Corrupt(storage_err.to_string()))
+                } else {
+                    Err(storage_err)
+                }
+            }
+        }
     }
 
     /// Creates an in-memory database (alias for `open(":memory:")`).
@@ -101,9 +139,13 @@ impl StorageConnection {
                     report.skipped_count += 1;
                     report.skipped_reasons.push(format!("`{stmt}`: {msg}"));
                 } else {
-                    return Err(StorageError::Schema(format!(
+                    let schema_err = StorageError::Schema(format!(
                         "failed to execute DDL `{stmt}`: {msg}"
-                    )));
+                    ));
+                    if is_corruption_error(&schema_err) {
+                        return Err(StorageError::Corrupt(schema_err.to_string()));
+                    }
+                    return Err(schema_err);
                 }
             }
         }
@@ -711,5 +753,44 @@ mod tests {
             value: Box::new(Value::Int8(42)),
         });
         assert_eq!(v, serde_json::json!(42));
+    }
+
+    // --- DatabaseCorrupt detection (complete-test-coverage spec) ---
+
+    /// Verifies that opening a file with invalid bytes (not a valid LadybugDB
+    /// file) is detected as corruption and mapped to
+    /// `IndexError::DatabaseCorrupt` (exit code 4).
+    #[test]
+    fn database_corrupt_detected_on_malformed_db() {
+        use crate::index::IndexError;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lbug_file = dir.path().join("corrupt.lbug");
+        std::fs::write(&lbug_file, b"this is not a valid ladybugdb file")
+            .expect("write corrupt file");
+        // Leak the tempdir so the database files survive for the test's
+        // lifetime (LadybugDB keeps file handles open).
+        std::mem::forget(dir);
+
+        let result = StorageConnection::open(&lbug_file).map_err(IndexError::from);
+        match result {
+            Err(IndexError::DatabaseCorrupt(_)) => (), // 通过
+            Err(e) => panic!(
+                "期望 IndexError::DatabaseCorrupt，实际 {:?}（消息：{}）",
+                e, e
+            ),
+            Ok(_) => panic!("期望错误，实际成功打开损坏数据库"),
+        }
+    }
+
+    /// Verifies that "database is locked" is NOT detected as corruption —
+    /// locking is a transient condition handled by retry logic, not corruption.
+    #[test]
+    fn database_locked_not_detected_as_corrupt() {
+        let locked_err = StorageError::Query("database is locked".to_string());
+        assert!(
+            !is_corruption_error(&locked_err),
+            "database is locked 不应被检测为损坏"
+        );
     }
 }

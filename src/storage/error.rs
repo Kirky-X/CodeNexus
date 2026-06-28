@@ -45,6 +45,15 @@ pub enum StorageError {
     /// The supplied data was invalid for the target table/schema.
     #[error("invalid data: {0}")]
     InvalidData(String),
+
+    /// The database is corrupt (malformed files, schema mismatch, etc.).
+    ///
+    /// Detected by [`super::connection::is_corruption_error`] during
+    /// `StorageConnection::open` or `init_schema`. Maps to
+    /// [`crate::index::IndexError::DatabaseCorrupt`] via the manual
+    /// `From<StorageError> for IndexError` impl.
+    #[error("database corrupt: {0}")]
+    Corrupt(String),
 }
 
 /// Convenience alias used throughout the storage layer.
