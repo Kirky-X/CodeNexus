@@ -67,7 +67,7 @@ codenexus query "<CYPHER>" [OPTIONS]
 
 **Output (JSON):** `columns`, `rows`, `duration_ms`
 
-> Caution (ADR-021): A Cypher subset validator (`validate_cypher_subset`) exists in `src/query/cypher_subset.rs` and rejects destructive clauses (`CREATE`/`DELETE`/`SET`/`MERGE`/`REMOVE`/`CALL`/`LOAD CSV`/`FOREACH`), but as of the latest audit it is **not yet wired into the query execution path**. Treat `codenexus query` as accepting arbitrary Cypher until ADR-021 is fully implemented; do not feed untrusted input.
+> ADR-021: A Cypher subset validator (`validate_cypher_subset`) in `src/query/cypher_subset.rs` is **wired into `query_cmd.rs`** and rejects destructive clauses (`CREATE`/`DELETE`/`SET`/`MERGE`/`REMOVE`/`CALL`/`LOAD CSV`/`FOREACH`) at the CLI boundary. Safe to use with LLM-generated queries.
 
 #### search — Search for symbols
 
