@@ -1,10 +1,22 @@
+---
+name: codenexus
+description: Index a codebase into a queryable LadybugDB knowledge graph and trace calls, data-flow, FFI, impact, and semantic search. Use when the user needs to index/parse code, run Cypher queries, trace call chains or data flow, analyze blast radius, search symbols, watch files, manage projects, export/import artifacts, inspect symbol context, detect git-change impact, propose renames, or configure MCP integration.
+when_to_use: Triggers include "index a codebase", "query the graph", "trace calls from X", "what's the impact of changing X", "search for symbol", "start the daemon", "list projects", "clean project", "export/import graph", "show context of X", "what changed", "rename X", "set up MCP", or any reference to CodeNexus / codenexus CLI.
+---
+
 # CodeNexus CLI Skill
 
 ## Description
 
-CodeNexus is a code knowledge graph indexing tool. It parses source code (C, Rust, Fortran, Python, TypeScript) using tree-sitter, builds a queryable graph in LadybugDB, and supports call-chain tracing, data-flow analysis, cross-language FFI tracking, and semantic search.
+CodeNexus is a code knowledge graph indexing tool. It parses source code (C, Rust, Fortran, Python, TypeScript) using tree-sitter, builds a queryable graph in LadybugDB, and supports call-chain tracing, data-flow analysis, cross-language FFI tracking, semantic search, change-impact analysis, refactoring proposals, and MCP server integration.
 
-Use this Skill when you need to index a codebase, query its structure, trace function calls or data flow, analyze the impact of changes, or search for symbols.
+Use this Skill when you need to index a codebase, query its structure, trace function calls or data flow, analyze the impact of changes, search for symbols, watch files for incremental updates, manage projects, export/import graph artifacts, inspect a symbol's 360° context, detect symbols affected by git changes, propose renames, or set up MCP integration with AI agents.
+
+**Project documentation** (for deeper context, read on demand):
+- `docs/PRD.md` — product requirements, scope, acceptance criteria
+- `docs/ADD.md` — architecture (C4, ADRs, dynamic behavior)
+- `docs/DDD.md` — LadybugDB schema, node/edge types
+- `docs/TRD.md` — technical requirements, performance/reliability targets
 
 ## Prerequisites
 
@@ -20,11 +32,15 @@ The binary is at `target/release/codenexus`. For semantic search (optional), bui
 cargo build --release --features embed
 ```
 
+Feature presets: `minimal` (one language), `core` (C+Rust+Fortran), `full` (all 5 languages + daemon). At least one `lang-*` feature is required — the crate fails to compile otherwise.
+
 ## Commands
 
-### index — Index a codebase
+CodeNexus has 17 subcommands grouped into five functional areas.
 
-Indexes a codebase into the LadybugDB knowledge graph. Parses all supported source files, extracts symbols (functions, classes, variables, etc.), resolves call/data-flow/FFI relationships, and stores everything in the graph database.
+### Indexing & querying
+
+#### index — Index a codebase
 
 ```bash
 codenexus index <PATH> --name <PROJECT_NAME> [OPTIONS]
@@ -33,33 +49,13 @@ codenexus index <PATH> --name <PROJECT_NAME> [OPTIONS]
 **Options:**
 - `--db <DB_PATH>` — Database path (default: `./codenexus.lbug`)
 - `--force` — Re-parse every file, ignoring cached hashes
-- `--lsp` — Enable LSP-enhanced extraction (reserved)
+- `--lsp` — Reserved for future use (currently unimplemented)
 - `--embed` — Generate embeddings for semantic search (requires `embed` feature)
+- `--ram-first` — RAM-first indexing (H15): LZ4-compress sources into memory, parse from memory, single `COPY FROM` dump. Recommended for repos < 1 GB source. Default is streaming.
 
 **Output (JSON):** `project_id`, `files_indexed`, `files_skipped`, `nodes_created`, `edges_created`, `duration_ms`
 
-**Examples:**
-```bash
-# Index a Rust project
-codenexus index /path/to/repo --name myproject
-
-# Force full re-index
-codenexus index /path/to/repo --name myproject --force
-
-# Index with custom database location
-codenexus index /path/to/repo --name myproject --db /tmp/graph.lbug
-
-# Index with embeddings (requires embed feature)
-codenexus index /path/to/repo --name myproject --embed
-```
-
-**Exit codes:** 0 success, 1 invalid input, 2 database locked, 3 system error, 4 database corrupt
-
----
-
-### query — Execute a Cypher query
-
-Runs a Cypher query against the graph database. Use this for custom graph queries not covered by the other commands.
+#### query — Execute a Cypher query
 
 ```bash
 codenexus query "<CYPHER>" [OPTIONS]
@@ -71,26 +67,27 @@ codenexus query "<CYPHER>" [OPTIONS]
 
 **Output (JSON):** `columns`, `rows`, `duration_ms`
 
-**Examples:**
+> Caution (ADR-021): A Cypher subset validator (`validate_cypher_subset`) exists in `src/query/cypher_subset.rs` and rejects destructive clauses (`CREATE`/`DELETE`/`SET`/`MERGE`/`REMOVE`/`CALL`/`LOAD CSV`/`FOREACH`), but as of the latest audit it is **not yet wired into the query execution path**. Treat `codenexus query` as accepting arbitrary Cypher until ADR-021 is fully implemented; do not feed untrusted input.
+
+#### search — Search for symbols
+
 ```bash
-# List all functions
-codenexus query "MATCH (f:Function) RETURN f.name AS name, f.filePath AS file LIMIT 10"
-
-# Count nodes by type
-codenexus query "MATCH (n:Class) RETURN count(n) AS class_count"
-
-# Find call relationships
-codenexus query "MATCH (a:Function)-[:CALLS]->(b:Function) RETURN a.name, b.name LIMIT 20"
-
-# Find functions in a specific file
-codenexus query "MATCH (f:Function) WHERE f.filePath CONTAINS 'main.rs' RETURN f.name, f.startLine"
+codenexus search <TEXT> [OPTIONS]
 ```
 
----
+**Options:**
+- `--semantic` — Use vector similarity search (requires `embed` feature)
+- `--limit <N>` — Maximum results (default: 10)
+- `--db <DB_PATH>` — Database path (default: `./codenexus.lbug`)
+- `--uid <UID>` — Narrow by node UID — direct lookup (H14)
+- `--file <PATH>` — Narrow by file path (H14)
+- `--kind <LABEL>` — Narrow by node label, e.g. `"Function"` (H14)
 
-### trace — Trace a symbol's paths
+**Output (JSON):** Array of `{name, label, file_path, start_line, qualified_name, score}`
 
-Traces call chains and/or data-flow paths starting from a symbol. Supports depth-limited BFS traversal over `CALLS`, `FFI_CALLS`, `DATAFLOWS`, `READS`, and `WRITES` edges.
+### Tracing & impact
+
+#### trace — Trace a symbol's paths
 
 ```bash
 codenexus trace <SYMBOL> [OPTIONS]
@@ -100,29 +97,16 @@ codenexus trace <SYMBOL> [OPTIONS]
 - `--type <TYPE>` — Trace type: `calls`, `dataflow`, or `all` (default: `all`)
 - `--depth <N>` — Maximum traversal depth (default: 3)
 - `--db <DB_PATH>` — Database path (default: `./codenexus.lbug`)
+- `--min-confidence <0.0-1.0>` — Drop edges with lower confidence. `0.85` keeps only SameFile + ImportScoped edges (design.md D4).
+- `--uid <UID>` — Disambiguate by node UID (H14)
+- `--file <PATH>` — Disambiguate by file path (H14)
+- `--kind <LABEL>` — Disambiguate by node label (H14)
 
 **Output (JSON):** `paths[].nodes`, `paths[].edges`, `paths[].depth`
 
-**Examples:**
-```bash
-# Trace all paths from a function
-codenexus trace main_function
+#### impact — Analyze impact radius
 
-# Trace only call chains, depth 5
-codenexus trace parse_file --type calls --depth 5
-
-# Trace only data flow
-codenexus trace variable_x --type dataflow
-
-# Use a specific database
-codenexus trace main --type all --depth 2 --db /tmp/graph.lbug
-```
-
----
-
-### impact — Analyze impact radius
-
-Analyzes the blast radius of changing a symbol. Performs reverse traversal to find all symbols that depend on the target.
+Performs reverse traversal to find all symbols that depend on the target.
 
 ```bash
 codenexus impact <SYMBOL> [OPTIONS]
@@ -131,52 +115,52 @@ codenexus impact <SYMBOL> [OPTIONS]
 **Options:**
 - `--depth <N>` — Maximum reverse-traversal depth (default: 3)
 - `--db <DB_PATH>` — Database path (default: `./codenexus.lbug`)
+- `--min-confidence <0.0-1.0>` — Drop edges with lower confidence
+- `--uid <UID>` / `--file <PATH>` / `--kind <LABEL>` — Disambiguation (H14)
 
 **Output (JSON):** List of affected symbols with their paths.
 
-**Examples:**
-```bash
-# Analyze impact of changing a function
-codenexus impact parse_file
+#### context — Show a 360° view of a symbol (H8)
 
-# Deep impact analysis
-codenexus impact critical_function --depth 10
-```
-
----
-
-### search — Search for symbols
-
-Searches for symbols by name (structured search), content (BM25 full-text), or semantic meaning (vector similarity, requires `embed` feature).
+Shows the resolved node, incoming edges (callers/importers/readers/writers), outgoing edges (callees/imports/uses), and processes/routes/endpoints the symbol participates in.
 
 ```bash
-codenexus search <TEXT> [OPTIONS]
+codenexus context <SYMBOL> [OPTIONS]
 ```
 
 **Options:**
-- `--semantic` — Use semantic (vector) search (requires `embed` feature)
-- `--limit <N>` — Maximum results (default: 10)
 - `--db <DB_PATH>` — Database path (default: `./codenexus.lbug`)
+- `--depth <N>` — BFS expansion depth for the surrounding subgraph (default: 2)
 
-**Output (JSON):** Array of `{name, label, file_path, start_line, qualified_name, score}`
+### Project management
 
-**Examples:**
+#### status — Show indexing status
+
 ```bash
-# Search by name keyword
-codenexus search parse
-
-# Semantic search (requires embed feature)
-codenexus search "解析函数" --semantic
-
-# Limit results
-codenexus search "database" --limit 5
+codenexus status [--db <DB_PATH>]
 ```
 
----
+**Output (JSON):** List of projects with their indexing metadata.
 
-### daemon — Start file-watching daemon
+#### list — List indexed projects
 
-Watches a codebase directory and automatically triggers incremental indexing when code files change. Uses a configurable debounce window to batch consecutive changes.
+```bash
+codenexus list [--db <DB_PATH>]
+```
+
+**Output (JSON):** Array of project names and metadata.
+
+#### clean — Remove a project's index
+
+```bash
+codenexus clean <PROJECT_NAME> [--db <DB_PATH>]
+```
+
+Removes a project and all its associated nodes and edges from the database.
+
+### Daemon & team artifacts
+
+#### daemon — Start file-watching daemon
 
 ```bash
 codenexus daemon <PATH> --name <PROJECT_NAME> [OPTIONS]
@@ -186,147 +170,153 @@ codenexus daemon <PATH> --name <PROJECT_NAME> [OPTIONS]
 - `--debounce-ms <MS>` — Debounce window in milliseconds (default: 2000)
 - `--db <DB_PATH>` — Database path (default: `./codenexus.lbug`)
 
-**Behavior:**
-- Watches the directory recursively
-- Ignores non-code files (only `.c`, `.h`, `.rs`, `.f90`, `.f`, `.f95`, `.py`, `.ts`, `.tsx` trigger indexing)
-- Debounces consecutive changes (default 2000ms)
-- Pauses event processing during indexing
-- Runs until interrupted (Ctrl+C)
+**Behavior:** Watches the directory recursively; only `.c`/`.h`/`.rs`/`.f90`/`.f`/`.f95`/`.py`/`.ts`/`.tsx` trigger indexing; debounces consecutive changes; pauses event processing during indexing; runs until interrupted (Ctrl+C). Requires the `daemon` feature.
 
-**Examples:**
+#### export — Export graph to a team artifact (H7)
+
 ```bash
-# Start daemon with default settings
-codenexus daemon /path/to/repo --name myproject
-
-# Custom debounce (500ms)
-codenexus daemon /path/to/repo --name myproject --debounce-ms 500
+codenexus export [OPTIONS]
 ```
 
----
+Dumps the LadybugDB database to a zstd-compressed artifact (`codenexus.graph.zst`) with a JSON manifest (version, timestamp, source DB path).
 
-### status — Show indexing status
+**Options:**
+- `--output <PATH>` — Output artifact path (default: `./codenexus.graph.zst`)
+- `--db <DB_PATH>` — Database path to export (default: `./codenexus.lbug`)
+- `--project <NAME>` — Project name to include in the manifest
 
-Displays the indexing status for all projects in the database.
+#### import — Import a team artifact (H7)
 
 ```bash
-codenexus status [OPTIONS]
+codenexus import [OPTIONS]
+```
+
+Decompresses a team artifact and loads it into a LadybugDB database. Optionally triggers an incremental reindex of the local diff.
+
+**Options:**
+- `--input <PATH>` — Input artifact path (default: `./codenexus.graph.zst`)
+- `--db <DB_PATH>` — Database path to import into (default: `./codenexus.lbug`)
+- `--reindex` — Trigger incremental reindex after import (requires `--path` and `--name`)
+- `--path <PATH>` — Codebase root path for reindex
+- `--name <NAME>` — Project name for reindex
+
+### Refactoring & MCP integration
+
+#### detect-changes — Detect symbols affected by git changes (H8)
+
+Runs `git diff` in `--path` and maps each touched file/line range to indexed symbols, then classifies each affected symbol's risk level by incoming edge count.
+
+```bash
+codenexus detect-changes <PATH> [OPTIONS]
 ```
 
 **Options:**
 - `--db <DB_PATH>` — Database path (default: `./codenexus.lbug`)
+- `--mode <MODE>` — Git diff mode: `unstaged` (default), `staged`, or `head` (vs HEAD)
 
-**Output (JSON):** List of projects with their indexing metadata.
+#### rename — Propose graph + text edits for renaming a symbol (H8)
 
-**Examples:**
-```bash
-codenexus status
-codenexus status --db /tmp/graph.lbug
-```
-
----
-
-### list — List indexed projects
-
-Lists all projects that have been indexed in the database.
+Proposes graph-edits for high-confidence edges and text-search edits for review. Always runs in dry-run mode by default; `--apply` writes text edits to disk (graph edits are applied via a subsequent `index` run).
 
 ```bash
-codenexus list [OPTIONS]
+codenexus rename <FROM> <TO> [OPTIONS]
 ```
 
 **Options:**
 - `--db <DB_PATH>` — Database path (default: `./codenexus.lbug`)
+- `--path <PATH>` — Codebase root path (required for text-search edits)
+- `--apply` — Apply text edits to disk (default: dry-run, only print the plan)
 
-**Output (JSON):** Array of project names and metadata.
+#### setup — Auto-detect AI agents and write MCP config (H13)
 
-**Examples:**
-```bash
-codenexus list
-codenexus list --db /tmp/graph.lbug
-```
-
----
-
-### clean — Remove a project's index
-
-Removes a project and all its associated nodes and edges from the database.
+Auto-detects installed AI coding agents (Claude Code, Cursor, Codex) under `$HOME` and writes the MCP server config for `codenexus mcp` into each agent's config file. Existing entries pointing to a different binary prompt for confirmation unless `--force` is given.
 
 ```bash
-codenexus clean <PROJECT_NAME> [OPTIONS]
+codenexus setup [--force]
 ```
 
-**Options:**
-- `--db <DB_PATH>` — Database path (default: `./codenexus.lbug`)
+#### hook — Emit PreToolUse/PostToolUse hook JSON (H13)
 
-**Examples:**
+Reads a PreToolUse/PostToolUse JSON payload from stdin and emits a no-op acknowledgment. The hook always exits 0, never blocks a tool call, and never intercepts `Read` tool invocations.
+
 ```bash
-codenexus clean myproject
-codenexus clean old_project --db /tmp/graph.lbug
+codenexus hook [--db <DB_PATH>]
 ```
 
----
+#### mcp — Serve MCP tools over stdio (H13)
+
+Starts the MCP stdio server, exposing `query`/`trace`/`impact`/`search`/`context` as MCP tools. Launched by AI agents via the config written by `codenexus setup`.
+
+```bash
+codenexus mcp [--db <DB_PATH>]
+```
 
 ## Typical Workflows
 
 ### Workflow 1: Index and explore a new codebase
 
 ```bash
-# 1. Index the codebase
 codenexus index /path/to/repo --name myproject
-
-# 2. List all functions
 codenexus query "MATCH (f:Function) RETURN f.name, f.filePath, f.startLine ORDER BY f.name LIMIT 50"
-
-# 3. Search for a specific symbol
 codenexus search "parse"
-
-# 4. Trace a function's call chain
 codenexus trace main --type calls --depth 5
-
-# 5. Check what would be affected by changing a function
 codenexus impact critical_function --depth 5
 ```
 
 ### Workflow 2: Continuous indexing with daemon
 
 ```bash
-# 1. Initial index
 codenexus index /path/to/repo --name myproject
-
-# 2. Start daemon for continuous updates
 codenexus daemon /path/to/repo --name myproject --debounce-ms 1000
-
-# 3. In another terminal, query the always-up-to-date graph
+# In another terminal:
 codenexus query "MATCH (f:Function)-[:CALLS]->(g:Function) RETURN f.name, g.name LIMIT 20"
 ```
 
 ### Workflow 3: Multi-project management
 
 ```bash
-# Index multiple projects into the same database
 codenexus index /path/to/project-a --name projectA --db /shared/graph.lbug
 codenexus index /path/to/project-b --name projectB --db /shared/graph.lbug
-
-# List all projects
 codenexus list --db /shared/graph.lbug
-
-# Query a specific project's functions
-codenexus query "MATCH (f:Function) WHERE f.project = 'projectA' RETURN f.name LIMIT 10" --db /shared/graph.lbug
-
-# Clean up a project
 codenexus clean projectA --db /shared/graph.lbug
 ```
 
 ### Workflow 4: Cross-language FFI tracing
 
 ```bash
-# Index a mixed Rust/C codebase
 codenexus index /path/to/mixed-repo --name ffiproject
-
-# Trace from a Rust function through FFI to C
 codenexus trace rust_entry_point --type calls --depth 10
-
-# Query FFI call edges
 codenexus query "MATCH (a:Function)-[:FFI_CALLS]->(b:Function) RETURN a.name, b.name, a.filePath, b.filePath"
+```
+
+### Workflow 5: Refactoring with confidence filtering
+
+```bash
+# Only trust same-file + import-scoped edges (design.md D4)
+codenexus impact critical_function --depth 5 --min-confidence 0.85
+codenexus trace data_var --type dataflow --min-confidence 0.85
+# Detect what a git change touches, then propose a rename
+codenexus detect-changes /repo --mode unstaged
+codenexus rename old_name new_name --path /repo --db /repo/codenexus.lbug
+codenexus rename old_name new_name --path /repo --apply
+```
+
+### Workflow 6: Team artifact sharing
+
+```bash
+# On machine A: export the indexed graph
+codenexus export --db /work/graph.lbug --project myproject --output myproject.graph.zst
+# On machine B: import and reindex local diff
+codenexus import --input myproject.graph.zst --db /work/graph.lbug --reindex --path /repo --name myproject
+```
+
+### Workflow 7: MCP integration with AI agents
+
+```bash
+# One-time: write MCP config into detected agents
+codenexus setup
+# Agents then launch `codenexus mcp` automatically; or run manually for testing:
+codenexus mcp --db /work/graph.lbug
 ```
 
 ## Supported Languages
@@ -339,13 +329,27 @@ codenexus query "MATCH (a:Function)-[:FFI_CALLS]->(b:Function) RETURN a.name, b.
 | Python | `.py` | `def`, `class`, `import`, `__init__.py` |
 | TypeScript | `.ts`, `.tsx` | `function`, `class`, `import`, `export` |
 
-## Node Types (20)
+## Node Types (44)
 
-Project, Folder, File, Module, Class, Struct, Enum, Trait, Impl, Function, Method, Variable, GlobalVar, Parameter, Const, Static, Macro, TypeAlias, Typedef, Namespace
+**Structural (4):** Project, Folder, File, Module
+**Type definitions (5):** Class, Struct, Enum, Trait, Impl
+**Callables (2):** Function, Method
+**Variables (5):** Variable, GlobalVar, Parameter, Const, Static
+**Meta (5):** Macro, TypeAlias, Typedef, Namespace, Interface
+**H1 Type definitions (5):** Constructor, Property, Record, Delegate, Annotation
+**H1 Templates (1):** Template
+**H1 Union/Variant/Field (3):** Union, Variant, Field
+**H1 Runtime/architecture (7):** Event, Handler, Middleware, Service, Endpoint, Route, Process
+**H1 Data/infra (2):** Database, Config
+**H1 Quality/docs (2):** Test, Section
+**H1 Community/extension (3):** Community, Tool, Embedding
 
-## Edge Types (14)
+## Edge Types (24)
 
-CONTAINS, DEFINES, MEMBER_OF, CALLS, FFI_CALLS, DATAFLOWS, READS, WRITES, IMPLEMENTS, EXTENDS, USES_TYPE, REFERENCES, IMPORTS, INCLUDES
+**Original (14):** CONTAINS, DEFINES, MEMBER_OF, CALLS, FFI_CALLS, DATAFLOWS, READS, WRITES, IMPLEMENTS, EXTENDS, USES_TYPE, REFERENCES, IMPORTS, INCLUDES
+**H1 T9 extension (10):** HAS_METHOD, HAS_PROPERTY, ACCESSES, METHOD_OVERRIDES, METHOD_IMPLEMENTS, STEP_IN_PROCESS, HANDLES_ROUTE, FETCHES, HANDLES_TOOL, ENTRY_POINT_OF
+
+Each edge carries a `confidence` score in `[0.0, 1.0]` and a `confidenceTier` (`SameFile` / `ImportScoped` / `Global`) populated during resolution. Use `--min-confidence` on `trace`/`impact` to filter by tier/score (design.md D4).
 
 ## Exit Codes
 
@@ -356,3 +360,20 @@ CONTAINS, DEFINES, MEMBER_OF, CALLS, FFI_CALLS, DATAFLOWS, READS, WRITES, IMPLEM
 | 2 | Database locked (retry) |
 | 3 | System error (out of memory) |
 | 4 | Database corrupt |
+
+## Examples
+
+Runnable example programs live in `examples/src/bin/`:
+
+| Example | Covers |
+|---------|--------|
+| `basic_indexing` | `index` + Cypher query |
+| `cypher_query` | `query` with multiple Cypher patterns |
+| `symbol_search` | `search` with empty-result handling |
+| `call_tracing` | `trace --type calls` + graph construction |
+| `impact_analysis` | `impact` reverse BFS |
+| `export_import` | DB copy (note: production uses `codenexus export`/`import` with zstd + manifest) |
+
+Run with: `cargo run --manifest-path examples/Cargo.toml --bin <name>`
+
+> The examples use `IndexFacade`/`QueryFacade`/`TraceFacade` directly rather than the Kit registry, because Kit creates per-subsystem connections that can cause file-DB visibility issues. Direct Facade use is the recommended programmatic API.
