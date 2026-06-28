@@ -45,7 +45,11 @@ lang-fortran = ["dep:tree-sitter-fortran"]
 lang-python = ["dep:tree-sitter-python"]
 lang-typescript = ["dep:tree-sitter-typescript"]
 # Function features
-embed = ["dep:reqwest"]
+# H10/D7: `embed` bundles `ort` (ONNX Runtime) + `tokenizers` for local
+# offline inference via arctic-embed-xs, alongside the existing remote HTTP
+# path (reqwest). `EmbeddingConfig.endpoint: Option<String>` — `None` → local
+# ort inference, `Some` → OpenAI-compatible HTTP API.
+embed = ["dep:reqwest", "dep:ort", "dep:tokenizers", "dep:ndarray"]
 daemon = ["dep:notify", "dep:notify-debouncer-full"]
 lsp = []
 
@@ -91,9 +95,22 @@ sha2 = "0.10"
 # HTTP for embed feature (ADR-004) — feature-gated behind `embed`.
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"], optional = true }
 
+# Local ONNX inference for embed feature (H10/D7) — feature-gated behind `embed`.
+# `ort` provides ONNX Runtime bindings; `download-binaries` (default) fetches
+# prebuilt ONNX Runtime shared libraries at build time. `tokenizers` provides
+# HuggingFace BERT tokenization. `ndarray` is required to construct input
+# tensors and extract output tensors.
+ort = { version = "2.0.0-rc.12", optional = true }
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"], optional = true }
+ndarray = { version = "0.17", optional = true }
+
 # Error handling
 thiserror = "2"
 anyhow = "1"
+
+# PEG parser for Cypher subset validation (H12)
+pest = "2.7"
+pest_derive = "2.7"
 
 # Logging
 tracing = "0.1"
@@ -108,6 +125,13 @@ csv = "1"
 
 # Temporary files for CSV bulk-loading (ADR-014)
 tempfile = "3"
+
+# NOTE: H7 export/import uses the system `zstd` CLI binary via
+# `std::process::Command` rather than the `zstd` Rust crate, because lbug
+# statically links its own copy of zstd and the `zstd` crate's `zstd_sys`
+# brings duplicate `ZSTD_*` symbols that fail at link time (mold duplicate
+# symbol errors). Shelling out keeps the artifact format identical to
+# `zstd`-compressed bytes (design.md D6) while avoiding the symbol conflict.
 
 # UUIDv7 for IDs
 uuid = { version = "1", features = ["v7"] }

@@ -487,29 +487,53 @@ mod tests {
     #[test]
     fn build_kit_registers_embed_when_feature_on() {
         use crate::kit::bootstrap::KitExt;
-        // Ensure deterministic env state — no API key.
+        // Ensure deterministic env state — no API key, no endpoint (local mode).
         std::env::remove_var(crate::embed::API_KEY_ENV);
         std::env::remove_var(crate::embed::OPENAI_API_KEY_ENV);
+        std::env::remove_var(crate::embed::EMBED_ENDPOINT_ENV);
+        std::env::remove_var(crate::embed::EMBED_MODEL_PATH_ENV);
 
         let config = KitBootstrapConfig::new(PathBuf::from(":memory:"));
         let kit = build_kit(&config).expect("build_kit");
         assert!(kit.contains::<EmbedKey>(), "EmbedKey missing with embed feature");
         let embed = kit.require_embed().expect("require_embed");
-        // Without an API key, embed() must return MissingApiKey (non-blocking).
+        // H10/D7: default is local mode; without a model file, embed() must
+        // return Unavailable (not MissingApiKey — no API key needed locally).
+        let result = embed.embed(&["hello"]);
+        assert!(
+            matches!(result, Err(crate::embed::EmbedError::Unavailable(ref msg)) if msg.contains("not found")),
+            "expected Unavailable (model not found) in local mode, got {result:?}"
+        );
+    }
+
+    #[cfg(feature = "embed")]
+    #[test]
+    fn build_kit_embed_remote_without_key_returns_missing_api_key() {
+        use crate::kit::bootstrap::KitExt;
+        // H10/D7: remote mode (endpoint=Some) without API key → MissingApiKey.
+        std::env::remove_var(crate::embed::API_KEY_ENV);
+        std::env::remove_var(crate::embed::OPENAI_API_KEY_ENV);
+        std::env::set_var(crate::embed::EMBED_ENDPOINT_ENV, "https://api.openai.com/v1");
+
+        let config = KitBootstrapConfig::new(PathBuf::from(":memory:"));
+        let kit = build_kit(&config).expect("build_kit");
+        let embed = kit.require_embed().expect("require_embed");
         let result = embed.embed(&["hello"]);
         assert!(
             matches!(result, Err(crate::embed::EmbedError::MissingApiKey)),
-            "expected MissingApiKey, got {result:?}"
+            "expected MissingApiKey in remote mode, got {result:?}"
         );
+        std::env::remove_var(crate::embed::EMBED_ENDPOINT_ENV);
     }
 
     #[cfg(feature = "embed")]
     #[test]
     fn bootstrap_config_with_embedding_config_overrides_from_env() {
         let custom = EmbeddingConfig {
-            endpoint: "https://custom.example.com/v1".to_string(),
+            endpoint: Some("https://custom.example.com/v1".to_string()),
             model: "custom-model".to_string(),
             api_key: Some("custom-key".to_string()),
+            ..EmbeddingConfig::default()
         };
         let config = KitBootstrapConfig::new(PathBuf::from(":memory:"))
             .with_embedding_config(custom.clone());

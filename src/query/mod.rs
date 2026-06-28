@@ -16,18 +16,22 @@
 
 pub mod capability;
 pub mod cypher;
+pub mod cypher_subset;
 pub mod error;
 pub mod facade;
 pub mod fulltext;
 pub mod module;
 pub mod structured;
+pub mod tokenizer;
 
 pub use cypher::CypherExecutor;
+pub use cypher_subset::validate_cypher_subset;
 pub use error::{QueryError, Result};
 pub use facade::QueryFacade;
 pub use fulltext::FullTextSearcher;
 pub use module::{QueryConfig, QueryModule, QueryModuleBuilder};
 pub use structured::StructuredSearcher;
+pub use tokenizer::{codenexus_tokenize, codenexus_tokenize_join};
 
 /// A single search hit returned by the structured and full-text searchers.
 ///

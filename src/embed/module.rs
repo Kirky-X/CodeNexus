@@ -2,37 +2,41 @@
 // SPDX-License-Identifier: MIT
 
 //! trait-kit module for the Embed subsystem (T6/unified-architecture
-//! Phase 2, Task 2.12).
+//! Phase 2, Task 2.12; H10/D7 local ONNX support).
 //!
 //! Implements [`Module`] / [`ModuleBuilder`] / [`WithConfig`] for
 //! [`EmbedModule`], wiring the existing [`EmbedClient`] trait (Strategy
 //! pattern) into the unified Kit registry as `Arc<dyn EmbedClient>` under
 //! [`EmbedKey`](crate::kit::EmbedKey).
 //!
-//! # Capability lifecycle
+//! # Capability lifecycle (H10/D7)
 //!
-//! [`EmbedCapability`] owns an [`EmbeddingConfig`] (immutable, `Send + Sync`).
-//! Each [`EmbedClient::embed`] invocation constructs a fresh
-//! [`OpenAIEmbedClient`] over the configured endpoint and delegates. This
-//! matches the existing `search_cmd::semantic_search` semantics (one client
-//! per call). A future optimization could pre-construct the HTTP client and
-//! cache it behind the capability; out of scope for Task 2.12.
+//! [`EmbedCapability`] owns an [`EmbeddingConfig`] and chooses the backend:
+//!
+//! - **Local mode** (`endpoint = None`, default): lazily loads a
+//!   [`LocalEmbedClient`] (ort + arctic-embed-xs) on the first `embed()` call.
+//!   The loaded client is cached behind a [`Mutex`] for reuse. If the model
+//!   file is missing, `embed()` returns [`EmbedError::Unavailable`] with a
+//!   clear message (Rule 12).
+//! - **Remote mode** (`endpoint = Some(url)`): creates a fresh
+//!   [`OpenAIEmbedClient`] per call (matches existing `search_cmd` semantics).
+//!   Requires an API key — returns [`EmbedError::MissingApiKey`] if absent.
 //!
 //! # Degradation
 //!
-//! When `EmbeddingConfig::has_api_key()` is `false` (no API key in env),
-//! [`EmbedCapability::embed`] returns [`EmbedError::MissingApiKey`]. The
-//! caller (e.g. `search_cmd`) is responsible for falling back to BM25 —
-//! this mirrors the existing `semantic_search` logic.
+//! In local mode, if the model file is missing at `embed()` time, the error is
+//! returned to the caller (e.g. `search_cmd`), which falls back to BM25. In
+//! remote mode without an API key, the same fallback applies. The caller is
+//! responsible for degradation — this mirrors the existing `semantic_search`
+//! logic.
 //!
 //! # Hot reconfiguration (future work)
 //!
 //! The spec mentions `EmbedConfig` via `ConfigHandle` for hot-reloading the
-//! endpoint/model. This is **not implemented** in Task 2.12 — the current
-//! capability takes `EmbeddingConfig` as a construction-time constant. Hot
-//! reload would require refactoring the capability to read from a shared
-//! `ConfigHandle<EmbeddingConfig>`. Tracked as future work; out of scope for
-//! the unified-registry migration.
+//! endpoint/model. This is **not implemented** — the current capability takes
+//! `EmbeddingConfig` as a construction-time constant. Hot reload would require
+//! refactoring the capability to read from a shared `ConfigHandle`. Tracked as
+//! future work; out of scope for the unified-registry migration.
 //!
 //! # Dependency note
 //!
@@ -54,13 +58,14 @@
 //! [`WithConfig`]: crate::kit::WithConfig
 //! [`EmbeddingStorage`]: super::EmbeddingStorage
 //! [`OpenAIEmbedClient`]: super::OpenAIEmbedClient
+//! [`LocalEmbedClient`]: super::LocalEmbedClient
 //! [`EmbeddingConfig`]: super::EmbeddingConfig
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::kit::{Module, ModuleBuilder, NoRequirements, WithConfig};
 
-use super::client::{EmbedClient, OpenAIEmbedClient};
+use super::client::{EmbedClient, LocalEmbedClient, OpenAIEmbedClient};
 use super::{EmbedError, EmbeddingConfig, Result};
 
 // ---------------------------------------------------------------------------
@@ -137,7 +142,10 @@ impl ModuleBuilder<EmbedModule> for EmbedModuleBuilder {
                 "EmbedModuleBuilder requires config — call .config(EmbeddingConfig::from_env()) before build".to_string(),
             )
         })?;
-        Ok(Arc::new(EmbedCapability { config }))
+        Ok(Arc::new(EmbedCapability {
+            config,
+            local_client: Mutex::new(None),
+        }))
     }
 }
 
@@ -153,32 +161,53 @@ impl WithConfig<EmbedModule> for EmbedModuleBuilder {
 // Concrete dyn EmbedClient implementation
 // ---------------------------------------------------------------------------
 
-/// Concrete implementation of [`dyn EmbedClient`] that constructs a fresh
-/// [`OpenAIEmbedClient`] on every [`EmbedClient::embed`] call.
+/// Concrete implementation of [`dyn EmbedClient`] that routes to either
+/// [`LocalEmbedClient`] (offline ONNX) or [`OpenAIEmbedClient`] (remote HTTP)
+/// based on [`EmbeddingConfig::endpoint`] (H10/D7).
 ///
-/// The capability owns only an [`EmbeddingConfig`] (immutable,
-/// `Send + Sync`). Each `embed` invocation:
+/// # Local mode (endpoint = None, default)
 ///
-/// 1. Checks `config.has_api_key()` — returns [`EmbedError::MissingApiKey`]
-///    if absent.
-/// 2. Constructs a fresh [`OpenAIEmbedClient`] from the config.
-/// 3. Delegates to `client.embed(texts)`.
+/// The [`LocalEmbedClient`] is lazily loaded on the first `embed()` call and
+/// cached behind a [`Mutex`] for subsequent calls. If the model file is
+/// missing, `embed()` returns [`EmbedError::Unavailable`] — `build()` always
+/// succeeds so that kit bootstrap doesn't fail when the model isn't present.
 ///
-/// This matches the existing `search_cmd::semantic_search` semantics (one
-/// client per call). A future optimization could pre-construct and cache the
-/// HTTP client; out of scope for Task 2.12.
+/// # Remote mode (endpoint = Some)
+///
+/// A fresh [`OpenAIEmbedClient`] is constructed on every `embed()` call
+/// (matching the existing `search_cmd::semantic_search` semantics). Requires
+/// an API key — returns [`EmbedError::MissingApiKey`] if absent.
 struct EmbedCapability {
-    /// Embedding-service config (endpoint, model, API key).
+    /// Embedding-service config (endpoint, model, API key, model path).
     config: EmbeddingConfig,
+    /// Lazily-loaded local ONNX client (H10/D7).
+    ///
+    /// `None` = not yet loaded (or local mode not in use).
+    /// `Some(client)` = loaded and cached for reuse.
+    local_client: Mutex<Option<LocalEmbedClient>>,
 }
 
 impl EmbedClient for EmbedCapability {
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        if !self.config.has_api_key() {
-            return Err(EmbedError::MissingApiKey);
+        if self.config.is_local() {
+            // H10/D7: local ONNX inference — lazy-load the model on first use.
+            let mut guard = self.local_client.lock().map_err(|e| {
+                EmbedError::Unavailable(format!("local_client mutex poisoned: {e}"))
+            })?;
+            if guard.is_none() {
+                let client = LocalEmbedClient::new(&self.config)?;
+                *guard = Some(client);
+            }
+            // unwrap is safe: we just ensured it's Some.
+            guard.as_ref().expect("local_client initialized").embed(texts)
+        } else {
+            // Remote HTTP mode — create a fresh OpenAIEmbedClient per call.
+            if !self.config.has_api_key() {
+                return Err(EmbedError::MissingApiKey);
+            }
+            let client = OpenAIEmbedClient::new(self.config.clone())?;
+            client.embed(texts)
         }
-        let client = OpenAIEmbedClient::new(self.config.clone())?;
-        client.embed(texts)
     }
 }
 
@@ -216,20 +245,44 @@ mod tests {
         _assert_send_sync(&cap);
     }
 
-    /// `embed` without an API key must return `EmbedError::MissingApiKey`
-    /// (non-blocking failure path — no network access attempted).
+    /// `embed` in local mode without a model file returns `Unavailable`
+    /// (non-blocking failure path — build succeeds, embed fails clearly).
     ///
-    /// This is the only `embed` code path that is safe to exercise in a unit
-    /// test: all other paths attempt real HTTP calls. End-to-end coverage
-    /// lives in the `kit_bootstrap` integration test (Task 1.7).
+    /// This verifies the lazy-loading path: `build()` succeeds even when the
+    /// model is missing, and `embed()` returns a clear error.
     #[test]
-    fn capability_embed_without_api_key_returns_missing_api_key() {
+    fn capability_embed_local_without_model_returns_unavailable() {
+        // Ensure no env vars override the default local mode.
+        std::env::remove_var(crate::embed::EMBED_ENDPOINT_ENV);
+        std::env::remove_var(crate::embed::EMBED_MODEL_PATH_ENV);
+
+        let cap = EmbedModuleBuilder::new()
+            .config(EmbeddingConfig::default()) // local mode, default model path
+            .build()
+            .expect("EmbedModuleBuilder::build");
+
+        let result = cap.embed(&["hello"]);
+        assert!(result.is_err(), "should error without model file");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, EmbedError::Unavailable(ref msg) if msg.contains("not found")),
+            "expected Unavailable with 'not found', got: {err}"
+        );
+    }
+
+    /// `embed` in remote mode without an API key returns `MissingApiKey`
+    /// (non-blocking failure path — no network access attempted).
+    #[test]
+    fn capability_embed_remote_without_api_key_returns_missing_api_key() {
         // Ensure no env vars leak in from the host.
         std::env::remove_var(crate::embed::API_KEY_ENV);
         std::env::remove_var(crate::embed::OPENAI_API_KEY_ENV);
 
         let cap = EmbedModuleBuilder::new()
-            .config(EmbeddingConfig::default()) // no api_key
+            .config(EmbeddingConfig {
+                endpoint: Some("https://api.openai.com/v1".to_string()),
+                ..EmbeddingConfig::default()
+            })
             .build()
             .expect("EmbedModuleBuilder::build");
         let result = cap.embed(&["hello"]);
@@ -261,6 +314,6 @@ mod tests {
     #[test]
     fn embed_config_alias_matches_embedding_config() {
         let cfg: EmbedConfig = EmbeddingConfig::default();
-        assert!(!cfg.has_api_key());
+        assert!(cfg.is_local());
     }
 }

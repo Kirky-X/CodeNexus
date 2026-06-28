@@ -248,7 +248,9 @@ impl QueryEngine for QueryCapability {
         let strategy = HybridStrategy::new(facade.connection(), embed_client);
         strategy
             .search(text, project, limit)
-            .map_err(|e| QueryError::Storage(StorageError::Query(e.to_string())))
+            .map_err(|e: crate::embed::EmbedError| {
+                QueryError::Storage(StorageError::Query(e.to_string()))
+            })
     }
 }
 

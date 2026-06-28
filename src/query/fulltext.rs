@@ -1,14 +1,22 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! BM25 full-text search (PRD §4.4.3).
+//! BM25 full-text search (PRD §4.4.3, H11).
 //!
 //! [`FullTextSearcher`] attempts to use the LadybugDB FTS extension
 //! (`CALL fts_search(...)`) for BM25-ranked results. When the FTS extension is
 //! unavailable (the common case in tests), it falls back to a `CONTAINS`-based
 //! scan over the symbol tables, ranking results with a simple relevance score.
+//!
+//! # codenexus_tokenizer (H11)
+//!
+//! Both the FTS query and the CONTAINS fallback use [`codenexus_tokenize`] to
+//! split camelCase / snake_case identifiers before matching. This enables
+//! searching for `parse` to match `parseFile`, `parse_file`, and
+//! `my_parse_helper` — a plain `CONTAINS` would only match the exact substring.
 
 use super::error::{QueryError, Result};
+use super::tokenizer::codenexus_tokenize;
 use super::SearchResult;
 use crate::model::NodeLabel;
 use crate::storage::schema::escape_identifier;
@@ -34,6 +42,18 @@ const SYMBOL_LABELS: &[NodeLabel] = &[
     NodeLabel::TypeAlias,
     NodeLabel::Typedef,
     NodeLabel::Namespace,
+];
+
+/// FTS indexes on symbol `name` columns (H11), created by
+/// [`crate::storage::schema::index_ddl`]. Each entry pairs the FTS index name
+/// with the [`NodeLabel`] used to tag search results.
+///
+/// Only `Function`, `Class`, and `Method` carry FTS indexes on `name` — these
+/// are the high-value symbol tables where identifier-aware BM25 search pays off.
+const FTS_NAME_INDEXES: &[(&str, NodeLabel)] = &[
+    ("fts_function_name", NodeLabel::Function),
+    ("fts_class_name", NodeLabel::Class),
+    ("fts_method_name", NodeLabel::Method),
 ];
 
 /// Executes BM25 full-text searches against a [`StorageConnection`].
@@ -82,10 +102,14 @@ impl<'a> FullTextSearcher<'a> {
         }
     }
 
-    /// Attempts a LadybugDB FTS query.
+    /// Attempts a LadybugDB FTS query against the `name` FTS indexes (H11).
     ///
-    /// The canonical FTS invocation is:
-    /// `CALL fts_search('fts_func_name', $text) YIELD node RETURN node`
+    /// Queries three FTS indexes — `fts_function_name`, `fts_class_name`,
+    /// `fts_method_name` — created by [`crate::storage::schema::index_ddl`].
+    /// The query is pre-tokenized via [`codenexus_tokenize`] so that
+    /// `parseFile` becomes `parse file`, enabling the FTS engine to match
+    /// individual sub-tokens.
+    ///
     /// LadybugDB builds may not ship the FTS extension or the named index, so
     /// any error here is treated as "FTS unavailable" and the caller falls
     /// back to [`Self::fallback_contains_search`].
@@ -95,52 +119,93 @@ impl<'a> FullTextSearcher<'a> {
         project: Option<&str>,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
-        let escaped = escape_cypher_string(text);
-        // Query the Function FTS index (the primary symbol table).
-        let cypher = match project {
-            Some(p) => format!(
-                "CALL fts_search('fts_func_name', '{escaped}') YIELD node \
-                 WHERE node.project = '{}' \
-                 RETURN node.name AS name, node.qualifiedName AS qn, \
-                 node.filePath AS filePath, node.startLine AS line;",
-                escape_cypher_string(p),
-            ),
-            None => format!(
-                "CALL fts_search('fts_func_name', '{escaped}') YIELD node \
-                 RETURN node.name AS name, node.qualifiedName AS qn, \
-                 node.filePath AS filePath, node.startLine AS line;",
-            ),
-        };
-        let rows = self.conn.query(&cypher).map_err(QueryError::from)?;
-        let mut results = rows_to_search_results(rows, NodeLabel::Function, text);
-        // FTS results are already BM25-ranked; we only truncate.
-        if limit < results.len() {
-            results.truncate(limit);
+        // H11: tokenize the query so camelCase/snake_case identifiers are split
+        // into sub-tokens before passing to the FTS engine.
+        let tokenized = codenexus_tokenize(text);
+        if tokenized.is_empty() {
+            return Err(QueryError::InvalidQuery(
+                "fulltext query tokenized to empty".to_string(),
+            ));
         }
-        Ok(results)
+        let fts_query = tokenized.join(" ");
+        let escaped = escape_cypher_string(&fts_query);
+
+        // Query all three name-column FTS indexes and merge results.
+        let mut all_results = Vec::new();
+        for (index_name, label) in FTS_NAME_INDEXES {
+            let cypher = match project {
+                Some(p) => format!(
+                    "CALL fts_search('{index_name}', '{escaped}') YIELD node \
+                     WHERE node.project = '{}' \
+                     RETURN node.name AS name, node.qualifiedName AS qn, \
+                     node.filePath AS filePath, node.startLine AS line;",
+                    escape_cypher_string(p),
+                ),
+                None => format!(
+                    "CALL fts_search('{index_name}', '{escaped}') YIELD node \
+                     RETURN node.name AS name, node.qualifiedName AS qn, \
+                     node.filePath AS filePath, node.startLine AS line;",
+                ),
+            };
+            match self.conn.query(&cypher) {
+                Ok(rows) => {
+                    all_results.extend(rows_to_search_results(rows, *label, text));
+                }
+                Err(e) => {
+                    // Propagate the first error — the caller will check
+                    // `is_fts_unsupported_error` to decide whether to fall back.
+                    return Err(QueryError::from(e));
+                }
+            }
+        }
+        // FTS results are already BM25-ranked per-index; merge-sort by score.
+        sort_and_truncate(&mut all_results, limit);
+        Ok(all_results)
     }
 
-    /// Fallback: scans symbol tables with `CONTAINS` and ranks by a simple
-    /// relevance score (exact > prefix > substring). Case-insensitive.
+    /// Fallback: scans symbol tables with `CONTAINS` and ranks by a relevance
+    /// score (exact > prefix > token-match > substring). Case-insensitive.
+    ///
+    /// H11: the query is pre-tokenized via [`codenexus_tokenize`] so that a
+    /// multi-token query like `parseFile` becomes `["parse", "file"]`. The
+    /// WHERE clause ORs one `CONTAINS` per token, enabling `parseFile` to
+    /// match `parse_file` (which contains both `parse` and `file` as
+    /// substrings) — a plain single-substring `CONTAINS('parseFile')` would
+    /// miss it.
     fn fallback_contains_search(
         &self,
         text: &str,
         project: Option<&str>,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
-        let escaped = escape_cypher_string(text);
+        let tokens = codenexus_tokenize(text);
+        if tokens.is_empty() {
+            return Err(QueryError::InvalidQuery(
+                "fulltext query tokenized to empty".to_string(),
+            ));
+        }
+        let or_clauses: Vec<String> = tokens
+            .iter()
+            .map(|t| {
+                format!(
+                    "toLower(n.name) CONTAINS toLower('{}')",
+                    escape_cypher_string(t)
+                )
+            })
+            .collect();
+        let where_inner = or_clauses.join(" OR ");
         let mut results = Vec::new();
         for &label in SYMBOL_LABELS {
             let table = escape_identifier(label.table_name());
             let cypher = match project {
                 Some(p) => format!(
-                    "MATCH (n:{table}) WHERE toLower(n.name) CONTAINS toLower('{escaped}') AND n.project = '{}' \
+                    "MATCH (n:{table}) WHERE ({where_inner}) AND n.project = '{}' \
                      RETURN n.name AS name, n.qualifiedName AS qn, \
                      n.filePath AS filePath, n.startLine AS line;",
                     escape_cypher_string(p),
                 ),
                 None => format!(
-                    "MATCH (n:{table}) WHERE toLower(n.name) CONTAINS toLower('{escaped}') \
+                    "MATCH (n:{table}) WHERE ({where_inner}) \
                      RETURN n.name AS name, n.qualifiedName AS qn, \
                      n.filePath AS filePath, n.startLine AS line;",
                 ),
@@ -191,16 +256,41 @@ fn rows_to_search_results(
 }
 
 /// Computes a relevance score in `[0.0, 1.0]` for `name` against `query`.
+///
+/// Scoring tiers (H11 token-aware):
+/// - `1.0` — exact match (case-insensitive)
+/// - `0.8` — name starts with query (prefix)
+/// - `0.7` — every query token appears as a substring of some name token
+///   (e.g. `my_parse_helper` vs `parse` → `["my","parse","helper"]` contains
+///   `parse`)
+/// - `0.5` — name contains query as a plain substring
+/// - `0.3` — no match (defensive; callers pre-filter via `CONTAINS`)
 fn relevance_score(name: &str, query: &str) -> f32 {
     let name_lower = name.to_ascii_lowercase();
     let query_lower = query.to_ascii_lowercase();
     if name_lower == query_lower {
-        1.0
-    } else if name_lower.starts_with(&query_lower) {
-        0.8
-    } else {
-        0.5
+        return 1.0;
     }
+    if name_lower.starts_with(&query_lower) {
+        return 0.8;
+    }
+    let query_tokens = codenexus_tokenize(&query_lower);
+    let name_tokens = codenexus_tokenize(&name_lower);
+    if !query_tokens.is_empty() && !name_tokens.is_empty() {
+        // Token-aligned match: every query token equals some name token. This
+        // ranks `my_parse_helper` (tokens `my`,`parse`,`helper`) above `xparse`
+        // (single token `xparse`) for query `parse`.
+        let all_match = query_tokens
+            .iter()
+            .all(|qt| name_tokens.iter().any(|nt| nt == qt));
+        if all_match {
+            return 0.7;
+        }
+    }
+    if name_lower.contains(&query_lower) {
+        return 0.5;
+    }
+    0.3
 }
 
 /// Sorts results by descending score then ascending name, and truncates.
@@ -412,8 +502,24 @@ mod tests {
     }
 
     #[test]
+    fn relevance_score_token_match() {
+        // H11: token-aligned match ranks above plain substring. `my_parse`
+        // tokenizes to `["my", "parse"]` which contains the query token
+        // `parse` exactly.
+        assert_eq!(relevance_score("my_parse", "parse"), 0.7);
+        assert_eq!(relevance_score("my_parse_helper", "parse"), 0.7);
+    }
+
+    #[test]
     fn relevance_score_substring_match() {
-        assert_eq!(relevance_score("my_parse", "parse"), 0.5);
+        // H11: a non-token-aligned substring (e.g. `xparse` → single token
+        // `xparse`) scores below a token-aligned match.
+        assert_eq!(relevance_score("xparse", "parse"), 0.5);
+    }
+
+    #[test]
+    fn relevance_score_no_match() {
+        assert_eq!(relevance_score("read_input", "parse"), 0.3);
     }
 
     #[test]
@@ -575,5 +681,59 @@ mod tests {
             .expect("fallback");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].qualified_name.as_deref(), Some("beta.parse"));
+    }
+
+    #[test]
+    fn fallback_contains_search_matches_camel_query_to_snake_name() {
+        // H11: searching `parseFile` (camelCase) should match `parse_file`
+        // (snake_case) via tokenization. Without tokenization, a single
+        // `CONTAINS('parseFile')` would miss `parse_file`.
+        let repo = fresh_repo();
+        repo.save_nodes(
+            &[
+                sample_function("f1", "demo", "parse_file", "demo.parse_file", "/a.rs", 1),
+                sample_function("f2", "demo", "read_input", "demo.read_input", "/b.rs", 1),
+            ],
+            NodeLabel::Function,
+        )
+        .expect("save_nodes");
+        let searcher = FullTextSearcher::new(repo.connection());
+        let results = searcher
+            .fallback_contains_search("parseFile", None, 100)
+            .expect("fallback");
+        let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.contains(&"parse_file"), "parse_file should match parseFile");
+        assert!(!names.contains(&"read_input"), "read_input should not match");
+    }
+
+    #[test]
+    fn fallback_contains_search_rejects_query_that_tokenizes_to_empty() {
+        // H11: a query consisting only of separators tokenizes to empty and
+        // must error (Rule 12: fail loud) rather than silently returning all
+        // rows.
+        let repo = fresh_repo();
+        let searcher = FullTextSearcher::new(repo.connection());
+        let err = searcher
+            .fallback_contains_search("___", None, 10)
+            .expect_err("separator-only query should error");
+        assert!(err.is_invalid_query());
+    }
+
+    #[test]
+    fn search_camel_query_matches_snake_name() {
+        // End-to-end: `search("parseFile")` should find `parse_file` through
+        // whichever path is available (FTS or fallback).
+        let repo = fresh_repo();
+        repo.save_nodes(
+            &[sample_function("f1", "demo", "parse_file", "demo.parse_file", "/a.rs", 1)],
+            NodeLabel::Function,
+        )
+        .expect("save_nodes");
+        let searcher = FullTextSearcher::new(repo.connection());
+        let results = searcher
+            .search("parseFile", None, 100)
+            .expect("search");
+        let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.contains(&"parse_file"));
     }
 }

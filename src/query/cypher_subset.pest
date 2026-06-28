@@ -1,0 +1,151 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+//
+// Cypher subset grammar for H12 query validation.
+//
+// Supported clauses: MATCH, OPTIONAL MATCH, WHERE, WITH, RETURN, ORDER BY,
+// LIMIT, SKIP, DISTINCT, UNWIND, UNION [ALL], EXISTS, variable-length paths
+// (`-[r*1..3]->`), aggregations (count/sum/avg/min/max/collect via func_call).
+//
+// Unsupported constructs (CREATE, DELETE, SET, MERGE, REMOVE, CALL, FOREACH,
+// LOAD CSV, etc.) fail to parse → explicit QueryError at the Rust boundary.
+
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" | comment }
+comment = _{ "//" ~ (!"\n" ~ ANY)* }
+
+query = { SOI ~ statement ~ ";"? ~ EOI }
+statement = { clause+ }
+
+clause = _{
+      optional_match
+    | match_clause
+    | where_clause
+    | with_clause
+    | return_clause
+    | unwind_clause
+    | union_clause
+}
+
+optional_match = { kw_optional ~ kw_match ~ pattern }
+match_clause   = { kw_match ~ pattern }
+where_clause   = { kw_where ~ expr }
+with_clause    = { kw_with ~ distinct? ~ return_list ~ order_by? ~ skip? ~ limit? }
+return_clause  = { kw_return ~ distinct? ~ return_list ~ order_by? ~ skip? ~ limit? }
+unwind_clause  = { kw_unwind ~ expr ~ kw_as ~ var }
+union_clause   = { kw_union ~ kw_all? }
+distinct       = { kw_distinct }
+
+// --- Patterns ---------------------------------------------------------------
+pattern       = { node_pattern ~ (rel_pattern ~ node_pattern)* }
+node_pattern  = { "(" ~ var? ~ label? ~ props? ~ ")" }
+label         = { (":" ~ ident)+ }
+props         = { "{" ~ (prop ~ ("," ~ prop)*)? ~ "}" }
+prop          = { ident ~ ":" ~ expr }
+
+rel_pattern = {
+      "<-" ~ bracket_rel ~ "->"
+    | "<-" ~ bracket_rel ~ "-"
+    | "-"  ~ bracket_rel ~ "->"
+    | "-"  ~ bracket_rel ~ "-"
+}
+bracket_rel = { "[" ~ var? ~ rel_type? ~ var_length? ~ "]" }
+rel_type    = { ":" ~ ident ~ ("|" ~ ":" ~ ident)* }
+var_length  = { "*" ~ range? }
+range       = { number? ~ (".." ~ number?)? }
+
+// --- Return / With lists ----------------------------------------------------
+return_list  = { return_star | (return_item ~ ("," ~ return_item)*) }
+return_star  = { "*" }
+return_item  = { expr ~ (kw_as ~ var)? }
+
+// --- Modifiers --------------------------------------------------------------
+order_by  = { kw_order ~ kw_by ~ order_item ~ ("," ~ order_item)* }
+order_item = { expr ~ direction? }
+direction = _{ kw_asc | kw_desc | kw_ascending | kw_descending }
+limit     = { kw_limit ~ number }
+skip      = { kw_skip ~ number }
+
+// --- Expressions ------------------------------------------------------------
+expr         = { or_expr }
+or_expr      = { and_expr ~ (kw_or ~ and_expr)* }
+and_expr     = { not_expr ~ (kw_and ~ not_expr)* }
+not_expr     = { (kw_not)* ~ comparison }
+comparison   = {
+    additive ~ (
+        (comp_op ~ additive)
+      | (kw_starts ~ kw_with ~ additive)
+      | (kw_ends ~ kw_with ~ additive)
+      | (kw_contains ~ additive)
+      | (kw_in ~ additive)
+      | (kw_is ~ kw_not? ~ kw_null)
+    )?
+}
+comp_op  = _{ "<=" | ">=" | "<>" | "!=" | "=~" | "=" | "<" | ">" }
+additive = { mult ~ (add_op ~ mult)* }
+add_op   = _{ "+" | "-" }
+mult     = { unary ~ (mul_op ~ unary)* }
+mul_op   = _{ "*" | "/" | "%" }
+unary    = { (unary_op)* ~ primary }
+unary_op = _{ "-" | "+" }
+
+primary = _{
+      list_lit
+    | number
+    | string_lit
+    | kw_true
+    | kw_false
+    | kw_null
+    | exists_expr
+    | func_call
+    | property_access
+    | var
+    | "(" ~ expr ~ ")"
+}
+list_lit       = { "[" ~ (expr ~ ("," ~ expr)*)? ~ "]" }
+exists_expr    = { kw_exists ~ "(" ~ (pattern | expr) ~ ")" }
+func_call      = { ident ~ "(" ~ (distinct? ~ func_args?)? ~ ")" }
+func_args      = { func_arg ~ ("," ~ func_arg)* }
+func_arg       = _{ star | expr }
+star           = { "*" }
+property_access = { var ~ ("." ~ ident)+ }
+var            = { ident }
+
+// --- Tokens -----------------------------------------------------------------
+ident       = @{ ident_start ~ ident_rest* }
+ident_start = @{ ASCII_ALPHA | "_" }
+ident_rest  = @{ ASCII_ALPHANUMERIC | "_" }
+number      = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+string_lit  = @{ ("\"" ~ (!"\"" ~ ANY)* ~ "\"") | ("'" ~ (!"'" ~ ANY)* ~ "'") }
+
+// --- Keywords (atomic, case-insensitive, word-bounded) ----------------------
+// `!ident_rest` ensures e.g. `MATCH` does not match the prefix of `MATCHING`.
+kw_optional  = @{ ^"OPTIONAL" ~ !ident_rest }
+kw_match     = @{ ^"MATCH" ~ !ident_rest }
+kw_where     = @{ ^"WHERE" ~ !ident_rest }
+kw_with      = @{ ^"WITH" ~ !ident_rest }
+kw_return    = @{ ^"RETURN" ~ !ident_rest }
+kw_unwind    = @{ ^"UNWIND" ~ !ident_rest }
+kw_union     = @{ ^"UNION" ~ !ident_rest }
+kw_all       = @{ ^"ALL" ~ !ident_rest }
+kw_as        = @{ ^"AS" ~ !ident_rest }
+kw_order     = @{ ^"ORDER" ~ !ident_rest }
+kw_by        = @{ ^"BY" ~ !ident_rest }
+kw_limit     = @{ ^"LIMIT" ~ !ident_rest }
+kw_skip      = @{ ^"SKIP" ~ !ident_rest }
+kw_distinct  = @{ ^"DISTINCT" ~ !ident_rest }
+kw_and       = @{ ^"AND" ~ !ident_rest }
+kw_or        = @{ ^"OR" ~ !ident_rest }
+kw_not       = @{ ^"NOT" ~ !ident_rest }
+kw_in        = @{ ^"IN" ~ !ident_rest }
+kw_is        = @{ ^"IS" ~ !ident_rest }
+kw_null      = @{ ^"NULL" ~ !ident_rest }
+kw_true      = @{ ^"TRUE" ~ !ident_rest }
+kw_false     = @{ ^"FALSE" ~ !ident_rest }
+kw_exists    = @{ ^"EXISTS" ~ !ident_rest }
+kw_starts    = @{ ^"STARTS" ~ !ident_rest }
+kw_ends      = @{ ^"ENDS" ~ !ident_rest }
+kw_contains  = @{ ^"CONTAINS" ~ !ident_rest }
+kw_asc       = @{ ^"ASC" ~ !ident_rest }
+kw_desc      = @{ ^"DESC" ~ !ident_rest }
+kw_ascending = @{ ^"ASCENDING" ~ !ident_rest }
+kw_descending= @{ ^"DESCENDING" ~ !ident_rest }

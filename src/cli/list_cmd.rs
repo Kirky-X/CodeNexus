@@ -48,6 +48,8 @@ pub struct ProjectOutput {
     pub file_count: i64,
     /// Indexing timestamp (unix seconds).
     pub indexed_at: i64,
+    /// Git commit hash at index time (empty if not a git repo at index time).
+    pub last_commit: String,
 }
 
 impl From<ProjectRecord> for ProjectOutput {
@@ -59,6 +61,7 @@ impl From<ProjectRecord> for ProjectOutput {
             language: p.language,
             file_count: p.file_count,
             indexed_at: p.indexed_at,
+            last_commit: p.last_commit,
         }
     }
 }
@@ -114,6 +117,7 @@ mod tests {
             language: "rust".into(),
             file_count: 5,
             indexed_at: 123,
+            last_commit: "abc123".into(),
         };
         let out = ProjectOutput::from(rec);
         assert_eq!(out.id, "p1");
@@ -122,6 +126,7 @@ mod tests {
         assert_eq!(out.language, "rust");
         assert_eq!(out.file_count, 5);
         assert_eq!(out.indexed_at, 123);
+        assert_eq!(out.last_commit, "abc123");
     }
 
     #[test]
@@ -133,10 +138,12 @@ mod tests {
             language: "rust".into(),
             file_count: 1,
             indexed_at: 0,
+            last_commit: "abc".into(),
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(json.contains("\"demo\""));
         assert!(json.contains("\"rust\""));
+        assert!(json.contains("\"last_commit\""));
     }
 
     // --- run() success ---

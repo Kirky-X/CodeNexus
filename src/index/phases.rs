@@ -595,16 +595,37 @@ fn save_project_node(
         );
         let _ = repo.connection().execute(&cypher);
     }
+    let last_commit = git_head_commit(root);
     let project_node = Node::builder(NodeLabel::Project, project_name, project_name)
         .id(project_id)
         .properties(serde_json::json!({
             "rootPath": root.display().to_string(),
             "fileCount": disk_files.len() as i64,
             "indexedAt": now_unix_seconds(),
+            "lastCommit": last_commit,
         }))
         .build();
     repo.save_project(&project_node)?;
     Ok(())
+}
+
+/// Returns the current `HEAD` commit hash of the git repo at `root`, or an
+/// empty string if `root` is not a git repo (or git is unavailable).
+///
+/// Used to populate the `lastCommit` field on Project nodes for staleness
+/// tracking (H9).
+fn git_head_commit(root: &Path) -> String {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("rev-parse")
+        .arg("HEAD")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
 }
 
 /// Groups nodes by label and bulk-saves each group.

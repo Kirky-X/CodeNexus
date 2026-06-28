@@ -223,7 +223,7 @@ pub struct TraceConfigKey;
 #[cfg(feature = "daemon")]
 pub struct DaemonConfigKey;
 
-/// Config key for the Embed subsystem (`EmbeddingConfig { endpoint, model, api_key }`).
+/// Config key for the Embed subsystem (`EmbeddingConfig { endpoint, model, api_key, model_path }`).
 ///
 /// Only available when the `embed` feature is enabled. Registered by
 /// `EmbedModule` (Task 2.12). Hot reconfiguration via `ConfigHandle::set`

@@ -44,6 +44,16 @@ pub enum Command {
     List(ListArgs),
     /// Remove a project and its index.
     Clean(CleanArgs),
+    /// Export the graph database to a compressed team artifact (H7).
+    Export(ExportArgs),
+    /// Import a team artifact and optionally reindex local diff (H7).
+    Import(ImportArgs),
+    /// Show a 360° view of a symbol (H8).
+    Context(ContextArgs),
+    /// Detect symbols affected by uncommitted git changes (H8).
+    DetectChanges(DetectChangesArgs),
+    /// Propose graph + text edits for renaming a symbol (H8).
+    Rename(RenameArgs),
 }
 
 /// Arguments for the `index` subcommand (PRD §4.1.3).
@@ -179,6 +189,109 @@ pub struct CleanArgs {
     /// Database path.
     #[arg(long, default_value = "./codenexus.lbug")]
     pub db: String,
+}
+
+/// Arguments for the `export` subcommand (H7).
+///
+/// Dumps the LadybugDB database to a zstd-compressed team artifact
+/// (`codenexus.graph.zst`). The artifact includes a JSON manifest with
+/// codenexus version, export timestamp, and source DB path for integrity
+/// verification on import.
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct ExportArgs {
+    /// Output artifact path (defaults to `./codenexus.graph.zst`).
+    #[arg(long, default_value = "./codenexus.graph.zst")]
+    pub output: String,
+    /// Database path to export.
+    #[arg(long, default_value = "./codenexus.lbug")]
+    pub db: String,
+    /// Project name to include in the manifest (for multi-project isolation).
+    #[arg(long)]
+    pub project: Option<String>,
+}
+
+/// Arguments for the `import` subcommand (H7).
+///
+/// Decompresses a team artifact and loads it into a LadybugDB database.
+/// Optionally triggers an incremental reindex of the local diff if `--reindex`
+/// is given with a `--path` and `--name`.
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct ImportArgs {
+    /// Input artifact path (defaults to `./codenexus.graph.zst`).
+    #[arg(long, default_value = "./codenexus.graph.zst")]
+    pub input: String,
+    /// Database path to import into.
+    #[arg(long, default_value = "./codenexus.lbug")]
+    pub db: String,
+    /// Trigger incremental reindex after import (requires --path and --name).
+    #[arg(long, default_value_t = false)]
+    pub reindex: bool,
+    /// Codebase root path for reindex (used with --reindex).
+    #[arg(long)]
+    pub path: Option<String>,
+    /// Project name for reindex (used with --reindex).
+    #[arg(long)]
+    pub name: Option<String>,
+}
+
+/// Arguments for the `context` subcommand (H8).
+///
+/// Shows a 360° view of a symbol: the resolved node, incoming edges
+/// (callers/importers/readers/writers), outgoing edges (callees/imports/uses),
+/// and processes/routes/endpoints the symbol participates in.
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct ContextArgs {
+    /// Symbol name or FQN to inspect.
+    pub symbol: String,
+    /// Database path.
+    #[arg(long, default_value = "./codenexus.lbug")]
+    pub db: String,
+    /// BFS expansion depth for the surrounding subgraph (default 2).
+    ///
+    /// Controls how many hops of edges are loaded around the symbol. `1` shows
+    /// only direct neighbors; `2` (default) shows neighbors-of-neighbors which
+    /// is usually enough to spot the symbol's role in its module.
+    #[arg(long, default_value_t = 2)]
+    pub depth: usize,
+}
+
+/// Arguments for the `detect-changes` subcommand (H8).
+///
+/// Runs `git diff` in `--path` and maps each touched file/line range to the
+/// symbols indexed in the graph, then classifies each affected symbol's
+/// risk_level based on its incoming edge count.
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct DetectChangesArgs {
+    /// Codebase root path (must be a git worktree).
+    pub path: String,
+    /// Database path.
+    #[arg(long, default_value = "./codenexus.lbug")]
+    pub db: String,
+    /// Git diff mode: `unstaged` (default), `staged`, or `head` (vs HEAD).
+    #[arg(long, default_value = "unstaged")]
+    pub mode: String,
+}
+
+/// Arguments for the `rename` subcommand (H8).
+///
+/// Proposes graph-edits for high-confidence edges and text-search edits for
+/// review. Always runs in `--dry-run` mode by default; `--apply` writes the
+/// text edits to disk (graph edits are applied via a subsequent `index` run).
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct RenameArgs {
+    /// Current symbol name or FQN.
+    pub from: String,
+    /// New symbol name (must be a valid identifier in the symbol's language).
+    pub to: String,
+    /// Database path.
+    #[arg(long, default_value = "./codenexus.lbug")]
+    pub db: String,
+    /// Codebase root path (required for text-search edits).
+    #[arg(long)]
+    pub path: Option<String>,
+    /// Apply text edits to disk (default: dry-run, only print the plan).
+    #[arg(long, default_value_t = false)]
+    pub apply: bool,
 }
 
 #[cfg(test)]
@@ -626,5 +739,266 @@ mod tests {
         };
         let s = format!("{a:?}");
         assert!(s.contains("IndexArgs"));
+    }
+
+    // --- Export / Import (H7) ---
+
+    #[test]
+    fn cli_parses_export_subcommand_defaults() {
+        let cli = Cli::parse_from(["codenexus", "export"]);
+        match cli.command {
+            Command::Export(args) => {
+                assert_eq!(args.output, "./codenexus.graph.zst");
+                assert_eq!(args.db, "./codenexus.lbug");
+                assert!(args.project.is_none());
+            }
+            other => panic!("expected Export, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_export_with_output_db_project() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "export",
+            "--output",
+            "/tmp/graph.zst",
+            "--db",
+            "/tmp/x.lbug",
+            "--project",
+            "demo",
+        ]);
+        match cli.command {
+            Command::Export(args) => {
+                assert_eq!(args.output, "/tmp/graph.zst");
+                assert_eq!(args.db, "/tmp/x.lbug");
+                assert_eq!(args.project.as_deref(), Some("demo"));
+            }
+            other => panic!("expected Export, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_import_subcommand_defaults() {
+        let cli = Cli::parse_from(["codenexus", "import"]);
+        match cli.command {
+            Command::Import(args) => {
+                assert_eq!(args.input, "./codenexus.graph.zst");
+                assert_eq!(args.db, "./codenexus.lbug");
+                assert!(!args.reindex);
+                assert!(args.path.is_none());
+                assert!(args.name.is_none());
+            }
+            other => panic!("expected Import, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_import_with_reindex_and_path() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "import",
+            "--input",
+            "/tmp/graph.zst",
+            "--db",
+            "/tmp/x.lbug",
+            "--reindex",
+            "--path",
+            "/repo",
+            "--name",
+            "demo",
+        ]);
+        match cli.command {
+            Command::Import(args) => {
+                assert_eq!(args.input, "/tmp/graph.zst");
+                assert_eq!(args.db, "/tmp/x.lbug");
+                assert!(args.reindex);
+                assert_eq!(args.path.as_deref(), Some("/repo"));
+                assert_eq!(args.name.as_deref(), Some("demo"));
+            }
+            other => panic!("expected Import, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn export_args_clone_eq() {
+        let a = ExportArgs {
+            output: "/tmp/o.zst".into(),
+            db: "/tmp/x.lbug".into(),
+            project: Some("demo".into()),
+        };
+        assert_eq!(a, a.clone());
+    }
+
+    #[test]
+    fn import_args_clone_eq() {
+        let a = ImportArgs {
+            input: "/tmp/i.zst".into(),
+            db: "/tmp/x.lbug".into(),
+            reindex: true,
+            path: Some("/r".into()),
+            name: Some("d".into()),
+        };
+        assert_eq!(a, a.clone());
+    }
+
+    // --- Context / DetectChanges / Rename (H8) ---
+
+    #[test]
+    fn cli_parses_context_subcommand_defaults() {
+        let cli = Cli::parse_from(["codenexus", "context", "helper"]);
+        match cli.command {
+            Command::Context(args) => {
+                assert_eq!(args.symbol, "helper");
+                assert_eq!(args.depth, 2);
+                assert_eq!(args.db, "./codenexus.lbug");
+            }
+            other => panic!("expected Context, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_context_with_depth_and_db() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "context",
+            "helper",
+            "--depth",
+            "5",
+            "--db",
+            "/tmp/x.lbug",
+        ]);
+        match cli.command {
+            Command::Context(args) => {
+                assert_eq!(args.symbol, "helper");
+                assert_eq!(args.depth, 5);
+                assert_eq!(args.db, "/tmp/x.lbug");
+            }
+            other => panic!("expected Context, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn context_requires_symbol_arg() {
+        let result = Cli::try_parse_from(["codenexus", "context"]);
+        assert!(result.is_err(), "context without symbol should fail");
+    }
+
+    #[test]
+    fn cli_parses_detect_changes_subcommand_defaults() {
+        let cli = Cli::parse_from(["codenexus", "detect-changes", "/repo"]);
+        match cli.command {
+            Command::DetectChanges(args) => {
+                assert_eq!(args.path, "/repo");
+                assert_eq!(args.mode, "unstaged");
+                assert_eq!(args.db, "./codenexus.lbug");
+            }
+            other => panic!("expected DetectChanges, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_detect_changes_with_mode_and_db() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "detect-changes",
+            "/repo",
+            "--mode",
+            "staged",
+            "--db",
+            "/tmp/x.lbug",
+        ]);
+        match cli.command {
+            Command::DetectChanges(args) => {
+                assert_eq!(args.path, "/repo");
+                assert_eq!(args.mode, "staged");
+                assert_eq!(args.db, "/tmp/x.lbug");
+            }
+            other => panic!("expected DetectChanges, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn detect_changes_requires_path_arg() {
+        let result = Cli::try_parse_from(["codenexus", "detect-changes"]);
+        assert!(result.is_err(), "detect-changes without path should fail");
+    }
+
+    #[test]
+    fn cli_parses_rename_subcommand_defaults() {
+        let cli = Cli::parse_from(["codenexus", "rename", "old", "new"]);
+        match cli.command {
+            Command::Rename(args) => {
+                assert_eq!(args.from, "old");
+                assert_eq!(args.to, "new");
+                assert_eq!(args.db, "./codenexus.lbug");
+                assert!(args.path.is_none());
+                assert!(!args.apply);
+            }
+            other => panic!("expected Rename, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_rename_with_path_and_apply() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "rename",
+            "old",
+            "new",
+            "--db",
+            "/tmp/x.lbug",
+            "--path",
+            "/repo",
+            "--apply",
+        ]);
+        match cli.command {
+            Command::Rename(args) => {
+                assert_eq!(args.from, "old");
+                assert_eq!(args.to, "new");
+                assert_eq!(args.db, "/tmp/x.lbug");
+                assert_eq!(args.path.as_deref(), Some("/repo"));
+                assert!(args.apply);
+            }
+            other => panic!("expected Rename, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rename_requires_two_args() {
+        let result = Cli::try_parse_from(["codenexus", "rename", "only_one"]);
+        assert!(result.is_err(), "rename with only one arg should fail");
+    }
+
+    #[test]
+    fn context_args_clone_eq() {
+        let a = ContextArgs {
+            symbol: "s".into(),
+            db: "/tmp/x.lbug".into(),
+            depth: 4,
+        };
+        assert_eq!(a, a.clone());
+    }
+
+    #[test]
+    fn detect_changes_args_clone_eq() {
+        let a = DetectChangesArgs {
+            path: "/r".into(),
+            db: "/tmp/x.lbug".into(),
+            mode: "head".into(),
+        };
+        assert_eq!(a, a.clone());
+    }
+
+    #[test]
+    fn rename_args_clone_eq() {
+        let a = RenameArgs {
+            from: "a".into(),
+            to: "b".into(),
+            db: "/tmp/x.lbug".into(),
+            path: Some("/r".into()),
+            apply: true,
+        };
+        assert_eq!(a, a.clone());
     }
 }

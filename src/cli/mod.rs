@@ -23,13 +23,18 @@
 
 pub mod args;
 pub mod clean_cmd;
+pub mod context_cmd;
 #[cfg(feature = "daemon")]
 pub mod daemon_cmd;
+pub mod detect_changes_cmd;
 pub mod error;
+pub mod export_cmd;
 pub mod impact_cmd;
+pub mod import_cmd;
 pub mod index_cmd;
 pub mod list_cmd;
 pub mod query_cmd;
+pub mod rename_cmd;
 pub mod search_cmd;
 pub mod status_cmd;
 pub mod trace_cmd;
@@ -41,7 +46,8 @@ pub use error::{CliError, Result};
 mod dispatch_tests {
     use super::*;
     use crate::cli::args::{
-        CleanArgs, ImpactArgs, IndexArgs, ListArgs, QueryArgs, SearchArgs, StatusArgs, TraceArgs,
+        CleanArgs, ContextArgs, DetectChangesArgs, ExportArgs, ImpactArgs, ImportArgs, IndexArgs,
+        ListArgs, QueryArgs, RenameArgs, SearchArgs, StatusArgs, TraceArgs,
     };
     #[cfg(feature = "daemon")]
     use crate::cli::args::DaemonArgs;
@@ -70,6 +76,11 @@ mod dispatch_tests {
             Command::Status(args) => status_cmd::run(kit, &args),
             Command::List(args) => list_cmd::run(kit, &args),
             Command::Clean(args) => clean_cmd::run(kit, &args),
+            Command::Export(args) => export_cmd::run(kit, &args),
+            Command::Import(args) => import_cmd::run(kit, &args),
+            Command::Context(args) => context_cmd::run(kit, &args),
+            Command::DetectChanges(args) => detect_changes_cmd::run(kit, &args),
+            Command::Rename(args) => rename_cmd::run(kit, &args),
         }
     }
 
@@ -205,6 +216,138 @@ mod dispatch_tests {
             "dispatch clean should succeed: {:?}",
             result.err()
         );
+    }
+
+    #[test]
+    fn dispatch_export_calls_export_cmd() {
+        if !zstd_cli_available() {
+            eprintln!("skipping: zstd binary not on PATH");
+            return;
+        }
+        // Build a real Kit on a real (empty) DB so the .lbug file exists on
+        // disk for export to read.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let dir = tempfile::TempDir::new().unwrap();
+        let out_path = dir.path().join("dispatch.zst");
+        let cli = Cli::parse_from([
+            "codenexus",
+            "export",
+            "--db",
+            db.to_str().unwrap(),
+            "--output",
+            out_path.to_str().unwrap(),
+        ]);
+        let result = dispatch(&kit, cli);
+        assert!(
+            result.is_ok(),
+            "dispatch export should succeed: {:?}",
+            result.err()
+        );
+        assert!(out_path.exists(), "artifact should exist after dispatch");
+    }
+
+    #[test]
+    fn dispatch_import_calls_import_cmd() {
+        if !zstd_cli_available() {
+            eprintln!("skipping: zstd binary not on PATH");
+            return;
+        }
+        // First export to produce a real artifact, then import it.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let dir = tempfile::TempDir::new().unwrap();
+        let artifact = dir.path().join("di.zst");
+        let cli = Cli::parse_from([
+            "codenexus",
+            "export",
+            "--db",
+            db.to_str().unwrap(),
+            "--output",
+            artifact.to_str().unwrap(),
+        ]);
+        dispatch(&kit, cli).expect("export should succeed");
+
+        // Now import the artifact into a new DB path.
+        let dst_db = dir.path().join("imported.lbug");
+        let cli = Cli::parse_from([
+            "codenexus",
+            "import",
+            "--input",
+            artifact.to_str().unwrap(),
+            "--db",
+            dst_db.to_str().unwrap(),
+        ]);
+        let result = dispatch(&kit, cli);
+        assert!(
+            result.is_ok(),
+            "dispatch import should succeed: {:?}",
+            result.err()
+        );
+        assert!(dst_db.exists(), "imported DB file should exist");
+    }
+
+    #[test]
+    fn dispatch_context_calls_context_cmd() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        let cli = Cli::parse_from([
+            "codenexus",
+            "context",
+            "a",
+            "--db",
+            db.to_str().unwrap(),
+        ]);
+        let result = dispatch(&kit, cli);
+        assert!(
+            result.is_ok(),
+            "dispatch context should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn dispatch_detect_changes_calls_detect_changes_cmd() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // /nonexistent is not a directory → InvalidInput → exit 1 (verifies dispatch).
+        let cli = Cli::parse_from([
+            "codenexus",
+            "detect-changes",
+            "/nonexistent/path/xyz",
+            "--db",
+            db.to_str().unwrap(),
+        ]);
+        let err = dispatch(&kit, cli).expect_err("nonexistent path should error");
+        assert_eq!(err.exit_code(), 1, "InvalidInput → exit 1");
+    }
+
+    #[test]
+    fn dispatch_rename_calls_rename_cmd() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Invalid new name → InvalidInput → exit 1 (verifies dispatch).
+        let cli = Cli::parse_from([
+            "codenexus",
+            "rename",
+            "foo",
+            "1bad",
+            "--db",
+            db.to_str().unwrap(),
+        ]);
+        let err = dispatch(&kit, cli).expect_err("invalid name should error");
+        assert_eq!(err.exit_code(), 1, "InvalidInput → exit 1");
+    }
+
+    /// Returns `true` if the `zstd` binary is available on PATH (H7
+    /// export/import shell out to it).
+    fn zstd_cli_available() -> bool {
+        std::process::Command::new("zstd")
+            .arg("--version")
+            .output()
+            .is_ok()
     }
 
     // --- Exit codes propagate through dispatch ---
@@ -386,6 +529,35 @@ mod dispatch_tests {
         let _ = CleanArgs {
             project: "p".into(),
             db: "./x.lbug".into(),
+        };
+        let _ = ExportArgs {
+            output: "./o.zst".into(),
+            db: "./x.lbug".into(),
+            project: None,
+        };
+        let _ = ImportArgs {
+            input: "./i.zst".into(),
+            db: "./x.lbug".into(),
+            reindex: false,
+            path: None,
+            name: None,
+        };
+        let _ = ContextArgs {
+            symbol: "s".into(),
+            db: "./x.lbug".into(),
+            depth: 2,
+        };
+        let _ = DetectChangesArgs {
+            path: "/r".into(),
+            db: "./x.lbug".into(),
+            mode: "unstaged".into(),
+        };
+        let _ = RenameArgs {
+            from: "a".into(),
+            to: "b".into(),
+            db: "./x.lbug".into(),
+            path: None,
+            apply: false,
         };
     }
 }

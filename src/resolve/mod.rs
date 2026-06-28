@@ -34,6 +34,7 @@ pub mod fqn;
 pub mod mro;
 pub mod scope;
 pub mod symbol_table;
+pub mod type_resolver;
 
 pub use calls::CallResolver;
 #[cfg(all(feature = "lang-c", feature = "lang-rust"))]
@@ -44,6 +45,7 @@ pub use fqn::FqnGenerator;
 pub use mro::{mro_for, MroResolver, MroStrategy};
 pub use scope::{Scope, ScopeChain, ScopeContext, ScopeResolver, ScopeResolverRegistry};
 pub use symbol_table::{FileSymbolTable, ProjectSymbolTable, SymbolEntry};
+pub use type_resolver::TypeResolver;
 pub use module::{ResolverModule, ResolverModuleBuilder};
 
 use crate::ir::ExtractResult;
@@ -126,6 +128,12 @@ pub fn resolve_all(
         let ffi_resolver = FfiResolver::new(symbol_table, project);
         edges.extend(ffi_resolver.resolve_ffi(results, graph));
     }
+    // Type resolution fixes dangling Extends/Implements/UsesType edges
+    // (design.md H6). Runs after other resolvers so it can fix edges created
+    // by the parse phase. Returns the list of fixed edges (already mutated
+    // in `graph`).
+    let type_resolver = TypeResolver::new(symbol_table);
+    edges.extend(type_resolver.resolve_types(results, graph));
     edges
 }
 

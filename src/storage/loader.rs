@@ -192,6 +192,7 @@ pub fn node_to_row(node: &Node, label: NodeLabel) -> Vec<String> {
             opt_lang(&node.language),
             prop_int(node, "fileCount"),
             prop_int(node, "indexedAt"),
+            prop_str(node, "lastCommit"),
         ],
         NodeLabel::Folder => vec![
             node.id.clone(),
@@ -637,17 +638,19 @@ mod tests {
             .properties(serde_json::json!({
                 "rootPath": "/repo/demo",
                 "fileCount": 42,
-                "indexedAt": 1700000000
+                "indexedAt": 1700000000,
+                "lastCommit": "abc123"
             }))
             .build();
         let csv = write_nodes_csv(&[node], NodeLabel::Project);
         let lines: Vec<&str> = csv.lines().collect();
-        assert_eq!(lines[0], "id,name,rootPath,language,fileCount,indexedAt");
+        assert_eq!(lines[0], "id,name,rootPath,language,fileCount,indexedAt,lastCommit");
         assert!(lines[1].contains("proj_001"));
         assert!(lines[1].contains("demo"));
         assert!(lines[1].contains("/repo/demo"));
         assert!(lines[1].contains("42"));
         assert!(lines[1].contains("1700000000"));
+        assert!(lines[1].contains("abc123"));
     }
 
     #[test]
@@ -723,16 +726,17 @@ mod tests {
     }
 
     #[test]
-    fn node_to_row_project_has_six_columns() {
+    fn node_to_row_project_has_seven_columns() {
         let node = Node::builder(NodeLabel::Project, "p", "p")
             .id("p1")
-            .properties(serde_json::json!({"rootPath": "/", "fileCount": 1, "indexedAt": 2}))
+            .properties(serde_json::json!({"rootPath": "/", "fileCount": 1, "indexedAt": 2, "lastCommit": "abc"}))
             .build();
         let row = node_to_row(&node, NodeLabel::Project);
-        assert_eq!(row.len(), 6);
+        assert_eq!(row.len(), 7);
         assert_eq!(row[2], "/");
         assert_eq!(row[4], "1");
         assert_eq!(row[5], "2");
+        assert_eq!(row[6], "abc");
     }
 
     #[test]

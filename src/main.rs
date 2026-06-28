@@ -86,6 +86,26 @@ fn run_command(command: Command) -> Result<(), CliError> {
             let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
             codenexus::cli::clean_cmd::run(&kit, &args)
         }
+        Command::Export(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::export_cmd::run(&kit, &args)
+        }
+        Command::Import(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::import_cmd::run(&kit, &args)
+        }
+        Command::Context(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::context_cmd::run(&kit, &args)
+        }
+        Command::DetectChanges(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::detect_changes_cmd::run(&kit, &args)
+        }
+        Command::Rename(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::rename_cmd::run(&kit, &args)
+        }
     }
 }
 

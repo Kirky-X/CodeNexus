@@ -49,7 +49,7 @@ pub enum SearchStrategyType {
 impl SearchStrategyType {
     /// Parses a strategy type from a string.
     #[must_use]
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse_str(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "bm25" => Some(Self::Bm25),
             "semantic" => Some(Self::Semantic),
@@ -145,12 +145,12 @@ impl<'a> SearchStrategy for Bm25Strategy<'a> {
 /// for similar vectors, and joins with node metadata to produce
 /// [`SearchResult`]s. On Windows (or when vector support is unavailable), this
 /// degrades to [`Bm25Strategy`].
-pub struct SemanticStrategy<'a, C: EmbedClient> {
+pub struct SemanticStrategy<'a, C: ?Sized + EmbedClient> {
     conn: &'a StorageConnection,
     client: &'a C,
 }
 
-impl<'a, C: EmbedClient> SemanticStrategy<'a, C> {
+impl<'a, C: ?Sized + EmbedClient> SemanticStrategy<'a, C> {
     /// Creates a new semantic strategy.
     #[must_use]
     pub fn new(conn: &'a StorageConnection, client: &'a C) -> Self {
@@ -158,7 +158,7 @@ impl<'a, C: EmbedClient> SemanticStrategy<'a, C> {
     }
 }
 
-impl<'a, C: EmbedClient> SearchStrategy for SemanticStrategy<'a, C> {
+impl<'a, C: ?Sized + EmbedClient> SearchStrategy for SemanticStrategy<'a, C> {
     fn search(
         &self,
         query: &str,
@@ -209,12 +209,12 @@ impl<'a, C: EmbedClient> SearchStrategy for SemanticStrategy<'a, C> {
 /// Runs both BM25 and semantic search, then fuses the ranked lists using
 /// Reciprocal Rank Fusion. On Windows (or when vector support is unavailable),
 /// this degrades to BM25-only.
-pub struct HybridStrategy<'a, C: EmbedClient> {
+pub struct HybridStrategy<'a, C: ?Sized + EmbedClient> {
     conn: &'a StorageConnection,
     client: &'a C,
 }
 
-impl<'a, C: EmbedClient> HybridStrategy<'a, C> {
+impl<'a, C: ?Sized + EmbedClient> HybridStrategy<'a, C> {
     /// Creates a new hybrid strategy.
     #[must_use]
     pub fn new(conn: &'a StorageConnection, client: &'a C) -> Self {
@@ -222,7 +222,7 @@ impl<'a, C: EmbedClient> HybridStrategy<'a, C> {
     }
 }
 
-impl<'a, C: EmbedClient> SearchStrategy for HybridStrategy<'a, C> {
+impl<'a, C: ?Sized + EmbedClient> SearchStrategy for HybridStrategy<'a, C> {
     fn search(
         &self,
         query: &str,
@@ -332,7 +332,7 @@ fn lookup_node_metadata(conn: &StorageConnection, hit: &EmbeddingHit) -> Option<
         if let Ok(rows) = conn.query(&cypher) {
             if let Some(row) = rows.first() {
                 let name = row
-                    .get(0)
+                    .first()
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
@@ -379,18 +379,18 @@ mod tests {
     #[test]
     fn strategy_type_from_str() {
         assert_eq!(
-            SearchStrategyType::from_str("bm25"),
+            SearchStrategyType::parse_str("bm25"),
             Some(SearchStrategyType::Bm25)
         );
         assert_eq!(
-            SearchStrategyType::from_str("SEMANTIC"),
+            SearchStrategyType::parse_str("SEMANTIC"),
             Some(SearchStrategyType::Semantic)
         );
         assert_eq!(
-            SearchStrategyType::from_str("Hybrid"),
+            SearchStrategyType::parse_str("Hybrid"),
             Some(SearchStrategyType::Hybrid)
         );
-        assert_eq!(SearchStrategyType::from_str("unknown"), None);
+        assert_eq!(SearchStrategyType::parse_str("unknown"), None);
     }
 
     #[test]

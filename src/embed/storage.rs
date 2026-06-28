@@ -182,7 +182,7 @@ impl<'a> EmbeddingStorage<'a> {
         let mut hits: Vec<EmbeddingHit> = rows
             .into_iter()
             .filter_map(|row| {
-                let node_id = row.get(0)?.as_str()?.to_string();
+                let node_id = row.first()?.as_str()?.to_string();
                 let project = row.get(1)?.as_str()?.to_string();
                 let embedding = Self::parse_embedding(row.get(2)?)?;
                 let score = cosine_similarity(query_vec, &embedding);

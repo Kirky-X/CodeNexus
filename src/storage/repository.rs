@@ -36,6 +36,8 @@ pub struct ProjectRecord {
     pub file_count: i64,
     /// Indexing timestamp (unix seconds).
     pub indexed_at: i64,
+    /// Git commit hash at index time (empty if not a git repo).
+    pub last_commit: String,
 }
 
 /// A simplified function record returned by [`Repository::query_functions`].
@@ -121,14 +123,16 @@ impl Repository {
             .unwrap_or_default();
         let file_count = i64_prop(node, "fileCount");
         let indexed_at = i64_prop(node, "indexedAt");
+        let last_commit = str_prop(node, "lastCommit");
         let cypher = format!(
-            "CREATE (:Project {{id: '{}', name: '{}', rootPath: '{}', language: '{}', fileCount: {}, indexedAt: {}}});",
+            "CREATE (:Project {{id: '{}', name: '{}', rootPath: '{}', language: '{}', fileCount: {}, indexedAt: {}, lastCommit: '{}'}});",
             escape_cypher_string(&node.id),
             escape_cypher_string(&node.name),
             escape_cypher_string(&root_path),
             escape_cypher_string(&language),
             file_count,
             indexed_at,
+            escape_cypher_string(&last_commit),
         );
         self.conn.execute(&cypher)
     }
@@ -164,7 +168,7 @@ impl Repository {
     /// Returns the project with the given id, or `None` if not found.
     pub fn get_project(&self, id: &str) -> Result<Option<ProjectRecord>> {
         let cypher = format!(
-            "MATCH (p:Project {{id: '{}'}}) RETURN p.id AS id, p.name AS name, p.rootPath AS rootPath, p.language AS language, p.fileCount AS fileCount, p.indexedAt AS indexedAt;",
+            "MATCH (p:Project {{id: '{}'}}) RETURN p.id AS id, p.name AS name, p.rootPath AS rootPath, p.language AS language, p.fileCount AS fileCount, p.indexedAt AS indexedAt, p.lastCommit AS lastCommit;",
             escape_cypher_string(id),
         );
         let rows = self.conn.query(&cypher)?;
@@ -173,7 +177,7 @@ impl Repository {
 
     /// Lists all indexed projects.
     pub fn list_projects(&self) -> Result<Vec<ProjectRecord>> {
-        let cypher = "MATCH (p:Project) RETURN p.id AS id, p.name AS name, p.rootPath AS rootPath, p.language AS language, p.fileCount AS fileCount, p.indexedAt AS indexedAt ORDER BY p.name;";
+        let cypher = "MATCH (p:Project) RETURN p.id AS id, p.name AS name, p.rootPath AS rootPath, p.language AS language, p.fileCount AS fileCount, p.indexedAt AS indexedAt, p.lastCommit AS lastCommit ORDER BY p.name;";
         let rows = self.conn.query(cypher)?;
         Ok(rows.into_iter().map(row_to_project).collect())
     }
@@ -380,6 +384,7 @@ fn row_to_project(row: Vec<serde_json::Value>) -> ProjectRecord {
         language: get_str(3),
         file_count: get_i64(4),
         indexed_at: get_i64(5),
+        last_commit: get_str(6),
     }
 }
 
@@ -978,6 +983,7 @@ mod tests {
             language: "rust".into(),
             file_count: 1,
             indexed_at: 2,
+            last_commit: "abc123".into(),
         };
         let b = a.clone();
         assert_eq!(a, b);

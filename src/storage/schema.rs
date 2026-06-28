@@ -138,6 +138,13 @@ pub fn index_ddl() -> Vec<String> {
         "CREATE FTS INDEX fts_function_content ON Function(content);".to_string(),
         "CREATE FTS INDEX fts_class_content ON Class(content);".to_string(),
         "CREATE FTS INDEX fts_method_content ON Method(content);".to_string(),
+        // --- FTS indexes (H11): BM25 over symbol `name` columns ---
+        // Used by `FullTextSearcher` for identifier-aware BM25 search. The
+        // `codenexus_tokenizer` (Rust-side) splits camelCase/snake_case before
+        // querying, enabling `parse` to match `parseFile` / `parse_file`.
+        "CREATE FTS INDEX fts_function_name ON Function(name);".to_string(),
+        "CREATE FTS INDEX fts_class_name ON Class(name);".to_string(),
+        "CREATE FTS INDEX fts_method_name ON Method(name);".to_string(),
         // --- VECTOR index (DDD §6): cosine similarity over embeddings ---
         "CREATE VECTOR INDEX vec_embedding ON Embedding(embedding) WITH (metric=cosine);"
             .to_string(),
@@ -171,7 +178,7 @@ pub fn all_init_ddl() -> Vec<String> {
 #[must_use]
 pub fn node_table_columns(label: NodeLabel) -> &'static [&'static str] {
     match label {
-        NodeLabel::Project => &["id", "name", "rootPath", "language", "fileCount", "indexedAt"],
+        NodeLabel::Project => &["id", "name", "rootPath", "language", "fileCount", "indexedAt", "lastCommit"],
         NodeLabel::Folder => &["id", "project", "name", "filePath"],
         NodeLabel::File => &[
             "id",
@@ -470,7 +477,8 @@ pub fn relation_table_columns() -> &'static [&'static str] {
 fn ddl_for_label(label: NodeLabel) -> String {
     match label {
         NodeLabel::Project => "CREATE NODE TABLE Project (id STRING, name STRING, rootPath STRING, \
-             language STRING, fileCount INT64, indexedAt INT64, PRIMARY KEY (id));"
+             language STRING, fileCount INT64, indexedAt INT64, lastCommit STRING, \
+             PRIMARY KEY (id));"
             .to_string(),
         NodeLabel::Folder => "CREATE NODE TABLE Folder (id STRING, project STRING, name STRING, \
              filePath STRING, PRIMARY KEY (id));"
@@ -825,8 +833,8 @@ mod tests {
     #[test]
     fn index_ddl_count_matches_spec() {
         let indexes = index_ddl();
-        // 18 secondary indexes + 3 FTS indexes + 1 VECTOR index = 22
-        assert_eq!(indexes.len(), 22, "expected 22 index statements");
+        // 18 secondary indexes + 6 FTS indexes (3 content + 3 name) + 1 VECTOR index = 25
+        assert_eq!(indexes.len(), 25, "expected 25 index statements");
     }
 
     #[test]
@@ -839,8 +847,8 @@ mod tests {
             .collect();
         assert_eq!(
             fts_indexes.len(),
-            3,
-            "expected exactly 3 FTS index statements, got {}: {fts_indexes:?}",
+            6,
+            "expected exactly 6 FTS index statements (3 content + 3 name), got {}: {fts_indexes:?}",
             fts_indexes.len()
         );
         // Each FTS statement must target the `content` column of its table.
@@ -864,6 +872,34 @@ mod tests {
                 up.contains("FTS") && up.contains("METHOD") && up.contains("CONTENT")
             }),
             "missing FTS index on Method(content): {indexes:?}"
+        );
+    }
+
+    #[test]
+    fn index_ddl_contains_fts_indexes_for_name_columns() {
+        // H11: FTS indexes on Function.name, Class.name, Method.name for
+        // identifier-aware BM25 search via codenexus_tokenizer.
+        let indexes = index_ddl();
+        assert!(
+            indexes.iter().any(|s| {
+                let up = s.to_ascii_uppercase();
+                up.contains("FTS") && up.contains("FUNCTION") && up.contains("NAME")
+            }),
+            "missing FTS index on Function(name): {indexes:?}"
+        );
+        assert!(
+            indexes.iter().any(|s| {
+                let up = s.to_ascii_uppercase();
+                up.contains("FTS") && up.contains("CLASS") && up.contains("NAME")
+            }),
+            "missing FTS index on Class(name): {indexes:?}"
+        );
+        assert!(
+            indexes.iter().any(|s| {
+                let up = s.to_ascii_uppercase();
+                up.contains("FTS") && up.contains("METHOD") && up.contains("NAME")
+            }),
+            "missing FTS index on Method(name): {indexes:?}"
         );
     }
 
@@ -897,8 +933,8 @@ mod tests {
     fn all_init_ddl_includes_node_tables_relation_embedding_and_indexes() {
         let ddl = all_init_ddl();
         // 44 node tables (incl. Embedding via ddl_for_label) + 1 relation
-        // + 22 indexes (18 secondary + 3 FTS + 1 VECTOR) = 67
-        assert_eq!(ddl.len(), 67, "expected 67 DDL statements total");
+        // + 25 indexes (18 secondary + 6 FTS + 1 VECTOR) = 70
+        assert_eq!(ddl.len(), 70, "expected 70 DDL statements total");
         assert!(ddl.iter().any(|s| s.contains("CREATE NODE TABLE Project")));
         assert!(ddl.iter().any(|s| s.contains("CodeRelation")));
         assert!(ddl.iter().any(|s| s.contains("Embedding")));
@@ -944,7 +980,7 @@ mod tests {
         let cols = node_table_columns(NodeLabel::Project);
         assert_eq!(
             cols,
-            &["id", "name", "rootPath", "language", "fileCount", "indexedAt"]
+            &["id", "name", "rootPath", "language", "fileCount", "indexedAt", "lastCommit"]
         );
     }
 

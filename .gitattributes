@@ -1,0 +1,11 @@
+# CodeNexus .gitattributes
+#
+# Team artifact (H7) — `codenexus export` produces a zstd-compressed binary
+# artifact. Treat it as a binary blob and use the `ours` merge driver so
+# concurrent edits don't corrupt the file (design.md D6). Engineers should
+# re-export after merging rather than letting Git attempt a text merge.
+codenexus.graph.zst merge=ours binary
+
+# LadybugDB database files are binary; never attempt text merges.
+*.lbug binary
+*.lbug.wal binary
