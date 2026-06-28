@@ -16,7 +16,16 @@ English | [简体中文](README_ZH.md)
 
 CodeNexus indexes source code repositories into a queryable knowledge graph. It uses [tree-sitter](https://tree-sitter.github.io/) for multi-language parsing and [LadybugDB](https://github.com/ladybugdb/ladybugdb) for graph storage, supporting symbol tracing, impact analysis, and data-flow analysis.
 
+CodeNexus turns a codebase into a structured graph of symbols and their relationships (calls, data flows, imports, FFI bindings, ...). Once indexed, you can query the graph with a Cypher subset, trace how a symbol is reached, measure the blast radius of a change, and feed the graph to AI agents through a Model Context Protocol (MCP) server.
+
 Supports **5 languages**: C, Rust, Fortran, Python, TypeScript.
+
+### Typical Use Cases
+
+- **Impact analysis before refactoring** — find every caller of a function across files and languages before editing it.
+- **Onboarding a new codebase** — index a repo, then `query`/`context`/`trace` to navigate symbols and their relationships instead of grepping.
+- **AI agent grounding** — run `codenexus mcp` so Claude Code / Cursor / Codex can call `query`, `context`, `impact`, and `detect-changes` tools with real call-graph data.
+- **Team knowledge sharing** — `export` an index as a `.graph.zst` artifact and `import` it on a teammate's machine.
 
 ## Key Features
 
@@ -31,119 +40,11 @@ Supports **5 languages**: C, Rust, Fortran, Python, TypeScript.
 | Impact analysis | Change impact radius analysis, layered by depth |
 | Disambiguation | Ranked multi-match symbol resolution with `--uid`/`--file`/`--kind` narrowing |
 | Confidence tiers | Each edge carries a tier (SameFile / ImportScoped / Global) + 0.0-1.0 score |
-| Cross-language FFI | C-Fortran bind(C), Rust extern, and other FFI call resolution |
+| Cross-language FFI | C-Fortran `bind(C)`, Rust `extern`, and other FFI call resolution |
 | Team artifacts | `export`/`import` compressed `.graph.zst` artifacts for sharing indexes |
 | Multi-agent MCP | `setup` auto-detects Claude Code/Cursor/Codex; `hook` emits PreToolUse/PostToolUse JSON; `mcp` stdio server |
 | File watching | Daemon mode with auto-incremental indexing (`daemon` feature) |
 | Vector embedding | Optional semantic search (`embed` feature) |
-
-## Installation
-
-```bash
-# Build from source
-git clone https://github.com/Kirky-X/codenexus.git
-cd codenexus
-cargo install --path .
-
-# Or compile directly
-cargo build --release
-```
-
-### Feature Flags
-
-| Feature | Default | Description |
-|---------|---------|-------------|
-| `daemon` | enabled | File-watching daemon (notify + notify-debouncer-full) |
-| `embed` | disabled | Vector embedding semantic search (reqwest HTTP client) |
-| `lsp` | disabled | LSP-enhanced extraction (reserved, not yet implemented) |
-| `lang-rust` | enabled | Rust language parser (minimal single-language build) |
-
-```bash
-# Lean build (no daemon, smaller binary)
-cargo build --release --no-default-features
-
-# Minimal single-language build (Rust only, no daemon)
-cargo build --release --no-default-features --features lang-rust
-
-# Full build (with embedding)
-cargo build --release --features embed
-```
-
-## Quick Start
-
-```bash
-# 1. Index a codebase
-codenexus index /path/to/project --name myproject
-
-# 1b. RAM-first indexing (LZ4 in-memory, faster for small-medium repos)
-codenexus index /path/to/project --name myproject --ram-first
-
-# 2. Query functions
-codenexus query "MATCH (f:Function) RETURN f.name LIMIT 10"
-
-# 3. Trace call paths (with disambiguation narrowing)
-codenexus trace main --type calls --depth 5
-codenexus trace main --uid "proj.fn.main.1" --depth 5
-
-# 4. Analyze change impact (filter by confidence)
-codenexus impact parse_function --depth 3
-codenexus impact parse_function --depth 3 --min-confidence 0.7
-
-# 5. Search symbols
-codenexus search "parse" --limit 20
-
-# 6. 360° symbol context
-codenexus context main
-
-# 7. Detect git-diff affected symbols
-codenexus detect-changes /path/to/project
-
-# 8. Rename a symbol (graph-edits + text-search, --dry-run supported)
-codenexus rename old_name new_name --dry-run
-
-# 9. Export / import team artifacts
-codenexus export --db ./my.lbug --output team.graph.zst
-codenexus import --input team.graph.zst --db ./shared.lbug
-
-# 10. Multi-agent MCP integration
-codenexus setup                    # auto-detect agents, write MCP config
-codenexus hook                     # emit PreToolUse/PostToolUse JSON
-codenexus mcp                      # stdio MCP server (JSON-RPC 2.0)
-
-# 11. Show indexing status
-codenexus status
-
-# 12. Start file-watching daemon
-codenexus daemon /path/to/project --name myproject
-
-# 13. List all projects
-codenexus list
-
-# 14. Remove a project
-codenexus clean myproject
-```
-
-## CLI Commands
-
-| Command | Description |
-|---------|-------------|
-| `index` | Index a codebase into the knowledge graph (`--ram-first` for LZ4 in-memory) |
-| `query` | Execute a Cypher query |
-| `trace` | Trace a symbol's call/data-flow paths (`--uid`/`--file`/`--kind` narrowing) |
-| `impact` | Analyze the impact radius of changing a symbol (`--min-confidence` filter) |
-| `search` | Search symbols by name or content (`--uid`/`--file`/`--kind` narrowing) |
-| `context` | 360° symbol view: incoming calls/imports, outgoing calls, processes |
-| `detect-changes` | Git diff → affected symbols + risk_level |
-| `rename` | Graph-edits for high-confidence + text-search edits (`--dry-run`) |
-| `export` | Export LadybugDB dump → zstd `codenexus.graph.zst` artifact |
-| `import` | Import artifact → LadybugDB (optional `--reindex` for local diff) |
-| `setup` | Auto-detect installed agents (Claude Code/Cursor/Codex) and write MCP config |
-| `hook` | Emit PreToolUse/PostToolUse JSON (exit 0, never blocks) |
-| `mcp` | stdio MCP server (JSON-RPC 2.0, protocol 2024-11-05) |
-| `daemon` | Start the file-watching daemon |
-| `status` | Show indexing status |
-| `list` | List all indexed projects |
-| `clean` | Remove a project and its index |
 
 ## Architecture
 
@@ -175,7 +76,7 @@ codenexus clean myproject
 - **24 edge types**: Contains, Defines, MemberOf, Calls, FfiCalls, DataFlows, Reads, Writes, Implements, Extends, UsesType, References, Imports, Includes, HasMethod, HasProperty, Accesses, MethodOverrides, MethodImplements, StepInProcess, HandlesRoute, Fetches, HandlesTool, EntryPointOf
 - Each edge carries a confidence score (0.0-1.0) and a confidence tier (`SameFile` / `ImportScoped` / `Global`)
 
-## Supported Languages
+### Supported Languages
 
 | Language | Node Types | Edge Types |
 |----------|------------|------------|
@@ -185,26 +86,223 @@ codenexus clean myproject
 | Python | Function, Method, Class | Calls, Imports, Extends |
 | TypeScript | Function, Class, Method, Interface, Enum, TypeAlias, Const | Calls, Imports |
 
+## Quick Start
+
+### Prerequisites
+
+| Dependency | Version | Notes |
+|------------|---------|-------|
+| Rust toolchain | 1.81+ (stable) | Required for `cargo build`. CI pins 1.81. |
+| nightly rustfmt | latest | `cargo fmt` uses nightly-only options (`imports_granularity`, `group_imports`). |
+| C/C++ compiler | system default | Required to build tree-sitter grammar crates. |
+| `zstd` CLI | any recent version | Used by `export`/`import` for `.graph.zst` artifacts. |
+
+### Installation
+
+```bash
+# Build from source
+git clone https://github.com/Kirky-X/codenexus.git
+cd codenexus
+cargo install --path .
+
+# Or compile directly (binary at target/release/codenexus)
+cargo build --release
+```
+
+### Feature Flags
+
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `daemon` | enabled | File-watching daemon (notify + notify-debouncer-full) |
+| `embed` | disabled | Vector embedding semantic search (reqwest HTTP client + local ONNX via `ort`) |
+| `lsp` | disabled | LSP-enhanced extraction (reserved, not yet implemented) |
+| `lang-rust` | enabled | Rust language parser (minimal single-language build) |
+| `lang-c` | enabled in `core`/`full` | C language parser |
+| `lang-python` | enabled in `core`/`full` | Python language parser |
+| `lang-fortran` | enabled in `full` | Fortran language parser |
+| `lang-typescript` | enabled in `full` | TypeScript language parser |
+
+Tiered presets: `minimal` < `core` < `full` (default = `full`).
+
+```bash
+# Lean build (no daemon, smaller binary)
+cargo build --release --no-default-features --features core
+
+# Minimal single-language build (Rust only, no daemon)
+cargo build --release --no-default-features --features minimal
+
+# Full build with embedding semantic search
+cargo build --release --features embed
+```
+
+### First Index
+
+```bash
+# 1. Index a codebase into the knowledge graph
+codenexus index /path/to/project --name myproject
+
+# 1b. RAM-first indexing (LZ4 in-memory, faster for small-medium repos)
+codenexus index /path/to/project --name myproject --ram-first
+
+# 2. Verify the index
+codenexus status
+codenexus list
+
+# 3. Start exploring
+codenexus query "MATCH (f:Function) RETURN f.name LIMIT 10"
+codenexus context main
+```
+
+### Common Workflows
+
+```bash
+# Trace call paths (with disambiguation narrowing)
+codenexus trace main --type calls --depth 5
+codenexus trace main --uid "proj.fn.main.1" --depth 5
+
+# Analyze change impact (filter by confidence)
+codenexus impact parse_function --depth 3
+codenexus impact parse_function --depth 3 --min-confidence 0.7
+
+# Search symbols
+codenexus search "parse" --limit 20
+
+# 360° symbol context: incoming calls/imports, outgoing calls, processes
+codenexus context main
+
+# Detect git-diff affected symbols before committing
+codenexus detect-changes /path/to/project
+
+# Rename a symbol (graph-edits + text-search, --dry-run supported)
+codenexus rename old_name new_name --dry-run
+
+# Export / import team artifacts
+codenexus export --db ./my.lbug --output team.graph.zst
+codenexus import --input team.graph.zst --db ./shared.lbug
+
+# Start file-watching daemon for auto-incremental indexing
+codenexus daemon /path/to/project --name myproject
+
+# Remove a project and its index
+codenexus clean myproject
+```
+
+## CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `index` | Index a codebase into the knowledge graph (`--ram-first` for LZ4 in-memory) |
+| `query` | Execute a Cypher query |
+| `trace` | Trace a symbol's call/data-flow paths (`--uid`/`--file`/`--kind` narrowing) |
+| `impact` | Analyze the impact radius of changing a symbol (`--min-confidence` filter) |
+| `search` | Search symbols by name or content (`--uid`/`--file`/`--kind` narrowing) |
+| `context` | 360° symbol view: incoming calls/imports, outgoing calls, processes |
+| `detect-changes` | Git diff → affected symbols + risk_level |
+| `rename` | Graph-edits for high-confidence + text-search edits (`--dry-run`) |
+| `export` | Export LadybugDB dump → zstd `codenexus.graph.zst` artifact |
+| `import` | Import artifact → LadybugDB (optional `--reindex` for local diff) |
+| `setup` | Auto-detect installed agents (Claude Code/Cursor/Codex) and write MCP config |
+| `hook` | Emit PreToolUse/PostToolUse JSON (exit 0, never blocks) |
+| `mcp` | stdio MCP server (JSON-RPC 2.0, protocol 2024-11-05) |
+| `daemon` | Start the file-watching daemon |
+| `status` | Show indexing status |
+| `list` | List all indexed projects |
+| `clean` | Remove a project and its index |
+
+## Configuration
+
+CodeNexus is a CLI tool and is configured primarily through command-line flags. A small number of environment variables are honored:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RUST_LOG` | `info` | `tracing` log level (`error`/`warn`/`info`/`debug`/`trace`), supports `codenexus=debug` style filtering. |
+| `CODENEXUS_DB_PATH` | `./codenexus.lbug` | Default LadybugDB database path used when `--db` is not passed to `index`/`query`/`status`/etc. |
+
+See [`.env.example`](.env.example) for a copy-paste template. CodeNexus does not read a `.env` file itself; that file is for shells or process managers.
+
+### Agent Integration
+
+Run `codenexus setup` to auto-detect installed AI agents (Claude Code, Cursor, Codex) and write the MCP configuration into the right location for each. After setup, the agent can call CodeNexus tools (`query`, `context`, `impact`, `detect-changes`, `rename`, ...) over the MCP stdio server started by `codenexus mcp`.
+
+For Git hooks, `codenexus hook` emits `PreToolUse`/`PostToolUse` JSON events and always exits 0, so it can be wired into a hook without blocking agent actions.
+
+## API Documentation
+
+CodeNexus exposes two programmatic interfaces:
+
+### MCP Server (`codenexus mcp`)
+
+A stdio JSON-RPC 2.0 server implementing [Model Context Protocol](https://modelcontextprotocol.io/) (version 2024-11-05). AI agents call it to query the knowledge graph. Run `codenexus setup` once to register the server with your agent; the agent then starts `codenexus mcp` automatically.
+
+### Library Crate
+
+CodeNexus is published as a Rust library (`codenexus` lib crate, see `Cargo.toml` `[lib]`). Embed the indexing pipeline, query facade, or trace engine in another Rust project by depending on the crate. Runnable usage examples live under [`examples/`](examples/).
+
+### In-Repo Design Docs
+
+Detailed design material is kept in `docs/` (note: some of these files are git-ignored as they are internal working documents):
+
+- `docs/PRD.md` — Product Requirements Document
+- `docs/TRD.md` — Technical Requirements Document
+- `docs/DDD.md` — Detailed Design Document
+- `docs/ADD.md` — Architecture Design Document (ADRs)
+
 ## Development
 
 ```bash
 # Run tests
 cargo test
 
-# Lint
+# Lint (CI gate)
 cargo clippy -- -D warnings
 
-# Format
-cargo fmt
+# Format (requires nightly rustfmt for imports_granularity/group_imports)
+cargo +nightly fmt
 
 # Benchmarks
 cargo bench
 ```
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development workflow, and [`.editorconfig`](.editorconfig) / [`rustfmt.toml`](rustfmt.toml) for style rules.
+
 ## Contributing
 
-Issues and Pull Requests are welcome. Please ensure `cargo test` and `cargo clippy -- -D warnings` pass.
+Issues and Pull Requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) for:
+
+- Development environment setup
+- Conventional Commits conventions
+- Pull Request workflow
+- Test and lint requirements (`cargo test` and `cargo clippy -- -D warnings` must pass)
+- Code style (`cargo +nightly fmt`)
+
+By participating, you agree to abide by the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Roadmap
+
+CodeNexus is at v0.1.0. Planned work, ordered by current priority:
+
+- [x] v0.1.0 — Multi-language indexing (C/Rust/Fortran/Python/TypeScript), graph schema (44 node types + 24 edge types), `query`/`trace`/`impact`/`context`/`search`, incremental indexing, RAM-first mode, MCP server, team `export`/`import`, daemon mode, confidence tiers, disambiguation
+- [ ] v0.1.x — Stability and performance hardening: incremental reindex coverage, larger-repo memory tuning, more language-specific edge extraction
+- [ ] v0.2.0 — `lsp` feature: LSP-enhanced extraction for type-accurate resolution beyond tree-sitter
+- [ ] v0.2.0 — Expand language coverage (Go, Java, C++) behind new `lang-*` features
+- [ ] v0.3.0 — Cross-language data-flow tracing end-to-end (currently edges are recorded; multi-hop taint paths need a dedicated query path)
+- [ ] v0.3.0 — Vector embedding default-on semantic search once ONNX model size and startup cost are acceptable
+- [ ] Future — Web UI / graph visualization on top of the query facade
 
 ## License
 
 [MIT](LICENSE)
+
+## Acknowledgments
+
+CodeNexus would not be possible without these projects:
+
+- [tree-sitter](https://tree-sitter.github.io/) — incremental parsing framework that powers all language extractors
+- [LadybugDB](https://github.com/ladybugdb/ladybugdb) — graph database backing the knowledge graph
+- [Rayon](https://github.com/rayon-rs/rayon) — data-parallel parsing
+- [ignore](https://docs.rs/ignore) — `.gitignore`-aware file discovery
+- [clap](https://docs.rs/clap) — CLI framework
+- [Model Context Protocol](https://modelcontextprotocol.io/) — spec for the `mcp` server
+- Every tree-sitter grammar maintainer — the per-language grammar crates do the hard parsing work
+
+Project author: **Kirky.X** — [github.com/Kirky-X](https://github.com/Kirky-X)
