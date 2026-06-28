@@ -2,7 +2,12 @@
 name = "codenexus"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.81"
+# MSRV 1.85 (Rust 2024 edition, released 2025-02-20). Unlocks future major
+# upgrades of clap 4.6 / reqwest 0.13 / uuid 1.23 (all MSRV 1.85) without
+# forcing them now. Previously 1.81 was the floor, but 1.85 is the natural
+# baseline for Rust 2024 edition projects and is widely available in current
+# distro toolchains (rustc 1.85+ shipped in Debian 13, Ubuntu 25.04, Fedora 42).
+rust-version = "1.85"
 description = "A queryable code knowledge graph tool built on LadybugDB and tree-sitter"
 authors = ["Kirky.X"]
 license = "MIT"
@@ -113,7 +118,13 @@ pest_derive = "2.7"
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.1", default-features = false, features = ["env-filter", "fmt"] }
+# tracing-subscriber 0.3 (was 0.1, EOL ~2020). API surface used here —
+# `FmtSubscriber::builder()`, `with_env_filter`, `with_target`, `with_writer`,
+# `finish`, `init`, `EnvFilter::from_default_env`, `fmt::MakeWriter` — is
+# stable across 0.1 → 0.3. 0.3 is the long-term maintained line and is what
+# `tracing` 0.1 itself recommends in its README. `default-features = false`
+# keeps the binary lean (only `env-filter` + `fmt` pulled in).
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
