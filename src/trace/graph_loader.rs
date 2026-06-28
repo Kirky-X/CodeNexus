@@ -20,7 +20,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::model::{Edge, EdgeType, Graph, Node, NodeLabel};
-use crate::storage::schema::escape_identifier;
+use crate::storage::schema::{escape_cypher_string, escape_identifier};
 use crate::storage::{Repository, StorageError};
 
 /// Loads the subgraph reachable from `symbol` (within `depth` hops) from the
@@ -319,11 +319,6 @@ fn parse_edge_type(s: &str) -> EdgeType {
     EdgeType::Calls
 }
 
-/// Escapes a string for safe interpolation into a Cypher single-quoted string.
-fn escape_cypher_string(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('\'', "\\'")
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -349,12 +344,6 @@ mod tests {
         conn.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         conn.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
         conn.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, reason: 'direct call', startLine: 2, project: 'demo'});").expect("create edge");
-    }
-
-    #[test]
-    fn escape_cypher_string_handles_quotes() {
-        assert_eq!(escape_cypher_string("it's"), "it\\'s");
-        assert_eq!(escape_cypher_string("plain"), "plain");
     }
 
     #[test]

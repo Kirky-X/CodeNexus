@@ -19,7 +19,7 @@ use super::error::{QueryError, Result};
 use super::tokenizer::codenexus_tokenize;
 use super::SearchResult;
 use crate::model::NodeLabel;
-use crate::storage::schema::escape_identifier;
+use crate::storage::schema::{escape_cypher_string, escape_identifier};
 use crate::storage::StorageConnection;
 use tracing::warn;
 
@@ -306,11 +306,6 @@ fn sort_and_truncate(results: &mut Vec<SearchResult>, limit: usize) {
     }
 }
 
-/// Escapes a string for safe interpolation into a Cypher single-quoted string.
-fn escape_cypher_string(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('\'', "\\'")
-}
-
 /// Returns `true` when `err` indicates the FTS extension or FTS index is
 /// unavailable in the linked LadybugDB build.
 ///
@@ -520,12 +515,6 @@ mod tests {
     #[test]
     fn relevance_score_no_match() {
         assert_eq!(relevance_score("read_input", "parse"), 0.3);
-    }
-
-    #[test]
-    fn escape_cypher_string_handles_special_chars() {
-        assert_eq!(escape_cypher_string("it's"), "it\\'s");
-        assert_eq!(escape_cypher_string("a\\b"), "a\\\\b");
     }
 
     #[test]

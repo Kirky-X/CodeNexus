@@ -11,7 +11,7 @@
 use super::error::{QueryError, Result};
 use super::SearchResult;
 use crate::model::NodeLabel;
-use crate::storage::schema::escape_identifier;
+use crate::storage::schema::{escape_cypher_string, escape_identifier};
 use crate::storage::StorageConnection;
 
 /// Symbol-bearing node labels searched by [`StructuredSearcher::search`] and
@@ -228,12 +228,6 @@ fn sort_and_truncate(results: &mut Vec<SearchResult>, limit: usize) {
     if limit < results.len() {
         results.truncate(limit);
     }
-}
-
-/// Escapes a string for safe interpolation into a Cypher single-quoted string
-/// literal (mirrors [`crate::storage::repository`] internal helper).
-fn escape_cypher_string(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
 #[cfg(test)]
@@ -751,11 +745,5 @@ mod tests {
     #[test]
     fn relevance_score_empty_query_is_neutral() {
         assert_eq!(relevance_score("anything", ""), 1.0);
-    }
-
-    #[test]
-    fn escape_cypher_string_handles_quotes() {
-        assert_eq!(escape_cypher_string("it's"), "it\\'s");
-        assert_eq!(escape_cypher_string("path\\to"), "path\\\\to");
     }
 }

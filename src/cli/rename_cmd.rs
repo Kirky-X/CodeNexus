@@ -23,6 +23,7 @@ use super::args::RenameArgs;
 use super::error::{CliError, Result};
 use crate::kit::{Kit, StorageKey, TraceKey};
 use crate::model::{Graph, Node, NodeId};
+use crate::storage::schema::escape_cypher_string;
 use crate::trace::TraceError;
 
 /// Runs the `rename` subcommand.
@@ -308,11 +309,6 @@ fn apply_replacements(content: &str, edits: &[&TextEdit]) -> String {
     result
 }
 
-/// Escapes a string for safe embedding in a Cypher single-quoted literal.
-fn escape_cypher_string(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('\'', "\\'")
-}
-
 /// JSON-serializable rename output.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct RenameOutput {
@@ -472,15 +468,6 @@ mod tests {
     #[test]
     fn find_word_occurrences_empty_needle() {
         assert!(find_word_occurrences("abc", "").is_empty());
-    }
-
-    // --- escape_cypher_string ---
-
-    #[test]
-    fn escape_cypher_string_escapes_backslash_and_quote() {
-        assert_eq!(escape_cypher_string("a'b"), "a\\'b");
-        assert_eq!(escape_cypher_string("a\\b"), "a\\\\b");
-        assert_eq!(escape_cypher_string("plain"), "plain");
     }
 
     // --- file_to_rel_string ---

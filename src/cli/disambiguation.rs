@@ -33,6 +33,7 @@ use serde::Serialize;
 use super::error::{CliError, Result};
 use crate::kit::{Kit, StorageKey};
 use crate::model::NodeLabel;
+use crate::storage::schema::escape_cypher_string;
 
 /// Symbol labels searched for disambiguation (mirrors `query::SYMBOL_LABELS`).
 ///
@@ -282,12 +283,6 @@ fn score_candidates(
             }
         })
         .collect()
-}
-
-/// Escapes single quotes in a Cypher string literal (mirrors
-/// `storage::repository::escape_cypher_string`).
-fn escape_cypher_string(s: &str) -> String {
-    s.replace('\'', "\\'")
 }
 
 /// Parses a `--kind` string into a [`NodeLabel`].
@@ -688,14 +683,6 @@ mod tests {
         assert!(json.contains("\"kind_match\":1.0"));
         assert!(json.contains("\"file_match\":1.0"));
         assert!(json.contains("\"confidence_score\":1.0"));
-    }
-
-    // --- escape_cypher_string ---
-
-    #[test]
-    fn escape_cypher_string_handles_single_quotes() {
-        assert_eq!(escape_cypher_string("it's"), "it\\'s");
-        assert_eq!(escape_cypher_string("plain"), "plain");
     }
 
     // --- apply_filters ---

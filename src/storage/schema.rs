@@ -56,6 +56,15 @@ pub fn escape_identifier(name: &str) -> String {
     }
 }
 
+/// Escapes a string literal for safe inclusion in a Cypher single-quoted
+/// string. Backslash is escaped first, then single quote — the same rule used
+/// by every prior local copy (graph_loader, repository, fulltext, structured,
+/// disambiguation, rename_cmd) before consolidation here.
+#[must_use]
+pub fn escape_cypher_string(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
 /// Returns `(table_name, ddl)` pairs for all 44 node tables, in declaration
 /// order matching [`NodeLabel::all`].
 ///
@@ -662,6 +671,18 @@ fn ddl_for_label(label: NodeLabel) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escape_cypher_string_escapes_backslash_and_quote() {
+        // Backslash is escaped first, then single quote.
+        assert_eq!(
+            escape_cypher_string("it's a \\test"),
+            "it\\'s a \\\\test"
+        );
+        assert_eq!(escape_cypher_string("plain"), "plain");
+        assert_eq!(escape_cypher_string("'quoted'"), "\\'quoted\\'");
+        assert_eq!(escape_cypher_string("back\\slash"), "back\\\\slash");
+    }
 
     #[test]
     fn node_table_ddl_returns_forty_four_entries() {

@@ -17,7 +17,7 @@
 use super::connection::{SchemaInitReport, StorageConnection};
 use super::error::{Result, StorageError};
 use super::loader::{load_from_csv, write_csv_temp, write_edges_csv, write_nodes_csv};
-use super::schema::{escape_identifier, node_table_columns};
+use super::schema::{escape_cypher_string, escape_identifier, node_table_columns};
 use crate::model::{Edge, Node, NodeLabel};
 
 /// A simplified project record returned by [`Repository::get_project`] and
@@ -355,13 +355,6 @@ fn i64_prop(node: &Node, key: &str) -> i64 {
         .get(key)
         .and_then(|v| v.as_i64())
         .unwrap_or(0)
-}
-
-/// Escapes a string for safe interpolation into a Cypher single-quoted string
-/// literal. LadybugDB uses backslash escaping (see `Cypher.g4` `EscapedChar`):
-/// `\` → `\\` and `'` → `\'`.
-fn escape_cypher_string(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
 /// Converts a query row into a [`ProjectRecord`].
@@ -964,15 +957,6 @@ mod tests {
     }
 
     // --- helpers ---
-
-    #[test]
-    fn escape_cypher_string_uses_backslash_escaping() {
-        assert_eq!(escape_cypher_string("it's"), "it\\'s");
-        assert_eq!(escape_cypher_string("plain"), "plain");
-        assert_eq!(escape_cypher_string("a'b'c"), "a\\'b\\'c");
-        assert_eq!(escape_cypher_string("path\\to"), "path\\\\to");
-        assert_eq!(escape_cypher_string(""), "");
-    }
 
     #[test]
     fn project_record_equality() {
