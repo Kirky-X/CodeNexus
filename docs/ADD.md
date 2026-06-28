@@ -1,4 +1,4 @@
-﻿# CodeNexus - 架构设计文档（ADD）
+# CodeNexus - 架构设计文档（ADD）
 
 > **文档状态：** 🟡 评审中
 >
@@ -44,6 +44,7 @@
 | 版本 | 日期 | 修订人 | 变更内容 | 审核人 |
 | :----- | :--------- | :----- | :------- | :------- |
 | v0.1 | 2026-06-23 | CodeNexus Team | 初稿：C4 视图 + 动态行为 + 数据架构 + ADR | — |
+| v0.2 | 2026-06-28 | CodeNexus Team | 新增 ADR-015~024：trait-kit、管线 DAG、ScopeResolver、ConfidenceTier、MRO、团队制品、Cypher 子集、多智能体 MCP、歧义消解、RAM 优先索引；废弃 ADR-005 | — |
 
 ---
 
@@ -731,7 +732,7 @@ flowchart LR
 | **ADR-002** | LadybugDB via 官方 lbug crate | ✅ 已采纳 | 需图数据库，LadybugDB 有官方 Rust crate | 使用 lbug crate v0.17 | 无需手动 FFI，但首次编译耗时 | 2026-06-23 |
 | **ADR-003** | tree-sitter 默认 + LSP 可选 | ✅ 已采纳 | 需多语言解析，LSP 准确但复杂 | 分层：tree-sitter 默认，LSP 可选 feature | 默认零外部依赖，LSP 需用户安装 | 2026-06-23 |
 | **ADR-004** | 嵌入为可选 feature | ✅ 已采纳 | 嵌入非核心功能 | `[feature=embed]` | 降低默认复杂度 | 2026-06-23 |
-| **ADR-005** | 仅 CLI，不提供 MCP | ✅ 已采纳 | 用户选择 | 仅 CLI + Skill | Agent 通过 CLI 交互 | 2026-06-23 |
+| **ADR-005** | 仅 CLI，不提供 MCP | ⛔ 已废弃 | 用户选择 | 仅 CLI + Skill | Agent 通过 CLI 交互 | 2026-06-23 |
 | **ADR-006** | notify 文件监视 + 防抖 | ✅ 已采纳 | 索引非 Git 代码库 | notify + 防抖 | 需文件系统监视，非 git 轮询 | 2026-06-23 |
 | **ADR-007** | 混合图模式 | ✅ 已采纳 | 便于 LLM 写 Cypher | 每类型 NODE TABLE + 单一 REL TABLE | 表数量多，但查询直观 | 2026-06-23 |
 | **ADR-008** | 嵌套双重表示 | ✅ 已采纳 | 需快速查找父节点 | CONTAINS 边 + parent_qn 字段 | 冗余存储，但查询高效 | 2026-06-23 |
@@ -741,6 +742,16 @@ flowchart LR
 | **ADR-012** | 用 ignore crate 替代自研 gitignore | ✅ 已采纳 | 文件发现需完整 gitignore 语义 | ripgrep 同源 ignore crate | 消除自研匹配引擎的 bug 风险 | 2026-06-24 |
 | **ADR-013** | 用 notify-debouncer-full 替代自写防抖 | ✅ 已采纳 | 守护模式需事件防抖 | notify-rs 官方防抖器 | 消除自写 Debouncer 的竞态风险 | 2026-06-24 |
 | **ADR-014** | 用 csv crate 替代自写 CSV 生成 | ✅ 已采纳 | LadybugDB COPY 需 RFC 4180 合规 CSV | csv crate（Rust 标准） | 免边界 case（转义/控制字符/UTF-8） | 2026-06-24 |
+| **ADR-015** | trait-kit 统一能力注册表（T6） | ✅ 已采纳 | 需统一 Kit 容器，消除硬编码依赖 | `Kit` + `build_kit` + 类型键 `*Key` 注册 | 所有 *_cmd::run 接收 `&Kit`，可测试性大幅提升 | 2026-06-27 |
+| **ADR-016** | 管线 DAG + 类型化阶段（H2） | ✅ 已采纳 | 索引流程需可扩展、可测试 | `Phase` trait + `DagPipeline` 拓扑排序 | 6 阶段（Scan/Parse/Scope/Resolve/Confidence/Load）解耦，单测隔离 | 2026-06-27 |
+| **ADR-017** | ScopeResolver 作用域解析（H1/H3） | ✅ 已采纳 | 需 FQN 生成 + 跨文件符号绑定 | 每语言薄 ScopeResolver + 通用 passes | module/subroutine/function/program 等 4 类作用域节点统一处理 | 2026-06-27 |
+| **ADR-018** | 置信度分层 ConfidenceTier（H4） | ✅ 已采纳 | 边置信度需分层表达来源 | `ConfidenceTier` 枚举（SameFile/ImportScoped/Global）+ `confidence` f32 | impact/trace 可按 `--min-confidence` 过滤 | 2026-06-27 |
+| **ADR-019** | MRO 方法解析顺序（H5） | ✅ 已采纳 | OOP 多继承/菱形继承需确定性 MRO | C3 线性化算法 | MethodOverrides/MethodImplements 边构建在类型系统解析阶段 | 2026-06-27 |
+| **ADR-020** | 团队制品 export/import（H7） | ✅ 已采纳 | 需共享索引制品 | zstd 压缩 `.graph.zst` + manifest + magic 校验 | `codenexus export`/`import`，`--reindex` 增量补齐 | 2026-06-27 |
+| **ADR-021** | Cypher 子集校验（H6） | ✅ 已采纳 | LadybugDB Cypher 支持有限，需防注入 + 友好报错 | `validate_cypher_subset` 白名单校验 | 拒绝写操作/危险关键字，LLM 可安全生成查询 | 2026-06-27 |
+| **ADR-022** | 多智能体 MCP 集成（H13，废弃 ADR-005） | ✅ 已采纳 | Agent 需原生 MCP 协议支持，CLI 交互不够 | `codenexus setup` 自动检测 + `hook` JSON + `mcp` stdio 服务 | JSON-RPC 2.0 协议 2024-11-05，支持 Claude Code/Cursor/Codex | 2026-06-28 |
+| **ADR-023** | 排序歧义消解（H14） | ✅ 已采纳 | 多匹配符号查询需排序消解 | `disambiguation::resolve()` 门控 + `--uid`/`--file`/`--kind` 收窄 | Single→直接用 UID；Ambiguous→fail_loud exit 1 | 2026-06-28 |
+| **ADR-024** | RAM 优先索引 + LZ4（H15） | ✅ 已采纳 | 中小仓库索引内存峰值需可控 | `lz4_flex` 纯 Rust 压缩 + `index_ram_first` + `--ram-first` | 默认流式保留，RAM 优先为可选路径 | 2026-06-28 |
 
 ### ADR 详细示例：ADR-011 符号解析方案
 
