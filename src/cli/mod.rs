@@ -4,7 +4,8 @@
 //! Command-line interface.
 //!
 //! Built on [`clap`] with subcommands for index/query/trace/impact/search/
-//! daemon/status/list/clean. Each subcommand has its own `*_cmd` module with
+//! daemon/status/list/clean/export/import/context/detect-changes/rename/
+//! setup/hook/mcp. Each subcommand has its own `*_cmd` module with
 //! a `run(kit, args) -> Result<()>` entry point; [`main.rs`] builds a unified
 //! [`Kit`] and dispatches to the matching handler based on the parsed
 //! [`Command`].

@@ -105,8 +105,13 @@ impl CliError {
             // Daemon errors (notify watcher / IO) are system errors → exit 3.
             #[cfg(feature = "daemon")]
             CliError::Daemon(_) => 3,
-            // Kit errors (missing capability, build failure) → exit 3.
-            CliError::Kit(_) => 3,
+            // Kit errors (missing capability, build failure) → exit 3 by
+            // default, but if the underlying source is a database-corruption
+            // error (StorageError::Corrupt or IndexError::DatabaseCorrupt),
+            // surface exit 4 so `codenexus index` on a corrupt DB returns the
+            // PRD §4.1.6 corrupt-database exit code even when build_kit
+            // fails before the index command runs.
+            CliError::Kit(e) => kit_exit_code(e),
         };
         error!(
             event = "error",
@@ -116,6 +121,37 @@ impl CliError {
         );
         code
     }
+}
+
+/// Resolves the exit code for a [`CliError::Kit`] by walking the error
+/// source chain.
+///
+/// `build_kit` runs before any CLI command (Task 2.14); when the database is
+/// corrupt, `StorageModuleBuilder::build` fails and the error is wrapped as
+/// `KitError::BuildFailed { source: Box<StorageError::Corrupt> }`. The
+/// default `Kit → exit 3` mapping would mask the corruption, so this helper
+/// traverses `Error::source()` looking for:
+///
+/// - [`IndexError::DatabaseCorrupt`] → exit 4
+/// - [`StorageError::Corrupt`] → exit 4
+///
+/// If neither is found, falls back to exit 3 (system error).
+fn kit_exit_code(e: &KitError) -> i32 {
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(err) = current {
+        if let Some(index_err) = err.downcast_ref::<IndexError>() {
+            if matches!(index_err, IndexError::DatabaseCorrupt(_)) {
+                return 4;
+            }
+        }
+        if let Some(storage_err) = err.downcast_ref::<StorageError>() {
+            if matches!(storage_err, StorageError::Corrupt(_)) {
+                return 4;
+            }
+        }
+        current = err.source();
+    }
+    3
 }
 
 #[cfg(test)]
@@ -426,6 +462,75 @@ mod tests {
         assert!(
             captured.contains("exit_code") && captured.contains("1"),
             "LOG-004: error event should carry the correct exit code, got: {captured:?}"
+        );
+    }
+
+    // --- Kit source-chain downcast (corruption surfacing) ---
+
+    /// `KitError::BuildFailed` wrapping `StorageError::Corrupt` must surface
+    /// exit code 4 (database corrupt), not the default 3 (system error).
+    /// This mirrors the real `build_kit` failure path when the LadybugDB
+    /// files are corrupt: `StorageModuleBuilder::build` →
+    /// `StorageConnection::open` → `StorageError::Corrupt` →
+    /// `KitError::BuildFailed { source: Box<StorageError::Corrupt> }`.
+    #[test]
+    fn exit_code_kit_build_failed_with_storage_corrupt_is_4() {
+        let kit_err = KitError::BuildFailed {
+            module: "storage",
+            source: Box::new(StorageError::Corrupt("invalid LadybugDB header".to_string())),
+        };
+        let err: CliError = kit_err.into();
+        assert_eq!(
+            err.exit_code(),
+            4,
+            "Kit(BuildFailed{{StorageError::Corrupt}}) → exit 4 (database corrupt)"
+        );
+    }
+
+    /// `KitError::BuildFailed` wrapping `IndexError::DatabaseCorrupt` must
+    /// also surface exit code 4. This covers the path where an intermediate
+    /// layer has already converted `StorageError::Corrupt` into
+    /// `IndexError::DatabaseCorrupt` via the manual `From` impl.
+    #[test]
+    fn exit_code_kit_build_failed_with_index_database_corrupt_is_4() {
+        let kit_err = KitError::BuildFailed {
+            module: "indexer",
+            source: Box::new(IndexError::DatabaseCorrupt("schema mismatch".to_string())),
+        };
+        let err: CliError = kit_err.into();
+        assert_eq!(
+            err.exit_code(),
+            4,
+            "Kit(BuildFailed{{IndexError::DatabaseCorrupt}}) → exit 4 (database corrupt)"
+        );
+    }
+
+    /// `KitError::MissingCapability` (no source chain) falls back to the
+    /// default Kit exit code 3 (system error).
+    #[test]
+    fn exit_code_kit_missing_capability_is_3() {
+        let kit_err = KitError::MissingCapability { key: "storage" };
+        let err: CliError = kit_err.into();
+        assert_eq!(
+            err.exit_code(),
+            3,
+            "Kit(MissingCapability) → exit 3 (default system error)"
+        );
+    }
+
+    /// `KitError::BuildFailed` wrapping a non-corruption error (e.g. plain
+    /// `std::io::Error`) must fall back to exit code 3, not 4.
+    #[test]
+    fn exit_code_kit_build_failed_with_other_error_is_3() {
+        let kit_err = KitError::BuildFailed {
+            module: "parser",
+            source: Box::new(std::io::Error::other("config missing")),
+        };
+        let err: CliError = kit_err.into();
+        assert_eq!(
+            err.exit_code(),
+            3,
+            "Kit(BuildFailed{{io::Error}}) → exit 3 (default system error)"
         );
     }
 }

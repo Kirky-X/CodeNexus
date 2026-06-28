@@ -3,10 +3,10 @@
 
 //! CLI argument definitions (clap derive, PRD §4.1.3 / §4.2.3 / §4.4).
 //!
-//! Defines [`Cli`] (top-level parser) and [`Command`] (the 9 subcommands).
-//! Each subcommand variant carries its own strongly-typed args struct so the
-//! dispatch in [`crate::cli`] can hand them to the matching `*_cmd::run`
-//! handler without re-parsing strings.
+//! Defines [`Cli`] (top-level parser) and [`Command`] (the 17 CLI subcommands
+//! (9 PRD + 8 agent integration)). Each subcommand variant carries its own
+//! strongly-typed args struct so the dispatch in [`crate::cli`] can hand them
+//! to the matching `*_cmd::run` handler without re-parsing strings.
 
 use clap::{Parser, Subcommand};
 
@@ -22,7 +22,7 @@ pub struct Cli {
     pub command: Command,
 }
 
-/// The 9 CLI subcommands (PRD §4.1.3, §4.2.3, §4.4).
+/// The 17 CLI subcommands (9 PRD + 8 agent integration) (PRD §4.1.3, §4.2.3, §4.4, §4.5).
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Index a codebase into the knowledge graph.
