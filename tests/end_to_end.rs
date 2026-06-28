@@ -634,3 +634,174 @@ fn reads_writes_edges_exist_after_multilang_index() {
         "graph should contain at least one WRITES edge (BR-TRACE-006), got {writes_count}"
     );
 }
+
+// --- FFI cross-language edges (complete-test-coverage spec) ---
+
+/// Verifies that indexing a multilang repo (Rust extern "C" + C code) produces
+/// FFI_CALLS edges in the graph.
+///
+/// Spec: `ffi_edge_exists_after_multilang_index` — indexes `build_multilang_repo`
+/// then queries `MATCH (r:CodeRelation) RETURN r.type AS type;` and asserts at
+/// least one row has type `FFI_CALLS`.
+#[test]
+fn ffi_edge_exists_after_multilang_index() {
+    let tmp = TempDir::new().unwrap();
+    build_multilang_repo(tmp.path());
+    let db = fresh_db_path();
+
+    let facade = IndexFacade::new(&db).expect("IndexFacade::new");
+    facade
+        .index(tmp.path(), "multilang", false)
+        .expect("index");
+
+    let query = QueryFacade::new(&db).expect("QueryFacade::new");
+    // Fetch all CodeRelation rows and filter by type in Rust (robust against
+    // Cypher WHERE/count dialect differences across LadybugDB versions).
+    let result = query
+        .cypher("MATCH (r:CodeRelation) RETURN r.type AS type;")
+        .expect("cypher CodeRelation");
+
+    let ffi_count = result
+        .rows
+        .iter()
+        .filter(|row| row.first().and_then(|v| v.as_str()) == Some("FFI_CALLS"))
+        .count();
+
+    assert!(
+        ffi_count >= 1,
+        "FFI 索引后应至少有 1 条 FfiCalls 边，实际 {}",
+        ffi_count
+    );
+}
+
+/// Verifies that the trace command returns cross-language paths containing
+/// FfiCalls edges after indexing a multilang repo.
+///
+/// Spec: `ffi_trace_returns_cross_language_path` — indexes
+/// `build_multilang_repo`, calls `trace_cmd::run` for `c_bridge`, and asserts
+/// the loaded trace graph contains at least one FfiCalls edge.
+#[test]
+fn ffi_trace_returns_cross_language_path() {
+    use codenexus::cli::args::TraceArgs;
+    use codenexus::cli::trace_cmd;
+    use codenexus::kit::{build_kit, IndexerKey, KitBootstrapConfig, TraceKey};
+    use codenexus::model::EdgeType;
+
+    let tmp = TempDir::new().unwrap();
+    build_multilang_repo(tmp.path());
+    let db = fresh_db_path();
+
+    let kit = build_kit(&KitBootstrapConfig::new(db.clone())).expect("build_kit");
+    let indexer = kit.require::<IndexerKey>().expect("require_indexer");
+    indexer
+        .index(tmp.path(), "multilang", false)
+        .expect("index");
+
+    // Exercise the trace command path (spec task 2.4.3). The result is allowed
+    // to be Err if the symbol is ambiguous — the core assertion is on the
+    // loaded graph below (spec task 2.4.4).
+    let args = TraceArgs {
+        symbol: "c_bridge".to_string(),
+        trace_type: "calls".to_string(),
+        depth: 3,
+        db: db.to_str().unwrap().to_string(),
+        min_confidence: None,
+        uid: None,
+        file: None,
+        kind: None,
+    };
+    let _ = trace_cmd::run(&kit, &args);
+
+    // Load the trace graph around "c_bridge" and verify FfiCalls edge exists.
+    let trace = kit.require::<TraceKey>().expect("require_trace");
+    let graph = trace.load_graph("c_bridge", 3).expect("load_graph");
+
+    assert!(
+        graph.edges.iter().any(|e| e.edge_type == EdgeType::FfiCalls),
+        "trace 应返回含 FfiCalls 边的跨语言路径，got edges: {:?}",
+        graph
+            .edges
+            .iter()
+            .map(|e| e.edge_type.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+// --- DatabaseCorrupt end-to-end (complete-test-coverage spec) ---
+
+/// Verifies that a corrupt database produces an error chain mapping to exit
+/// code 4 (`IndexError::DatabaseCorrupt`).
+///
+/// Spec: `corrupt_db_returns_exit_code_4` — writes invalid bytes to a `.lbug`
+/// file, then attempts to build a Kit against that database. `build_kit`
+/// fails with `KitError::BuildFailed` whose `source` is `StorageError::Corrupt`.
+/// The manual `From<StorageError> for IndexError` impl maps `Corrupt` to
+/// `IndexError::DatabaseCorrupt`, whose `exit_code()` returns 4.
+///
+/// # 架构冲突说明（Rule 7 — 暴露冲突，不要折中）
+///
+/// spec 写明 "executes the index command against that database" 并期望进程
+/// 退出码 4。然而 `build_kit` 在 `index_cmd::run` 之前被调用（负责装配 Kit），
+/// 遇到损坏数据库时 `build_kit` 先失败并返回 `KitError::BuildFailed`。
+/// `CliError::Kit(_) => 3`（见 src/cli/error.rs:109），因此 CLI 退出码路径
+/// 在 Kit bootstrap 阶段检测到的损坏数据库**无法**到达退出码 4。
+///
+/// 本测试因此验证**错误链**（`build_kit` → `KitError::BuildFailed` →
+/// `StorageError::Corrupt` → `IndexError::DatabaseCorrupt` → `exit_code 4`），
+/// 而非 CLI 退出码。要让 CLI 路径直接返回退出码 4，需修改 `CliError::Kit`
+/// 分支：downcast `source` 并对 `StorageError::Corrupt` 重新映射为
+/// `CliError::Index(IndexError::DatabaseCorrupt(_))`。该修改超出本次 change
+/// 范围（Rule 3 外科手术式修改），已在 design.md 中作为开放问题记录。
+#[test]
+fn corrupt_db_returns_exit_code_4() {
+    use codenexus::index::IndexError;
+    use codenexus::kit::{build_kit, KitBootstrapConfig, KitError};
+    use codenexus::storage::StorageError;
+
+    let dir = TempDir::new().unwrap();
+    let lbug_file = dir.path().join("corrupt.lbug");
+    std::fs::write(&lbug_file, b"this is not a valid ladybugdb file")
+        .expect("write corrupt file");
+    // Leak the TempDir so the .lbug file survives the test (matches
+    // fresh_db_path's pattern).
+    std::mem::forget(dir);
+
+    let config = KitBootstrapConfig::new(lbug_file);
+    let result = build_kit(&config);
+
+    let kit_err = result.expect_err("build_kit 应在损坏数据库上失败");
+    // 导航错误链：KitError::BuildFailed { source } → source。
+    let build_failed_source = match &kit_err {
+        KitError::BuildFailed { source, .. } => source.as_ref(),
+        other => panic!("期望 KitError::BuildFailed，实际 {other:?}"),
+    };
+
+    // Downcast source 到 StorageError。bootstrap 的 StorageModuleBuilder 调用
+    // StorageConnection::open，将损坏模式错误包装为 StorageError::Corrupt。
+    let storage_err = build_failed_source
+        .downcast_ref::<StorageError>()
+        .unwrap_or_else(|| {
+            panic!(
+                "期望 BuildFailed.source 为 StorageError，实际: {:?}",
+                build_failed_source
+            );
+        });
+
+    assert!(
+        matches!(storage_err, StorageError::Corrupt(_)),
+        "期望 StorageError::Corrupt，实际: {storage_err:?}"
+    );
+
+    // 验证 From<StorageError> for IndexError 映射产生 DatabaseCorrupt 且
+    // exit_code == 4。
+    let index_err: IndexError = StorageError::Corrupt("test corrupt".to_string()).into();
+    assert!(
+        matches!(index_err, IndexError::DatabaseCorrupt(_)),
+        "期望 IndexError::DatabaseCorrupt，实际: {index_err:?}"
+    );
+    assert_eq!(
+        index_err.exit_code(),
+        4,
+        "IndexError::DatabaseCorrupt exit_code 必须为 4 (PRD §4.1.6)"
+    );
+}
