@@ -15,11 +15,11 @@
 //! alongside the successful [`ParallelParseResult::results`].
 
 use rayon::prelude::*;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::discover::FileInfo;
 use crate::parse::error::ParseError;
-use crate::parse::extractor::{extract_file, ExtractResult};
+use crate::parse::extractor::{extract_file, extract_from_source, ExtractResult};
 
 // ---------------------------------------------------------------------------
 // ParallelParseResult
@@ -131,6 +131,118 @@ pub fn parse_single(file: &FileInfo, project: &str) -> Result<ExtractResult, Par
         .language
         .ok_or_else(|| ParseError::UnsupportedLanguage("unknown".to_string()))?;
     extract_file(&file.path, lang, project)
+}
+
+// ---------------------------------------------------------------------------
+// parallel_parse_ram_first (H15)
+// ---------------------------------------------------------------------------
+
+/// LZ4-compressed source buffer keyed by absolute file path.
+///
+/// Built by [`IndexFacade::index_ram_first`] before the DAG runs: each
+/// changed/added file is read from disk, LZ4-compressed into a `Vec<u8>`, and
+/// stored in this map. The parse phase decompresses on demand (one file per
+/// rayon worker), bounding peak memory to `compressed_total + N * max_file`
+/// where N is the worker count.
+///
+/// [`IndexFacade::index_ram_first`]: crate::index::IndexFacade::index_ram_first
+pub type RamFirstSources = std::collections::HashMap<std::path::PathBuf, Vec<u8>>;
+
+/// Parses multiple files in parallel from LZ4-compressed in-memory buffers
+/// (H15/D9 RAM-first indexing).
+///
+/// For each file in `files`, if its `path` is present in `compressed`, the
+/// LZ4-compressed bytes are decompressed into a `String` and parsed via
+/// [`extract_from_source`] (no disk read). Files not in the map fall back to
+/// the normal [`extract_file`] disk-read path — this keeps the function robust
+/// if the map was built from a slightly different file set (e.g. a file was
+/// created between the pre-scan and the DAG scan).
+///
+/// Peak per-worker memory is bounded by one decompressed file at a time: the
+/// decompressed `String` is dropped at the end of each rayon task before the
+/// result is collected.
+///
+/// # Arguments
+///
+/// * `files` - The discovered files to parse (from `ScanPhase`).
+/// * `compressed` - LZ4-compressed source bytes keyed by absolute path.
+/// * `project` - The project name (used for node `project` field, DDD §2.3).
+///
+/// # Returns
+///
+/// A [`ParallelParseResult`] — same shape as [`parallel_parse`].
+pub fn parallel_parse_ram_first(
+    files: &[FileInfo],
+    compressed: &RamFirstSources,
+    project: &str,
+) -> ParallelParseResult {
+    let results: Vec<Result<ExtractResult, (String, String)>> = files
+        .par_iter()
+        .map(|file| {
+            let lang = file.language.ok_or_else(|| {
+                (file.relative_path.clone(), "unknown language".to_string())
+            })?;
+            if let Some(comp_bytes) = compressed.get(&file.path) {
+                // RAM-first path: LZ4-decompress into String, parse, drop.
+                let raw = lz4_flex::decompress_size_prepended(comp_bytes).map_err(|e| {
+                    (
+                        file.relative_path.clone(),
+                        format!("LZ4 decompress failed: {e}"),
+                    )
+                })?;
+                let source = String::from_utf8(raw).map_err(|e| {
+                    (
+                        file.relative_path.clone(),
+                        format!("UTF-8 decode failed: {e}"),
+                    )
+                })?;
+                let result = extract_from_source(
+                    &file.path.display().to_string(),
+                    &source,
+                    lang,
+                    project,
+                )
+                .map_err(|e| (file.relative_path.clone(), e.to_string()))?;
+                // `source` dropped here (decompressed bytes released).
+                debug!(
+                    event = "file_parsed_ram_first",
+                    path = %file.relative_path,
+                    language = %lang,
+                    nodes = result.nodes.len(),
+                    "file parsed from RAM-first buffer"
+                );
+                Ok(result)
+            } else {
+                // Fallback: file not in compressed map — read from disk.
+                warn!(
+                    path = %file.relative_path,
+                    "RAM-first: file not in compressed map, falling back to disk read"
+                );
+                let result = extract_file(&file.path, lang, project)
+                    .map_err(|e| (file.relative_path.clone(), e.to_string()))?;
+                Ok(result)
+            }
+        })
+        .collect();
+
+    let mut ok_results = Vec::with_capacity(files.len());
+    let mut errors = Vec::new();
+    for result in results {
+        match result {
+            Ok(r) => ok_results.push(r),
+            Err((path, msg)) => errors.push((path, msg)),
+        }
+    }
+
+    let files_parsed = ok_results.len();
+    let files_failed = errors.len();
+
+    ParallelParseResult {
+        results: ok_results,
+        errors,
+        files_parsed,
+        files_failed,
+    }
 }
 
 #[cfg(test)]

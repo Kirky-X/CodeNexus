@@ -36,6 +36,19 @@ pub trait Indexer: Send + Sync {
         project_name: &str,
         force: bool,
     ) -> std::result::Result<IndexResult, IndexError>;
+
+    /// Runs the RAM-first index pipeline (H15/D9).
+    ///
+    /// LZ4-compresses source files into memory, parses from memory, then
+    /// performs a single `COPY FROM` dump. Use for small-to-medium
+    /// repositories (< 1 GB source). The default [`index`](Self::index)
+    /// streaming path is retained for large repositories.
+    fn index_ram_first(
+        &self,
+        path: &Path,
+        project_name: &str,
+        force: bool,
+    ) -> std::result::Result<IndexResult, IndexError>;
 }
 
 /// Compile-time assertion that `Indexer` is object-safe and `Send + Sync`.

@@ -10,6 +10,7 @@
 use serde::Serialize;
 
 use super::args::TraceArgs;
+use super::disambiguation::{self, DisambiguationFilters, DisambiguationResult};
 use super::error::{CliError, Result};
 use crate::kit::{Kit, TraceKey};
 use crate::trace::{TraceFacade, TraceResult, TraceType};
@@ -20,10 +21,18 @@ use crate::trace::{TraceFacade, TraceResult, TraceType};
 /// capability from `kit`, parses `--type` into a [`TraceType`], and runs
 /// [`TraceEngine::trace`], printing the result as JSON.
 ///
+/// # Disambiguation (H14)
+///
+/// Before tracing, the symbol is resolved via [`disambiguation::resolve`].
+/// If multiple candidates match and narrowing flags (`--uid`/`--file`/`--kind`)
+/// don't reduce to a single candidate, the command fails loud with the ranked
+/// `ambiguous` list. If exactly one candidate remains (or the symbol is
+/// unique), tracing proceeds normally.
+///
 /// # Errors
 ///
-/// Returns [`CliError::InvalidInput`] for an unknown `--type` value.
-/// Returns [`CliError::Trace`] for symbol-not-found / ambiguous-symbol /
+/// Returns [`CliError::InvalidInput`] for an unknown `--type` value or an
+/// ambiguous symbol. Returns [`CliError::Trace`] for symbol-not-found /
 /// invalid-depth errors. Returns [`CliError::Kit`] if the Trace capability
 /// is not registered.
 pub fn run(kit: &Kit, args: &TraceArgs) -> Result<()> {
@@ -34,23 +43,56 @@ pub fn run(kit: &Kit, args: &TraceArgs) -> Result<()> {
         ))
     })?;
 
+    // H14: disambiguation gate — fail loud if the symbol is ambiguous.
+    let filters = build_filters(args)?;
+    let disambig = disambiguation::resolve(kit, &args.symbol, &filters)?;
+    if let DisambiguationResult::Ambiguous(candidates) = &disambig {
+        return Err(disambiguation::fail_loud(&args.symbol, candidates.clone()));
+    }
+
     let trace = kit.require::<TraceKey>()?;
-    let result = match args.min_confidence {
-        Some(min_conf) => {
-            // Filter path: load graph, drop low-confidence edges, trace via
-            // facade (design.md D4: --min-confidence filters by edge score).
+    let result = match (&disambig, args.min_confidence) {
+        // Single candidate resolved by disambiguation: trace by UID to bypass
+        // the trace engine's symbol resolution (which would re-match multiple).
+        (DisambiguationResult::Single(c), min_conf) => {
             let mut graph = trace.load_graph(&args.symbol, args.depth)?;
-            let min_conf = min_conf as f32;
-            graph.retain_edges(|e| e.confidence >= min_conf);
+            if let Some(mc) = min_conf {
+                graph.retain_edges(|e| e.confidence >= mc as f32);
+            }
+            let facade = TraceFacade::new(&graph);
+            facade.trace_by_id(&c.uid, &args.symbol, trace_type, args.depth)?
+        }
+        // NotFound + min_confidence: filter path, trace engine resolves.
+        (DisambiguationResult::NotFound, Some(min_conf)) => {
+            let mut graph = trace.load_graph(&args.symbol, args.depth)?;
+            graph.retain_edges(|e| e.confidence >= min_conf as f32);
             let facade = TraceFacade::new(&graph);
             facade.trace(&args.symbol, trace_type, args.depth)?
         }
-        None => trace.trace(&args.symbol, trace_type, args.depth)?,
+        // NotFound + no filter: direct trace.
+        (DisambiguationResult::NotFound, None) => {
+            trace.trace(&args.symbol, trace_type, args.depth)?
+        }
+        // Ambiguous already handled above.
+        _ => unreachable!("ambiguous case handled by fail_loud"),
     };
     let output = TraceOutput::from(result);
     let json = serde_json::to_string(&output)?;
     println!("{json}");
     Ok(())
+}
+
+/// Builds [`DisambiguationFilters`] from the `--uid`/`--file`/`--kind` args.
+fn build_filters(args: &TraceArgs) -> Result<DisambiguationFilters> {
+    Ok(DisambiguationFilters {
+        uid: args.uid.clone(),
+        file: args.file.clone(),
+        kind: args
+            .kind
+            .as_deref()
+            .map(disambiguation::parse_kind)
+            .transpose()?,
+    })
 }
 
 /// JSON-serializable view of [`TraceResult`] (PRD §4.2.3 output table).
@@ -175,6 +217,9 @@ mod tests {
             depth,
             db: db.to_string(),
             min_confidence: None,
+            uid: None,
+            file: None,
+            kind: None,
         }
     }
 
@@ -262,6 +307,9 @@ mod tests {
             depth: 3,
             db: db.to_str().unwrap().to_string(),
             min_confidence: None,
+            uid: None,
+            file: None,
+            kind: None,
         };
         let result = run(&kit, &args);
         assert!(
@@ -482,4 +530,69 @@ mod tests {
     // "missing db" error now surfaces at `build_kit` time, not at `run` time.
     // Covered by `build_kit_invalid_db_path_returns_build_failed_error` in
     // `kit::bootstrap::tests`.
+
+    // --- H14: disambiguation gate ---
+
+    /// Seeds two functions with the same name `handle` in different files.
+    fn seed_ambiguous_symbols(kit: &Kit) {
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.execute("CREATE (:Function {id: 'h1', project: 'demo', name: 'handle', qualifiedName: 'demo.handle', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create h1");
+        storage.execute("CREATE (:Function {id: 'h2', project: 'demo', name: 'handle', qualifiedName: 'demo.handle', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create h2");
+    }
+
+    #[test]
+    fn run_trace_ambiguous_symbol_fails_loud() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_ambiguous_symbols(&kit);
+        let args = make_args("handle", "calls", 3, db.to_str().unwrap());
+        let err = run(&kit, &args).expect_err("ambiguous symbol should fail");
+        assert_eq!(err.exit_code(), 1, "ambiguous → InvalidInput → exit 1");
+    }
+
+    #[test]
+    fn run_trace_uid_filter_narrows_to_single() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_ambiguous_symbols(&kit);
+        let args = TraceArgs {
+            symbol: "handle".to_string(),
+            trace_type: "calls".to_string(),
+            depth: 3,
+            db: db.to_str().unwrap().to_string(),
+            min_confidence: None,
+            uid: Some("h1".to_string()),
+            file: None,
+            kind: None,
+        };
+        let result = run(&kit, &args);
+        assert!(
+            result.is_ok(),
+            "uid filter should narrow to single: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn run_trace_file_filter_narrows_to_single() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_ambiguous_symbols(&kit);
+        let args = TraceArgs {
+            symbol: "handle".to_string(),
+            trace_type: "calls".to_string(),
+            depth: 3,
+            db: db.to_str().unwrap().to_string(),
+            min_confidence: None,
+            uid: None,
+            file: Some("/src/a.rs".to_string()),
+            kind: None,
+        };
+        let result = run(&kit, &args);
+        assert!(
+            result.is_ok(),
+            "file filter should narrow to single: {:?}",
+            result.err()
+        );
+    }
 }

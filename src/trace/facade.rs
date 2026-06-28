@@ -87,17 +87,39 @@ impl<'a> TraceFacade<'a> {
             return Err(TraceError::InvalidDepth(depth));
         }
         let start_id = self.resolve_symbol(symbol)?;
+        self.trace_by_id(&start_id, symbol, trace_type, depth)
+    }
+
+    /// Traces from a specific node id, bypassing symbol resolution.
+    ///
+    /// Used by the H14 disambiguation gate in `trace_cmd` / `impact_cmd`:
+    /// when `--uid`/`--file`/`--kind` narrows to a single candidate, the
+    /// caller already knows the node id and passes it here directly.
+    /// `symbol_label` is used only for the `TraceResult.symbol` field.
+    ///
+    /// `depth` must be at least 1; otherwise an
+    /// [`InvalidDepth`][TraceError::InvalidDepth] error is returned.
+    pub fn trace_by_id(
+        &self,
+        start_id: &NodeId,
+        symbol_label: &str,
+        trace_type: TraceType,
+        depth: usize,
+    ) -> Result<TraceResult> {
+        if depth == 0 {
+            return Err(TraceError::InvalidDepth(depth));
+        }
         let paths = match trace_type {
-            TraceType::Calls => CallGraphTracer::new(self.graph).trace(&start_id, depth),
-            TraceType::DataFlow => DataFlowTracer::new(self.graph).trace(&start_id, depth),
+            TraceType::Calls => CallGraphTracer::new(self.graph).trace(start_id, depth),
+            TraceType::DataFlow => DataFlowTracer::new(self.graph).trace(start_id, depth),
             TraceType::All => {
-                let mut combined = CallGraphTracer::new(self.graph).trace(&start_id, depth);
-                combined.extend(DataFlowTracer::new(self.graph).trace(&start_id, depth));
+                let mut combined = CallGraphTracer::new(self.graph).trace(start_id, depth);
+                combined.extend(DataFlowTracer::new(self.graph).trace(start_id, depth));
                 combined
             }
         };
         Ok(TraceResult {
-            symbol: symbol.to_string(),
+            symbol: symbol_label.to_string(),
             paths,
         })
     }

@@ -126,6 +126,11 @@ csv = "1"
 # Temporary files for CSV bulk-loading (ADR-014)
 tempfile = "3"
 
+# LZ4 compression for RAM-first indexing (H15/D9). Pure-Rust implementation
+# (no native deps) used to compress source file bytes in memory before
+# parsing, bounding peak memory for the `--ram-first` path.
+lz4_flex = "0.11"
+
 # NOTE: H7 export/import uses the system `zstd` CLI binary via
 # `std::process::Command` rather than the `zstd` Rust crate, because lbug
 # statically links its own copy of zstd and the `zstd` crate's `zstd_sys`

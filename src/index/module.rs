@@ -171,6 +171,15 @@ impl Indexer for IndexerCapability {
     ) -> Result<IndexResult, IndexError> {
         self.facade.index_incremental(path, project_name, force)
     }
+
+    fn index_ram_first(
+        &self,
+        path: &Path,
+        project_name: &str,
+        force: bool,
+    ) -> Result<IndexResult, IndexError> {
+        self.facade.index_ram_first(path, project_name, force)
+    }
 }
 
 // ---------------------------------------------------------------------------

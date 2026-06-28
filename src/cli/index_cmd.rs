@@ -40,7 +40,11 @@ use crate::storage::QualityChecker;
 pub fn run(kit: &Kit, args: &IndexArgs) -> Result<()> {
     let path = Path::new(&args.path);
     let indexer = kit.require::<IndexerKey>()?;
-    let result = indexer.index(path, &args.name, args.force)?;
+    let result = if args.ram_first {
+        indexer.index_ram_first(path, &args.name, args.force)?
+    } else {
+        indexer.index(path, &args.name, args.force)?
+    };
 
     // Run data quality checks (DQ-002/004/005/006) against the freshly indexed
     // database. The Storage capability is the same one the Indexer used.
@@ -139,6 +143,7 @@ mod tests {
             force: false,
             lsp: false,
             embed: false,
+            ram_first: false,
         }
     }
 
@@ -232,6 +237,7 @@ mod tests {
             force: true,
             lsp: false,
             embed: false,
+            ram_first: false,
         };
         let result = run(&kit, &args2);
         assert!(result.is_ok(), "force run should succeed: {:?}", result.err());
@@ -282,6 +288,7 @@ mod tests {
             force: false,
             lsp: true,
             embed: false,
+            ram_first: false,
         };
         assert!(run(&kit, &args).is_ok());
     }
@@ -299,7 +306,148 @@ mod tests {
             force: false,
             lsp: false,
             embed: true,
+            ram_first: false,
         };
         assert!(run(&kit, &args).is_ok());
+    }
+
+    // --- --ram-first flag (H15) ---
+
+    #[test]
+    fn run_with_ram_first_indexes_rust_file() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "main.rs", "fn main() { helper(); }\nfn helper() {}\n");
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let args = IndexArgs {
+            path: tmp.path().to_str().unwrap().to_string(),
+            name: "demo_ram".to_string(),
+            db: db.to_str().unwrap().to_string(),
+            force: false,
+            lsp: false,
+            embed: false,
+            ram_first: true,
+        };
+        let result = run(&kit, &args);
+        assert!(result.is_ok(), "ram-first run should succeed: {:?}", result.err());
+    }
+
+    #[test]
+    fn run_with_ram_first_multiple_files_succeeds() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "a.rs", "fn a() {}\n");
+        write_file(tmp.path(), "b.rs", "fn b() {}\n");
+        write_file(tmp.path(), "c.rs", "fn c() {}\n");
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let args = IndexArgs {
+            path: tmp.path().to_str().unwrap().to_string(),
+            name: "multi_ram".to_string(),
+            db: db.to_str().unwrap().to_string(),
+            force: false,
+            lsp: false,
+            embed: false,
+            ram_first: true,
+        };
+        let result = run(&kit, &args);
+        assert!(result.is_ok(), "ram-first multi-file run should succeed: {:?}", result.err());
+    }
+
+    #[test]
+    fn run_with_ram_first_empty_directory_succeeds() {
+        let tmp = TempDir::new().unwrap();
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let args = IndexArgs {
+            path: tmp.path().to_str().unwrap().to_string(),
+            name: "empty_ram".to_string(),
+            db: db.to_str().unwrap().to_string(),
+            force: false,
+            lsp: false,
+            embed: false,
+            ram_first: true,
+        };
+        let result = run(&kit, &args);
+        assert!(result.is_ok(), "ram-first empty dir should succeed: {:?}", result.err());
+    }
+
+    #[test]
+    fn run_with_ram_first_path_not_found_returns_exit_code_1() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let args = IndexArgs {
+            path: "/nonexistent/path/xyz".to_string(),
+            name: "demo".to_string(),
+            db: db.to_str().unwrap().to_string(),
+            force: false,
+            lsp: false,
+            embed: false,
+            ram_first: true,
+        };
+        let err = run(&kit, &args).expect_err("path not found should error");
+        assert_eq!(err.exit_code(), 1, "ram-first: path not found → exit 1");
+    }
+
+    #[test]
+    fn run_with_ram_first_produces_same_node_count_as_streaming() {
+        // Functional equivalence: streaming and RAM-first must produce the
+        // same number of nodes/edges for the same input. We index the same
+        // fixture twice into separate DBs and compare node counts via
+        // `Storage::query`.
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "lib.rs", "pub fn add(a: i32, b: i32) -> i32 { a + b }\n");
+        write_file(tmp.path(), "main.rs", "mod lib; fn main() { let _ = lib::add(1, 2); }\n");
+
+        // Streaming path.
+        let db_stream = fresh_db_path();
+        let kit_stream = build_kit_for_db(db_stream.to_str().unwrap());
+        let args_stream = IndexArgs {
+            path: tmp.path().to_str().unwrap().to_string(),
+            name: "eq_stream".to_string(),
+            db: db_stream.to_str().unwrap().to_string(),
+            force: false,
+            lsp: false,
+            embed: false,
+            ram_first: false,
+        };
+        run(&kit_stream, &args_stream).expect("streaming index should succeed");
+
+        // RAM-first path.
+        let db_ram = fresh_db_path();
+        let kit_ram = build_kit_for_db(db_ram.to_str().unwrap());
+        let args_ram = IndexArgs {
+            path: tmp.path().to_str().unwrap().to_string(),
+            name: "eq_ram".to_string(),
+            db: db_ram.to_str().unwrap().to_string(),
+            force: false,
+            lsp: false,
+            embed: false,
+            ram_first: true,
+        };
+        run(&kit_ram, &args_ram).expect("ram-first index should succeed");
+
+        // Compare node counts (Function nodes) between the two databases.
+        let storage_stream = kit_stream.require::<StorageKey>().expect("require_storage");
+        let storage_ram = kit_ram.require::<StorageKey>().expect("require_storage");
+        let count_stream = storage_stream
+            .query("MATCH (n:Function) RETURN count(n) AS c;")
+            .expect("query stream");
+        let count_ram = storage_ram
+            .query("MATCH (n:Function) RETURN count(n) AS c;")
+            .expect("query ram");
+        let n_stream = count_stream
+            .first()
+            .and_then(|row| row.first())
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let n_ram = count_ram
+            .first()
+            .and_then(|row| row.first())
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        assert_eq!(
+            n_stream, n_ram,
+            "streaming ({n_stream}) and RAM-first ({n_ram}) must produce same Function node count"
+        );
     }
 }

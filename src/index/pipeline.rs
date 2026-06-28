@@ -28,10 +28,12 @@ use std::time::Instant;
 
 use tracing::{info, warn};
 
+use crate::discover::Walker;
 use crate::index::error::{IndexError, Result};
 use crate::index::hash::compute_file_hash;
 use crate::index::incremental::FileDiff;
 use crate::model::{Language, Node, NodeLabel, new_file_id};
+use crate::parse::parallel::RamFirstSources;
 use crate::storage::{Repository, StorageError};
 
 use super::phases::{
@@ -186,6 +188,67 @@ impl IndexFacade {
     ) -> Result<IndexResult> {
         self.index(path, project_name, force)
     }
+
+    /// Runs the RAM-first index pipeline (H15/D9).
+    ///
+    /// Reads all source files under `path` into memory, LZ4-compresses each
+    /// into a `Vec<u8>` (bounding peak memory), then runs the standard DAG
+    /// pipeline with [`ParsePhase`] in RAM-first mode — the parse phase
+    /// LZ4-decompresses on demand instead of reading from disk. The
+    /// compressed buffers are dropped when this method returns.
+    ///
+    /// Use for small-to-medium repositories (< 1 GB source) to reduce
+    /// LadybugDB write amplification. Large repositories should use the
+    /// default [`index`](Self::index) streaming path to avoid OOM.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`index`](Self::index), plus [`IndexError::Io`] if a source
+    /// file cannot be read for compression.
+    pub fn index_ram_first(&self, path: &Path, project_name: &str, force: bool) -> Result<IndexResult> {
+        // PRD §4.1.6: path not found → exit code 1.
+        if !path.exists() {
+            return Err(IndexError::PathNotFound(path.display().to_string()));
+        }
+
+        // Pre-scan: discover all files on disk so we can read + compress them
+        // before the DAG runs. ScanPhase will re-discover (cheap) and produce
+        // the authoritative diff; the compressed map is keyed by absolute
+        // path, so ParsePhase looks up whatever subset ScanPhase selects.
+        let disk_files = Walker::new(path)
+            .discover()
+            .map_err(IndexError::from)?;
+
+        // H15: LZ4-compress every discovered file into memory. Files that
+        // ScanPhase later marks unchanged (hash match) won't be in `to_parse`,
+        // so their compressed bytes are simply never looked up — the small
+        // waste of compressing them is preferable to a second scan+hash pass
+        // just to filter the set.
+        let mut compressed: RamFirstSources = std::collections::HashMap::with_capacity(disk_files.len());
+        for file in &disk_files {
+            match std::fs::read(&file.path) {
+                Ok(bytes) => {
+                    compressed.insert(file.path.clone(), lz4_flex::compress_prepend_size(&bytes));
+                }
+                Err(err) => {
+                    warn!(
+                        file = %file.relative_path,
+                        error = %err,
+                        "RAM-first: failed to read file for compression, will fall back to disk read in parse phase"
+                    );
+                }
+            }
+        }
+
+        let repository = with_retry(DEFAULT_MAX_RETRIES, || {
+            Repository::open(&self.db_path).map_err(IndexError::from)
+        })?;
+        let pipeline = Pipeline::new(repository);
+        // `run_ram_first` takes ownership of `compressed`; it is dropped when
+        // `run_ram_first` returns (after the single COPY FROM dump in LoadPhase).
+        let result = pipeline.run_ram_first(path, project_name, force, compressed)?;
+        Ok(result)
+    }
 }
 
 /// Internal pipeline orchestration over a [`Repository`].
@@ -223,12 +286,50 @@ impl Pipeline {
     /// Returns [`IndexError::Storage`] for database failures.
     /// Parse failures are logged and skipped (PRD §4.1.6).
     pub fn run(&self, path: &Path, project_name: &str, force: bool) -> Result<IndexResult> {
+        self.run_inner(path, project_name, force, None)
+    }
+
+    /// Runs the RAM-first indexing pipeline (H15/D9).
+    ///
+    /// Same as [`run`](Self::run) but all source files are LZ4-compressed into
+    /// memory before parsing, and the parse phase decompresses on demand
+    /// instead of reading from disk. The compressed buffers are dropped when
+    /// this method returns. Use for small-to-medium repositories (< 1 GB
+    /// source) to reduce LadybugDB write amplification.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`run`](Self::run), plus [`IndexError::Io`] if a source file
+    /// cannot be read for compression.
+    pub fn run_ram_first(
+        &self,
+        path: &Path,
+        project_name: &str,
+        force: bool,
+        compressed: RamFirstSources,
+    ) -> Result<IndexResult> {
+        self.run_inner(path, project_name, force, Some(compressed))
+    }
+
+    /// Shared DAG runner for both streaming and RAM-first paths.
+    ///
+    /// When `compressed` is `Some`, [`ParsePhase`] is constructed with the
+    /// LZ4-compressed buffers (RAM-first mode); otherwise it uses the default
+    /// streaming disk-read path.
+    fn run_inner(
+        &self,
+        path: &Path,
+        project_name: &str,
+        force: bool,
+        compressed: Option<RamFirstSources>,
+    ) -> Result<IndexResult> {
         let start = Instant::now();
 
         info!(
             event = "index_started",
             project = %project_name,
             path = %path.display(),
+            ram_first = compressed.is_some(),
             "indexing started"
         );
 
@@ -262,7 +363,8 @@ impl Pipeline {
             repo: self.repository.clone(),
         })
         .map_err(IndexError::from)?;
-        dag.register(ParsePhase).map_err(IndexError::from)?;
+        dag.register(ParsePhase { ram_first_compressed: compressed })
+            .map_err(IndexError::from)?;
         dag.register(ScopeResolutionPhase)
             .map_err(IndexError::from)?;
         dag.register(ResolvePhase).map_err(IndexError::from)?;

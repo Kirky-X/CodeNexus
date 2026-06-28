@@ -11,6 +11,7 @@
 use serde::Serialize;
 
 use super::args::ImpactArgs;
+use super::disambiguation::{self, DisambiguationFilters, DisambiguationResult};
 use super::error::Result;
 use crate::kit::{Kit, TraceKey};
 use crate::model::Graph;
@@ -24,6 +25,13 @@ use crate::trace::TraceNode;
 /// [`TraceEngine::load_graph`], runs [`ImpactAnalyzer::analyze`], and prints
 /// the impacted nodes as a JSON object `{ symbol, depth, impacted: [...] }`.
 ///
+/// # Disambiguation (H14)
+///
+/// Before loading the graph, the symbol is resolved via
+/// [`disambiguation::resolve`]. If multiple candidates match and narrowing
+/// flags (`--uid`/`--file`/`--kind`) don't reduce to a single candidate, the
+/// command fails loud with the ranked `ambiguous` list.
+///
 /// # Errors
 ///
 /// Returns [`crate::cli::error::CliError::Kit`] if the Trace capability is
@@ -31,6 +39,13 @@ use crate::trace::TraceNode;
 /// database failures during graph loading. If the symbol is not found, the
 /// `impacted` array is empty (impact analysis is best-effort, not an error).
 pub fn run(kit: &Kit, args: &ImpactArgs) -> Result<()> {
+    // H14: disambiguation gate — fail loud if the symbol is ambiguous.
+    let filters = build_filters(args)?;
+    let disambig = disambiguation::resolve(kit, &args.symbol, &filters)?;
+    if let DisambiguationResult::Ambiguous(candidates) = &disambig {
+        return Err(disambiguation::fail_loud(&args.symbol, candidates.clone()));
+    }
+
     let trace = kit.require::<TraceKey>()?;
     let mut graph = trace.load_graph(&args.symbol, args.depth)?;
     // design.md D4: --min-confidence filters edges by score before analysis.
@@ -39,8 +54,15 @@ pub fn run(kit: &Kit, args: &ImpactArgs) -> Result<()> {
         graph.retain_edges(|e| e.confidence >= min_conf);
     }
     let analyzer = ImpactAnalyzer::new(&graph);
-    // Resolve the start node id by name (mirrors TraceFacade's resolution).
-    let start_id = resolve_start_id(&graph, &args.symbol);
+    // H14: when disambiguation resolved to a single candidate, use its UID
+    // directly to avoid re-resolving by name (which could match multiple
+    // nodes with the same name in the loaded subgraph). When NotFound, fall
+    // back to name-based resolution.
+    let start_id: Option<String> = match &disambig {
+        DisambiguationResult::Single(c) => Some(c.uid.clone()),
+        DisambiguationResult::NotFound => resolve_start_id(&graph, &args.symbol),
+        DisambiguationResult::Ambiguous(_) => unreachable!("ambiguous handled by fail_loud"),
+    };
     let impacted: Vec<TraceNode> = match start_id {
         Some(id) => analyzer.analyze(&id, args.depth),
         None => Vec::new(),
@@ -74,6 +96,19 @@ fn resolve_start_id(graph: &Graph, symbol: &str) -> Option<String> {
     // If multiple match by name, return the first (impact analysis is
     // best-effort; the user can disambiguate with a FQN).
     by_name.first().map(|n| n.id.clone())
+}
+
+/// Builds [`DisambiguationFilters`] from the `--uid`/`--file`/`--kind` args.
+fn build_filters(args: &ImpactArgs) -> Result<DisambiguationFilters> {
+    Ok(DisambiguationFilters {
+        uid: args.uid.clone(),
+        file: args.file.clone(),
+        kind: args
+            .kind
+            .as_deref()
+            .map(disambiguation::parse_kind)
+            .transpose()?,
+    })
 }
 
 /// JSON-serializable impact-analysis output.
@@ -150,6 +185,9 @@ mod tests {
             depth,
             db: db.to_string(),
             min_confidence: None,
+            uid: None,
+            file: None,
+            kind: None,
         }
     }
 
@@ -301,4 +339,67 @@ mod tests {
     // "missing db" error now surfaces at `build_kit` time, not at `run` time.
     // Covered by `build_kit_invalid_db_path_returns_build_failed_error` in
     // `kit::bootstrap::tests`.
+
+    // --- H14: disambiguation gate ---
+
+    /// Seeds two functions with the same name `handle` in different files.
+    fn seed_ambiguous_symbols(kit: &Kit) {
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.execute("CREATE (:Function {id: 'h1', project: 'demo', name: 'handle', qualifiedName: 'demo.handle', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create h1");
+        storage.execute("CREATE (:Function {id: 'h2', project: 'demo', name: 'handle', qualifiedName: 'demo.handle', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create h2");
+    }
+
+    #[test]
+    fn run_impact_ambiguous_symbol_fails_loud() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_ambiguous_symbols(&kit);
+        let args = make_args("handle", 3, db.to_str().unwrap());
+        let err = run(&kit, &args).expect_err("ambiguous symbol should fail");
+        assert_eq!(err.exit_code(), 1, "ambiguous → InvalidInput → exit 1");
+    }
+
+    #[test]
+    fn run_impact_uid_filter_narrows_to_single() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_ambiguous_symbols(&kit);
+        let args = ImpactArgs {
+            symbol: "handle".to_string(),
+            depth: 3,
+            db: db.to_str().unwrap().to_string(),
+            min_confidence: None,
+            uid: Some("h1".to_string()),
+            file: None,
+            kind: None,
+        };
+        let result = run(&kit, &args);
+        assert!(
+            result.is_ok(),
+            "uid filter should narrow to single: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn run_impact_file_plus_kind_filter_narrows() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_ambiguous_symbols(&kit);
+        let args = ImpactArgs {
+            symbol: "handle".to_string(),
+            depth: 3,
+            db: db.to_str().unwrap().to_string(),
+            min_confidence: None,
+            uid: None,
+            file: Some("/src/a.rs".to_string()),
+            kind: Some("Function".to_string()),
+        };
+        let result = run(&kit, &args);
+        assert!(
+            result.is_ok(),
+            "file+kind filter should narrow to single: {:?}",
+            result.err()
+        );
+    }
 }

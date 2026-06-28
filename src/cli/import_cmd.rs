@@ -183,6 +183,7 @@ pub fn run(kit: &crate::kit::Kit, args: &ImportArgs) -> Result<()> {
             force: false,
             lsp: false,
             embed: false,
+            ram_first: false,
         };
         super::index_cmd::run(kit, &index_args)?;
         reindexed = true;
@@ -513,6 +514,7 @@ mod tests {
             force: false,
             lsp: false,
             embed: false,
+            ram_first: false,
         };
     }
 }

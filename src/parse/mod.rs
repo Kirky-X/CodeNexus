@@ -52,12 +52,14 @@ pub use c::CExtractor;
 pub use dispatcher::get_extractor;
 pub use error::{ParseError, Result};
 pub use extractor::{
-    extract_file, AssignInfo, CallInfo, ExternInfo, ExtractResult, Extractor, ImportInfo,
-    ReadInfo, WriteInfo,
+    extract_file, extract_from_source, AssignInfo, CallInfo, ExternInfo, ExtractResult, Extractor,
+    ImportInfo, ReadInfo, WriteInfo,
 };
 #[cfg(feature = "lang-fortran")]
 pub use fortran::FortranExtractor;
-pub use parallel::{parallel_parse, parse_single, ParallelParseResult};
+pub use parallel::{
+    parallel_parse, parallel_parse_ram_first, parse_single, ParallelParseResult, RamFirstSources,
+};
 pub use module::{
     ExtractorRegistryModule, ExtractorRegistryModuleBuilder, ParserFactoryModule,
     ParserFactoryModuleBuilder,

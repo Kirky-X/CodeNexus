@@ -34,7 +34,7 @@ use crate::index::pipeline::{
 };
 use crate::ir::ExtractResult;
 use crate::model::{Edge, Graph, Node, NodeLabel, new_project_id};
-use crate::parse::parallel_parse;
+use crate::parse::parallel::{parallel_parse, parallel_parse_ram_first, RamFirstSources};
 use crate::resolve::{build_symbol_table, resolve_all};
 use crate::storage::Repository;
 
@@ -199,7 +199,22 @@ impl Phase for ScanPhase {
 ///
 /// Replaces original step 4 of the pipeline. Parse failures are logged and
 /// skipped (PRD §4.1.6) — they do not abort the pipeline.
-pub struct ParsePhase;
+///
+/// # RAM-first mode (H15)
+///
+/// When [`ram_first_compressed`](Self::ram_first_compressed) is `Some`, files
+/// are LZ4-decompressed from in-memory buffers instead of read from disk. The
+/// buffers are built by [`IndexFacade::index_ram_first`] before the DAG runs.
+///
+/// [`IndexFacade::index_ram_first`]: super::pipeline::IndexFacade::index_ram_first
+#[derive(Default)]
+pub struct ParsePhase {
+    /// RAM-first mode: LZ4-compressed source bytes keyed by absolute path.
+    /// When `Some`, [`parallel_parse_ram_first`] is used instead of
+    /// [`parallel_parse`]. When `None`, the default streaming path reads
+    /// files from disk.
+    pub ram_first_compressed: Option<RamFirstSources>,
+}
 
 impl Phase for ParsePhase {
     type Input = ();
@@ -218,8 +233,14 @@ impl Phase for ParsePhase {
         let mut to_parse: Vec<FileInfo> = scan.diff.changed.clone();
         to_parse.extend(scan.diff.added.iter().cloned());
 
-        // Parallel-parse the files.
-        let parse_result = parallel_parse(&to_parse, &scan.project_id);
+        // H15: RAM-first path uses LZ4-compressed in-memory buffers; the
+        // streaming path reads from disk.
+        let parse_result = match &self.ram_first_compressed {
+            Some(compressed) => {
+                parallel_parse_ram_first(&to_parse, compressed, &scan.project_id)
+            }
+            None => parallel_parse(&to_parse, &scan.project_id),
+        };
 
         // PRD §4.1.6: parse failures are logged and skipped.
         for (file_path, error_msg) in &parse_result.errors {

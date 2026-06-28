@@ -54,6 +54,12 @@ pub enum Command {
     DetectChanges(DetectChangesArgs),
     /// Propose graph + text edits for renaming a symbol (H8).
     Rename(RenameArgs),
+    /// Auto-detect installed AI agents and write MCP config (H13).
+    Setup(SetupArgs),
+    /// Emit PreToolUse/PostToolUse hook JSON (H13).
+    Hook(HookArgs),
+    /// Serve MCP tools over stdio (H13).
+    Mcp(McpArgs),
 }
 
 /// Arguments for the `index` subcommand (PRD §4.1.3).
@@ -76,6 +82,11 @@ pub struct IndexArgs {
     /// Enable embedding generation (requires the `embed` feature).
     #[arg(long, default_value_t = false)]
     pub embed: bool,
+    /// RAM-first indexing (H15): LZ4-compress source files into memory, parse
+    /// from memory, then single `COPY FROM` dump. Recommended for
+    /// small-to-medium repositories (< 1 GB source). Default is streaming.
+    #[arg(long, default_value_t = false)]
+    pub ram_first: bool,
 }
 
 /// Arguments for the `query` subcommand (PRD §4.4).
@@ -111,6 +122,15 @@ pub struct TraceArgs {
     /// (design.md D4).
     #[arg(long)]
     pub min_confidence: Option<f64>,
+    /// Narrow disambiguation by node UID (H14).
+    #[arg(long)]
+    pub uid: Option<String>,
+    /// Narrow disambiguation by file path (H14).
+    #[arg(long)]
+    pub file: Option<String>,
+    /// Narrow disambiguation by node label, e.g. `"Function"` (H14).
+    #[arg(long)]
+    pub kind: Option<String>,
 }
 
 /// Arguments for the `impact` subcommand.
@@ -130,6 +150,15 @@ pub struct ImpactArgs {
     /// (design.md D4).
     #[arg(long)]
     pub min_confidence: Option<f64>,
+    /// Narrow disambiguation by node UID (H14).
+    #[arg(long)]
+    pub uid: Option<String>,
+    /// Narrow disambiguation by file path (H14).
+    #[arg(long)]
+    pub file: Option<String>,
+    /// Narrow disambiguation by node label, e.g. `"Function"` (H14).
+    #[arg(long)]
+    pub kind: Option<String>,
 }
 
 /// Arguments for the `search` subcommand (PRD §4.4).
@@ -146,6 +175,15 @@ pub struct SearchArgs {
     /// Database path.
     #[arg(long, default_value = "./codenexus.lbug")]
     pub db: String,
+    /// Narrow search by node UID — looks up the node directly (H14).
+    #[arg(long)]
+    pub uid: Option<String>,
+    /// Narrow search by file path (H14).
+    #[arg(long)]
+    pub file: Option<String>,
+    /// Narrow search by node label, e.g. `"Function"` (H14).
+    #[arg(long)]
+    pub kind: Option<String>,
 }
 
 /// Arguments for the `daemon` subcommand (PRD §4.3, Task 15).
@@ -292,6 +330,42 @@ pub struct RenameArgs {
     /// Apply text edits to disk (default: dry-run, only print the plan).
     #[arg(long, default_value_t = false)]
     pub apply: bool,
+}
+
+/// Arguments for the `setup` subcommand (H13).
+///
+/// Auto-detects installed AI coding agents (Claude Code, Cursor, Codex) under
+/// `$HOME` and writes the MCP server config for `codenexus mcp` into each
+/// agent's config file. Existing entries pointing to a different binary prompt
+/// for confirmation unless `--force` is given.
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct SetupArgs {
+    /// Skip confirmation prompts and overwrite existing entries without asking.
+    #[arg(long, default_value_t = false)]
+    pub force: bool,
+}
+
+/// Arguments for the `hook` subcommand (H13).
+///
+/// Reads a PreToolUse/PostToolUse JSON payload from stdin and emits a
+/// no-op acknowledgment. The hook always exits 0, never blocks a tool call,
+/// and never intercepts `Read` tool invocations.
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct HookArgs {
+    /// Database path (used for PostToolUse summarisation of `codenexus rename`).
+    #[arg(long, default_value = "./codenexus.lbug")]
+    pub db: String,
+}
+
+/// Arguments for the `mcp` subcommand (H13).
+///
+/// Starts the MCP stdio server, exposing query/trace/impact/search/context as
+/// MCP tools. Launched by AI agents via the config written by `codenexus setup`.
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct McpArgs {
+    /// Database path.
+    #[arg(long, default_value = "./codenexus.lbug")]
+    pub db: String,
 }
 
 #[cfg(test)]
@@ -642,6 +716,7 @@ mod tests {
             force: true,
             lsp: false,
             embed: false,
+            ram_first: false,
         };
         assert_eq!(a, a.clone());
     }
@@ -664,6 +739,9 @@ mod tests {
             depth: 5,
             db: "./x.lbug".into(),
             min_confidence: None,
+            uid: None,
+            file: None,
+            kind: None,
         };
         assert_eq!(a, a.clone());
     }
@@ -675,6 +753,9 @@ mod tests {
             depth: 2,
             db: "./x.lbug".into(),
             min_confidence: None,
+            uid: None,
+            file: None,
+            kind: None,
         };
         assert_eq!(a, a.clone());
     }
@@ -686,6 +767,9 @@ mod tests {
             semantic: true,
             limit: 20,
             db: "./x.lbug".into(),
+            uid: None,
+            file: None,
+            kind: None,
         };
         assert_eq!(a, a.clone());
     }
@@ -736,6 +820,7 @@ mod tests {
             force: false,
             lsp: false,
             embed: false,
+            ram_first: false,
         };
         let s = format!("{a:?}");
         assert!(s.contains("IndexArgs"));
@@ -998,6 +1083,84 @@ mod tests {
             db: "/tmp/x.lbug".into(),
             path: Some("/r".into()),
             apply: true,
+        };
+        assert_eq!(a, a.clone());
+    }
+
+    // --- Setup / Hook / Mcp (H13) ---
+
+    #[test]
+    fn cli_parses_setup_subcommand_defaults() {
+        let cli = Cli::parse_from(["codenexus", "setup"]);
+        match cli.command {
+            Command::Setup(args) => assert!(!args.force),
+            other => panic!("expected Setup, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_setup_with_force() {
+        let cli = Cli::parse_from(["codenexus", "setup", "--force"]);
+        match cli.command {
+            Command::Setup(args) => assert!(args.force),
+            other => panic!("expected Setup, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_hook_subcommand_defaults() {
+        let cli = Cli::parse_from(["codenexus", "hook"]);
+        match cli.command {
+            Command::Hook(args) => assert_eq!(args.db, "./codenexus.lbug"),
+            other => panic!("expected Hook, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_hook_with_db() {
+        let cli = Cli::parse_from(["codenexus", "hook", "--db", "/tmp/x.lbug"]);
+        match cli.command {
+            Command::Hook(args) => assert_eq!(args.db, "/tmp/x.lbug"),
+            other => panic!("expected Hook, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_mcp_subcommand_defaults() {
+        let cli = Cli::parse_from(["codenexus", "mcp"]);
+        match cli.command {
+            Command::Mcp(args) => assert_eq!(args.db, "./codenexus.lbug"),
+            other => panic!("expected Mcp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_mcp_with_db() {
+        let cli = Cli::parse_from(["codenexus", "mcp", "--db", "/tmp/x.lbug"]);
+        match cli.command {
+            Command::Mcp(args) => assert_eq!(args.db, "/tmp/x.lbug"),
+            other => panic!("expected Mcp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn setup_args_clone_eq() {
+        let a = SetupArgs { force: true };
+        assert_eq!(a, a.clone());
+    }
+
+    #[test]
+    fn hook_args_clone_eq() {
+        let a = HookArgs {
+            db: "/tmp/x.lbug".into(),
+        };
+        assert_eq!(a, a.clone());
+    }
+
+    #[test]
+    fn mcp_args_clone_eq() {
+        let a = McpArgs {
+            db: "/tmp/x.lbug".into(),
         };
         assert_eq!(a, a.clone());
     }

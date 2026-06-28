@@ -17,10 +17,12 @@
 use serde::Serialize;
 
 use super::args::SearchArgs;
+use super::disambiguation;
 use super::error::Result;
 use crate::kit::{Kit, QueryKey};
 #[cfg(feature = "embed")]
 use crate::kit::EmbedKey;
+use crate::model::NodeLabel;
 use crate::query::capability::QueryEngine;
 use crate::query::SearchResult;
 
@@ -30,23 +32,99 @@ use crate::query::SearchResult;
 /// capability from `kit`, runs the search, and prints the results as a JSON
 /// array of [`SearchResultOutput`] objects.
 ///
+/// # Narrowing flags (H14)
+///
+/// `--uid`/`--file`/`--kind` filter the results. When `--uid` is supplied,
+/// the command looks up the node by id directly (bypassing text search) and
+/// returns it as a single result, further filtered by `--file`/`--kind` if
+/// also supplied. Without `--uid`, the normal text search runs and results
+/// are filtered by `--file`/`--kind`.
+///
 /// # Errors
 ///
 /// Returns [`crate::cli::error::CliError::Kit`] if the Query capability is
 /// not registered. Returns [`crate::cli::error::CliError::Query`] for search
-/// failures.
+/// failures. Returns [`crate::cli::error::CliError::InvalidInput`] for an
+/// invalid `--kind` value.
 pub fn run(kit: &Kit, args: &SearchArgs) -> Result<()> {
-    let query = kit.require::<QueryKey>()?;
-    let results = if args.semantic {
-        semantic_search(kit, &*query, &args.text, args.limit)?
+    let kind_filter: Option<NodeLabel> = args
+        .kind
+        .as_deref()
+        .map(disambiguation::parse_kind)
+        .transpose()?;
+
+    let results = if let Some(uid) = &args.uid {
+        // --uid mode: direct node lookup, bypassing text search.
+        let candidate = disambiguation::find_by_uid(kit, uid)?;
+        match candidate {
+            Some(c) => {
+                let label_match = kind_filter
+                    .map(|k| c.label == k.to_string())
+                    .unwrap_or(true);
+                let file_match = args
+                    .file
+                    .as_ref()
+                    .map(|f| c.file_path.as_deref() == Some(f.as_str()))
+                    .unwrap_or(true);
+                if label_match && file_match {
+                    vec![SearchResult {
+                        name: c.name,
+                        label: c.label,
+                        file_path: c.file_path,
+                        start_line: c.start_line,
+                        qualified_name: if c.qualified_name.is_empty() {
+                            None
+                        } else {
+                            Some(c.qualified_name)
+                        },
+                        score: 1.0,
+                    }]
+                } else {
+                    Vec::new()
+                }
+            }
+            None => Vec::new(),
+        }
     } else {
-        query.search(&args.text, None, args.limit)?
+        // Normal text search, then filter by --kind/--file.
+        let query = kit.require::<QueryKey>()?;
+        let raw = if args.semantic {
+            semantic_search(kit, &*query, &args.text, args.limit)?
+        } else {
+            query.search(&args.text, None, args.limit)?
+        };
+        filter_results(raw, kind_filter, &args.file)
     };
+
     let output: Vec<SearchResultOutput> =
         results.into_iter().map(SearchResultOutput::from).collect();
     let json = serde_json::to_string(&output)?;
     println!("{json}");
     Ok(())
+}
+
+/// Filters search results by `--kind` and `--file`.
+fn filter_results(
+    results: Vec<SearchResult>,
+    kind: Option<NodeLabel>,
+    file: &Option<String>,
+) -> Vec<SearchResult> {
+    results
+        .into_iter()
+        .filter(|r| {
+            if let Some(k) = kind {
+                if r.label != k.to_string() {
+                    return false;
+                }
+            }
+            if let Some(ref f) = file {
+                if r.file_path.as_deref() != Some(f.as_str()) {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect()
 }
 
 /// Executes a semantic search, using the embed subsystem when available.
@@ -144,6 +222,9 @@ mod tests {
             semantic,
             limit,
             db: db.to_string(),
+            uid: None,
+            file: None,
+            kind: None,
         }
     }
 
@@ -256,4 +337,90 @@ mod tests {
     // "missing db" error now surfaces at `build_kit` time, not at `run` time.
     // Covered by `build_kit_invalid_db_path_returns_build_failed_error` in
     // `kit::bootstrap::tests`.
+
+    // --- H14: narrowing flags ---
+
+    #[test]
+    fn run_search_uid_looks_up_node_directly() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_search_fixture(&kit);
+        let args = SearchArgs {
+            text: String::new(), // --uid bypasses text search
+            semantic: false,
+            limit: 10,
+            db: db.to_str().unwrap().to_string(),
+            uid: Some("f1".to_string()),
+            file: None,
+            kind: None,
+        };
+        let result = run(&kit, &args);
+        assert!(
+            result.is_ok(),
+            "uid search should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn run_search_kind_filter_succeeds() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_search_fixture(&kit);
+        let args = SearchArgs {
+            text: "parse".to_string(),
+            semantic: false,
+            limit: 10,
+            db: db.to_str().unwrap().to_string(),
+            uid: None,
+            file: None,
+            kind: Some("Function".to_string()),
+        };
+        let result = run(&kit, &args);
+        assert!(
+            result.is_ok(),
+            "kind-filtered search should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn run_search_invalid_kind_returns_error() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_search_fixture(&kit);
+        let args = SearchArgs {
+            text: "parse".to_string(),
+            semantic: false,
+            limit: 10,
+            db: db.to_str().unwrap().to_string(),
+            uid: None,
+            file: None,
+            kind: Some("BogusLabel".to_string()),
+        };
+        let err = run(&kit, &args).expect_err("invalid kind should error");
+        assert_eq!(err.exit_code(), 1, "invalid kind → exit 1");
+    }
+
+    #[test]
+    fn run_search_file_filter_succeeds() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        seed_search_fixture(&kit);
+        let args = SearchArgs {
+            text: "parse".to_string(),
+            semantic: false,
+            limit: 10,
+            db: db.to_str().unwrap().to_string(),
+            uid: None,
+            file: Some("/src/main.rs".to_string()),
+            kind: None,
+        };
+        let result = run(&kit, &args);
+        assert!(
+            result.is_ok(),
+            "file-filtered search should succeed: {:?}",
+            result.err()
+        );
+    }
 }

@@ -63,8 +63,8 @@ pub trait Extractor: Send + Sync {
 /// Reads a source file and extracts symbols.
 ///
 /// This is a convenience function that reads the file from disk and dispatches
-/// to the language-specific [`Extractor`] (via [`get_extractor`](super::get_extractor))
-/// to produce an [`ExtractResult`].
+/// to [`extract_from_source`] (which dispatches to the language-specific
+/// [`Extractor`] via [`get_extractor`](super::get_extractor)).
 ///
 /// # Errors
 ///
@@ -75,8 +75,28 @@ pub fn extract_file(path: &Path, language: Language, project: &str) -> Result<Ex
         file_path: path.display().to_string(),
         source,
     })?;
+    extract_from_source(&path.display().to_string(), &source, language, project)
+}
+
+/// Extracts symbols from an in-memory source string.
+///
+/// Used by the RAM-first indexing path (H15): source bytes are LZ4-decompressed
+/// into a `String` and passed here directly, bypassing the disk read in
+/// [`extract_file`]. `file_path_str` is used only for node `file_path` fields
+/// and error messages — no filesystem access occurs.
+///
+/// # Errors
+///
+/// Returns a [`ParseError::ParseFailed`] if the tree-sitter parser returns no
+/// tree.
+pub fn extract_from_source(
+    file_path_str: &str,
+    source: &str,
+    language: Language,
+    project: &str,
+) -> Result<ExtractResult> {
     let extractor = super::get_extractor(language);
-    extractor.extract(&source, &path.display().to_string(), project)
+    extractor.extract(source, file_path_str, project)
 }
 
 #[cfg(test)]

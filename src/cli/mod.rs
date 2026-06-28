@@ -27,15 +27,19 @@ pub mod context_cmd;
 #[cfg(feature = "daemon")]
 pub mod daemon_cmd;
 pub mod detect_changes_cmd;
+pub mod disambiguation;
 pub mod error;
 pub mod export_cmd;
+pub mod hook_cmd;
 pub mod impact_cmd;
 pub mod import_cmd;
 pub mod index_cmd;
 pub mod list_cmd;
+pub mod mcp_cmd;
 pub mod query_cmd;
 pub mod rename_cmd;
 pub mod search_cmd;
+pub mod setup_cmd;
 pub mod status_cmd;
 pub mod trace_cmd;
 
@@ -46,8 +50,9 @@ pub use error::{CliError, Result};
 mod dispatch_tests {
     use super::*;
     use crate::cli::args::{
-        CleanArgs, ContextArgs, DetectChangesArgs, ExportArgs, ImpactArgs, ImportArgs, IndexArgs,
-        ListArgs, QueryArgs, RenameArgs, SearchArgs, StatusArgs, TraceArgs,
+        CleanArgs, ContextArgs, DetectChangesArgs, ExportArgs, HookArgs, ImpactArgs, ImportArgs,
+        IndexArgs, ListArgs, McpArgs, QueryArgs, RenameArgs, SearchArgs, SetupArgs, StatusArgs,
+        TraceArgs,
     };
     #[cfg(feature = "daemon")]
     use crate::cli::args::DaemonArgs;
@@ -81,6 +86,9 @@ mod dispatch_tests {
             Command::Context(args) => context_cmd::run(kit, &args),
             Command::DetectChanges(args) => detect_changes_cmd::run(kit, &args),
             Command::Rename(args) => rename_cmd::run(kit, &args),
+            Command::Setup(args) => setup_cmd::run(&args),
+            Command::Hook(args) => hook_cmd::run(kit, &args),
+            Command::Mcp(args) => mcp_cmd::run(kit, &args),
         }
     }
 
@@ -488,6 +496,7 @@ mod dispatch_tests {
             force: false,
             lsp: false,
             embed: false,
+            ram_first: false,
         };
         let _ = QueryArgs {
             cypher: "MATCH (n) RETURN n;".into(),
@@ -500,18 +509,27 @@ mod dispatch_tests {
             depth: 3,
             db: "./x.lbug".into(),
             min_confidence: None,
+            uid: None,
+            file: None,
+            kind: None,
         };
         let _ = ImpactArgs {
             symbol: "s".into(),
             depth: 3,
             db: "./x.lbug".into(),
             min_confidence: None,
+            uid: None,
+            file: None,
+            kind: None,
         };
         let _ = SearchArgs {
             text: "t".into(),
             semantic: false,
             limit: 10,
             db: "./x.lbug".into(),
+            uid: None,
+            file: None,
+            kind: None,
         };
         #[cfg(feature = "daemon")]
         let _ = DaemonArgs {
@@ -558,6 +576,13 @@ mod dispatch_tests {
             db: "./x.lbug".into(),
             path: None,
             apply: false,
+        };
+        let _ = SetupArgs { force: false };
+        let _ = HookArgs {
+            db: "./x.lbug".into(),
+        };
+        let _ = McpArgs {
+            db: "./x.lbug".into(),
         };
     }
 }

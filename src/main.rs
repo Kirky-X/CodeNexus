@@ -106,6 +106,18 @@ fn run_command(command: Command) -> Result<(), CliError> {
             let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
             codenexus::cli::rename_cmd::run(&kit, &args)
         }
+        Command::Setup(args) => {
+            // Setup writes MCP config files — no database access needed.
+            codenexus::cli::setup_cmd::run(&args)
+        }
+        Command::Hook(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::hook_cmd::run(&kit, &args)
+        }
+        Command::Mcp(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::mcp_cmd::run(&kit, &args)
+        }
     }
 }
 
