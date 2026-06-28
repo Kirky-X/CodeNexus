@@ -79,7 +79,38 @@ impl StorageConnection {
     /// [`StorageError::Corrupt`] so the upper layer's `From<StorageError>`
     /// impl maps it to [`IndexError::DatabaseCorrupt`] (exit code 4).
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        match Database::new(path, SystemConfig::default()) {
+        // Test builds run many StorageConnection instances in parallel under
+        // `cargo test`. LadybugDB's default `buffer_pool_size = 0` lets DuckDB
+        // auto-detect the buffer pool, which resolves to ~8 TiB and triggers
+        // `Mmap for size 8796093022208 failed` once N parallel instances each
+        // try to reserve 8 TiB of virtual address space (Rule 12: fail loud —
+        // the original failure surfaced as `.expect("in_memory ...")` panics
+        // scattered across ~120 tests). Pin a 256 MiB cap in test builds so
+        // parallel in-memory DBs stay within reasonable per-process limits.
+        // Production builds keep the auto-detect behavior (buffer_pool_size = 0).
+        let config = if cfg!(test) {
+            // Test builds run many StorageConnection instances in parallel
+            // under `cargo test`. Two SystemConfig defaults trigger 8 TiB
+            // mmap requests per instance, exhausting the kernel's virtual
+            // address budget once N instances run together:
+            //   1. buffer_pool_size = 0 → C++ auto-detects to ~80% of phys
+            //      mem, capped at DEFAULT_VM_REGION_MAX_SIZE (8 TiB on 64-bit
+            //      Linux — see lbug constants.h L63).
+            //   2. max_db_size = u32::MAX (0xFFFFFFFF) → C++ treats this as
+            //      "unset" and replaces it with DEFAULT_VM_REGION_MAX_SIZE
+            //      (database.cpp L82-84), then mmaps that as the BM region.
+            // The resulting `Mmap for size 8796093022208 failed` panic
+            // surfaces in ~120 tests via `.expect("in_memory ...")`. Pin both
+            // to small explicit values so parallel in-memory DBs stay within
+            // reasonable per-process limits (Rule 12: fail loud, not silent).
+            // Production builds keep the auto-detect behavior.
+            SystemConfig::default()
+                .buffer_pool_size(256 * 1024 * 1024)
+                .max_db_size(1024 * 1024 * 1024)
+        } else {
+            SystemConfig::default()
+        };
+        match Database::new(path, config) {
             Ok(db) => Ok(Self { db }),
             Err(e) => {
                 let storage_err = StorageError::Database(e);
