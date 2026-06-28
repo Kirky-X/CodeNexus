@@ -1,0 +1,35 @@
+[package]
+name = "codenexus-examples"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Example programs demonstrating CodeNexus core features"
+
+[dependencies]
+codenexus = { path = ".." }
+tempfile = "3"
+serde_json = "1"
+
+[[bin]]
+name = "basic_indexing"
+path = "src/bin/basic_indexing.rs"
+
+[[bin]]
+name = "cypher_query"
+path = "src/bin/cypher_query.rs"
+
+[[bin]]
+name = "symbol_search"
+path = "src/bin/symbol_search.rs"
+
+[[bin]]
+name = "call_tracing"
+path = "src/bin/call_tracing.rs"
+
+[[bin]]
+name = "impact_analysis"
+path = "src/bin/impact_analysis.rs"
+
+[[bin]]
+name = "export_import"
+path = "src/bin/export_import.rs"
