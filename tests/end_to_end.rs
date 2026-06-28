@@ -450,7 +450,7 @@ struct CapturingMakeWriter {
     buf: Arc<Mutex<Vec<u8>>>,
 }
 
-impl MakeWriter for CapturingMakeWriter {
+impl MakeWriter<'_> for CapturingMakeWriter {
     type Writer = CapturingWriter;
 
     fn make_writer(&self) -> Self::Writer {
@@ -722,7 +722,7 @@ fn ffi_trace_returns_cross_language_path() {
         graph
             .edges
             .iter()
-            .map(|e| e.edge_type.clone())
+            .map(|e| e.edge_type)
             .collect::<Vec<_>>()
     );
 }

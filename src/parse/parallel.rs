@@ -563,7 +563,7 @@ mod tests {
         buf: Arc<Mutex<Vec<u8>>>,
     }
 
-    impl MakeWriter for CapturingMakeWriter {
+    impl MakeWriter<'_> for CapturingMakeWriter {
         type Writer = CapturingWriter;
 
         fn make_writer(&self) -> Self::Writer {
