@@ -409,7 +409,12 @@ impl Phase for ResolvePhase {
         let mut all_nodes = scope.all_nodes.clone();
         let mut all_edges = scope.all_edges.clone();
 
-        // Resolve calls + dataflow + FFI edges.
+        // Resolve calls + dataflow + FFI edges. `TypeResolver::resolve_types`
+        // internally builds a path mapping between `result.file_path` (absolute
+        // in production) and graph nodes' `file_path` (relative, normalized by
+        // ScopeResolutionPhase) so that `imports_map` and `lookup_in_file`
+        // lookups succeed despite the path-format difference. See
+        // TypeResolver::resolve_types for details.
         let symbol_table = build_symbol_table(&parse.results, project_id);
         let resolved_edges = resolve_all(&parse.results, &symbol_table, project_id, &mut graph);
         all_edges.extend(resolved_edges);

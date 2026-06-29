@@ -151,10 +151,51 @@ impl<'a> TypeResolver<'a> {
         results: &[ExtractResult],
         graph: &mut Graph,
     ) -> Vec<Edge> {
-        // Build file_path → imports map from extraction results.
+        // In production, `ExtractResult.file_path` is absolute (set by
+        // `extract_file` from `file.path`), while graph nodes' `file_path` is
+        // relative (normalized by `ScopeResolutionPhase`, phases.rs:344-346).
+        // This path-format mismatch causes `imports_map.get(source_file)` and
+        // `symbol_table.lookup_in_file(source_file, ...)` to miss, leaving all
+        // Extends/Implements/UsesType edges unresolved (confidence stuck at
+        // 1.0). Build a bidirectional path mapping by matching result nodes'
+        // `qualified_name` to graph nodes' `qualified_name` (both are FQNs
+        // generated from the absolute path during the parse phase, so they
+        // match even though `file_path` differs).
+        let mut result_to_graph_fp: HashMap<&str, &str> = HashMap::new();
+        for result in results {
+            // Skip if we already mapped this file.
+            if result_to_graph_fp.contains_key(result.file_path.as_str()) {
+                continue;
+            }
+            for node in &result.nodes {
+                if let Some(graph_node) = graph.nodes.get(&node.qualified_name) {
+                    if let Some(graph_fp) = graph_node.file_path.as_deref() {
+                        result_to_graph_fp
+                            .insert(result.file_path.as_str(), graph_fp);
+                        break;
+                    }
+                }
+            }
+        }
+        // Reverse mapping: graph file_path (relative) → result file_path
+        // (absolute), used to translate `source_file` back to the format
+        // expected by `symbol_table.lookup_in_file`.
+        let graph_to_result_fp: HashMap<&str, &str> = result_to_graph_fp
+            .iter()
+            .map(|(k, v)| (*v, *k))
+            .collect();
+
+        // Build file_path → imports map, keyed by GRAPH file_path (relative)
+        // so it matches `fqn_to_file` values.
         let imports_map: HashMap<&str, &[ImportInfo]> = results
             .iter()
-            .map(|r| (r.file_path.as_str(), r.imports.as_slice()))
+            .map(|r| {
+                let key = result_to_graph_fp
+                    .get(r.file_path.as_str())
+                    .copied()
+                    .unwrap_or(r.file_path.as_str());
+                (key, r.imports.as_slice())
+            })
             .collect();
 
         // Build fqn → file_path map from graph nodes (for source lookup).
@@ -178,17 +219,24 @@ impl<'a> TypeResolver<'a> {
             if graph.nodes.contains_key(&edge.target) {
                 continue;
             }
-            // Get the source node's file path.
+            // Get the source node's file path (relative, from graph).
             let Some(&source_file) = fqn_to_file.get(edge.source.as_str()) else {
                 continue;
             };
             // Extract the type name from the dangling FQN (last component).
             let type_name = edge.target.rsplit('.').next().unwrap_or(&edge.target);
-            // Retrieve imports for this file.
+            // Retrieve imports for this file (imports_map keyed by relative
+            // path, matching source_file).
             let imports = imports_map.get(source_file).copied().unwrap_or(&[]);
+            // Translate relative source_file back to absolute for symbol table
+            // lookup (file table keyed by result.file_path = absolute).
+            let lookup_file = graph_to_result_fp
+                .get(source_file)
+                .copied()
+                .unwrap_or(source_file);
             // Attempt resolution.
             let Some((resolved_qn, confidence, tier)) =
-                self.resolve_type(source_file, type_name, imports)
+                self.resolve_type(lookup_file, type_name, imports)
             else {
                 continue;
             };
@@ -520,5 +568,105 @@ mod tests {
         let resolver = TypeResolver::new(&table);
         let fixed = resolver.resolve_types(&results, &mut graph);
         assert!(fixed.is_empty());
+    }
+
+    #[test]
+    fn resolve_types_handles_path_format_mismatch() {
+        // Regression test for the TypeResolver path mismatch bug.
+        //
+        // In production, `ExtractResult.file_path` is absolute (e.g.
+        // "/home/user/proj/src/b.py") while graph nodes' `file_path` is
+        // relative (e.g. "src/b.py") — normalized by ScopeResolutionPhase.
+        // TypeResolver builds `imports_map` from `ExtractResult.file_path`
+        // (absolute) but queries it with `fqn_to_file` values (relative),
+        // causing `imports_map.get(source_file)` to return None.
+        //
+        // The fix: TypeResolver builds a bidirectional path mapping by
+        // matching result nodes' `qualified_name` to graph nodes'
+        // `qualified_name` (both are FQNs from the absolute path during
+        // parse, so they match). This allows `imports_map` to be keyed by
+        // the graph's relative paths and `lookup_in_file` to be queried
+        // with the result's absolute path.
+        //
+        // FQNs are generated from the absolute path (as in production), so
+        // they include all path segments: "/abs/path/a.py" → "proj.abs.path.a.py.A".
+        // Graph nodes use the SAME FQN but have file_path normalized to relative.
+
+        // Simulate production: extraction with ABSOLUTE file_path.
+        let abs_a = "/abs/path/a.py";
+        let abs_b = "/abs/path/b.py";
+        // FQN segments from absolute path: ["abs", "path", "a.py"]
+        let qn_a = "proj.abs.path.a.py.A";
+        let qn_b = "proj.abs.path.b.py.B";
+
+        let class_a = Node::builder(NodeLabel::Class, "A", qn_a)
+            .file_path(abs_a)
+            .language(Language::Python)
+            .project("proj")
+            .is_exported(true)
+            .build();
+        let class_b = Node::builder(NodeLabel::Class, "B", qn_b)
+            .file_path(abs_b)
+            .language(Language::Python)
+            .project("proj")
+            .build();
+
+        let results = vec![
+            {
+                let mut r = ExtractResult::new(abs_a, Language::Python);
+                r.push_node(class_a);
+                r
+            },
+            {
+                let mut r = ExtractResult::new(abs_b, Language::Python);
+                r.push_node(class_b);
+                r.imports.push(ImportInfo {
+                    source_file: "a".to_string(),
+                    imported_names: vec!["A".to_string()],
+                    line: 1,
+                });
+                r
+            },
+        ];
+        let table = build_symbol_table(&results, "proj");
+
+        // Graph nodes: id set to FQN (simulating ScopeResolutionPhase
+        // phases.rs:338-342 which sets g.id = node.qualified_name), and
+        // file_path normalized to RELATIVE (phases.rs:344-346).
+        let mut graph = Graph::new();
+        let graph_a = Node::builder(NodeLabel::Class, "A", qn_a)
+            .id(qn_a)
+            .file_path("a.py")
+            .language(Language::Python)
+            .project("proj")
+            .is_exported(true)
+            .build();
+        let graph_b = Node::builder(NodeLabel::Class, "B", qn_b)
+            .id(qn_b)
+            .file_path("b.py")
+            .language(Language::Python)
+            .project("proj")
+            .build();
+        graph.add_node(graph_a);
+        graph.add_node(graph_b);
+        // Dangling edge: B extends A (wrong file segment in FQN).
+        graph.add_edge(Edge::new(qn_b, "proj.abs.path.b.py.A", EdgeType::Extends, "proj"));
+
+        let resolver = TypeResolver::new(&table);
+        let fixed = resolver.resolve_types(&results, &mut graph);
+
+        // With the path-mapping fix, import-scoped resolution (0.90) should
+        // succeed despite the path-format mismatch.
+        assert_eq!(fixed.len(), 1, "should fix the dangling edge");
+        assert_eq!(graph.edges[0].target, qn_a, "should resolve to A's FQN");
+        assert!(
+            (graph.edges[0].confidence - 0.90).abs() < f32::EPSILON,
+            "import-scoped (0.90) should succeed with path mapping; got {}",
+            graph.edges[0].confidence
+        );
+        assert_eq!(
+            graph.edges[0].confidence_tier,
+            ConfidenceTier::ImportScoped
+        );
     }
 }
