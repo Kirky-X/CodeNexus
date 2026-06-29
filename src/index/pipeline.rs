@@ -386,6 +386,25 @@ impl Pipeline {
                 ))
             })?;
 
+        // Force a checkpoint so the WAL is flushed to the main DB file before
+        // this Pipeline (and its Repository) is dropped. Without this, a
+        // concurrently-open Repository (e.g. the Kit's Storage capability
+        // opened at boot) may trigger a checkpoint-on-drop that loses this
+        // indexer's writes ("checkpoint interference on Kit drop" — see
+        // cli/mod.rs dispatch_tests comment).
+        //
+        // LadybugDB Cypher grammar (Cypher.g4:262) accepts `CHECKPOINT` as a
+        // standalone statement — the `CALL CHECKPOINT` syntax is invalid.
+        // `force_checkpoint_on_close=true` ensures the DB flushes its WAL
+        // when the connection is dropped, even if other connections remain
+        // open.
+        if let Err(err) = self.repository.connection().execute("CALL force_checkpoint_on_close=true;") {
+            warn!(error = %err, "failed to enable force_checkpoint_on_close");
+        }
+        if let Err(err) = self.repository.connection().execute("CHECKPOINT;") {
+            warn!(error = %err, "post-index checkpoint failed; data may not persist if other DB handles are open");
+        }
+
         Ok(load_output.index_result)
     }
 }

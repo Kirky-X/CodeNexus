@@ -14,10 +14,10 @@ use std::path::Path;
 use serde::Serialize;
 
 use super::args::IndexArgs;
-use super::error::Result;
+use super::error::{CliError, Result};
 use crate::index::IndexResult;
-use crate::kit::{IndexerKey, Kit, StorageKey};
-use crate::storage::QualityChecker;
+use crate::kit::{IndexerKey, Kit};
+use crate::storage::{QualityChecker, Repository};
 
 /// Runs the `index` subcommand.
 ///
@@ -47,9 +47,19 @@ pub fn run(kit: &Kit, args: &IndexArgs) -> Result<()> {
     };
 
     // Run data quality checks (DQ-002/004/005/006) against the freshly indexed
-    // database. The Storage capability is the same one the Indexer used.
-    let storage = kit.require::<StorageKey>()?;
-    let checker = QualityChecker::new(&*storage);
+    // database.
+    //
+    // We open a FRESH Repository here instead of using `kit.require::<StorageKey>()`
+    // because the Kit's Storage capability was opened at boot (before the
+    // indexer ran), so its connection holds a stale MVCC snapshot of the
+    // empty DB — querying through it would return empty results. Opening a
+    // new Repository here gets a current snapshot that sees the indexed data.
+    //
+    // The stale-connection data-loss bug (Kit's drop checkpointing over
+    // writes) is handled by `std::mem::forget(kit)` in main.rs, not here.
+    let fresh_repo = Repository::open(&args.db)
+        .map_err(|e| CliError::Index(crate::index::IndexError::Storage(e)))?;
+    let checker = QualityChecker::new(&fresh_repo);
     let dq_report = checker.run_all()?;
     if !dq_report.is_clean() {
         eprintln!("Data quality violations found:");
@@ -61,6 +71,19 @@ pub fn run(kit: &Kit, args: &IndexArgs) -> Result<()> {
                 violation.project.as_deref().unwrap_or("N/A")
             );
         }
+    }
+
+    // Flush the WAL to the main DB file after the quality checks. The
+    // pipeline already ran CHECKPOINT at the end of indexing, but the DQ
+    // checks may have opened new read transactions; this ensures the data
+    // is durably persisted before the process exits.
+    //
+    // Note: the Kit's stale Storage/Query/Trace connections (opened at boot,
+    // before indexing) are prevented from dropping by `std::mem::forget(kit)`
+    // in main.rs. This is the real fix — a stale connection's drop-time
+    // checkpoint would overwrite the indexer's writes with its empty view.
+    if let Err(err) = fresh_repo.connection().execute("CHECKPOINT;") {
+        eprintln!("[warn] post-quality-check checkpoint failed: {err}");
     }
 
     let output = IndexOutput::from(result);
@@ -103,7 +126,7 @@ impl From<IndexResult> for IndexOutput {
 mod tests {
     use super::*;
     use crate::cli::args::IndexArgs;
-    use crate::kit::{build_kit, KitBootstrapConfig};
+    use crate::kit::{build_kit, KitBootstrapConfig, StorageKey};
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;

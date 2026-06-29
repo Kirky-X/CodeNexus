@@ -48,7 +48,21 @@ fn run_command(command: Command) -> Result<(), CliError> {
     match command {
         Command::Index(args) => {
             let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
-            codenexus::cli::index_cmd::run(&kit, &args)
+            let result = codenexus::cli::index_cmd::run(&kit, &args);
+            // Leak the Kit intentionally. `build_kit` opens Storage / Query /
+            // Trace Database connections at boot — BEFORE the indexer writes.
+            // These connections hold stale MVCC snapshots of the empty DB.
+            // If they drop at end-of-scope, LadybugDB's drop-time checkpoint
+            // overwrites the indexer's writes with the stale empty view,
+            // losing all data. `std::mem::forget` prevents the drop; the OS
+            // reclaims file handles when the short-lived CLI process exits.
+            //
+            // Only the `index` command has this problem — it's the only
+            // command that WRITES to the DB after the Kit opens connections.
+            // Read-only commands (query/trace/impact/...) are unaffected
+            // because there's nothing to corrupt.
+            std::mem::forget(kit);
+            result
         }
         Command::Query(args) => {
             let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;

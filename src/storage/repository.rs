@@ -14,6 +14,7 @@
 //! read/delete methods accept a `project` parameter and filter on it, ensuring
 //! that data from one project never leaks into another (BR-INDEX-004).
 
+use super::capability::Storage;
 use super::connection::{SchemaInitReport, StorageConnection};
 use super::error::{Result, StorageError};
 use super::loader::{load_from_csv, write_csv_temp, write_edges_csv, write_nodes_csv};
@@ -428,6 +429,101 @@ impl Repository {
         );
         let rows = self.conn.query(&cypher)?;
         Ok(rows.into_iter().map(row_to_function).collect())
+    }
+}
+
+/// Delegates the [`Storage`] capability trait to a bare [`Repository`].
+///
+/// This exists so callers which need a FRESH `Repository` (opened after
+/// writes occurred) can pass it to APIs expecting `&dyn Storage` — most
+/// notably [`QualityChecker`](super::QualityChecker) in `index_cmd::run`.
+/// The Kit's storage capability wraps a `Repository` opened at boot; using
+/// it after indexing would read a stale MVCC snapshot and risk "checkpoint
+/// interference on drop" (the stale Repository's destructor may flush its
+/// empty view over the indexer's writes). Opening a new `Repository` and
+/// passing it as `&dyn Storage` avoids both problems.
+///
+/// # Thread-safety
+///
+/// This impl does NOT lock a mutex (unlike the Kit's storage capability,
+/// which wraps `Repository` in a `Mutex`). It is safe for single-threaded
+/// consumers such as `QualityChecker`. Multi-threaded consumers must use
+/// the Kit's mutex-guarded capability instead.
+impl Storage for Repository {
+    fn init_schema(&self) -> std::result::Result<SchemaInitReport, StorageError> {
+        Repository::init_schema(self)
+    }
+
+    fn execute(&self, cypher: &str) -> std::result::Result<(), StorageError> {
+        self.connection().execute(cypher)
+    }
+
+    fn query(
+        &self,
+        cypher: &str,
+    ) -> std::result::Result<Vec<Vec<serde_json::Value>>, StorageError> {
+        self.connection().query(cypher)
+    }
+
+    fn save_project(&self, node: &Node) -> std::result::Result<(), StorageError> {
+        Repository::save_project(self, node)
+    }
+
+    fn save_nodes(
+        &self,
+        nodes: &[Node],
+        label: NodeLabel,
+    ) -> std::result::Result<(), StorageError> {
+        Repository::save_nodes(self, nodes, label)
+    }
+
+    fn save_edges(&self, edges: &[Edge]) -> std::result::Result<(), StorageError> {
+        Repository::save_edges(self, edges)
+    }
+
+    fn get_project(
+        &self,
+        id: &str,
+    ) -> std::result::Result<Option<ProjectRecord>, StorageError> {
+        Repository::get_project(self, id)
+    }
+
+    fn list_projects(&self) -> std::result::Result<Vec<ProjectRecord>, StorageError> {
+        Repository::list_projects(self)
+    }
+
+    fn query_functions(
+        &self,
+        project: &str,
+    ) -> std::result::Result<Vec<FunctionRecord>, StorageError> {
+        Repository::query_functions(self, project)
+    }
+
+    fn get_file_hash(
+        &self,
+        file_path: &str,
+        project: &str,
+    ) -> std::result::Result<Option<String>, StorageError> {
+        Repository::get_file_hash(self, file_path, project)
+    }
+
+    fn get_all_file_hashes(
+        &self,
+        project: &str,
+    ) -> std::result::Result<Vec<(String, String)>, StorageError> {
+        Repository::get_all_file_hashes(self, project)
+    }
+
+    fn delete_project(&self, project_id: &str) -> std::result::Result<(), StorageError> {
+        Repository::delete_project(self, project_id)
+    }
+
+    fn delete_file_nodes(
+        &self,
+        file_path: &str,
+        project: &str,
+    ) -> std::result::Result<(), StorageError> {
+        Repository::delete_file_nodes(self, file_path, project)
     }
 }
 
