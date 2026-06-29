@@ -65,3 +65,6 @@ temp/
 
 # OpenSpec artifacts
 openspec/
+
+# Verification harness outputs (large, sample-derived; rebuild locally)
+tools/verification/results/

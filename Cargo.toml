@@ -26,6 +26,13 @@ path = "src/lib.rs"
 name = "codenexus"
 path = "src/main.rs"
 
+# Verification harness for cross-validating CodeNexus parsing against gitnexus
+# (openspec/changes/cross-validate-parsing-with-gitnexus). Lives under
+# tools/verification/ and reuses the codenexus lib for LadybugDB access.
+[[bin]]
+name = "codenexus-verify"
+path = "tools/verification/src/main.rs"
+
 # ============================================================================
 # FEATURES
 # ============================================================================
