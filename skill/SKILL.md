@@ -1,6 +1,6 @@
 ---
 name: codenexus
-description: Index a codebase into a queryable LadybugDB knowledge graph and trace calls, data-flow, FFI, impact, and semantic search. Use when the user needs to index/parse code, run Cypher queries, trace call chains or data flow, analyze blast radius, search symbols, watch files, manage projects, export/import artifacts, inspect symbol context, detect git-change impact, propose renames, or configure MCP integration.
+description: Code knowledge graph indexer and query tool. Use when indexing code, tracing calls, analyzing impact, or querying the graph. Triggers: index codebase, trace calls, impact analysis, codenexus.
 when_to_use: Triggers include "index a codebase", "query the graph", "trace calls from X", "what's the impact of changing X", "search for symbol", "start the daemon", "list projects", "clean project", "export/import graph", "show context of X", "what changed", "rename X", "set up MCP", or any reference to CodeNexus / codenexus CLI.
 ---
 
@@ -12,24 +12,26 @@ CodeNexus is a code knowledge graph indexing tool. It parses source code (C, Rus
 
 Use this Skill when you need to index a codebase, query its structure, trace function calls or data flow, analyze the impact of changes, search for symbols, watch files for incremental updates, manage projects, export/import graph artifacts, inspect a symbol's 360° context, detect symbols affected by git changes, propose renames, or set up MCP integration with AI agents.
 
-**Project documentation** (for deeper context, read on demand):
-- `docs/PRD.md` — product requirements, scope, acceptance criteria
-- `docs/ADD.md` — architecture (C4, ADRs, dynamic behavior)
-- `docs/DDD.md` — LadybugDB schema, node/edge types
-- `docs/TRD.md` — technical requirements, performance/reliability targets
-
 ## Prerequisites
 
-Build the CLI first:
+Install from crates.io (recommended):
 
 ```bash
+cargo install codenexus
+```
+
+Or build from source:
+
+```bash
+git clone https://github.com/Kirky-X/codenexus.git
+cd codenexus
 cargo build --release
 ```
 
-The binary is at `target/release/codenexus`. For semantic search (optional), build with:
+The binary is at `target/release/codenexus` (or `~/.cargo/bin/codenexus` if installed via `cargo install`). For semantic search (optional), install with:
 
 ```bash
-cargo build --release --features embed
+cargo install codenexus --features embed
 ```
 
 Feature presets: `minimal` (one language), `core` (C+Rust+Fortran), `full` (all 5 languages + daemon). At least one `lang-*` feature is required — the crate fails to compile otherwise.
