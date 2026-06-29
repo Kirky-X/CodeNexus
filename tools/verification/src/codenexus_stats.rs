@@ -101,11 +101,16 @@ pub fn run_single(repo: &Path, name: &str, language: &str, resume: bool) -> Resu
 /// storing the project's UUIDv7 id, and [`extract_stats`] filters all queries
 /// by this id. There is no need to delete the DB file between samples — doing
 /// so would destroy other projects' indexes unnecessarily.
+///
+/// **Release mode**: uses `--release` because large projects (velo: 69K edges,
+/// LAPACK: 493K edges) in debug mode are too slow and get killed by signals
+/// (exit status None) mid-index. Release mode completes in seconds.
 pub fn run_index(repo_path: &Path, name: &str) -> Result<()> {
-    eprintln!("[index] codenexus index {} --name {}", repo_path.display(), name);
+    eprintln!("[index] codenexus index {} --name {} (release)", repo_path.display(), name);
     let output = Command::new("cargo")
         .args([
             "run",
+            "--release",
             "--bin",
             "codenexus",
             "--",
@@ -174,12 +179,15 @@ pub fn extract_stats(db_path: &Path, name: &str) -> Result<CodeNexusStats> {
     for table in NODE_TABLES {
         // Parameterized DDL not supported here; table name is from a
         // hardcoded trusted list (NODE_TABLES), not user input, so SQL
-        // injection is not a concern.
+        // injection is not a concern. However, some table names (Macro,
+        // Union) collide with LadybugDB reserved keywords and must be
+        // backtick-escaped via `escape_identifier`.
+        let escaped_table = codenexus::storage::schema::escape_identifier(table);
         let cypher = if *table == "Project" {
             // Project table has no `project` column; filter by name instead.
             format!("MATCH (n:Project) WHERE n.name = '{escaped_name}' RETURN count(n) AS c")
         } else {
-            format!("MATCH (n:{table}) WHERE n.project = '{escaped_pid}' RETURN count(n) AS c")
+            format!("MATCH (n:{escaped_table}) WHERE n.project = '{escaped_pid}' RETURN count(n) AS c")
         };
         match conn.query(&cypher) {
             Ok(rows) => {
