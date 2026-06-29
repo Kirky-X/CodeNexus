@@ -1,0 +1,58 @@
+{
+  "_comment": "Type mapping between CodeNexus (44 node types, 24 edge types) and gitnexus (~15 node labels, 17 CodeRelation.type values). category: comparable = both sides index this as a direct parsing output; codenexus_only = CodeNexus parses, gitnexus does not; gitnexus_only = gitnexus indexes, CodeNexus does not; analysis_artifact = both sides have it but it's an upper-layer analysis product (not a parsing output), excluded from parsing-correctness comparison. Updated per triage.md Pattern 1/2 + B1 fix (CONTAINS emission removed from all extractors).",
+  "nodes": {
+    "comparable": {
+      "File":      { "canonical": "file" },
+      "Function":  { "canonical": "function" },
+      "Method":    { "canonical": "method" },
+      "Class":     { "canonical": "class" },
+      "Interface": { "canonical": "interface" },
+      "Struct":    { "canonical": "struct" },
+      "Enum":      { "canonical": "enum" },
+      "Trait":     { "canonical": "trait" },
+      "Impl":      { "canonical": "impl" }
+    },
+    "codenexus_only": [
+      "Project", "Module", "GlobalVar", "Variable", "Parameter", "Const",
+      "Static", "Macro", "TypeAlias", "Typedef", "Namespace", "Constructor",
+      "Property", "Record", "Delegate", "Annotation", "Template", "Union",
+      "Variant", "Field", "Event", "Handler", "Middleware", "Service",
+      "Endpoint", "Database", "Config", "Test", "Section", "Embedding"
+    ],
+    "gitnexus_only": [
+      "CodeElement",
+      "Folder"
+    ],
+    "analysis_artifact": [
+      "Community", "Process", "Route", "Tool"
+    ]
+  },
+  "edges": {
+    "comparable": {
+      "DEFINES":  { "canonical": "defines" },
+      "CALLS":    { "canonical": "calls" },
+      "EXTENDS":  { "canonical": "extends" }
+    },
+    "codenexus_only": [
+      "FFI_CALLS", "DATA_FLOWS", "READS", "WRITES",
+      "USES_TYPE", "REFERENCES", "INCLUDES"
+    ],
+    "gitnexus_only": [
+      "CONTAINS",
+      "MEMBER_OF",
+      "IMPLEMENTS",
+      "IMPORTS",
+      "HAS_METHOD",
+      "HAS_PROPERTY",
+      "ACCESSES",
+      "METHOD_OVERRIDES",
+      "METHOD_IMPLEMENTS",
+      "STEP_IN_PROCESS",
+      "HANDLES_ROUTE",
+      "FETCHES",
+      "HANDLES_TOOL",
+      "ENTRY_POINT_OF"
+    ],
+    "analysis_artifact": []
+  }
+}

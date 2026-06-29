@@ -1,0 +1,77 @@
+{
+  "_comment": "Sample corpus for cross-validation. Rust/Python/TypeScript entries reuse existing gitnexus indexes. C (redis) and Fortran (LAPACK) were indexed by `gitnexus analyze` on 2026-06-29 — gitnexus supports both languages, so no tree-sitter fallback is needed. All 8 samples have a valid `gitnexus_name` for direct comparison.",
+  "samples": [
+    {
+      "name": "CodeNexus",
+      "language": "rust",
+      "repo_path": "/home/dev/projects/CodeNexus",
+      "gitnexus_name": "CodeNexus",
+      "commit": "ee97bc8",
+      "expected_node_min": 5000,
+      "source": "self"
+    },
+    {
+      "name": "velo",
+      "language": "rust",
+      "repo_path": "/home/dev/projects/velo",
+      "gitnexus_name": "velo",
+      "commit": "b9795f1",
+      "expected_node_min": 12000,
+      "source": "gitnexus-indexed"
+    },
+    {
+      "name": "panorama",
+      "language": "python",
+      "repo_path": "/home/dev/projects/panorama",
+      "gitnexus_name": "panorama",
+      "commit": "90d552b",
+      "expected_node_min": 14000,
+      "source": "gitnexus-indexed"
+    },
+    {
+      "name": "hermes-agent",
+      "language": "python",
+      "repo_path": "/home/dev/github/hermes-agent",
+      "gitnexus_name": "hermes-agent",
+      "commit": "af9caec",
+      "expected_node_min": 60000,
+      "source": "gitnexus-indexed"
+    },
+    {
+      "name": "claudecode",
+      "language": "typescript",
+      "repo_path": "/home/dev/github/claudecode",
+      "gitnexus_name": "claudecode",
+      "commit": "7911745",
+      "expected_node_min": 15000,
+      "source": "gitnexus-indexed"
+    },
+    {
+      "name": "subno.ts",
+      "language": "typescript",
+      "repo_path": "/home/dev/projects/subno.ts",
+      "gitnexus_name": "subno.ts",
+      "commit": "bc1571a",
+      "expected_node_min": 3500,
+      "source": "gitnexus-indexed"
+    },
+    {
+      "name": "redis",
+      "language": "c",
+      "repo_path": "/home/dev/projects/redis",
+      "gitnexus_name": "redis",
+      "commit": "7.4.0",
+      "expected_node_min": 3000,
+      "source": "https://github.com/redis/redis.git"
+    },
+    {
+      "name": "LAPACK",
+      "language": "fortran",
+      "repo_path": "/home/dev/projects/LAPACK",
+      "gitnexus_name": "LAPACK",
+      "commit": "v3.12.0",
+      "expected_node_min": 2000,
+      "source": "https://github.com/Reference-LAPACK/lapack.git"
+    }
+  ]
+}
