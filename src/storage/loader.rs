@@ -17,12 +17,21 @@
 use std::io::Write;
 use std::path::Path;
 
-use csv::Writer;
+use csv::WriterBuilder;
 
 use super::connection::StorageConnection;
 use super::error::{Result, StorageError};
 use super::schema::{escape_identifier, node_table_columns, relation_table_columns};
 use crate::model::{Edge, Node, NodeLabel};
+
+/// Tab character used as the CSV delimiter.
+///
+/// LadybugDB's COPY parser does not correctly handle RFC 4180 quoted fields
+/// containing commas (e.g. `FallbackChain<T, U>` — the comma inside the
+/// angle brackets splits the field even though it's quoted). Switching to
+/// tab-delimited format avoids this entirely because tab characters never
+/// appear in code identifiers or file paths.
+const CSV_DELIMITER: u8 = b'\t';
 
 /// CSV batch loader for node and edge tables (ADR-014).
 ///
@@ -55,21 +64,66 @@ impl CsvLoader {
     }
 }
 
+/// Sanitizes a string field for LadybugDB COPY compatibility (B6 workaround).
+///
+/// LadybugDB's COPY parser does not correctly handle RFC 4180 quoted fields:
+/// - Backslashes are treated as C-style escape chars (breaks C macro line
+///   continuations in the redis sample).
+/// - Doubled quotes (`""`) are not always parsed as a literal `"` (breaks
+///   Python method signatures in the subno.ts sample).
+/// - Multi-line quoted fields (newlines inside a quoted field) cause the
+///   parser to report "expected N values per row, but got M" because it
+///   cannot reconcile a quoted field spanning multiple physical lines with
+///   its row-splitting logic (breaks any sample whose `content` or
+///   `signature` field contains embedded newlines — e.g. subno.ts Python
+///   methods, redis C function bodies).
+/// - Tab characters inside a field collide with the tab delimiter and force
+///   quoting, re-triggering the multi-line issue.
+///
+/// To prevent parser corruption, we replace these characters with visually
+/// similar but parser-safe alternatives:
+/// - `\` → `/` (consistent with [`load_from_csv`]'s path normalization)
+/// - `"` → `'` (preserves readability of quoted strings in signatures)
+/// - `\n` / `\r` → ` ` (space; collapses multi-line content to one line)
+/// - `\t` → ` ` (space; prevents delimiter collision and forced quoting)
+///
+/// The data-fidelity impact is minimal: backslashes in indexed code are rare
+/// (mostly C macros and Windows paths, both already normalized elsewhere),
+/// double-quotes in signatures are typically decorative rather than
+/// semantically significant, and newlines/tabs in indexed metadata fields
+/// (signatures, docstrings, content snapshots) are not semantically loaded —
+/// the structural line range is preserved in the dedicated `startLine` and
+/// `endLine` columns. See `tools/verification/results/triage.md` §B6.
+fn sanitize_for_ladybugdb(s: String) -> String {
+    if !s.contains('\\') && !s.contains('"') && !s.contains('\n') && !s.contains('\r') && !s.contains('\t') {
+        return s;
+    }
+    s.replace('\\', "/")
+        .replace('"', "'")
+        .replace(['\n', '\r', '\t'], " ")
+}
+
 /// Generates a CSV string for a node table (header + one row per node).
 ///
 /// The header row contains the column names from [`node_table_columns`] for the
 /// given `label`. Each subsequent row contains the field values extracted by
-/// [`node_to_row`]. The output is RFC 4180-compliant: fields containing
-/// commas, quotes, or newlines are properly escaped.
+/// [`node_to_row`], sanitized via [`sanitize_for_ladybugdb`] to avoid the
+/// LadybugDB COPY parser bug (B6). Uses tab-delimited format (see
+/// [`CSV_DELIMITER`] for rationale).
 #[must_use]
 pub fn write_nodes_csv(nodes: &[Node], label: NodeLabel) -> String {
     let columns = node_table_columns(label);
-    let mut writer = Writer::from_writer(Vec::new());
+    let mut writer = WriterBuilder::new()
+        .delimiter(CSV_DELIMITER)
+        .from_writer(Vec::new());
     // Header
     writer.write_record(columns).expect("csv header write");
     // Rows
     for node in nodes {
-        let row = node_to_row(node, label);
+        let row: Vec<String> = node_to_row(node, label)
+            .into_iter()
+            .map(sanitize_for_ladybugdb)
+            .collect();
         writer.write_record(&row).expect("csv row write");
     }
     let bytes = writer.into_inner().expect("csv flush");
@@ -88,7 +142,9 @@ pub fn write_nodes_csv(nodes: &[Node], label: NodeLabel) -> String {
 #[must_use]
 pub fn write_edges_csv(edges: &[Edge]) -> String {
     let columns = relation_table_columns();
-    let mut writer = Writer::from_writer(Vec::new());
+    let mut writer = WriterBuilder::new()
+        .delimiter(CSV_DELIMITER)
+        .from_writer(Vec::new());
     writer.write_record(columns).expect("csv header write");
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut skipped = 0usize;
@@ -98,7 +154,10 @@ pub fn write_edges_csv(edges: &[Edge]) -> String {
             skipped += 1;
             continue;
         }
-        let row = edge_to_row(edge);
+        let row: Vec<String> = edge_to_row(edge)
+            .into_iter()
+            .map(sanitize_for_ladybugdb)
+            .collect();
         writer.write_record(&row).expect("csv row write");
     }
     if skipped > 0 {
@@ -126,6 +185,11 @@ pub fn write_edges_csv(edges: &[Edge]) -> String {
 /// `HEADER` is specified so LadybugDB skips the CSV header row. Without it,
 /// the header row (e.g. `id,project,name,...`) is inserted as a data row,
 /// producing phantom nodes whose fields are the column names (DQ-005).
+///
+/// `DELIM '\t'` specifies tab-delimited format. LadybugDB's COPY parser does
+/// not correctly handle RFC 4180 quoted fields containing commas (e.g. Rust
+/// generic types like `FallbackChain<T, U>`), so we use tab delimiters
+/// instead (see [`CSV_DELIMITER`]).
 pub fn load_from_csv(conn: &StorageConnection, table: &str, csv_path: &Path) -> Result<()> {
     let path_str = csv_path
         .to_str()
@@ -137,7 +201,7 @@ pub fn load_from_csv(conn: &StorageConnection, table: &str, csv_path: &Path) -> 
     let escaped_path = path_str.replace('\'', "''");
     let escaped_table = escape_identifier(table);
     let cypher = format!(
-        "COPY {escaped_table} FROM '{escaped_path}' (HEADER, PARALLEL=FALSE);"
+        "COPY {escaped_table} FROM '{escaped_path}' (HEADER, DELIM '\\t', PARALLEL=FALSE);"
     );
     conn.execute(&cypher)?;
     Ok(())
@@ -559,9 +623,10 @@ mod tests {
     fn write_nodes_csv_has_header_row() {
         let csv = write_nodes_csv(&[], NodeLabel::Function);
         let lines: Vec<&str> = csv.lines().collect();
+        // CSV_DELIMITER is tab (LadybugDB COPY compatibility); header uses tabs.
         assert_eq!(
             lines[0],
-            "id,project,name,qualifiedName,filePath,startLine,endLine,signature,returnType,isExported,docstring,content,parentQn"
+            "id\tproject\tname\tqualifiedName\tfilePath\tstartLine\tendLine\tsignature\treturnType\tisExported\tdocstring\tcontent\tparentQn"
         );
     }
 
@@ -591,21 +656,31 @@ mod tests {
     }
 
     #[test]
-    fn write_nodes_csv_escapes_commas_in_fields() {
-        let node = Node::builder(NodeLabel::Function, "foo,bar", "qn")
+    fn write_nodes_csv_sanitizes_tabs_in_fields() {
+        // B6 workaround: tabs are replaced with spaces by sanitize_for_ladybugdb
+        // to prevent delimiter collision and forced quoting (LadybugDB COPY
+        // cannot parse multi-line quoted fields that result from tab-quoted fields).
+        let node = Node::builder(NodeLabel::Function, "foo\tbar", "qn")
             .id("id1")
             .project("p")
-            .docstring("has, comma")
+            .docstring("has\t tab")
             .build();
         let csv = write_nodes_csv(&[node], NodeLabel::Function);
         let lines: Vec<&str> = csv.lines().collect();
-        // The field with a comma should be quoted
-        assert!(lines[1].contains("\"foo,bar\""));
-        assert!(lines[1].contains("\"has, comma\""));
+        // Tab replaced with space; field is NOT quoted.
+        assert!(lines[1].contains("foo bar"));
+        assert!(lines[1].contains("has  tab"));
+        // No literal tab should remain in the data row (only as delimiter).
+        // The data row has exactly 13 tab delimiters (14 columns) — verify no
+        // extra tabs from field content by checking the quoted form is absent.
+        assert!(!lines[1].contains("\"foo"));
     }
 
     #[test]
-    fn write_nodes_csv_escapes_quotes_in_fields() {
+    fn write_nodes_csv_sanitizes_quotes_in_fields() {
+        // B6 workaround: double-quotes are replaced with single-quotes before
+        // CSV writing to avoid LadybugDB COPY parser corruption on Python
+        // method signatures (subno.ts sample).
         let node = Node::builder(NodeLabel::Function, "foo\"bar", "qn")
             .id("id1")
             .project("p")
@@ -613,22 +688,48 @@ mod tests {
             .build();
         let csv = write_nodes_csv(&[node], NodeLabel::Function);
         let lines: Vec<&str> = csv.lines().collect();
-        // Quotes inside fields are doubled per RFC 4180
-        assert!(lines[1].contains("\"foo\"\"bar\""));
-        assert!(lines[1].contains("\"say \"\"hi\"\"\""));
+        // Quotes are sanitized to single-quotes (no RFC 4180 doubling needed)
+        assert!(lines[1].contains("foo'bar"));
+        assert!(lines[1].contains("say 'hi'"));
+        // Ensure no doubled quotes remain (would indicate sanitize was bypassed)
+        assert!(!lines[1].contains("\"\""));
     }
 
     #[test]
-    fn write_nodes_csv_escapes_newlines_in_fields() {
+    fn write_nodes_csv_sanitizes_backslashes_for_ladybugdb() {
+        // B6 workaround: backslashes are replaced with forward slashes before
+        // CSV writing to avoid LadybugDB COPY parser treating them as C-style
+        // escape chars (breaks C macro line continuations in redis sample).
+        let node = Node::builder(NodeLabel::Macro, "MY_MACRO", "proj.MY_MACRO")
+            .id("macro_1")
+            .project("demo")
+            .file_path("/src/macro.h")
+            .start_line(1)
+            .end_line(3)
+            .signature("#define MY_MACRO(x) \\ continuation")
+            .properties(serde_json::json!({"content": "#define MY_MACRO(x) \\ continuation"}))
+            .build();
+        let csv = write_nodes_csv(&[node], NodeLabel::Macro);
+        // Backslash in signature/content replaced with forward slash
+        assert!(csv.contains("MY_MACRO(x) / continuation"));
+        // Ensure no raw backslash remains in the CSV data (sanitize was applied)
+        assert!(!csv.contains('\\'));
+    }
+
+    #[test]
+    fn write_nodes_csv_sanitizes_newlines_in_fields() {
+        // B6 workaround: newlines are replaced with spaces by sanitize_for_ladybugdb
+        // to prevent multi-line quoted fields (which LadybugDB COPY cannot parse).
         let node = Node::builder(NodeLabel::Function, "foo", "qn")
             .id("id1")
             .project("p")
             .docstring("line1\nline2")
             .build();
         let csv = write_nodes_csv(&[node], NodeLabel::Function);
-        // The newline is inside a quoted field, so the CSV has 3 lines total
-        // (header + 2 lines for the quoted field with embedded newline).
-        assert!(csv.contains("\"line1\nline2\""));
+        let lines: Vec<&str> = csv.lines().collect();
+        // Newline replaced with space; field is NOT quoted (no quoting needed).
+        assert!(lines[1].contains("line1 line2"));
+        assert!(!lines[1].contains("\"line1"));
     }
 
     #[test]
@@ -644,7 +745,8 @@ mod tests {
             .build();
         let csv = write_nodes_csv(&[node], NodeLabel::Project);
         let lines: Vec<&str> = csv.lines().collect();
-        assert_eq!(lines[0], "id,name,rootPath,language,fileCount,indexedAt,lastCommit");
+        // CSV_DELIMITER is tab; Project header uses tabs.
+        assert_eq!(lines[0], "id\tname\trootPath\tlanguage\tfileCount\tindexedAt\tlastCommit");
         assert!(lines[1].contains("proj_001"));
         assert!(lines[1].contains("demo"));
         assert!(lines[1].contains("/repo/demo"));
@@ -674,16 +776,18 @@ mod tests {
         let csv = write_nodes_csv(&[], NodeLabel::Class);
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 1);
-        assert!(lines[0].starts_with("id,"));
+        // CSV_DELIMITER is tab; header starts with "id\t".
+        assert!(lines[0].starts_with("id\t"));
     }
 
     #[test]
     fn write_edges_csv_has_header_row() {
         let csv = write_edges_csv(&[]);
         let lines: Vec<&str> = csv.lines().collect();
+        // CSV_DELIMITER is tab (LadybugDB COPY compatibility); header uses tabs.
         assert_eq!(
             lines[0],
-            "id,source,target,type,confidence,confidenceTier,reason,startLine,project"
+            "id\tsource\ttarget\ttype\tconfidence\tconfidenceTier\treason\tstartLine\tproject"
         );
     }
 
@@ -707,12 +811,16 @@ mod tests {
     }
 
     #[test]
-    fn write_edges_csv_escapes_special_chars_in_reason() {
+    fn write_edges_csv_sanitizes_special_chars_in_reason() {
+        // B6 workaround: newlines in edge reason fields are replaced with spaces
+        // to prevent multi-line quoted fields (LadybugDB COPY cannot parse them).
         let edge = Edge::builder("s", "t", EdgeType::Calls, "p")
             .reason("arg, index=0\nnext line")
             .build();
         let csv = write_edges_csv(&[edge]);
-        assert!(csv.contains("\"arg, index=0\nnext line\""));
+        // Newline replaced with space; no quoting needed.
+        assert!(csv.contains("arg, index=0 next line"));
+        assert!(!csv.contains("\"arg"));
     }
 
     #[test]

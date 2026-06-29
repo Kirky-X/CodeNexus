@@ -725,8 +725,25 @@ fn function_name(node: Node, source: &str) -> Option<String> {
 fn declarator_name(node: Node, source: &str) -> Option<String> {
     match node.kind() {
         "identifier" => node_text(node, source).map(String::from),
-        "function_declarator"
-        | "pointer_declarator"
+        "function_declarator" => {
+            let inner = node.child_by_field_name("declarator")?;
+            // B9 fix: detect nested function_declarator (function returning
+            // function), which is invalid in C. This pattern occurs when a
+            // macro invocation like `API_SUFFIX(cblas_caxpy)` is misparsed by
+            // tree-sitter-c as a function_declarator wrapping another
+            // function_declarator. Without this check, the macro name (e.g.
+            // "API_SUFFIX") would be extracted as a Function node, inflating
+            // function counts by 148 on LAPACK and causing 100% query diff in
+            // file_contains_symbols. C functions cannot return functions (only
+            // function pointers, which use pointer_declarator), so nested
+            // function_declarator is always a macro artifact. See
+            // tools/verification/results/triage.md §B9.
+            if inner.kind() == "function_declarator" {
+                return None;
+            }
+            declarator_name(inner, source)
+        }
+        "pointer_declarator"
         | "array_declarator"
         | "parenthesized_declarator"
         | "init_declarator" => {
@@ -853,13 +870,10 @@ fn add_definition_edges(
     node: &ModelNode,
     result: &mut ExtractResult,
 ) {
-    // CONTAINS edge: file -> definition
-    result.edges.push(Edge::new(
-        file_path.to_string(),
-        node.id.clone(),
-        EdgeType::Contains,
-        project,
-    ));
+    // B1 fix: only emit DEFINES (file -> definition). The previous CONTAINS
+    // emission was redundant — for (file, node) pairs, CONTAINS and DEFINES
+    // carry identical semantics, producing duplicate edges that inflated
+    // verification diffs against gitnexus (see triage.md §B1).
     // DEFINES edge: file -> definition
     result.edges.push(Edge::new(
         file_path.to_string(),
@@ -1027,13 +1041,15 @@ typedef unsigned short int flex_uint16_t;
     }
 
     #[test]
-    fn creates_contains_and_defines_edges() {
+    fn creates_defines_edges() {
+        // B1 fix: CONTAINS emission removed; only DEFINES remains.
         let result = extract(C_SOURCE);
-        let contains_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Contains).count();
         let defines_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Defines).count();
         let node_count = result.nodes.len();
-        assert_eq!(contains_count, node_count, "each node should have a CONTAINS edge");
         assert_eq!(defines_count, node_count, "each node should have a DEFINES edge");
+        // B1 fix verification: no CONTAINS edges should be emitted
+        let contains_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Contains).count();
+        assert_eq!(contains_count, 0, "B1 fix: no CONTAINS edges should be emitted");
     }
 
     #[test]
@@ -1417,6 +1433,50 @@ static void cJSON_skip_whitespace(const char *buffer) {
     }
 
     #[test]
+    fn macro_invocation_not_extracted_as_function() {
+        // B9 fix: `void API_SUFFIX(cblas_caxpy)(int x) { ... }` is a LAPACK
+        // CBLAS pattern where API_SUFFIX is a macro. tree-sitter-c (without
+        // preprocessing) parses this as a nested function_declarator (function
+        // returning function), which is invalid C. The extractor must NOT
+        // create a Function node for the macro name "API_SUFFIX".
+        // See tools/verification/results/triage.md §B9.
+        let src = r#"#define API_SUFFIX(a) a##_64
+void API_SUFFIX(cblas_caxpy)(int N, const void *X) {
+    (void)N;
+    (void)X;
+}
+void normal_func(int x) {
+    (void)x;
+}
+"#;
+        let result = extract(src);
+        let api_suffix_funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function && n.name == "API_SUFFIX")
+            .collect();
+        assert!(
+            api_suffix_funcs.is_empty(),
+            "B9 fix: API_SUFFIX (macro invocation) must NOT be extracted as Function: {:?}",
+            api_suffix_funcs
+        );
+        // The normal function should still be extracted.
+        let normal_funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function && n.name == "normal_func")
+            .collect();
+        assert_eq!(normal_funcs.len(), 1, "normal function should still be extracted");
+        // The API_SUFFIX macro definition should be extracted as a Macro node.
+        let macros: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Macro && n.name == "API_SUFFIX")
+            .collect();
+        assert_eq!(macros.len(), 1, "API_SUFFIX macro definition should be extracted as Macro");
+    }
+
+    #[test]
     fn macro_has_contains_and_defines_edges() {
         // Spec REQ-LV-004: defect must be reproducible + fixable. Edges are
         // part of the contract — a Macro node without CONTAINS/DEFINES would
@@ -1429,17 +1489,18 @@ static void cJSON_skip_whitespace(const char *buffer) {
             .iter()
             .find(|n| n.label == NodeLabel::Macro)
             .expect("macro node should exist");
-        let contains_count = result
-            .edges
-            .iter()
-            .filter(|e| e.edge_type == EdgeType::Contains && e.target == macro_node.id)
-            .count();
         let defines_count = result
             .edges
             .iter()
             .filter(|e| e.edge_type == EdgeType::Defines && e.target == macro_node.id)
             .count();
-        assert_eq!(contains_count, 1, "macro should have 1 CONTAINS edge");
         assert_eq!(defines_count, 1, "macro should have 1 DEFINES edge");
+        // B1 fix verification: no CONTAINS edges should remain
+        let contains_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Contains && e.target == macro_node.id)
+            .count();
+        assert_eq!(contains_count, 0, "B1 fix: macro should have 0 CONTAINS edges");
     }
 }

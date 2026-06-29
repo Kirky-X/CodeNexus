@@ -331,6 +331,13 @@ fn extract_function(
         .language(Language::Python)
         .project(ctx.project)
         .is_global(!is_method);
+    // B8 fix: set parentQn for Method nodes so class_methods.cql can find them
+    // (CodeNexus doesn't emit HAS_METHOD edges; parentQn is the linkage).
+    if is_method {
+        if let Some(parent) = ctx.current_parent {
+            builder = builder.parent_qn(parent);
+        }
+    }
     if let Some(sig) = signature {
         builder = builder.signature(sig);
     }
@@ -778,12 +785,10 @@ fn add_definition_edges(
     node: &ModelNode,
     result: &mut ExtractResult,
 ) {
-    result.edges.push(Edge::new(
-        file_path.to_string(),
-        node.id.clone(),
-        EdgeType::Contains,
-        project,
-    ));
+    // B1 fix: only emit DEFINES (file -> definition). The previous CONTAINS
+    // emission was redundant — for (file, node) pairs, CONTAINS and DEFINES
+    // carry identical semantics, producing duplicate edges that inflated
+    // verification diffs against gitnexus (see triage.md §B1).
     result.edges.push(Edge::new(
         file_path.to_string(),
         node.id.clone(),
@@ -984,13 +989,15 @@ class Foo(metaclass=Meta):
     }
 
     #[test]
-    fn creates_contains_and_defines_edges() {
+    fn creates_defines_edges() {
+        // B1 fix: CONTAINS emission removed; only DEFINES remains.
         let result = extract(PYTHON_SOURCE);
-        let contains_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Contains).count();
         let defines_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Defines).count();
         let node_count = result.nodes.len();
-        assert_eq!(contains_count, node_count);
         assert_eq!(defines_count, node_count);
+        // B1 fix verification: no CONTAINS edges should be emitted
+        let contains_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Contains).count();
+        assert_eq!(contains_count, 0, "B1 fix: no CONTAINS edges should be emitted");
     }
 
     #[test]

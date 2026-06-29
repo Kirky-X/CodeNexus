@@ -18,7 +18,7 @@
 //!   0.80-0.95).
 //! - Confidence: exact match 0.95, import match 0.90, project-level match 0.80.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::model::{ConfidenceTier, Edge, EdgeType, Graph};
 use crate::ir::{ExtractResult, ImportInfo};
@@ -97,6 +97,13 @@ impl<'a> CallResolver<'a> {
     /// A vector of all resolved CALLS edges (also added to `graph`).
     pub fn resolve_calls(&self, results: &[ExtractResult], graph: &mut Graph) -> Vec<Edge> {
         let mut edges = Vec::new();
+        // B3 fix: deduplicate by (caller_qn, callee_qn) pair. gitnexus stores
+        // one CALLS edge per (caller, callee) pair, ignoring how many call
+        // sites exist. Without dedup, CodeNexus created one edge per call site
+        // (per CallInfo), inflating edge counts by ~23% (9144 total vs 6998
+        // unique pairs on the CodeNexus self-index). The first call site's
+        // line number is preserved. See tools/verification/results/triage.md §B3.
+        let mut seen_pairs: HashSet<(String, String)> = HashSet::new();
         for result in results {
             let caller_file = &result.file_path;
             let imports = &result.imports;
@@ -109,6 +116,10 @@ impl<'a> CallResolver<'a> {
                 else {
                     continue;
                 };
+                let pair_key = (caller_qn.clone(), callee_qn.clone());
+                if !seen_pairs.insert(pair_key) {
+                    continue;
+                }
                 let edge =
                     Edge::builder(caller_qn.clone(), callee_qn, EdgeType::Calls, self.project)
                         .confidence(confidence)
@@ -565,6 +576,50 @@ mod tests {
 
         assert_eq!(edges.len(), 2);
         assert_eq!(graph.edge_count(), 2);
+    }
+
+    #[test]
+    fn resolve_calls_deduplicates_same_callee_pair() {
+        // B3 fix: multiple call sites of the same (caller, callee) pair
+        // should produce only one CALLS edge, matching gitnexus behavior.
+        let foo_node = make_node("foo", "a.rs", "proj", NodeLabel::Function);
+        let bar_node = make_node("bar", "a.rs", "proj", NodeLabel::Function);
+        let foo_qn = fqn("proj", "a.rs", "foo", Language::Rust);
+
+        let mut result = make_result("a.rs", vec![foo_node, bar_node]);
+        // foo calls bar from 3 different lines — should produce 1 edge.
+        result.calls.push(CallInfo {
+            caller_qn: Some(foo_qn.clone()),
+            callee_name: "bar".to_string(),
+            line: 3,
+            args: vec![],
+        });
+        result.calls.push(CallInfo {
+            caller_qn: Some(foo_qn.clone()),
+            callee_name: "bar".to_string(),
+            line: 7,
+            args: vec![],
+        });
+        result.calls.push(CallInfo {
+            caller_qn: Some(foo_qn.clone()),
+            callee_name: "bar".to_string(),
+            line: 12,
+            args: vec![],
+        });
+
+        let results = vec![result];
+        let table = build_symbol_table(&results, "proj");
+        let mut graph = Graph::new();
+        add_nodes_to_graph(&mut graph, &results, "proj");
+
+        let resolver = CallResolver::new(&table, "proj");
+        let edges = resolver.resolve_calls(&results, &mut graph);
+
+        // Only 1 edge for the (foo, bar) pair, despite 3 call sites.
+        assert_eq!(edges.len(), 1);
+        assert_eq!(graph.edge_count(), 1);
+        // First call site's line is preserved.
+        assert_eq!(edges[0].start_line, Some(3));
     }
 
     #[test]

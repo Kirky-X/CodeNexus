@@ -133,6 +133,9 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "struct_item" => {
             extract_named_item(node, NodeLabel::Struct, source, ctx, result);
+            // Feature gap (closed): extract struct fields as Property nodes
+            // with HasProperty edges, matching gitnexus's modeling.
+            extract_struct_fields(node, source, ctx, result);
         }
         "enum_item" => {
             extract_named_item(node, NodeLabel::Enum, source, ctx, result);
@@ -362,28 +365,117 @@ fn extract_impl(
     let trait_name = node
         .child_by_field_name("trait")
         .and_then(|n| node_text(n, source).map(String::from));
+    // B2 fix: only model inherent impls (`impl Type {}`), not trait impls
+    // (`impl Trait for Type {}`). gitnexus only indexes inherent impls —
+    // verified via cross-validation. Methods inside trait impls are still
+    // extracted by visit_children (called unconditionally after extract_impl),
+    // so no symbol information is lost. See
+    // tools/verification/results/triage.md §B2.
+    //
+    // Feature gap (closed): For trait impls, create an IMPLEMENTS edge from
+    // the implemented type to the trait. The source FQN matches the type's
+    // definition FQN (Struct/Enum node, using the same scope as
+    // `extract_named_item`); the target is a best-effort pseudo-FQN that
+    // `TypeResolver` will resolve via the symbol table (same pattern as
+    // Python's `Extends` edges, see `src/parse/python.rs` P2-2).
+    if let Some(trait_name) = trait_name {
+        // Extract the trait name (last `::`-separated component) for
+        // resolution. e.g. `std::fmt::Display` → `Display`, `Trait` → `Trait`.
+        let trait_short = trait_name.rsplit("::").next().unwrap_or(&trait_name);
+        let type_qn = make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent);
+        let trait_qn = make_qn(ctx.file_path, trait_short, ctx.project, ctx.current_parent);
+        result.edges.push(Edge::new(
+            type_qn,
+            trait_qn,
+            EdgeType::Implements,
+            ctx.project,
+        ));
+        return;
+    }
     // Impl blocks need disambiguation from struct/enum with the same name
-    // (ADR-003). Use the trait name when present, otherwise the literal
-    // "impl" marker, combined with the module parent context.
-    let im = trait_name.as_deref().unwrap_or("impl");
+    // (ADR-003). Use the literal "impl" marker combined with the module
+    // parent context.
     let disambiguator = match module_parent {
-        Some(m) => format!("{m}_{im}"),
-        None => im.to_string(),
+        Some(m) => format!("{m}_impl"),
+        None => "impl".to_string(),
     };
     let qn = make_qn(ctx.file_path, &name, ctx.project, Some(&disambiguator));
-    let mut builder = ModelNode::builder(NodeLabel::Impl, name, qn)
+    let builder = ModelNode::builder(NodeLabel::Impl, name, qn)
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Rust)
         .project(ctx.project)
         .is_global(true);
-    if let Some(trait_name) = trait_name {
-        builder = builder.properties(serde_json::json!({"trait": trait_name}));
-    }
     let model_node = builder.build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.push_node(model_node);
+}
+
+/// Extracts Rust struct fields as [`NodeLabel::Property`] nodes with
+/// [`EdgeType::HasProperty`] edges from the struct to each field
+/// (feature gap closed — gitnexus indexes struct fields as Property).
+///
+/// Only named fields (`field_declaration` with a `field_identifier`) are
+/// extracted. Tuple struct fields (`tuple_field`) and unit structs (no body)
+/// are skipped because they have no field names.
+///
+/// Field FQNs are disambiguated by the struct name (combined with the module
+/// parent, same convention as impl methods, ADR-003): e.g. for field `x` of
+/// `struct Point` in `mod foo`, the FQN is `proj.test.x#foo_Point`.
+fn extract_struct_fields(
+    node: Node,
+    source: &str,
+    ctx: &VisitContext<'_>,
+    result: &mut ExtractResult,
+) {
+    let Some(name_node) = node.child_by_field_name("name") else {
+        return;
+    };
+    let Some(struct_name) = node_text(name_node, source).map(String::from) else {
+        return;
+    };
+    let Some(body) = node.child_by_field_name("body") else {
+        // Unit struct (`struct Foo;`) — no fields.
+        return;
+    };
+    let struct_qn = make_qn(ctx.file_path, &struct_name, ctx.project, ctx.current_parent);
+    let combined = match ctx.current_parent {
+        Some(p) => format!("{p}_{struct_name}"),
+        None => struct_name.clone(),
+    };
+    for i in 0..body.named_child_count() as u32 {
+        let Some(field) = body.named_child(i) else {
+            continue;
+        };
+        if field.kind() != "field_declaration" {
+            // Skip tuple fields, attributes, etc.
+            continue;
+        }
+        let Some(field_name_node) = field.child_by_field_name("name") else {
+            continue;
+        };
+        let Some(field_name) = node_text(field_name_node, source).map(String::from) else {
+            continue;
+        };
+        let field_qn = make_qn(ctx.file_path, &field_name, ctx.project, Some(&combined));
+        let model_node = ModelNode::builder(NodeLabel::Property, field_name, field_qn)
+            .file_path(ctx.file_path)
+            .start_line(field.start_position().row as u32 + 1)
+            .end_line(field.end_position().row as u32 + 1)
+            .language(Language::Rust)
+            .project(ctx.project)
+            .is_global(false)
+            .build();
+        add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
+        result.edges.push(Edge::new(
+            struct_qn.clone(),
+            model_node.id.clone(),
+            EdgeType::HasProperty,
+            ctx.project,
+        ));
+        result.push_node(model_node);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -884,12 +976,10 @@ fn add_definition_edges(
     node: &ModelNode,
     result: &mut ExtractResult,
 ) {
-    result.edges.push(Edge::new(
-        file_path.to_string(),
-        node.id.clone(),
-        EdgeType::Contains,
-        project,
-    ));
+    // B1 fix: only emit DEFINES (file -> definition). The previous CONTAINS
+    // emission was redundant — for (file, node) pairs, CONTAINS and DEFINES
+    // carry identical semantics, producing duplicate edges that inflated
+    // verification diffs against gitnexus (see triage.md §B1).
     result.edges.push(Edge::new(
         file_path.to_string(),
         node.id.clone(),
@@ -914,6 +1004,7 @@ extern "C" {
 pub struct Point { x: i32, y: i32 }
 enum Color { Red, Green, Blue }
 trait Drawable { fn draw(&self); }
+impl Point { fn new(x: i32, y: i32) -> Self { Point { x, y } } }
 impl Drawable for Point { fn draw(&self) {} }
 fn add(a: i32, b: i32) -> i32 { a + b }
 fn main() {
@@ -1096,21 +1187,23 @@ fn main() {
     }
 
     #[test]
-    fn creates_contains_and_defines_edges() {
+    fn creates_defines_edges() {
+        // B1 fix: CONTAINS emission removed; only DEFINES remains.
         let result = extract(RUST_SOURCE);
-        let contains_count = result
-            .edges
-            .iter()
-            .filter(|e| e.edge_type == EdgeType::Contains)
-            .count();
         let defines_count = result
             .edges
             .iter()
             .filter(|e| e.edge_type == EdgeType::Defines)
             .count();
         let node_count = result.nodes.len();
-        assert_eq!(contains_count, node_count);
         assert_eq!(defines_count, node_count);
+        // B1 fix verification: no CONTAINS edges should be emitted
+        let contains_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Contains)
+            .count();
+        assert_eq!(contains_count, 0, "B1 fix: no CONTAINS edges should be emitted");
     }
 
     #[test]
@@ -1230,20 +1323,314 @@ fn main() {
     }
 
     #[test]
-    fn impl_stores_trait_in_properties() {
+    fn trait_impl_does_not_create_impl_node() {
+        // B2 fix: trait impls (impl Trait for Type) do not create Impl nodes,
+        // matching gitnexus which only models inherent impls. Methods inside
+        // trait impls are still extracted as Function nodes.
         let result = extract(RUST_SOURCE);
         let impls: Vec<_> = result
             .nodes
             .iter()
             .filter(|n| n.label == NodeLabel::Impl)
             .collect();
+        // Only the inherent `impl Point {}` creates an Impl node.
+        // The trait `impl Drawable for Point {}` does not.
         assert_eq!(impls.len(), 1);
-        let props = &impls[0].properties;
+        assert_eq!(impls[0].name, "Point");
         assert!(
-            props.get("trait").is_some(),
-            "impl should store trait name in properties: {props}"
+            impls[0].properties.get("trait").is_none(),
+            "inherent impl should not have trait property: {:?}",
+            impls[0].properties
         );
-        assert_eq!(props.get("trait").unwrap(), "Drawable");
+    }
+
+    #[test]
+    fn trait_impl_creates_implements_edge() {
+        // Feature gap (closed): trait impls create an IMPLEMENTS edge from
+        // the implemented type to the trait. The source FQN matches the
+        // Struct node's FQN; the target is a best-effort pseudo-FQN that
+        // TypeResolver will resolve.
+        let result = extract(RUST_SOURCE);
+        let implements: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Implements)
+            .collect();
+        // RUST_SOURCE has one trait impl: `impl Drawable for Point`.
+        assert_eq!(
+            implements.len(),
+            1,
+            "should create 1 IMPLEMENTS edge: {:?}",
+            implements
+        );
+        // Source = Point FQN (matches Struct node).
+        assert!(
+            implements[0].source.contains("Point"),
+            "IMPLEMENTS source should be Point FQN: {}",
+            implements[0].source
+        );
+        // Target = Drawable pseudo-FQN.
+        assert!(
+            implements[0].target.contains("Drawable"),
+            "IMPLEMENTS target should be Drawable FQN: {}",
+            implements[0].target
+        );
+    }
+
+    #[test]
+    fn trait_impl_with_path_extracts_last_component() {
+        // `impl std::fmt::Display for Foo` — the trait name is a path; only
+        // the last component (`Display`) should be used for the pseudo-FQN.
+        let src = r#"struct Foo;
+impl std::fmt::Display for Foo {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { Ok(()) }
+}
+"#;
+        let result = extract(src);
+        let implements: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Implements)
+            .collect();
+        assert_eq!(implements.len(), 1, "should create 1 IMPLEMENTS edge");
+        // Target should contain `Display` (last component), not `std::fmt::Display`.
+        assert!(
+            implements[0].target.ends_with(".Display"),
+            "IMPLEMENTS target should end with .Display: {}",
+            implements[0].target
+        );
+        assert!(
+            !implements[0].target.contains("::"),
+            "IMPLEMENTS target should not contain `::`: {}",
+            implements[0].target
+        );
+    }
+
+    #[test]
+    fn multiple_trait_impls_create_multiple_implements_edges() {
+        let src = r#"trait A { fn a(&self); }
+trait B { fn b(&self); }
+struct Foo;
+impl A for Foo { fn a(&self) {} }
+impl B for Foo { fn b(&self) {} }
+"#;
+        let result = extract(src);
+        let implements: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Implements)
+            .collect();
+        assert_eq!(implements.len(), 2, "should create 2 IMPLEMENTS edges");
+        let targets: Vec<&str> = implements.iter().map(|e| e.target.as_str()).collect();
+        assert!(
+            targets.iter().any(|t| t.contains("A")),
+            "should have edge to trait A: {targets:?}"
+        );
+        assert!(
+            targets.iter().any(|t| t.contains("B")),
+            "should have edge to trait B: {targets:?}"
+        );
+    }
+
+    #[test]
+    fn inherent_impl_does_not_create_implements_edge() {
+        // Inherent impls (`impl Type {}`) should NOT create IMPLEMENTS edges.
+        let src = r#"struct Foo;
+impl Foo { fn new() -> Self { Self } }
+"#;
+        let result = extract(src);
+        let implements: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Implements)
+            .collect();
+        assert_eq!(
+            implements.len(),
+            0,
+            "inherent impl should not create IMPLEMENTS edge: {:?}",
+            implements
+        );
+    }
+
+    // --- struct fields as Property nodes (feature gap closed) ---
+
+    #[test]
+    fn struct_fields_extracted_as_property_nodes() {
+        // `pub struct Point { x: i32, y: i32 }` has two named fields → 2
+        // Property nodes.
+        let result = extract(RUST_SOURCE);
+        let properties: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Property)
+            .collect();
+        assert_eq!(
+            properties.len(),
+            2,
+            "should extract 2 Property nodes for Point's fields: {:?}",
+            properties.iter().map(|p| &p.name).collect::<Vec<_>>()
+        );
+        let names: Vec<&str> = properties.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"x"), "should have field x: {names:?}");
+        assert!(names.contains(&"y"), "should have field y: {names:?}");
+    }
+
+    #[test]
+    fn struct_creates_has_property_edges() {
+        // Each field creates a HasProperty edge from the Struct FQN to the
+        // Property node id (UUID, remapped to FQN by ScopeResolutionPhase).
+        let result = extract(RUST_SOURCE);
+        let has_property: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::HasProperty)
+            .collect();
+        assert_eq!(
+            has_property.len(),
+            2,
+            "should create 2 HasProperty edges: {:?}",
+            has_property
+        );
+        // All edges should originate from the Point struct FQN.
+        for edge in &has_property {
+            assert!(
+                edge.source.contains("Point"),
+                "HasProperty source should be Point FQN: {}",
+                edge.source
+            );
+        }
+        // Targets should match the Property node ids.
+        let property_ids: Vec<String> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Property)
+            .map(|n| n.id.clone())
+            .collect();
+        assert_eq!(property_ids.len(), 2);
+        for edge in &has_property {
+            assert!(
+                property_ids.contains(&edge.target),
+                "HasProperty target should be a Property node id: {}",
+                edge.target
+            );
+        }
+    }
+
+    #[test]
+    fn unit_struct_creates_no_property_nodes() {
+        // `struct Foo;` has no body → no Property nodes.
+        let src = "struct Foo;";
+        let result = extract(src);
+        let properties: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Property)
+            .collect();
+        assert_eq!(
+            properties.len(),
+            0,
+            "unit struct should not create Property nodes: {:?}",
+            properties
+        );
+        let has_property: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::HasProperty)
+            .collect();
+        assert_eq!(
+            has_property.len(),
+            0,
+            "unit struct should not create HasProperty edges: {:?}",
+            has_property
+        );
+    }
+
+    #[test]
+    fn tuple_struct_creates_no_property_nodes() {
+        // `struct Foo(i32, i32);` has tuple fields without names → no Property
+        // nodes (tuple_field is not field_declaration).
+        let src = "struct Foo(i32, i32);";
+        let result = extract(src);
+        let properties: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Property)
+            .collect();
+        assert_eq!(
+            properties.len(),
+            0,
+            "tuple struct should not create Property nodes: {:?}",
+            properties
+        );
+    }
+
+    #[test]
+    fn struct_fields_have_disambiguated_fqn() {
+        // Field FQN (qualified_name) should be disambiguated by the struct
+        // name: e.g. `proj.test.x#Point` (matching the convention for impl
+        // methods). Note: `id` is a UUID at extraction time; the FQN lives in
+        // `qualified_name` and becomes the node id after ScopeResolutionPhase.
+        let result = extract(RUST_SOURCE);
+        let property_x = result
+            .nodes
+            .iter()
+            .find(|n| n.label == NodeLabel::Property && n.name == "x")
+            .expect("should have Property node for field x");
+        assert!(
+            property_x.qualified_name.ends_with("#Point"),
+            "field x FQN should end with #Point: {}",
+            property_x.qualified_name
+        );
+        assert!(
+            property_x.qualified_name.contains(".x#"),
+            "field x FQN should contain `.x#`: {}",
+            property_x.qualified_name
+        );
+    }
+
+    #[test]
+    fn struct_in_module_has_module_qualified_field_fqn() {
+        // Fields of a struct inside a module should be disambiguated by
+        // `{module}_{struct}` (same convention as impl methods).
+        let src = r#"mod foo {
+    struct Point { x: i32, y: i32 }
+}
+"#;
+        let result = extract(src);
+        let property_x = result
+            .nodes
+            .iter()
+            .find(|n| n.label == NodeLabel::Property && n.name == "x")
+            .expect("should have Property node for field x in module");
+        assert!(
+            property_x.qualified_name.ends_with("#foo_Point"),
+            "field x FQN in module foo should end with #foo_Point: {}",
+            property_x.qualified_name
+        );
+    }
+
+    #[test]
+    fn property_nodes_have_defines_edges() {
+        // Property nodes should have DEFINES edges from the file (same as
+        // other definition nodes).
+        let result = extract(RUST_SOURCE);
+        let properties: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Property)
+            .collect();
+        assert_eq!(properties.len(), 2);
+        for prop in &properties {
+            let has_defines = result
+                .edges
+                .iter()
+                .any(|e| e.edge_type == EdgeType::Defines && e.target == prop.id);
+            assert!(
+                has_defines,
+                "Property {} should have a DEFINES edge from the file",
+                prop.name
+            );
+        }
     }
 
     // --- reads/writes extraction (BR-TRACE-005 / BR-TRACE-006) ---
@@ -1563,17 +1950,18 @@ pub mod other {
             .iter()
             .find(|n| n.label == NodeLabel::Module)
             .expect("Module node should exist");
-        let contains_count = result
-            .edges
-            .iter()
-            .filter(|e| e.edge_type == EdgeType::Contains && e.target == module_node.id)
-            .count();
         let defines_count = result
             .edges
             .iter()
             .filter(|e| e.edge_type == EdgeType::Defines && e.target == module_node.id)
             .count();
-        assert_eq!(contains_count, 1, "Module should have 1 CONTAINS edge");
         assert_eq!(defines_count, 1, "Module should have 1 DEFINES edge");
+        // B1 fix verification: no CONTAINS edges should remain
+        let contains_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Contains && e.target == module_node.id)
+            .count();
+        assert_eq!(contains_count, 0, "B1 fix: Module should have 0 CONTAINS edges");
     }
 }

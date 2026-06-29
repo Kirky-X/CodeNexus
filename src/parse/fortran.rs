@@ -22,6 +22,8 @@
 //! - `do_loop` loop variable → [`WriteInfo`] (BR-TRACE-006)
 //! - expression-position `identifier` → [`ReadInfo`] (BR-TRACE-005)
 
+use std::collections::HashSet;
+
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
@@ -59,12 +61,27 @@ impl Extractor for FortranExtractor {
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::Fortran);
         let mut parser = ParserFactory::create_parser(Language::Fortran)?;
+        // B11 fix: tree-sitter-fortran only supports free-form Fortran
+        // comments (`!`). Fixed-form files (`.f` extension) use `*`, `C`, or
+        // `c` in column 1 as comment characters, which tree-sitter-fortran
+        // mis-parses as code. This causes the parser to fail catastrophically
+        // on small files (e.g. LAPACK's xerbla.f) — the entire AST becomes
+        // ERROR nodes and subroutine/function definitions are never
+        // recognized. We preprocess fixed-form files by replacing the
+        // column-1 comment character with `!`, preserving byte offsets so
+        // tree-sitter positions stay valid.
+        let effective_source = preprocess_fixed_form_comments(source, file_path);
         let tree = parser
-            .parse(source, None)
+            .parse(effective_source.as_str(), None)
             .ok_or_else(|| ParseError::ParseFailed {
                 file_path: file_path.to_string(),
             })?;
         let root = tree.root_node();
+        // B10 fix: collect declared array names to distinguish function calls
+        // from array access. tree-sitter-fortran parses both `ABS(Y)` and
+        // `D(I)` as `call_expression`; we filter out array access by checking
+        // if the callee matches a declared array name.
+        let declared_arrays = collect_declared_arrays(root, &effective_source);
         let registry = ScopeResolverRegistry::new();
         let ctx = VisitContext {
             file_path,
@@ -72,10 +89,11 @@ impl Extractor for FortranExtractor {
             current_func: None,
             current_parent: None,
             resolver: &registry,
+            declared_arrays: &declared_arrays,
         };
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
-                visit_node(child, source, &ctx, &mut result);
+                visit_node(child, &effective_source, &ctx, &mut result);
             }
         }
         Ok(result)
@@ -94,6 +112,10 @@ struct VisitContext<'a> {
     current_func: Option<&'a str>,
     current_parent: Option<&'a str>,
     resolver: &'a ScopeResolverRegistry,
+    /// Declared array names in the current file (B10 fix: distinguish
+    /// function calls from array access in Fortran, since tree-sitter-fortran
+    /// parses both `ABS(Y)` and `D(I)` as `call_expression`).
+    declared_arrays: &'a HashSet<String>,
 }
 
 fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
@@ -120,6 +142,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
                 current_func: None,
                 current_parent: combined.as_deref(),
                 resolver: ctx.resolver,
+                declared_arrays: ctx.declared_arrays,
             };
             visit_children(node, source, &child_ctx, result);
         }
@@ -147,6 +170,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
                 current_func: func_name,
                 current_parent: ctx.current_parent,
                 resolver: ctx.resolver,
+                declared_arrays: ctx.declared_arrays,
             };
             visit_children(node, source, &child_ctx, result);
         }
@@ -170,6 +194,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
                 current_func: func_name,
                 current_parent: ctx.current_parent,
                 resolver: ctx.resolver,
+                declared_arrays: ctx.declared_arrays,
             };
             visit_children(node, source, &child_ctx, result);
         }
@@ -192,6 +217,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
                 current_func: func_name,
                 current_parent: ctx.current_parent,
                 resolver: ctx.resolver,
+                declared_arrays: ctx.declared_arrays,
             };
             visit_children(node, source, &child_ctx, result);
         }
@@ -200,6 +226,22 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "subroutine_call" | "call_statement" => {
             extract_call(node, source, ctx, result);
+            visit_children(node, source, ctx, result);
+        }
+        "call_expression" => {
+            // B10 fix: tree-sitter-fortran parses both function calls (`ABS(Y)`)
+            // and array access (`D(I)`) as `call_expression`. We distinguish
+            // them by checking if the callee matches a declared array name.
+            // If it's an array access, skip CallInfo creation but still
+            // visit_children to capture nested function calls in array indices
+            // (e.g., `D(FUNC(X))` — D is array, FUNC(X) is a function call).
+            let callee = first_identifier_child(node, source);
+            let is_array_access = callee
+                .map(|name| ctx.declared_arrays.contains(name))
+                .unwrap_or(false);
+            if !is_array_access {
+                extract_call(node, source, ctx, result);
+            }
             visit_children(node, source, ctx, result);
         }
         "assignment_statement" => {
@@ -287,6 +329,85 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     }
 }
 
+/// Returns `true` if the file path has a fixed-form Fortran extension (`.f`).
+///
+/// Fixed-form Fortran (F77) uses `*`, `C`, or `c` in column 1 as comment
+/// characters. Free-form Fortran (F90+, `.f90`/`.f95`) uses `!` only.
+fn is_fixed_form_fortran(file_path: &str) -> bool {
+    let ext = file_path.rsplit('.').next().unwrap_or("");
+    ext.eq_ignore_ascii_case("f")
+}
+
+/// Preprocesses fixed-form Fortran source so tree-sitter-fortran can parse it.
+///
+/// tree-sitter-fortran only recognizes free-form comments (`!`). Fixed-form
+/// files (`.f` extension) use `*`, `C`, or `c` in column 1 as comment
+/// characters, which tree-sitter-fortran mis-parses as code, causing
+/// catastrophic parse failures on small files (e.g. LAPACK's `xerbla.f`).
+///
+/// This function replaces the column-1 comment character with `!` for `.f`
+/// files. The replacement is a single-byte swap (no length change), so
+/// tree-sitter byte offsets remain valid for `node_text` lookups.
+///
+/// For free-form files (`.f90`, `.f95`), the source is returned unchanged.
+fn preprocess_fixed_form_comments(source: &str, file_path: &str) -> String {
+    if !is_fixed_form_fortran(file_path) {
+        return source.to_string();
+    }
+    let mut out = String::with_capacity(source.len());
+    for line in source.split_inclusive('\n') {
+        if let Some(first) = line.bytes().next() {
+            if first == b'*' || first == b'C' || first == b'c' {
+                out.push('!');
+                out.push_str(&line[1..]);
+                continue;
+            }
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// Collects all declared array names in the file by walking the tree and
+/// finding `sized_declarator` nodes (e.g., `D(10)` in `REAL :: D(10)`).
+/// These names are used to filter array access from function calls (B10 fix).
+fn collect_declared_arrays(root: Node, source: &str) -> HashSet<String> {
+    let mut arrays = HashSet::new();
+    collect_arrays_recursive(root, source, &mut arrays);
+    arrays
+}
+
+fn collect_arrays_recursive(node: Node, source: &str, arrays: &mut HashSet<String>) {
+    if node.kind() == "sized_declarator" {
+        for i in 0..node.named_child_count() as u32 {
+            if let Some(child) = node.named_child(i) {
+                if child.kind() == "identifier" {
+                    if let Some(name) = node_text(child, source) {
+                        arrays.insert(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(child) = node.named_child(i) {
+            collect_arrays_recursive(child, source, arrays);
+        }
+    }
+}
+
+/// Returns the text of the first `identifier` named child of `node`, if any.
+fn first_identifier_child<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(child) = node.named_child(i) {
+            if child.kind() == "identifier" {
+                return node_text(child, source);
+            }
+        }
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Definition extractors
 // ---------------------------------------------------------------------------
@@ -308,6 +429,9 @@ fn extract_module(
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Fortran)
         .project(ctx.project)
+        // Fortran modules are public by default — mark as exported so
+        // cross-file `use module_name` import resolution can find them.
+        .is_exported(true)
         .is_global(true)
         .build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
@@ -337,6 +461,12 @@ fn extract_subroutine_or_function(
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Fortran)
         .project(ctx.project)
+        // Fortran top-level subroutines/functions are public by default —
+        // mark as exported so cross-file CALLS resolution via
+        // `lookup_exported` (resolve/symbol_table.rs) can find them.
+        // Without this, B10 fix produced LAPACK CALLS=80 (was 2747) because
+        // all cross-file calls were unresolvable and silently skipped.
+        .is_exported(true)
         .is_global(true);
     if let Some(sig) = signature {
         builder = builder.signature(sig);
@@ -367,6 +497,10 @@ fn extract_program(
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Fortran)
         .project(ctx.project)
+        // Fortran programs are top-level public entities — mark as exported
+        // for consistency with subroutines/functions (Fortran default
+        // visibility is public).
+        .is_exported(true)
         .is_global(true)
         .build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
@@ -662,12 +796,10 @@ fn add_definition_edges(
     node: &ModelNode,
     result: &mut ExtractResult,
 ) {
-    result.edges.push(Edge::new(
-        file_path.to_string(),
-        node.id.clone(),
-        EdgeType::Contains,
-        project,
-    ));
+    // B1 fix: only emit DEFINES (file -> definition). The previous CONTAINS
+    // emission was redundant — for (file, node) pairs, CONTAINS and DEFINES
+    // carry identical semantics, producing duplicate edges that inflated
+    // verification diffs against gitnexus (see triage.md §B1).
     result.edges.push(Edge::new(
         file_path.to_string(),
         node.id.clone(),
@@ -866,13 +998,15 @@ end function"#;
     }
 
     #[test]
-    fn creates_contains_and_defines_edges() {
+    fn creates_defines_edges() {
+        // B1 fix: CONTAINS emission removed; only DEFINES remains.
         let result = extract(FORTRAN_SOURCE);
-        let contains_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Contains).count();
         let defines_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Defines).count();
         let node_count = result.nodes.len();
-        assert_eq!(contains_count, node_count);
         assert_eq!(defines_count, node_count);
+        // B1 fix verification: no CONTAINS edges should be emitted
+        let contains_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Contains).count();
+        assert_eq!(contains_count, 0, "B1 fix: no CONTAINS edges should be emitted");
     }
 
     #[test]
@@ -1152,6 +1286,204 @@ end function"#;
             result.writes.is_empty(),
             "module-level declaration must not produce WriteInfo: {:?}",
             result.writes
+        );
+    }
+
+    #[test]
+    fn function_call_in_expression_is_extracted() {
+        // B10 fix: function calls in expressions (e.g., `EPS = SLAMCH('Epsilon')`)
+        // must be extracted as CallInfo. Previously, only `CALL` statements
+        // (subroutine_call) were captured, missing all function calls.
+        let src = r#"      SUBROUTINE TEST()
+      REAL :: EPS
+      EPS = SLAMCH('Epsilon')
+      END SUBROUTINE
+"#;
+        let result = extract(src);
+        let calls: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(
+            calls.contains(&"SLAMCH"),
+            "B10 fix: function call SLAMCH should be extracted: {:?}",
+            calls
+        );
+    }
+
+    #[test]
+    fn array_access_not_extracted_as_call() {
+        // B10 fix: array access `D(I)` must NOT be extracted as a function call.
+        // tree-sitter-fortran parses both `ABS(Y)` and `D(I)` as call_expression;
+        // we filter by checking if the callee is a declared array.
+        let src = r#"      SUBROUTINE TEST()
+      REAL :: D(10)
+      INTEGER :: I, X
+      X = D(I)
+      END SUBROUTINE
+"#;
+        let result = extract(src);
+        let calls: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(
+            !calls.contains(&"D"),
+            "B10 fix: array access D(I) must NOT be extracted as call: {:?}",
+            calls
+        );
+    }
+
+    #[test]
+    fn nested_function_call_in_array_index_is_captured() {
+        // B10 fix: when an array index contains a function call, the function
+        // call should still be captured. e.g., `D(FUNC(I))` — D is array
+        // (skip), but FUNC(I) is a function call (capture).
+        let src = r#"      SUBROUTINE TEST()
+      REAL :: D(10)
+      INTEGER :: I, X
+      X = D(MYFUNC(I))
+      END SUBROUTINE
+"#;
+        let result = extract(src);
+        let calls: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(
+            !calls.contains(&"D"),
+            "array access D(...) should not be a call: {:?}",
+            calls
+        );
+        assert!(
+            calls.contains(&"MYFUNC"),
+            "nested function call MYFUNC should be captured: {:?}",
+            calls
+        );
+    }
+
+    #[test]
+    fn multiple_function_calls_in_expression() {
+        // B10 fix: multiple function calls in one expression should all be
+        // captured. e.g., `Z = MAX(X, MIN(Y, EPS))` has two function calls.
+        let src = r#"      SUBROUTINE TEST()
+      REAL :: X, Y, Z, EPS
+      Z = MAX(X, MIN(Y, EPS))
+      END SUBROUTINE
+"#;
+        let result = extract(src);
+        let calls: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(
+            calls.contains(&"MAX"),
+            "MAX should be captured: {:?}",
+            calls
+        );
+        assert!(
+            calls.contains(&"MIN"),
+            "MIN should be captured: {:?}",
+            calls
+        );
+    }
+
+    #[test]
+    fn function_call_with_array_arg_not_double_counted() {
+        // B10 fix: `X = ABS(D(I))` — ABS is a function call (capture), D(I)
+        // is array access (skip). Only one CallInfo should be created.
+        let src = r#"      SUBROUTINE TEST()
+      REAL :: D(10)
+      INTEGER :: I
+      REAL :: X
+      X = ABS(D(I))
+      END SUBROUTINE
+"#;
+        let result = extract(src);
+        let calls: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(
+            calls.contains(&"ABS"),
+            "ABS function call should be captured: {:?}",
+            calls
+        );
+        assert!(
+            !calls.contains(&"D"),
+            "array access D(I) should NOT be captured: {:?}",
+            calls
+        );
+        // Only one call (ABS), not two.
+        assert_eq!(
+            result.calls.len(),
+            1,
+            "should have exactly 1 call (ABS only): {:?}",
+            calls
+        );
+    }
+
+    // --- B11 fix: fixed-form Fortran comment preprocessing ---
+
+    #[test]
+    fn is_fixed_form_detects_f_extension() {
+        assert!(is_fixed_form_fortran("foo.f"));
+        assert!(is_fixed_form_fortran("foo.F"));
+        assert!(is_fixed_form_fortran("src/bar.f"));
+        assert!(!is_fixed_form_fortran("foo.f90"));
+        assert!(!is_fixed_form_fortran("foo.f95"));
+        assert!(!is_fixed_form_fortran("foo.rs"));
+    }
+
+    #[test]
+    fn preprocess_converts_star_comments_to_bang() {
+        let src = "* This is a comment\n      SUBROUTINE FOO()\n      END\n";
+        let out = preprocess_fixed_form_comments(src, "test.f");
+        assert!(out.starts_with("! This is a comment"), "got: {out:?}");
+        assert!(out.contains("SUBROUTINE FOO"));
+    }
+
+    #[test]
+    fn preprocess_converts_uppercase_c_comments() {
+        let src = "C This is a comment\n      SUBROUTINE FOO()\n      END\n";
+        let out = preprocess_fixed_form_comments(src, "test.f");
+        assert!(out.starts_with("! This is a comment"), "got: {out:?}");
+    }
+
+    #[test]
+    fn preprocess_converts_lowercase_c_comments() {
+        let src = "c This is a comment\n      SUBROUTINE FOO()\n      END\n";
+        let out = preprocess_fixed_form_comments(src, "test.f");
+        assert!(out.starts_with("! This is a comment"), "got: {out:?}");
+    }
+
+    #[test]
+    fn preprocess_preserves_byte_offsets() {
+        // Single-char replacement must not change byte offsets, otherwise
+        // tree-sitter node positions would be invalid for node_text lookups.
+        let src = "* comment\n      X = 1\n";
+        let out = preprocess_fixed_form_comments(src, "test.f");
+        assert_eq!(src.len(), out.len());
+        assert_eq!(out.as_bytes()[0], b'!');
+        // Position of "X = 1" is unchanged.
+        assert_eq!(
+            out.find("X = 1"),
+            src.find("X = 1"),
+            "byte offset of code must be preserved"
+        );
+    }
+
+    #[test]
+    fn preprocess_leaves_free_form_unchanged() {
+        let src = "! comment\nsubroutine foo()\nend subroutine\n";
+        let out = preprocess_fixed_form_comments(src, "test.f90");
+        assert_eq!(src, out.as_str());
+    }
+
+    #[test]
+    fn extract_finds_subroutine_in_fixed_form_file() {
+        // B11 regression test: LAPACK's xerbla.f uses fixed-form Fortran
+        // with `*` comment lines. Before the fix, tree-sitter-fortran
+        // mis-parsed the entire file as ERROR, and the XERBLA subroutine
+        // node was never extracted.
+        let src = "*      SUBROUTINE XERBLA( SRNAME, INFO )\n*\n      SUBROUTINE XERBLA( SRNAME, INFO )\n      CHARACTER*(*) SRNAME\n      INTEGER INFO\n      WRITE(*,FMT=9999) SRNAME, INFO\n      STOP\n 9999 FORMAT(' error')\n      END\n";
+        let ext = FortranExtractor::new();
+        let result = ext
+            .extract(src, "xerbla.f", "proj")
+            .expect("extraction should succeed");
+        let has_xerbla = result
+            .nodes
+            .iter()
+            .any(|n| n.name == "XERBLA" && n.label == NodeLabel::Function);
+        assert!(
+            has_xerbla,
+            "XERBLA subroutine node should be extracted from fixed-form file; got nodes: {:?}",
+            result.nodes.iter().map(|n| &n.name).collect::<Vec<_>>()
         );
     }
 }
