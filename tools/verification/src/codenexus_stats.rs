@@ -95,21 +95,13 @@ pub fn run_single(repo: &Path, name: &str, language: &str, resume: bool) -> Resu
 /// is not installed in PATH in this environment. Captures stdout/stderr and
 /// returns an explicit error on non-zero exit (Rule 12: fail loud).
 ///
-/// **Database isolation**: deletes `./codenexus.lbug` before each index run
-/// to prevent cross-project data pollution. Without this, all 8 batch samples
-/// share the same DB file, and later samples inherit nodes/edges from earlier
-/// ones (e.g. a pure-C project would show Rust `Impl`/`Trait` nodes from a
-/// previous Rust sample). The `--force` flag alone does NOT clear other
-/// projects' data — it only forces a full re-index of the *current* project.
+/// **Multi-project coexistence**: CodeNexus supports multiple projects in the
+/// same DB by design (see `ac_index_003_multiple_projects_coexist` in
+/// `src/index/pipeline.rs`). Each project's nodes carry a `project` column
+/// storing the project's UUIDv7 id, and [`extract_stats`] filters all queries
+/// by this id. There is no need to delete the DB file between samples — doing
+/// so would destroy other projects' indexes unnecessarily.
 pub fn run_index(repo_path: &Path, name: &str) -> Result<()> {
-    // Delete the DB file to ensure a clean slate for this sample.
-    let db_path = Path::new(DEFAULT_DB);
-    if db_path.exists() {
-        eprintln!("[index] removing existing DB at {db_path:?} to prevent cross-project pollution");
-        std::fs::remove_file(db_path)
-            .with_context(|| format!("failed to remove old DB at {}", db_path.display()))?;
-    }
-
     eprintln!("[index] codenexus index {} --name {}", repo_path.display(), name);
     let output = Command::new("cargo")
         .args([
@@ -150,19 +142,45 @@ pub fn run_index(repo_path: &Path, name: &str) -> Result<()> {
 ///
 /// CodeNexus stores each node type in a separate table (e.g. `Function`,
 /// `Class`, ...) and all edges in a single `CodeRelation` table with a `type`
-/// column. We run one `SELECT count(*) FROM <Table>` per node type and one
-/// `SELECT type, count(*) FROM CodeRelation GROUP BY type` for edges.
+/// column. We run one `MATCH (n:<Table>) WHERE n.project = $id RETURN count(n)`
+/// per node type and one `MATCH (r:CodeRelation) WHERE r.project = $id RETURN
+/// r.type, count(*)` for edges.
+///
+/// **Project filtering**: all node tables (except `Project` itself) and the
+/// `CodeRelation` table carry a `project` column storing the project's UUIDv7
+/// id. We look up the id by name from the `Project` table, then filter every
+/// query by it. This ensures we only count the current sample's data even when
+/// multiple projects coexist in the same DB (the default — see
+/// `ac_index_003_multiple_projects_coexist` in `src/index/pipeline.rs`).
+/// Previously, the lack of this filter caused apparent "data pollution" where
+/// a pure-C project would show Rust `Impl`/`Trait` nodes from a previous
+/// sample. The old workaround (deleting the DB file before each run) was a
+/// sledgehammer that destroyed other projects' indexes; this filter is the
+/// correct fix.
 pub fn extract_stats(db_path: &Path, name: &str) -> Result<CodeNexusStats> {
     let repo = codenexus::storage::repository::Repository::open(db_path)
         .with_context(|| format!("failed to open CodeNexus DB at {}", db_path.display()))?;
     let conn = repo.connection();
+
+    // Look up the project_id by name. All node tables (except Project itself)
+    // and CodeRelation store this id in their `project` column.
+    let project_id = lookup_project_id(conn, name)?;
+    eprintln!("[stats] project '{name}' → id {project_id}");
+
+    let escaped_pid = codenexus::storage::schema::escape_cypher_string(&project_id);
+    let escaped_name = codenexus::storage::schema::escape_cypher_string(name);
 
     let mut node_counts = BTreeMap::new();
     for table in NODE_TABLES {
         // Parameterized DDL not supported here; table name is from a
         // hardcoded trusted list (NODE_TABLES), not user input, so SQL
         // injection is not a concern.
-        let cypher = format!("MATCH (n:{table}) RETURN count(n) AS c");
+        let cypher = if *table == "Project" {
+            // Project table has no `project` column; filter by name instead.
+            format!("MATCH (n:Project) WHERE n.name = '{escaped_name}' RETURN count(n) AS c")
+        } else {
+            format!("MATCH (n:{table}) WHERE n.project = '{escaped_pid}' RETURN count(n) AS c")
+        };
         match conn.query(&cypher) {
             Ok(rows) => {
                 let raw = rows.first().and_then(|row| row.first());
@@ -185,8 +203,12 @@ pub fn extract_stats(db_path: &Path, name: &str) -> Result<CodeNexusStats> {
     let mut edge_counts = BTreeMap::new();
     // CodeNexus stores CodeRelation as a NODE TABLE (not a REL TABLE), so we
     // must use `MATCH (r:CodeRelation)` — the `()-[r:CodeRelation]->()` REL
-    // TABLE syntax is not valid against this schema.
-    match conn.query("MATCH (r:CodeRelation) RETURN r.type AS t, count(*) AS c ORDER BY t") {
+    // TABLE syntax is not valid against this schema. Filter by project_id so
+    // we only count the current sample's edges.
+    let edge_cypher = format!(
+        "MATCH (r:CodeRelation) WHERE r.project = '{escaped_pid}' RETURN r.type AS t, count(*) AS c ORDER BY t"
+    );
+    match conn.query(&edge_cypher) {
         Ok(rows) => {
             for row in &rows {
                 if row.len() < 2 {
@@ -208,6 +230,45 @@ pub fn extract_stats(db_path: &Path, name: &str) -> Result<CodeNexusStats> {
         edge_counts_by_type: edge_counts,
         file_counts_by_language: BTreeMap::new(),
     })
+}
+
+/// Looks up a project's UUIDv7 id by its display name from the `Project`
+/// table.
+///
+/// CodeNexus assigns each indexed project a UUIDv7 id at index time (see
+/// `ScanPhase`). All node tables (except `Project` itself) and the
+/// `CodeRelation` table store this id in their `project` column. Filtering
+/// stats by this id ensures we only count the current sample's data, even
+/// when multiple projects coexist in the same DB.
+///
+/// # Errors
+///
+/// Returns an error if the project name is not found in the Project table.
+/// This is a fail-loud signal (Rule 12): a missing project means the index
+/// step failed silently or the wrong DB was opened. We must NOT silently
+/// return zero counts — that would hide the failure behind plausible-looking
+/// numbers.
+fn lookup_project_id(
+    conn: &codenexus::storage::StorageConnection,
+    name: &str,
+) -> Result<String> {
+    let escaped = codenexus::storage::schema::escape_cypher_string(name);
+    let cypher = format!("MATCH (p:Project) WHERE p.name = '{escaped}' RETURN p.id");
+    let rows = conn
+        .query(&cypher)
+        .with_context(|| format!("failed to query Project table for name '{name}'"))?;
+    let id = rows
+        .first()
+        .and_then(|row| row.first())
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "project '{name}' not found in Project table — \
+                 index step may have failed silently or the wrong DB was opened"
+            )
+        })?;
+    Ok(id)
 }
 
 /// Convert a `serde_json::Value` to `u64`, handling the LadybugDB quirk where
