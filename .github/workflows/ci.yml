@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust 1.81 (stable) with clippy
+      - name: Install Rust 1.85 (stable) with clippy
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.81"
+          toolchain: "1.85"
           components: clippy
       - name: Install nightly toolchain with rustfmt
         # rustfmt.toml uses the nightly-only options `imports_granularity`
@@ -42,12 +42,23 @@ jobs:
         run: cargo clippy -- -D warnings
       - name: Tests
         run: cargo test --verbose
-      - name: Install tarpaulin
-        run: cargo install cargo-tarpaulin
-      - name: Coverage
-        run: cargo tarpaulin --fail-under 89 --exclude-files "src/embed/*" "src/main.rs" --out Lcov --output-path coverage.lcov
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Coverage (fail under 95% lines)
+        run: cargo llvm-cov --all-features --fail-under-lines 95 --lcov --output-path lcov.info
       - name: Upload coverage
         uses: actions/upload-artifact@v4
         with:
           name: coverage
-          path: coverage.lcov
+          path: lcov.info
+
+  security:
+    name: cargo-audit + cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo-audit (RustSec 漏洞库)
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: cargo-deny (license / ban / advisory)
+        uses: EmbarkStudios/cargo-deny-action@v2

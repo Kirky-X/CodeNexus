@@ -49,7 +49,7 @@ default = ["full"]
 # once all modules migrated to `build_kit`.
 minimal = ["lang-rust"]
 core = ["lang-c", "lang-rust", "lang-python"]
-full = ["core", "lang-fortran", "lang-typescript", "lang-go", "lang-java", "lang-cpp", "daemon", "analysis"]
+full = ["core", "lang-fortran", "lang-typescript", "lang-go", "lang-java", "lang-cpp", "daemon", "analysis", "api-review"]
 # Per-language features (each pulls its tree-sitter grammar)
 lang-c = ["dep:tree-sitter-c"]
 lang-rust = ["dep:tree-sitter-rust"]
@@ -69,6 +69,9 @@ daemon = ["dep:notify", "dep:notify-debouncer-full"]
 # Analysis features (T005/T006): dead-code detection + architecture overview.
 # Pure Cypher aggregation over the existing graph — no new dependencies.
 analysis = []
+# API review toolkit (T008): route-map / shape-check / api-impact / tool-map.
+# Pure Cypher queries over the existing graph — no new dependencies.
+api-review = ["analysis"]
 
 [dependencies]
 # Unified module interface & Kit capability registry (T6/unified-architecture

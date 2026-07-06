@@ -2,51 +2,150 @@
 
 <div align="center">
 
-**A multi-language code knowledge graph tool built on LadybugDB and tree-sitter**
+**基于 LadybugDB 与 tree-sitter 的多语言代码知识图谱工具**
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust Version](https://img.shields.io/badge/rust-1.81%2B-orange.svg)](https://www.rust-lang.org)
 [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml)
 
-English | [简体中文](README_ZH.md)
+[English](README_EN.md) | 简体中文
 
 </div>
 
-## Overview
+## 简介
 
-CodeNexus indexes source code repositories into a queryable knowledge graph. It uses [tree-sitter](https://tree-sitter.github.io/) for multi-language parsing and [LadybugDB](https://github.com/ladybugdb/ladybugdb) for graph storage, supporting symbol tracing, impact analysis, and data-flow analysis.
+CodeNexus 将源代码仓库索引为可查询的知识图谱。它使用 [tree-sitter](https://tree-sitter.github.io/) 进行多语言语法解析，[LadybugDB](https://github.com/ladybugdb/ladybugdb) 进行图存储，支持符号追踪、影响分析和数据流分析。
 
-CodeNexus turns a codebase into a structured graph of symbols and their relationships (calls, data flows, imports, FFI bindings, ...). Once indexed, you can query the graph with a Cypher subset, trace how a symbol is reached, measure the blast radius of a change, and feed the graph to AI agents through a Model Context Protocol (MCP) server.
+支持 **5 种语言**：C、Rust、Fortran、Python、TypeScript。
 
-Supports **5 languages**: C, Rust, Fortran, Python, TypeScript.
+## 核心特性
 
-### Typical Use Cases
+| 特性 | 说明 |
+|------|------|
+| 多语言解析 | C / Rust / Fortran / Python / TypeScript，基于 tree-sitter |
+| 图数据库 | LadybugDB 图存储，44 种节点类型 + 24 种边类型 |
+| 增量索引 | SHA-256 文件哈希比对，仅重新解析变更文件 |
+| 并行解析 | Rayon 并行 + 线程局部 parser 池 |
+| RAM 优先索引 | LZ4 压缩源码到内存，单次 `COPY FROM` 批量入库（`--ram-first`） |
+| 符号追踪 | 调用链 (Calls) 与数据流 (DataFlows) 双向追踪 |
+| 影响分析 | 变更影响半径分析，按深度分层 |
+| 歧义消解 | 多匹配符号排序消解，支持 `--uid`/`--file`/`--kind` 收窄 |
+| 置信度分层 | 每条边携带分层（SameFile / ImportScoped / Global）+ 0.0-1.0 分数 |
+| 跨语言 FFI | C-Fortran bind(C)、Rust extern 等跨语言调用解析 |
+| 团队制品 | `export`/`import` 压缩 `.graph.zst` 制品，共享索引 |
+| 多智能体 MCP | `setup` 自动检测 Claude Code/Cursor/Codex；`hook` 输出 PreToolUse/PostToolUse JSON；`mcp` stdio 服务 |
+| 文件监视 | 守护进程模式，自动增量索引（`daemon` feature） |
+| 向量嵌入 | 可选的语义搜索（`embed` feature） |
 
-- **Impact analysis before refactoring** — find every caller of a function across files and languages before editing it.
-- **Onboarding a new codebase** — index a repo, then `query`/`context`/`trace` to navigate symbols and their relationships instead of grepping.
-- **AI agent grounding** — run `codenexus mcp` so Claude Code / Cursor / Codex can call `query`, `context`, `impact`, and `detect-changes` tools with real call-graph data.
-- **Team knowledge sharing** — `export` an index as a `.graph.zst` artifact and `import` it on a teammate's machine.
+## 安装
 
-## Key Features
+```bash
+# 从源码构建
+git clone https://github.com/Kirky-X/codenexus.git
+cd codenexus
+cargo install --path .
 
-| Feature | Description |
-|---------|-------------|
-| Multi-language parsing | C / Rust / Fortran / Python / TypeScript via tree-sitter |
-| Graph database | LadybugDB storage with 44 node types + 24 edge types |
-| Incremental indexing | SHA-256 file hash diffing, re-parses only changed files |
-| Parallel parsing | Rayon parallelism + thread-local parser pool |
-| RAM-first indexing | LZ4-compress source into memory, single `COPY FROM` dump (`--ram-first`) |
-| Symbol tracing | Bidirectional call (Calls) and data-flow (DataFlows) tracing |
-| Impact analysis | Change impact radius analysis, layered by depth |
-| Disambiguation | Ranked multi-match symbol resolution with `--uid`/`--file`/`--kind` narrowing |
-| Confidence tiers | Each edge carries a tier (SameFile / ImportScoped / Global) + 0.0-1.0 score |
-| Cross-language FFI | C-Fortran `bind(C)`, Rust `extern`, and other FFI call resolution |
-| Team artifacts | `export`/`import` compressed `.graph.zst` artifacts for sharing indexes |
-| Multi-agent MCP | `setup` auto-detects Claude Code/Cursor/Codex; `hook` emits PreToolUse/PostToolUse JSON; `mcp` stdio server |
-| File watching | Daemon mode with auto-incremental indexing (`daemon` feature) |
-| Vector embedding | Optional semantic search (`embed` feature) |
+# 或直接编译
+cargo build --release
+```
 
-## Architecture
+### Feature 开关
+
+| Feature | 默认 | 说明 |
+|---------|------|------|
+| `daemon` | 启用 | 文件监视守护进程（notify + notify-debouncer-full） |
+| `embed` | 关闭 | 向量嵌入语义搜索（reqwest HTTP 客户端） |
+| `lsp` | 关闭 | LSP 增强解析（预留，当前未实现） |
+| `lang-rust` | 启用 | Rust 语言解析器（最小单语言构建） |
+
+```bash
+# 精简构建（不含 daemon，减小二进制体积）
+cargo build --release --no-default-features
+
+# 最小单语言构建（仅 Rust，不含 daemon）
+cargo build --release --no-default-features --features lang-rust
+
+# 完整构建（含嵌入）
+cargo build --release --features embed
+```
+
+## 快速开始
+
+```bash
+# 1. 索引一个代码仓库
+codenexus index /path/to/project --name myproject
+
+# 1b. RAM 优先索引（LZ4 内存压缩，适合中小仓库，更快）
+codenexus index /path/to/project --name myproject --ram-first
+
+# 2. 查询函数
+codenexus query "MATCH (f:Function) RETURN f.name LIMIT 10"
+
+# 3. 追踪调用链（支持歧义消解收窄）
+codenexus trace main --type calls --depth 5
+codenexus trace main --uid "proj.fn.main.1" --depth 5
+
+# 4. 分析变更影响（按置信度过滤）
+codenexus impact parse_function --depth 3
+codenexus impact parse_function --depth 3 --min-confidence 0.7
+
+# 5. 搜索符号
+codenexus search "parse" --limit 20
+
+# 6. 360° 符号上下文
+codenexus context main
+
+# 7. 检测 git diff 影响的符号
+codenexus detect-changes /path/to/project
+
+# 8. 重命名符号（图编辑 + 文本搜索，支持 --dry-run）
+codenexus rename old_name new_name --dry-run
+
+# 9. 导出 / 导入团队制品
+codenexus export --db ./my.lbug --output team.graph.zst
+codenexus import --input team.graph.zst --db ./shared.lbug
+
+# 10. 多智能体 MCP 集成
+codenexus setup                    # 自动检测智能体，写入 MCP 配置
+codenexus hook                     # 输出 PreToolUse/PostToolUse JSON
+codenexus mcp                      # stdio MCP 服务（JSON-RPC 2.0）
+
+# 11. 查看索引状态
+codenexus status
+
+# 12. 启动文件监视守护进程
+codenexus daemon /path/to/project --name myproject
+
+# 13. 列出所有项目
+codenexus list
+
+# 14. 删除项目
+codenexus clean myproject
+```
+
+## CLI 命令
+
+| 命令 | 说明 |
+|------|------|
+| `index` | 索引代码仓库到知识图谱（`--ram-first` 启用 LZ4 内存模式） |
+| `query` | 执行 Cypher 查询 |
+| `trace` | 追踪符号的调用/数据流路径（`--uid`/`--file`/`--kind` 收窄） |
+| `impact` | 分析符号变更的影响半径（`--min-confidence` 过滤） |
+| `search` | 按名称或内容搜索符号（`--uid`/`--file`/`--kind` 收窄） |
+| `context` | 360° 符号视图：入度调用/导入、出度调用、所属流程 |
+| `detect-changes` | git diff → 受影响符号 + risk_level |
+| `rename` | 高置信度图编辑 + 文本搜索编辑（`--dry-run`） |
+| `export` | 导出 LadybugDB 转储 → zstd `codenexus.graph.zst` 制品 |
+| `import` | 导入制品 → LadybugDB（可选 `--reindex` 增量补齐本地差异） |
+| `setup` | 自动检测已安装的智能体（Claude Code/Cursor/Codex）并写入 MCP 配置 |
+| `hook` | 输出 PreToolUse/PostToolUse JSON（exit 0，永不阻塞） |
+| `mcp` | stdio MCP 服务（JSON-RPC 2.0，协议 2024-11-05） |
+| `daemon` | 启动文件监视守护进程 |
+| `status` | 查看索引状态 |
+| `list` | 列出所有已索引项目 |
+| `clean` | 删除项目及其索引 |
+
+## 架构
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -54,255 +153,58 @@ Supports **5 languages**: C, Rust, Fortran, Python, TypeScript.
 ├─────────────────────────────────────────────┤
 │  Index Pipeline  │  Query  │  Trace │ Daemon │
 ├──────────────────┴─────────┴────────┴────────┤
-│           Resolve (symbol + data-flow)        │
+│           Resolve (符号解析 + 数据流)          │
 ├──────────────────────────────────────────────┤
-│        Parse (tree-sitter multi-language)     │
+│        Parse (tree-sitter 多语言提取)          │
 ├──────────────────────────────────────────────┤
 │     Discover (ignore)  │  Storage (LadybugDB) │
 └──────────────────────────────────────────────┘
 ```
 
-### Indexing Pipeline
+### 索引流程
 
-1. **File discovery** — `ignore` crate honors `.gitignore` rules
-2. **Incremental hashing** — SHA-256 diffing, skips unchanged files
-3. **Parallel parsing** — Rayon parallelism + tree-sitter node/edge extraction
-4. **Symbol resolution** — FQN generation, call resolution, data-flow analysis, cross-language FFI
-5. **Bulk loading** — CSV generation + `COPY FROM` batch insert
+1. **文件发现** — `ignore` crate 遵守 `.gitignore` 规则
+2. **增量哈希** — SHA-256 比对，跳过未变更文件
+3. **并行解析** — Rayon 并行 + tree-sitter 提取节点/边
+4. **符号解析** — FQN 生成、调用解析、数据流分析、跨语言 FFI
+5. **批量入库** — CSV 生成 + `COPY FROM` 批量加载
 
-### Graph Model
+### 图模型
 
-- **44 node types**: Project, Folder, File, Module, Class, Struct, Enum, Trait, Impl, Function, Method, Variable, GlobalVar, Parameter, Const, Static, Macro, TypeAlias, Typedef, Namespace, Interface, Constructor, Property, Record, Delegate, Annotation, Template, Union, Variant, Field, Event, Handler, Middleware, Service, Endpoint, Route, Process, Database, Config, Test, Section, Community, Tool, Embedding
-- **24 edge types**: Contains, Defines, MemberOf, Calls, FfiCalls, DataFlows, Reads, Writes, Implements, Extends, UsesType, References, Imports, Includes, HasMethod, HasProperty, Accesses, MethodOverrides, MethodImplements, StepInProcess, HandlesRoute, Fetches, HandlesTool, EntryPointOf
-- Each edge carries a confidence score (0.0-1.0) and a confidence tier (`SameFile` / `ImportScoped` / `Global`)
+- **44 种节点类型**：Project, Folder, File, Module, Class, Struct, Enum, Trait, Impl, Function, Method, Variable, GlobalVar, Parameter, Const, Static, Macro, TypeAlias, Typedef, Namespace, Interface, Constructor, Property, Record, Delegate, Annotation, Template, Union, Variant, Field, Event, Handler, Middleware, Service, Endpoint, Route, Process, Database, Config, Test, Section, Community, Tool, Embedding
+- **24 种边类型**：Contains, Defines, MemberOf, Calls, FfiCalls, DataFlows, Reads, Writes, Implements, Extends, UsesType, References, Imports, Includes, HasMethod, HasProperty, Accesses, MethodOverrides, MethodImplements, StepInProcess, HandlesRoute, Fetches, HandlesTool, EntryPointOf
+- 每条边携带置信度分数 (0.0-1.0) 和置信度分层（`SameFile` / `ImportScoped` / `Global`）
 
-### Supported Languages
+## 支持语言
 
-| Language | Node Types | Edge Types |
-|----------|------------|------------|
+| 语言 | 节点类型 | 边类型 |
+|------|----------|--------|
 | C | Function, GlobalVar, Struct, Enum, Typedef, Macro | Calls, Imports, Reads, Writes, Includes |
 | Rust | Function, Struct, Enum, Trait, Impl, Const, Static, Macro, Module, TypeAlias | Calls, Imports, Reads, Writes |
 | Fortran | Module, Function | Calls, Imports, FfiCalls |
 | Python | Function, Method, Class | Calls, Imports, Extends |
 | TypeScript | Function, Class, Method, Interface, Enum, TypeAlias, Const | Calls, Imports |
 
-## Quick Start
-
-### Prerequisites
-
-| Dependency | Version | Notes |
-|------------|---------|-------|
-| Rust toolchain | 1.81+ (stable) | Required for `cargo build`. CI pins 1.81. |
-| nightly rustfmt | latest | `cargo fmt` uses nightly-only options (`imports_granularity`, `group_imports`). |
-| C/C++ compiler | system default | Required to build tree-sitter grammar crates. |
-| `zstd` CLI | any recent version | Used by `export`/`import` for `.graph.zst` artifacts. |
-
-### Installation
+## 开发
 
 ```bash
-# Build from source
-git clone https://github.com/Kirky-X/codenexus.git
-cd codenexus
-cargo install --path .
-
-# Or compile directly (binary at target/release/codenexus)
-cargo build --release
-```
-
-### Feature Flags
-
-| Feature | Default | Description |
-|---------|---------|-------------|
-| `daemon` | enabled | File-watching daemon (notify + notify-debouncer-full) |
-| `embed` | disabled | Vector embedding semantic search (reqwest HTTP client + local ONNX via `ort`) |
-| `lsp` | disabled | LSP-enhanced extraction (reserved, not yet implemented) |
-| `lang-rust` | enabled | Rust language parser (minimal single-language build) |
-| `lang-c` | enabled in `core`/`full` | C language parser |
-| `lang-python` | enabled in `core`/`full` | Python language parser |
-| `lang-fortran` | enabled in `full` | Fortran language parser |
-| `lang-typescript` | enabled in `full` | TypeScript language parser |
-
-Tiered presets: `minimal` < `core` < `full` (default = `full`).
-
-```bash
-# Lean build (no daemon, smaller binary)
-cargo build --release --no-default-features --features core
-
-# Minimal single-language build (Rust only, no daemon)
-cargo build --release --no-default-features --features minimal
-
-# Full build with embedding semantic search
-cargo build --release --features embed
-```
-
-### First Index
-
-```bash
-# 1. Index a codebase into the knowledge graph
-codenexus index /path/to/project --name myproject
-
-# 1b. RAM-first indexing (LZ4 in-memory, faster for small-medium repos)
-codenexus index /path/to/project --name myproject --ram-first
-
-# 2. Verify the index
-codenexus status
-codenexus list
-
-# 3. Start exploring
-codenexus query "MATCH (f:Function) RETURN f.name LIMIT 10"
-codenexus context main
-```
-
-### Common Workflows
-
-```bash
-# Trace call paths (with disambiguation narrowing)
-codenexus trace main --type calls --depth 5
-codenexus trace main --uid "proj.fn.main.1" --depth 5
-
-# Analyze change impact (filter by confidence)
-codenexus impact parse_function --depth 3
-codenexus impact parse_function --depth 3 --min-confidence 0.7
-
-# Search symbols
-codenexus search "parse" --limit 20
-
-# 360° symbol context: incoming calls/imports, outgoing calls, processes
-codenexus context main
-
-# Detect git-diff affected symbols before committing
-codenexus detect-changes /path/to/project
-
-# Rename a symbol (graph-edits + text-search, --dry-run supported)
-codenexus rename old_name new_name --dry-run
-
-# Export / import team artifacts
-codenexus export --db ./my.lbug --output team.graph.zst
-codenexus import --input team.graph.zst --db ./shared.lbug
-
-# Start file-watching daemon for auto-incremental indexing
-codenexus daemon /path/to/project --name myproject
-
-# Remove a project and its index
-codenexus clean myproject
-```
-
-## CLI Commands
-
-| Command | Description |
-|---------|-------------|
-| `index` | Index a codebase into the knowledge graph (`--ram-first` for LZ4 in-memory) |
-| `query` | Execute a Cypher query |
-| `trace` | Trace a symbol's call/data-flow paths (`--uid`/`--file`/`--kind` narrowing) |
-| `impact` | Analyze the impact radius of changing a symbol (`--min-confidence` filter) |
-| `search` | Search symbols by name or content (`--uid`/`--file`/`--kind` narrowing) |
-| `context` | 360° symbol view: incoming calls/imports, outgoing calls, processes |
-| `detect-changes` | Git diff → affected symbols + risk_level |
-| `rename` | Graph-edits for high-confidence + text-search edits (`--dry-run`) |
-| `export` | Export LadybugDB dump → zstd `codenexus.graph.zst` artifact |
-| `import` | Import artifact → LadybugDB (optional `--reindex` for local diff) |
-| `setup` | Auto-detect installed agents (Claude Code/Cursor/Codex) and write MCP config |
-| `hook` | Emit PreToolUse/PostToolUse JSON (exit 0, never blocks) |
-| `mcp` | stdio MCP server (JSON-RPC 2.0, protocol 2024-11-05) |
-| `daemon` | Start the file-watching daemon |
-| `status` | Show indexing status |
-| `list` | List all indexed projects |
-| `clean` | Remove a project and its index |
-
-## Configuration
-
-CodeNexus is a CLI tool and is configured primarily through command-line flags. A small number of environment variables are honored:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RUST_LOG` | `info` | `tracing` log level (`error`/`warn`/`info`/`debug`/`trace`), supports `codenexus=debug` style filtering. |
-| `CODENEXUS_DB_PATH` | `./codenexus.lbug` | Default LadybugDB database path used when `--db` is not passed to `index`/`query`/`status`/etc. |
-
-See [`.env.example`](.env.example) for a copy-paste template. CodeNexus does not read a `.env` file itself; that file is for shells or process managers.
-
-### Agent Integration
-
-Run `codenexus setup` to auto-detect installed AI agents (Claude Code, Cursor, Codex) and write the MCP configuration into the right location for each. After setup, the agent can call CodeNexus tools (`query`, `context`, `impact`, `detect-changes`, `rename`, ...) over the MCP stdio server started by `codenexus mcp`.
-
-For Git hooks, `codenexus hook` emits `PreToolUse`/`PostToolUse` JSON events and always exits 0, so it can be wired into a hook without blocking agent actions.
-
-## API Documentation
-
-CodeNexus exposes two programmatic interfaces:
-
-### MCP Server (`codenexus mcp`)
-
-A stdio JSON-RPC 2.0 server implementing [Model Context Protocol](https://modelcontextprotocol.io/) (version 2024-11-05). AI agents call it to query the knowledge graph. Run `codenexus setup` once to register the server with your agent; the agent then starts `codenexus mcp` automatically.
-
-### Library Crate
-
-CodeNexus is published as a Rust library (`codenexus` lib crate, see `Cargo.toml` `[lib]`). Embed the indexing pipeline, query facade, or trace engine in another Rust project by depending on the crate. Runnable usage examples live under [`examples/`](examples/).
-
-### In-Repo Design Docs
-
-Detailed design material is kept in `docs/` (note: some of these files are git-ignored as they are internal working documents):
-
-- `docs/PRD.md` — Product Requirements Document
-- `docs/TRD.md` — Technical Requirements Document
-- `docs/DDD.md` — Detailed Design Document
-- `docs/ADD.md` — Architecture Design Document (ADRs)
-
-## Development
-
-```bash
-# Run tests
+# 运行测试
 cargo test
 
-# Lint (CI gate)
+# 代码检查
 cargo clippy -- -D warnings
 
-# Format (requires nightly rustfmt for imports_granularity/group_imports)
-cargo +nightly fmt
+# 格式化
+cargo fmt
 
-# Benchmarks
+# 基准测试
 cargo bench
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development workflow, and [`.editorconfig`](.editorconfig) / [`rustfmt.toml`](rustfmt.toml) for style rules.
+## 贡献
 
-## Contributing
+欢迎提交 Issue 和 Pull Request。请确保通过 `cargo test` 和 `cargo clippy -- -D warnings`。
 
-Issues and Pull Requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) for:
-
-- Development environment setup
-- Conventional Commits conventions
-- Pull Request workflow
-- Test and lint requirements (`cargo test` and `cargo clippy -- -D warnings` must pass)
-- Code style (`cargo +nightly fmt`)
-
-By participating, you agree to abide by the [Code of Conduct](CODE_OF_CONDUCT.md).
-
-## Roadmap
-
-CodeNexus is at v0.1.0. Planned work, ordered by current priority:
-
-- [x] v0.1.0 — Multi-language indexing (C/Rust/Fortran/Python/TypeScript), graph schema (44 node types + 24 edge types), `query`/`trace`/`impact`/`context`/`search`, incremental indexing, RAM-first mode, MCP server, team `export`/`import`, daemon mode, confidence tiers, disambiguation
-- [ ] v0.1.x — Stability and performance hardening: incremental reindex coverage, larger-repo memory tuning, more language-specific edge extraction
-- [ ] v0.2.0 — `lsp` feature: LSP-enhanced extraction for type-accurate resolution beyond tree-sitter
-- [ ] v0.2.0 — Expand language coverage (Go, Java, C++) behind new `lang-*` features
-- [ ] v0.3.0 — Cross-language data-flow tracing end-to-end (currently edges are recorded; multi-hop taint paths need a dedicated query path)
-- [ ] v0.3.0 — Vector embedding default-on semantic search once ONNX model size and startup cost are acceptable
-- [ ] Future — Web UI / graph visualization on top of the query facade
-
-## License
+## 许可证
 
 [MIT](LICENSE)
-
-## Acknowledgments
-
-CodeNexus would not be possible without these projects:
-
-- [tree-sitter](https://tree-sitter.github.io/) — incremental parsing framework that powers all language extractors
-- [LadybugDB](https://github.com/ladybugdb/ladybugdb) — graph database backing the knowledge graph
-- [Rayon](https://github.com/rayon-rs/rayon) — data-parallel parsing
-- [ignore](https://docs.rs/ignore) — `.gitignore`-aware file discovery
-- [clap](https://docs.rs/clap) — CLI framework
-- [Model Context Protocol](https://modelcontextprotocol.io/) — spec for the `mcp` server
-- Every tree-sitter grammar maintainer — the per-language grammar crates do the hard parsing work
-
-Project author: **Kirky.X** — [github.com/Kirky-X](https://github.com/Kirky-X)

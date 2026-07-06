@@ -58,6 +58,18 @@ repos:
         types: [rust]
         pass_filenames: false
         stages: [pre-push]
+      - id: cargo-audit
+        name: cargo audit (RustSec 漏洞库)
+        entry: bash -c 'cargo audit 2>/dev/null || { echo "→ 先运行: cargo install cargo-audit"; exit 1; }'
+        language: system
+        files: 'Cargo\.lock'
+        pass_filenames: false
+      - id: cargo-deny
+        name: cargo deny check (license/advisory/ban)
+        entry: bash -c 'cargo deny check 2>/dev/null || { echo "→ 先运行: cargo install cargo-deny && cargo deny init"; exit 1; }'
+        language: system
+        files: 'Cargo\.(toml|lock)'
+        pass_filenames: false
 
 ci:
   autoupdate_commit_msg: "chore: update pre-commit hooks"
