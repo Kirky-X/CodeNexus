@@ -45,6 +45,8 @@ impl ParserFactory {
             Language::Go => tree_sitter_go::LANGUAGE.into(),
             #[cfg(feature = "lang-java")]
             Language::Java => tree_sitter_java::LANGUAGE.into(),
+            #[cfg(feature = "lang-cpp")]
+            Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
         };
         Ok(ts_lang)
     }
@@ -118,6 +120,13 @@ mod tests {
         assert!(lang.is_ok(), "Java language should be supported");
     }
 
+    #[cfg(feature = "lang-cpp")]
+    #[test]
+    fn create_language_cpp_succeeds() {
+        let lang = ParserFactory::create_language(Language::Cpp);
+        assert!(lang.is_ok(), "C++ language should be supported");
+    }
+
     #[test]
     fn create_language_all_variants_succeed() {
         for lang in Language::all() {
@@ -173,6 +182,13 @@ mod tests {
     fn create_parser_java_succeeds() {
         let parser = ParserFactory::create_parser(Language::Java);
         assert!(parser.is_ok(), "Java parser should be creatable");
+    }
+
+    #[cfg(feature = "lang-cpp")]
+    #[test]
+    fn create_parser_cpp_succeeds() {
+        let parser = ParserFactory::create_parser(Language::Cpp);
+        assert!(parser.is_ok(), "C++ parser should be creatable");
     }
 
     #[test]
@@ -281,6 +297,19 @@ mod tests {
         assert!(
             !tree.root_node().has_error(),
             "Java source should parse without errors"
+        );
+    }
+
+    #[cfg(feature = "lang-cpp")]
+    #[test]
+    fn parse_simple_cpp_file() {
+        let mut parser = ParserFactory::create_parser(Language::Cpp).unwrap();
+        let tree = parser
+            .parse("int add(int a, int b) { return a + b; }\n", None)
+            .expect("C++ parse failed");
+        assert!(
+            !tree.root_node().has_error(),
+            "C++ source should parse without errors"
         );
     }
 

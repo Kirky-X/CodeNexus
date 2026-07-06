@@ -40,6 +40,8 @@ pub mod fortran;
 pub mod go;
 #[cfg(feature = "lang-java")]
 pub mod java;
+#[cfg(feature = "lang-cpp")]
+pub mod cpp;
 pub mod module;
 pub mod parallel;
 pub mod parser_factory;
@@ -65,6 +67,8 @@ pub use fortran::FortranExtractor;
 pub use go::GoExtractor;
 #[cfg(feature = "lang-java")]
 pub use java::JavaExtractor;
+#[cfg(feature = "lang-cpp")]
+pub use cpp::CppExtractor;
 pub use parallel::{
     parallel_parse, parallel_parse_ram_first, parse_single, ParallelParseResult, RamFirstSources,
 };

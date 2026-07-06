@@ -57,6 +57,11 @@ pub fn mro_for(lang: Language) -> MroStrategy {
         // Rust/C/TypeScript.
         #[cfg(feature = "lang-java")]
         Language::Java => MroStrategy::FirstWins,
+        // C++ supports multiple inheritance, but FirstWins (DFS pre-order) is
+        // used as the default strategy for consistency with C. C3 linearization
+        // is reserved for Python's diamond inheritance semantics.
+        #[cfg(feature = "lang-cpp")]
+        Language::Cpp => MroStrategy::FirstWins,
     }
 }
 

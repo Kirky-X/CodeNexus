@@ -30,6 +30,8 @@ pub enum Language {
     Go,
     #[cfg(feature = "lang-java")]
     Java,
+    #[cfg(feature = "lang-cpp")]
+    Cpp,
 }
 
 impl Language {
@@ -55,6 +57,8 @@ impl Language {
             Language::Go,
             #[cfg(feature = "lang-java")]
             Language::Java,
+            #[cfg(feature = "lang-cpp")]
+            Language::Cpp,
         ]
     }
 
@@ -76,6 +80,8 @@ impl Language {
             Language::Go => &["go"],
             #[cfg(feature = "lang-java")]
             Language::Java => &["java"],
+            #[cfg(feature = "lang-cpp")]
+            Language::Cpp => &["cpp", "cc", "cxx", "c++", "hpp", "hh", "hxx", "h++"],
         }
     }
 
@@ -100,6 +106,8 @@ impl Language {
             "go" => Some(Language::Go),
             #[cfg(feature = "lang-java")]
             "java" => Some(Language::Java),
+            #[cfg(feature = "lang-cpp")]
+            "cpp" | "cc" | "cxx" | "c++" | "hpp" | "hh" | "hxx" | "h++" => Some(Language::Cpp),
             _ => None,
         }
     }
@@ -122,6 +130,8 @@ impl fmt::Display for Language {
             Language::Go => f.write_str("go"),
             #[cfg(feature = "lang-java")]
             Language::Java => f.write_str("java"),
+            #[cfg(feature = "lang-cpp")]
+            Language::Cpp => f.write_str("cpp"),
         }
     }
 }
@@ -145,6 +155,8 @@ impl FromStr for Language {
             "go" => Ok(Language::Go),
             #[cfg(feature = "lang-java")]
             "java" => Ok(Language::Java),
+            #[cfg(feature = "lang-cpp")]
+            "cpp" => Ok(Language::Cpp),
             other => Err(format!("unknown Language: {other}")),
         }
     }
@@ -328,12 +340,22 @@ mod tests {
         assert_eq!(Language::from_extension("JAVA"), Some(Language::Java));
     }
 
+    #[cfg(feature = "lang-cpp")]
+    #[test]
+    fn from_extension_maps_cpp_extensions() {
+        assert_eq!(Language::from_extension("cpp"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("cc"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("hpp"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("CPP"), Some(Language::Cpp));
+    }
+
     #[test]
     fn from_extension_returns_none_for_unknown() {
         #[cfg(not(feature = "lang-java"))]
         assert_eq!(Language::from_extension("java"), None);
         #[cfg(not(feature = "lang-go"))]
         assert_eq!(Language::from_extension("go"), None);
+        #[cfg(not(feature = "lang-cpp"))]
         assert_eq!(Language::from_extension("cpp"), None);
         assert_eq!(Language::from_extension(""), None);
         assert_eq!(Language::from_extension(".rs"), None);

@@ -17,6 +17,8 @@ use super::fortran::FortranExtractor;
 use super::go::GoExtractor;
 #[cfg(feature = "lang-java")]
 use super::java::JavaExtractor;
+#[cfg(feature = "lang-cpp")]
+use super::cpp::CppExtractor;
 #[cfg(feature = "lang-python")]
 use super::python::PythonExtractor;
 #[cfg(feature = "lang-rust")]
@@ -46,6 +48,8 @@ pub fn get_extractor(language: Language) -> Box<dyn Extractor> {
         Language::Go => Box::new(GoExtractor::new()),
         #[cfg(feature = "lang-java")]
         Language::Java => Box::new(JavaExtractor::new()),
+        #[cfg(feature = "lang-cpp")]
+        Language::Cpp => Box::new(CppExtractor::new()),
     }
 }
 
@@ -100,6 +104,13 @@ mod tests {
     fn get_extractor_returns_java_for_java() {
         let ext = get_extractor(Language::Java);
         assert_eq!(ext.language(), Language::Java);
+    }
+
+    #[cfg(feature = "lang-cpp")]
+    #[test]
+    fn get_extractor_returns_cpp_for_cpp() {
+        let ext = get_extractor(Language::Cpp);
+        assert_eq!(ext.language(), Language::Cpp);
     }
 
     #[test]
