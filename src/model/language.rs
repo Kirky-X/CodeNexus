@@ -28,6 +28,8 @@ pub enum Language {
     TypeScript,
     #[cfg(feature = "lang-go")]
     Go,
+    #[cfg(feature = "lang-java")]
+    Java,
 }
 
 impl Language {
@@ -51,6 +53,8 @@ impl Language {
             Language::TypeScript,
             #[cfg(feature = "lang-go")]
             Language::Go,
+            #[cfg(feature = "lang-java")]
+            Language::Java,
         ]
     }
 
@@ -70,6 +74,8 @@ impl Language {
             Language::TypeScript => &["ts", "tsx"],
             #[cfg(feature = "lang-go")]
             Language::Go => &["go"],
+            #[cfg(feature = "lang-java")]
+            Language::Java => &["java"],
         }
     }
 
@@ -92,6 +98,8 @@ impl Language {
             "ts" | "tsx" => Some(Language::TypeScript),
             #[cfg(feature = "lang-go")]
             "go" => Some(Language::Go),
+            #[cfg(feature = "lang-java")]
+            "java" => Some(Language::Java),
             _ => None,
         }
     }
@@ -112,6 +120,8 @@ impl fmt::Display for Language {
             Language::TypeScript => f.write_str("typescript"),
             #[cfg(feature = "lang-go")]
             Language::Go => f.write_str("go"),
+            #[cfg(feature = "lang-java")]
+            Language::Java => f.write_str("java"),
         }
     }
 }
@@ -133,6 +143,8 @@ impl FromStr for Language {
             "typescript" => Ok(Language::TypeScript),
             #[cfg(feature = "lang-go")]
             "go" => Ok(Language::Go),
+            #[cfg(feature = "lang-java")]
+            "java" => Ok(Language::Java),
             other => Err(format!("unknown Language: {other}")),
         }
     }
@@ -216,6 +228,7 @@ mod tests {
 
     #[test]
     fn from_str_rejects_unknown() {
+        #[cfg(not(feature = "lang-java"))]
         assert!("java".parse::<Language>().is_err());
         #[cfg(not(feature = "lang-go"))]
         assert!("go".parse::<Language>().is_err());
@@ -225,8 +238,10 @@ mod tests {
 
     #[test]
     fn from_str_error_message_contains_input() {
-        let err = "java".parse::<Language>().unwrap_err();
-        assert!(err.contains("java"));
+        // "java" is a valid language when lang-java is enabled, so use a
+        // guaranteed-unknown string for the error-message check.
+        let err = "cobol".parse::<Language>().unwrap_err();
+        assert!(err.contains("cobol"));
     }
 
     #[cfg(all(
@@ -306,8 +321,16 @@ mod tests {
         assert_eq!(Language::from_extension("GO"), Some(Language::Go));
     }
 
+    #[cfg(feature = "lang-java")]
+    #[test]
+    fn from_extension_maps_java_extension() {
+        assert_eq!(Language::from_extension("java"), Some(Language::Java));
+        assert_eq!(Language::from_extension("JAVA"), Some(Language::Java));
+    }
+
     #[test]
     fn from_extension_returns_none_for_unknown() {
+        #[cfg(not(feature = "lang-java"))]
         assert_eq!(Language::from_extension("java"), None);
         #[cfg(not(feature = "lang-go"))]
         assert_eq!(Language::from_extension("go"), None);

@@ -43,6 +43,8 @@ impl ParserFactory {
             Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             #[cfg(feature = "lang-go")]
             Language::Go => tree_sitter_go::LANGUAGE.into(),
+            #[cfg(feature = "lang-java")]
+            Language::Java => tree_sitter_java::LANGUAGE.into(),
         };
         Ok(ts_lang)
     }
@@ -109,6 +111,13 @@ mod tests {
         assert!(lang.is_ok(), "Go language should be supported");
     }
 
+    #[cfg(feature = "lang-java")]
+    #[test]
+    fn create_language_java_succeeds() {
+        let lang = ParserFactory::create_language(Language::Java);
+        assert!(lang.is_ok(), "Java language should be supported");
+    }
+
     #[test]
     fn create_language_all_variants_succeed() {
         for lang in Language::all() {
@@ -157,6 +166,13 @@ mod tests {
     fn create_parser_go_succeeds() {
         let parser = ParserFactory::create_parser(Language::Go);
         assert!(parser.is_ok(), "Go parser should be creatable");
+    }
+
+    #[cfg(feature = "lang-java")]
+    #[test]
+    fn create_parser_java_succeeds() {
+        let parser = ParserFactory::create_parser(Language::Java);
+        assert!(parser.is_ok(), "Java parser should be creatable");
     }
 
     #[test]
@@ -252,6 +268,19 @@ mod tests {
         assert!(
             !tree.root_node().has_error(),
             "Go source should parse without errors"
+        );
+    }
+
+    #[cfg(feature = "lang-java")]
+    #[test]
+    fn parse_simple_java_file() {
+        let mut parser = ParserFactory::create_parser(Language::Java).unwrap();
+        let tree = parser
+            .parse("class Foo { void bar() {} }\n", None)
+            .expect("Java parse failed");
+        assert!(
+            !tree.root_node().has_error(),
+            "Java source should parse without errors"
         );
     }
 

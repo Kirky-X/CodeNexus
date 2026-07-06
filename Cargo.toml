@@ -57,6 +57,7 @@ lang-fortran = ["dep:tree-sitter-fortran"]
 lang-python = ["dep:tree-sitter-python"]
 lang-typescript = ["dep:tree-sitter-typescript"]
 lang-go = ["dep:tree-sitter-go"]
+lang-java = ["dep:tree-sitter-java"]
 # Function features
 # H10/D7: `embed` bundles `ort` (ONNX Runtime) + `tokenizers` for local
 # offline inference via arctic-embed-xs, alongside the existing remote HTTP
@@ -85,6 +86,7 @@ tree-sitter-fortran = { version = "0.6", optional = true }
 tree-sitter-python = { version = "0.25", optional = true }
 tree-sitter-typescript = { version = "0.23", optional = true }
 tree-sitter-go = { version = "0.23", optional = true }
+tree-sitter-java = { version = "0.23", optional = true }
 
 # Parallel parsing (ADR-010)
 rayon = "1"

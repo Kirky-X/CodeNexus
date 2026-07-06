@@ -52,6 +52,11 @@ pub fn mro_for(lang: Language) -> MroStrategy {
         // rather than silently producing a wrong linearization.
         #[cfg(feature = "lang-go")]
         Language::Go => MroStrategy::None,
+        // Java has single inheritance (extends) + interface implementation
+        // (implements), matching the FirstWins DFS pre-order model used for
+        // Rust/C/TypeScript.
+        #[cfg(feature = "lang-java")]
+        Language::Java => MroStrategy::FirstWins,
     }
 }
 
