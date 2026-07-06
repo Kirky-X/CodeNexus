@@ -142,6 +142,36 @@ fn run_command(command: Command) -> Result<(), CliError> {
             let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
             codenexus::cli::architecture_cmd::run(&kit, &args)
         }
+        #[cfg(feature = "api-review")]
+        Command::ApiRouteMap(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::route_map_cmd::run(&kit, &args)
+        }
+        #[cfg(feature = "api-review")]
+        Command::ApiShapeCheck(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::shape_check_cmd::run(&kit, &args)
+        }
+        #[cfg(feature = "api-review")]
+        Command::ApiImpact(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::api_impact_cmd::run(&kit, &args)
+        }
+        #[cfg(feature = "api-review")]
+        Command::ApiToolMap(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::tool_map_cmd::run(&kit, &args)
+        }
+        #[cfg(feature = "community")]
+        Command::Community(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::community_cmd::run(&kit, &args)
+        }
+        #[cfg(feature = "cross-service")]
+        Command::CrossService(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::cross_service_cmd::run(&kit, &args)
+        }
     }
 }
 
