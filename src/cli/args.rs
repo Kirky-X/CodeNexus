@@ -66,6 +66,18 @@ pub enum Command {
     /// Show a project's architecture overview (T006, v0.1.6).
     #[cfg(feature = "analysis")]
     Architecture(ArchitectureArgs),
+    /// List all API routes + handlers + middleware (T008, v0.2.0).
+    #[cfg(feature = "api-review")]
+    ApiRouteMap(RouteMapArgs),
+    /// Check API endpoint schema consistency (T008, v0.2.0).
+    #[cfg(feature = "api-review")]
+    ApiShapeCheck(ShapeCheckArgs),
+    /// Analyse the impact of changing an endpoint (T008, v0.2.0).
+    #[cfg(feature = "api-review")]
+    ApiImpact(ApiImpactArgs),
+    /// List all MCP tools + their handlers (T008, v0.2.0).
+    #[cfg(feature = "api-review")]
+    ApiToolMap(ToolMapArgs),
 }
 
 /// Arguments for the `index` subcommand (PRD §4.1.3).
@@ -403,6 +415,69 @@ pub struct DeadCodeArgs {
 #[cfg(feature = "analysis")]
 #[derive(Parser, Debug, Clone, PartialEq, Eq)]
 pub struct ArchitectureArgs {
+    /// Project name (the multi-project isolation key).
+    pub project: String,
+    /// Database path.
+    #[arg(long, default_value = "./codenexus.lbug")]
+    pub db: String,
+}
+
+/// Arguments for the `api-route-map` subcommand (T008, v0.2.0).
+///
+/// Lists all `Route`/`Endpoint` nodes for a project joined with their handler
+/// functions and middleware chains via `HANDLES`/`USES` edges. Output is a
+/// JSON object `{ project, route_map: [...] }`.
+#[cfg(feature = "api-review")]
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct RouteMapArgs {
+    /// Project name (the multi-project isolation key).
+    pub project: String,
+    /// Database path.
+    #[arg(long, default_value = "./codenexus.lbug")]
+    pub db: String,
+}
+
+/// Arguments for the `api-shape-check` subcommand (T008, v0.2.0).
+///
+/// Validates API endpoint schema consistency by comparing each `Endpoint`
+/// node's `expectedSchema` property with the actual schema recorded on `CALLS`
+/// edges pointing to it. Output is a JSON object `{ project, violations: [...] }`.
+#[cfg(feature = "api-review")]
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct ShapeCheckArgs {
+    /// Project name (the multi-project isolation key).
+    pub project: String,
+    /// Database path.
+    #[arg(long, default_value = "./codenexus.lbug")]
+    pub db: String,
+}
+
+/// Arguments for the `api-impact` subcommand (T008, v0.2.0).
+///
+/// Traces which callers would be affected by changing an endpoint, by
+/// reverse-traversing `CALLS` edges from the endpoint's handler. `endpoint`
+/// is matched against both `Endpoint.path` and `Endpoint.name`. Output is a
+/// JSON object `{ project, endpoint, impact: [...] }`.
+#[cfg(feature = "api-review")]
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct ApiImpactArgs {
+    /// Project name (the multi-project isolation key).
+    pub project: String,
+    /// Endpoint path (e.g. `/api/users`) or name to analyse.
+    pub endpoint: String,
+    /// Database path.
+    #[arg(long, default_value = "./codenexus.lbug")]
+    pub db: String,
+}
+
+/// Arguments for the `api-tool-map` subcommand (T008, v0.2.0).
+///
+/// Lists all `Tool` nodes (MCP tools) for a project joined with their handler
+/// functions via `HANDLES` edges. Output is a JSON object
+/// `{ project, tool_map: [...] }`.
+#[cfg(feature = "api-review")]
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct ToolMapArgs {
     /// Project name (the multi-project isolation key).
     pub project: String,
     /// Database path.
@@ -1202,6 +1277,199 @@ mod tests {
     #[test]
     fn mcp_args_clone_eq() {
         let a = McpArgs {
+            db: "/tmp/x.lbug".into(),
+        };
+        assert_eq!(a, a.clone());
+    }
+
+    // --- API Review subcommands (T008, v0.2.0) ---
+
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn cli_parses_api_route_map_subcommand_defaults() {
+        let cli = Cli::parse_from(["codenexus", "api-route-map", "demo"]);
+        match cli.command {
+            Command::ApiRouteMap(args) => {
+                assert_eq!(args.project, "demo");
+                assert_eq!(args.db, "./codenexus.lbug");
+            }
+            other => panic!("expected ApiRouteMap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn cli_parses_api_route_map_with_db() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "api-route-map",
+            "demo",
+            "--db",
+            "/tmp/x.lbug",
+        ]);
+        match cli.command {
+            Command::ApiRouteMap(args) => {
+                assert_eq!(args.project, "demo");
+                assert_eq!(args.db, "/tmp/x.lbug");
+            }
+            other => panic!("expected ApiRouteMap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn api_route_map_requires_project_arg() {
+        let result = Cli::try_parse_from(["codenexus", "api-route-map"]);
+        assert!(result.is_err(), "api-route-map without project should fail");
+    }
+
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn cli_parses_api_shape_check_subcommand_defaults() {
+        let cli = Cli::parse_from(["codenexus", "api-shape-check", "demo"]);
+        match cli.command {
+            Command::ApiShapeCheck(args) => {
+                assert_eq!(args.project, "demo");
+                assert_eq!(args.db, "./codenexus.lbug");
+            }
+            other => panic!("expected ApiShapeCheck, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn cli_parses_api_shape_check_with_db() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "api-shape-check",
+            "demo",
+            "--db",
+            "/tmp/x.lbug",
+        ]);
+        match cli.command {
+            Command::ApiShapeCheck(args) => {
+                assert_eq!(args.project, "demo");
+                assert_eq!(args.db, "/tmp/x.lbug");
+            }
+            other => panic!("expected ApiShapeCheck, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn cli_parses_api_impact_subcommand_defaults() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "api-impact",
+            "demo",
+            "/api/users",
+        ]);
+        match cli.command {
+            Command::ApiImpact(args) => {
+                assert_eq!(args.project, "demo");
+                assert_eq!(args.endpoint, "/api/users");
+                assert_eq!(args.db, "./codenexus.lbug");
+            }
+            other => panic!("expected ApiImpact, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn cli_parses_api_impact_with_db() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "api-impact",
+            "demo",
+            "/api/users",
+            "--db",
+            "/tmp/x.lbug",
+        ]);
+        match cli.command {
+            Command::ApiImpact(args) => {
+                assert_eq!(args.project, "demo");
+                assert_eq!(args.endpoint, "/api/users");
+                assert_eq!(args.db, "/tmp/x.lbug");
+            }
+            other => panic!("expected ApiImpact, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn api_impact_requires_two_args() {
+        let result = Cli::try_parse_from(["codenexus", "api-impact", "demo"]);
+        assert!(result.is_err(), "api-impact without endpoint should fail");
+    }
+
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn cli_parses_api_tool_map_subcommand_defaults() {
+        let cli = Cli::parse_from(["codenexus", "api-tool-map", "demo"]);
+        match cli.command {
+            Command::ApiToolMap(args) => {
+                assert_eq!(args.project, "demo");
+                assert_eq!(args.db, "./codenexus.lbug");
+            }
+            other => panic!("expected ApiToolMap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn cli_parses_api_tool_map_with_db() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "api-tool-map",
+            "demo",
+            "--db",
+            "/tmp/x.lbug",
+        ]);
+        match cli.command {
+            Command::ApiToolMap(args) => {
+                assert_eq!(args.project, "demo");
+                assert_eq!(args.db, "/tmp/x.lbug");
+            }
+            other => panic!("expected ApiToolMap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn route_map_args_clone_eq() {
+        let a = RouteMapArgs {
+            project: "demo".into(),
+            db: "/tmp/x.lbug".into(),
+        };
+        assert_eq!(a, a.clone());
+    }
+
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn shape_check_args_clone_eq() {
+        let a = ShapeCheckArgs {
+            project: "demo".into(),
+            db: "/tmp/x.lbug".into(),
+        };
+        assert_eq!(a, a.clone());
+    }
+
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn api_impact_args_clone_eq() {
+        let a = ApiImpactArgs {
+            project: "demo".into(),
+            endpoint: "/api/users".into(),
+            db: "/tmp/x.lbug".into(),
+        };
+        assert_eq!(a, a.clone());
+    }
+
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn tool_map_args_clone_eq() {
+        let a = ToolMapArgs {
+            project: "demo".into(),
             db: "/tmp/x.lbug".into(),
         };
         assert_eq!(a, a.clone());

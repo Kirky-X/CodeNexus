@@ -421,7 +421,20 @@ pub fn node_table_columns(label: NodeLabel) -> &'static [&'static str] {
             "templateParams",
             "parentQn",
         ],
-        NodeLabel::Endpoint | NodeLabel::Route => &[
+        NodeLabel::Endpoint => &[
+            "id",
+            "project",
+            "name",
+            "qualifiedName",
+            "filePath",
+            "startLine",
+            "endLine",
+            "httpMethod",
+            "path",
+            "expectedSchema",
+            "parentQn",
+        ],
+        NodeLabel::Route => &[
             "id",
             "project",
             "name",
@@ -643,7 +656,8 @@ fn ddl_for_label(label: NodeLabel) -> String {
             .to_string(),
         NodeLabel::Endpoint => "CREATE NODE TABLE Endpoint (id STRING, project STRING, name \
              STRING, qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, \
-             httpMethod STRING, path STRING, parentQn STRING, PRIMARY KEY (id));"
+             httpMethod STRING, path STRING, expectedSchema STRING, parentQn STRING, PRIMARY KEY \
+             (id));"
             .to_string(),
         NodeLabel::Route => "CREATE NODE TABLE Route (id STRING, project STRING, name STRING, \
              qualifiedName STRING, filePath STRING, startLine INT64, endLine INT64, httpMethod \

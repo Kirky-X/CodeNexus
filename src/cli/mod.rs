@@ -25,6 +25,8 @@
 pub mod args;
 #[cfg(feature = "analysis")]
 pub mod architecture_cmd;
+#[cfg(feature = "api-review")]
+pub mod api_impact_cmd;
 pub mod clean_cmd;
 pub mod context_cmd;
 #[cfg(feature = "analysis")]
@@ -43,10 +45,16 @@ pub mod list_cmd;
 pub mod mcp_cmd;
 pub mod query_cmd;
 pub mod rename_cmd;
+#[cfg(feature = "api-review")]
+pub mod route_map_cmd;
 pub mod search_cmd;
+#[cfg(feature = "api-review")]
+pub mod shape_check_cmd;
 pub mod setup_cmd;
 pub mod status_cmd;
 pub mod trace_cmd;
+#[cfg(feature = "api-review")]
+pub mod tool_map_cmd;
 
 pub use args::{Cli, Command};
 pub use error::{CliError, Result};
@@ -63,6 +71,8 @@ mod dispatch_tests {
     use crate::cli::args::DaemonArgs;
     #[cfg(feature = "analysis")]
     use crate::cli::args::{ArchitectureArgs, DeadCodeArgs};
+    #[cfg(feature = "api-review")]
+    use crate::cli::args::{ApiImpactArgs, RouteMapArgs, ShapeCheckArgs, ToolMapArgs};
     use crate::kit::{build_kit, Kit, KitBootstrapConfig, StorageKey};
     use clap::Parser;
 
@@ -100,6 +110,14 @@ mod dispatch_tests {
             Command::DeadCode(args) => dead_code_cmd::run(kit, &args),
             #[cfg(feature = "analysis")]
             Command::Architecture(args) => architecture_cmd::run(kit, &args),
+            #[cfg(feature = "api-review")]
+            Command::ApiRouteMap(args) => route_map_cmd::run(kit, &args),
+            #[cfg(feature = "api-review")]
+            Command::ApiShapeCheck(args) => shape_check_cmd::run(kit, &args),
+            #[cfg(feature = "api-review")]
+            Command::ApiImpact(args) => api_impact_cmd::run(kit, &args),
+            #[cfg(feature = "api-review")]
+            Command::ApiToolMap(args) => tool_map_cmd::run(kit, &args),
         }
     }
 
@@ -404,6 +422,95 @@ mod dispatch_tests {
         );
     }
 
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn dispatch_api_route_map_calls_route_map_cmd() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
+        let cli = Cli::parse_from([
+            "codenexus",
+            "api-route-map",
+            "demo",
+            "--db",
+            db.to_str().unwrap(),
+        ]);
+        let result = dispatch(&kit, cli);
+        assert!(
+            result.is_ok(),
+            "dispatch api-route-map should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn dispatch_api_shape_check_calls_shape_check_cmd() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.execute("CREATE (:Endpoint {id: 'e1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', expectedSchema: '', parentQn: ''});").expect("create endpoint");
+        let cli = Cli::parse_from([
+            "codenexus",
+            "api-shape-check",
+            "demo",
+            "--db",
+            db.to_str().unwrap(),
+        ]);
+        let result = dispatch(&kit, cli);
+        assert!(
+            result.is_ok(),
+            "dispatch api-shape-check should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn dispatch_api_impact_calls_api_impact_cmd() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.execute("CREATE (:Endpoint {id: 'e1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', expectedSchema: '', parentQn: ''});").expect("create endpoint");
+        let cli = Cli::parse_from([
+            "codenexus",
+            "api-impact",
+            "demo",
+            "/api/users",
+            "--db",
+            db.to_str().unwrap(),
+        ]);
+        let result = dispatch(&kit, cli);
+        assert!(
+            result.is_ok(),
+            "dispatch api-impact should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "api-review")]
+    fn dispatch_api_tool_map_calls_tool_map_cmd() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.execute("CREATE (:Tool {id: 't1', project: 'demo', name: 'query', qualifiedName: 'query', filePath: '', toolType: 'mcp', parentQn: ''});").expect("create tool");
+        let cli = Cli::parse_from([
+            "codenexus",
+            "api-tool-map",
+            "demo",
+            "--db",
+            db.to_str().unwrap(),
+        ]);
+        let result = dispatch(&kit, cli);
+        assert!(
+            result.is_ok(),
+            "dispatch api-tool-map should succeed: {:?}",
+            result.err()
+        );
+    }
+
     /// Returns `true` if the `zstd` binary is available on PATH (H7
     /// export/import shell out to it).
     fn zstd_cli_available() -> bool {
@@ -647,6 +754,27 @@ mod dispatch_tests {
         };
         #[cfg(feature = "analysis")]
         let _ = ArchitectureArgs {
+            project: "demo".into(),
+            db: "./x.lbug".into(),
+        };
+        #[cfg(feature = "api-review")]
+        let _ = RouteMapArgs {
+            project: "demo".into(),
+            db: "./x.lbug".into(),
+        };
+        #[cfg(feature = "api-review")]
+        let _ = ShapeCheckArgs {
+            project: "demo".into(),
+            db: "./x.lbug".into(),
+        };
+        #[cfg(feature = "api-review")]
+        let _ = ApiImpactArgs {
+            project: "demo".into(),
+            endpoint: "/api/users".into(),
+            db: "./x.lbug".into(),
+        };
+        #[cfg(feature = "api-review")]
+        let _ = ToolMapArgs {
             project: "demo".into(),
             db: "./x.lbug".into(),
         };

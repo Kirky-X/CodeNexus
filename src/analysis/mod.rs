@@ -18,3 +18,6 @@
 
 pub mod architecture;
 pub mod dead_code;
+
+#[cfg(feature = "api-review")]
+pub mod api_review;
