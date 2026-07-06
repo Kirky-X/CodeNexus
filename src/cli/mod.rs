@@ -31,6 +31,8 @@ pub mod clean_cmd;
 #[cfg(feature = "community")]
 pub mod community_cmd;
 pub mod context_cmd;
+#[cfg(feature = "cross-service")]
+pub mod cross_service_cmd;
 #[cfg(feature = "analysis")]
 pub mod dead_code_cmd;
 #[cfg(feature = "daemon")]
@@ -77,6 +79,8 @@ mod dispatch_tests {
     use crate::cli::args::{ApiImpactArgs, RouteMapArgs, ShapeCheckArgs, ToolMapArgs};
     #[cfg(feature = "community")]
     use crate::cli::args::CommunityArgs;
+    #[cfg(feature = "cross-service")]
+    use crate::cli::args::CrossServiceArgs;
     use crate::kit::{build_kit, Kit, KitBootstrapConfig, StorageKey};
     use clap::Parser;
 
@@ -124,6 +128,8 @@ mod dispatch_tests {
             Command::ApiToolMap(args) => tool_map_cmd::run(kit, &args),
             #[cfg(feature = "community")]
             Command::Community(args) => community_cmd::run(kit, &args),
+            #[cfg(feature = "cross-service")]
+            Command::CrossService(args) => cross_service_cmd::run(kit, &args),
         }
     }
 
@@ -567,6 +573,29 @@ mod dispatch_tests {
         );
     }
 
+    #[test]
+    #[cfg(feature = "cross-service")]
+    fn dispatch_cross_service_calls_cross_service_cmd() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/caller.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fetch(\"/api/users\");', parentQn: ''});").expect("create function");
+        let cli = Cli::parse_from([
+            "codenexus",
+            "cross-service",
+            "demo",
+            "--db",
+            db.to_str().unwrap(),
+        ]);
+        let result = dispatch(&kit, cli);
+        assert!(
+            result.is_ok(),
+            "dispatch cross-service should succeed: {:?}",
+            result.err()
+        );
+    }
+
     /// Returns `true` if the `zstd` binary is available on PATH (H7
     /// export/import shell out to it).
     fn zstd_cli_available() -> bool {
@@ -839,6 +868,11 @@ mod dispatch_tests {
             project: "demo".into(),
             db: "./x.lbug".into(),
             resolution: None,
+        };
+        #[cfg(feature = "cross-service")]
+        let _ = CrossServiceArgs {
+            project: "demo".into(),
+            db: "./x.lbug".into(),
         };
     }
 }

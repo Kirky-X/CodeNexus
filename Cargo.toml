@@ -49,7 +49,7 @@ default = ["full"]
 # once all modules migrated to `build_kit`.
 minimal = ["lang-rust"]
 core = ["lang-c", "lang-rust", "lang-python"]
-full = ["core", "lang-fortran", "lang-typescript", "lang-go", "lang-java", "lang-cpp", "daemon", "analysis", "api-review", "community"]
+full = ["core", "lang-fortran", "lang-typescript", "lang-go", "lang-java", "lang-cpp", "daemon", "analysis", "api-review", "community", "cross-service"]
 # Per-language features (each pulls its tree-sitter grammar)
 lang-c = ["dep:tree-sitter-c"]
 lang-rust = ["dep:tree-sitter-rust"]
@@ -76,6 +76,10 @@ api-review = ["analysis"]
 # graph. Depends on `analysis` for the `&dyn Storage` capability pattern and
 # `petgraph` for the in-memory weighted undirected graph.
 community = ["analysis", "dep:petgraph"]
+# Cross-service link detection (T010): matches HTTP route patterns against
+# caller string literals and persists `CROSS_SERVICE_CALLS` edges. Pure
+# Cypher + deterministic string matching — no new dependencies.
+cross-service = ["analysis"]
 
 [dependencies]
 # Unified module interface & Kit capability registry (T6/unified-architecture

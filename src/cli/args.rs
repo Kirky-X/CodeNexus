@@ -81,6 +81,9 @@ pub enum Command {
     /// Detect communities in the CALLS graph via Louvain (T009, v0.2.0).
     #[cfg(feature = "community")]
     Community(CommunityArgs),
+    /// Detect cross-service links via route pattern matching (T010, v0.2.0).
+    #[cfg(feature = "cross-service")]
+    CrossService(CrossServiceArgs),
 }
 
 /// Arguments for the `index` subcommand (PRD §4.1.3).
@@ -507,6 +510,23 @@ pub struct CommunityArgs {
     /// is `1.0` (standard Newman modularity). Must be > 0.
     #[arg(long)]
     pub resolution: Option<f64>,
+}
+
+/// Arguments for the `cross-service` subcommand (T010, v0.2.0).
+///
+/// Detects HTTP route patterns matching string literals in caller function
+/// bodies and persists `CROSS_SERVICE_CALLS` edges. Output is a JSON object
+/// `{ project, links: [...] }` where each link entry has `route_id`,
+/// `route_pattern`, `caller_id`, `caller_file`, `caller_line`, and
+/// `match_type` (`Exact` | `Parameterized` | `Wildcard`).
+#[cfg(feature = "cross-service")]
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct CrossServiceArgs {
+    /// Project name (the multi-project isolation key).
+    pub project: String,
+    /// Database path.
+    #[arg(long, default_value = "./codenexus.lbug")]
+    pub db: String,
 }
 
 #[cfg(test)]
@@ -1551,6 +1571,57 @@ mod tests {
             project: "demo".into(),
             db: "/tmp/x.lbug".into(),
             resolution: Some(2.0),
+        };
+        assert_eq!(a, a.clone());
+    }
+
+    // --- CrossService (T010, v0.2.0) ---
+
+    #[test]
+    #[cfg(feature = "cross-service")]
+    fn cli_parses_cross_service_subcommand_defaults() {
+        let cli = Cli::parse_from(["codenexus", "cross-service", "demo"]);
+        match cli.command {
+            Command::CrossService(args) => {
+                assert_eq!(args.project, "demo");
+                assert_eq!(args.db, "./codenexus.lbug");
+            }
+            other => panic!("expected CrossService, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "cross-service")]
+    fn cli_parses_cross_service_with_db() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "cross-service",
+            "demo",
+            "--db",
+            "/tmp/x.lbug",
+        ]);
+        match cli.command {
+            Command::CrossService(args) => {
+                assert_eq!(args.project, "demo");
+                assert_eq!(args.db, "/tmp/x.lbug");
+            }
+            other => panic!("expected CrossService, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "cross-service")]
+    fn cross_service_requires_project_arg() {
+        let result = Cli::try_parse_from(["codenexus", "cross-service"]);
+        assert!(result.is_err(), "cross-service without project should fail");
+    }
+
+    #[test]
+    #[cfg(feature = "cross-service")]
+    fn cross_service_args_clone_eq() {
+        let a = CrossServiceArgs {
+            project: "demo".into(),
+            db: "/tmp/x.lbug".into(),
         };
         assert_eq!(a, a.clone());
     }
