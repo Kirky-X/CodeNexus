@@ -49,7 +49,7 @@ default = ["full"]
 # once all modules migrated to `build_kit`.
 minimal = ["lang-rust"]
 core = ["lang-c", "lang-rust", "lang-python"]
-full = ["core", "lang-fortran", "lang-typescript", "daemon"]
+full = ["core", "lang-fortran", "lang-typescript", "lang-go", "lang-java", "lang-cpp", "daemon"]
 # Per-language features (each pulls its tree-sitter grammar)
 lang-c = ["dep:tree-sitter-c"]
 lang-rust = ["dep:tree-sitter-rust"]

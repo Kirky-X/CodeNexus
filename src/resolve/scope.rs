@@ -505,6 +505,194 @@ impl ScopeResolver for TypeScriptScopeResolver {
 }
 
 // ---------------------------------------------------------------------------
+// GoScopeResolver
+// ---------------------------------------------------------------------------
+
+/// [`ScopeResolver`] for Go (feature `lang-go`).
+///
+/// Scope-introducing nodes:
+/// - `function_declaration` → [`NodeLabel::Function`].
+/// - `method_declaration` → [`NodeLabel::Method`].
+/// - `type_spec` (with `struct_type`) → [`NodeLabel::Struct`].
+/// - `type_spec` (with `interface_type`) → [`NodeLabel::Interface`].
+#[cfg(feature = "lang-go")]
+pub struct GoScopeResolver;
+
+#[cfg(feature = "lang-go")]
+impl ScopeResolver for GoScopeResolver {
+    fn resolve<'a>(&self, node: Node<'a>, ctx: &ScopeContext<'a>) -> Option<Scope> {
+        match node.kind() {
+            "function_declaration" => {
+                let name = name_field(node, ctx.source)?;
+                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Go, ctx.current_parent);
+                Some(build_scope(name, qn, NodeLabel::Function, ctx.current_parent))
+            }
+            "method_declaration" => {
+                let name = name_field(node, ctx.source)?;
+                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Go, ctx.current_parent);
+                Some(build_scope(name, qn, NodeLabel::Method, ctx.current_parent))
+            }
+            "type_spec" => {
+                let name = name_field(node, ctx.source)?;
+                let type_kind = node.child_by_field_name("type").map(|n| n.kind());
+                let label = match type_kind {
+                    Some("struct_type") => NodeLabel::Struct,
+                    Some("interface_type") => NodeLabel::Interface,
+                    _ => return None,
+                };
+                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Go, ctx.current_parent);
+                Some(build_scope(name, qn, label, ctx.current_parent))
+            }
+            _ => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// JavaScopeResolver
+// ---------------------------------------------------------------------------
+
+/// [`ScopeResolver`] for Java (feature `lang-java`).
+///
+/// Scope-introducing nodes:
+/// - `class_declaration` → [`NodeLabel::Class`].
+/// - `interface_declaration` → [`NodeLabel::Interface`].
+/// - `enum_declaration` → [`NodeLabel::Enum`].
+/// - `method_declaration` → [`NodeLabel::Method`].
+#[cfg(feature = "lang-java")]
+pub struct JavaScopeResolver;
+
+#[cfg(feature = "lang-java")]
+impl ScopeResolver for JavaScopeResolver {
+    fn resolve<'a>(&self, node: Node<'a>, ctx: &ScopeContext<'a>) -> Option<Scope> {
+        match node.kind() {
+            "class_declaration" => {
+                let name = name_field(node, ctx.source)?;
+                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Java, ctx.current_parent);
+                Some(build_scope(name, qn, NodeLabel::Class, ctx.current_parent))
+            }
+            "interface_declaration" => {
+                let name = name_field(node, ctx.source)?;
+                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Java, ctx.current_parent);
+                Some(build_scope(name, qn, NodeLabel::Interface, ctx.current_parent))
+            }
+            "enum_declaration" => {
+                let name = name_field(node, ctx.source)?;
+                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Java, ctx.current_parent);
+                Some(build_scope(name, qn, NodeLabel::Enum, ctx.current_parent))
+            }
+            "method_declaration" => {
+                let name = name_field(node, ctx.source)?;
+                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Java, ctx.current_parent);
+                Some(build_scope(name, qn, NodeLabel::Method, ctx.current_parent))
+            }
+            _ => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CppScopeResolver
+// ---------------------------------------------------------------------------
+
+/// [`ScopeResolver`] for C++ (feature `lang-cpp`).
+///
+/// Scope-introducing nodes:
+/// - `function_definition` → [`NodeLabel::Function`] (or [`NodeLabel::Method`]
+///   when inside a class/struct body).
+/// - `class_specifier` → [`NodeLabel::Class`].
+/// - `struct_specifier` → [`NodeLabel::Struct`].
+/// - `namespace_definition` → [`NodeLabel::Namespace`].
+#[cfg(feature = "lang-cpp")]
+pub struct CppScopeResolver;
+
+#[cfg(feature = "lang-cpp")]
+impl ScopeResolver for CppScopeResolver {
+    fn resolve<'a>(&self, node: Node<'a>, ctx: &ScopeContext<'a>) -> Option<Scope> {
+        match node.kind() {
+            "function_definition" => {
+                let name = cpp_function_name(node, ctx.source)?;
+                // A function inside a class/struct body is a method.
+                let label = if has_class_or_struct_ancestor(node) {
+                    NodeLabel::Method
+                } else {
+                    NodeLabel::Function
+                };
+                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Cpp, ctx.current_parent);
+                Some(build_scope(name, qn, label, ctx.current_parent))
+            }
+            "class_specifier" => {
+                let name = name_field(node, ctx.source)?;
+                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Cpp, ctx.current_parent);
+                Some(build_scope(name, qn, NodeLabel::Class, ctx.current_parent))
+            }
+            "struct_specifier" => {
+                let name = name_field(node, ctx.source)?;
+                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Cpp, ctx.current_parent);
+                Some(build_scope(name, qn, NodeLabel::Struct, ctx.current_parent))
+            }
+            "namespace_definition" => {
+                let name = name_field(node, ctx.source)?;
+                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Cpp, ctx.current_parent);
+                Some(build_scope(name, qn, NodeLabel::Namespace, ctx.current_parent))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Extracts the function name from a C++ `function_definition` node by
+/// unwrapping the declarator chain (`function_declarator`/`pointer_declarator`/
+/// etc.) to find the inner `identifier`. Mirrors the extractor's
+/// `declarator_name` logic.
+#[cfg(feature = "lang-cpp")]
+fn cpp_function_name(node: Node, source: &str) -> Option<String> {
+    let declarator = node.child_by_field_name("declarator")?;
+    cpp_declarator_name(declarator, source)
+}
+
+/// Recursively unwraps C++ declarator nodes to find the inner identifier.
+#[cfg(feature = "lang-cpp")]
+fn cpp_declarator_name(node: Node, source: &str) -> Option<String> {
+    match node.kind() {
+        "identifier" | "field_identifier" => node_text(node, source).map(String::from),
+        "function_declarator" | "pointer_declarator" | "reference_declarator"
+        | "array_declarator" | "parenthesized_declarator" => {
+            let inner = node.child_by_field_name("declarator")?;
+            cpp_declarator_name(inner, source)
+        }
+        "qualified_identifier" => {
+            // ns::func → use the rightmost identifier (the function name).
+            let scope = node.child_by_field_name("scope");
+            let name = node.child_by_field_name("name");
+            if let Some(n) = name {
+                cpp_declarator_name(n, source)
+            } else if let Some(s) = scope {
+                cpp_declarator_name(s, source)
+            } else {
+                None
+            }
+        }
+        "operator_name" => node_text(node, source).map(String::from),
+        _ => None,
+    }
+}
+
+/// Returns true if the node has a `class_specifier` or `struct_specifier`
+/// ancestor. Used to distinguish methods from free functions.
+#[cfg(feature = "lang-cpp")]
+fn has_class_or_struct_ancestor(node: Node) -> bool {
+    let mut cur = node.parent();
+    while let Some(p) = cur {
+        match p.kind() {
+            "class_specifier" | "struct_specifier" => return true,
+            _ => cur = p.parent(),
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
 // ScopeResolverRegistry
 // ---------------------------------------------------------------------------
 
@@ -543,6 +731,18 @@ impl ScopeResolverRegistry {
         #[cfg(feature = "lang-typescript")]
         {
             resolvers.insert(Language::TypeScript, Box::new(TypeScriptScopeResolver));
+        }
+        #[cfg(feature = "lang-go")]
+        {
+            resolvers.insert(Language::Go, Box::new(GoScopeResolver));
+        }
+        #[cfg(feature = "lang-java")]
+        {
+            resolvers.insert(Language::Java, Box::new(JavaScopeResolver));
+        }
+        #[cfg(feature = "lang-cpp")]
+        {
+            resolvers.insert(Language::Cpp, Box::new(CppScopeResolver));
         }
         Self { resolvers }
     }
