@@ -35,6 +35,18 @@ use super::{EmbedError, Result, EMBEDDING_DIM};
 /// RRF constant (standard value from the original paper).
 const RRF_K: u32 = 60;
 
+/// Weight for the base (BM25 + semantic RRF) score in multi-signal fusion
+/// (R-search-002). Explicit constant per Rule 5 (deterministic logic).
+const BASE_WEIGHT: f32 = 0.5;
+
+/// Weight for the centrality signal (CALLS in-degree) in multi-signal fusion
+/// (R-search-002).
+const CENTRALITY_WEIGHT: f32 = 0.3;
+
+/// Weight for the file heat signal (IMPORTS count) in multi-signal fusion
+/// (R-search-002).
+const FILE_HEAT_WEIGHT: f32 = 0.2;
+
 /// The search strategy to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchStrategyType {
@@ -209,16 +221,58 @@ impl<'a, C: ?Sized + EmbedClient> SearchStrategy for SemanticStrategy<'a, C> {
 /// Runs both BM25 and semantic search, then fuses the ranked lists using
 /// Reciprocal Rank Fusion. On Windows (or when vector support is unavailable),
 /// this degrades to BM25-only.
+///
+/// # Multi-signal scoring (T011, R-search-002, v0.2.0)
+///
+/// When [`with_centrality`](Self::with_centrality) and/or
+/// [`with_file_heat`](Self::with_file_heat) are enabled, the fused RRF score
+/// is combined with call-graph centrality and file heat signals:
+///
+/// ```text
+/// final_score = 0.5 * base_score + 0.3 * centrality_score + 0.2 * file_heat_score
+/// ```
+///
+/// When neither signal is enabled (the default), the ranking is identical to
+/// the original RRF-only fusion (backward compatible).
 pub struct HybridStrategy<'a, C: ?Sized + EmbedClient> {
     conn: &'a StorageConnection,
     client: &'a C,
+    enable_centrality: bool,
+    enable_file_heat: bool,
 }
 
 impl<'a, C: ?Sized + EmbedClient> HybridStrategy<'a, C> {
     /// Creates a new hybrid strategy.
     #[must_use]
     pub fn new(conn: &'a StorageConnection, client: &'a C) -> Self {
-        Self { conn, client }
+        Self {
+            conn,
+            client,
+            enable_centrality: false,
+            enable_file_heat: false,
+        }
+    }
+
+    /// Enables or disables the centrality signal (CALLS in-degree).
+    ///
+    /// When enabled, each result's final score incorporates a normalized
+    /// centrality term: `in_degree / max_in_degree`. The weight is
+    /// [`CENTRALITY_WEIGHT`] (0.3). Disabled by default (backward compatible).
+    #[must_use]
+    pub fn with_centrality(mut self, enable: bool) -> Self {
+        self.enable_centrality = enable;
+        self
+    }
+
+    /// Enables or disables the file heat signal (IMPORTS count).
+    ///
+    /// When enabled, each result's final score incorporates a normalized
+    /// file heat term: `import_count / max_import_count`. The weight is
+    /// [`FILE_HEAT_WEIGHT`] (0.2). Disabled by default (backward compatible).
+    #[must_use]
+    pub fn with_file_heat(mut self, enable: bool) -> Self {
+        self.enable_file_heat = enable;
+        self
     }
 }
 
@@ -231,7 +285,14 @@ impl<'a, C: ?Sized + EmbedClient> SearchStrategy for HybridStrategy<'a, C> {
     ) -> Result<Vec<SearchResult>> {
         // Windows degradation: BM25 only (R-003 / TR-005).
         if !is_vector_supported() {
-            return Bm25Strategy::new(self.conn).search(query, project, limit);
+            let results = Bm25Strategy::new(self.conn).search(query, project, limit)?;
+            return Ok(apply_multi_signal_if_enabled(
+                self.conn,
+                results,
+                project,
+                self.enable_centrality,
+                self.enable_file_heat,
+            ));
         }
 
         // Run BM25 search.
@@ -242,16 +303,235 @@ impl<'a, C: ?Sized + EmbedClient> SearchStrategy for HybridStrategy<'a, C> {
             match SemanticStrategy::new(self.conn, self.client).search(query, project, limit * 2) {
                 Ok(results) => results,
                 Err(EmbedError::EmbeddingTableNotAvailable) | Err(EmbedError::Unavailable(_)) => {
-                    // Semantic unavailable — return BM25 only.
-                    return Ok(bm25_results.into_iter().take(limit).collect());
+                    // Semantic unavailable — return BM25 only (with multi-signal if enabled).
+                    let results: Vec<SearchResult> =
+                        bm25_results.into_iter().take(limit).collect();
+                    return Ok(apply_multi_signal_if_enabled(
+                        self.conn,
+                        results,
+                        project,
+                        self.enable_centrality,
+                        self.enable_file_heat,
+                    ));
                 }
                 Err(e) => return Err(e),
             };
 
         // Fuse via RRF.
         let fused = rrf_fuse(bm25_results, semantic_results, limit);
-        Ok(fused)
+        Ok(apply_multi_signal_if_enabled(
+            self.conn,
+            fused,
+            project,
+            self.enable_centrality,
+            self.enable_file_heat,
+        ))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Multi-signal scoring (T011, R-search-002, v0.2.0)
+// ---------------------------------------------------------------------------
+
+/// Returns results unchanged if neither signal is enabled or no project filter
+/// is present. Otherwise applies [`apply_multi_signal_scoring`].
+fn apply_multi_signal_if_enabled(
+    conn: &StorageConnection,
+    results: Vec<SearchResult>,
+    project: Option<&str>,
+    enable_centrality: bool,
+    enable_file_heat: bool,
+) -> Vec<SearchResult> {
+    if !enable_centrality && !enable_file_heat {
+        return results;
+    }
+    let project = match project {
+        Some(p) => p,
+        None => return results,
+    };
+    apply_multi_signal_scoring(conn, results, project, enable_centrality, enable_file_heat)
+}
+
+/// Applies the multi-signal scoring formula (R-search-002):
+///
+/// `final_score = 0.5 * base_score + 0.3 * centrality_score + 0.2 * file_heat_score`
+///
+/// When a signal is disabled, its term is 0 for every result. Results are
+/// re-sorted by final score descending.
+fn apply_multi_signal_scoring(
+    conn: &StorageConnection,
+    mut results: Vec<SearchResult>,
+    project: &str,
+    enable_centrality: bool,
+    enable_file_heat: bool,
+) -> Vec<SearchResult> {
+    if results.is_empty() {
+        return results;
+    }
+
+    let centrality_scores: HashMap<String, f32> = if enable_centrality {
+        compute_centrality_scores(conn, &results, project)
+    } else {
+        HashMap::new()
+    };
+
+    let file_heat_scores: HashMap<String, f32> = if enable_file_heat {
+        compute_file_heat_scores(conn, &results, project)
+    } else {
+        HashMap::new()
+    };
+
+    for result in &mut results {
+        let key = result
+            .qualified_name
+            .clone()
+            .unwrap_or_else(|| result.name.clone());
+        let base = result.score;
+        let centrality = centrality_scores.get(&key).copied().unwrap_or(0.0);
+        let file_heat = file_heat_scores.get(&key).copied().unwrap_or(0.0);
+        result.score =
+            BASE_WEIGHT * base + CENTRALITY_WEIGHT * centrality + FILE_HEAT_WEIGHT * file_heat;
+    }
+
+    results.sort_by(|a, b| {
+        b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    results
+}
+
+/// Computes normalized centrality scores (CALLS in-degree / max in-degree)
+/// for each search result. Returns a map keyed by `qualified_name` (or `name`
+/// when QN is absent).
+fn compute_centrality_scores(
+    conn: &StorageConnection,
+    results: &[SearchResult],
+    project: &str,
+) -> HashMap<String, f32> {
+    let project_esc = project.replace('\'', "\\'");
+
+    // Load all CALLS edges, aggregate in-degree per target node id.
+    let cypher = format!(
+        "MATCH (e:CodeRelation) WHERE e.type = 'CALLS' AND e.project = '{project_esc}' \
+         RETURN e.target AS target;"
+    );
+    let rows = conn.query(&cypher).unwrap_or_default();
+    let mut in_degrees: HashMap<String, u32> = HashMap::new();
+    for row in &rows {
+        if let Some(target) = row.first().and_then(|v| v.as_str()) {
+            *in_degrees.entry(target.to_string()).or_insert(0) += 1;
+        }
+    }
+    let max_in_degree = in_degrees.values().copied().max().unwrap_or(0);
+
+    // For each result, look up its node id by (label, qualifiedName), then
+    // look up the in-degree.
+    let mut scores = HashMap::new();
+    for result in results {
+        let key = result
+            .qualified_name
+            .clone()
+            .unwrap_or_else(|| result.name.clone());
+        let qn = result.qualified_name.as_deref().unwrap_or(&result.name);
+        let in_degree = lookup_node_id_by_qn(conn, &result.label, qn, project)
+            .and_then(|id| in_degrees.get(&id).copied())
+            .unwrap_or(0);
+        let centrality = if max_in_degree > 0 {
+            in_degree as f32 / max_in_degree as f32
+        } else {
+            0.0
+        };
+        scores.insert(key, centrality);
+    }
+    scores
+}
+
+/// Computes normalized file heat scores (import count / max import count) for
+/// each search result. The "file heat" of a result is the number of IMPORTS
+/// edges targeting the File node at `result.file_path`, divided by the maximum
+/// such count across all files in the project.
+fn compute_file_heat_scores(
+    conn: &StorageConnection,
+    results: &[SearchResult],
+    project: &str,
+) -> HashMap<String, f32> {
+    let project_esc = project.replace('\'', "\\'");
+
+    // Load all File nodes: id → filePath, filePath → id.
+    let cypher = format!(
+        "MATCH (f:File) WHERE f.project = '{project_esc}' \
+         RETURN f.id AS id, f.filePath AS filePath;"
+    );
+    let rows = conn.query(&cypher).unwrap_or_default();
+    let mut path_to_id: HashMap<String, String> = HashMap::new();
+    for row in &rows {
+        if let (Some(id), Some(path)) = (
+            row.first().and_then(|v| v.as_str()),
+            row.get(1).and_then(|v| v.as_str()),
+        ) {
+            path_to_id.insert(path.to_string(), id.to_string());
+        }
+    }
+
+    // Load all IMPORTS edges, aggregate count per target (file id).
+    let cypher = format!(
+        "MATCH (e:CodeRelation) WHERE e.type = 'IMPORTS' AND e.project = '{project_esc}' \
+         RETURN e.target AS target;"
+    );
+    let rows = conn.query(&cypher).unwrap_or_default();
+    let mut import_counts: HashMap<String, u32> = HashMap::new();
+    for row in &rows {
+        if let Some(target) = row.first().and_then(|v| v.as_str()) {
+            *import_counts.entry(target.to_string()).or_insert(0) += 1;
+        }
+    }
+    let max_imports = import_counts.values().copied().max().unwrap_or(0);
+
+    // For each result, map file_path → file_id → import_count.
+    let mut scores = HashMap::new();
+    for result in results {
+        let key = result
+            .qualified_name
+            .clone()
+            .unwrap_or_else(|| result.name.clone());
+        let heat = result
+            .file_path
+            .as_ref()
+            .and_then(|p| path_to_id.get(p))
+            .and_then(|id| import_counts.get(id).copied())
+            .unwrap_or(0);
+        let heat_score = if max_imports > 0 {
+            heat as f32 / max_imports as f32
+        } else {
+            0.0
+        };
+        scores.insert(key, heat_score);
+    }
+    scores
+}
+
+/// Looks up a node's `id` by its label and `qualifiedName` within a project.
+/// Escapes the label for tables that require backticks (e.g. `Macro`).
+fn lookup_node_id_by_qn(
+    conn: &StorageConnection,
+    label: &str,
+    qualified_name: &str,
+    project: &str,
+) -> Option<String> {
+    let table = match label {
+        "Macro" => "`Macro`",
+        other => other,
+    };
+    let qn_esc = qualified_name.replace('\'', "\\'");
+    let project_esc = project.replace('\'', "\\'");
+    let cypher = format!(
+        "MATCH (n:{table}) WHERE n.qualifiedName = '{qn_esc}' AND n.project = '{project_esc}' \
+         RETURN n.id AS id LIMIT 1;"
+    );
+    conn.query(&cypher)
+        .ok()
+        .and_then(|rows| rows.into_iter().next())
+        .and_then(|row| row.into_iter().next())
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
 }
 
 /// Fuses two ranked lists using Reciprocal Rank Fusion (RRF).
@@ -806,5 +1086,214 @@ mod tests {
         let strategy = HybridStrategy::new(&conn, &client);
         // Should not panic; should either degrade to BM25 or return error.
         let _ = strategy.search("parse", None, 10);
+    }
+
+    // --- T011: Multi-signal scoring (R-search-002) ---
+
+    /// Seeds a project + two same-named functions (`foo` in /a.rs, `bar` in
+    /// /b.rs) where `foo` has 3 CALLS in-edges and `bar` has 0. Both functions
+    /// share identical name/content so BM25 scores are equal. Reused by the
+    /// centrality test and the combined additivity test.
+    fn seed_centrality_fixture(conn: &StorageConnection) {
+        conn.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/', language: 'rust', fileCount: 1, indexedAt: 0, lastCommit: ''});").expect("project");
+        conn.execute("CREATE (:Function {id: 'foo', project: 'demo', name: 'process', qualifiedName: 'demo.foo', filePath: '/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'process', parentQn: ''});").expect("foo");
+        conn.execute("CREATE (:Function {id: 'bar', project: 'demo', name: 'process', qualifiedName: 'demo.bar', filePath: '/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'process', parentQn: ''});").expect("bar");
+        for i in 1..=3 {
+            conn.execute(&format!(
+                "CREATE (:Function {{id: 'c{i}', project: 'demo', name: 'caller{i}', qualifiedName: 'demo.caller{i}', filePath: '/c.rs', startLine: {i}, endLine: {i}, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''}});"
+            ))
+            .expect("caller");
+            conn.execute(&format!(
+                "CREATE (:CodeRelation {{id: 'cr{i}', source: 'c{i}', target: 'foo', type: 'CALLS', confidence: 1.0, confidenceTier: 'HIGH', reason: '', startLine: 0, project: 'demo'}});"
+            ))
+            .expect("cr");
+        }
+    }
+
+    #[test]
+    fn hybrid_with_centrality_boosts_high_indegree_nodes() {
+        let conn = fresh_conn();
+        seed_centrality_fixture(&conn);
+        let client = MockEmbedClient::new();
+        let strategy = HybridStrategy::new(&conn, &client).with_centrality(true);
+        let results = strategy
+            .search("process", Some("demo"), 10)
+            .expect("search");
+        assert!(results.len() >= 2, "should find both foo and bar");
+        let foo_rank = results
+            .iter()
+            .position(|r| r.qualified_name.as_deref() == Some("demo.foo"));
+        let bar_rank = results
+            .iter()
+            .position(|r| r.qualified_name.as_deref() == Some("demo.bar"));
+        assert!(foo_rank.is_some(), "foo should be in results");
+        assert!(bar_rank.is_some(), "bar should be in results");
+        assert!(
+            foo_rank.unwrap() < bar_rank.unwrap(),
+            "foo (3 CALLS in-edges) should rank higher than bar (0 in-edges) when centrality enabled"
+        );
+    }
+
+    #[test]
+    fn hybrid_with_file_heat_boosts_referenced_files() {
+        let conn = fresh_conn();
+        // Fixture: File A (5 imports) + File B (0 imports), each containing a
+        // same-named function. BM25 scores are equal (same name/content).
+        conn.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/', language: 'rust', fileCount: 2, indexedAt: 0, lastCommit: ''});").expect("project");
+        conn.execute("CREATE (:File {id: 'fileA', project: 'demo', name: 'a.rs', filePath: '/a.rs', language: 'rust', hash: '', lineCount: 10});").expect("fileA");
+        conn.execute("CREATE (:File {id: 'fileB', project: 'demo', name: 'b.rs', filePath: '/b.rs', language: 'rust', hash: '', lineCount: 10});").expect("fileB");
+        conn.execute("CREATE (:Function {id: 'fnA', project: 'demo', name: 'handle', qualifiedName: 'demo.handle_a', filePath: '/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'handle', parentQn: ''});").expect("fnA");
+        conn.execute("CREATE (:Function {id: 'fnB', project: 'demo', name: 'handle', qualifiedName: 'demo.handle_b', filePath: '/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'handle', parentQn: ''});").expect("fnB");
+        for i in 1..=5 {
+            conn.execute(&format!(
+                "CREATE (:File {{id: 'imp{i}', project: 'demo', name: 'imp{i}.rs', filePath: '/imp{i}.rs', language: 'rust', hash: '', lineCount: 1}});"
+            ))
+            .expect("imp");
+            conn.execute(&format!(
+                "CREATE (:CodeRelation {{id: 'ir{i}', source: 'imp{i}', target: 'fileA', type: 'IMPORTS', confidence: 1.0, confidenceTier: 'HIGH', reason: '', startLine: 0, project: 'demo'}});"
+            ))
+            .expect("ir");
+        }
+
+        let client = MockEmbedClient::new();
+        let strategy = HybridStrategy::new(&conn, &client).with_file_heat(true);
+        let results = strategy
+            .search("handle", Some("demo"), 10)
+            .expect("search");
+        assert!(results.len() >= 2, "should find both fnA and fnB");
+        let fn_a_rank = results
+            .iter()
+            .position(|r| r.qualified_name.as_deref() == Some("demo.handle_a"));
+        let fn_b_rank = results
+            .iter()
+            .position(|r| r.qualified_name.as_deref() == Some("demo.handle_b"));
+        assert!(fn_a_rank.is_some(), "fnA should be in results");
+        assert!(fn_b_rank.is_some(), "fnB should be in results");
+        assert!(
+            fn_a_rank.unwrap() < fn_b_rank.unwrap(),
+            "fnA (in 5x-imported file) should rank higher than fnB when file_heat enabled"
+        );
+    }
+
+    #[test]
+    fn hybrid_without_centrality_preserves_original_ranking() {
+        let conn = fresh_conn();
+        seed_fixture(&conn);
+        let client = MockEmbedClient::new();
+        // Default strategy (no builders invoked).
+        let baseline = HybridStrategy::new(&conn, &client);
+        let baseline_results = baseline
+            .search("parse", Some("demo"), 10)
+            .expect("baseline");
+        // Strategy with both signals explicitly disabled.
+        let disabled = HybridStrategy::new(&conn, &client)
+            .with_centrality(false)
+            .with_file_heat(false);
+        let disabled_results = disabled
+            .search("parse", Some("demo"), 10)
+            .expect("disabled");
+        assert_eq!(
+            baseline_results.len(),
+            disabled_results.len(),
+            "result count must match (backward compatible)"
+        );
+        for (a, b) in baseline_results.iter().zip(disabled_results.iter()) {
+            assert_eq!(a.name, b.name, "name ordering must match");
+            assert_eq!(a.qualified_name, b.qualified_name, "QN ordering must match");
+            assert!(
+                (a.score - b.score).abs() < 1e-6,
+                "scores must match: {} vs {}",
+                a.score,
+                b.score
+            );
+        }
+    }
+
+    #[test]
+    fn hybrid_combined_signals_additive() {
+        let conn = fresh_conn();
+        // Combined fixture: foo in /a.rs (3 CALLS + 5 IMPORTS to fileA),
+        // bar in /b.rs (0 CALLS + 0 IMPORTS to fileB).
+        seed_centrality_fixture(&conn);
+        // Add File nodes matching foo's /a.rs and bar's /b.rs paths.
+        conn.execute("CREATE (:File {id: 'fileA', project: 'demo', name: 'a.rs', filePath: '/a.rs', language: 'rust', hash: '', lineCount: 10});").expect("fileA");
+        conn.execute("CREATE (:File {id: 'fileB', project: 'demo', name: 'b.rs', filePath: '/b.rs', language: 'rust', hash: '', lineCount: 10});").expect("fileB");
+        for i in 1..=5 {
+            conn.execute(&format!(
+                "CREATE (:File {{id: 'imp{i}', project: 'demo', name: 'imp{i}.rs', filePath: '/imp{i}.rs', language: 'rust', hash: '', lineCount: 1}});"
+            ))
+            .expect("imp");
+            conn.execute(&format!(
+                "CREATE (:CodeRelation {{id: 'ir{i}', source: 'imp{i}', target: 'fileA', type: 'IMPORTS', confidence: 1.0, confidenceTier: 'HIGH', reason: '', startLine: 0, project: 'demo'}});"
+            ))
+            .expect("ir");
+        }
+
+        let client = MockEmbedClient::new();
+
+        // Step 1: base scores (no signals).
+        let base_results = HybridStrategy::new(&conn, &client)
+            .search("process", Some("demo"), 10)
+            .expect("base search");
+        let base_foo = base_results
+            .iter()
+            .find(|r| r.qualified_name.as_deref() == Some("demo.foo"))
+            .expect("foo in base results")
+            .score;
+        let base_bar = base_results
+            .iter()
+            .find(|r| r.qualified_name.as_deref() == Some("demo.bar"))
+            .expect("bar in base results")
+            .score;
+
+        // Step 2: final scores (both signals enabled).
+        let final_results = HybridStrategy::new(&conn, &client)
+            .with_centrality(true)
+            .with_file_heat(true)
+            .search("process", Some("demo"), 10)
+            .expect("combined search");
+        let final_foo = final_results
+            .iter()
+            .find(|r| r.qualified_name.as_deref() == Some("demo.foo"))
+            .expect("foo in final results")
+            .score;
+        let final_bar = final_results
+            .iter()
+            .find(|r| r.qualified_name.as_deref() == Some("demo.bar"))
+            .expect("bar in final results")
+            .score;
+
+        // foo: centrality = 3/3 = 1.0, file_heat = 5/5 = 1.0.
+        // final_foo = 0.5 * base_foo + 0.3 * 1.0 + 0.2 * 1.0.
+        let expected_foo = 0.5 * base_foo + 0.3 + 0.2;
+        assert!(
+            (final_foo - expected_foo).abs() < 1e-5,
+            "foo final score {} should be {} (0.5*{} + 0.3*1.0 + 0.2*1.0)",
+            final_foo,
+            expected_foo,
+            base_foo
+        );
+
+        // bar: centrality = 0/3 = 0.0, file_heat = 0/5 = 0.0.
+        // final_bar = 0.5 * base_bar.
+        let expected_bar = 0.5 * base_bar;
+        assert!(
+            (final_bar - expected_bar).abs() < 1e-5,
+            "bar final score {} should be {} (0.5*{})",
+            final_bar,
+            expected_bar,
+            base_bar
+        );
+
+        // Sanity: foo should rank higher than bar.
+        let foo_rank = final_results
+            .iter()
+            .position(|r| r.qualified_name.as_deref() == Some("demo.foo"))
+            .unwrap();
+        let bar_rank = final_results
+            .iter()
+            .position(|r| r.qualified_name.as_deref() == Some("demo.bar"))
+            .unwrap();
+        assert!(foo_rank < bar_rank, "foo should rank higher than bar");
     }
 }
