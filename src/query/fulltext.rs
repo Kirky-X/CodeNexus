@@ -19,7 +19,7 @@ use super::error::{QueryError, Result};
 use super::tokenizer::codenexus_tokenize;
 use super::SearchResult;
 use crate::model::NodeLabel;
-use crate::storage::schema::{escape_cypher_string, escape_identifier};
+use crate::storage::schema::{escape_cypher_string, escape_identifier, node_table_columns};
 use crate::storage::StorageConnection;
 use tracing::warn;
 
@@ -44,16 +44,29 @@ const SYMBOL_LABELS: &[NodeLabel] = &[
     NodeLabel::Namespace,
 ];
 
-/// FTS indexes on symbol `name` columns (H11), created by
+/// FTS indexes on symbol `name` columns (H11 / T004 v0.1.4), created by
 /// [`crate::storage::schema::index_ddl`]. Each entry pairs the FTS index name
 /// with the [`NodeLabel`] used to tag search results.
 ///
-/// Only `Function`, `Class`, and `Method` carry FTS indexes on `name` — these
-/// are the high-value symbol tables where identifier-aware BM25 search pays off.
+/// T004 (v0.1.4) extended coverage from 3 tables (Function/Class/Method) to
+/// all 15 symbol-bearing tables so that BM25 search reaches Struct/Enum/Trait/
+/// Macro/Typedef/Namespace/Module/Variable/GlobalVar/Const/Static/TypeAlias.
 const FTS_NAME_INDEXES: &[(&str, NodeLabel)] = &[
     ("fts_function_name", NodeLabel::Function),
     ("fts_class_name", NodeLabel::Class),
     ("fts_method_name", NodeLabel::Method),
+    ("fts_struct_name", NodeLabel::Struct),
+    ("fts_enum_name", NodeLabel::Enum),
+    ("fts_trait_name", NodeLabel::Trait),
+    ("fts_macro_name", NodeLabel::Macro),
+    ("fts_typedef_name", NodeLabel::Typedef),
+    ("fts_namespace_name", NodeLabel::Namespace),
+    ("fts_module_name", NodeLabel::Module),
+    ("fts_variable_name", NodeLabel::Variable),
+    ("fts_globalvar_name", NodeLabel::GlobalVar),
+    ("fts_const_name", NodeLabel::Const),
+    ("fts_static_name", NodeLabel::Static),
+    ("fts_typealias_name", NodeLabel::TypeAlias),
 ];
 
 /// Executes BM25 full-text searches against a [`StorageConnection`].
@@ -130,21 +143,28 @@ impl<'a> FullTextSearcher<'a> {
         let fts_query = tokenized.join(" ");
         let escaped = escape_cypher_string(&fts_query);
 
-        // Query all three name-column FTS indexes and merge results.
+        // Query all name-column FTS indexes and merge results.
         let mut all_results = Vec::new();
         for (index_name, label) in FTS_NAME_INDEXES {
+            // T004 (v0.1.4): Namespace and Module tables have no `startLine`
+            // column; return NULL instead of erroring.
+            let line_expr = if node_table_columns(*label).contains(&"startLine") {
+                "node.startLine"
+            } else {
+                "NULL"
+            };
             let cypher = match project {
                 Some(p) => format!(
                     "CALL fts_search('{index_name}', '{escaped}') YIELD node \
                      WHERE node.project = '{}' \
                      RETURN node.name AS name, node.qualifiedName AS qn, \
-                     node.filePath AS filePath, node.startLine AS line;",
+                     node.filePath AS filePath, {line_expr} AS line;",
                     escape_cypher_string(p),
                 ),
                 None => format!(
                     "CALL fts_search('{index_name}', '{escaped}') YIELD node \
                      RETURN node.name AS name, node.qualifiedName AS qn, \
-                     node.filePath AS filePath, node.startLine AS line;",
+                     node.filePath AS filePath, {line_expr} AS line;",
                 ),
             };
             match self.conn.query(&cypher) {
@@ -197,17 +217,26 @@ impl<'a> FullTextSearcher<'a> {
         let mut results = Vec::new();
         for &label in SYMBOL_LABELS {
             let table = escape_identifier(label.table_name());
+            // T004 (v0.1.4): Namespace and Module tables have no `startLine`
+            // column; return NULL instead of erroring so the fallback path
+            // reaches all symbol tables (previously these were silently
+            // skipped via `Err(_) => continue`).
+            let line_expr = if node_table_columns(label).contains(&"startLine") {
+                "n.startLine"
+            } else {
+                "NULL"
+            };
             let cypher = match project {
                 Some(p) => format!(
                     "MATCH (n:{table}) WHERE ({where_inner}) AND n.project = '{}' \
                      RETURN n.name AS name, n.qualifiedName AS qn, \
-                     n.filePath AS filePath, n.startLine AS line;",
+                     n.filePath AS filePath, {line_expr} AS line;",
                     escape_cypher_string(p),
                 ),
                 None => format!(
                     "MATCH (n:{table}) WHERE ({where_inner}) \
                      RETURN n.name AS name, n.qualifiedName AS qn, \
-                     n.filePath AS filePath, n.startLine AS line;",
+                     n.filePath AS filePath, {line_expr} AS line;",
                 ),
             };
             match self.conn.query(&cypher) {
@@ -724,5 +753,248 @@ mod tests {
             .expect("search");
         let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
         assert!(names.contains(&"parse_file"));
+    }
+
+    // --- T004 (v0.1.4): BM25 FTS index coverage extension ---
+
+    /// Helper: builds a minimal node of any symbol-bearing label.
+    fn sample_symbol(
+        label: NodeLabel,
+        id: &str,
+        project: &str,
+        name: &str,
+        qn: &str,
+        file: &str,
+        line: u32,
+    ) -> Node {
+        Node::builder(label, name, qn)
+            .id(id)
+            .project(project)
+            .file_path(file)
+            .start_line(line)
+            .language(Language::Rust)
+            .build()
+    }
+
+    #[test]
+    fn fts_name_indexes_covers_all_symbol_tables() {
+        // R-search-001: FTS_NAME_INDEXES must contain 15 entries covering all
+        // symbol-bearing node labels (excluding Impl which has no meaningful
+        // name for search).
+        assert_eq!(
+            FTS_NAME_INDEXES.len(),
+            15,
+            "expected 15 FTS name indexes, got {}: {FTS_NAME_INDEXES:?}",
+            FTS_NAME_INDEXES.len()
+        );
+        let labels: Vec<NodeLabel> = FTS_NAME_INDEXES.iter().map(|(_, l)| *l).collect();
+        for expected in [
+            NodeLabel::Function,
+            NodeLabel::Class,
+            NodeLabel::Method,
+            NodeLabel::Struct,
+            NodeLabel::Enum,
+            NodeLabel::Trait,
+            NodeLabel::Macro,
+            NodeLabel::Typedef,
+            NodeLabel::Namespace,
+            NodeLabel::Module,
+            NodeLabel::Variable,
+            NodeLabel::GlobalVar,
+            NodeLabel::Const,
+            NodeLabel::Static,
+            NodeLabel::TypeAlias,
+        ] {
+            assert!(
+                labels.contains(&expected),
+                "FTS_NAME_INDEXES missing {expected:?}: {FTS_NAME_INDEXES:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn search_finds_struct_by_name() {
+        // R-search-001: saving a Struct named "Point" and searching "Point"
+        // must return a result with label == "Struct".
+        let repo = fresh_repo();
+        repo.save_nodes(
+            &[sample_symbol(
+                NodeLabel::Struct,
+                "s1",
+                "demo",
+                "Point",
+                "demo.Point",
+                "/a.rs",
+                1,
+            )],
+            NodeLabel::Struct,
+        )
+        .expect("save_nodes");
+        let searcher = FullTextSearcher::new(repo.connection());
+        let results = searcher
+            .search("Point", None, 100)
+            .expect("search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Point");
+        assert_eq!(results[0].label, "Struct");
+    }
+
+    #[test]
+    fn search_finds_enum_by_name() {
+        let repo = fresh_repo();
+        repo.save_nodes(
+            &[sample_symbol(
+                NodeLabel::Enum,
+                "e1",
+                "demo",
+                "Color",
+                "demo.Color",
+                "/a.rs",
+                1,
+            )],
+            NodeLabel::Enum,
+        )
+        .expect("save_nodes");
+        let searcher = FullTextSearcher::new(repo.connection());
+        let results = searcher
+            .search("Color", None, 100)
+            .expect("search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Color");
+        assert_eq!(results[0].label, "Enum");
+    }
+
+    #[test]
+    fn search_finds_macro_by_name() {
+        let repo = fresh_repo();
+        repo.save_nodes(
+            &[sample_symbol(
+                NodeLabel::Macro,
+                "m1",
+                "demo",
+                "FOO",
+                "demo.FOO",
+                "/a.rs",
+                1,
+            )],
+            NodeLabel::Macro,
+        )
+        .expect("save_nodes");
+        let searcher = FullTextSearcher::new(repo.connection());
+        let results = searcher
+            .search("FOO", None, 100)
+            .expect("search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "FOO");
+        assert_eq!(results[0].label, "Macro");
+    }
+
+    #[test]
+    fn search_finds_namespace_by_name() {
+        let repo = fresh_repo();
+        repo.save_nodes(
+            &[sample_symbol(
+                NodeLabel::Namespace,
+                "n1",
+                "demo",
+                "graphics",
+                "demo.graphics",
+                "/a.rs",
+                1,
+            )],
+            NodeLabel::Namespace,
+        )
+        .expect("save_nodes");
+        let searcher = FullTextSearcher::new(repo.connection());
+        let results = searcher
+            .search("graphics", None, 100)
+            .expect("search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "graphics");
+        assert_eq!(results[0].label, "Namespace");
+    }
+
+    #[test]
+    fn search_finds_typedef_by_name() {
+        let repo = fresh_repo();
+        repo.save_nodes(
+            &[sample_symbol(
+                NodeLabel::Typedef,
+                "t1",
+                "demo",
+                "Handle",
+                "demo.Handle",
+                "/a.rs",
+                1,
+            )],
+            NodeLabel::Typedef,
+        )
+        .expect("save_nodes");
+        let searcher = FullTextSearcher::new(repo.connection());
+        let results = searcher
+            .search("Handle", None, 100)
+            .expect("search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Handle");
+        assert_eq!(results[0].label, "Typedef");
+    }
+
+    #[test]
+    fn search_across_multiple_label_types() {
+        // R-search-001: saving Function + Struct + Enum with a shared name
+        // token and searching that token must return all three label types.
+        let repo = fresh_repo();
+        repo.save_nodes(
+            &[sample_function("f1", "demo", "parse", "demo.parse", "/a.rs", 1)],
+            NodeLabel::Function,
+        )
+        .expect("save_nodes function");
+        repo.save_nodes(
+            &[sample_symbol(
+                NodeLabel::Struct,
+                "s1",
+                "demo",
+                "Parser",
+                "demo.Parser",
+                "/b.rs",
+                1,
+            )],
+            NodeLabel::Struct,
+        )
+        .expect("save_nodes struct");
+        repo.save_nodes(
+            &[sample_symbol(
+                NodeLabel::Enum,
+                "e1",
+                "demo",
+                "ParseMode",
+                "demo.ParseMode",
+                "/c.rs",
+                1,
+            )],
+            NodeLabel::Enum,
+        )
+        .expect("save_nodes enum");
+
+        let searcher = FullTextSearcher::new(repo.connection());
+        let results = searcher
+            .search("parse", None, 100)
+            .expect("search");
+        let labels: Vec<&str> = results.iter().map(|r| r.label.as_str()).collect();
+        // All three symbol tables should return at least one hit (Function
+        // exact match, Struct token match via "Parser" → ["parser"], Enum
+        // token match via "ParseMode" → ["parse", "mode"]).
+        assert!(
+            labels.contains(&"Function"),
+            "expected Function in results: {labels:?}"
+        );
+        assert!(
+            labels.contains(&"Struct"),
+            "expected Struct in results: {labels:?}"
+        );
+        assert!(
+            labels.contains(&"Enum"),
+            "expected Enum in results: {labels:?}"
+        );
     }
 }

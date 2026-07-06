@@ -114,8 +114,9 @@ pub fn embedding_table_ddl() -> String {
 
 /// Returns all secondary index creation statements (DDD §12.2, §6).
 ///
-/// Includes 18 B-tree secondary indexes, 3 FTS (full-text search) indexes on
-/// the `content` columns of `Function`, `Class`, and `Method` (DDD §6), and 1
+/// Includes 18 B-tree secondary indexes, 18 FTS (full-text search) indexes
+/// (3 on `content` columns of `Function`/`Class`/`Method` per DDD §6, plus
+/// 15 on `name` columns of all symbol tables per H11/T004 v0.1.4), and 1
 /// VECTOR index on `Embedding.embedding` with cosine distance (DDD §6).
 ///
 /// LadybugDB may not support every index type; [`crate::storage::connection`]
@@ -147,13 +148,28 @@ pub fn index_ddl() -> Vec<String> {
         "CREATE FTS INDEX fts_function_content ON Function(content);".to_string(),
         "CREATE FTS INDEX fts_class_content ON Class(content);".to_string(),
         "CREATE FTS INDEX fts_method_content ON Method(content);".to_string(),
-        // --- FTS indexes (H11): BM25 over symbol `name` columns ---
+        // --- FTS indexes (H11 / T004 v0.1.4): BM25 over symbol `name` columns ---
         // Used by `FullTextSearcher` for identifier-aware BM25 search. The
         // `codenexus_tokenizer` (Rust-side) splits camelCase/snake_case before
         // querying, enabling `parse` to match `parseFile` / `parse_file`.
+        // T004 (v0.1.4) extended coverage from 3 tables to all 15 symbol
+        // tables. `Macro` is backtick-escaped because it is a reserved keyword
+        // (see [`is_reserved_keyword`]).
         "CREATE FTS INDEX fts_function_name ON Function(name);".to_string(),
         "CREATE FTS INDEX fts_class_name ON Class(name);".to_string(),
         "CREATE FTS INDEX fts_method_name ON Method(name);".to_string(),
+        "CREATE FTS INDEX fts_struct_name ON Struct(name);".to_string(),
+        "CREATE FTS INDEX fts_enum_name ON Enum(name);".to_string(),
+        "CREATE FTS INDEX fts_trait_name ON Trait(name);".to_string(),
+        "CREATE FTS INDEX fts_macro_name ON `Macro`(name);".to_string(),
+        "CREATE FTS INDEX fts_typedef_name ON Typedef(name);".to_string(),
+        "CREATE FTS INDEX fts_namespace_name ON Namespace(name);".to_string(),
+        "CREATE FTS INDEX fts_module_name ON Module(name);".to_string(),
+        "CREATE FTS INDEX fts_variable_name ON Variable(name);".to_string(),
+        "CREATE FTS INDEX fts_globalvar_name ON GlobalVar(name);".to_string(),
+        "CREATE FTS INDEX fts_const_name ON Const(name);".to_string(),
+        "CREATE FTS INDEX fts_static_name ON Static(name);".to_string(),
+        "CREATE FTS INDEX fts_typealias_name ON TypeAlias(name);".to_string(),
         // --- VECTOR index (DDD §6): cosine similarity over embeddings ---
         "CREATE VECTOR INDEX vec_embedding ON Embedding(embedding) WITH (metric=cosine);"
             .to_string(),
@@ -854,8 +870,8 @@ mod tests {
     #[test]
     fn index_ddl_count_matches_spec() {
         let indexes = index_ddl();
-        // 18 secondary indexes + 6 FTS indexes (3 content + 3 name) + 1 VECTOR index = 25
-        assert_eq!(indexes.len(), 25, "expected 25 index statements");
+        // 18 secondary indexes + 18 FTS indexes (3 content + 15 name) + 1 VECTOR index = 37
+        assert_eq!(indexes.len(), 37, "expected 37 index statements");
     }
 
     #[test]
@@ -868,8 +884,8 @@ mod tests {
             .collect();
         assert_eq!(
             fts_indexes.len(),
-            6,
-            "expected exactly 6 FTS index statements (3 content + 3 name), got {}: {fts_indexes:?}",
+            18,
+            "expected exactly 18 FTS index statements (3 content + 15 name), got {}: {fts_indexes:?}",
             fts_indexes.len()
         );
         // Each FTS statement must target the `content` column of its table.
@@ -898,30 +914,49 @@ mod tests {
 
     #[test]
     fn index_ddl_contains_fts_indexes_for_name_columns() {
-        // H11: FTS indexes on Function.name, Class.name, Method.name for
-        // identifier-aware BM25 search via codenexus_tokenizer.
+        // H11 / T004 (v0.1.4): FTS indexes on the `name` column of all 15
+        // symbol-bearing tables for identifier-aware BM25 search via
+        // codenexus_tokenizer.
         let indexes = index_ddl();
-        assert!(
-            indexes.iter().any(|s| {
+        let fts_name_indexes: Vec<&String> = indexes
+            .iter()
+            .filter(|s| {
                 let up = s.to_ascii_uppercase();
-                up.contains("FTS") && up.contains("FUNCTION") && up.contains("NAME")
-            }),
-            "missing FTS index on Function(name): {indexes:?}"
+                up.contains("FTS") && up.contains("NAME")
+            })
+            .collect();
+        assert_eq!(
+            fts_name_indexes.len(),
+            15,
+            "expected 15 FTS name indexes, got {}: {fts_name_indexes:?}",
+            fts_name_indexes.len()
         );
-        assert!(
-            indexes.iter().any(|s| {
-                let up = s.to_ascii_uppercase();
-                up.contains("FTS") && up.contains("CLASS") && up.contains("NAME")
-            }),
-            "missing FTS index on Class(name): {indexes:?}"
-        );
-        assert!(
-            indexes.iter().any(|s| {
-                let up = s.to_ascii_uppercase();
-                up.contains("FTS") && up.contains("METHOD") && up.contains("NAME")
-            }),
-            "missing FTS index on Method(name): {indexes:?}"
-        );
+        // Spot-check the original 3 + a few new ones.
+        for table in [
+            "FUNCTION",
+            "CLASS",
+            "METHOD",
+            "STRUCT",
+            "ENUM",
+            "TRAIT",
+            "MACRO",
+            "TYPEDEF",
+            "NAMESPACE",
+            "MODULE",
+            "VARIABLE",
+            "GLOBALVAR",
+            "CONST",
+            "STATIC",
+            "TYPEALIAS",
+        ] {
+            assert!(
+                indexes.iter().any(|s| {
+                    let up = s.to_ascii_uppercase();
+                    up.contains("FTS") && up.contains(table) && up.contains("NAME")
+                }),
+                "missing FTS index on {table}(name): {indexes:?}"
+            );
+        }
     }
 
     #[test]
@@ -954,8 +989,8 @@ mod tests {
     fn all_init_ddl_includes_node_tables_relation_embedding_and_indexes() {
         let ddl = all_init_ddl();
         // 44 node tables (incl. Embedding via ddl_for_label) + 1 relation
-        // + 25 indexes (18 secondary + 6 FTS + 1 VECTOR) = 70
-        assert_eq!(ddl.len(), 70, "expected 70 DDL statements total");
+        // + 37 indexes (18 secondary + 18 FTS + 1 VECTOR) = 82
+        assert_eq!(ddl.len(), 82, "expected 82 DDL statements total");
         assert!(ddl.iter().any(|s| s.contains("CREATE NODE TABLE Project")));
         assert!(ddl.iter().any(|s| s.contains("CodeRelation")));
         assert!(ddl.iter().any(|s| s.contains("Embedding")));
