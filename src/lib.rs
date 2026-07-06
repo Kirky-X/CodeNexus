@@ -55,6 +55,9 @@ pub mod resolve;
 pub mod storage;
 pub mod trace;
 
+#[cfg(feature = "analysis")]
+pub mod analysis;
+
 #[cfg(feature = "embed")]
 pub mod embed;
 

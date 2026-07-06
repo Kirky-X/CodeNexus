@@ -60,6 +60,9 @@ pub enum Command {
     Hook(HookArgs),
     /// Serve MCP tools over stdio (H13).
     Mcp(McpArgs),
+    /// Detect dead code (zero-indegree CALLS functions) for a project (T005).
+    #[cfg(feature = "analysis")]
+    DeadCode(DeadCodeArgs),
 }
 
 /// Arguments for the `index` subcommand (PRD §4.1.3).
@@ -366,6 +369,26 @@ pub struct McpArgs {
     /// Database path.
     #[arg(long, default_value = "./codenexus.lbug")]
     pub db: String,
+}
+
+/// Arguments for the `dead-code` subcommand (T005, v0.1.5).
+///
+/// Detects `Function`/`Method` nodes with zero incoming `CALLS` edges that
+/// are not entry points or test functions. Output is a JSON array of
+/// [`DeadCodeEntry`](crate::analysis::dead_code::DeadCodeEntry) objects.
+#[cfg(feature = "analysis")]
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct DeadCodeArgs {
+    /// Project name (the multi-project isolation key).
+    pub project: String,
+    /// Database path.
+    #[arg(long, default_value = "./codenexus.lbug")]
+    pub db: String,
+    /// Additional entry-point glob patterns (e.g. `main`, `__main__`).
+    /// Functions matching these patterns are excluded from dead-code results.
+    /// Test functions (`test_*`, `*_test`, `*_spec`) are always excluded.
+    #[arg(long)]
+    pub entry: Option<Vec<String>>,
 }
 
 #[cfg(test)]

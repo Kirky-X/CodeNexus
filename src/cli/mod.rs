@@ -25,6 +25,8 @@
 pub mod args;
 pub mod clean_cmd;
 pub mod context_cmd;
+#[cfg(feature = "analysis")]
+pub mod dead_code_cmd;
 #[cfg(feature = "daemon")]
 pub mod daemon_cmd;
 pub mod detect_changes_cmd;
@@ -57,6 +59,8 @@ mod dispatch_tests {
     };
     #[cfg(feature = "daemon")]
     use crate::cli::args::DaemonArgs;
+    #[cfg(feature = "analysis")]
+    use crate::cli::args::DeadCodeArgs;
     use crate::kit::{build_kit, Kit, KitBootstrapConfig, StorageKey};
     use clap::Parser;
 
@@ -90,6 +94,8 @@ mod dispatch_tests {
             Command::Setup(args) => setup_cmd::run(&args),
             Command::Hook(args) => hook_cmd::run(kit, &args),
             Command::Mcp(args) => mcp_cmd::run(kit, &args),
+            #[cfg(feature = "analysis")]
+            Command::DeadCode(args) => dead_code_cmd::run(kit, &args),
         }
     }
 
@@ -350,6 +356,28 @@ mod dispatch_tests {
         assert_eq!(err.exit_code(), 1, "InvalidInput → exit 1");
     }
 
+    #[test]
+    #[cfg(feature = "analysis")]
+    fn dispatch_dead_code_calls_dead_code_cmd() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        let cli = Cli::parse_from([
+            "codenexus",
+            "dead-code",
+            "demo",
+            "--db",
+            db.to_str().unwrap(),
+        ]);
+        let result = dispatch(&kit, cli);
+        assert!(
+            result.is_ok(),
+            "dispatch dead-code should succeed: {:?}",
+            result.err()
+        );
+    }
+
     /// Returns `true` if the `zstd` binary is available on PATH (H7
     /// export/import shell out to it).
     fn zstd_cli_available() -> bool {
@@ -584,6 +612,12 @@ mod dispatch_tests {
         };
         let _ = McpArgs {
             db: "./x.lbug".into(),
+        };
+        #[cfg(feature = "analysis")]
+        let _ = DeadCodeArgs {
+            project: "demo".into(),
+            db: "./x.lbug".into(),
+            entry: None,
         };
     }
 }
