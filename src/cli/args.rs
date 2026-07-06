@@ -84,6 +84,12 @@ pub enum Command {
     /// Detect cross-service links via route pattern matching (T010, v0.2.0).
     #[cfg(feature = "cross-service")]
     CrossService(CrossServiceArgs),
+    /// Query LSP Go-to-Definition for a Rust symbol (T007, v0.2.0).
+    #[cfg(feature = "lsp")]
+    LspGotoDef(LspGotoDefArgs),
+    /// Query LSP Hover info for a Rust symbol (T007, v0.2.0).
+    #[cfg(feature = "lsp")]
+    LspHover(LspHoverArgs),
 }
 
 /// Arguments for the `index` subcommand (PRD §4.1.3).
@@ -527,6 +533,51 @@ pub struct CrossServiceArgs {
     /// Database path.
     #[arg(long, default_value = "./codenexus.lbug")]
     pub db: String,
+}
+
+/// Arguments for the `lsp-goto-def` subcommand (T007, v0.2.0).
+///
+/// Spawns `rust-analyzer` rooted at `--workspace` (default: current directory),
+/// sends a `textDocument/definition` LSP request at `(file, line, col)`, and
+/// prints the resolved [`lsp_types::Location`] as JSON to stdout. Returns exit
+/// code 1 if `rust-analyzer` cannot be started or the query fails.
+///
+/// `line` and `col` are **0-based** per the LSP spec (matching the convention
+/// of the [`LspProvider`](crate::lsp::LspProvider) trait).
+#[cfg(feature = "lsp")]
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct LspGotoDefArgs {
+    /// File path (absolute or relative to `--workspace`) of the symbol to query.
+    pub file: String,
+    /// 0-based line number (LSP `Position.line`).
+    pub line: u32,
+    /// 0-based column number (LSP `Position.character`).
+    pub col: u32,
+    /// Workspace root path for `rust-analyzer` (default: current directory).
+    #[arg(long, default_value = ".")]
+    pub workspace: String,
+}
+
+/// Arguments for the `lsp-hover` subcommand (T007, v0.2.0).
+///
+/// Spawns `rust-analyzer` rooted at `--workspace` (default: current directory),
+/// sends a `textDocument/hover` LSP request at `(file, line, col)`, and prints
+/// the resolved [`lsp_types::Hover`] as JSON to stdout. Returns exit code 1 if
+/// `rust-analyzer` cannot be started or the query fails.
+///
+/// `line` and `col` are **0-based** per the LSP spec.
+#[cfg(feature = "lsp")]
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct LspHoverArgs {
+    /// File path (absolute or relative to `--workspace`) of the symbol to query.
+    pub file: String,
+    /// 0-based line number (LSP `Position.line`).
+    pub line: u32,
+    /// 0-based column number (LSP `Position.character`).
+    pub col: u32,
+    /// Workspace root path for `rust-analyzer` (default: current directory).
+    #[arg(long, default_value = ".")]
+    pub workspace: String,
 }
 
 #[cfg(test)]
@@ -1622,6 +1673,140 @@ mod tests {
         let a = CrossServiceArgs {
             project: "demo".into(),
             db: "/tmp/x.lbug".into(),
+        };
+        assert_eq!(a, a.clone());
+    }
+
+    // --- LSP subcommands (T007, v0.2.0) ---
+
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn cli_parses_lsp_goto_def_subcommand_defaults() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "lsp-goto-def",
+            "/repo/src/main.rs",
+            "10",
+            "5",
+        ]);
+        match cli.command {
+            Command::LspGotoDef(args) => {
+                assert_eq!(args.file, "/repo/src/main.rs");
+                assert_eq!(args.line, 10);
+                assert_eq!(args.col, 5);
+                assert_eq!(args.workspace, ".");
+            }
+            other => panic!("expected LspGotoDef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn cli_parses_lsp_goto_def_with_workspace() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "lsp-goto-def",
+            "/repo/src/main.rs",
+            "0",
+            "0",
+            "--workspace",
+            "/repo",
+        ]);
+        match cli.command {
+            Command::LspGotoDef(args) => {
+                assert_eq!(args.file, "/repo/src/main.rs");
+                assert_eq!(args.line, 0);
+                assert_eq!(args.col, 0);
+                assert_eq!(args.workspace, "/repo");
+            }
+            other => panic!("expected LspGotoDef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn lsp_goto_def_requires_file_line_col() {
+        let result = Cli::try_parse_from(["codenexus", "lsp-goto-def", "file.rs", "1"]);
+        assert!(
+            result.is_err(),
+            "lsp-goto-def without col should fail"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn cli_parses_lsp_hover_subcommand_defaults() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "lsp-hover",
+            "/repo/src/lib.rs",
+            "3",
+            "7",
+        ]);
+        match cli.command {
+            Command::LspHover(args) => {
+                assert_eq!(args.file, "/repo/src/lib.rs");
+                assert_eq!(args.line, 3);
+                assert_eq!(args.col, 7);
+                assert_eq!(args.workspace, ".");
+            }
+            other => panic!("expected LspHover, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn cli_parses_lsp_hover_with_workspace() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "lsp-hover",
+            "src/lib.rs",
+            "0",
+            "0",
+            "--workspace",
+            "/home/user/project",
+        ]);
+        match cli.command {
+            Command::LspHover(args) => {
+                assert_eq!(args.file, "src/lib.rs");
+                assert_eq!(args.line, 0);
+                assert_eq!(args.col, 0);
+                assert_eq!(args.workspace, "/home/user/project");
+            }
+            other => panic!("expected LspHover, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn lsp_hover_requires_three_args() {
+        let result = Cli::try_parse_from(["codenexus", "lsp-hover", "file.rs"]);
+        assert!(
+            result.is_err(),
+            "lsp-hover without line and col should fail"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn lsp_goto_def_args_clone_eq() {
+        let a = LspGotoDefArgs {
+            file: "/r/x.rs".into(),
+            line: 1,
+            col: 2,
+            workspace: "/r".into(),
+        };
+        assert_eq!(a, a.clone());
+    }
+
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn lsp_hover_args_clone_eq() {
+        let a = LspHoverArgs {
+            file: "/r/x.rs".into(),
+            line: 3,
+            col: 4,
+            workspace: ".".into(),
         };
         assert_eq!(a, a.clone());
     }

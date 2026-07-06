@@ -61,6 +61,9 @@ pub mod analysis;
 #[cfg(feature = "embed")]
 pub mod embed;
 
+#[cfg(feature = "lsp")]
+pub mod lsp;
+
 /// Returns the crate version, primarily for use by the CLI `--version` flag.
 #[must_use]
 pub fn version() -> &'static str {

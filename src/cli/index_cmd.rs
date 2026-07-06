@@ -86,6 +86,18 @@ pub fn run(kit: &Kit, args: &IndexArgs) -> Result<()> {
         eprintln!("[warn] post-quality-check checkpoint failed: {err}");
     }
 
+    // R-lsp-004: LSP-enhanced semantic_type extraction. When `--lsp` is
+    // given and the `lsp` feature is enabled, spawn rust-analyzer and query
+    // each Rust symbol's hover info to populate `semantic_type`. Any LSP
+    // failure (binary missing, timeout, communication error) degrades
+    // gracefully to pure tree-sitter extraction — the index is never aborted.
+    #[cfg(feature = "lsp")]
+    if args.lsp {
+        if let Err(err) = enhance_with_lsp(path, &fresh_repo, &args.name) {
+            eprintln!("[warn] LSP enhancement aborted: {err}");
+        }
+    }
+
     let output = IndexOutput::from(result);
     let json = serde_json::to_string(&output)?;
     println!("{json}");
@@ -119,6 +131,182 @@ impl From<IndexResult> for IndexOutput {
             edges_created: r.edges_created,
             duration_ms: r.duration_ms,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// R-lsp-004: LSP semantic_type enhancement
+// ---------------------------------------------------------------------------
+
+/// LSP-driven `semantic_type` enhancement (R-lsp-004).
+///
+/// After the tree-sitter indexer has written all symbol nodes, this function
+/// spawns `rust-analyzer`, queries each Rust symbol's hover info, and writes
+/// the extracted type signature back to the node's `semantic_type` property.
+///
+/// # Failure semantics (Rule 12: failures must be explicit)
+///
+/// - **`rust-analyzer` binary missing** → `LspError::ServerStart`, logged to
+///   stderr, returns `Ok(())` (degrade to pure tree-sitter extraction —
+///   specmark R-lsp-004: "LSP server 启动失败时，索引不中断").
+/// - **Per-symbol `Timeout`/`Communication`** → symbol skipped, enhancement
+///   continues for remaining symbols (specmark: "LSP 查询超时时，跳过该
+///   符号的语义增强，不中断索引").
+/// - **Database query/update failure** → returns `Err(CliError::Storage(_))`
+///   so the caller can decide whether to surface it. The index itself is
+///   already complete; only the enhancement is affected.
+#[cfg(feature = "lsp")]
+fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Result<()> {
+    use crate::lsp::{LspError, LspProvider, RustAnalyzerClient};
+    use crate::storage::schema::escape_cypher_string;
+
+    let client = RustAnalyzerClient::new();
+
+    // 1. Start the LSP server. ServerStart failure is non-fatal — the index
+    //    is already complete, so we log a warning and return Ok to signal
+    //    "enhancement skipped, index succeeded".
+    if let Err(LspError::ServerStart(msg)) = client.start(workspace) {
+        eprintln!(
+            "[warn] LSP server start failed, degrading to pure tree-sitter: {msg}"
+        );
+        return Ok(());
+    }
+
+    // 2. Query all Function/Method nodes in the project that have a filePath
+    //    and startLine. v0.2.0 focuses on Function/Method (the primary
+    //    semantic-type targets); Struct/Enum/Trait can be added in v0.3.0+.
+    //
+    //    LadybugDB's Cypher subset does not support `WHERE (n:Function OR
+    //    n:Method)` label expressions nor `any(lbl IN labels(n) ...)`, so we
+    //    issue two separate queries (one per label) and merge in Rust — same
+    //    pattern as `dead_code::load_functions`.
+    let proj = escape_cypher_string(project);
+    let queries = [
+        format!(
+            "MATCH (n:Function) WHERE n.project = '{proj}' \
+             AND n.filePath IS NOT NULL AND n.startLine IS NOT NULL \
+             RETURN n.id AS id, n.filePath AS filePath, n.startLine AS startLine;"
+        ),
+        format!(
+            "MATCH (n:Method) WHERE n.project = '{proj}' \
+             AND n.filePath IS NOT NULL AND n.startLine IS NOT NULL \
+             RETURN n.id AS id, n.filePath AS filePath, n.startLine AS startLine;"
+        ),
+    ];
+    let mut rows = Vec::new();
+    for q in &queries {
+        let r = repo.connection().query(q).map_err(|e| {
+            CliError::Storage(crate::storage::StorageError::Query(e.to_string()))
+        })?;
+        rows.extend(r);
+    }
+
+    let mut enhanced: u32 = 0;
+    let mut skipped: u32 = 0;
+    for row in &rows {
+        let Some(id) = row.first().and_then(|v| v.as_str()) else {
+            skipped += 1;
+            continue;
+        };
+        let Some(file_path_str) = row.get(1).and_then(|v| v.as_str()) else {
+            skipped += 1;
+            continue;
+        };
+        let Some(start_line) = row.get(2).and_then(|v| v.as_u64()) else {
+            skipped += 1;
+            continue;
+        };
+
+        // Resolve file path — DB may store absolute or workspace-relative.
+        let file_path = Path::new(file_path_str);
+        let abs_file = if file_path.is_absolute() {
+            file_path.to_path_buf()
+        } else {
+            workspace.join(file_path)
+        };
+
+        // LSP Position is 0-based; DB startLine follows the same convention
+        // (tree-sitter points are 0-indexed). Column 0 hits the start of the
+        // symbol's definition line.
+        let line = u32::try_from(start_line).unwrap_or(0);
+        match client.hover(&abs_file, line, 0) {
+            Ok(Some(hover)) => {
+                if let Some(text) = extract_hover_text(&hover) {
+                    let update = format!(
+                        "MATCH (n {{id: '{id}', project: '{proj}'}}) \
+                         SET n.semantic_type = '{sem}';",
+                        id = escape_cypher_string(id),
+                        proj = escape_cypher_string(project),
+                        sem = escape_cypher_string(&text),
+                    );
+                    // Best-effort update — a failure here means the symbol
+                    // keeps its tree-sitter-only data, which is acceptable.
+                    if repo.connection().execute(&update).is_ok() {
+                        enhanced += 1;
+                    } else {
+                        skipped += 1;
+                    }
+                } else {
+                    skipped += 1;
+                }
+            }
+            Ok(None) => {
+                skipped += 1;
+            }
+            Err(LspError::Timeout(_)) | Err(LspError::Communication(_)) => {
+                // Per-symbol failure — skip and continue (Rule 12: explicit
+                // skip, not silent success).
+                skipped += 1;
+            }
+            Err(LspError::ServerStart(_)) => {
+                // Shouldn't happen after a successful start, but handle
+                // defensively to avoid panicking the index.
+                skipped += 1;
+            }
+        }
+    }
+
+    eprintln!(
+        "[info] LSP enhancement: {enhanced} symbol(s) enhanced, {skipped} skipped"
+    );
+
+    // Best-effort shutdown — ignore errors since the index is already done.
+    let _ = client.shutdown();
+    Ok(())
+}
+
+/// Extracts the first non-empty line from an LSP [`Hover`] response as the
+/// `semantic_type` string. Truncates to 200 chars to keep the property lean.
+#[cfg(feature = "lsp")]
+fn extract_hover_text(hover: &lsp_types::Hover) -> Option<String> {
+    use lsp_types::{HoverContents, MarkedString};
+
+    let raw = match &hover.contents {
+        HoverContents::Scalar(MarkedString::String(s)) => s.clone(),
+        HoverContents::Scalar(MarkedString::LanguageString(ls)) => ls.value.clone(),
+        HoverContents::Array(vec) => vec
+            .iter()
+            .map(|ms| match ms {
+                MarkedString::String(s) => s.clone(),
+                MarkedString::LanguageString(ls) => ls.value.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        HoverContents::Markup(mc) => mc.value.clone(),
+    };
+
+    // Take the first non-empty line — typically the type signature like
+    // "fn add(a: i32, b: i32) -> i32". Truncate to avoid bloating the DB.
+    let first_line = raw.lines().find(|l| !l.trim().is_empty())?;
+    let truncated = if first_line.len() > 200 {
+        &first_line[..200]
+    } else {
+        first_line
+    };
+    if truncated.is_empty() {
+        None
+    } else {
+        Some(truncated.to_string())
     }
 }
 
@@ -296,7 +484,7 @@ mod tests {
     // time. Covered by `build_kit_invalid_db_path_returns_build_failed_error`
     // in `kit::bootstrap::tests`.
 
-    // --- lsp / embed flags are accepted but no-ops for now ---
+    // --- lsp / embed flags are accepted ---
 
     #[test]
     fn run_with_lsp_flag_succeeds() {
@@ -472,5 +660,178 @@ mod tests {
             n_stream, n_ram,
             "streaming ({n_stream}) and RAM-first ({n_ram}) must produce same Function node count"
         );
+    }
+
+    // --- R-lsp-004: LSP enhancement graceful degradation ---
+
+    /// `index --lsp` must succeed even when `rust-analyzer` is not installed.
+    /// The LSP enhancement logs a warning and degrades to pure tree-sitter
+    /// extraction (specmark R-lsp-004: "LSP server 启动失败时，索引不中断").
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn run_with_lsp_flag_degrades_gracefully_without_rust_analyzer() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "a.rs", "fn a() {}\n");
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let args = IndexArgs {
+            path: tmp.path().to_str().unwrap().to_string(),
+            name: "demo_lsp".to_string(),
+            db: db.to_str().unwrap().to_string(),
+            force: false,
+            lsp: true,
+            embed: false,
+            ram_first: false,
+        };
+        // Must succeed regardless of whether rust-analyzer is installed —
+        // LSP enhancement is best-effort, never aborts the index.
+        let result = run(&kit, &args);
+        assert!(
+            result.is_ok(),
+            "index --lsp must succeed even without rust-analyzer: {:?}",
+            result.err()
+        );
+    }
+
+    /// `enhance_with_lsp` returns Ok when the LSP server fails to start —
+    /// verifies the graceful-degradation contract directly.
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn enhance_with_lsp_returns_ok_when_server_start_fails() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "a.rs", "fn a() {}\n");
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+
+        // Index first so nodes exist in the DB.
+        let args = IndexArgs {
+            path: tmp.path().to_str().unwrap().to_string(),
+            name: "demo_enhance".to_string(),
+            db: db.to_str().unwrap().to_string(),
+            force: false,
+            lsp: false,
+            embed: false,
+            ram_first: false,
+        };
+        run(&kit, &args).expect("index should succeed");
+
+        // Open a fresh Repository (same pattern as run()) and call
+        // enhance_with_lsp. rust-analyzer may or may not be installed —
+        // either way, the function must return Ok.
+        let fresh_repo = Repository::open(&db)
+            .map_err(|e| CliError::Index(crate::index::IndexError::Storage(e)))
+            .expect("open repo");
+        let result = enhance_with_lsp(tmp.path(), &fresh_repo, "demo_enhance");
+        assert!(
+            result.is_ok(),
+            "enhance_with_lsp must return Ok regardless of LSP availability: {:?}",
+            result.err()
+        );
+    }
+
+    // --- extract_hover_text unit tests ---
+
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn extract_hover_text_from_markup_content() {
+        use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
+        let hover = Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: "fn add(a: i32, b: i32) -> i32\n\nAdds two numbers.".to_string(),
+            }),
+            range: None,
+        };
+        let text = extract_hover_text(&hover).expect("should extract text");
+        assert_eq!(text, "fn add(a: i32, b: i32) -> i32");
+    }
+
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn extract_hover_text_from_scalar_string() {
+        use lsp_types::{Hover, HoverContents, MarkedString};
+        let hover = Hover {
+            contents: HoverContents::Scalar(MarkedString::String(
+                "struct Foo\n\nA struct.".to_string(),
+            )),
+            range: None,
+        };
+        let text = extract_hover_text(&hover).expect("should extract text");
+        assert_eq!(text, "struct Foo");
+    }
+
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn extract_hover_text_from_language_string() {
+        use lsp_types::{Hover, HoverContents, LanguageString, MarkedString};
+        let hover = Hover {
+            contents: HoverContents::Scalar(MarkedString::LanguageString(LanguageString {
+                language: "rust".to_string(),
+                value: "fn main()".to_string(),
+            })),
+            range: None,
+        };
+        let text = extract_hover_text(&hover).expect("should extract text");
+        assert_eq!(text, "fn main()");
+    }
+
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn extract_hover_text_from_array_joins_lines() {
+        use lsp_types::{Hover, HoverContents, MarkedString};
+        let hover = Hover {
+            contents: HoverContents::Array(vec![
+                MarkedString::String("fn foo()".to_string()),
+                MarkedString::String("fn bar()".to_string()),
+            ]),
+            range: None,
+        };
+        let text = extract_hover_text(&hover).expect("should extract text");
+        assert_eq!(text, "fn foo()");
+    }
+
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn extract_hover_text_skips_empty_lines() {
+        use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
+        let hover = Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: "\n\n\nfn real_signature()\n".to_string(),
+            }),
+            range: None,
+        };
+        let text = extract_hover_text(&hover).expect("should extract text");
+        assert_eq!(text, "fn real_signature()");
+    }
+
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn extract_hover_text_returns_none_for_empty() {
+        use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
+        let hover = Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: "".to_string(),
+            }),
+            range: None,
+        };
+        assert_eq!(extract_hover_text(&hover), None);
+    }
+
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn extract_hover_text_truncates_long_lines() {
+        use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
+        let long_line = "x".repeat(300);
+        let hover = Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: long_line,
+            }),
+            range: None,
+        };
+        let text = extract_hover_text(&hover).expect("should extract text");
+        assert_eq!(text.len(), 200);
     }
 }

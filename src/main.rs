@@ -172,6 +172,15 @@ fn run_command(command: Command) -> Result<(), CliError> {
             let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
             codenexus::cli::cross_service_cmd::run(&kit, &args)
         }
+        #[cfg(feature = "lsp")]
+        Command::LspGotoDef(args) => {
+            // Ad-hoc LSP query — no database access needed (mirrors Setup).
+            codenexus::cli::lsp_cmd::run_goto_def(&args)
+        }
+        #[cfg(feature = "lsp")]
+        Command::LspHover(args) => {
+            codenexus::cli::lsp_cmd::run_hover(&args)
+        }
     }
 }
 
