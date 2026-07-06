@@ -137,6 +137,11 @@ fn run_command(command: Command) -> Result<(), CliError> {
             let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
             codenexus::cli::dead_code_cmd::run(&kit, &args)
         }
+        #[cfg(feature = "analysis")]
+        Command::Architecture(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::architecture_cmd::run(&kit, &args)
+        }
     }
 }
 

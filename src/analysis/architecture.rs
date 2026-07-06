@@ -1,0 +1,878 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+//! Architecture overview (T006, v0.1.6).
+//!
+//! Produces a high-level summary of a project's structure by aggregating over
+//! the existing LadybugDB graph:
+//! - **Languages**: file count + symbol count per source language
+//! - **Packages**: symbol count grouped by package prefix (first 2 components
+//!   of the qualified name, e.g. `com.example`)
+//! - **Entry points**: functions matching default entry patterns
+//!   (`main`, `Main`, `__main__`)
+//! - **Routes**: HTTP routes joined with their handler functions via
+//!   `HANDLES` edges in the `CodeRelation` table
+//! - **Hotspots**: functions ranked by incoming `CALLS` edge count (top 10)
+//!
+//! # Algorithm
+//!
+//! Each section issues one or more Cypher queries against the `&dyn Storage`
+//! capability and joins results in Rust. LadybugDB's Cypher subset does not
+//! support `GROUP BY`, multi-label `WHERE (n:A OR n:B)` expressions, or
+//! `UNION` — so we issue separate queries per node label and aggregate in
+//! Rust.
+
+use crate::storage::capability::Storage;
+use crate::storage::error::Result as StorageResult;
+use crate::storage::schema::escape_cypher_string;
+use serde::Serialize;
+
+/// Default glob patterns for entry-point function names.
+const DEFAULT_ENTRY_PATTERNS: &[&str] = &["main", "Main", "__main__"];
+
+/// Maximum number of hotspot entries to return (spec: "最多返回 10 条").
+const HOTSPOT_LIMIT: usize = 10;
+
+/// Symbol tables queried for package grouping. Each has a `qualifiedName`
+/// column. LadybugDB does not support `UNION`, so we issue one query per
+/// table and merge in Rust.
+const PACKAGE_TABLES: &[&str] = &[
+    "Function",
+    "Method",
+    "Class",
+    "Struct",
+    "Enum",
+    "Trait",
+    "Interface",
+    "Namespace",
+];
+
+/// A complete architecture overview for a project.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ArchitectureOverview {
+    /// Language distribution (file count + symbol count per language).
+    pub languages: Vec<LanguageStat>,
+    /// Package/module distribution (symbol count per package prefix).
+    pub packages: Vec<PackageStat>,
+    /// Entry-point functions (matching default entry patterns).
+    pub entry_points: Vec<EntryPoint>,
+    /// HTTP routes joined with their handler functions.
+    pub routes: Vec<RouteStat>,
+    /// High-indegree functions (top 10 by caller count).
+    pub hotspots: Vec<HotspotStat>,
+}
+
+/// Language statistics.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct LanguageStat {
+    /// Source language (e.g. `rust`, `python`).
+    pub language: String,
+    /// Number of `File` nodes with this language.
+    pub file_count: u32,
+    /// Number of symbol nodes (`Function`/`Method`) in files of this language.
+    pub symbol_count: u32,
+}
+
+/// Package statistics.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PackageStat {
+    /// Package prefix (first 2 components of qualified name, e.g. `com.example`).
+    pub package: String,
+    /// Number of symbols in this package.
+    pub symbol_count: u32,
+}
+
+/// An entry-point function.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct EntryPoint {
+    /// Short function name (e.g. `main`).
+    pub name: String,
+    /// Fully-qualified name (e.g. `demo.main`).
+    pub qualified_name: String,
+    /// Source file path.
+    pub file_path: String,
+    /// 1-based start line.
+    pub line: u32,
+}
+
+/// An HTTP route joined with its handler.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RouteStat {
+    /// Route path (e.g. `/api/users`).
+    pub path: String,
+    /// HTTP method (e.g. `GET`, `POST`). Empty if not set.
+    pub method: String,
+    /// Handler function name. Empty if no handler linked.
+    pub handler: String,
+}
+
+/// A hotspot function (high incoming CALLS edge count).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct HotspotStat {
+    /// Short function name.
+    pub name: String,
+    /// Fully-qualified name.
+    pub qualified_name: String,
+    /// Number of incoming CALLS edges (caller count).
+    pub caller_count: u32,
+}
+
+/// Produces an [`ArchitectureOverview`] for a project.
+pub struct ArchitectureAnalyzer<'a> {
+    storage: &'a dyn Storage,
+}
+
+impl<'a> ArchitectureAnalyzer<'a> {
+    /// Creates a new analyzer backed by the given storage capability.
+    #[must_use]
+    pub fn new(storage: &'a dyn Storage) -> Self {
+        Self { storage }
+    }
+
+    /// Returns the architecture overview for `project`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::storage::error::StorageError`] if any Cypher query
+    /// fails.
+    pub fn overview(&self, project: &str) -> StorageResult<ArchitectureOverview> {
+        let languages = self.load_languages(project)?;
+        let packages = self.load_packages(project)?;
+        let entry_points = self.load_entry_points(project)?;
+        let routes = self.load_routes(project)?;
+        let hotspots = self.load_hotspots(project)?;
+        Ok(ArchitectureOverview {
+            languages,
+            packages,
+            entry_points,
+            routes,
+            hotspots,
+        })
+    }
+
+    /// Loads language statistics: file count + symbol count per language.
+    ///
+    /// Symbol count is computed by joining `Function`/`Method` nodes with the
+    /// `File` table via `filePath` (polyglot projects are handled correctly).
+    fn load_languages(&self, project: &str) -> StorageResult<Vec<LanguageStat>> {
+        let escaped = escape_cypher_string(project);
+        // (a) Load all File nodes with their language + filePath.
+        let file_cypher = format!(
+            "MATCH (f:File) WHERE f.project = '{escaped}' \
+             RETURN f.language AS language, f.filePath AS file_path;"
+        );
+        let file_rows = self.storage.query(&file_cypher)?;
+
+        // Build: language -> file_count, and filePath -> language map.
+        let mut lang_file_count: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+        let mut path_to_lang: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for row in file_rows {
+            if row.len() < 2 {
+                continue;
+            }
+            let language = row[0].as_str().unwrap_or_default().to_string();
+            let file_path = row[1].as_str().unwrap_or_default().to_string();
+            *lang_file_count.entry(language.clone()).or_insert(0) += 1;
+            path_to_lang.insert(file_path, language);
+        }
+
+        // (b) Count symbols (Function + Method) per language via filePath join.
+        let mut lang_symbol_count: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+        for table in &["Function", "Method"] {
+            let cypher = format!(
+                "MATCH (n:{table}) WHERE n.project = '{escaped}' \
+                 RETURN n.filePath AS file_path;"
+            );
+            let rows = self.storage.query(&cypher)?;
+            for row in rows {
+                if let Some(path) = row.first().and_then(|v| v.as_str()) {
+                    if let Some(lang) = path_to_lang.get(path) {
+                        *lang_symbol_count.entry(lang.clone()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+
+        // (c) Build the result vector, sorted by language for determinism.
+        let mut result: Vec<LanguageStat> = lang_file_count
+            .into_iter()
+            .map(|(language, file_count)| LanguageStat {
+                file_count,
+                symbol_count: *lang_symbol_count.get(&language).unwrap_or(&0),
+                language,
+            })
+            .collect();
+        result.sort_by(|a, b| a.language.cmp(&b.language));
+        Ok(result)
+    }
+
+    /// Loads package statistics: symbol count grouped by package prefix.
+    ///
+    /// Package prefix = first 2 components of `qualifiedName` split by `.`
+    /// (e.g. `com.example.Foo` → `com.example`).
+    fn load_packages(&self, project: &str) -> StorageResult<Vec<PackageStat>> {
+        let escaped = escape_cypher_string(project);
+        let mut pkg_counts: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+        for table in PACKAGE_TABLES {
+            let cypher = format!(
+                "MATCH (n:{table}) WHERE n.project = '{escaped}' \
+                 RETURN n.qualifiedName AS qualified_name;"
+            );
+            let rows = self.storage.query(&cypher)?;
+            for row in rows {
+                if let Some(qn) = row.first().and_then(|v| v.as_str()) {
+                    if let Some(pkg) = package_prefix(qn) {
+                        *pkg_counts.entry(pkg.to_string()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+        let mut result: Vec<PackageStat> = pkg_counts
+            .into_iter()
+            .map(|(package, symbol_count)| PackageStat {
+                package,
+                symbol_count,
+            })
+            .collect();
+        // Sort by symbol_count desc, then by package name for determinism.
+        result.sort_by(|a, b| {
+            b.symbol_count
+                .cmp(&a.symbol_count)
+                .then_with(|| a.package.cmp(&b.package))
+        });
+        Ok(result)
+    }
+
+    /// Loads entry-point functions (matching default entry patterns).
+    fn load_entry_points(&self, project: &str) -> StorageResult<Vec<EntryPoint>> {
+        let escaped = escape_cypher_string(project);
+        let cypher = format!(
+            "MATCH (f:Function) WHERE f.project = '{escaped}' \
+             RETURN f.name AS name, f.qualifiedName AS qualified_name, \
+             f.filePath AS file_path, f.startLine AS start_line;"
+        );
+        let rows = self.storage.query(&cypher)?;
+        let mut result = Vec::new();
+        for row in rows {
+            if row.len() < 4 {
+                continue;
+            }
+            let name = row[0].as_str().unwrap_or_default().to_string();
+            if !DEFAULT_ENTRY_PATTERNS.iter().any(|p| *p == name.as_str()) {
+                continue;
+            }
+            let qualified_name = row[1].as_str().unwrap_or_default().to_string();
+            let file_path = row[2].as_str().unwrap_or_default().to_string();
+            let line = row[3]
+                .as_i64()
+                .map(|v| v as u32)
+                .or_else(|| row[3].as_u64().map(|v| v as u32))
+                .unwrap_or(0);
+            result.push(EntryPoint {
+                name,
+                qualified_name,
+                file_path,
+                line,
+            });
+        }
+        // Sort by qualified name for determinism.
+        result.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+        Ok(result)
+    }
+
+    /// Loads HTTP routes joined with their handler functions.
+    ///
+    /// Routes and handlers are linked via `CodeRelation` rows with
+    /// `type = 'HANDLES'` (source = handler id, target = route id).
+    fn load_routes(&self, project: &str) -> StorageResult<Vec<RouteStat>> {
+        let escaped = escape_cypher_string(project);
+        // (a) Load all Route nodes.
+        let route_cypher = format!(
+            "MATCH (r:Route) WHERE r.project = '{escaped}' \
+             RETURN r.id AS id, r.path AS path, r.httpMethod AS method;"
+        );
+        let route_rows = self.storage.query(&route_cypher)?;
+        let mut routes: Vec<(String, String, String)> = Vec::new(); // (id, path, method)
+        for row in route_rows {
+            if row.len() < 3 {
+                continue;
+            }
+            let id = row[0].as_str().unwrap_or_default().to_string();
+            let path = row[1].as_str().unwrap_or_default().to_string();
+            let method = row[2].as_str().unwrap_or_default().to_string();
+            routes.push((id, path, method));
+        }
+
+        // (b) Load all Handler nodes (id → name).
+        let handler_cypher = format!(
+            "MATCH (h:Handler) WHERE h.project = '{escaped}' \
+             RETURN h.id AS id, h.name AS name;"
+        );
+        let handler_rows = self.storage.query(&handler_cypher)?;
+        let mut handlers: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for row in handler_rows {
+            if row.len() < 2 {
+                continue;
+            }
+            let id = row[0].as_str().unwrap_or_default().to_string();
+            let name = row[1].as_str().unwrap_or_default().to_string();
+            handlers.insert(id, name);
+        }
+
+        // (c) Load HANDLES edges (source = handler id, target = route id).
+        let edge_cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.type = 'HANDLES' AND e.project = '{escaped}' \
+             RETURN e.source AS source, e.target AS target;"
+        );
+        let edge_rows = self.storage.query(&edge_cypher)?;
+        let mut route_to_handler: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for row in edge_rows {
+            if row.len() < 2 {
+                continue;
+            }
+            let source = row[0].as_str().unwrap_or_default().to_string();
+            let target = row[1].as_str().unwrap_or_default().to_string();
+            if let Some(handler_name) = handlers.get(&source) {
+                route_to_handler.insert(target, handler_name.clone());
+            }
+        }
+
+        // (d) Build result: for each route, look up its handler (if any).
+        let mut result: Vec<RouteStat> = routes
+            .into_iter()
+            .map(|(id, path, method)| RouteStat {
+                path,
+                method,
+                handler: route_to_handler.get(&id).cloned().unwrap_or_default(),
+            })
+            .collect();
+        // Sort by path for determinism.
+        result.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(result)
+    }
+
+    /// Loads hotspot functions: top 10 by incoming CALLS edge count.
+    ///
+    /// LadybugDB does not support `GROUP BY`, so we load all CALLS edges and
+    /// count in Rust.
+    fn load_hotspots(&self, project: &str) -> StorageResult<Vec<HotspotStat>> {
+        let escaped = escape_cypher_string(project);
+        // (a) Count CALLS edges per target id.
+        let calls_cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.type = 'CALLS' AND e.project = '{escaped}' \
+             RETURN e.target AS target;"
+        );
+        let calls_rows = self.storage.query(&calls_cypher)?;
+        let mut caller_counts: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+        for row in calls_rows {
+            if let Some(target) = row.first().and_then(|v| v.as_str()) {
+                *caller_counts.entry(target.to_string()).or_insert(0) += 1;
+            }
+        }
+
+        // (b) Load Function + Method nodes for name/qualifiedName.
+        let mut id_to_info: std::collections::HashMap<String, (String, String)> =
+            std::collections::HashMap::new();
+        for table in &["Function", "Method"] {
+            let cypher = format!(
+                "MATCH (n:{table}) WHERE n.project = '{escaped}' \
+                 RETURN n.id AS id, n.name AS name, n.qualifiedName AS qualified_name;"
+            );
+            let rows = self.storage.query(&cypher)?;
+            for row in rows {
+                if row.len() < 3 {
+                    continue;
+                }
+                let id = row[0].as_str().unwrap_or_default().to_string();
+                let name = row[1].as_str().unwrap_or_default().to_string();
+                let qn = row[2].as_str().unwrap_or_default().to_string();
+                id_to_info.insert(id, (name, qn));
+            }
+        }
+
+        // (c) Build hotspot stats: for each target with callers, look up name.
+        let mut result: Vec<HotspotStat> = caller_counts
+            .into_iter()
+            .filter_map(|(id, count)| {
+                id_to_info.get(&id).map(|(name, qn)| HotspotStat {
+                    name: name.clone(),
+                    qualified_name: qn.clone(),
+                    caller_count: count,
+                })
+            })
+            .collect();
+        // Sort by caller_count desc, then by qualified_name for determinism.
+        result.sort_by(|a, b| {
+            b.caller_count
+                .cmp(&a.caller_count)
+                .then_with(|| a.qualified_name.cmp(&b.qualified_name))
+        });
+        // Truncate to top 10.
+        result.truncate(HOTSPOT_LIMIT);
+        Ok(result)
+    }
+}
+
+/// Extracts the package prefix from a qualified name.
+///
+/// Returns the first 2 components joined by `.`, or `None` if the qualified
+/// name has fewer than 2 components.
+///
+/// # Examples
+///
+/// ```
+/// # use codenexus::analysis::architecture::package_prefix;
+/// assert_eq!(package_prefix("com.example.Foo"), Some("com.example"));
+/// assert_eq!(package_prefix("demo.foo"), Some("demo.foo"));
+/// assert_eq!(package_prefix("foo"), None);
+/// ```
+fn package_prefix(qualified_name: &str) -> Option<&str> {
+    let components: Vec<&str> = qualified_name.split('.').collect();
+    if components.len() < 2 {
+        return None;
+    }
+    // Take first 2 components.
+    let end = components[0].len() + 1 + components[1].len();
+    Some(&qualified_name[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kit::{build_kit, KitBootstrapConfig, Kit, StorageKey};
+    use tempfile::TempDir;
+
+    /// Returns a fresh on-disk database path inside a temp dir.
+    fn fresh_db_path() -> std::path::PathBuf {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("arch_testdb");
+        std::mem::forget(dir);
+        path
+    }
+
+    /// Builds a Kit backed by an on-disk database at `db`.
+    fn build_kit_for_db(db: &std::path::Path) -> Kit {
+        let config = KitBootstrapConfig::new(db.to_path_buf());
+        build_kit(&config).expect("build_kit")
+    }
+
+    /// Returns the `dyn Storage` capability from `kit`.
+    fn storage(kit: &Kit) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
+        kit.require::<StorageKey>().expect("require_storage")
+    }
+
+    /// Creates a File node.
+    fn create_file(kit: &Kit, id: &str, project: &str, file_path: &str, language: &str) {
+        let storage = storage(kit);
+        let cypher = format!(
+            "CREATE (:File {{id: '{}', project: '{}', name: '{}', filePath: '{}', \
+             language: '{}', hash: '', lineCount: 0}});",
+            escape_cypher_string(id),
+            escape_cypher_string(project),
+            escape_cypher_string(file_path.split('/').next_back().unwrap_or("file")),
+            escape_cypher_string(file_path),
+            escape_cypher_string(language),
+        );
+        storage.execute(&cypher).expect("create file");
+    }
+
+    /// Creates a Function node.
+    fn create_function(kit: &Kit, id: &str, project: &str, name: &str, qn: &str, file: &str, line: u32) {
+        let storage = storage(kit);
+        let end_line = line + 10;
+        let cypher = format!(
+            "CREATE (:Function {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
+             filePath: '{}', startLine: {}, endLine: {}, signature: '', returnType: '', \
+             isExported: false, docstring: '', content: '', parentQn: ''}});",
+            escape_cypher_string(id),
+            escape_cypher_string(project),
+            escape_cypher_string(name),
+            escape_cypher_string(qn),
+            escape_cypher_string(file),
+            line,
+            end_line,
+        );
+        storage.execute(&cypher).expect("create function");
+    }
+
+    /// Creates a Method node.
+    fn create_method(kit: &Kit, id: &str, project: &str, name: &str, qn: &str, file: &str, line: u32) {
+        let storage = storage(kit);
+        let end_line = line + 10;
+        let cypher = format!(
+            "CREATE (:Method {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
+             filePath: '{}', startLine: {}, endLine: {}, signature: '', returnType: '', \
+             isExported: false, docstring: '', content: '', parameterCount: 0, parentQn: ''}});",
+            escape_cypher_string(id),
+            escape_cypher_string(project),
+            escape_cypher_string(name),
+            escape_cypher_string(qn),
+            escape_cypher_string(file),
+            line,
+            end_line,
+        );
+        storage.execute(&cypher).expect("create method");
+    }
+
+    /// Creates a Class node.
+    fn create_class(kit: &Kit, id: &str, project: &str, name: &str, qn: &str, file: &str, line: u32) {
+        let storage = storage(kit);
+        let end_line = line + 10;
+        let cypher = format!(
+            "CREATE (:Class {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
+             filePath: '{}', startLine: {}, endLine: {}, isExported: false, docstring: '', \
+             content: '', parentQn: ''}});",
+            escape_cypher_string(id),
+            escape_cypher_string(project),
+            escape_cypher_string(name),
+            escape_cypher_string(qn),
+            escape_cypher_string(file),
+            line,
+            end_line,
+        );
+        storage.execute(&cypher).expect("create class");
+    }
+
+    /// Creates a Route node.
+    fn create_route(kit: &Kit, id: &str, project: &str, path: &str, method: &str) {
+        let storage = storage(kit);
+        let cypher = format!(
+            "CREATE (:Route {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
+             filePath: '', startLine: 0, endLine: 0, httpMethod: '{}', path: '{}', parentQn: ''}});",
+            escape_cypher_string(id),
+            escape_cypher_string(project),
+            escape_cypher_string(path),
+            escape_cypher_string(path),
+            escape_cypher_string(method),
+            escape_cypher_string(path),
+        );
+        storage.execute(&cypher).expect("create route");
+    }
+
+    /// Creates a Handler node.
+    fn create_handler(kit: &Kit, id: &str, project: &str, name: &str) {
+        let storage = storage(kit);
+        let cypher = format!(
+            "CREATE (:Handler {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
+             filePath: '', startLine: 0, endLine: 0, signature: '', returnType: '', \
+             isExported: false, docstring: '', content: '', parentQn: ''}});",
+            escape_cypher_string(id),
+            escape_cypher_string(project),
+            escape_cypher_string(name),
+            escape_cypher_string(name),
+        );
+        storage.execute(&cypher).expect("create handler");
+    }
+
+    /// Creates a CodeRelation edge.
+    fn create_edge(kit: &Kit, id: &str, source: &str, target: &str, edge_type: &str, project: &str) {
+        let storage = storage(kit);
+        let cypher = format!(
+            "CREATE (:CodeRelation {{id: '{}', source: '{}', target: '{}', type: '{}', \
+             confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: '{}'}});",
+            escape_cypher_string(id),
+            escape_cypher_string(source),
+            escape_cypher_string(target),
+            escape_cypher_string(edge_type),
+            escape_cypher_string(project),
+        );
+        storage.execute(&cypher).expect("create edge");
+    }
+
+    // --- package_prefix unit tests ---
+
+    #[test]
+    fn package_prefix_extracts_first_two_components() {
+        assert_eq!(package_prefix("com.example.Foo"), Some("com.example"));
+        assert_eq!(package_prefix("com.example.Bar"), Some("com.example"));
+    }
+
+    #[test]
+    fn package_prefix_two_components_returns_both() {
+        assert_eq!(package_prefix("demo.foo"), Some("demo.foo"));
+    }
+
+    #[test]
+    fn package_prefix_single_component_returns_none() {
+        assert_eq!(package_prefix("foo"), None);
+    }
+
+    #[test]
+    fn package_prefix_empty_returns_none() {
+        assert_eq!(package_prefix(""), None);
+    }
+
+    // --- ArchitectureAnalyzer tests ---
+
+    #[test]
+    fn overview_returns_empty_for_empty_db() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert!(result.languages.is_empty(), "languages should be empty");
+        assert!(result.packages.is_empty(), "packages should be empty");
+        assert!(result.entry_points.is_empty(), "entry_points should be empty");
+        assert!(result.routes.is_empty(), "routes should be empty");
+        assert!(result.hotspots.is_empty(), "hotspots should be empty");
+    }
+
+    #[test]
+    fn overview_counts_languages() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_file(&kit, "f1", "demo", "/src/main.rs", "rust");
+        create_file(&kit, "f2", "demo", "/src/app.py", "python");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert_eq!(result.languages.len(), 2, "should have 2 languages");
+        // Languages are sorted alphabetically.
+        let py = result.languages.iter().find(|l| l.language == "python")
+            .expect("python should be present");
+        assert_eq!(py.file_count, 1, "python file_count should be 1");
+        let rs = result.languages.iter().find(|l| l.language == "rust")
+            .expect("rust should be present");
+        assert_eq!(rs.file_count, 1, "rust file_count should be 1");
+    }
+
+    #[test]
+    fn overview_counts_symbols_per_language() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_file(&kit, "f1", "demo", "/src/main.rs", "rust");
+        create_file(&kit, "f2", "demo", "/src/app.py", "python");
+        // 2 Rust functions + 1 Python function.
+        create_function(&kit, "fn1", "demo", "foo", "demo.foo", "/src/main.rs", 1);
+        create_function(&kit, "fn2", "demo", "bar", "demo.bar", "/src/main.rs", 10);
+        create_function(&kit, "fn3", "demo", "baz", "demo.baz", "/src/app.py", 1);
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        let rs = result.languages.iter().find(|l| l.language == "rust")
+            .expect("rust should be present");
+        assert_eq!(rs.symbol_count, 2, "rust symbol_count should be 2");
+        let py = result.languages.iter().find(|l| l.language == "python")
+            .expect("python should be present");
+        assert_eq!(py.symbol_count, 1, "python symbol_count should be 1");
+    }
+
+    #[test]
+    fn overview_lists_entry_points() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f_main", "demo", "main", "demo.main", "/src/main.rs", 1);
+        create_function(&kit, "f_foo", "demo", "foo", "demo.foo", "/src/lib.rs", 1);
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert_eq!(result.entry_points.len(), 1, "should have 1 entry point");
+        let ep = &result.entry_points[0];
+        assert_eq!(ep.name, "main");
+        assert_eq!(ep.qualified_name, "demo.main");
+        assert_eq!(ep.file_path, "/src/main.rs");
+        assert_eq!(ep.line, 1);
+    }
+
+    #[test]
+    fn overview_lists_entry_points_multiple_patterns() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f1", "demo", "main", "demo.main", "/src/main.rs", 1);
+        create_function(&kit, "f2", "demo", "Main", "demo.Main", "/src/Main.cs", 1);
+        create_function(&kit, "f3", "demo", "__main__", "demo.__main__", "/src/app.py", 1);
+        create_function(&kit, "f4", "demo", "foo", "demo.foo", "/src/lib.rs", 1);
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert_eq!(result.entry_points.len(), 3, "should have 3 entry points");
+        let names: Vec<&str> = result.entry_points.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"main"));
+        assert!(names.contains(&"Main"));
+        assert!(names.contains(&"__main__"));
+        assert!(!names.contains(&"foo"));
+    }
+
+    #[test]
+    fn overview_lists_routes() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r1", "demo", "/api/users", "GET");
+        create_handler(&kit, "h1", "demo", "list_users");
+        create_edge(&kit, "e1", "h1", "r1", "HANDLES", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert_eq!(result.routes.len(), 1, "should have 1 route");
+        let route = &result.routes[0];
+        assert_eq!(route.path, "/api/users");
+        assert_eq!(route.method, "GET");
+        assert_eq!(route.handler, "list_users");
+    }
+
+    #[test]
+    fn overview_route_without_handler_has_empty_handler() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r1", "demo", "/api/orphan", "POST");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert_eq!(result.routes.len(), 1, "should have 1 route");
+        assert_eq!(result.routes[0].handler, "", "handler should be empty");
+    }
+
+    #[test]
+    fn overview_identifies_hotspots() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f_foo", "demo", "foo", "demo.foo", "/src/lib.rs", 1);
+        create_function(&kit, "f_a", "demo", "a", "demo.a", "/src/a.rs", 1);
+        create_function(&kit, "f_b", "demo", "b", "demo.b", "/src/b.rs", 1);
+        create_function(&kit, "f_c", "demo", "c", "demo.c", "/src/c.rs", 1);
+        // 3 CALLS edges pointing to foo.
+        create_edge(&kit, "e1", "f_a", "f_foo", "CALLS", "demo");
+        create_edge(&kit, "e2", "f_b", "f_foo", "CALLS", "demo");
+        create_edge(&kit, "e3", "f_c", "f_foo", "CALLS", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert!(!result.hotspots.is_empty(), "should have hotspots");
+        let foo = result.hotspots.iter().find(|h| h.name == "foo")
+            .expect("foo should be a hotspot");
+        assert_eq!(foo.caller_count, 3, "foo caller_count should be 3");
+        assert_eq!(foo.qualified_name, "demo.foo");
+    }
+
+    #[test]
+    fn overview_hotspots_sorted_by_caller_count_desc() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f_foo", "demo", "foo", "demo.foo", "/src/lib.rs", 1);
+        create_function(&kit, "f_bar", "demo", "bar", "demo.bar", "/src/lib.rs", 10);
+        create_function(&kit, "f_a", "demo", "a", "demo.a", "/src/a.rs", 1);
+        create_function(&kit, "f_b", "demo", "b", "demo.b", "/src/b.rs", 1);
+        create_function(&kit, "f_c", "demo", "c", "demo.c", "/src/c.rs", 1);
+        // foo has 3 callers, bar has 1 caller.
+        create_edge(&kit, "e1", "f_a", "f_foo", "CALLS", "demo");
+        create_edge(&kit, "e2", "f_b", "f_foo", "CALLS", "demo");
+        create_edge(&kit, "e3", "f_c", "f_foo", "CALLS", "demo");
+        create_edge(&kit, "e4", "f_a", "f_bar", "CALLS", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert!(result.hotspots.len() >= 2, "should have at least 2 hotspots");
+        // First hotspot should be foo (3 callers).
+        assert_eq!(result.hotspots[0].name, "foo");
+        assert_eq!(result.hotspots[0].caller_count, 3);
+        // Second should be bar (1 caller).
+        assert_eq!(result.hotspots[1].name, "bar");
+        assert_eq!(result.hotspots[1].caller_count, 1);
+    }
+
+    #[test]
+    fn overview_hotspots_limited_to_10() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Create 15 functions, each with 1 caller.
+        for i in 0..15 {
+            let id = format!("f_{i}");
+            let name = format!("func{i}");
+            let qn = format!("demo.func{i}");
+            let file = format!("/src/f{i}.rs");
+            create_function(&kit, &id, "demo", &name, &qn, &file, 1);
+        }
+        // Create a caller for each (self-call to keep it simple).
+        for i in 0..15 {
+            let id = format!("f_{i}");
+            let edge_id = format!("e_{i}");
+            create_edge(&kit, &edge_id, &id, &id, "CALLS", "demo");
+        }
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert_eq!(result.hotspots.len(), 10, "hotspots should be limited to 10");
+    }
+
+    #[test]
+    fn overview_groups_packages() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_class(&kit, "c1", "demo", "Foo", "com.example.Foo", "/src/Foo.java", 1);
+        create_class(&kit, "c2", "demo", "Bar", "com.example.Bar", "/src/Bar.java", 1);
+        create_class(&kit, "c3", "demo", "Baz", "org.other.Baz", "/src/Baz.java", 1);
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        let pkg = result.packages.iter().find(|p| p.package == "com.example")
+            .expect("com.example package should exist");
+        assert_eq!(pkg.symbol_count, 2, "com.example should have 2 symbols");
+        let other = result.packages.iter().find(|p| p.package == "org.other")
+            .expect("org.other package should exist");
+        assert_eq!(other.symbol_count, 1, "org.other should have 1 symbol");
+    }
+
+    #[test]
+    fn overview_includes_methods_in_packages() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_method(&kit, "m1", "demo", "helper", "com.example.helper", "/src/lib.rs", 1);
+        create_function(&kit, "f1", "demo", "foo", "com.example.foo", "/src/lib.rs", 10);
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        let pkg = result.packages.iter().find(|p| p.package == "com.example")
+            .expect("com.example package should exist");
+        assert_eq!(pkg.symbol_count, 2, "should count both method and function");
+    }
+
+    #[test]
+    fn overview_filters_by_project() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_file(&kit, "f1", "demo", "/src/main.rs", "rust");
+        create_file(&kit, "f2", "other", "/src/app.py", "python");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert_eq!(result.languages.len(), 1, "should only see demo's languages");
+        assert_eq!(result.languages[0].language, "rust");
+    }
+
+    #[test]
+    fn overview_hotspot_method_nodes() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_method(&kit, "m1", "demo", "helper", "demo.Class.helper", "/src/lib.rs", 5);
+        create_function(&kit, "f1", "demo", "a", "demo.a", "/src/a.rs", 1);
+        create_edge(&kit, "e1", "f1", "m1", "CALLS", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        let helper = result.hotspots.iter().find(|h| h.name == "helper")
+            .expect("helper method should be a hotspot");
+        assert_eq!(helper.caller_count, 1);
+        assert_eq!(helper.qualified_name, "demo.Class.helper");
+    }
+}

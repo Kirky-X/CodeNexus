@@ -63,6 +63,9 @@ pub enum Command {
     /// Detect dead code (zero-indegree CALLS functions) for a project (T005).
     #[cfg(feature = "analysis")]
     DeadCode(DeadCodeArgs),
+    /// Show a project's architecture overview (T006, v0.1.6).
+    #[cfg(feature = "analysis")]
+    Architecture(ArchitectureArgs),
 }
 
 /// Arguments for the `index` subcommand (PRD §4.1.3).
@@ -389,6 +392,22 @@ pub struct DeadCodeArgs {
     /// Test functions (`test_*`, `*_test`, `*_spec`) are always excluded.
     #[arg(long)]
     pub entry: Option<Vec<String>>,
+}
+
+/// Arguments for the `architecture` subcommand (T006, v0.1.6).
+///
+/// Produces a high-level overview of a project's structure: language
+/// distribution, package structure, entry points, HTTP routes, and hotspot
+/// functions. Output is a JSON object with `languages`, `packages`,
+/// `entry_points`, `routes`, and `hotspots` arrays.
+#[cfg(feature = "analysis")]
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct ArchitectureArgs {
+    /// Project name (the multi-project isolation key).
+    pub project: String,
+    /// Database path.
+    #[arg(long, default_value = "./codenexus.lbug")]
+    pub db: String,
 }
 
 #[cfg(test)]

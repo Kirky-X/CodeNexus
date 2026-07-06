@@ -16,4 +16,5 @@
 //! with the Kit capability pattern (Rule 11: 惯例优先于新颖) and works in
 //! both production (via `kit.require::<StorageKey>()`) and tests.
 
+pub mod architecture;
 pub mod dead_code;

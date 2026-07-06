@@ -23,6 +23,8 @@
 //! See [`error::CliError`] for the full mapping.
 
 pub mod args;
+#[cfg(feature = "analysis")]
+pub mod architecture_cmd;
 pub mod clean_cmd;
 pub mod context_cmd;
 #[cfg(feature = "analysis")]
@@ -60,7 +62,7 @@ mod dispatch_tests {
     #[cfg(feature = "daemon")]
     use crate::cli::args::DaemonArgs;
     #[cfg(feature = "analysis")]
-    use crate::cli::args::DeadCodeArgs;
+    use crate::cli::args::{ArchitectureArgs, DeadCodeArgs};
     use crate::kit::{build_kit, Kit, KitBootstrapConfig, StorageKey};
     use clap::Parser;
 
@@ -96,6 +98,8 @@ mod dispatch_tests {
             Command::Mcp(args) => mcp_cmd::run(kit, &args),
             #[cfg(feature = "analysis")]
             Command::DeadCode(args) => dead_code_cmd::run(kit, &args),
+            #[cfg(feature = "analysis")]
+            Command::Architecture(args) => architecture_cmd::run(kit, &args),
         }
     }
 
@@ -378,6 +382,28 @@ mod dispatch_tests {
         );
     }
 
+    #[test]
+    #[cfg(feature = "analysis")]
+    fn dispatch_architecture_calls_architecture_cmd() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.execute("CREATE (:File {id: 'f1', project: 'demo', name: 'main.rs', filePath: '/src/main.rs', language: 'rust', hash: '', lineCount: 0});").expect("create file");
+        let cli = Cli::parse_from([
+            "codenexus",
+            "architecture",
+            "demo",
+            "--db",
+            db.to_str().unwrap(),
+        ]);
+        let result = dispatch(&kit, cli);
+        assert!(
+            result.is_ok(),
+            "dispatch architecture should succeed: {:?}",
+            result.err()
+        );
+    }
+
     /// Returns `true` if the `zstd` binary is available on PATH (H7
     /// export/import shell out to it).
     fn zstd_cli_available() -> bool {
@@ -618,6 +644,11 @@ mod dispatch_tests {
             project: "demo".into(),
             db: "./x.lbug".into(),
             entry: None,
+        };
+        #[cfg(feature = "analysis")]
+        let _ = ArchitectureArgs {
+            project: "demo".into(),
+            db: "./x.lbug".into(),
         };
     }
 }
