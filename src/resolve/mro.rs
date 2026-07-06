@@ -47,6 +47,11 @@ pub fn mro_for(lang: Language) -> MroStrategy {
         Language::TypeScript => MroStrategy::FirstWins,
         #[cfg(feature = "lang-fortran")]
         Language::Fortran => MroStrategy::None,
+        // Go has no classical inheritance (only structural interfaces + embedding,
+        // which don't fit the C3/FirstWin MRO models). Return None to fail loud
+        // rather than silently producing a wrong linearization.
+        #[cfg(feature = "lang-go")]
+        Language::Go => MroStrategy::None,
     }
 }
 

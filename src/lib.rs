@@ -31,10 +31,11 @@
     feature = "lang-fortran",
     feature = "lang-python",
     feature = "lang-typescript",
+    feature = "lang-go",
 )))]
 compile_error!(
     "CodeNexus requires at least one `lang-*` feature enabled. \
-     Use `--features lang-rust` (or lang-c/lang-fortran/lang-python/lang-typescript), \
+     Use `--features lang-rust` (or lang-c/lang-fortran/lang-python/lang-typescript/lang-go), \
      or a preset like `--features minimal`/`core`/`full`."
 );
 

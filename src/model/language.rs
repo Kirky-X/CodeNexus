@@ -26,6 +26,8 @@ pub enum Language {
     Python,
     #[cfg(feature = "lang-typescript")]
     TypeScript,
+    #[cfg(feature = "lang-go")]
+    Go,
 }
 
 impl Language {
@@ -47,6 +49,8 @@ impl Language {
             Language::Python,
             #[cfg(feature = "lang-typescript")]
             Language::TypeScript,
+            #[cfg(feature = "lang-go")]
+            Language::Go,
         ]
     }
 
@@ -64,6 +68,8 @@ impl Language {
             Language::Python => &["py"],
             #[cfg(feature = "lang-typescript")]
             Language::TypeScript => &["ts", "tsx"],
+            #[cfg(feature = "lang-go")]
+            Language::Go => &["go"],
         }
     }
 
@@ -84,6 +90,8 @@ impl Language {
             "py" => Some(Language::Python),
             #[cfg(feature = "lang-typescript")]
             "ts" | "tsx" => Some(Language::TypeScript),
+            #[cfg(feature = "lang-go")]
+            "go" => Some(Language::Go),
             _ => None,
         }
     }
@@ -102,6 +110,8 @@ impl fmt::Display for Language {
             Language::Python => f.write_str("python"),
             #[cfg(feature = "lang-typescript")]
             Language::TypeScript => f.write_str("typescript"),
+            #[cfg(feature = "lang-go")]
+            Language::Go => f.write_str("go"),
         }
     }
 }
@@ -121,6 +131,8 @@ impl FromStr for Language {
             "python" => Ok(Language::Python),
             #[cfg(feature = "lang-typescript")]
             "typescript" => Ok(Language::TypeScript),
+            #[cfg(feature = "lang-go")]
+            "go" => Ok(Language::Go),
             other => Err(format!("unknown Language: {other}")),
         }
     }
@@ -205,6 +217,7 @@ mod tests {
     #[test]
     fn from_str_rejects_unknown() {
         assert!("java".parse::<Language>().is_err());
+        #[cfg(not(feature = "lang-go"))]
         assert!("go".parse::<Language>().is_err());
         assert!("".parse::<Language>().is_err());
         assert!("c++".parse::<Language>().is_err());
@@ -286,9 +299,17 @@ mod tests {
         assert_eq!(Language::from_extension("tsx"), Some(Language::TypeScript));
     }
 
+    #[cfg(feature = "lang-go")]
+    #[test]
+    fn from_extension_maps_go_extension() {
+        assert_eq!(Language::from_extension("go"), Some(Language::Go));
+        assert_eq!(Language::from_extension("GO"), Some(Language::Go));
+    }
+
     #[test]
     fn from_extension_returns_none_for_unknown() {
         assert_eq!(Language::from_extension("java"), None);
+        #[cfg(not(feature = "lang-go"))]
         assert_eq!(Language::from_extension("go"), None);
         assert_eq!(Language::from_extension("cpp"), None);
         assert_eq!(Language::from_extension(""), None);

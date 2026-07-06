@@ -41,6 +41,8 @@ impl ParserFactory {
             Language::Python => tree_sitter_python::LANGUAGE.into(),
             #[cfg(feature = "lang-typescript")]
             Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            #[cfg(feature = "lang-go")]
+            Language::Go => tree_sitter_go::LANGUAGE.into(),
         };
         Ok(ts_lang)
     }
@@ -100,6 +102,13 @@ mod tests {
         assert!(lang.is_ok(), "TypeScript language should be supported");
     }
 
+    #[cfg(feature = "lang-go")]
+    #[test]
+    fn create_language_go_succeeds() {
+        let lang = ParserFactory::create_language(Language::Go);
+        assert!(lang.is_ok(), "Go language should be supported");
+    }
+
     #[test]
     fn create_language_all_variants_succeed() {
         for lang in Language::all() {
@@ -141,6 +150,13 @@ mod tests {
     fn create_parser_typescript_succeeds() {
         let parser = ParserFactory::create_parser(Language::TypeScript);
         assert!(parser.is_ok(), "TypeScript parser should be creatable");
+    }
+
+    #[cfg(feature = "lang-go")]
+    #[test]
+    fn create_parser_go_succeeds() {
+        let parser = ParserFactory::create_parser(Language::Go);
+        assert!(parser.is_ok(), "Go parser should be creatable");
     }
 
     #[test]
@@ -223,6 +239,19 @@ mod tests {
         assert!(
             !tree.root_node().has_error(),
             "TypeScript source should parse without errors"
+        );
+    }
+
+    #[cfg(feature = "lang-go")]
+    #[test]
+    fn parse_simple_go_file() {
+        let mut parser = ParserFactory::create_parser(Language::Go).unwrap();
+        let tree = parser
+            .parse("package main\nfunc foo() {}\n", None)
+            .expect("Go parse failed");
+        assert!(
+            !tree.root_node().has_error(),
+            "Go source should parse without errors"
         );
     }
 

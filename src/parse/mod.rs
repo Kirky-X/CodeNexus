@@ -36,6 +36,8 @@ pub mod error;
 pub mod extractor;
 #[cfg(feature = "lang-fortran")]
 pub mod fortran;
+#[cfg(feature = "lang-go")]
+pub mod go;
 pub mod module;
 pub mod parallel;
 pub mod parser_factory;
@@ -57,6 +59,8 @@ pub use extractor::{
 };
 #[cfg(feature = "lang-fortran")]
 pub use fortran::FortranExtractor;
+#[cfg(feature = "lang-go")]
+pub use go::GoExtractor;
 pub use parallel::{
     parallel_parse, parallel_parse_ram_first, parse_single, ParallelParseResult, RamFirstSources,
 };
