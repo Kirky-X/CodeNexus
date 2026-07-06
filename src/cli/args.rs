@@ -78,6 +78,9 @@ pub enum Command {
     /// List all MCP tools + their handlers (T008, v0.2.0).
     #[cfg(feature = "api-review")]
     ApiToolMap(ToolMapArgs),
+    /// Detect communities in the CALLS graph via Louvain (T009, v0.2.0).
+    #[cfg(feature = "community")]
+    Community(CommunityArgs),
 }
 
 /// Arguments for the `index` subcommand (PRD §4.1.3).
@@ -483,6 +486,27 @@ pub struct ToolMapArgs {
     /// Database path.
     #[arg(long, default_value = "./codenexus.lbug")]
     pub db: String,
+}
+
+/// Arguments for the `community` subcommand (T009, v0.2.0).
+///
+/// Runs Louvain modularity optimization on the project's `CALLS` graph and
+/// prints the detected communities as a JSON object
+/// `{ project, resolution, communities: [...] }`. Each community entry has
+/// `id`, `members` (FQN list), `modularity` (Q_c contribution), and `size`.
+#[cfg(feature = "community")]
+#[derive(Parser, Debug, Clone, PartialEq)]
+pub struct CommunityArgs {
+    /// Project name (the multi-project isolation key).
+    pub project: String,
+    /// Database path.
+    #[arg(long, default_value = "./codenexus.lbug")]
+    pub db: String,
+    /// Louvain resolution parameter (γ). Higher values produce more, smaller
+    /// communities; lower values produce fewer, larger communities. Default
+    /// is `1.0` (standard Newman modularity). Must be > 0.
+    #[arg(long)]
+    pub resolution: Option<f64>,
 }
 
 #[cfg(test)]
@@ -1471,6 +1495,62 @@ mod tests {
         let a = ToolMapArgs {
             project: "demo".into(),
             db: "/tmp/x.lbug".into(),
+        };
+        assert_eq!(a, a.clone());
+    }
+
+    // --- Community (T009, v0.2.0) ---
+
+    #[test]
+    #[cfg(feature = "community")]
+    fn cli_parses_community_subcommand_defaults() {
+        let cli = Cli::parse_from(["codenexus", "community", "demo"]);
+        match cli.command {
+            Command::Community(args) => {
+                assert_eq!(args.project, "demo");
+                assert_eq!(args.db, "./codenexus.lbug");
+                assert!(args.resolution.is_none());
+            }
+            other => panic!("expected Community, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "community")]
+    fn cli_parses_community_with_db_and_resolution() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "community",
+            "demo",
+            "--db",
+            "/tmp/x.lbug",
+            "--resolution",
+            "2.5",
+        ]);
+        match cli.command {
+            Command::Community(args) => {
+                assert_eq!(args.project, "demo");
+                assert_eq!(args.db, "/tmp/x.lbug");
+                assert!((args.resolution.unwrap() - 2.5).abs() < f64::EPSILON);
+            }
+            other => panic!("expected Community, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "community")]
+    fn community_requires_project_arg() {
+        let result = Cli::try_parse_from(["codenexus", "community"]);
+        assert!(result.is_err(), "community without project should fail");
+    }
+
+    #[test]
+    #[cfg(feature = "community")]
+    fn community_args_clone_eq() {
+        let a = CommunityArgs {
+            project: "demo".into(),
+            db: "/tmp/x.lbug".into(),
+            resolution: Some(2.0),
         };
         assert_eq!(a, a.clone());
     }

@@ -49,7 +49,7 @@ default = ["full"]
 # once all modules migrated to `build_kit`.
 minimal = ["lang-rust"]
 core = ["lang-c", "lang-rust", "lang-python"]
-full = ["core", "lang-fortran", "lang-typescript", "lang-go", "lang-java", "lang-cpp", "daemon", "analysis", "api-review"]
+full = ["core", "lang-fortran", "lang-typescript", "lang-go", "lang-java", "lang-cpp", "daemon", "analysis", "api-review", "community"]
 # Per-language features (each pulls its tree-sitter grammar)
 lang-c = ["dep:tree-sitter-c"]
 lang-rust = ["dep:tree-sitter-rust"]
@@ -72,6 +72,10 @@ analysis = []
 # API review toolkit (T008): route-map / shape-check / api-impact / tool-map.
 # Pure Cypher queries over the existing graph — no new dependencies.
 api-review = ["analysis"]
+# Community detection (T009): Louvain modularity optimization on the CALLS
+# graph. Depends on `analysis` for the `&dyn Storage` capability pattern and
+# `petgraph` for the in-memory weighted undirected graph.
+community = ["analysis", "dep:petgraph"]
 
 [dependencies]
 # Unified module interface & Kit capability registry (T6/unified-architecture
@@ -169,6 +173,11 @@ lz4_flex = "0.11"
 
 # UUIDv7 for IDs
 uuid = { version = "1", features = ["v7"] }
+
+# Graph data structure for community detection (T009): Louvain runs on a
+# `petgraph::graph::UnGraph<String, f64>`. Default features disabled to keep
+# the binary lean (we only need the core graph + stable graph APIs).
+petgraph = { version = "0.6", default-features = false, optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

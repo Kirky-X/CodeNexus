@@ -28,6 +28,8 @@ pub mod architecture_cmd;
 #[cfg(feature = "api-review")]
 pub mod api_impact_cmd;
 pub mod clean_cmd;
+#[cfg(feature = "community")]
+pub mod community_cmd;
 pub mod context_cmd;
 #[cfg(feature = "analysis")]
 pub mod dead_code_cmd;
@@ -73,6 +75,8 @@ mod dispatch_tests {
     use crate::cli::args::{ArchitectureArgs, DeadCodeArgs};
     #[cfg(feature = "api-review")]
     use crate::cli::args::{ApiImpactArgs, RouteMapArgs, ShapeCheckArgs, ToolMapArgs};
+    #[cfg(feature = "community")]
+    use crate::cli::args::CommunityArgs;
     use crate::kit::{build_kit, Kit, KitBootstrapConfig, StorageKey};
     use clap::Parser;
 
@@ -118,6 +122,8 @@ mod dispatch_tests {
             Command::ApiImpact(args) => api_impact_cmd::run(kit, &args),
             #[cfg(feature = "api-review")]
             Command::ApiToolMap(args) => tool_map_cmd::run(kit, &args),
+            #[cfg(feature = "community")]
+            Command::Community(args) => community_cmd::run(kit, &args),
         }
     }
 
@@ -511,6 +517,56 @@ mod dispatch_tests {
         );
     }
 
+    #[test]
+    #[cfg(feature = "community")]
+    fn dispatch_community_calls_community_cmd() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create edge");
+        let cli = Cli::parse_from([
+            "codenexus",
+            "community",
+            "demo",
+            "--db",
+            db.to_str().unwrap(),
+        ]);
+        let result = dispatch(&kit, cli);
+        assert!(
+            result.is_ok(),
+            "dispatch community should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "community")]
+    fn dispatch_community_with_resolution_flag() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create edge");
+        let cli = Cli::parse_from([
+            "codenexus",
+            "community",
+            "demo",
+            "--db",
+            db.to_str().unwrap(),
+            "--resolution",
+            "2.0",
+        ]);
+        let result = dispatch(&kit, cli);
+        assert!(
+            result.is_ok(),
+            "dispatch community --resolution should succeed: {:?}",
+            result.err()
+        );
+    }
+
     /// Returns `true` if the `zstd` binary is available on PATH (H7
     /// export/import shell out to it).
     fn zstd_cli_available() -> bool {
@@ -777,6 +833,12 @@ mod dispatch_tests {
         let _ = ToolMapArgs {
             project: "demo".into(),
             db: "./x.lbug".into(),
+        };
+        #[cfg(feature = "community")]
+        let _ = CommunityArgs {
+            project: "demo".into(),
+            db: "./x.lbug".into(),
+            resolution: None,
         };
     }
 }
