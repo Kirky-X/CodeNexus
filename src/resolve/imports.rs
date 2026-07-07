@@ -16,11 +16,15 @@
 //!
 //! 1. **Direct match**: `source_file` exactly matches a File node's `file_path`
 //!    or `name` (e.g. `"b.rs"`, `"./utils.rs"`).
-//! 2. **Relative path with extension probing**: for paths starting with `.` or
+//! 2. **Rust module paths** (`crate::`, `self::`, `super::`): resolve to
+//!    `src/{path}.rs` or `src/{path}/mod.rs`, stripping a trailing symbol
+//!    name component if the full path doesn't match (e.g.
+//!    `crate::model::Node` → `src/model.rs`).
+//! 3. **Relative path with extension probing**: for paths starting with `.` or
 //!    `/`, resolve relative to the importing file's directory and try common
 //!    extensions (`.ts`, `.tsx`, `.js`, `.rs`, `.go`, `.py`, …) plus
 //!    `index.{ext}` for barrel imports.
-//! 3. **External modules** (no `.`/`/` prefix, e.g. `"react"`, `"std::io"`):
+//! 4. **External modules** (no `.`/`/` prefix, e.g. `"react"`, `"std::io"`):
 //!    no local File node exists → skip with `warn`.
 
 use std::collections::{HashMap, HashSet};
@@ -146,9 +150,12 @@ fn build_file_index(graph: &Graph) -> HashMap<String, String> {
 /// Deterministic resolution (Rule 5) — no LLM, no fuzzy matching:
 ///
 /// 1. Direct match against the file index (handles `"b.rs"`, `"./utils.ts"`).
-/// 2. For relative paths (starting with `.` or `/`), normalise against the
+/// 2. Rust module paths (`crate::`, `self::`, `super::`) resolve to
+///    `src/{path}.rs` or `src/{path}/mod.rs`, stripping a trailing symbol
+///    name component if the full path doesn't match.
+/// 3. For relative paths (starting with `.` or `/`), normalise against the
 ///    importer's directory and probe common extensions + `index.{ext}`.
-/// 3. External bare specifiers (`"react"`, `"std::io"`) return `None`.
+/// 4. External bare specifiers (`"react"`, `"std::io"`) return `None`.
 fn resolve_import_target(
     source_file: &str,
     importer_path: &str,
@@ -159,7 +166,14 @@ fn resolve_import_target(
         return Some(id.clone());
     }
 
-    // Strategy 2: relative path resolution + extension probing.
+    // Strategy 2: Rust module path resolution (crate::, self::, super::).
+    // Rust `use crate::model::Node` produces source_file = "crate::model::Node",
+    // which needs module-path-aware resolution to find src/model.rs.
+    if let Some(id) = resolve_rust_module_path(source_file, importer_path, file_index) {
+        return Some(id);
+    }
+
+    // Strategy 3: relative path resolution + extension probing.
     // Only attempt path resolution for relative specifiers (TS/JS `./`, `../`,
     // or absolute `/`). Bare specifiers like "react" or "std::io" are external.
     let is_relative = source_file.starts_with('.') || source_file.starts_with('/');
@@ -225,6 +239,100 @@ fn normalise_relative(source_file: &str, importer_path: &str) -> String {
         }
     }
     segments.join("/")
+}
+
+/// Resolves a Rust module path (`crate::`, `self::`, `super::` prefix) to a
+/// target File node id.
+///
+/// Rust `use crate::model::Node` produces `source_file = "crate::model::Node"`.
+/// The last component (`Node`) is typically a symbol name, not a module, so we
+/// try both the full path and the parent path (stripping the last component).
+///
+/// # Candidates (tried in order)
+///
+/// For `crate::a::b`:
+/// 1. `src/a/b.rs`, `src/a/b/mod.rs` (full path as module)
+/// 2. `src/a.rs`, `src/a/mod.rs` (last component is symbol name)
+///
+/// For `self::b` / `super::b`, the same logic applies but the path is
+/// normalised relative to the importer's directory first.
+fn resolve_rust_module_path(
+    source_file: &str,
+    importer_path: &str,
+    file_index: &HashMap<String, String>,
+) -> Option<String> {
+    // Detect Rust module path prefixes. Return None for non-Rust specifiers
+    // (e.g. "react", "./b.ts") so Strategy 3 (relative path) can handle them.
+    if let Some(module_path) = source_file.strip_prefix("crate::") {
+        let path = module_path.replace("::", "/");
+        return try_candidates(&rust_crate_candidates(&path), file_index);
+    }
+
+    if let Some(module_path) = source_file.strip_prefix("self::") {
+        let path = module_path.replace("::", "/");
+        let relative = format!("./{path}");
+        let normalised = normalise_relative(&relative, importer_path);
+        return try_candidates(&rust_relative_candidates(&normalised), file_index);
+    }
+
+    if let Some(module_path) = source_file.strip_prefix("super::") {
+        let path = module_path.replace("::", "/");
+        let relative = format!("../{path}");
+        let normalised = normalise_relative(&relative, importer_path);
+        return try_candidates(&rust_relative_candidates(&normalised), file_index);
+    }
+
+    None
+}
+
+/// Returns the first match from a list of candidate file paths.
+fn try_candidates(candidates: &[String], file_index: &HashMap<String, String>) -> Option<String> {
+    for candidate in candidates {
+        if let Some(id) = file_index.get(candidate) {
+            return Some(id.clone());
+        }
+    }
+    None
+}
+
+/// Generates candidate file paths for `crate::` prefixed module paths.
+///
+/// `crate::a::b` (path = "a/b") tries:
+/// - `src/a/b.rs`, `src/a/b/mod.rs` (full path as module)
+/// - `src/a.rs`, `src/a/mod.rs` (last component is symbol name)
+fn rust_crate_candidates(path: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    // Full path: the entire path is a module file.
+    candidates.push(format!("src/{path}.rs"));
+    candidates.push(format!("src/{path}/mod.rs"));
+    // Parent path: last component is a symbol name (e.g. `Node` in `model::Node`).
+    if let Some((parent, _)) = path.rsplit_once('/') {
+        candidates.push(format!("src/{parent}.rs"));
+        candidates.push(format!("src/{parent}/mod.rs"));
+    }
+    candidates
+}
+
+/// Generates candidate file paths for `self::`/`super::` prefixed module paths.
+///
+/// `self::b` (normalised = "src/b") tries:
+/// - `src/b.rs`, `src/b/mod.rs` (full path as module)
+/// - `src.rs`, `src/mod.rs` — unlikely but covered for single-component parents
+///
+/// `self::a::b` (normalised = "src/a/b") tries:
+/// - `src/a/b.rs`, `src/a/b/mod.rs` (full path as module)
+/// - `src/a.rs`, `src/a/mod.rs` (last component is symbol name)
+fn rust_relative_candidates(normalised: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    // Full path: the entire normalised path is a module file.
+    candidates.push(format!("{normalised}.rs"));
+    candidates.push(format!("{normalised}/mod.rs"));
+    // Parent path: last component is a symbol name.
+    if let Some((parent, _)) = normalised.rsplit_once('/') {
+        candidates.push(format!("{parent}.rs"));
+        candidates.push(format!("{parent}/mod.rs"));
+    }
+    candidates
 }
 
 #[cfg(test)]
@@ -641,5 +749,267 @@ mod tests {
         let edges = resolver.resolve_imports(&results, &mut graph);
 
         assert!(edges.is_empty(), "source file not in graph → no edges");
+    }
+
+    // --- resolve_imports: Rust module path resolution (crate::) ---
+
+    #[test]
+    fn resolve_imports_resolves_rust_crate_prefix_to_src_file() {
+        // src/lib.rs imports `crate::model` → src/model.rs
+        let mut lib_result = make_result("src/lib.rs");
+        lib_result.imports.push(crate::ir::ImportInfo {
+            source_file: "crate::model".to_string(),
+            imported_names: vec!["Node".to_string()],
+            line: 1,
+        });
+        let results = vec![lib_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/lib.rs", "proj"));
+        graph.add_node(make_file_node("src/model.rs", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(edges.len(), 1, "crate:: prefix should resolve to src/model.rs");
+        assert_eq!(edges[0].source, "src/lib.rs");
+        assert_eq!(edges[0].target, "src/model.rs");
+    }
+
+    #[test]
+    fn resolve_imports_resolves_rust_crate_prefix_with_symbol_name() {
+        // src/lib.rs imports `crate::model::Node` → src/model.rs (Node is a symbol)
+        let mut lib_result = make_result("src/lib.rs");
+        lib_result.imports.push(crate::ir::ImportInfo {
+            source_file: "crate::model::Node".to_string(),
+            imported_names: vec!["Node".to_string()],
+            line: 1,
+        });
+        let results = vec![lib_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/lib.rs", "proj"));
+        graph.add_node(make_file_node("src/model.rs", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(
+            edges.len(),
+            1,
+            "symbol name should be stripped, resolving to src/model.rs"
+        );
+        assert_eq!(edges[0].target, "src/model.rs");
+    }
+
+    #[test]
+    fn resolve_imports_resolves_rust_crate_prefix_to_mod_file() {
+        // src/lib.rs imports `crate::model` → src/model/mod.rs
+        let mut lib_result = make_result("src/lib.rs");
+        lib_result.imports.push(crate::ir::ImportInfo {
+            source_file: "crate::model".to_string(),
+            imported_names: vec![],
+            line: 1,
+        });
+        let results = vec![lib_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/lib.rs", "proj"));
+        graph.add_node(make_file_node("src/model/mod.rs", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(
+            edges.len(),
+            1,
+            "crate:: prefix should resolve to src/model/mod.rs"
+        );
+        assert_eq!(edges[0].target, "src/model/mod.rs");
+    }
+
+    #[test]
+    fn resolve_imports_resolves_rust_crate_nested_module() {
+        // src/lib.rs imports `crate::parse::parser` → src/parse/parser.rs
+        let mut lib_result = make_result("src/lib.rs");
+        lib_result.imports.push(crate::ir::ImportInfo {
+            source_file: "crate::parse::parser".to_string(),
+            imported_names: vec![],
+            line: 1,
+        });
+        let results = vec![lib_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/lib.rs", "proj"));
+        graph.add_node(make_file_node("src/parse/parser.rs", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(edges.len(), 1, "nested crate:: path should resolve");
+        assert_eq!(edges[0].target, "src/parse/parser.rs");
+    }
+
+    // --- resolve_imports: Rust module path resolution (self::, super::) ---
+
+    #[test]
+    fn resolve_imports_resolves_rust_self_prefix() {
+        // src/lib.rs imports `self::model` → src/model.rs
+        let mut lib_result = make_result("src/lib.rs");
+        lib_result.imports.push(crate::ir::ImportInfo {
+            source_file: "self::model".to_string(),
+            imported_names: vec![],
+            line: 1,
+        });
+        let results = vec![lib_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/lib.rs", "proj"));
+        graph.add_node(make_file_node("src/model.rs", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(edges.len(), 1, "self:: prefix should resolve");
+        assert_eq!(edges[0].target, "src/model.rs");
+    }
+
+    #[test]
+    fn resolve_imports_resolves_rust_super_prefix() {
+        // src/sub/mod.rs imports `super::model` → src/model.rs
+        let mut sub_result = make_result("src/sub/mod.rs");
+        sub_result.imports.push(crate::ir::ImportInfo {
+            source_file: "super::model".to_string(),
+            imported_names: vec![],
+            line: 1,
+        });
+        let results = vec![sub_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/sub/mod.rs", "proj"));
+        graph.add_node(make_file_node("src/model.rs", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(edges.len(), 1, "super:: prefix should resolve");
+        assert_eq!(edges[0].target, "src/model.rs");
+    }
+
+    #[test]
+    fn resolve_imports_resolves_rust_super_prefix_with_symbol() {
+        // src/sub/mod.rs imports `super::model::Node` → src/model.rs
+        let mut sub_result = make_result("src/sub/mod.rs");
+        sub_result.imports.push(crate::ir::ImportInfo {
+            source_file: "super::model::Node".to_string(),
+            imported_names: vec![],
+            line: 1,
+        });
+        let results = vec![sub_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/sub/mod.rs", "proj"));
+        graph.add_node(make_file_node("src/model.rs", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(edges.len(), 1, "super:: with symbol should strip last component");
+        assert_eq!(edges[0].target, "src/model.rs");
+    }
+
+    // --- resolve_imports: Rust external crate skipped ---
+
+    #[test]
+    fn resolve_imports_skips_rust_external_crate() {
+        // src/lib.rs imports `std::io` (external crate) — no File node, skip.
+        let mut lib_result = make_result("src/lib.rs");
+        lib_result.imports.push(crate::ir::ImportInfo {
+            source_file: "std::io".to_string(),
+            imported_names: vec!["Read".to_string()],
+            line: 1,
+        });
+        let results = vec![lib_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/lib.rs", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert!(edges.is_empty(), "external crate (std::io) → no edge");
+    }
+
+    // --- resolve_rust_module_path helper (direct unit tests) ---
+
+    #[test]
+    fn resolve_rust_module_path_crate_prefix_resolves_src_file() {
+        let mut index = HashMap::new();
+        index.insert("src/model.rs".to_string(), "id-model".to_string());
+
+        let result = resolve_rust_module_path("crate::model", "src/lib.rs", &index);
+        assert_eq!(result, Some("id-model".to_string()));
+    }
+
+    #[test]
+    fn resolve_rust_module_path_crate_prefix_with_symbol_strips_last() {
+        let mut index = HashMap::new();
+        index.insert("src/model.rs".to_string(), "id-model".to_string());
+
+        let result = resolve_rust_module_path("crate::model::Node", "src/lib.rs", &index);
+        assert_eq!(result, Some("id-model".to_string()));
+    }
+
+    #[test]
+    fn resolve_rust_module_path_crate_prefix_resolves_mod_file() {
+        let mut index = HashMap::new();
+        index.insert("src/model/mod.rs".to_string(), "id-model-mod".to_string());
+
+        let result = resolve_rust_module_path("crate::model", "src/lib.rs", &index);
+        assert_eq!(result, Some("id-model-mod".to_string()));
+    }
+
+    #[test]
+    fn resolve_rust_module_path_external_returns_none() {
+        let mut index = HashMap::new();
+        index.insert("src/model.rs".to_string(), "id-model".to_string());
+
+        let result = resolve_rust_module_path("std::io", "src/lib.rs", &index);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn resolve_rust_module_path_non_rust_returns_none() {
+        let index = HashMap::new();
+
+        let result = resolve_rust_module_path("react", "src/lib.ts", &index);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn resolve_rust_module_path_no_match_returns_none() {
+        let mut index = HashMap::new();
+        index.insert("src/other.rs".to_string(), "id-other".to_string());
+
+        let result = resolve_rust_module_path("crate::nonexistent", "src/lib.rs", &index);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn resolve_rust_module_path_self_prefix_resolves() {
+        let mut index = HashMap::new();
+        index.insert("src/model.rs".to_string(), "id-model".to_string());
+
+        let result = resolve_rust_module_path("self::model", "src/lib.rs", &index);
+        assert_eq!(result, Some("id-model".to_string()));
+    }
+
+    #[test]
+    fn resolve_rust_module_path_super_prefix_resolves() {
+        let mut index = HashMap::new();
+        index.insert("src/model.rs".to_string(), "id-model".to_string());
+
+        let result = resolve_rust_module_path("super::model", "src/sub/mod.rs", &index);
+        assert_eq!(result, Some("id-model".to_string()));
     }
 }
