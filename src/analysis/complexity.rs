@@ -8,6 +8,7 @@
 //! (Green / Yellow / Red).
 
 use serde::Serialize;
+use tree_sitter::Node;
 
 use crate::model::Language;
 
@@ -183,9 +184,49 @@ pub fn is_branch_node(language: Language, node_type: &str) -> bool {
     }
 }
 
+/// Computes cyclomatic complexity (McCabe) for the given parse tree.
+///
+/// Starts at CC=1 (entry point) and adds 1 for each branch node, each `&&`/`||`
+/// operator in binary expressions, and each `match_arm` beyond the first.
+pub fn calc_cyclomatic(tree: &tree_sitter::Tree, language: Language) -> u32 {
+    1 + cyclomatic_count(tree.root_node(), language)
+}
+
+fn cyclomatic_count(node: Node<'_>, language: Language) -> u32 {
+    let mut count = 0;
+    let kind = node.kind();
+
+    if is_branch_node(language, kind) {
+        count += 1;
+    }
+
+    let is_binary = kind == "binary_expression";
+    let is_match = kind == "match_expression";
+    let mut arm_count = 0u32;
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if is_binary && (child.kind() == "&&" || child.kind() == "||") {
+            count += 1;
+        }
+        if is_match && child.kind() == "match_arm" {
+            arm_count += 1;
+        }
+        count += cyclomatic_count(child, language);
+    }
+
+    if is_match {
+        count += arm_count.saturating_sub(1);
+    }
+
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::parse::parser_factory::ParserFactory;
 
     // --- T005: is_branch_node tests ---
 
@@ -304,5 +345,43 @@ mod tests {
         assert!(!is_branch_node(Language::Rust, "identifier"));
         assert!(!is_branch_node(Language::Rust, "string_literal"));
         assert!(!is_branch_node(Language::Rust, "totally_made_up_node"));
+    }
+
+    // --- T007: calc_cyclomatic tests ---
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn calc_cyclomatic_empty_function() {
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse("fn empty() {}", None).unwrap();
+        assert_eq!(calc_cyclomatic(&tree, Language::Rust), 1);
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn calc_cyclomatic_branches() {
+        let src = r#"
+fn complex(x: i32) {
+    if x > 0 {
+        for i in 0..x {
+            if i % 2 == 0 {
+                println!("{}", i);
+            }
+        }
+    }
+}
+"#;
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(calc_cyclomatic(&tree, Language::Rust), 4);
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn calc_cyclomatic_logical_operators() {
+        let src = "fn logic(a: bool, b: bool) { if a && b || a { } }";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(calc_cyclomatic(&tree, Language::Rust), 4);
     }
 }
