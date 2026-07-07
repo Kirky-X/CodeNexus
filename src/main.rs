@@ -142,6 +142,11 @@ fn run_command(command: Command) -> Result<(), CliError> {
             let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
             codenexus::cli::architecture_cmd::run(&kit, &args)
         }
+        #[cfg(feature = "complexity")]
+        Command::Complexity(args) => {
+            let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
+            codenexus::cli::complexity_cmd::run(&kit, &args)
+        }
         #[cfg(feature = "api-review")]
         Command::ApiRouteMap(args) => {
             let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;

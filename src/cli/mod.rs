@@ -28,6 +28,8 @@ pub mod architecture_cmd;
 #[cfg(feature = "api-review")]
 pub mod api_impact_cmd;
 pub mod clean_cmd;
+#[cfg(feature = "complexity")]
+pub mod complexity_cmd;
 #[cfg(feature = "community")]
 pub mod community_cmd;
 pub mod context_cmd;
@@ -77,6 +79,8 @@ mod dispatch_tests {
     use crate::cli::args::DaemonArgs;
     #[cfg(feature = "analysis")]
     use crate::cli::args::{ArchitectureArgs, DeadCodeArgs};
+    #[cfg(feature = "complexity")]
+    use crate::cli::args::ComplexityArgs;
     #[cfg(feature = "api-review")]
     use crate::cli::args::{ApiImpactArgs, RouteMapArgs, ShapeCheckArgs, ToolMapArgs};
     #[cfg(feature = "community")]
@@ -120,6 +124,8 @@ mod dispatch_tests {
             Command::DeadCode(args) => dead_code_cmd::run(kit, &args),
             #[cfg(feature = "analysis")]
             Command::Architecture(args) => architecture_cmd::run(kit, &args),
+            #[cfg(feature = "complexity")]
+            Command::Complexity(args) => complexity_cmd::run(kit, &args),
             #[cfg(feature = "api-review")]
             Command::ApiRouteMap(args) => route_map_cmd::run(kit, &args),
             #[cfg(feature = "api-review")]
@@ -436,6 +442,28 @@ mod dispatch_tests {
         assert!(
             result.is_ok(),
             "dispatch architecture should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "complexity")]
+    fn dispatch_complexity_calls_complexity_cmd() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fn a() {}', parentQn: ''});").expect("create a");
+        let cli = Cli::parse_from([
+            "codenexus",
+            "complexity",
+            "demo",
+            "--db",
+            db.to_str().unwrap(),
+        ]);
+        let result = dispatch(&kit, cli);
+        assert!(
+            result.is_ok(),
+            "dispatch complexity should succeed: {:?}",
             result.err()
         );
     }
@@ -894,6 +922,13 @@ mod dispatch_tests {
         let _ = ArchitectureArgs {
             project: "demo".into(),
             db: "./x.lbug".into(),
+        };
+        #[cfg(feature = "complexity")]
+        let _ = ComplexityArgs {
+            project: "demo".into(),
+            db: "./x.lbug".into(),
+            red_only: false,
+            sort_by_severity: false,
         };
         #[cfg(feature = "api-review")]
         let _ = RouteMapArgs {
