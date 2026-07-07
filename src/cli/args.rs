@@ -66,6 +66,9 @@ pub enum Command {
     /// Show a project's architecture overview (T006, v0.1.6).
     #[cfg(feature = "analysis")]
     Architecture(ArchitectureArgs),
+    /// Analyse code complexity metrics (cyclomatic, cognitive, nesting, length) (T-v0.2.1).
+    #[cfg(feature = "complexity")]
+    Complexity(ComplexityArgs),
     /// List all API routes + handlers + middleware (T008, v0.2.0).
     #[cfg(feature = "api-review")]
     ApiRouteMap(RouteMapArgs),
@@ -434,6 +437,27 @@ pub struct ArchitectureArgs {
     /// Database path.
     #[arg(long, default_value = "./codenexus.lbug")]
     pub db: String,
+}
+
+/// Arguments for the `complexity` subcommand (v0.2.1).
+///
+/// Calculates AST-based complexity metrics (cyclomatic, cognitive, nesting
+/// depth, function length) for all functions in a project. Output is a JSON
+/// object with `complexity` array and `summary` statistics.
+#[cfg(feature = "complexity")]
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct ComplexityArgs {
+    /// Project name (the multi-project isolation key).
+    pub project: String,
+    /// Database path.
+    #[arg(long, default_value = "./codenexus.lbug")]
+    pub db: String,
+    /// Only show Red-level high-risk functions.
+    #[arg(long)]
+    pub red_only: bool,
+    /// Sort output by overall severity (Red first).
+    #[arg(long)]
+    pub sort_by_severity: bool,
 }
 
 /// Arguments for the `api-route-map` subcommand (T008, v0.2.0).
@@ -1809,6 +1833,65 @@ mod tests {
             line: 3,
             col: 4,
             workspace: ".".into(),
+        };
+        assert_eq!(a, a.clone());
+    }
+
+    // --- Complexity (T017, v0.2.1) ---
+
+    #[test]
+    #[cfg(feature = "complexity")]
+    fn cli_parses_complexity_subcommand_defaults() {
+        let cli = Cli::parse_from(["codenexus", "complexity", "demo"]);
+        match cli.command {
+            Command::Complexity(args) => {
+                assert_eq!(args.project, "demo");
+                assert_eq!(args.db, "./codenexus.lbug");
+                assert!(!args.red_only);
+                assert!(!args.sort_by_severity);
+            }
+            other => panic!("expected Complexity, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "complexity")]
+    fn cli_parses_complexity_with_flags() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "complexity",
+            "demo",
+            "--db",
+            "/tmp/x.lbug",
+            "--red-only",
+            "--sort-by-severity",
+        ]);
+        match cli.command {
+            Command::Complexity(args) => {
+                assert_eq!(args.project, "demo");
+                assert_eq!(args.db, "/tmp/x.lbug");
+                assert!(args.red_only);
+                assert!(args.sort_by_severity);
+            }
+            other => panic!("expected Complexity, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "complexity")]
+    fn complexity_requires_project_arg() {
+        let result = Cli::try_parse_from(["codenexus", "complexity"]);
+        assert!(result.is_err(), "complexity without project should fail");
+    }
+
+    #[test]
+    #[cfg(feature = "complexity")]
+    fn complexity_args_clone_eq() {
+        let a = ComplexityArgs {
+            project: "demo".into(),
+            db: "/tmp/x.lbug".into(),
+            red_only: true,
+            sort_by_severity: false,
         };
         assert_eq!(a, a.clone());
     }
