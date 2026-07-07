@@ -222,6 +222,36 @@ fn cyclomatic_count(node: Node<'_>, language: Language) -> u32 {
     count
 }
 
+/// Computes cognitive complexity for the given parse tree.
+///
+/// Increments by `(1 + nesting_level)` for each branch node and each `&&`/`||`
+/// operator. Nesting level increases when descending into a branch node's body.
+pub fn calc_cognitive(tree: &tree_sitter::Tree, language: Language) -> u32 {
+    cognitive_count(tree.root_node(), language, 0)
+}
+
+fn cognitive_count(node: Node<'_>, language: Language, nesting: u32) -> u32 {
+    let mut count = 0;
+    let kind = node.kind();
+    let is_branch = is_branch_node(language, kind);
+    let is_binary = kind == "binary_expression";
+
+    if is_branch {
+        count += 1 + nesting;
+    }
+
+    let child_nesting = if is_branch { nesting + 1 } else { nesting };
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if is_binary && (child.kind() == "&&" || child.kind() == "||") {
+            count += 1 + nesting;
+        }
+        count += cognitive_count(child, language, child_nesting);
+    }
+
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,5 +413,51 @@ fn complex(x: i32) {
         let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
         let tree = parser.parse(src, None).unwrap();
         assert_eq!(calc_cyclomatic(&tree, Language::Rust), 4);
+    }
+
+    // --- T009: calc_cognitive tests ---
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn calc_cognitive_nested_if() {
+        let src = r#"
+fn nested(a: i32, b: i32, c: i32) {
+    if a > 0 {
+        if b > 0 {
+            if c > 0 {
+                println!("deep");
+            }
+        }
+    }
+}
+"#;
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(calc_cognitive(&tree, Language::Rust), 6);
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn calc_cognitive_sequential_ifs() {
+        let src = r#"
+fn flat(a: i32) {
+    if a > 0 { }
+    if a > 1 { }
+    if a > 2 { }
+    if a > 3 { }
+    if a > 4 { }
+}
+"#;
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(calc_cognitive(&tree, Language::Rust), 5);
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn calc_cognitive_empty_function() {
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse("fn empty() {}", None).unwrap();
+        assert_eq!(calc_cognitive(&tree, Language::Rust), 0);
     }
 }
