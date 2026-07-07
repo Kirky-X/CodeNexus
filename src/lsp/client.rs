@@ -44,7 +44,7 @@ use lsp_types::request::{GotoDefinition, GotoTypeDefinition, HoverRequest, Initi
 use lsp_types::{
     ClientCapabilities, GotoDefinitionParams, GotoDefinitionResponse, HoverParams,
     InitializeParams, InitializedParams, PartialResultParams, Position, TextDocumentIdentifier,
-    TextDocumentPositionParams, Url, WorkDoneProgressParams,
+    TextDocumentPositionParams, Url, WorkDoneProgressParams, WorkspaceFolder,
 };
 
 use super::{LspError, LspProvider, REQUEST_TIMEOUT_MS};
@@ -143,7 +143,13 @@ impl LspProvider for RustAnalyzerClient {
         let root_uri = path_to_url(workspace)?;
         let init_params = InitializeParams {
             process_id: Some(std::process::id()),
-            root_uri: Some(root_uri),
+            workspace_folders: Some(vec![WorkspaceFolder {
+                uri: root_uri,
+                name: workspace
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "workspace".to_string()),
+            }]),
             capabilities: ClientCapabilities::default(),
             ..Default::default()
         };

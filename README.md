@@ -4,9 +4,7 @@
 
 **基于 LadybugDB 与 tree-sitter 的多语言代码知识图谱工具**
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Rust Version](https://img.shields.io/badge/rust-1.81%2B-orange.svg)](https://www.rust-lang.org)
-[![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Rust Version](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org) [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml)
 
 [English](README_EN.md) | 简体中文
 
@@ -16,13 +14,13 @@
 
 CodeNexus 将源代码仓库索引为可查询的知识图谱。它使用 [tree-sitter](https://tree-sitter.github.io/) 进行多语言语法解析，[LadybugDB](https://github.com/ladybugdb/ladybugdb) 进行图存储，支持符号追踪、影响分析和数据流分析。
 
-支持 **5 种语言**：C、Rust、Fortran、Python、TypeScript。
+支持 **8 种语言**：C、Rust、Fortran、Python、TypeScript、Go、Java、C++。
 
 ## 核心特性
 
 | 特性 | 说明 |
 |------|------|
-| 多语言解析 | C / Rust / Fortran / Python / TypeScript，基于 tree-sitter |
+| 多语言解析 | C / Rust / Fortran / Python / TypeScript / Go / Java / C++，基于 tree-sitter |
 | 图数据库 | LadybugDB 图存储，44 种节点类型 + 24 种边类型 |
 | 增量索引 | SHA-256 文件哈希比对，仅重新解析变更文件 |
 | 并行解析 | Rayon 并行 + 线程局部 parser 池 |
@@ -51,21 +49,43 @@ cargo build --release
 
 ### Feature 开关
 
+**预设**：`default = ["full"]`
+
 | Feature | 默认 | 说明 |
 |---------|------|------|
+| `minimal` | — | 最小预设：仅 `lang-rust` |
+| `core` | — | 核心预设：`lang-c` + `lang-rust` + `lang-python` |
+| `full` | 启用 | 完整预设：`core` + Fortran/TypeScript/Go/Java/C++ + daemon/analysis/api-review/community/cross-service/lsp |
+| `lang-c` | — | C 语言解析器（tree-sitter-c） |
+| `lang-rust` | 启用 | Rust 语言解析器（tree-sitter-rust） |
+| `lang-fortran` | — | Fortran 语言解析器（tree-sitter-fortran） |
+| `lang-python` | — | Python 语言解析器（tree-sitter-python） |
+| `lang-typescript` | — | TypeScript 语言解析器（tree-sitter-typescript） |
+| `lang-go` | — | Go 语言解析器（tree-sitter-go） |
+| `lang-java` | — | Java 语言解析器（tree-sitter-java） |
+| `lang-cpp` | — | C++ 语言解析器（tree-sitter-cpp） |
 | `daemon` | 启用 | 文件监视守护进程（notify + notify-debouncer-full） |
-| `embed` | 关闭 | 向量嵌入语义搜索（reqwest HTTP 客户端） |
-| `lsp` | 关闭 | LSP 增强解析（预留，当前未实现） |
-| `lang-rust` | 启用 | Rust 语言解析器（最小单语言构建） |
+| `embed` | 关闭 | 向量嵌入语义搜索（reqwest HTTP + 本地 ONNX 推理） |
+| `lsp` | 关闭 | LSP 增强解析（rust-analyzer 集成，语义类型增强） |
+| `analysis` | 启用 | 死代码检测 + 架构概览（纯 Cypher 聚合） |
+| `api-review` | 启用 | API 审查工具包（route-map/shape-check/api-impact/tool-map） |
+| `community` | 启用 | 社区检测（Louvain 模块度优化，依赖 petgraph） |
+| `cross-service` | 启用 | 跨服务调用链检测（HTTP 路由模式匹配） |
 
 ```bash
-# 精简构建（不含 daemon，减小二进制体积）
-cargo build --release --no-default-features
+# 最小构建（仅 Rust，不含 daemon/analysis）
+cargo build --release --no-default-features --features minimal
 
-# 最小单语言构建（仅 Rust，不含 daemon）
-cargo build --release --no-default-features --features lang-rust
+# 核心构建（C + Rust + Python）
+cargo build --release --no-default-features --features core
 
-# 完整构建（含嵌入）
+# 单语言精简构建（例如仅 C）
+cargo build --release --no-default-features --features lang-c
+
+# 完整构建（默认，含所有语言 + 全部功能）
+cargo build --release
+
+# 含向量嵌入的构建
 cargo build --release --features embed
 ```
 
@@ -144,6 +164,14 @@ codenexus clean myproject
 | `status` | 查看索引状态 |
 | `list` | 列出所有已索引项目 |
 | `clean` | 删除项目及其索引 |
+| `dead-code` | 死代码检测（未被调用的函数，`analysis` feature） |
+| `architecture` | 架构概览（模块依赖图，`analysis` feature） |
+| `api-route-map` | HTTP 路由映射（API 端点清单，`api-review` feature） |
+| `api-shape-check` | API 形状检查（请求/响应结构验证，`api-review` feature） |
+| `api-impact` | API 变更影响分析（`api-review` feature） |
+| `api-tool-map` | 工具映射（MCP 工具清单，`api-review` feature） |
+| `community` | 社区检测（Louvain 模块度优化，`community` feature） |
+| `cross-service` | 跨服务调用链检测（HTTP 路由模式匹配，`cross-service` feature） |
 
 ## 架构
 
@@ -184,6 +212,9 @@ codenexus clean myproject
 | Fortran | Module, Function | Calls, Imports, FfiCalls |
 | Python | Function, Method, Class | Calls, Imports, Extends |
 | TypeScript | Function, Class, Method, Interface, Enum, TypeAlias, Const | Calls, Imports |
+| Go | Function, Method, Struct, Interface, TypeAlias | Defines, Calls, Imports |
+| Java | Class, Interface, Enum, Method | Defines, Calls, Imports |
+| C++ | Function, Method, Class, Struct, Namespace, Enum, Template | Defines, Calls, Imports |
 
 ## 开发
 

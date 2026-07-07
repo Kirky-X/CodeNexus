@@ -496,7 +496,7 @@ pub(crate) fn now_unix_seconds() -> i64 {
 ///   nodes and non-`.rs` files are left untouched.
 /// * `workspace` - The workspace root passed to `provider.start()` (used by
 ///   rust-analyzer as `rootUri`).
-#[cfg(feature = "lsp")]
+#[cfg(all(test, feature = "lsp"))]
 pub(crate) fn enhance_with_lsp(
     provider: &dyn crate::lsp::LspProvider,
     nodes: &mut [crate::model::Node],
@@ -564,7 +564,7 @@ pub(crate) fn enhance_with_lsp(
 
 /// Writes `text` into `node.properties["semantic_type"]`, converting a `Null`
 /// properties value to an empty object first so the field can be set.
-#[cfg(feature = "lsp")]
+#[cfg(all(test, feature = "lsp"))]
 fn write_semantic_type(node: &mut crate::model::Node, text: String) {
     if !node.properties.is_object() {
         if node.properties.is_null() {

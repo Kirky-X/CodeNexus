@@ -38,7 +38,7 @@ pub mod dead_code_cmd;
 #[cfg(feature = "daemon")]
 pub mod daemon_cmd;
 pub mod detect_changes_cmd;
-pub mod disambiguation;
+pub(crate) mod disambiguation;
 pub mod error;
 pub mod export_cmd;
 pub mod hook_cmd;

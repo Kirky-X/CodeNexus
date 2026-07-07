@@ -38,6 +38,15 @@ use crate::storage::{QualityChecker, Repository};
 /// [`crate::cli::error::CliError::Kit`] if a required capability is not
 /// registered.
 pub fn run(kit: &Kit, args: &IndexArgs) -> Result<()> {
+    // Rule 12: --embed flag is a no-op; embedding is controlled by the
+    // `embed` cargo feature (auto-registered via Kit). Warn explicitly
+    // instead of silently ignoring.
+    if args.embed {
+        eprintln!(
+            "[warn] --embed flag is deprecated; embedding is controlled by \
+             the `embed` cargo feature (rebuild with --features embed to enable)"
+        );
+    }
     let path = Path::new(&args.path);
     let indexer = kit.require::<IndexerKey>()?;
     let result = if args.ram_first {

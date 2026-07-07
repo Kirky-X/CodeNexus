@@ -37,6 +37,7 @@ pub struct CodeNexusStats {
 
 impl CodeNexusStats {
     /// Build a zero-filled stats object (for empty-repo scenario).
+    #[cfg(test)]
     pub fn empty(name: &str) -> Self {
         Self {
             name: name.to_string(),

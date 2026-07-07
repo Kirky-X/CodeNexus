@@ -41,7 +41,7 @@ use super::args::McpArgs;
 use super::error::Result;
 use crate::kit::{Kit, QueryKey, TraceKey};
 use crate::query::{QueryResult, SearchResult};
-use crate::trace::{TraceEdge, TraceNode, TracePath, TraceResult, TraceType};
+use crate::trace::{TraceEdge, TraceNode, TraceResult, TraceType};
 
 /// MCP protocol version this server speaks.
 pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
@@ -503,6 +503,7 @@ fn search_result_to_json(r: &SearchResult) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::trace::TracePath;
     use crate::kit::{build_kit, KitBootstrapConfig};
 
     fn fresh_kit() -> Kit {

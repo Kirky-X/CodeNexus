@@ -4,9 +4,7 @@
 
 **A multi-language code knowledge graph tool built on LadybugDB and tree-sitter**
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Rust Version](https://img.shields.io/badge/rust-1.81%2B-orange.svg)](https://www.rust-lang.org)
-[![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Rust Version](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org) [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml)
 
 English | [简体中文](README.md)
 
@@ -18,7 +16,7 @@ CodeNexus indexes source code repositories into a queryable knowledge graph. It 
 
 CodeNexus turns a codebase into a structured graph of symbols and their relationships (calls, data flows, imports, FFI bindings, ...). Once indexed, you can query the graph with a Cypher subset, trace how a symbol is reached, measure the blast radius of a change, and feed the graph to AI agents through a Model Context Protocol (MCP) server.
 
-Supports **5 languages**: C, Rust, Fortran, Python, TypeScript.
+Supports **8 languages**: C, Rust, Fortran, Python, TypeScript, Go, Java, C++.
 
 ### Typical Use Cases
 
@@ -31,7 +29,7 @@ Supports **5 languages**: C, Rust, Fortran, Python, TypeScript.
 
 | Feature | Description |
 |---------|-------------|
-| Multi-language parsing | C / Rust / Fortran / Python / TypeScript via tree-sitter |
+| Multi-language parsing | C / Rust / Fortran / Python / TypeScript / Go / Java / C++ via tree-sitter |
 | Graph database | LadybugDB storage with 44 node types + 24 edge types |
 | Incremental indexing | SHA-256 file hash diffing, re-parses only changed files |
 | Parallel parsing | Rayon parallelism + thread-local parser pool |
@@ -85,6 +83,9 @@ Supports **5 languages**: C, Rust, Fortran, Python, TypeScript.
 | Fortran | Module, Function | Calls, Imports, FfiCalls |
 | Python | Function, Method, Class | Calls, Imports, Extends |
 | TypeScript | Function, Class, Method, Interface, Enum, TypeAlias, Const | Calls, Imports |
+| Go | Function, Method, Struct, Interface, TypeAlias | Defines, Calls, Imports |
+| Java | Class, Interface, Enum, Method | Defines, Calls, Imports |
+| C++ | Function, Method, Class, Struct, Namespace, Enum, Template | Defines, Calls, Imports |
 
 ## Quick Start
 
@@ -92,7 +93,7 @@ Supports **5 languages**: C, Rust, Fortran, Python, TypeScript.
 
 | Dependency | Version | Notes |
 |------------|---------|-------|
-| Rust toolchain | 1.81+ (stable) | Required for `cargo build`. CI pins 1.81. |
+| Rust toolchain | 1.85+ (stable) | Required for `cargo build`. CI pins 1.85. |
 | nightly rustfmt | latest | `cargo fmt` uses nightly-only options (`imports_granularity`, `group_imports`). |
 | C/C++ compiler | system default | Required to build tree-sitter grammar crates. |
 | `zstd` CLI | any recent version | Used by `export`/`import` for `.graph.zst` artifacts. |
@@ -111,27 +112,43 @@ cargo build --release
 
 ### Feature Flags
 
+**Preset**: `default = ["full"]`
+
 | Feature | Default | Description |
 |---------|---------|-------------|
+| `minimal` | — | Minimal preset: `lang-rust` only |
+| `core` | — | Core preset: `lang-c` + `lang-rust` + `lang-python` |
+| `full` | enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++ + daemon/analysis/api-review/community/cross-service/lsp |
+| `lang-c` | — | C language parser (tree-sitter-c) |
+| `lang-rust` | enabled | Rust language parser (tree-sitter-rust) |
+| `lang-fortran` | — | Fortran language parser (tree-sitter-fortran) |
+| `lang-python` | — | Python language parser (tree-sitter-python) |
+| `lang-typescript` | — | TypeScript language parser (tree-sitter-typescript) |
+| `lang-go` | — | Go language parser (tree-sitter-go) |
+| `lang-java` | — | Java language parser (tree-sitter-java) |
+| `lang-cpp` | — | C++ language parser (tree-sitter-cpp) |
 | `daemon` | enabled | File-watching daemon (notify + notify-debouncer-full) |
-| `embed` | disabled | Vector embedding semantic search (reqwest HTTP client + local ONNX via `ort`) |
-| `lsp` | disabled | LSP-enhanced extraction (reserved, not yet implemented) |
-| `lang-rust` | enabled | Rust language parser (minimal single-language build) |
-| `lang-c` | enabled in `core`/`full` | C language parser |
-| `lang-python` | enabled in `core`/`full` | Python language parser |
-| `lang-fortran` | enabled in `full` | Fortran language parser |
-| `lang-typescript` | enabled in `full` | TypeScript language parser |
-
-Tiered presets: `minimal` < `core` < `full` (default = `full`).
+| `embed` | disabled | Vector embedding semantic search (reqwest HTTP + local ONNX inference) |
+| `lsp` | disabled | LSP-enhanced extraction (rust-analyzer integration, semantic type augmentation) |
+| `analysis` | enabled | Dead code detection + architecture overview (pure Cypher aggregation) |
+| `api-review` | enabled | API review toolkit (route-map/shape-check/api-impact/tool-map) |
+| `community` | enabled | Community detection (Louvain modularity optimization, depends on petgraph) |
+| `cross-service` | enabled | Cross-service call chain detection (HTTP route pattern matching) |
 
 ```bash
-# Lean build (no daemon, smaller binary)
-cargo build --release --no-default-features --features core
-
-# Minimal single-language build (Rust only, no daemon)
+# Minimal build (Rust only, no daemon/analysis)
 cargo build --release --no-default-features --features minimal
 
-# Full build with embedding semantic search
+# Core build (C + Rust + Python)
+cargo build --release --no-default-features --features core
+
+# Single-language lean build (e.g., C only)
+cargo build --release --no-default-features --features lang-c
+
+# Full build (default, all languages + all features)
+cargo build --release
+
+# Build with vector embedding
 cargo build --release --features embed
 ```
 
@@ -208,6 +225,14 @@ codenexus clean myproject
 | `status` | Show indexing status |
 | `list` | List all indexed projects |
 | `clean` | Remove a project and its index |
+| `dead-code` | Dead code detection (uncalled functions, `analysis` feature) |
+| `architecture` | Architecture overview (module dependency graph, `analysis` feature) |
+| `api-route-map` | HTTP route mapping (API endpoint inventory, `api-review` feature) |
+| `api-shape-check` | API shape check (request/response structure validation, `api-review` feature) |
+| `api-impact` | API change impact analysis (`api-review` feature) |
+| `api-tool-map` | Tool mapping (MCP tool inventory, `api-review` feature) |
+| `community` | Community detection (Louvain modularity optimization, `community` feature) |
+| `cross-service` | Cross-service call chain detection (HTTP route pattern matching, `cross-service` feature) |
 
 ## Configuration
 
@@ -279,12 +304,13 @@ By participating, you agree to abide by the [Code of Conduct](CODE_OF_CONDUCT.md
 
 ## Roadmap
 
-CodeNexus is at v0.1.0. Planned work, ordered by current priority:
+CodeNexus is at v0.2.0. Planned work, ordered by current priority:
 
 - [x] v0.1.0 — Multi-language indexing (C/Rust/Fortran/Python/TypeScript), graph schema (44 node types + 24 edge types), `query`/`trace`/`impact`/`context`/`search`, incremental indexing, RAM-first mode, MCP server, team `export`/`import`, daemon mode, confidence tiers, disambiguation
-- [ ] v0.1.x — Stability and performance hardening: incremental reindex coverage, larger-repo memory tuning, more language-specific edge extraction
-- [ ] v0.2.0 — `lsp` feature: LSP-enhanced extraction for type-accurate resolution beyond tree-sitter
-- [ ] v0.2.0 — Expand language coverage (Go, Java, C++) behind new `lang-*` features
+- [x] v0.1.x — Stability and performance hardening: incremental reindex coverage, larger-repo memory tuning, more language-specific edge extraction
+- [x] v0.2.0 — `lsp` feature: LSP-enhanced extraction for type-accurate resolution beyond tree-sitter (rust-analyzer integration)
+- [x] v0.2.0 — Expand language coverage (Go, Java, C++) behind new `lang-*` features
+- [x] v0.2.0 — Analysis toolkit: dead-code detection, architecture overview, API review (route-map/shape-check/api-impact/tool-map), community detection, cross-service link detection
 - [ ] v0.3.0 — Cross-language data-flow tracing end-to-end (currently edges are recorded; multi-hop taint paths need a dedicated query path)
 - [ ] v0.3.0 — Vector embedding default-on semantic search once ONNX model size and startup cost are acceptable
 - [ ] Future — Web UI / graph visualization on top of the query facade

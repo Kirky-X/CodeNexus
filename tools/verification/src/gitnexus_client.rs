@@ -41,7 +41,13 @@ pub struct GitnexusStats {
 #[derive(Debug, Clone)]
 pub enum CypherResponse {
     /// Query returned rows. `headers` is the column list; `rows` is row-major.
-    Rows { headers: Vec<String>, rows: Vec<Vec<String>> },
+    Rows {
+        /// Column names from the Cypher RETURN clause; retained for structural
+        /// completeness (currently only `rows` is read by consumers).
+        #[allow(dead_code)]
+        headers: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
     /// Query returned zero rows (`[]`).
     Empty,
     /// Query or DB errored. `corruption: true` if pattern-matched as DB
@@ -54,7 +60,9 @@ pub enum CypherResponse {
 struct CypherJson {
     #[serde(default)]
     markdown: Option<String>,
+    /// Retained for JSON structural completeness; not read by consumers.
     #[serde(default)]
+    #[allow(dead_code)]
     row_count: Option<u64>,
     #[serde(default)]
     error: Option<String>,
