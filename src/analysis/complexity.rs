@@ -91,6 +91,49 @@ impl Severity {
     }
 }
 
+/// A single function's complexity metrics with overall severity.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ComplexityEntry {
+    /// Short function name (e.g. `parse_file`).
+    pub name: String,
+    /// Fully-qualified name (e.g. `demo.parse_file`).
+    pub qualified_name: String,
+    /// Source file path.
+    pub file_path: String,
+    /// 1-based start line.
+    pub start_line: u32,
+    /// 1-based end line.
+    pub end_line: u32,
+    /// Source language.
+    pub language: String,
+    /// Cyclomatic complexity.
+    pub cyclomatic: u32,
+    /// Cognitive complexity.
+    pub cognitive: u32,
+    /// Maximum nesting depth.
+    pub nesting_depth: u32,
+    /// Function length in lines.
+    pub function_length: u32,
+    /// Highest severity across all four metrics.
+    pub overall_severity: Severity,
+}
+
+impl ComplexityEntry {
+    /// Computes the overall severity as the highest individual metric severity
+    /// (`Red > Yellow > Green`) by calling the `from_*` classifiers.
+    pub fn compute_overall_severity(&self, _thresholds: &ComplexityThresholds) -> Severity {
+        [
+            Severity::from_cyclomatic(self.cyclomatic),
+            Severity::from_cognitive(self.cognitive),
+            Severity::from_nesting(self.nesting_depth),
+            Severity::from_func_length(self.function_length),
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or(Severity::Green)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +173,48 @@ mod tests {
         assert_eq!(t.cognitive, (15, 20));
         assert_eq!(t.nesting, (5, 6));
         assert_eq!(t.func_length, (100, 200));
+    }
+
+    /// Builds a `ComplexityEntry` with the given metric values and placeholder
+    /// metadata. `overall_severity` is set to `Green` and should be recomputed
+    /// via `compute_overall_severity` in the test.
+    fn make_entry(cyclomatic: u32, cognitive: u32, nesting: u32, length: u32) -> ComplexityEntry {
+        ComplexityEntry {
+            name: "f".to_string(),
+            qualified_name: "demo.f".to_string(),
+            file_path: "/src/lib.rs".to_string(),
+            start_line: 1,
+            end_line: 1 + length,
+            language: "rust".to_string(),
+            cyclomatic,
+            cognitive,
+            nesting_depth: nesting,
+            function_length: length,
+            overall_severity: Severity::Green,
+        }
+    }
+
+    #[test]
+    fn compute_overall_severity_red_when_any_red() {
+        let mut entry = make_entry(30, 5, 2, 20);
+        let thresholds = ComplexityThresholds::default();
+        entry.overall_severity = entry.compute_overall_severity(&thresholds);
+        assert_eq!(entry.overall_severity, Severity::Red);
+    }
+
+    #[test]
+    fn compute_overall_severity_green_when_all_green() {
+        let mut entry = make_entry(5, 5, 2, 20);
+        let thresholds = ComplexityThresholds::default();
+        entry.overall_severity = entry.compute_overall_severity(&thresholds);
+        assert_eq!(entry.overall_severity, Severity::Green);
+    }
+
+    #[test]
+    fn compute_overall_severity_yellow_when_any_yellow() {
+        let mut entry = make_entry(15, 5, 2, 20);
+        let thresholds = ComplexityThresholds::default();
+        entry.overall_severity = entry.compute_overall_severity(&thresholds);
+        assert_eq!(entry.overall_severity, Severity::Yellow);
     }
 }
