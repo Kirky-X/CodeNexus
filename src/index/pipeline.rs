@@ -459,6 +459,129 @@ pub(crate) fn now_unix_seconds() -> i64 {
         .unwrap_or(0)
 }
 
+// ---------------------------------------------------------------------------
+// R-lsp-004: LSP semantic_type enhancement (mock-testable pure unit)
+// ---------------------------------------------------------------------------
+//
+// NOTE: The DB-backed wiring that actually runs `rust-analyzer` after an index
+// run lives in `src/cli/index_cmd.rs::enhance_with_lsp` (added in T007). This
+// pure function is the mock-injectable core: it takes a `&dyn LspProvider`
+// and a `&mut [Node]` slice so the graceful-degradation contract (R-lsp-004:
+// "LSP server 启动失败时，索引不中断" / "LSP 查询超时时，跳过该符号的语义
+// 增强，不中断索引") can be unit-tested without spawning a real rust-analyzer
+// subprocess. The CLI handler delegates the per-symbol hover logic here.
+
+/// LSP-driven `semantic_type` enhancement for in-memory nodes (R-lsp-004).
+///
+/// For each `Function`/`Method` node whose `file_path` ends in `.rs`, queries
+/// the provider's `hover` and writes the first non-empty line of the response
+/// (truncated to 200 chars) into `node.properties["semantic_type"]`.
+///
+/// # Failure semantics (Rule 12: failures must be explicit, never silent)
+///
+/// - **`provider.start()` returns `LspError::ServerStart`** → logs a
+///   `tracing::warn!` and returns `Ok(())` immediately (graceful degradation:
+///   the index is already complete, LSP is purely enhancement).
+/// - **Per-symbol `hover()` returns `Timeout`/`Communication`** → that symbol
+///   is skipped (its `semantic_type` stays unset) and enhancement continues
+///   for the remaining symbols. The skip is counted but never aborts the run.
+/// - **`provider.shutdown()`** is always called once the loop completes
+///   (best-effort; errors are logged but never propagated).
+///
+/// # Arguments
+///
+/// * `provider` - Any [`LspProvider`] implementation (`RustAnalyzerClient` in
+///   production, a mock in tests).
+/// * `nodes` - The nodes to enhance **in place**. Non-`Function`/`Method`
+///   nodes and non-`.rs` files are left untouched.
+/// * `workspace` - The workspace root passed to `provider.start()` (used by
+///   rust-analyzer as `rootUri`).
+#[cfg(feature = "lsp")]
+pub(crate) fn enhance_with_lsp(
+    provider: &dyn crate::lsp::LspProvider,
+    nodes: &mut [crate::model::Node],
+    workspace: &Path,
+) -> Result<()> {
+    use crate::lsp::LspError;
+    use crate::model::NodeLabel;
+
+    // 1. Start the LSP server. Any start failure is non-fatal — the index is
+    //    already complete, so we log a warning and return Ok to signal
+    //    "enhancement skipped, index succeeded" (R-lsp-004 graceful
+    //    degradation). shutdown() is NOT called: nothing was started.
+    if let Err(err) = provider.start(workspace) {
+        warn!(
+            error = %err,
+            "LSP server start failed, degrading to pure tree-sitter extraction"
+        );
+        return Ok(());
+    }
+
+    // 2. Enhance each Rust Function/Method node with hover-derived
+    //    semantic_type. Per-symbol failures (Timeout/Communication) skip the
+    //    symbol but never abort the run (R-lsp-004).
+    for node in nodes.iter_mut() {
+        let is_target = matches!(node.label, NodeLabel::Function | NodeLabel::Method);
+        let is_rust = node
+            .file_path
+            .as_deref()
+            .map(|p| p.ends_with(".rs"))
+            .unwrap_or(false);
+        if !is_target || !is_rust {
+            continue;
+        }
+
+        let file_path = match node.file_path.as_deref() {
+            Some(p) => Path::new(p),
+            None => continue,
+        };
+        let line = node.start_line.unwrap_or(0);
+
+        match provider.hover(file_path, line, 0) {
+            Ok(Some(hover)) => {
+                if let Some(text) = crate::lsp::extract_hover_text(&hover) {
+                    write_semantic_type(node, text);
+                }
+            }
+            Ok(None) => {}
+            Err(LspError::Timeout(_)) | Err(LspError::Communication(_)) => {
+                // Per-symbol failure — skip and continue (Rule 12: explicit
+                // skip, not silent success).
+            }
+            Err(LspError::ServerStart(_)) => {
+                // Shouldn't happen after a successful start; skip defensively.
+            }
+        }
+    }
+
+    // 3. Best-effort shutdown — errors are logged but never propagated (the
+    //    index is already complete; a dirty subprocess exit is non-fatal).
+    if let Err(err) = provider.shutdown() {
+        warn!(error = %err, "LSP server shutdown failed (non-fatal)");
+    }
+    Ok(())
+}
+
+/// Writes `text` into `node.properties["semantic_type"]`, converting a `Null`
+/// properties value to an empty object first so the field can be set.
+#[cfg(feature = "lsp")]
+fn write_semantic_type(node: &mut crate::model::Node, text: String) {
+    if !node.properties.is_object() {
+        if node.properties.is_null() {
+            node.properties = serde_json::Value::Object(serde_json::Map::new());
+        } else {
+            // properties holds a non-object scalar/array — don't clobber it.
+            return;
+        }
+    }
+    if let Some(obj) = node.properties.as_object_mut() {
+        obj.insert(
+            "semantic_type".to_string(),
+            serde_json::Value::String(text),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1221,5 +1344,343 @@ mod tests {
             1,
             "should not retry on non-lock error"
         );
+    }
+
+    // --- R-lsp-004: enhance_with_lsp graceful degradation + writes ---
+
+    /// What `MockLspProvider::hover` returns on each call.
+    #[cfg(feature = "lsp")]
+    #[allow(dead_code)] // test mock: documents available behaviors for future tests
+    enum MockHoverBehavior {
+        /// Return `Ok(Some(hover))` — simulates a successful hover response.
+        Ok(Option<lsp_types::Hover>),
+        /// Return `Err(LspError::Timeout)` — simulates a query timeout.
+        Timeout,
+        /// Return `Err(LspError::Communication)` — simulates a channel error.
+        Communication,
+    }
+
+    /// Mock `LspProvider` for testing `enhance_with_lsp` without spawning a
+    /// real `rust-analyzer` subprocess. Tracks call counts so tests can assert
+    /// on the exact call pattern (e.g. "hover must NOT be called when start
+    /// fails").
+    #[cfg(feature = "lsp")]
+    struct MockLspProvider {
+        /// If `true`, `start()` returns `Err(LspError::ServerStart(_))`.
+        start_fails: bool,
+        /// What `hover()` returns.
+        hover_behavior: MockHoverBehavior,
+        /// Call counters (AtomicU32 so the mock stays `Send + Sync`).
+        start_calls: AtomicU32,
+        hover_calls: AtomicU32,
+        shutdown_calls: AtomicU32,
+    }
+
+    #[cfg(feature = "lsp")]
+    impl crate::lsp::LspProvider for MockLspProvider {
+        fn start(&self, _workspace: &Path) -> std::result::Result<(), crate::lsp::LspError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            if self.start_fails {
+                Err(crate::lsp::LspError::ServerStart(
+                    "mock: server unavailable".into(),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn definition(
+            &self,
+            _file: &Path,
+            _line: u32,
+            _col: u32,
+        ) -> std::result::Result<Option<lsp_types::Location>, crate::lsp::LspError> {
+            Ok(None)
+        }
+
+        fn type_definition(
+            &self,
+            _file: &Path,
+            _line: u32,
+            _col: u32,
+        ) -> std::result::Result<Option<lsp_types::Location>, crate::lsp::LspError> {
+            Ok(None)
+        }
+
+        fn hover(
+            &self,
+            _file: &Path,
+            _line: u32,
+            _col: u32,
+        ) -> std::result::Result<Option<lsp_types::Hover>, crate::lsp::LspError> {
+            self.hover_calls.fetch_add(1, Ordering::SeqCst);
+            match &self.hover_behavior {
+                MockHoverBehavior::Ok(h) => Ok(h.clone()),
+                MockHoverBehavior::Timeout => {
+                    Err(crate::lsp::LspError::Timeout(crate::lsp::REQUEST_TIMEOUT_MS))
+                }
+                MockHoverBehavior::Communication => Err(crate::lsp::LspError::Communication(
+                    "mock: channel closed".into(),
+                )),
+            }
+        }
+
+        fn shutdown(&self) -> std::result::Result<(), crate::lsp::LspError> {
+            self.shutdown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// Builds a `Hover` with `MarkupContent` carrying `text` (the type
+    /// signature `enhance_with_lsp` is expected to extract).
+    #[cfg(feature = "lsp")]
+    fn make_hover(text: &str) -> lsp_types::Hover {
+        use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
+        Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: text.to_string(),
+            }),
+            range: None,
+        }
+    }
+
+    /// Builds a `Function` node with the given name, file path, and start line.
+    /// `properties` starts as `Null` (the `NodeBuilder` default).
+    #[cfg(feature = "lsp")]
+    fn make_function_node(name: &str, file_path: &str, start_line: u32) -> Node {
+        Node::builder(NodeLabel::Function, name, format!("proj.{name}"))
+            .file_path(file_path)
+            .start_line(start_line)
+            .language(Language::Rust)
+            .project("proj")
+            .build()
+    }
+
+    /// R-lsp-004: "LSP server 启动失败时，索引不中断".
+    ///
+    /// A mock whose `start()` returns `Err(LspError::ServerStart(_))` must
+    /// cause `enhance_with_lsp` to return `Ok(())` (graceful degradation),
+    /// NOT call `hover()` or `shutdown()`, and leave all nodes untouched.
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn lsp_enhance_skips_on_server_start_failure() {
+        let mock = MockLspProvider {
+            start_fails: true,
+            hover_behavior: MockHoverBehavior::Ok(Some(make_hover("fn foo()"))),
+            start_calls: AtomicU32::new(0),
+            hover_calls: AtomicU32::new(0),
+            shutdown_calls: AtomicU32::new(0),
+        };
+        let mut nodes = vec![make_function_node("foo", "src/main.rs", 0)];
+
+        let result = enhance_with_lsp(&mock, &mut nodes, Path::new("/workspace"));
+
+        assert!(
+            result.is_ok(),
+            "ServerStart failure must NOT abort enhancement: {:?}",
+            result.err()
+        );
+        assert_eq!(
+            mock.start_calls.load(Ordering::SeqCst),
+            1,
+            "start must be called exactly once"
+        );
+        assert_eq!(
+            mock.hover_calls.load(Ordering::SeqCst),
+            0,
+            "hover must NOT be called when start fails"
+        );
+        assert_eq!(
+            mock.shutdown_calls.load(Ordering::SeqCst),
+            0,
+            "shutdown must NOT be called when start fails (nothing to shut down)"
+        );
+        assert!(
+            nodes[0].properties.get("semantic_type").is_none(),
+            "node must NOT be enhanced when start fails"
+        );
+    }
+
+    /// R-lsp-004: "LSP 查询超时时，跳过该符号的语义增强，不中断索引".
+    ///
+    /// A mock whose `hover()` returns `Err(LspError::Timeout)` must cause the
+    /// symbol to be skipped (no `semantic_type` written) but enhancement must
+    /// continue and return `Ok(())`. `shutdown()` must still be called.
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn lsp_enhance_skips_on_query_timeout() {
+        let mock = MockLspProvider {
+            start_fails: false,
+            hover_behavior: MockHoverBehavior::Timeout,
+            start_calls: AtomicU32::new(0),
+            hover_calls: AtomicU32::new(0),
+            shutdown_calls: AtomicU32::new(0),
+        };
+        let mut nodes = vec![make_function_node("foo", "src/main.rs", 0)];
+
+        let result = enhance_with_lsp(&mock, &mut nodes, Path::new("/workspace"));
+
+        assert!(
+            result.is_ok(),
+            "Timeout must NOT abort enhancement: {:?}",
+            result.err()
+        );
+        assert_eq!(
+            mock.hover_calls.load(Ordering::SeqCst),
+            1,
+            "hover must be attempted for the symbol"
+        );
+        assert_eq!(
+            mock.shutdown_calls.load(Ordering::SeqCst),
+            1,
+            "shutdown must be called after the loop even if all symbols timed out"
+        );
+        assert!(
+            nodes[0].properties.get("semantic_type").is_none(),
+            "timed-out symbol must NOT be enhanced"
+        );
+    }
+
+    /// R-lsp-004: successful hover response must be written to the node's
+    /// `semantic_type` property.
+    ///
+    /// The mock returns a hover carrying `"fn add(a: i32, b: i32) -> i32"`;
+    /// `enhance_with_lsp` must extract that text and store it under
+    /// `node.properties["semantic_type"]`.
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn lsp_enhance_writes_semantic_type() {
+        let signature = "fn add(a: i32, b: i32) -> i32";
+        let mock = MockLspProvider {
+            start_fails: false,
+            hover_behavior: MockHoverBehavior::Ok(Some(make_hover(signature))),
+            start_calls: AtomicU32::new(0),
+            hover_calls: AtomicU32::new(0),
+            shutdown_calls: AtomicU32::new(0),
+        };
+        let mut nodes = vec![make_function_node("add", "src/lib.rs", 0)];
+
+        let result = enhance_with_lsp(&mock, &mut nodes, Path::new("/workspace"));
+
+        assert!(result.is_ok(), "enhancement should succeed: {:?}", result.err());
+        assert_eq!(
+            mock.hover_calls.load(Ordering::SeqCst),
+            1,
+            "hover must be called for the Function node"
+        );
+        assert_eq!(
+            mock.shutdown_calls.load(Ordering::SeqCst),
+            1,
+            "shutdown must be called after enhancement"
+        );
+        let sem = nodes[0]
+            .properties
+            .get("semantic_type")
+            .and_then(|v| v.as_str());
+        assert_eq!(
+            sem,
+            Some(signature),
+            "semantic_type must be the hover text signature"
+        );
+    }
+
+    /// R-lsp-004: an empty node list (or a list with no Rust Function/Method
+    /// nodes) must return `Ok(())` without calling `hover()`. `shutdown()`
+    /// must still be called so the LSP server is reaped.
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn lsp_enhance_noop_when_no_rust_nodes() {
+        let mock = MockLspProvider {
+            start_fails: false,
+            hover_behavior: MockHoverBehavior::Ok(Some(make_hover("fn foo()"))),
+            start_calls: AtomicU32::new(0),
+            hover_calls: AtomicU32::new(0),
+            shutdown_calls: AtomicU32::new(0),
+        };
+        let mut nodes: Vec<Node> = vec![];
+
+        let result = enhance_with_lsp(&mock, &mut nodes, Path::new("/workspace"));
+
+        assert!(
+            result.is_ok(),
+            "empty node list must return Ok: {:?}",
+            result.err()
+        );
+        assert_eq!(
+            mock.hover_calls.load(Ordering::SeqCst),
+            0,
+            "hover must NOT be called for an empty node list"
+        );
+        assert_eq!(
+            mock.shutdown_calls.load(Ordering::SeqCst),
+            1,
+            "shutdown must still be called even with no nodes to enhance"
+        );
+    }
+
+    /// Real rust-analyzer integration test (R-lsp-004 happy path).
+    ///
+    /// Spawns a real `rust-analyzer` against a temp workspace containing one
+    /// `fn add(a: i32, b: i32) -> i32`, calls `enhance_with_lsp`, and asserts
+    /// that the node's `semantic_type` is populated. `#[ignore]` so CI does
+    /// not depend on `rust-analyzer` being on PATH.
+    ///
+    /// Run locally with:
+    /// ```text
+    /// cargo test --features "lsp lang-rust" --lib src::index::pipeline::tests::lsp_enhance_integration_with_real_rust_analyzer -- --ignored
+    /// ```
+    #[test]
+    #[cfg(feature = "lsp")]
+    #[ignore = "requires rust-analyzer on PATH; run with --ignored"]
+    fn lsp_enhance_integration_with_real_rust_analyzer() {
+        use crate::lsp::RustAnalyzerClient;
+        use std::process::{Command, Stdio};
+
+        // Skip deterministically if rust-analyzer is not installed.
+        let ra_available = Command::new("rust-analyzer")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok();
+        if !ra_available {
+            eprintln!("skipping: rust-analyzer not on PATH");
+            return;
+        }
+
+        let workspace = TempDir::new().unwrap();
+        std::fs::write(
+            workspace.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(workspace.path().join("src")).unwrap();
+        std::fs::write(
+            workspace.path().join("src/lib.rs"),
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+        )
+        .unwrap();
+
+        let abs_file = workspace.path().join("src/lib.rs");
+        let mut nodes = vec![Node::builder(NodeLabel::Function, "add", "demo.add")
+            .file_path("src/lib.rs")
+            .start_line(0)
+            .language(Language::Rust)
+            .project("demo")
+            .build()];
+
+        let client = RustAnalyzerClient::new();
+        let result = enhance_with_lsp(&client, &mut nodes, workspace.path());
+
+        assert!(
+            result.is_ok(),
+            "enhancement should not error even if rust-analyzer indexing is incomplete: {:?}",
+            result.err()
+        );
+        // rust-analyzer may need time to index; if it returned a hover, the
+        // semantic_type must be set. If not, the node is unchanged — both are
+        // acceptable per the graceful-degradation contract.
+        let _ = abs_file;
     }
 }

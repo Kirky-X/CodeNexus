@@ -106,8 +106,10 @@ pub struct IndexArgs {
     /// Force re-parse of every file, ignoring cached hashes.
     #[arg(long, default_value_t = false)]
     pub force: bool,
-    /// Enable LSP-enhanced extraction (reserved for future use).
-    #[arg(long, default_value_t = false, help = "Enable LSP-enhanced extraction (reserved for future use)（预留，当前未实现）")]
+    /// Enable LSP-enhanced semantic type extraction (requires `rust-analyzer`
+    /// on PATH for Rust; degrades gracefully to pure tree-sitter if the
+    /// server is missing or a query times out — never aborts the index).
+    #[arg(long, default_value_t = false)]
     pub lsp: bool,
     /// Enable embedding generation (requires the `embed` feature).
     #[arg(long, default_value_t = false)]
