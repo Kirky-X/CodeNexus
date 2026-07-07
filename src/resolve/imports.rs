@@ -89,8 +89,11 @@ impl<'a> ImportResolver<'a> {
         let mut seen_pairs: HashSet<(String, String)> = HashSet::new();
 
         for result in results {
-            let source_file_id = match file_index.get(&result.file_path) {
-                Some(id) => id.clone(),
+            // result.file_path is absolute in production (e.g.
+            // `/home/dev/.../src/lib.rs`) but file_index keys are relative
+            // (e.g. `src/lib.rs`). find_file_in_index handles this mismatch.
+            let (source_file_id, importer_rel_path) = match find_file_in_index(&file_index, &result.file_path) {
+                Some((id, rel)) => (id, rel),
                 None => {
                     // Single-line for coverage: tarpaulin attribute continuation
                     warn!(file = %result.file_path, "IMPORTS source File node not found in graph; skipping imports for this file"); continue;
@@ -101,7 +104,7 @@ impl<'a> ImportResolver<'a> {
                 // Single-line for coverage: tarpaulin attribute continuation
                 if import.source_file.is_empty() { continue; }
                 // Single-line for coverage: tarpaulin attribute continuation
-                let target_file_id = match resolve_import_target(&import.source_file, &result.file_path, &file_index) {
+                let target_file_id = match resolve_import_target(&import.source_file, &importer_rel_path, &file_index) {
                     Some(id) => id,
                     None => {
                         // Single-line for coverage: tarpaulin attribute continuation
@@ -143,6 +146,40 @@ fn build_file_index(graph: &Graph) -> HashMap<String, String> {
             .or_insert_with(|| node.id.clone());
     }
     index
+}
+
+/// Finds a File node id and its relative path in the index.
+///
+/// `result.file_path` is absolute in production (e.g.
+/// `/home/dev/projects/CodeNexus/src/lib.rs`) but `file_index` keys are
+/// relative paths normalized by the scope phase (e.g. `src/lib.rs`). This
+/// function tries direct match first, then suffix match with path boundary
+/// check to bridge the absolute/relative gap.
+///
+/// Returns `(file_node_id, relative_path)` on success. The relative_path is
+/// used as `importer_path` in [`resolve_import_target`] so that
+/// `normalise_relative` works correctly (it expects relative paths).
+fn find_file_in_index(
+    file_index: &HashMap<String, String>,
+    path: &str,
+) -> Option<(String, String)> {
+    // Direct match (handles relative paths and test cases).
+    if let Some(id) = file_index.get(path) {
+        return Some((id.clone(), path.to_string()));
+    }
+    // Suffix match: path may be absolute while file_index uses relative paths.
+    // e.g. path = "/home/dev/projects/CodeNexus/src/lib.rs"
+    //      file_index key = "src/lib.rs"
+    for (rel, id) in file_index {
+        if path.ends_with(rel.as_str()) {
+            let prefix_len = path.len() - rel.len();
+            // Ensure path boundary: char before the suffix must be '/'.
+            if prefix_len == 0 || path.as_bytes()[prefix_len - 1] == b'/' {
+                return Some((id.clone(), rel.clone()));
+            }
+        }
+    }
+    None
 }
 
 /// Resolves an `ImportInfo::source_file` to a target File node id.
@@ -1011,5 +1048,98 @@ mod tests {
 
         let result = resolve_rust_module_path("super::model", "src/sub/mod.rs", &index);
         assert_eq!(result, Some("id-model".to_string()));
+    }
+
+    // --- find_file_in_index: absolute vs relative path mismatch ---
+
+    #[test]
+    fn find_file_in_index_direct_match_relative() {
+        let mut index = HashMap::new();
+        index.insert("src/lib.rs".to_string(), "id-lib".to_string());
+
+        let result = find_file_in_index(&index, "src/lib.rs");
+        assert_eq!(result, Some(("id-lib".to_string(), "src/lib.rs".to_string())));
+    }
+
+    #[test]
+    fn find_file_in_index_absolute_path_suffix_match() {
+        // result.file_path is absolute, file_index keys are relative.
+        let mut index = HashMap::new();
+        index.insert("src/lib.rs".to_string(), "id-lib".to_string());
+
+        let result = find_file_in_index(&index, "/home/dev/projects/CodeNexus/src/lib.rs");
+        assert_eq!(result, Some(("id-lib".to_string(), "src/lib.rs".to_string())));
+    }
+
+    #[test]
+    fn find_file_in_index_suffix_boundary_check() {
+        // Ensure "xsrc/lib.rs" does NOT match "/path/to/src/lib.rs"
+        let mut index = HashMap::new();
+        index.insert("xsrc/lib.rs".to_string(), "id-xlib".to_string());
+
+        let result = find_file_in_index(&index, "/home/dev/projects/CodeNexus/src/lib.rs");
+        assert_eq!(result, None, "xsrc/lib.rs should not suffix-match src/lib.rs");
+    }
+
+    #[test]
+    fn find_file_in_index_no_match_returns_none() {
+        let mut index = HashMap::new();
+        index.insert("src/other.rs".to_string(), "id-other".to_string());
+
+        let result = find_file_in_index(&index, "/home/dev/projects/CodeNexus/src/lib.rs");
+        assert_eq!(result, None);
+    }
+
+    // --- resolve_imports: absolute importer path (production scenario) ---
+
+    #[test]
+    fn resolve_imports_handles_absolute_importer_path() {
+        // Production scenario: result.file_path is absolute, but File nodes
+        // in graph use relative paths. IMPORTS edge should still be created.
+        let mut lib_result = make_result("/home/dev/projects/CodeNexus/src/lib.rs");
+        lib_result.imports.push(crate::ir::ImportInfo {
+            source_file: "crate::model".to_string(),
+            imported_names: vec!["Node".to_string()],
+            line: 1,
+        });
+        let results = vec![lib_result];
+
+        let mut graph = Graph::new();
+        // File nodes use relative paths (as normalized by scope phase).
+        graph.add_node(make_file_node("src/lib.rs", "proj"));
+        graph.add_node(make_file_node("src/model.rs", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(
+            edges.len(),
+            1,
+            "absolute importer path should resolve via suffix match"
+        );
+        assert_eq!(edges[0].target, "src/model.rs");
+    }
+
+    #[test]
+    fn resolve_imports_absolute_path_with_relative_ts_import() {
+        // TS import with absolute importer path: ./b.ts should still resolve.
+        let mut a_result = make_result("/home/dev/projects/subno.ts/src/a.ts");
+        a_result.imports.push(crate::ir::ImportInfo {
+            source_file: "./b.ts".to_string(),
+            imported_names: vec!["foo".to_string()],
+            line: 1,
+        });
+        let results = vec![a_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/a.ts", "proj"));
+        graph.add_node(make_file_node("src/b.ts", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(edges.len(), 1, "absolute importer + relative TS import should resolve");
+        assert_eq!(edges[0].source, "src/a.ts");
+        assert_eq!(edges[0].target, "src/b.ts");
     }
 }
