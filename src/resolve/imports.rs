@@ -264,10 +264,9 @@ fn resolve_import_target(
 /// extension so downstream extension probing can find the `.ts`/`.tsx` file.
 /// Non-JS extensions (`.ts`, `.tsx`, `.rs`, …) are preserved.
 fn strip_js_style_extension(path: &str) -> String {
-    const JS_EXTS: &[&str] = &[".js", ".jsx", ".mjs", ".cjs"];
-    for ext in JS_EXTS {
-        if path.ends_with(ext) {
-            return path[..path.len() - ext.len()].to_string();
+    for ext in [".js", ".jsx", ".mjs", ".cjs"] {
+        if let Some(stripped) = path.strip_suffix(ext) {
+            return stripped.to_string();
         }
     }
     path.to_string()
@@ -1281,6 +1280,31 @@ mod tests {
             edges.len(),
             1,
             ".mjs extension should be stripped, resolving to .js file"
+        );
+        assert_eq!(edges[0].target, "src/config.js");
+    }
+
+    #[test]
+    fn resolve_imports_strips_cjs_extension() {
+        let mut a_result = make_result("src/a.ts");
+        a_result.imports.push(crate::ir::ImportInfo {
+            source_file: "./config.cjs".to_string(),
+            imported_names: vec![],
+            line: 1,
+        });
+        let results = vec![a_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/a.ts", "proj"));
+        graph.add_node(make_file_node("src/config.js", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(
+            edges.len(),
+            1,
+            ".cjs extension should be stripped, resolving to .js file"
         );
         assert_eq!(edges[0].target, "src/config.js");
     }
