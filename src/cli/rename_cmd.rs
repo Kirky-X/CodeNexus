@@ -677,4 +677,145 @@ mod tests {
             .unwrap_or("");
         assert_eq!(name, "b", "graph name should be updated to 'b'");
     }
+
+    // --- collect_candidate_files: relative file_path branch (lines 162-163) ---
+
+    #[test]
+    fn collect_candidate_files_with_relative_file_path_joins_root() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let mut graph = Graph::new();
+        graph.add_node(
+            Node::builder(NodeLabel::Function, "foo", "demo.foo")
+                .id("f1")
+                .file_path("src/main.rs") // relative path
+                .build(),
+        );
+        let files = collect_candidate_files(&graph, &"f1".to_string(), root);
+        assert_eq!(
+            files.len(),
+            1,
+            "relative file_path should be joined with root"
+        );
+        assert_eq!(files[0], root.join("src/main.rs"));
+    }
+
+    // --- collect_candidate_files: incoming edge branch (lines 175-177) ---
+
+    #[test]
+    fn collect_candidate_files_includes_incoming_edge_source() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let file_a = root.join("a.rs");
+        let file_b = root.join("b.rs");
+        std::fs::write(&file_a, "fn foo() {}\n").unwrap();
+        std::fs::write(&file_b, "fn bar() {}\n").unwrap();
+
+        let mut graph = Graph::new();
+        graph.add_node(
+            Node::builder(NodeLabel::Function, "foo", "demo.foo")
+                .id("f1")
+                .file_path(file_a.to_str().unwrap())
+                .build(),
+        );
+        graph.add_node(
+            Node::builder(NodeLabel::Function, "bar", "demo.bar")
+                .id("f2")
+                .file_path(file_b.to_str().unwrap())
+                .build(),
+        );
+        // Edge: f2 calls f1 — f1 is the TARGET (exercises the
+        // `else if edge.target == *start_id` branch).
+        graph.add_edge(Edge::new("f2", "f1", EdgeType::Calls, "demo"));
+
+        let files = collect_candidate_files(&graph, &"f1".to_string(), root);
+        assert_eq!(
+            files.len(),
+            2,
+            "should include both f1's file and f2's file (incoming edge source)"
+        );
+    }
+
+    // --- scan_text_edits: reading files and creating edits (lines 194-205) ---
+
+    #[test]
+    fn scan_text_edits_finds_word_occurrences_in_file() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("a.rs");
+        std::fs::write(&file, "fn foo() { foo(); }\n").unwrap();
+        let files = vec![file];
+        let edits = scan_text_edits(tmp.path(), "foo", "bar", &files).unwrap();
+        assert_eq!(edits.len(), 2, "should find both 'foo' occurrences");
+        assert_eq!(edits[0].old_text, "foo");
+        assert_eq!(edits[0].new_text, "bar");
+        assert_eq!(edits[0].line, 1);
+        // "fn " is 3 bytes → first 'foo' at byte offset 3 → column 4.
+        assert_eq!(edits[0].column, 4);
+        // file_path should be relative to root.
+        assert_eq!(edits[0].file_path, "a.rs");
+    }
+
+    #[test]
+    fn scan_text_edits_skips_unreadable_files() {
+        let tmp = TempDir::new().unwrap();
+        let files = vec![tmp.path().join("nonexistent.rs")];
+        let edits = scan_text_edits(tmp.path(), "foo", "bar", &files).unwrap();
+        assert!(edits.is_empty(), "unreadable files should be skipped");
+    }
+
+    // --- apply_text_edits: writing replacements (lines 272, 275-278) ---
+
+    #[test]
+    fn apply_text_edits_writes_replacements_to_file() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("a.rs");
+        std::fs::write(&file, "fn foo() {}\n").unwrap();
+        let edits = vec![TextEdit {
+            file_path: file.to_string_lossy().into_owned(),
+            line: 1,
+            column: 4,
+            old_text: "foo".to_string(),
+            new_text: "bar".to_string(),
+        }];
+        let result = apply_text_edits(&edits);
+        assert!(
+            result.is_ok(),
+            "apply_text_edits should succeed: {:?}",
+            result.err()
+        );
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(
+            content, "fn bar() {}\n",
+            "file should have foo replaced with bar"
+        );
+    }
+
+    #[test]
+    fn apply_text_edits_handles_multiple_files() {
+        let tmp = TempDir::new().unwrap();
+        let file_a = tmp.path().join("a.rs");
+        let file_b = tmp.path().join("b.rs");
+        std::fs::write(&file_a, "fn foo() {}\n").unwrap();
+        std::fs::write(&file_b, "let foo = 1;\n").unwrap();
+        let edits = vec![
+            TextEdit {
+                file_path: file_a.to_string_lossy().into_owned(),
+                line: 1,
+                column: 4,
+                old_text: "foo".to_string(),
+                new_text: "bar".to_string(),
+            },
+            TextEdit {
+                file_path: file_b.to_string_lossy().into_owned(),
+                line: 1,
+                column: 5,
+                old_text: "foo".to_string(),
+                new_text: "bar".to_string(),
+            },
+        ];
+        let result = apply_text_edits(&edits);
+        assert!(result.is_ok(), "apply_text_edits should succeed: {:?}", result.err());
+        assert_eq!(std::fs::read_to_string(&file_a).unwrap(), "fn bar() {}\n");
+        assert_eq!(std::fs::read_to_string(&file_b).unwrap(), "let bar = 1;\n");
+    }
 }

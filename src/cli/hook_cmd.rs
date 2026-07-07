@@ -330,6 +330,31 @@ mod tests {
         let _args = hook_args();
     }
 
+    // --- run() reads stdin and emits decision (lines 78-86) ---
+    //
+    // Calls the real `run()` which reads from process stdin. Skips when stdin
+    // is a TTY (would block waiting for input). In CI / piped contexts stdin
+    // returns EOF immediately, producing an empty payload → no-op pass.
+
+    #[test]
+    fn run_with_empty_stdin_returns_ok() {
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() {
+            eprintln!("skipping: stdin is a TTY (would block)");
+            return;
+        }
+        let kit = fresh_kit();
+        let args = hook_args();
+        // read_line returns 0 bytes on EOF → input stays empty →
+        // build_decision returns no-op pass → run prints JSON and returns Ok.
+        let result = run(&kit, &args);
+        assert!(
+            result.is_ok(),
+            "run with empty stdin should return Ok: {:?}",
+            result.err()
+        );
+    }
+
     // --- summarize_rename risk classification branches ---
     //
     // Seeds Function nodes with 0, 2, and 5 incoming CodeRelation edges to

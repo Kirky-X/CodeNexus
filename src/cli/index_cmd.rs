@@ -693,4 +693,59 @@ mod tests {
             result.err()
         );
     }
+
+    // --- DQ violations branch (lines 64-74) ---
+    //
+    // Pre-inserts a bogus File node with an empty hash under a DIFFERENT
+    // project ("other") before calling run(). The indexer only manages nodes
+    // for the current project ("demo"), so the bogus node survives indexing.
+    // The DQ-006 check scans ALL File nodes regardless of project, finds the
+    // empty-hash node, and triggers the violation-printing branch.
+
+    #[test]
+    fn run_prints_dq_violations_when_file_node_has_empty_hash() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "main.rs", "fn main() {}\n");
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+
+        // Insert a bogus File node under project "other" with an empty hash.
+        // The indexer indexes under "demo" and won't touch this node
+        // (get_all_file_hashes and delete_file_nodes_batch are project-scoped).
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage
+            .execute(
+                "CREATE (:File {id: 'bogus_empty_hash', project: 'other', \
+                 name: 'bogus.rs', filePath: '/nonexistent/bogus.rs', \
+                 language: 'Rust', hash: '', lineCount: 0});",
+            )
+            .expect("insert bogus File node");
+
+        let args = make_args(
+            tmp.path().to_str().unwrap(),
+            "demo",
+            db.to_str().unwrap(),
+        );
+        // DQ violations are printed to stderr but don't affect exit status.
+        let result = run(&kit, &args);
+        assert!(
+            result.is_ok(),
+            "run should succeed despite DQ violations: {:?}",
+            result.err()
+        );
+
+        // Verify the bogus node triggered DQ-006 by querying through a fresh
+        // repo (same pattern as run()).
+        let fresh_repo = Repository::open(&db).expect("open repo");
+        let checker = QualityChecker::new(&fresh_repo);
+        let report = checker.run_all().expect("run_all");
+        assert!(
+            !report.is_clean(),
+            "DQ report should contain violations for the empty-hash File node"
+        );
+        assert!(
+            report.count_for_rule("DQ-006") >= 1,
+            "should have at least one DQ-006 violation"
+        );
+    }
 }

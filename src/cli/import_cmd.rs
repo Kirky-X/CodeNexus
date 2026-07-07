@@ -613,4 +613,58 @@ mod tests {
         // Io error → exit 2 (CliError::Io maps to exit code 2).
         assert_ne!(err.exit_code(), 0, "should fail");
     }
+
+    // --- run() with --reindex success path (lines 179-182, 188-189) ---
+    //
+    // Imports a valid artifact with --reindex, --path, and --name. The import
+    // decompresses the artifact, writes the DB, constructs IndexArgs (lines
+    // 179-182), and calls index_cmd::run (line 188). The index path points
+    // at a real temp dir with a .rs file so index_cmd::run succeeds, covering
+    // the reindexed=true assignment (line 189).
+
+    #[test]
+    fn run_import_reindex_with_valid_path_triggers_index_cmd() {
+        if skip_without_zstd() {
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+
+        // Build a real LadybugDB to use as the artifact payload so that
+        // index_cmd::run's Repository::open(args.db) succeeds after import
+        // writes the decompressed bytes.
+        let source_db_dir = TempDir::new().unwrap();
+        let source_db = source_db_dir.path().join("source.lbug");
+        let _source_kit =
+            build_kit(&KitBootstrapConfig::new(source_db.clone())).expect("build source kit");
+        let db_bytes = std::fs::read(&source_db).expect("read source db");
+
+        let artifact = build_test_artifact(dir.path(), "reindex.zst", &db_bytes);
+        let import_db = dir.path().join("imported.lbug");
+
+        // Source directory with a .rs file for the reindex to parse.
+        let src_dir = TempDir::new().unwrap();
+        let src_main = src_dir.path().join("main.rs");
+        std::fs::write(&src_main, "fn main() {}\n").unwrap();
+
+        // Kit db must differ from import db (import overwrites import_db).
+        let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(
+            "/tmp/_unused_reindex_kit.lbug",
+        )))
+        .expect("build kit");
+
+        let args = ImportArgs {
+            input: artifact.to_string_lossy().into_owned(),
+            db: import_db.to_string_lossy().into_owned(),
+            reindex: true,
+            path: Some(src_dir.path().to_string_lossy().into_owned()),
+            name: Some("demo".into()),
+        };
+
+        let result = run(&kit, &args);
+        assert!(
+            result.is_ok(),
+            "import with reindex should succeed: {:?}",
+            result.err()
+        );
+    }
 }

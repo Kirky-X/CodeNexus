@@ -322,6 +322,60 @@ mod tests {
         assert!(json.contains("\"line\":0"));
     }
 
+    // --- HoverOutput::from variant coverage (lines 206-215) ---
+
+    #[test]
+    fn hover_output_from_scalar_string_extracts_text() {
+        use lsp_types::{Hover, HoverContents, MarkedString};
+        let hover = Hover {
+            contents: HoverContents::Scalar(MarkedString::String("plain text hover".to_string())),
+            range: None,
+        };
+        let out = HoverOutput::from(hover);
+        let json = serde_json::to_string(&out).unwrap();
+        assert!(json.contains("\"found\":true"));
+        assert!(json.contains("plain text hover"));
+    }
+
+    #[test]
+    fn hover_output_from_scalar_language_string_extracts_value() {
+        use lsp_types::{Hover, HoverContents, LanguageString, MarkedString};
+        let hover = Hover {
+            contents: HoverContents::Scalar(MarkedString::LanguageString(LanguageString {
+                language: "rust".to_string(),
+                value: "fn compute() -> i32".to_string(),
+            })),
+            range: None,
+        };
+        let out = HoverOutput::from(hover);
+        let json = serde_json::to_string(&out).unwrap();
+        assert!(json.contains("\"found\":true"));
+        assert!(json.contains("fn compute() -> i32"));
+    }
+
+    #[test]
+    fn hover_output_from_array_joins_all_strings() {
+        use lsp_types::{Hover, HoverContents, LanguageString, MarkedString};
+        let hover = Hover {
+            contents: HoverContents::Array(vec![
+                MarkedString::String("line one".to_string()),
+                MarkedString::LanguageString(LanguageString {
+                    language: "rust".to_string(),
+                    value: "fn two()".to_string(),
+                }),
+            ]),
+            range: None,
+        };
+        let out = HoverOutput::from(hover);
+        let json = serde_json::to_string(&out).unwrap();
+        assert!(json.contains("\"found\":true"));
+        assert!(json.contains("line one"));
+        assert!(json.contains("fn two()"));
+        // Array items are joined with newline.
+        let contents = out.contents.expect("contents should be present");
+        assert!(contents.contains("line one\nfn two()"));
+    }
+
     // --- lsp_error_to_cli ---
 
     #[test]

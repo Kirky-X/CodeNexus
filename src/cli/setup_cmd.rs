@@ -257,6 +257,7 @@ pub fn run_with_home(
 }
 
 /// Outcome of attempting to write the MCP entry into a single agent's config.
+#[derive(Debug)]
 enum WriteOutcome {
     /// The entry was freshly written or updated.
     Written,
@@ -687,5 +688,116 @@ mod tests {
         assert_eq!(Agent::ClaudeCode.name(), "Claude Code");
         assert_eq!(Agent::Cursor.name(), "Cursor");
         assert_eq!(Agent::Codex.name(), "Codex");
+    }
+
+    // --- run() wrapper (lines 164-174) ---
+    //
+    // These tests set/unset `HOME` process-wide. They are safe within this
+    // module because no other test here reads `HOME`. The original value is
+    // always restored.
+
+    #[test]
+    fn run_succeeds_when_home_has_fresh_agent() {
+        let home = fake_home(&[Agent::ClaudeCode]);
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+        let args = SetupArgs { force: false };
+        let result = run(&args);
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        assert!(
+            result.is_ok(),
+            "run should succeed with a fresh agent: {:?}",
+            result.err()
+        );
+        let config_path = home.path().join(".claude.json");
+        assert!(config_path.exists(), "config file should be created");
+    }
+
+    #[test]
+    fn run_returns_error_when_home_unset() {
+        let original_home = std::env::var("HOME").ok();
+        std::env::remove_var("HOME");
+        let args = SetupArgs { force: false };
+        let err = run(&args).expect_err("HOME unset should error");
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        assert!(matches!(err, CliError::InvalidInput(_)));
+    }
+
+    // --- run_with_home: Declined branch (lines 241, 244-245, 247-250) ---
+
+    #[test]
+    fn run_with_home_declines_overwrite_returns_skipped() {
+        let home = fake_home(&[Agent::ClaudeCode]);
+        let config_path = home.path().join(".claude.json");
+        // Pre-existing config with a different entry → user says "no".
+        std::fs::write(
+            &config_path,
+            r#"{"mcpServers":{"codenexus":{"command":"/old/codenexus","args":["mcp"]}}}"#,
+        )
+        .unwrap();
+        let mut stdin = no_stdin();
+        let mut stdout = Vec::new();
+        let output = run_with_home(home.path(), false, &mut stdin, &mut stdout).unwrap();
+        assert!(output.configured.is_empty(), "nothing should be configured");
+        assert_eq!(output.skipped.len(), 1, "agent should be skipped");
+        assert_eq!(output.skipped[0].agent, "Claude Code");
+        assert_eq!(output.skipped[0].reason, "user declined overwrite");
+        // File unchanged.
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        assert_eq!(v["mcpServers"]["codenexus"]["command"], "/old/codenexus");
+    }
+
+    // --- write_agent_config: invalid JSON (lines 302, 304) ---
+
+    #[test]
+    fn write_agent_config_invalid_json_returns_invalid_input() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("mcp.json");
+        std::fs::write(&path, "not valid json {").unwrap();
+        let entry = codenexus_mcp_entry();
+        let mut stdin = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let err = write_agent_config(&path, &entry, false, &mut stdin, &mut stdout)
+            .expect_err("invalid JSON should error");
+        assert!(matches!(err, CliError::InvalidInput(_)));
+    }
+
+    // --- write_agent_config: non-object root (lines 312, 314) ---
+
+    #[test]
+    fn write_agent_config_non_object_root_returns_invalid_input() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("mcp.json");
+        // Valid JSON but an array, not an object.
+        std::fs::write(&path, r#"[1, 2, 3]"#).unwrap();
+        let entry = codenexus_mcp_entry();
+        let mut stdin = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let err = write_agent_config(&path, &entry, false, &mut stdin, &mut stdout)
+            .expect_err("non-object root should error");
+        assert!(matches!(err, CliError::InvalidInput(_)));
+    }
+
+    // --- write_agent_config: non-object mcpServers (lines 321, 323) ---
+
+    #[test]
+    fn write_agent_config_non_object_mcp_servers_returns_invalid_input() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("mcp.json");
+        // mcpServers is a string, not an object.
+        std::fs::write(&path, r#"{"mcpServers":"not-an-object"}"#).unwrap();
+        let entry = codenexus_mcp_entry();
+        let mut stdin = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let err = write_agent_config(&path, &entry, false, &mut stdin, &mut stdout)
+            .expect_err("non-object mcpServers should error");
+        assert!(matches!(err, CliError::InvalidInput(_)));
     }
 }
