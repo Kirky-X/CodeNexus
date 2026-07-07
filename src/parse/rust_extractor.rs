@@ -387,16 +387,23 @@ fn extract_impl(
         // Extract the trait name (last `::`-separated component) for
         // resolution. e.g. `std::fmt::Display` → `Display`, `Trait` → `Trait`.
         // Also strip generic params (e.g. `IntoIterator<Item=u8>` → `IntoIterator`).
-        let trait_short = trait_name.rsplit("::").next().unwrap_or(&trait_name);
-        let trait_short = strip_generics(trait_short);
+        //
+        // Order matters: strip generics BEFORE rsplit to avoid residual `>`.
+        // `From<tokio::time::error::Elapsed>` → strip_generics → `From` → rsplit → `From`.
+        // (was: rsplit → `Elapsed>` → strip_generics → `Elapsed>` due to no `<`).
+        let trait_stripped = strip_generics(&trait_name);
+        let trait_short = trait_stripped.rsplit("::").next().unwrap_or(trait_stripped);
         let type_qn = make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent);
         let trait_qn = make_qn(ctx.file_path, trait_short, ctx.project, ctx.current_parent);
-        result.edges.push(Edge::new(
-            type_qn,
-            trait_qn,
-            EdgeType::Implements,
-            ctx.project,
-        ));
+        // Set start_line so multiple `impl From<X> for Y` blocks produce
+        // distinct edge IDs (source, target, start_line). Without this, all
+        // IMPLEMENTS edges have start_line=0 → duplicate primary key (ADR-014).
+        let start_line = node.start_position().row as u32 + 1;
+        result.edges.push(
+            Edge::builder(type_qn, trait_qn, EdgeType::Implements, ctx.project)
+                .start_line(start_line)
+                .build(),
+        );
         return;
     }
     // Impl blocks need disambiguation from struct/enum with the same name
@@ -2016,5 +2023,85 @@ pub mod other {
             .filter(|e| e.edge_type == EdgeType::Contains && e.target == module_node.id)
             .count();
         assert_eq!(contains_count, 0, "B1 fix: Module should have 0 CONTAINS edges");
+    }
+
+    // --- IMPLEMENTS edge: generic trait target stripping (ADR-014 regression) ---
+
+    #[test]
+    fn trait_impl_strips_generic_params_from_trait_target() {
+        // `impl From<reqwest::Error> for SecureNotifyError` — the trait field
+        // is `From<reqwest::Error>`. The IMPLEMENTS edge target must be `From`
+        // (generic params stripped), NOT `Error>` (residual `>` after rsplit).
+        // Regression: duplicate primary key on --force reindex (ADR-014).
+        let src = "struct SecureNotifyError;\nimpl From<reqwest::Error> for SecureNotifyError {\n    fn from(e: reqwest::Error) -> Self { Self }\n}\n";
+        let result = extract(src);
+        let implements: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Implements)
+            .collect();
+        assert_eq!(implements.len(), 1, "should create 1 IMPLEMENTS edge");
+        assert!(
+            implements[0].target.ends_with("From"),
+            "IMPLEMENTS target should end with From (generics stripped): {}",
+            implements[0].target
+        );
+        assert!(
+            !implements[0].target.contains('>'),
+            "IMPLEMENTS target must not contain residual `>`: {}",
+            implements[0].target
+        );
+    }
+
+    #[test]
+    fn multiple_from_impls_produce_distinct_edge_ids() {
+        // Multiple `impl From<X> for Y` blocks must produce IMPLEMENTS edges
+        // with distinct (source, target, start_line) to avoid duplicate primary
+        // key on --force reindex. Each impl block has a different start_line.
+        let src = r#"struct SecureNotifyError;
+impl From<reqwest::Error> for SecureNotifyError {
+    fn from(e: reqwest::Error) -> Self { Self }
+}
+impl From<serde_json::Error> for SecureNotifyError {
+    fn from(e: serde_json::Error) -> Self { Self }
+}
+impl From<std::io::Error> for SecureNotifyError {
+    fn from(e: std::io::Error) -> Self { Self }
+}
+"#;
+        let result = extract(src);
+        let implements: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Implements)
+            .collect();
+        assert_eq!(
+            implements.len(),
+            3,
+            "should create 3 IMPLEMENTS edges: {:?}",
+            implements
+        );
+        // All targets should be `From` (generics stripped), not `Error>`.
+        for e in &implements {
+            assert!(
+                e.target.ends_with("From"),
+                "IMPLEMENTS target should end with From: {}",
+                e.target
+            );
+        }
+        // Edge IDs (source, target, start_line) must be unique.
+        let mut edge_keys: Vec<(String, String, u32)> = implements
+            .iter()
+            .map(|e| (e.source.clone(), e.target.clone(), e.start_line.unwrap_or(0)))
+            .collect();
+        let total = edge_keys.len();
+        edge_keys.sort();
+        edge_keys.dedup();
+        assert_eq!(
+            edge_keys.len(),
+            total,
+            "IMPLEMENTS edge keys must be unique (no duplicate primary key): {:?}",
+            implements
+        );
     }
 }
