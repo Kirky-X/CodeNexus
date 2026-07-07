@@ -31,6 +31,7 @@ pub mod cross_lang;
 pub mod dataflow;
 pub mod error;
 pub mod fqn;
+pub mod imports;
 pub mod mro;
 pub mod scope;
 pub mod symbol_table;
@@ -42,6 +43,7 @@ pub use cross_lang::{FfiResolver, MatchStrategy};
 pub use dataflow::DataFlowResolver;
 pub use error::{ResolveError, Result};
 pub use fqn::FqnGenerator;
+pub use imports::ImportResolver;
 pub use mro::{mro_for, MroResolver, MroStrategy};
 pub use scope::{Scope, ScopeChain, ScopeContext, ScopeResolver, ScopeResolverRegistry};
 pub use symbol_table::{FileSymbolTable, ProjectSymbolTable, SymbolEntry};
@@ -93,12 +95,14 @@ pub fn build_symbol_table(results: &[ExtractResult], project: &str) -> ProjectSy
     table
 }
 
-/// Resolves all symbols: calls + dataflows + FFI, returning resolved edges.
+/// Resolves all symbols: calls + dataflows + FFI + imports, returning resolved edges.
 ///
 /// This is the top-level orchestration function for the resolve phase
 /// (ADR-011). It runs [`CallResolver`] to produce CALLS edges,
-/// [`DataFlowResolver`] to produce DataFlows edges, and [`FfiResolver`] to
-/// produce FfiCalls edges (ADD §7.4), adding all resolved edges to the graph.
+/// [`DataFlowResolver`] to produce DataFlows edges, [`FfiResolver`] to
+/// produce FfiCalls edges (ADD §7.4), [`ImportResolver`] to produce IMPORTS
+/// edges (DDD §7.2), and [`TypeResolver`] to fix dangling type edges,
+/// adding all resolved edges to the graph.
 ///
 /// # Arguments
 ///
@@ -128,6 +132,12 @@ pub fn resolve_all(
         let ffi_resolver = FfiResolver::new(symbol_table, project);
         edges.extend(ffi_resolver.resolve_ffi(results, graph));
     }
+    // Import resolution creates File → File IMPORTS edges from ImportInfo
+    // records extracted by the parse phase (DDD §7.2). Runs after the other
+    // resolvers; needs File nodes already in the graph (created by the scope
+    // phase).
+    let import_resolver = ImportResolver::new(project);
+    edges.extend(import_resolver.resolve_imports(results, graph));
     // Type resolution fixes dangling Extends/Implements/UsesType edges
     // (design.md H6). Runs after other resolvers so it can fix edges created
     // by the parse phase. Returns the list of fixed edges (already mutated
