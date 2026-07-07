@@ -1099,4 +1099,89 @@ mod tests {
         // Clean up the mock session.
         let _ = client.shutdown();
     }
+
+    // --- definition / type_definition / hover with active mock session ---
+    // These exercise the trait method bodies (params construction +
+    // send_request round-trip + result extraction) that the per-method
+    // unit tests above skip by calling send_request directly.
+
+    fn client_with_mock_session() -> (RustAnalyzerClient, Sender<Message>, Receiver<Message>) {
+        let (session, reader_tx, writer_rx) = mock_session();
+        let client = RustAnalyzerClient::new();
+        *client.session.lock().unwrap() = Some(session);
+        (client, reader_tx, writer_rx)
+    }
+
+    fn make_location() -> lsp_types::Location {
+        lsp_types::Location {
+            uri: Url::parse("file:///tmp/lib.rs").unwrap(),
+            range: lsp_types::Range {
+                start: Position { line: 5, character: 10 },
+                end: Position { line: 5, character: 20 },
+            },
+        }
+    }
+
+    #[test]
+    fn definition_with_mock_session_returns_location() {
+        let (client, reader_tx, _writer_rx) = client_with_mock_session();
+        let response = Response {
+            id: RequestId::from(1),
+            result: Some(
+                serde_json::to_value(GotoDefinitionResponse::Scalar(make_location()))
+                    .unwrap(),
+            ),
+            error: None,
+        };
+        reader_tx.send(Message::Response(response)).unwrap();
+
+        let result = client.definition(Path::new("/tmp/lib.rs"), 0, 0);
+        let loc = result.expect("definition should succeed");
+        assert!(loc.is_some(), "should return a location");
+        assert_eq!(loc.unwrap().range.start.line, 5);
+        let _ = client.shutdown();
+    }
+
+    #[test]
+    fn type_definition_with_mock_session_returns_location() {
+        let (client, reader_tx, _writer_rx) = client_with_mock_session();
+        let response = Response {
+            id: RequestId::from(1),
+            result: Some(
+                serde_json::to_value(GotoDefinitionResponse::Scalar(make_location()))
+                    .unwrap(),
+            ),
+            error: None,
+        };
+        reader_tx.send(Message::Response(response)).unwrap();
+
+        let result = client.type_definition(Path::new("/tmp/lib.rs"), 0, 0);
+        let loc = result.expect("type_definition should succeed");
+        assert!(loc.is_some(), "should return a location");
+        assert_eq!(loc.unwrap().range.start.line, 5);
+        let _ = client.shutdown();
+    }
+
+    #[test]
+    fn hover_with_mock_session_returns_hover() {
+        let (client, reader_tx, _writer_rx) = client_with_mock_session();
+        let hover = lsp_types::Hover {
+            contents: lsp_types::HoverContents::Markup(lsp_types::MarkupContent {
+                kind: lsp_types::MarkupKind::Markdown,
+                value: "fn foo()".to_string(),
+            }),
+            range: None,
+        };
+        let response = Response {
+            id: RequestId::from(1),
+            result: Some(serde_json::to_value(hover).unwrap()),
+            error: None,
+        };
+        reader_tx.send(Message::Response(response)).unwrap();
+
+        let result = client.hover(Path::new("/tmp/lib.rs"), 0, 0);
+        let h = result.expect("hover should succeed");
+        assert!(h.is_some(), "should return hover info");
+        let _ = client.shutdown();
+    }
 }
