@@ -69,3 +69,11 @@ specmark/
 
 # Verification harness outputs (large, sample-derived; rebuild locally)
 tools/verification/results/
+
+# IDE uploads (transient artifacts, not source of truth)
+.uploads/
+
+# Coverage artifacts
+lcov.info
+*.lcov
+tarpaulin-report.*
