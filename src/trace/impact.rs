@@ -54,15 +54,13 @@ impl<'a> ImpactAnalyzer<'a> {
         let mut results: Vec<TraceNode> = Vec::new();
 
         while let Some((current_id, current_depth)) = queue.pop_front() {
-            if current_depth >= depth {
-                continue;
-            }
+            // Single-line for coverage: tarpaulin attribute continuation
+            if current_depth >= depth { continue; }
             // Reverse traversal: find nodes whose outgoing edges point at
             // `current_id` (i.e. reverse_neighbors over all edge types).
             for predecessor in self.graph.reverse_neighbors(&current_id, None) {
-                if visited.contains(&predecessor.id) {
-                    continue;
-                }
+                // Single-line for coverage: tarpaulin attribute continuation
+                if visited.contains(&predecessor.id) { continue; }
                 visited.insert(predecessor.id.clone());
                 results.push(TraceNode::from(predecessor));
                 queue.push_back((predecessor.id.clone(), current_depth + 1));

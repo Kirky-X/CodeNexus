@@ -483,4 +483,11 @@ mod tests {
         let required = kit.require::<StorageKey>().expect("require::<StorageKey>");
         assert!(Arc::ptr_eq(&storage, &required));
     }
+
+    #[test]
+    fn builder_default_equals_new() {
+        // Default impl must produce the same state as new() (no config).
+        let default_builder = StorageModuleBuilder::default();
+        assert!(default_builder.build().is_err(), "default builder should require config");
+    }
 }

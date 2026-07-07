@@ -498,4 +498,36 @@ mod tests {
             "expected exactly 1 f_a→f_b CALLS edge, got {dup_count} (BFS dedup regression)"
         );
     }
+
+    #[test]
+    fn fetch_edges_outgoing_direction_returns_only_outgoing() {
+        // Covers EdgeDirection::Outgoing arm (line 175).
+        let db = fresh_db_path();
+        seed_call_graph(&db);
+        let repo = Repository::open(&db).expect("open");
+        let edges = fetch_edges_for_node(&repo, "f_a", EdgeDirection::Outgoing).expect("fetch");
+        assert!(!edges.is_empty(), "f_a should have outgoing CALLS edges");
+        assert!(edges.iter().all(|e| e.source == "f_a"), "all edges should have f_a as source");
+    }
+
+    #[test]
+    fn fetch_edges_incoming_direction_returns_only_incoming() {
+        // Covers EdgeDirection::Incoming arm (line 178).
+        let db = fresh_db_path();
+        seed_call_graph(&db);
+        let repo = Repository::open(&db).expect("open");
+        let edges = fetch_edges_for_node(&repo, "f_b", EdgeDirection::Incoming).expect("fetch");
+        assert!(!edges.is_empty(), "f_b should have incoming CALLS edges");
+        assert!(edges.iter().all(|e| e.target == "f_b"), "all edges should have f_b as target");
+    }
+
+    #[test]
+    fn fetch_node_by_id_returns_none_for_missing_id() {
+        // Covers the `Ok(None)` fall-through in fetch_node_by_id (line 164).
+        let db = fresh_db_path();
+        seed_call_graph(&db);
+        let repo = Repository::open(&db).expect("open");
+        let node = fetch_node_by_id(&repo, "nonexistent_id").expect("fetch");
+        assert!(node.is_none(), "should return None for missing id");
+    }
 }

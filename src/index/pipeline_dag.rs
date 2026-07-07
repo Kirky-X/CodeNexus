@@ -894,6 +894,74 @@ mod tests {
         }
     }
 
+    // --- Non-ExecutionFailed phase errors are rewrapped (other arm) ---
+    //
+    // A phase that returns a PhaseError variant OTHER than ExecutionFailed or
+    // MissingInput must be wrapped into ExecutionFailed by the runner (lines 411-414).
+
+    #[test]
+    fn run_phase_returning_type_mismatch_is_wrapped_as_execution_failed() {
+        struct OddFailPhase;
+        impl Phase for OddFailPhase {
+            type Input = ();
+            type Output = ();
+            const NAME: &'static str = "ODD";
+            fn deps() -> &'static [&'static str] {
+                &[]
+            }
+            fn run(&self, _: Self::Input, _ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+                // A non-ExecutionFailed, non-MissingInput variant → hits the
+                // `other` arm in Pipeline::run, which wraps it.
+                Err(PhaseError::TypeMismatch("ODD"))
+            }
+        }
+        let mut p = Pipeline::new();
+        p.register(OddFailPhase).unwrap();
+        let mut ctx = PipelineCtx::new();
+        ctx.insert("ODD", ());
+        let err = p.run(&mut ctx).unwrap_err();
+        match err {
+            PhaseError::ExecutionFailed { phase, inner } => {
+                assert_eq!(phase, "ODD");
+                // Inner carries the original TypeMismatch error message.
+                assert!(inner.to_string().contains("ODD"), "got: {inner}");
+            }
+            other => panic!("expected ExecutionFailed wrapping TypeMismatch, got {other:?}"),
+        }
+    }
+
+    // --- Default impls + Debug formatting (lines 181-182, 423-424, 429-431) ---
+
+    #[test]
+    fn pipeline_ctx_default_is_empty() {
+        let ctx = PipelineCtx::default();
+        assert!(ctx.is_empty());
+        assert_eq!(ctx.len(), 0);
+    }
+
+    #[test]
+    fn pipeline_default_is_empty() {
+        let p = Pipeline::default();
+        assert!(p.is_empty());
+        assert_eq!(p.len(), 0);
+    }
+
+    #[test]
+    fn pipeline_debug_format_lists_registered_phase_names() {
+        let mut p = Pipeline::new();
+        p.register(PhaseA::default()).unwrap();
+        let s = format!("{p:?}");
+        assert!(s.contains("Pipeline"), "got: {s}");
+        assert!(s.contains("A"), "debug output must list phase names: {s}");
+    }
+
+    #[test]
+    fn pipeline_debug_format_empty_pipeline() {
+        let p = Pipeline::new();
+        let s = format!("{p:?}");
+        assert!(s.contains("Pipeline"), "got: {s}");
+    }
+
     #[test]
     fn run_executes_phases_in_topological_order() {
         // Use a shared log to verify execution order matches topo sort.

@@ -746,4 +746,60 @@ mod tests {
     fn relevance_score_empty_query_is_neutral() {
         assert_eq!(relevance_score("anything", ""), 1.0);
     }
+
+    // --- error continuation coverage ---
+
+    #[test]
+    fn search_by_name_continues_on_query_error() {
+        // Cover the `Err(_) => continue` arm (line 86) of search_by_name:
+        // when a per-table MATCH query fails (table dropped), the loop
+        // skips it and continues to the next table.
+        let repo = fresh_repo();
+        repo.save_nodes(
+            &[sample_function("f1", "demo", "parse", "demo.parse", "/a.rs", 1)],
+            NodeLabel::Function,
+        )
+        .expect("save_nodes");
+        // Drop the Class table so its MATCH query errors.
+        repo.connection()
+            .execute("DROP TABLE Class;")
+            .expect("drop table");
+        // Verify the table is actually gone.
+        let check = repo
+            .connection()
+            .query("MATCH (n:Class) RETURN n.name AS name;");
+        assert!(check.is_err(), "Class table should be gone after DROP");
+        let searcher = StructuredSearcher::new(repo.connection());
+        // Should still return results from the Function table.
+        let results = searcher
+            .search_by_name("parse", None, 100)
+            .expect("search");
+        assert!(results.iter().any(|r| r.name == "parse"));
+    }
+
+    #[test]
+    fn search_by_file_continues_on_query_error() {
+        // Cover the `Err(_) => continue` arm (line 143) of search_by_file.
+        let repo = fresh_repo();
+        repo.save_nodes(
+            &[sample_function(
+                "f1",
+                "demo",
+                "parse",
+                "demo.parse",
+                "/src/main.rs",
+                1,
+            )],
+            NodeLabel::Function,
+        )
+        .expect("save_nodes");
+        repo.connection()
+            .execute("DROP TABLE Class;")
+            .expect("drop table");
+        let searcher = StructuredSearcher::new(repo.connection());
+        let results = searcher
+            .search_by_file("/src/main.rs", None)
+            .expect("search_by_file");
+        assert!(results.iter().any(|r| r.name == "parse"));
+    }
 }

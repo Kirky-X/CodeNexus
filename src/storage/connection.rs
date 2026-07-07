@@ -824,4 +824,17 @@ mod tests {
             "database is locked 不应被检测为损坏"
         );
     }
+
+    #[test]
+    fn value_to_json_map_with_non_string_key() {
+        // Cover the `other => other.to_string()` arm of value_to_json: a Map
+        // entry whose key is not a Value::String (e.g. Int64) is stringified.
+        let val = Value::Map(
+            (lbug::LogicalType::Int64, lbug::LogicalType::Int64),
+            vec![(Value::Int64(42), Value::Int64(100))],
+        );
+        let json = value_to_json(val);
+        let obj = json.as_object().expect("should be object");
+        assert_eq!(obj.get("42"), Some(&serde_json::json!(100)));
+    }
 }

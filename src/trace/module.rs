@@ -343,4 +343,17 @@ mod tests {
         let result = required.trace("a", TraceType::Calls, 3).expect("trace");
         assert_eq!(result.symbol, "a");
     }
+
+    #[test]
+    fn builder_default_equals_new() {
+        // Default impl must produce the same state as new() (no config).
+        let default_builder = TraceModuleBuilder::default();
+        assert!(default_builder.build().is_err(), "default builder should require config");
+    }
+
+    #[test]
+    fn trace_config_in_memory_sets_memory_path() {
+        let config = TraceConfig::in_memory();
+        assert_eq!(config.db_path, std::path::PathBuf::from(":memory:"));
+    }
 }

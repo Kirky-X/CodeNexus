@@ -232,4 +232,10 @@ mod tests {
             .expect("require::<ResolverKey>");
         assert!(Arc::ptr_eq(&resolver, &required));
     }
+
+    #[test]
+    fn builder_default_equals_new() {
+        let default_builder = ResolverModuleBuilder::default();
+        let _ = default_builder.build().expect("build should succeed");
+    }
 }

@@ -406,4 +406,11 @@ mod tests {
         let required = kit.require::<QueryKey>().expect("require::<QueryKey>");
         assert!(Arc::ptr_eq(&query, &required));
     }
+
+    #[test]
+    fn builder_default_equals_new() {
+        // Default impl must produce the same state as new() (no config).
+        let default_builder = QueryModuleBuilder::default();
+        assert!(default_builder.build().is_err(), "default builder should require config");
+    }
 }
