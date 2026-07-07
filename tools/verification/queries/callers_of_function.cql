@@ -4,8 +4,11 @@
 // Comparison: order-insensitive set equality on (symbol_name, file_path)
 
 // === CODENEXUS ===
-MATCH (caller:Function), (r:CodeRelation)
-WHERE r.source = caller.id AND r.type = 'CALLS'
+MATCH (r:CodeRelation)
+WHERE r.type = 'CALLS'
+WITH r
+MATCH (caller:Function)
+WHERE caller.id = r.source
 RETURN caller.name AS symbol_name, caller.filePath AS file_path
 ORDER BY symbol_name, file_path
 LIMIT 200

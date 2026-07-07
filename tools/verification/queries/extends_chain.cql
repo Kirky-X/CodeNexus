@@ -4,8 +4,11 @@
 // Note: Rust repos have no EXTENDS edges; expect empty set on both sides.
 
 // === CODENEXUS ===
-MATCH (child:Class), (r:CodeRelation)
-WHERE r.source = child.id AND r.type = 'EXTENDS'
+MATCH (r:CodeRelation)
+WHERE r.type = 'EXTENDS'
+WITH r
+MATCH (child:Class)
+WHERE child.id = r.source
 RETURN child.name AS symbol_name, child.filePath AS file_path
 ORDER BY symbol_name, file_path
 LIMIT 200

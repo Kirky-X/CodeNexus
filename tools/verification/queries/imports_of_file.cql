@@ -4,8 +4,11 @@
 // Comparison: order-insensitive set equality on (symbol_name, file_path)
 
 // === CODENEXUS ===
-MATCH (f:File), (r:CodeRelation)
-WHERE r.source = f.id AND r.type = 'IMPORTS'
+MATCH (r:CodeRelation)
+WHERE r.type = 'IMPORTS'
+WITH r
+MATCH (f:File)
+WHERE f.id = r.source
 RETURN f.filePath AS symbol_name, f.filePath AS file_path
 ORDER BY symbol_name, file_path
 LIMIT 200

@@ -5,18 +5,27 @@
 
 // === CODENEXUS ===
 // IMPLEMENTS edge sources are Struct/Enum (Rust), Class (Python/Java/TS).
-// The old query matched only Impl nodes (inherent impls), missing all
-// trait impls whose source is the type definition node.
-MATCH (r:CodeRelation), (n:Struct)
-WHERE r.source = n.id AND r.type = 'IMPLEMENTS'
+// CodeRelation is a NODE table in CodeNexus, so we use WITH clause chaining
+// instead of Cartesian product (LadybugDB does not support `MATCH (a), (b)`).
+MATCH (r:CodeRelation)
+WHERE r.type = 'IMPLEMENTS'
+WITH r
+MATCH (n:Struct)
+WHERE n.id = r.source
 RETURN n.name AS symbol_name, n.filePath AS file_path
 UNION
-MATCH (r:CodeRelation), (n:Enum)
-WHERE r.source = n.id AND r.type = 'IMPLEMENTS'
+MATCH (r:CodeRelation)
+WHERE r.type = 'IMPLEMENTS'
+WITH r
+MATCH (n:Enum)
+WHERE n.id = r.source
 RETURN n.name AS symbol_name, n.filePath AS file_path
 UNION
-MATCH (r:CodeRelation), (n:Class)
-WHERE r.source = n.id AND r.type = 'IMPLEMENTS'
+MATCH (r:CodeRelation)
+WHERE r.type = 'IMPLEMENTS'
+WITH r
+MATCH (n:Class)
+WHERE n.id = r.source
 RETURN n.name AS symbol_name, n.filePath AS file_path
 ORDER BY symbol_name, file_path
 LIMIT 200

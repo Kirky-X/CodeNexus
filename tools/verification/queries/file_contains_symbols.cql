@@ -4,8 +4,11 @@
 // Note: We pick Function symbols (most numerous, easiest to compare).
 
 // === CODENEXUS ===
-MATCH (fn:Function), (r:CodeRelation)
-WHERE r.target = fn.id AND r.type = 'DEFINES'
+MATCH (r:CodeRelation)
+WHERE r.type = 'DEFINES'
+WITH r
+MATCH (fn:Function)
+WHERE fn.id = r.target
 RETURN fn.name AS symbol_name, fn.filePath AS file_path
 ORDER BY symbol_name, file_path
 LIMIT 200
