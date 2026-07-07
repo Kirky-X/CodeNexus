@@ -252,6 +252,27 @@ fn cognitive_count(node: Node<'_>, language: Language, nesting: u32) -> u32 {
     count
 }
 
+/// Computes the maximum nesting depth of branch nodes in the parse tree.
+///
+/// Returns the deepest level of nested branch nodes (e.g. an `if` inside an
+/// `if` inside an `if` has depth 3).
+pub fn calc_nesting_depth(tree: &tree_sitter::Tree, language: Language) -> u32 {
+    nesting_depth_count(tree.root_node(), language, 0)
+}
+
+fn nesting_depth_count(node: Node<'_>, language: Language, current_depth: u32) -> u32 {
+    let is_branch = is_branch_node(language, node.kind());
+    let this_depth = if is_branch { current_depth + 1 } else { current_depth };
+    let mut max_depth = if is_branch { this_depth } else { 0 };
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        max_depth = max_depth.max(nesting_depth_count(child, language, this_depth));
+    }
+
+    max_depth
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,5 +480,54 @@ fn flat(a: i32) {
         let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
         let tree = parser.parse("fn empty() {}", None).unwrap();
         assert_eq!(calc_cognitive(&tree, Language::Rust), 0);
+    }
+
+    // --- T011: calc_nesting_depth tests ---
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn calc_nesting_depth_four_levels() {
+        let src = r#"
+fn deep(a: i32) {
+    if a > 0 {
+        if a > 1 {
+            if a > 2 {
+                if a > 3 { }
+            }
+        }
+    }
+}
+"#;
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(calc_nesting_depth(&tree, Language::Rust), 4);
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn calc_nesting_depth_no_branches() {
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse("fn flat() {}", None).unwrap();
+        assert_eq!(calc_nesting_depth(&tree, Language::Rust), 0);
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn calc_nesting_depth_parallel_branches() {
+        let src = r#"
+fn parallel(a: i32) {
+    if a > 0 {
+        if a > 1 { }
+    }
+    if a > 2 {
+        if a > 3 {
+            if a > 4 { }
+        }
+    }
+}
+"#;
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(calc_nesting_depth(&tree, Language::Rust), 3);
     }
 }
