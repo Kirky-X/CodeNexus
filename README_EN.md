@@ -118,7 +118,7 @@ cargo build --release
 |---------|---------|-------------|
 | `minimal` | — | Minimal preset: `lang-rust` only |
 | `core` | — | Core preset: `lang-c` + `lang-rust` + `lang-python` |
-| `full` | enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++ + daemon/analysis/api-review/community/cross-service/lsp |
+| `full` | enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++ + daemon/analysis/complexity/api-review/community/cross-service/lsp |
 | `lang-c` | — | C language parser (tree-sitter-c) |
 | `lang-rust` | enabled | Rust language parser (tree-sitter-rust) |
 | `lang-fortran` | — | Fortran language parser (tree-sitter-fortran) |
@@ -131,6 +131,7 @@ cargo build --release
 | `embed` | disabled | Vector embedding semantic search (reqwest HTTP + local ONNX inference) |
 | `lsp` | disabled | LSP-enhanced extraction (rust-analyzer integration, semantic type augmentation) |
 | `analysis` | enabled | Dead code detection + architecture overview (pure Cypher aggregation) |
+| `complexity` | enabled | AST complexity analysis (cyclomatic/cognitive complexity, nesting depth, function length, depends on `analysis`) |
 | `api-review` | enabled | API review toolkit (route-map/shape-check/api-impact/tool-map) |
 | `community` | enabled | Community detection (Louvain modularity optimization, depends on petgraph) |
 | `cross-service` | enabled | Cross-service call chain detection (HTTP route pattern matching) |
@@ -227,6 +228,7 @@ codenexus clean myproject
 | `clean` | Remove a project and its index |
 | `dead-code` | Dead code detection (uncalled functions, `analysis` feature) |
 | `architecture` | Architecture overview (module dependency graph, `analysis` feature) |
+| `complexity` | AST complexity analysis (cyclomatic/cognitive complexity, nesting depth, function length, `complexity` feature) |
 | `api-route-map` | HTTP route mapping (API endpoint inventory, `api-review` feature) |
 | `api-shape-check` | API shape check (request/response structure validation, `api-review` feature) |
 | `api-impact` | API change impact analysis (`api-review` feature) |
@@ -304,13 +306,14 @@ By participating, you agree to abide by the [Code of Conduct](CODE_OF_CONDUCT.md
 
 ## Roadmap
 
-CodeNexus is at v0.2.0. Planned work, ordered by current priority:
+CodeNexus is at v0.2.1. Planned work, ordered by current priority:
 
 - [x] v0.1.0 — Multi-language indexing (C/Rust/Fortran/Python/TypeScript), graph schema (44 node types + 24 edge types), `query`/`trace`/`impact`/`context`/`search`, incremental indexing, RAM-first mode, MCP server, team `export`/`import`, daemon mode, confidence tiers, disambiguation
 - [x] v0.1.x — Stability and performance hardening: incremental reindex coverage, larger-repo memory tuning, more language-specific edge extraction
 - [x] v0.2.0 — `lsp` feature: LSP-enhanced extraction for type-accurate resolution beyond tree-sitter (rust-analyzer integration)
 - [x] v0.2.0 — Expand language coverage (Go, Java, C++) behind new `lang-*` features
 - [x] v0.2.0 — Analysis toolkit: dead-code detection, architecture overview, API review (route-map/shape-check/api-impact/tool-map), community detection, cross-service link detection
+- [x] v0.2.1 — AST complexity analysis: cyclomatic/cognitive complexity, nesting depth, function length with green/yellow/red severity alerting
 - [ ] v0.3.0 — Cross-language data-flow tracing end-to-end (currently edges are recorded; multi-hop taint paths need a dedicated query path)
 - [ ] v0.3.0 — Vector embedding default-on semantic search once ONNX model size and startup cost are acceptable
 - [ ] Future — Web UI / graph visualization on top of the query facade

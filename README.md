@@ -55,7 +55,7 @@ cargo build --release
 |---------|------|------|
 | `minimal` | — | 最小预设：仅 `lang-rust` |
 | `core` | — | 核心预设：`lang-c` + `lang-rust` + `lang-python` |
-| `full` | 启用 | 完整预设：`core` + Fortran/TypeScript/Go/Java/C++ + daemon/analysis/api-review/community/cross-service/lsp |
+| `full` | 启用 | 完整预设：`core` + Fortran/TypeScript/Go/Java/C++ + daemon/analysis/complexity/api-review/community/cross-service/lsp |
 | `lang-c` | — | C 语言解析器（tree-sitter-c） |
 | `lang-rust` | 启用 | Rust 语言解析器（tree-sitter-rust） |
 | `lang-fortran` | — | Fortran 语言解析器（tree-sitter-fortran） |
@@ -68,6 +68,7 @@ cargo build --release
 | `embed` | 关闭 | 向量嵌入语义搜索（reqwest HTTP + 本地 ONNX 推理） |
 | `lsp` | 关闭 | LSP 增强解析（rust-analyzer 集成，语义类型增强） |
 | `analysis` | 启用 | 死代码检测 + 架构概览（纯 Cypher 聚合） |
+| `complexity` | 启用 | AST 复杂度分析（圈/认知复杂度、嵌套深度、函数长度，依赖 `analysis`） |
 | `api-review` | 启用 | API 审查工具包（route-map/shape-check/api-impact/tool-map） |
 | `community` | 启用 | 社区检测（Louvain 模块度优化，依赖 petgraph） |
 | `cross-service` | 启用 | 跨服务调用链检测（HTTP 路由模式匹配） |
@@ -166,6 +167,7 @@ codenexus clean myproject
 | `clean` | 删除项目及其索引 |
 | `dead-code` | 死代码检测（未被调用的函数，`analysis` feature） |
 | `architecture` | 架构概览（模块依赖图，`analysis` feature） |
+| `complexity` | AST 复杂度分析（圈/认知复杂度、嵌套深度、函数长度，`complexity` feature） |
 | `api-route-map` | HTTP 路由映射（API 端点清单，`api-review` feature） |
 | `api-shape-check` | API 形状检查（请求/响应结构验证，`api-review` feature） |
 | `api-impact` | API 变更影响分析（`api-review` feature） |
