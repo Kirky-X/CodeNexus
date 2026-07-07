@@ -11,6 +11,10 @@ use serde::Serialize;
 use tree_sitter::Node;
 
 use crate::model::Language;
+use crate::parse::parser_factory::ParserFactory;
+use crate::storage::capability::Storage;
+use crate::storage::error::Result as StorageResult;
+use crate::storage::schema::escape_cypher_string;
 
 /// Complexity severity level for a single metric.
 ///
@@ -273,11 +277,137 @@ fn nesting_depth_count(node: Node<'_>, language: Language, current_depth: u32) -
     max_depth
 }
 
+/// Analyzes per-function complexity metrics over a Storage graph.
+///
+/// Loads `Function`/`Method` nodes for a project, parses each node's
+/// `content` with tree-sitter, and computes cyclomatic/cognitive/nesting/
+/// length metrics via the functions in this module.
+pub struct ComplexityAnalyzer<'a> {
+    storage: &'a dyn Storage,
+    thresholds: ComplexityThresholds,
+}
+
+impl<'a> ComplexityAnalyzer<'a> {
+    /// Creates a new analyzer backed by the given storage capability, using
+    /// the default [`ComplexityThresholds`].
+    #[must_use]
+    pub fn new(storage: &'a dyn Storage) -> Self {
+        Self {
+            storage,
+            thresholds: ComplexityThresholds::default(),
+        }
+    }
+
+    /// Returns complexity entries for every `Function`/`Method` node in
+    /// `project` whose `content` is non-empty and whose language is supported.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError`](crate::storage::error::StorageError) if any
+    /// Cypher query fails.
+    pub fn analyze(&self, project: &str) -> StorageResult<Vec<ComplexityEntry>> {
+        let escaped = escape_cypher_string(project);
+        // LadybugDB's Cypher subset does not support `WHERE (n:Function OR
+        // n:Method)` label expressions, so we issue two separate queries and
+        // merge the results in Rust (same pattern as DeadCodeDetector).
+        let function_cypher = format!(
+            "MATCH (n:Function) WHERE n.project = '{escaped}' \
+             RETURN n.name AS name, n.qualifiedName AS qualified_name, \
+             n.filePath AS file_path, n.startLine AS start_line, \
+             n.endLine AS end_line, n.content AS content;"
+        );
+        let method_cypher = format!(
+            "MATCH (n:Method) WHERE n.project = '{escaped}' \
+             RETURN n.name AS name, n.qualifiedName AS qualified_name, \
+             n.filePath AS file_path, n.startLine AS start_line, \
+             n.endLine AS end_line, n.content AS content;"
+        );
+
+        let mut entries = Vec::new();
+        for cypher in [function_cypher, method_cypher] {
+            let rows = self.storage.query(&cypher)?;
+            for row in rows {
+                if row.len() < 6 {
+                    continue;
+                }
+                let name = row[0].as_str().unwrap_or_default().to_string();
+                let qualified_name = row[1].as_str().unwrap_or_default().to_string();
+                let file_path = row[2].as_str().unwrap_or_default().to_string();
+                let start_line = row[3]
+                    .as_i64()
+                    .map(|v| v as u32)
+                    .or_else(|| row[3].as_u64().map(|v| v as u32))
+                    .unwrap_or(0);
+                let end_line = row[4]
+                    .as_i64()
+                    .map(|v| v as u32)
+                    .or_else(|| row[4].as_u64().map(|v| v as u32))
+                    .unwrap_or(0);
+                let content = row[5].as_str().unwrap_or_default().to_string();
+
+                // Skip nodes with empty content (nothing to parse).
+                if content.is_empty() {
+                    continue;
+                }
+
+                // Resolve language from the file path extension.
+                let language = match std::path::Path::new(&file_path)
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .and_then(Language::from_extension)
+                {
+                    Some(lang) => lang,
+                    None => continue,
+                };
+
+                // Create parser; skip if the language grammar is not enabled.
+                let mut parser = match ParserFactory::create_parser(language) {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+
+                // Parse content; skip if parsing yields no tree.
+                let tree = match parser.parse(&content, None) {
+                    Some(t) => t,
+                    None => continue,
+                };
+
+                let cyclomatic = calc_cyclomatic(&tree, language);
+                let cognitive = calc_cognitive(&tree, language);
+                let nesting_depth = calc_nesting_depth(&tree, language);
+                let function_length = end_line.saturating_sub(start_line) + 1;
+
+                let mut entry = ComplexityEntry {
+                    name,
+                    qualified_name,
+                    file_path,
+                    start_line,
+                    end_line,
+                    language: language.to_string(),
+                    cyclomatic,
+                    cognitive,
+                    nesting_depth,
+                    function_length,
+                    overall_severity: Severity::Green,
+                };
+                entry.overall_severity = entry.compute_overall_severity(&self.thresholds);
+                entries.push(entry);
+            }
+        }
+
+        // Stable order by qualified name for deterministic output.
+        entries.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+        Ok(entries)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use crate::kit::{build_kit, Kit, KitBootstrapConfig, StorageKey};
     use crate::parse::parser_factory::ParserFactory;
+    use tempfile::TempDir;
 
     // --- T005: is_branch_node tests ---
 
@@ -529,5 +659,117 @@ fn parallel(a: i32) {
         let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
         let tree = parser.parse(src, None).unwrap();
         assert_eq!(calc_nesting_depth(&tree, Language::Rust), 3);
+    }
+
+    // --- T013: ComplexityAnalyzer tests ---
+
+    /// Returns a fresh on-disk database path inside a temp dir.
+    fn fresh_db_path() -> std::path::PathBuf {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("complexity_testdb");
+        std::mem::forget(dir);
+        path
+    }
+
+    /// Builds a Kit backed by an on-disk database at `db`.
+    fn build_kit_for_db(db: &std::path::Path) -> Kit {
+        let config = KitBootstrapConfig::new(db.to_path_buf());
+        build_kit(&config).expect("build_kit")
+    }
+
+    /// Returns the `dyn Storage` capability from `kit`.
+    fn storage(kit: &Kit) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
+        kit.require::<StorageKey>().expect("require_storage")
+    }
+
+    /// Creates a Function node with the given `content` via direct Cypher.
+    fn create_function_with_content(
+        kit: &Kit,
+        id: &str,
+        project: &str,
+        name: &str,
+        qn: &str,
+        file: &str,
+        start_line: u32,
+        end_line: u32,
+        content: &str,
+    ) {
+        let storage = storage(kit);
+        let cypher = format!(
+            "CREATE (:Function {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
+             filePath: '{}', startLine: {}, endLine: {}, signature: '', returnType: '', \
+             isExported: false, docstring: '', content: '{}', parentQn: ''}});",
+            escape_cypher_string(id),
+            escape_cypher_string(project),
+            escape_cypher_string(name),
+            escape_cypher_string(qn),
+            escape_cypher_string(file),
+            start_line,
+            end_line,
+            escape_cypher_string(content),
+        );
+        storage.execute(&cypher).expect("create function");
+    }
+
+    #[test]
+    fn analyze_returns_empty_for_empty_db() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = storage(&kit);
+        let analyzer = ComplexityAnalyzer::new(&*storage);
+        let result = analyzer.analyze("demo").expect("analyze");
+        assert!(result.is_empty(), "empty DB should yield no complexity entries");
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn analyze_returns_correct_metrics() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Simple function: no branches.
+        create_function_with_content(
+            &kit,
+            "f_foo",
+            "demo",
+            "foo",
+            "demo.foo",
+            "/src/lib.rs",
+            1,
+            1,
+            "fn foo() {}",
+        );
+        // Complex function: if > for > if (3 branch nodes, 3 levels deep).
+        create_function_with_content(
+            &kit,
+            "f_bar",
+            "demo",
+            "bar",
+            "demo.bar",
+            "/src/lib.rs",
+            1,
+            5,
+            "fn bar() { if x { for i in 0..n { if i % 2 == 0 {} } } }",
+        );
+
+        let storage = storage(&kit);
+        let analyzer = ComplexityAnalyzer::new(&*storage);
+        let mut result = analyzer.analyze("demo").expect("analyze");
+        // Stable order by qualified name for deterministic assertions.
+        result.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+
+        assert_eq!(result.len(), 2, "should analyze both functions");
+
+        let foo = result.iter().find(|e| e.name == "foo").expect("foo entry");
+        assert_eq!(foo.cyclomatic, 1, "foo cyclomatic");
+        assert_eq!(foo.cognitive, 0, "foo cognitive");
+        assert_eq!(foo.nesting_depth, 0, "foo nesting");
+        assert_eq!(foo.function_length, 1, "foo length");
+        assert_eq!(foo.overall_severity, Severity::Green, "foo severity");
+
+        let bar = result.iter().find(|e| e.name == "bar").expect("bar entry");
+        assert_eq!(bar.cyclomatic, 4, "bar cyclomatic");
+        assert!(bar.cognitive > 0, "bar cognitive should be > 0, got {}", bar.cognitive);
+        assert_eq!(bar.nesting_depth, 3, "bar nesting (if>for>if = 3 levels)");
+        assert_eq!(bar.function_length, 5, "bar length");
     }
 }
