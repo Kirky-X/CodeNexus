@@ -351,11 +351,7 @@ impl<'a> ComplexityAnalyzer<'a> {
                 }
 
                 // Resolve language from the file path extension.
-                let language = match std::path::Path::new(&file_path)
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .and_then(Language::from_extension)
-                {
+                let language = match detect_language(&file_path) {
                     Some(lang) => lang,
                     None => continue,
                 };
@@ -399,6 +395,19 @@ impl<'a> ComplexityAnalyzer<'a> {
         entries.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
         Ok(entries)
     }
+}
+
+/// Detects the source language from a file path's extension.
+///
+/// Extracts the extension (lowercased) and delegates to
+/// [`Language::from_extension`]. Returns `None` for unknown extensions or
+/// paths without an extension.
+#[must_use]
+pub fn detect_language(file_path: &str) -> Option<Language> {
+    std::path::Path::new(file_path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .and_then(Language::from_extension)
 }
 
 #[cfg(test)]
@@ -771,5 +780,35 @@ fn parallel(a: i32) {
         assert!(bar.cognitive > 0, "bar cognitive should be > 0, got {}", bar.cognitive);
         assert_eq!(bar.nesting_depth, 3, "bar nesting (if>for>if = 3 levels)");
         assert_eq!(bar.function_length, 5, "bar length");
+    }
+
+    // --- T015: detect_language tests ---
+
+    #[cfg(all(
+        feature = "lang-rust",
+        feature = "lang-python",
+        feature = "lang-typescript",
+        feature = "lang-c",
+        feature = "lang-cpp",
+        feature = "lang-go",
+        feature = "lang-java",
+        feature = "lang-fortran"
+    ))]
+    #[test]
+    fn detect_language_maps_known_extensions() {
+        assert_eq!(detect_language("/src/lib.rs"), Some(Language::Rust));
+        assert_eq!(detect_language("/src/main.py"), Some(Language::Python));
+        assert_eq!(detect_language("/src/index.ts"), Some(Language::TypeScript));
+        assert_eq!(detect_language("/src/main.c"), Some(Language::C));
+        assert_eq!(detect_language("/src/main.cpp"), Some(Language::Cpp));
+        assert_eq!(detect_language("/src/main.go"), Some(Language::Go));
+        assert_eq!(detect_language("/src/Main.java"), Some(Language::Java));
+        assert_eq!(detect_language("/src/program.f90"), Some(Language::Fortran));
+    }
+
+    #[test]
+    fn detect_language_returns_none_for_unknown() {
+        assert_eq!(detect_language("/src/unknown.xyz"), None);
+        assert_eq!(detect_language("no_extension"), None);
     }
 }
