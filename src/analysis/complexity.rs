@@ -347,25 +347,43 @@ impl<'a> ComplexityAnalyzer<'a> {
 
                 // Skip nodes with empty content (nothing to parse).
                 if content.is_empty() {
+                    eprintln!(
+                        "warning: skipping {qualified_name} ({file_path}): empty content"
+                    );
                     continue;
                 }
 
                 // Resolve language from the file path extension.
                 let language = match detect_language(&file_path) {
                     Some(lang) => lang,
-                    None => continue,
+                    None => {
+                        eprintln!(
+                            "warning: skipping {qualified_name} ({file_path}): unknown language"
+                        );
+                        continue;
+                    }
                 };
 
                 // Create parser; skip if the language grammar is not enabled.
                 let mut parser = match ParserFactory::create_parser(language) {
                     Ok(p) => p,
-                    Err(_) => continue,
+                    Err(e) => {
+                        eprintln!(
+                            "warning: skipping {qualified_name} ({file_path}): parser unavailable: {e}"
+                        );
+                        continue;
+                    }
                 };
 
                 // Parse content; skip if parsing yields no tree.
                 let tree = match parser.parse(&content, None) {
                     Some(t) => t,
-                    None => continue,
+                    None => {
+                        eprintln!(
+                            "warning: skipping {qualified_name} ({file_path}): parse failed"
+                        );
+                        continue;
+                    }
                 };
 
                 let cyclomatic = calc_cyclomatic(&tree, language);
