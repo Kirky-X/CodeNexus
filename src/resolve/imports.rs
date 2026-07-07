@@ -219,6 +219,10 @@ fn resolve_import_target(
     }
 
     let normalised = normalise_relative(source_file, importer_path);
+    // TS ESM (NodeNext / moduleResolution=bundler) requires `.js`/`.jsx`/`.mjs`/`.cjs`
+    // extensions in specifiers even when the source file is `.ts`/`.tsx`. Strip these
+    // before probing so `./types/api.js` resolves to `types/api.ts`.
+    let normalised = strip_js_style_extension(&normalised);
     if let Some(id) = file_index.get(&normalised) {
         return Some(id.clone());
     }
@@ -240,6 +244,22 @@ fn resolve_import_target(
     }
 
     None
+}
+
+/// Strips `.js`/`.jsx`/`.mjs`/`.cjs` extensions from a normalised path.
+///
+/// TS ESM (NodeNext / moduleResolution=bundler) requires `.js` extensions in
+/// import specifiers even when the source file is `.ts`. This strips the
+/// extension so downstream extension probing can find the `.ts`/`.tsx` file.
+/// Non-JS extensions (`.ts`, `.tsx`, `.rs`, …) are preserved.
+fn strip_js_style_extension(path: &str) -> String {
+    const JS_EXTS: &[&str] = &[".js", ".jsx", ".mjs", ".cjs"];
+    for ext in JS_EXTS {
+        if path.ends_with(ext) {
+            return path[..path.len() - ext.len()].to_string();
+        }
+    }
+    path.to_string()
 }
 
 /// Normalises a relative `source_file` against the importer's directory.
@@ -1141,5 +1161,86 @@ mod tests {
         assert_eq!(edges.len(), 1, "absolute importer + relative TS import should resolve");
         assert_eq!(edges[0].source, "src/a.ts");
         assert_eq!(edges[0].target, "src/b.ts");
+    }
+
+    // --- TS ESM .js/.jsx extension stripping (NodeNext / bundler resolution) ---
+
+    #[test]
+    fn resolve_imports_strips_js_extension_for_ts_esm() {
+        // TS NodeNext ESM requires `.js` in specifiers even for `.ts` files.
+        // sdk/typescript/src/client.ts imports "./types/api.js" → types/api.ts
+        let mut client_result = make_result("sdk/typescript/src/client.ts");
+        client_result.imports.push(crate::ir::ImportInfo {
+            source_file: "./types/api.js".to_string(),
+            imported_names: vec!["ClientOptions".to_string()],
+            line: 1,
+        });
+        let results = vec![client_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("sdk/typescript/src/client.ts", "proj"));
+        graph.add_node(make_file_node("sdk/typescript/src/types/api.ts", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(
+            edges.len(),
+            1,
+            ".js extension should be stripped, resolving to .ts file"
+        );
+        assert_eq!(edges[0].target, "sdk/typescript/src/types/api.ts");
+    }
+
+    #[test]
+    fn resolve_imports_strips_jsx_extension() {
+        // React JSX: ./Button.jsx → Button.tsx
+        let mut app_result = make_result("src/app.tsx");
+        app_result.imports.push(crate::ir::ImportInfo {
+            source_file: "./Button.jsx".to_string(),
+            imported_names: vec!["Button".to_string()],
+            line: 1,
+        });
+        let results = vec![app_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/app.tsx", "proj"));
+        graph.add_node(make_file_node("src/Button.tsx", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(
+            edges.len(),
+            1,
+            ".jsx extension should be stripped, resolving to .tsx file"
+        );
+        assert_eq!(edges[0].target, "src/Button.tsx");
+    }
+
+    #[test]
+    fn resolve_imports_strips_mjs_cjs_extensions() {
+        // .mjs / .cjs specifiers → .js target (common in Node ESM projects).
+        let mut a_result = make_result("src/a.ts");
+        a_result.imports.push(crate::ir::ImportInfo {
+            source_file: "./config.mjs".to_string(),
+            imported_names: vec![],
+            line: 1,
+        });
+        let results = vec![a_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/a.ts", "proj"));
+        graph.add_node(make_file_node("src/config.js", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(
+            edges.len(),
+            1,
+            ".mjs extension should be stripped, resolving to .js file"
+        );
+        assert_eq!(edges[0].target, "src/config.js");
     }
 }

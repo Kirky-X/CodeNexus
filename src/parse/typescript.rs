@@ -195,6 +195,23 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             extract_import(node, source, result);
         }
         "export_statement" => {
+            // Re-exports: `export { foo } from './mod'`, `export * from './mod'`,
+            // `export type { Foo } from './mod'`. The `source` field (string
+            // literal) is present only for re-exports, not for local exports.
+            // Produce an ImportInfo so IMPORTS edges are created (same as
+            // `import { foo } from './mod'`).
+            if let Some(source_node) = node.child_by_field_name("source") {
+                let source_file = node_text(source_node, source)
+                    .map(|s| s.trim_matches('\'').trim_matches('"').to_string())
+                    .unwrap_or_default();
+                if !source_file.is_empty() {
+                    result.imports.push(ImportInfo {
+                        source_file,
+                        imported_names: Vec::new(),
+                        line: node.start_position().row as u32 + 1,
+                    });
+                }
+            }
             // P2-4: `export default function() {}` and `export default () => {}`
             // store the anonymous function as the `value` field (an expression),
             // not as a `declaration` field. visit_children won't promote it to
@@ -1688,5 +1705,75 @@ function setupSecond() {
                 "writer_qn should be the dotted FQN of the enclosing function"
             );
         }
+    }
+
+    // --- export ... from re-exports (barrel files) ---
+
+    #[test]
+    fn extracts_export_named_from_reexport() {
+        // `export { foo } from './mod'` should produce an ImportInfo with
+        // source_file="./mod" (same File→File IMPORTS edge as `import`).
+        let src = "export { foo } from './mod';\n";
+        let result = extract(src);
+        let reexports: Vec<_> = result
+            .imports
+            .iter()
+            .filter(|i| i.source_file == "./mod")
+            .collect();
+        assert_eq!(
+            reexports.len(),
+            1,
+            "export {{...}} from should produce 1 ImportInfo: {:?}",
+            result.imports
+        );
+    }
+
+    #[test]
+    fn extracts_export_star_from_reexport() {
+        // `export * from './mod'` should produce an ImportInfo.
+        let src = "export * from './mod';\n";
+        let result = extract(src);
+        let reexports: Vec<_> = result
+            .imports
+            .iter()
+            .filter(|i| i.source_file == "./mod")
+            .collect();
+        assert_eq!(
+            reexports.len(),
+            1,
+            "export * from should produce 1 ImportInfo: {:?}",
+            result.imports
+        );
+    }
+
+    #[test]
+    fn extracts_export_type_from_reexport() {
+        // `export type { Foo } from './mod'` should produce an ImportInfo.
+        let src = "export type { Foo } from './mod';\n";
+        let result = extract(src);
+        let reexports: Vec<_> = result
+            .imports
+            .iter()
+            .filter(|i| i.source_file == "./mod")
+            .collect();
+        assert_eq!(
+            reexports.len(),
+            1,
+            "export type {{...}} from should produce 1 ImportInfo: {:?}",
+            result.imports
+        );
+    }
+
+    #[test]
+    fn export_from_does_not_duplicate_for_plain_export() {
+        // `export { foo }` (no `from`) should NOT produce an ImportInfo —
+        // it's a local export, not a re-export.
+        let src = "const foo = 1;\nexport { foo };\n";
+        let result = extract(src);
+        assert!(
+            result.imports.is_empty(),
+            "plain export without `from` should not produce ImportInfo: {:?}",
+            result.imports
+        );
     }
 }
