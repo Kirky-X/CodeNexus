@@ -170,16 +170,27 @@ fn find_file_in_index(
     // Suffix match: path may be absolute while file_index uses relative paths.
     // e.g. path = "/home/dev/projects/CodeNexus/src/lib.rs"
     //      file_index key = "src/lib.rs"
+    //
+    // Pick the LONGEST suffix match (most specific) for determinism (Rule 5):
+    // HashMap iteration order is non-deterministic, so returning the first
+    // match would produce different results across runs when multiple keys
+    // suffix-match the same path (e.g. "index.ts" and "src/index.ts" both
+    // match "/proj/src/index.ts").
+    // Boundary check accepts both `/` and `\` for cross-platform support.
+    let path_norm = path.replace('\\', "/");
+    let mut best: Option<(&String, &String)> = None;
     for (rel, id) in file_index {
-        if path.ends_with(rel.as_str()) {
-            let prefix_len = path.len() - rel.len();
-            // Ensure path boundary: char before the suffix must be '/'.
-            if prefix_len == 0 || path.as_bytes()[prefix_len - 1] == b'/' {
-                return Some((id.clone(), rel.clone()));
+        let rel_norm = rel.replace('\\', "/");
+        if path_norm.ends_with(rel_norm.as_str()) {
+            let prefix_len = path_norm.len() - rel_norm.len();
+            if prefix_len == 0 || path_norm.as_bytes()[prefix_len - 1] == b'/' {
+                if best.as_ref().map_or(true, |(r, _)| rel.len() > r.len()) {
+                    best = Some((rel, id));
+                }
             }
         }
     }
-    None
+    best.map(|(rel, id)| (id.clone(), rel.clone()))
 }
 
 /// Resolves an `ImportInfo::source_file` to a target File node id.
@@ -1108,6 +1119,36 @@ mod tests {
 
         let result = find_file_in_index(&index, "/home/dev/projects/CodeNexus/src/lib.rs");
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn find_file_in_index_multiple_suffix_matches_picks_longest() {
+        // Determinism (Rule 5): when multiple keys suffix-match the same path,
+        // pick the longest (most specific) to avoid HashMap order non-determinism.
+        let mut index = HashMap::new();
+        index.insert("index.ts".to_string(), "id-root".to_string());
+        index.insert("src/index.ts".to_string(), "id-src".to_string());
+
+        let result = find_file_in_index(&index, "/home/dev/proj/src/index.ts");
+        assert_eq!(
+            result,
+            Some(("id-src".to_string(), "src/index.ts".to_string())),
+            "longest suffix match should win for determinism"
+        );
+    }
+
+    #[test]
+    fn find_file_in_index_windows_backslash_boundary() {
+        // Windows paths use `\` as separator; boundary check must accept it.
+        let mut index = HashMap::new();
+        index.insert("src/lib.rs".to_string(), "id-lib".to_string());
+
+        let result = find_file_in_index(&index, r"C:\Users\dev\proj\src\lib.rs");
+        assert_eq!(
+            result,
+            Some(("id-lib".to_string(), "src/lib.rs".to_string())),
+            "Windows backslash separator should be accepted in boundary check"
+        );
     }
 
     // --- resolve_imports: absolute importer path (production scenario) ---
