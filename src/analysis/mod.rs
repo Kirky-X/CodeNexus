@@ -27,3 +27,6 @@ pub mod community;
 
 #[cfg(feature = "cross-service")]
 pub mod cross_service;
+
+#[cfg(feature = "complexity")]
+pub mod complexity;

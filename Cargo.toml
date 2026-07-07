@@ -80,6 +80,10 @@ community = ["analysis", "dep:petgraph"]
 # caller string literals and persists `CROSS_SERVICE_CALLS` edges. Pure
 # Cypher + deterministic string matching — no new dependencies.
 cross-service = ["analysis"]
+# AST complexity analysis (T001-T004, v0.2.1): cyclomatic/cognitive/nesting/
+# function-length metrics with severity classification. Pure computation — no
+# new dependencies.
+complexity = ["analysis"]
 # LSP semantic type resolution (T007, v0.2.0): subprocess integration with
 # external LSP servers (rust-analyzer for Rust) to provide IDE-grade
 # definition/hover/type-definition queries. v0.2.0 ships the Rust framework;
