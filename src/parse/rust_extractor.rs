@@ -362,6 +362,11 @@ fn extract_impl(
     let Some(name) = node_text(type_node, source).map(String::from) else {
         return;
     };
+    // Strip generic parameters (e.g. `ParserGuard<'_>` → `ParserGuard`) so
+    // the type FQN matches the Struct/Enum node ID (which has no generics).
+    // Without this, delete_file_nodes_batch cannot match IMPLEMENTS edges
+    // for deletion during --force reindex → duplicate primary key (ADR-014).
+    let name = strip_generics(&name).to_string();
     let trait_name = node
         .child_by_field_name("trait")
         .and_then(|n| node_text(n, source).map(String::from));
@@ -381,7 +386,9 @@ fn extract_impl(
     if let Some(trait_name) = trait_name {
         // Extract the trait name (last `::`-separated component) for
         // resolution. e.g. `std::fmt::Display` → `Display`, `Trait` → `Trait`.
+        // Also strip generic params (e.g. `IntoIterator<Item=u8>` → `IntoIterator`).
         let trait_short = trait_name.rsplit("::").next().unwrap_or(&trait_name);
+        let trait_short = strip_generics(trait_short);
         let type_qn = make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent);
         let trait_qn = make_qn(ctx.file_path, trait_short, ctx.project, ctx.current_parent);
         result.edges.push(Edge::new(
@@ -958,6 +965,20 @@ fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> 
     FqnGenerator::generate(project, file_path, name, Language::Rust, parent)
 }
 
+/// Strips generic type parameters from a type name.
+///
+/// `ParserGuard<'_>` → `ParserGuard`, `Vec<u8>` → `Vec`,
+/// `HashMap<String, Vec<u8>>` → `HashMap`. This ensures IMPLEMENTS edge
+/// sources match Struct/Enum node IDs (which don't include generic params),
+/// so `delete_file_nodes_batch` can match and delete old edges during
+/// --force reindex (ADR-014).
+fn strip_generics(name: &str) -> &str {
+    match name.find('<') {
+        Some(idx) => name[..idx].trim_end(),
+        None => name,
+    }
+}
+
 /// Combines a parent scope context with a child scope name (ADR-005).
 /// Returns `Some("{parent}_{child}")` when both are present, the non-`None`
 /// value when only one is, or `None` when neither is.
@@ -1429,6 +1450,38 @@ impl B for Foo { fn b(&self) {} }
         assert!(
             targets.iter().any(|t| t.contains("B")),
             "should have edge to trait B: {targets:?}"
+        );
+    }
+
+    #[test]
+    fn trait_impl_strips_generics_from_type_name() {
+        // `impl Trait for Type<'_>` — the type name has generic parameters.
+        // The IMPLEMENTS edge source must NOT include generics, so it matches
+        // the Struct node ID (which also has no generics). Otherwise
+        // delete_file_nodes_batch cannot match and delete old edges during
+        // --force reindex, causing duplicate primary key errors (ADR-014).
+        let src = r#"struct ParserGuard<'a> { inner: &'a i32 }
+trait DerefMut { fn deref_mut(&mut self); }
+impl DerefMut for ParserGuard<'_> {
+    fn deref_mut(&mut self) {}
+}
+"#;
+        let result = extract(src);
+        let implements: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Implements)
+            .collect();
+        assert_eq!(implements.len(), 1, "should create 1 IMPLEMENTS edge");
+        assert!(
+            implements[0].source.contains("ParserGuard"),
+            "IMPLEMENTS source should contain ParserGuard: {}",
+            implements[0].source
+        );
+        assert!(
+            !implements[0].source.contains("<'"),
+            "IMPLEMENTS source must not contain generic params: {}",
+            implements[0].source
         );
     }
 
