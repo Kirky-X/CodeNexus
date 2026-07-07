@@ -143,16 +143,25 @@ fn summarize_rename(kit: &Kit) -> std::result::Result<HookSummary, CliError> {
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as usize;
 
-    // Risk distribution: count Function nodes by incoming edge count.
-    let risk_rows = storage.query(
-        "MATCH (n:Function) OPTIONAL MATCH (caller)-[e]->(n) RETURN n.id AS id, count(e) AS incoming",
-    )?;
+    // Risk distribution: count incoming CodeRelation edges per Function node.
+    //
+    // CodeRelation is materialized as a NODE TABLE (not a REL TABLE — see
+    // `schema.rs` CodeRelation design note), so `OPTIONAL MATCH (caller)-[e]->(n)`
+    // cannot traverse it. Instead, query each function's id and count
+    // CodeRelation rows where `target = id` (same pattern as
+    // `detect_changes_cmd::count_incoming_edges`).
+    let fn_rows = storage.query("MATCH (n:Function) RETURN n.id AS id")?;
     let mut high_risk = 0;
     let mut medium_risk = 0;
     let mut low_risk = 0;
-    for row in &risk_rows {
-        let incoming = row
-            .get(1)
+    for row in &fn_rows {
+        let id = row.first().and_then(|v| v.as_str()).unwrap_or("");
+        let edge_rows = storage.query(&format!(
+            "MATCH (r:CodeRelation) WHERE r.target = '{id}' RETURN count(r) AS cnt"
+        ))?;
+        let incoming = edge_rows
+            .first()
+            .and_then(|r| r.first())
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
         if incoming >= 5 {
@@ -319,5 +328,109 @@ mod tests {
         // so we test via `build_decision` instead. This test verifies that the
         // HookArgs struct is constructible.
         let _args = hook_args();
+    }
+
+    // --- summarize_rename risk classification branches ---
+    //
+    // Seeds Function nodes with 0, 2, and 5 incoming CodeRelation edges to
+    // exercise all three risk levels (low / medium / high) in a single
+    // rename-summary invocation.
+
+    /// Builds a Function Node with the given id.
+    fn fn_node(id: &str) -> crate::model::Node {
+        crate::model::Node::builder(
+            crate::model::NodeLabel::Function,
+            id,
+            &format!("demo.{id}"),
+        )
+        .id(id)
+        .project("demo")
+        .file_path("/src/demo.rs")
+        .start_line(1)
+        .end_line(10)
+        .language(crate::model::Language::Rust)
+        .build()
+    }
+
+    #[test]
+    fn summarize_rename_classifies_low_medium_high_risk() {
+        let kit = fresh_kit();
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+
+        // Seed 3 functions: f_low (0 incoming), f_med (2 incoming), f_high (5 incoming).
+        storage
+            .save_nodes(
+                &[
+                    fn_node("f_low"),
+                    fn_node("f_med"),
+                    fn_node("f_high"),
+                ],
+                crate::model::NodeLabel::Function,
+            )
+            .expect("save_nodes");
+
+        // 2 edges → f_med (medium risk: 1–4 incoming).
+        // 5 edges → f_high (high risk: ≥5 incoming).
+        let edges: Vec<crate::model::Edge> = [
+            ("c1", "f_med"),
+            ("c2", "f_med"),
+            ("c3", "f_high"),
+            ("c4", "f_high"),
+            ("c5", "f_high"),
+            ("c6", "f_high"),
+            ("c7", "f_high"),
+        ]
+        .iter()
+        .map(|(s, t)| {
+            crate::model::Edge::builder(*s, *t, crate::model::EdgeType::Calls, "demo").build()
+        })
+        .collect();
+        storage.save_edges(&edges).expect("save_edges");
+
+        let summary = summarize_rename(&kit).expect("summarize_rename");
+        assert_eq!(summary.symbols_affected, 3, "3 function nodes");
+        assert_eq!(summary.low_risk, 1, "f_low has 0 incoming → low");
+        assert_eq!(summary.medium_risk, 1, "f_med has 2 incoming → medium");
+        assert_eq!(summary.high_risk, 1, "f_high has 5 incoming → high");
+    }
+
+    #[test]
+    fn summarize_rename_empty_db_returns_zero_counts() {
+        let kit = fresh_kit();
+        let summary = summarize_rename(&kit).expect("summarize_rename on empty DB");
+        assert_eq!(summary.symbols_affected, 0);
+        assert_eq!(summary.high_risk, 0);
+        assert_eq!(summary.medium_risk, 0);
+        assert_eq!(summary.low_risk, 0);
+    }
+
+    #[test]
+    fn build_decision_post_tool_use_rename_classifies_risk() {
+        let kit = fresh_kit();
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+
+        // Seed a function with 5 incoming edges → high risk.
+        storage
+            .save_nodes(&[fn_node("f_risky")], crate::model::NodeLabel::Function)
+            .expect("save_nodes");
+        let edges: Vec<crate::model::Edge> = (1..=5)
+            .map(|i| {
+                crate::model::Edge::builder(
+                    format!("caller{i}"),
+                    "f_risky",
+                    crate::model::EdgeType::Calls,
+                    "demo",
+                )
+                .build()
+            })
+            .collect();
+        storage.save_edges(&edges).expect("save_edges");
+
+        let raw = r#"{"tool_name":"codenexus rename","tool_input":{"from":"f_risky","to":"f_safe"},"phase":"PostToolUse"}"#;
+        let decision = build_decision(&kit, &hook_args(), raw);
+        assert_eq!(decision.decision, "pass");
+        let summary = decision.summary.expect("rename should produce summary");
+        assert!(summary.symbols_affected >= 1);
+        assert!(summary.high_risk >= 1, "5 incoming → high_risk >= 1");
     }
 }

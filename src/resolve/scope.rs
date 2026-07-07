@@ -1344,4 +1344,386 @@ mod resolver_tests {
             assert!(resolver.resolve(root, &ctx).is_none());
         }
     }
+
+    // --- CScopeResolver: namespace/class/struct misparse detection ---
+    // tree-sitter-c misparses C++ namespace/class/struct blocks as
+    // `function_definition`. The resolver detects this by inspecting the
+    // `type` field (a `type_identifier` whose text is `namespace`/`class`/
+    // `struct`) and returns the appropriate label.
+
+    #[cfg(feature = "lang-c")]
+    #[test]
+    fn c_resolves_function_with_pointer_declarator() {
+        // `int *get_ptr(void)` — the declarator is a `pointer_declarator`
+        // wrapping a `function_declarator`. Covers c_declarator_name's
+        // pointer_declarator branch.
+        let source = String::from("int *get_ptr(void) { return 0; }\n");
+        let tree = parse(Language::C, &source).expect("parse");
+        let resolver = CScopeResolver;
+        let ctx = ScopeContext {
+            source: &source,
+            file_path: "src/main.c",
+            project: "proj",
+            current_parent: None,
+        };
+        let scopes = collect_scopes(&resolver, tree.root_node(), &ctx);
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(scopes[0].name, "get_ptr");
+        assert_eq!(scopes[0].label, NodeLabel::Function);
+    }
+
+    #[cfg(feature = "lang-c")]
+    #[test]
+    fn c_resolves_struct_specifier_with_parent() {
+        // Struct with a parent context — covers the with_parent path.
+        let source = String::from("struct Point { int x; };\n");
+        let tree = parse(Language::C, &source).expect("parse");
+        let resolver = CScopeResolver;
+        let ctx = ScopeContext {
+            source: &source,
+            file_path: "src/main.c",
+            project: "proj",
+            current_parent: Some("outer"),
+        };
+        let scopes = collect_scopes(&resolver, tree.root_node(), &ctx);
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(scopes[0].name, "Point");
+        assert_eq!(scopes[0].label, NodeLabel::Struct);
+        assert_eq!(scopes[0].parent.as_deref(), Some("outer"));
+    }
+
+    // --- FortranScopeResolver: function and program ---
+
+    #[cfg(feature = "lang-fortran")]
+    #[test]
+    fn fortran_resolves_function() {
+        // Covers the `function` arm of FortranScopeResolver.
+        let source = String::from("function myfunc(a) result(r)\n  integer :: a, r\n  r = a\nend function\n");
+        let tree = parse(Language::Fortran, &source).expect("parse");
+        let resolver = FortranScopeResolver;
+        let ctx = ScopeContext {
+            source: &source,
+            file_path: "src/mod.f90",
+            project: "proj",
+            current_parent: None,
+        };
+        let scopes = collect_scopes(&resolver, tree.root_node(), &ctx);
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(scopes[0].name, "myfunc");
+        assert_eq!(scopes[0].label, NodeLabel::Function);
+    }
+
+    #[cfg(feature = "lang-fortran")]
+    #[test]
+    fn fortran_resolves_program() {
+        // Covers the `program` arm of FortranScopeResolver.
+        let source = String::from("program myprog\n  print *, 'hi'\nend program\n");
+        let tree = parse(Language::Fortran, &source).expect("parse");
+        let resolver = FortranScopeResolver;
+        let ctx = ScopeContext {
+            source: &source,
+            file_path: "src/mod.f90",
+            project: "proj",
+            current_parent: None,
+        };
+        let scopes = collect_scopes(&resolver, tree.root_node(), &ctx);
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(scopes[0].name, "myprog");
+        assert_eq!(scopes[0].label, NodeLabel::Function);
+    }
+
+    // --- TypeScriptScopeResolver: method_definition and generator_function ---
+
+    #[cfg(feature = "lang-typescript")]
+    #[test]
+    fn typescript_resolves_method_definition() {
+        // Covers the `method_definition` arm.
+        let source = String::from("class Foo { bar(): void {} }\n");
+        let tree = parse(Language::TypeScript, &source).expect("parse");
+        let resolver = TypeScriptScopeResolver;
+        let ctx = ScopeContext {
+            source: &source,
+            file_path: "src/main.ts",
+            project: "proj",
+            current_parent: None,
+        };
+        // collect_scopes only walks root's direct children, so we get the
+        // class. The method is nested inside the class body.
+        let scopes = collect_scopes(&resolver, tree.root_node(), &ctx);
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(scopes[0].name, "Foo");
+        assert_eq!(scopes[0].label, NodeLabel::Class);
+        // Now walk the class body to find the method.
+        let class_node = tree.root_node().named_child(0).expect("class");
+        let body = class_node.child_by_field_name("body").expect("body");
+        let mut method_scopes = Vec::new();
+        for i in 0..body.named_child_count() as u32 {
+            if let Some(child) = body.named_child(i) {
+                if let Some(scope) = resolver.resolve(child, &ctx) {
+                    method_scopes.push(scope);
+                }
+            }
+        }
+        assert_eq!(method_scopes.len(), 1);
+        assert_eq!(method_scopes[0].name, "bar");
+        assert_eq!(method_scopes[0].label, NodeLabel::Method);
+    }
+
+    #[cfg(feature = "lang-typescript")]
+    #[test]
+    fn typescript_resolves_generator_function_declaration() {
+        // Covers the `generator_function_declaration` arm.
+        let source = String::from("function* gen(): Generator<number> { yield 1; }\n");
+        let tree = parse(Language::TypeScript, &source).expect("parse");
+        let resolver = TypeScriptScopeResolver;
+        let ctx = ScopeContext {
+            source: &source,
+            file_path: "src/main.ts",
+            project: "proj",
+            current_parent: None,
+        };
+        let scopes = collect_scopes(&resolver, tree.root_node(), &ctx);
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(scopes[0].name, "gen");
+        assert_eq!(scopes[0].label, NodeLabel::Function);
+    }
+
+    // --- GoScopeResolver ---
+
+    #[cfg(feature = "lang-go")]
+    #[test]
+    fn go_resolves_function_and_method() {
+        let source = String::from(
+            "package main\nfunc foo() {}\nfunc (r Receiver) bar() {}\n",
+        );
+        let tree = parse(Language::Go, &source).expect("parse");
+        let resolver = GoScopeResolver;
+        let ctx = ScopeContext {
+            source: &source,
+            file_path: "src/main.go",
+            project: "proj",
+            current_parent: None,
+        };
+        let scopes = collect_scopes(&resolver, tree.root_node(), &ctx);
+        // function_declaration foo + method_declaration bar.
+        assert_eq!(scopes.len(), 2);
+        assert_eq!(scopes[0].name, "foo");
+        assert_eq!(scopes[0].label, NodeLabel::Function);
+        assert_eq!(scopes[1].name, "bar");
+        assert_eq!(scopes[1].label, NodeLabel::Method);
+    }
+
+    #[cfg(feature = "lang-go")]
+    #[test]
+    fn go_resolves_struct_and_interface_type_spec() {
+        // In tree-sitter-go, `type Foo struct{...}` parses as
+        // type_declaration → type_spec. We walk recursively to find them.
+        fn collect_recursive(
+            resolver: &dyn ScopeResolver,
+            node: tree_sitter::Node,
+            ctx: &ScopeContext,
+            out: &mut Vec<Scope>,
+        ) {
+            if let Some(scope) = resolver.resolve(node, ctx) {
+                out.push(scope);
+            }
+            for i in 0..node.named_child_count() as u32 {
+                if let Some(child) = node.named_child(i) {
+                    collect_recursive(resolver, child, ctx, out);
+                }
+            }
+        }
+        let source = String::from(
+            "package main\ntype Foo struct { x int }\ntype Bar interface { M() }\n",
+        );
+        let tree = parse(Language::Go, &source).expect("parse");
+        let resolver = GoScopeResolver;
+        let ctx = ScopeContext {
+            source: &source,
+            file_path: "src/main.go",
+            project: "proj",
+            current_parent: None,
+        };
+        let mut scopes = Vec::new();
+        collect_recursive(&resolver, tree.root_node(), &ctx, &mut scopes);
+        let struct_scope = scopes.iter().find(|s| s.label == NodeLabel::Struct).expect("struct");
+        assert_eq!(struct_scope.name, "Foo");
+        let iface = scopes.iter().find(|s| s.label == NodeLabel::Interface).expect("interface");
+        assert_eq!(iface.name, "Bar");
+    }
+
+    #[cfg(feature = "lang-go")]
+    #[test]
+    fn go_type_spec_with_other_type_returns_none() {
+        // `type Alias int` — type_spec whose type is neither struct nor
+        // interface → resolver returns None. Covers the `_ => return None`
+        // branch.
+        let source = String::from("package main\ntype Alias int\n");
+        let tree = parse(Language::Go, &source).expect("parse");
+        let resolver = GoScopeResolver;
+        let ctx = ScopeContext {
+            source: &source,
+            file_path: "src/main.go",
+            project: "proj",
+            current_parent: None,
+        };
+        // Walk the type_declaration to find the type_spec and resolve it.
+        let type_decl = tree.root_node().named_child(1).expect("type_declaration");
+        let type_spec = type_decl.named_child(0).expect("type_spec");
+        assert!(resolver.resolve(type_spec, &ctx).is_none());
+    }
+
+    // --- JavaScopeResolver ---
+
+    #[cfg(feature = "lang-java")]
+    #[test]
+    fn java_resolves_class_interface_enum_method() {
+        let source = String::from(
+            "class Foo { void bar() {} }\ninterface Iface { void m(); }\nenum Color { RED }\n",
+        );
+        let tree = parse(Language::Java, &source).expect("parse");
+        let resolver = JavaScopeResolver;
+        let ctx = ScopeContext {
+            source: &source,
+            file_path: "src/Main.java",
+            project: "proj",
+            current_parent: None,
+        };
+        let scopes = collect_scopes(&resolver, tree.root_node(), &ctx);
+        // class Foo, interface Iface, enum Color at the top level.
+        assert_eq!(scopes.len(), 3);
+        assert_eq!(scopes[0].name, "Foo");
+        assert_eq!(scopes[0].label, NodeLabel::Class);
+        assert_eq!(scopes[1].name, "Iface");
+        assert_eq!(scopes[1].label, NodeLabel::Interface);
+        assert_eq!(scopes[2].name, "Color");
+        assert_eq!(scopes[2].label, NodeLabel::Enum);
+
+        // Walk the class body to find the method.
+        let class_node = tree.root_node().named_child(0).expect("class");
+        let body = class_node.child_by_field_name("body").expect("body");
+        let mut method_scopes = Vec::new();
+        for i in 0..body.named_child_count() as u32 {
+            if let Some(child) = body.named_child(i) {
+                if let Some(scope) = resolver.resolve(child, &ctx) {
+                    method_scopes.push(scope);
+                }
+            }
+        }
+        assert_eq!(method_scopes.len(), 1);
+        assert_eq!(method_scopes[0].name, "bar");
+        assert_eq!(method_scopes[0].label, NodeLabel::Method);
+    }
+
+    // --- CppScopeResolver ---
+
+    #[cfg(feature = "lang-cpp")]
+    #[test]
+    fn cpp_resolves_namespace_class_struct() {
+        // Walk recursively: namespace's body contains class/struct/function.
+        fn collect_recursive(
+            resolver: &dyn ScopeResolver,
+            node: tree_sitter::Node,
+            ctx: &ScopeContext,
+            out: &mut Vec<Scope>,
+        ) {
+            if let Some(scope) = resolver.resolve(node, ctx) {
+                out.push(scope);
+            }
+            for i in 0..node.named_child_count() as u32 {
+                if let Some(child) = node.named_child(i) {
+                    collect_recursive(resolver, child, ctx, out);
+                }
+            }
+        }
+        let source = String::from(
+            "namespace ns { class Foo {}; struct Bar {}; void free_fn() {} }\n",
+        );
+        let tree = parse(Language::Cpp, &source).expect("parse");
+        let resolver = CppScopeResolver;
+        let ctx = ScopeContext {
+            source: &source,
+            file_path: "src/main.cpp",
+            project: "proj",
+            current_parent: None,
+        };
+        let mut scopes = Vec::new();
+        collect_recursive(&resolver, tree.root_node(), &ctx, &mut scopes);
+        let ns = scopes.iter().find(|s| s.label == NodeLabel::Namespace).expect("namespace");
+        assert_eq!(ns.name, "ns");
+        let class = scopes.iter().find(|s| s.label == NodeLabel::Class).expect("class");
+        assert_eq!(class.name, "Foo");
+        let struct_scope = scopes.iter().find(|s| s.label == NodeLabel::Struct).expect("struct");
+        assert_eq!(struct_scope.name, "Bar");
+        // free_fn is inside namespace, not class/struct → Function, not Method.
+        let free_fn = scopes.iter().find(|s| s.label == NodeLabel::Function).expect("free function");
+        assert_eq!(free_fn.name, "free_fn");
+    }
+
+    #[cfg(feature = "lang-cpp")]
+    #[test]
+    fn cpp_resolves_method_inside_class_body() {
+        // A function_definition inside a class_specifier body must be labeled
+        // Method (has_class_or_struct_ancestor returns true).
+        let source = String::from("class Foo { public: void bar() {} };\n");
+        let tree = parse(Language::Cpp, &source).expect("parse");
+        let resolver = CppScopeResolver;
+        let ctx = ScopeContext {
+            source: &source,
+            file_path: "src/main.cpp",
+            project: "proj",
+            current_parent: None,
+        };
+        let class_node = tree.root_node().named_child(0).expect("class");
+        let body = class_node.child_by_field_name("body").expect("body");
+        let mut method_scopes = Vec::new();
+        for i in 0..body.named_child_count() as u32 {
+            if let Some(child) = body.named_child(i) {
+                if let Some(scope) = resolver.resolve(child, &ctx) {
+                    method_scopes.push(scope);
+                }
+            }
+        }
+        assert_eq!(method_scopes.len(), 1);
+        assert_eq!(method_scopes[0].name, "bar");
+        assert_eq!(method_scopes[0].label, NodeLabel::Method);
+    }
+
+    #[cfg(feature = "lang-cpp")]
+    #[test]
+    fn cpp_function_with_qualified_identifier_name() {
+        // `void ns::func()` — function_declarator wrapping a
+        // qualified_identifier. cpp_declarator_name must unwrap to the
+        // rightmost identifier `func`.
+        let source = String::from("void ns::func() {}\n");
+        let tree = parse(Language::Cpp, &source).expect("parse");
+        let resolver = CppScopeResolver;
+        let ctx = ScopeContext {
+            source: &source,
+            file_path: "src/main.cpp",
+            project: "proj",
+            current_parent: None,
+        };
+        let scopes = collect_scopes(&resolver, tree.root_node(), &ctx);
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(scopes[0].name, "func");
+        assert_eq!(scopes[0].label, NodeLabel::Function);
+    }
+
+    #[cfg(feature = "lang-cpp")]
+    #[test]
+    fn cpp_returns_none_for_non_scope_node() {
+        // A top-level statement (e.g. `int x = 1;`) is not scope-introducing.
+        let source = String::from("int x = 1;\n");
+        let tree = parse(Language::Cpp, &source).expect("parse");
+        let resolver = CppScopeResolver;
+        let ctx = ScopeContext {
+            source: &source,
+            file_path: "src/main.cpp",
+            project: "proj",
+            current_parent: None,
+        };
+        let scopes = collect_scopes(&resolver, tree.root_node(), &ctx);
+        assert!(scopes.is_empty());
+    }
 }

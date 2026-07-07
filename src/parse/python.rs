@@ -1299,4 +1299,108 @@ class Foo(metaclass=Meta):
             "loop body should read i"
         );
     }
+
+    // --- callee_name branch coverage ---
+
+    #[test]
+    fn call_to_parenthesized_callee_is_extracted() {
+        // `(get_fn)()` — parenthesized_expression callee. Covers callee_name's
+        // parenthesized_expression arm.
+        let src = "def get_fn():\n    pass\nresult = (get_fn)()\n";
+        let result = extract(src);
+        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(
+            callees.contains(&"get_fn"),
+            "should extract call to parenthesized get_fn: {:?}",
+            callees
+        );
+    }
+
+    #[test]
+    fn call_to_chained_invocation_is_extracted() {
+        // `factory()()` — call whose function is itself a call. Covers
+        // callee_name's call arm.
+        let src = "def factory():\n    pass\nfactory()()\n";
+        let result = extract(src);
+        // At least one call to factory should be recorded (the inner call).
+        assert!(
+            result.calls.iter().any(|c| c.callee_name == "factory"),
+            "chained call should record the inner factory() call: {:?}",
+            result.calls
+        );
+    }
+
+    // --- assignment_target_name branch coverage ---
+
+    #[test]
+    fn tuple_assignment_extracts_first_target() {
+        // `a, b = 1, 2` — tuple/pattern_list left side. Covers
+        // assignment_target_name's tuple arm.
+        let src = "a, b = 1, 2\n";
+        let result = extract(src);
+        let assign = result
+            .assignments
+            .iter()
+            .find(|a| a.target_name == "a")
+            .expect("should find tuple assignment to a");
+        assert_eq!(assign.line, 1);
+    }
+
+    #[test]
+    fn list_assignment_does_not_panic() {
+        // `[a, b] = [1, 2]` — list left side. tree-sitter-python may parse
+        // this as a list or pattern_list; either way, extraction must not
+        // panic. The tuple test already covers the pattern_list arm.
+        let src = "[a, b] = [1, 2]\n";
+        let result = extract(src);
+        let _ = result.assignments;
+    }
+
+    #[test]
+    fn subscript_assignment_extracts_container_name() {
+        // `arr[0] = 1` — subscript left side. Covers the subscript arm.
+        let src = "arr = [1, 2, 3]\narr[0] = 99\n";
+        let result = extract(src);
+        assert!(
+            result.assignments.iter().any(|a| a.target_name == "arr"),
+            "should find subscript assignment to arr: {:?}",
+            result.assignments
+        );
+    }
+
+    // --- aliased import coverage ---
+
+    #[test]
+    fn from_import_with_alias_records_alias_name() {
+        // `from numpy import array as arr` — aliased_import inside a
+        // from-import. Covers aliased_import_name (called from
+        // extract_import_from). The alias name "arr" must appear in
+        // imported_names.
+        let src = "from numpy import array as arr\n";
+        let result = extract(src);
+        assert_eq!(result.imports.len(), 1);
+        assert_eq!(result.imports[0].source_file, "numpy");
+        assert!(
+            result.imports[0].imported_names.contains(&"arr".to_string()),
+            "aliased import should record the alias name: {:?}",
+            result.imports[0].imported_names
+        );
+    }
+
+    // --- function_signature multi-line coverage ---
+
+    #[test]
+    fn multi_line_function_signature_uses_first_line() {
+        // def spanning multiple lines — function_signature must extract just
+        // the first line (the `def name(...):` part).
+        let src = "def add(a,\n        b):\n    return a + b\n";
+        let result = extract(src);
+        let add = result.nodes.iter().find(|n| n.name == "add").expect("add");
+        let sig = add.signature.as_deref().expect("signature should be set");
+        assert!(
+            !sig.contains('\n'),
+            "signature must be a single line, got: {sig:?}"
+        );
+        assert!(sig.contains("add"), "signature should contain the function name");
+    }
 }

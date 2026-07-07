@@ -312,4 +312,148 @@ LIMIT 200
         let diff = compare_query_results(&[], &[]);
         assert_eq!(diff, QueryDiff::Match { count: 0 });
     }
+
+    #[test]
+    fn extract_strips_inline_comments_within_block() {
+        // `//` comments inside the block (after the marker) must be stripped,
+        // leaving only the Cypher text. This covers the `line[..idx]` branch.
+        let content = "\
+// === CODENEXUS ===
+MATCH (n) RETURN n // limit for safety
+// explanatory note
+LIMIT 10
+
+// === GITNEXUS ===
+MATCH (m) RETURN m
+LIMIT 5
+";
+        let q = extract_query_for_side(content, Side::Codenexus).unwrap();
+        assert!(q.contains("MATCH (n) RETURN n"));
+        assert!(q.contains("LIMIT 10"));
+        // The inline `// limit for safety` and the standalone `// explanatory note`
+        // must NOT appear in the extracted block.
+        assert!(!q.contains("limit for safety"));
+        assert!(!q.contains("explanatory note"));
+        // Markers themselves must not leak.
+        assert!(!q.contains("==="));
+    }
+
+    #[test]
+    fn extract_returns_error_when_block_is_empty() {
+        // Marker is present but no Cypher between it and the next marker.
+        // Covers the `bail!("empty Cypher block")` branch.
+        let content = "\
+// === CODENEXUS ===
+
+// === GITNEXUS ===
+MATCH (m) RETURN m
+";
+        let err = extract_query_for_side(content, Side::Codenexus).unwrap_err();
+        assert!(
+            err.to_string().contains("empty Cypher block"),
+            "expected empty-block error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn extract_gitnexus_block_at_eof_without_other_marker() {
+        // When the gitnexus marker is the last one with no terminator,
+        // the extractor must read to end-of-string. Covers the
+        // `unwrap_or(content.len())` branch.
+        let content = "\
+// === CODENEXUS ===
+MATCH (a) RETURN a
+
+// === GITNEXUS ===
+MATCH (b) RETURN b
+LIMIT 50
+";
+        let q = extract_query_for_side(content, Side::Gitnexus).unwrap();
+        assert!(q.contains("MATCH (b) RETURN b"));
+        assert!(q.contains("LIMIT 50"));
+        assert!(!q.contains("==="));
+    }
+
+    #[test]
+    fn execute_codenexus_query_returns_rows_from_real_db() {
+        // End-to-end: open a fresh DB, create a Project row, query it back via
+        // execute_codenexus_query. Covers lines 102-126 (open + query + row
+        // extraction). Project nodes carry `name` and `id` (string) columns;
+        // both are returned as strings.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("cov.lbug");
+        let repo = codenexus::storage::repository::Repository::open(&db_path)
+            .expect("Repository::open");
+        // Insert a Project node so we have something to query.
+        let project = codenexus::model::Node::builder(
+            codenexus::model::NodeLabel::Project,
+            "demo",
+            "demo",
+        )
+        .id("proj-1")
+        .build();
+        repo.save_nodes(&[project], codenexus::model::NodeLabel::Project)
+            .expect("save_nodes");
+        drop(repo);
+
+        let cql = "MATCH (p:Project) RETURN p.name AS name, p.id AS id";
+        let rows = execute_codenexus_query(&db_path, cql).expect("execute_codenexus_query");
+        assert_eq!(rows.len(), 1, "expected exactly one Project row");
+        assert_eq!(rows[0].0, "demo");
+        assert_eq!(rows[0].1, "proj-1");
+    }
+
+    #[test]
+    fn execute_codenexus_query_propagates_open_error_for_missing_db() {
+        // Pointing at a path whose parent doesn't exist must surface an error
+        // rather than panicking or returning an empty vec. Covers the
+        // `with_context` error branch.
+        let bogus = std::path::Path::new("/nonexistent/dir/missing.lbug");
+        let err = execute_codenexus_query(bogus, "MATCH (n) RETURN n").unwrap_err();
+        assert!(
+            err.to_string().contains("failed to open CodeNexus DB"),
+            "expected open-DB error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn execute_codenexus_query_returns_empty_for_empty_table() {
+        // Querying an empty Project table must return an empty vec (not an
+        // error). Covers the no-rows path of the row-mapping closure.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("empty.lbug");
+        let _ = codenexus::storage::repository::Repository::open(&db_path)
+            .expect("Repository::open");
+        let cql = "MATCH (p:Project) RETURN p.name AS name, p.id AS id";
+        let rows = execute_codenexus_query(&db_path, cql).expect("execute_codenexus_query");
+        assert!(rows.is_empty(), "expected zero rows for empty Project table");
+    }
+
+    #[test]
+    fn execute_codenexus_query_falls_back_to_empty_when_column_value_is_null() {
+        // Insert a Project with only `name` set; query `name` and a column
+        // that exists in the schema but is null (`rootPath`). The row-mapping
+        // closure must coerce null → "" (Rule 12: visible empty, not drop).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("null.lbug");
+        let repo = codenexus::storage::repository::Repository::open(&db_path)
+            .expect("Repository::open");
+        let project = codenexus::model::Node::builder(
+            codenexus::model::NodeLabel::Project,
+            "nullproj",
+            "nullproj",
+        )
+        .id("np-1")
+        .build();
+        repo.save_nodes(&[project], codenexus::model::NodeLabel::Project)
+            .expect("save_nodes");
+        drop(repo);
+
+        let cql = "MATCH (p:Project) RETURN p.name AS name, p.rootPath AS root";
+        let rows = execute_codenexus_query(&db_path, cql).expect("execute_codenexus_query");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "nullproj");
+        // rootPath was never set → null → coerced to "" by the closure.
+        assert_eq!(rows[0].1, "");
+    }
 }

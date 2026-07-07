@@ -225,7 +225,7 @@ fn find_symbols_in_ranges(
         if !cols.contains(&"filePath") || !cols.contains(&"startLine") || !cols.contains(&"endLine") {
             continue;
         }
-        let table = label.table_name();
+        let table = crate::storage::schema::escape_identifier(label.table_name());
         let cypher = format!(
             "MATCH (n:{table}) WHERE n.filePath = '{rel}' OR n.filePath = '{abs}' \
              RETURN n.id AS id, n.name AS name, n.qualifiedName AS qualifiedName, \
@@ -654,5 +654,214 @@ diff --git a/added.rs b/added.rs
         assert!(json.contains("\"files_changed\":2"));
         assert!(json.contains("\"risk_level\":\"high\""));
         assert!(json.contains("\"incoming_edge_count\":5"));
+    }
+
+    // --- find_symbols_in_ranges: end-to-end with seeded DB ---
+    //
+    // Seeds a Function node whose [startLine, endLine] overlaps the query
+    // range, plus CodeRelation edges to exercise count_incoming_edges and
+    // all three classify_risk branches (low/medium/high).
+
+    /// Builds a Function Node with the given id, filePath, and line range.
+    fn sample_function(id: &str, file_path: &str, start: u32, end: u32) -> crate::model::Node {
+        crate::model::Node::builder(
+            crate::model::NodeLabel::Function,
+            "sym",
+            &format!("demo.{id}"),
+        )
+        .id(id)
+        .project("demo")
+        .file_path(file_path)
+        .start_line(start)
+        .end_line(end)
+        .language(crate::model::Language::Rust)
+        .build()
+    }
+
+    #[test]
+    fn find_symbols_in_ranges_returns_overlapping_symbol_low_risk() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+
+        // Symbol at lines 10–20, range [10, 5] → 10..14, overlaps.
+        storage
+            .save_nodes(
+                &[sample_function("f_low", "/repo/src/foo.rs", 10, 20)],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+
+        let affected = find_symbols_in_ranges(
+            &*storage,
+            "src/foo.rs",
+            std::path::Path::new("/repo/src/foo.rs"),
+            &[(10, 5)],
+        )
+        .expect("find_symbols_in_ranges");
+        assert_eq!(affected.len(), 1, "should find the seeded function");
+        assert_eq!(affected[0].name, "sym");
+        assert_eq!(affected[0].incoming_edge_count, 0, "no edges → 0 incoming");
+        assert_eq!(affected[0].risk_level, "low", "0 incoming → low risk");
+    }
+
+    #[test]
+    fn find_symbols_in_ranges_returns_medium_risk_with_1_to_3_incoming() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+
+        storage
+            .save_nodes(
+                &[sample_function("f_med", "/repo/src/bar.rs", 5, 15)],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+
+        // Seed 2 CALLS edges targeting f_med → incoming=2 → medium risk.
+        let edges = vec![
+            crate::model::Edge::builder("caller1", "f_med", crate::model::EdgeType::Calls, "demo")
+                .build(),
+            crate::model::Edge::builder("caller2", "f_med", crate::model::EdgeType::Calls, "demo")
+                .build(),
+        ];
+        storage.save_edges(&edges).expect("save_edges");
+
+        let affected = find_symbols_in_ranges(
+            &*storage,
+            "src/bar.rs",
+            std::path::Path::new("/repo/src/bar.rs"),
+            &[(5, 10)],
+        )
+        .expect("find_symbols_in_ranges");
+        assert_eq!(affected.len(), 1);
+        assert_eq!(affected[0].incoming_edge_count, 2, "2 incoming edges");
+        assert_eq!(affected[0].risk_level, "medium", "1–3 incoming → medium");
+    }
+
+    #[test]
+    fn find_symbols_in_ranges_returns_high_risk_with_4_plus_incoming() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+
+        storage
+            .save_nodes(
+                &[sample_function("f_high", "/repo/src/baz.rs", 1, 100)],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+
+        // Seed 5 CALLS edges targeting f_high → incoming=5 → high risk.
+        let edges: Vec<crate::model::Edge> = (1..=5)
+            .map(|i| {
+                crate::model::Edge::builder(
+                    format!("caller{i}"),
+                    "f_high",
+                    crate::model::EdgeType::Calls,
+                    "demo",
+                )
+                .build()
+            })
+            .collect();
+        storage.save_edges(&edges).expect("save_edges");
+
+        let affected = find_symbols_in_ranges(
+            &*storage,
+            "src/baz.rs",
+            std::path::Path::new("/repo/src/baz.rs"),
+            &[(1, 100)],
+        )
+        .expect("find_symbols_in_ranges");
+        assert_eq!(affected.len(), 1);
+        assert_eq!(affected[0].incoming_edge_count, 5, "5 incoming edges");
+        assert_eq!(affected[0].risk_level, "high", "≥4 incoming → high");
+    }
+
+    #[test]
+    fn find_symbols_in_ranges_skips_non_overlapping_symbol() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+
+        // Symbol at lines 1–5, range [100, 10] → 100..109, no overlap.
+        storage
+            .save_nodes(
+                &[sample_function("f_off", "/repo/src/off.rs", 1, 5)],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+
+        let affected = find_symbols_in_ranges(
+            &*storage,
+            "src/off.rs",
+            std::path::Path::new("/repo/src/off.rs"),
+            &[(100, 10)],
+        )
+        .expect("find_symbols_in_ranges");
+        assert!(affected.is_empty(), "non-overlapping symbol should be skipped");
+    }
+
+    #[test]
+    fn find_symbols_in_ranges_empty_ranges_returns_empty() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage
+            .save_nodes(
+                &[sample_function("f_e", "/repo/src/e.rs", 1, 5)],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+
+        let affected = find_symbols_in_ranges(
+            &*storage,
+            "src/e.rs",
+            std::path::Path::new("/repo/src/e.rs"),
+            &[],
+        )
+        .expect("find_symbols_in_ranges");
+        assert!(affected.is_empty(), "empty ranges → no symbols");
+    }
+
+    #[test]
+    fn count_incoming_edges_returns_zero_for_no_edges() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let cnt = count_incoming_edges(&*storage, "no_such_id").expect("count_incoming_edges");
+        assert_eq!(cnt, 0, "no edges → 0");
+    }
+
+    #[test]
+    fn count_incoming_edges_counts_targeting_edges() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let edges = vec![
+            crate::model::Edge::builder("a", "target", crate::model::EdgeType::Calls, "demo").build(),
+            crate::model::Edge::builder("b", "target", crate::model::EdgeType::Calls, "demo").build(),
+            crate::model::Edge::builder("target", "c", crate::model::EdgeType::Calls, "demo").build(),
+        ];
+        storage.save_edges(&edges).expect("save_edges");
+        // 2 edges target "target", 1 edge sources from it.
+        let cnt = count_incoming_edges(&*storage, "target").expect("count_incoming_edges");
+        assert_eq!(cnt, 2, "2 edges target 'target'");
+    }
+
+    // --- run_git_diff error paths ---
+
+    #[test]
+    fn run_git_diff_non_git_dir_returns_invalid_input() {
+        let tmp = TempDir::new().unwrap();
+        // A plain TempDir is not a git repo → git diff exits non-zero.
+        let result = run_git_diff(tmp.path(), DiffMode::Unstaged);
+        // Accept either error (some CI envs have GIT_DIR set elsewhere).
+        match result {
+            Err(CliError::InvalidInput(_)) => {}
+            Err(CliError::Io(_)) => {}
+            Ok(s) if s.is_empty() => {}
+            other => panic!("expected error or empty, got {other:?}"),
+        }
     }
 }

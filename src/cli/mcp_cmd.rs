@@ -41,7 +41,7 @@ use super::args::McpArgs;
 use super::error::Result;
 use crate::kit::{Kit, QueryKey, TraceKey};
 use crate::query::{QueryResult, SearchResult};
-use crate::trace::{TraceEdge, TraceNode, TraceResult, TraceType};
+use crate::trace::{TraceEdge, TraceNode, TracePath, TraceResult, TraceType};
 
 /// MCP protocol version this server speaks.
 pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
@@ -731,5 +731,387 @@ mod tests {
     #[test]
     fn server_version_matches_cargo_pkg_version() {
         assert!(!SERVER_VERSION.is_empty());
+    }
+
+    // --- Output serializer coverage ---
+
+    #[test]
+    fn query_output_preserves_columns_rows_and_duration() {
+        let r = QueryResult {
+            columns: vec!["name".to_string(), "id".to_string()],
+            rows: vec![vec![json!("foo"), json!(42)]],
+            duration_ms: 17,
+        };
+        let out = query_output(r);
+        assert_eq!(out.columns, vec!["name".to_string(), "id".to_string()]);
+        assert_eq!(out.rows.len(), 1);
+        assert_eq!(out.rows[0][0], json!("foo"));
+        assert_eq!(out.rows[0][1], json!(42));
+        assert_eq!(out.duration_ms, 17);
+    }
+
+    #[test]
+    fn query_output_serializes_to_json() {
+        let out = query_output(QueryResult {
+            columns: vec!["c".to_string()],
+            rows: vec![vec![json!(1)]],
+            duration_ms: 0,
+        });
+        let json = serde_json::to_value(&out).unwrap();
+        assert_eq!(json["columns"][0], "c");
+        assert_eq!(json["rows"][0][0], 1);
+    }
+
+    #[test]
+    fn trace_node_to_json_includes_all_fields() {
+        let n = TraceNode {
+            name: "foo".to_string(),
+            label: "Function".to_string(),
+            file_path: Some("/src/a.rs".to_string()),
+            start_line: Some(42),
+        };
+        let j = trace_node_to_json(&n);
+        assert_eq!(j["name"], "foo");
+        assert_eq!(j["label"], "Function");
+        assert_eq!(j["filePath"], "/src/a.rs");
+        assert_eq!(j["startLine"], 42);
+    }
+
+    #[test]
+    fn trace_node_to_json_handles_none_fields() {
+        // A node without location info must still serialize (null for the
+        // optional fields, not missing keys).
+        let n = TraceNode {
+            name: "x".to_string(),
+            label: "Module".to_string(),
+            file_path: None,
+            start_line: None,
+        };
+        let j = trace_node_to_json(&n);
+        assert_eq!(j["name"], "x");
+        assert_eq!(j["label"], "Module");
+        assert!(j["filePath"].is_null());
+        assert!(j["startLine"].is_null());
+    }
+
+    #[test]
+    fn trace_edge_to_json_includes_all_fields() {
+        let e = TraceEdge {
+            edge_type: "CALLS".to_string(),
+            reason: Some("direct call".to_string()),
+            confidence: 0.5,
+        };
+        let j = trace_edge_to_json(&e);
+        assert_eq!(j["edgeType"], "CALLS");
+        assert_eq!(j["reason"], "direct call");
+        // f32→f64 round-trip: compare via as_f64 to avoid f32/f64 precision mismatch.
+        assert!((j["confidence"].as_f64().unwrap() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn trace_edge_to_json_handles_none_reason() {
+        let e = TraceEdge {
+            edge_type: "READS".to_string(),
+            reason: None,
+            confidence: 0.0,
+        };
+        let j = trace_edge_to_json(&e);
+        assert_eq!(j["edgeType"], "READS");
+        assert!(j["reason"].is_null());
+        assert_eq!(j["confidence"], 0.0);
+    }
+
+    #[test]
+    fn search_result_to_json_includes_all_fields() {
+        let r = SearchResult {
+            name: "parse".to_string(),
+            label: "Function".to_string(),
+            file_path: Some("/src/a.rs".to_string()),
+            start_line: Some(10),
+            qualified_name: Some("demo.parse".to_string()),
+            score: 0.5,
+        };
+        let j = search_result_to_json(&r);
+        assert_eq!(j["name"], "parse");
+        assert_eq!(j["label"], "Function");
+        assert_eq!(j["filePath"], "/src/a.rs");
+        assert_eq!(j["startLine"], 10);
+        assert_eq!(j["qualifiedName"], "demo.parse");
+        // f32→f64 round-trip: compare via as_f64 to avoid precision mismatch.
+        assert!((j["score"].as_f64().unwrap() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn trace_output_converts_paths_to_json_nodes_and_edges() {
+        // Build a TraceResult with one path containing one node and one edge.
+        let r = TraceResult {
+            symbol: "demo.foo".to_string(),
+            paths: vec![TracePath {
+                nodes: vec![TraceNode {
+                    name: "foo".to_string(),
+                    label: "Function".to_string(),
+                    file_path: Some("/src/a.rs".to_string()),
+                    start_line: Some(1),
+                }],
+                edges: vec![TraceEdge {
+                    edge_type: "CALLS".to_string(),
+                    reason: None,
+                    confidence: 1.0,
+                }],
+                depth: 1,
+            }],
+        };
+        let out = trace_output(r);
+        assert_eq!(out.symbol, "demo.foo");
+        assert_eq!(out.paths.len(), 1);
+        assert_eq!(out.paths[0].depth, 1);
+        assert_eq!(out.paths[0].nodes.len(), 1);
+        assert_eq!(out.paths[0].nodes[0]["name"], "foo");
+        assert_eq!(out.paths[0].edges.len(), 1);
+        assert_eq!(out.paths[0].edges[0]["edgeType"], "CALLS");
+        // The output must be JSON-serializable (the whole point of the
+        // conversion is to feed serde_json).
+        let json = serde_json::to_value(&out).expect("TraceOutput serializes");
+        assert_eq!(json["symbol"], "demo.foo");
+    }
+
+    #[test]
+    fn trace_output_empty_paths_produces_empty_paths_array() {
+        let r = TraceResult {
+            symbol: "ghost".to_string(),
+            paths: vec![],
+        };
+        let out = trace_output(r);
+        assert_eq!(out.symbol, "ghost");
+        assert!(out.paths.is_empty());
+    }
+
+    // --- tool_def ---
+
+    #[test]
+    fn tool_def_builds_object_with_name_description_and_schema() {
+        let schema = json!({"type": "object", "properties": {}});
+        let t = tool_def("mytool", "does a thing", schema.clone());
+        assert_eq!(t["name"], "mytool");
+        assert_eq!(t["description"], "does a thing");
+        assert_eq!(t["inputSchema"], schema);
+    }
+
+    // --- handle_tools_call missing arguments ---
+
+    #[test]
+    fn handle_tools_call_missing_arguments_returns_error() {
+        let kit = fresh_kit();
+        // params has `name` but no `arguments` field.
+        let result = handle_tools_call(&kit, &json!({"name": "query"}));
+        let (code, _msg) = result.expect_err("missing arguments should error");
+        assert_eq!(code, error_codes::INVALID_PARAMS);
+    }
+
+    // --- dispatch_trace missing symbol ---
+
+    #[test]
+    fn dispatch_trace_missing_symbol_returns_error() {
+        let kit = fresh_kit();
+        let result = dispatch_trace(&kit, &json!({"depth": 2}));
+        let (code, _msg) = result.expect_err("missing symbol should error");
+        assert_eq!(code, error_codes::INVALID_PARAMS);
+    }
+
+    // --- dispatch_impact missing symbol ---
+
+    #[test]
+    fn dispatch_impact_missing_symbol_returns_error() {
+        let kit = fresh_kit();
+        let result = dispatch_impact(&kit, &json!({"depth": 2}));
+        let (code, _msg) = result.expect_err("missing symbol should error");
+        assert_eq!(code, error_codes::INVALID_PARAMS);
+    }
+
+    // --- dispatch_context missing symbol ---
+
+    #[test]
+    fn dispatch_context_missing_symbol_returns_error() {
+        let kit = fresh_kit();
+        let result = dispatch_context(&kit, &json!({}));
+        let (code, _msg) = result.expect_err("missing symbol should error");
+        assert_eq!(code, error_codes::INVALID_PARAMS);
+    }
+
+    // --- dispatch_search missing text ---
+
+    #[test]
+    fn dispatch_search_missing_text_returns_error() {
+        let kit = fresh_kit();
+        let result = dispatch_search(&kit, &json!({"limit": 5}));
+        let (code, _msg) = result.expect_err("missing text should error");
+        assert_eq!(code, error_codes::INVALID_PARAMS);
+    }
+
+    // --- dispatch_trace error path: unknown symbol → trace.trace() returns
+    //     TraceError::SymbolNotFound, which dispatch_trace maps to
+    //     INTERNAL_ERROR. This exercises the full arg-parsing + trace call +
+    //     error-mapping path. ---
+
+    #[test]
+    fn dispatch_trace_with_unknown_symbol_returns_internal_error() {
+        let kit = fresh_kit();
+        let result = dispatch_trace(&kit, &json!({"symbol": "nonexistent", "trace_type": "all", "depth": 2}));
+        let (code, _msg) = result.expect_err("unknown symbol should error");
+        assert_eq!(code, error_codes::INTERNAL_ERROR);
+    }
+
+    #[test]
+    fn dispatch_trace_defaults_trace_type_to_all_and_depth_to_3() {
+        let kit = fresh_kit();
+        // Omit trace_type and depth — defaults should kick in (unwrap_or).
+        // The call still errors (SymbolNotFound) but only AFTER the defaults
+        // are applied, proving the defaults parsed correctly.
+        let result = dispatch_trace(&kit, &json!({"symbol": "missing"}));
+        let (code, _msg) = result.expect_err("default trace should reach trace() then error");
+        assert_eq!(code, error_codes::INTERNAL_ERROR);
+    }
+
+    #[test]
+    fn dispatch_trace_invalid_trace_type_returns_invalid_params() {
+        let kit = fresh_kit();
+        let result = dispatch_trace(&kit, &json!({"symbol": "x", "trace_type": "bogus"}));
+        let (code, _msg) = result.expect_err("invalid trace_type should error");
+        assert_eq!(code, error_codes::INVALID_PARAMS);
+    }
+
+    // --- dispatch_impact success path ---
+
+    #[test]
+    fn dispatch_impact_with_unknown_symbol_returns_empty_graph() {
+        let kit = fresh_kit();
+        let result = dispatch_impact(&kit, &json!({"symbol": "nonexistent", "depth": 2}));
+        let text = result.expect("impact should succeed for unknown symbol");
+        let parsed: Value = serde_json::from_str(&text).expect("output is JSON");
+        assert_eq!(parsed["symbol"], "nonexistent");
+        assert_eq!(parsed["depth"], 2);
+        assert!(parsed["nodes"].is_array(), "nodes is array");
+        assert!(parsed["edges"].is_array(), "edges is array");
+        assert_eq!(parsed["node_count"], 0);
+        assert_eq!(parsed["edge_count"], 0);
+    }
+
+    #[test]
+    fn dispatch_impact_defaults_depth_to_3() {
+        let kit = fresh_kit();
+        let result = dispatch_impact(&kit, &json!({"symbol": "x"}));
+        assert!(result.is_ok(), "default depth should succeed: {:?}", result.err());
+    }
+
+    // --- dispatch_context success path ---
+
+    #[test]
+    fn dispatch_context_with_unknown_symbol_returns_empty_graph() {
+        let kit = fresh_kit();
+        let result = dispatch_context(&kit, &json!({"symbol": "nonexistent", "depth": 1}));
+        let text = result.expect("context should succeed for unknown symbol");
+        let parsed: Value = serde_json::from_str(&text).expect("output is JSON");
+        assert_eq!(parsed["symbol"], "nonexistent");
+        assert_eq!(parsed["depth"], 1);
+        assert!(parsed["nodes"].is_array(), "nodes is array");
+        assert!(parsed["edges"].is_array(), "edges is array");
+    }
+
+    #[test]
+    fn dispatch_context_defaults_depth_to_2() {
+        let kit = fresh_kit();
+        let result = dispatch_context(&kit, &json!({"symbol": "x"}));
+        assert!(result.is_ok(), "default depth should succeed: {:?}", result.err());
+    }
+
+    // --- dispatch_trace/impact/context via handle_raw_line (end-to-end
+    //     JSON-RPC dispatch) ---
+
+    #[test]
+    fn handle_raw_line_tools_call_trace_returns_error_for_unknown_symbol() {
+        let kit = fresh_kit();
+        let raw = r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"trace","arguments":{"symbol":"missing","trace_type":"calls","depth":1}}}"#;
+        let resp = handle_raw_line(&kit, raw).expect("trace tool should respond");
+        assert_eq!(resp["jsonrpc"], "2.0");
+        assert_eq!(resp["id"], 10);
+        // Unknown symbol → trace.trace() errors → INTERNAL_ERROR response.
+        assert_eq!(resp["error"]["code"], error_codes::INTERNAL_ERROR);
+    }
+
+    #[test]
+    fn handle_raw_line_tools_call_impact_returns_result() {
+        let kit = fresh_kit();
+        let raw = r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"impact","arguments":{"symbol":"missing","depth":1}}}"#;
+        let resp = handle_raw_line(&kit, raw).expect("impact tool should respond");
+        assert_eq!(resp["id"], 11);
+        assert!(resp["result"]["content"].is_array());
+    }
+
+    #[test]
+    fn handle_raw_line_tools_call_context_returns_result() {
+        let kit = fresh_kit();
+        let raw = r#"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"context","arguments":{"symbol":"missing","depth":1}}}"#;
+        let resp = handle_raw_line(&kit, raw).expect("context tool should respond");
+        assert_eq!(resp["id"], 12);
+        assert!(resp["result"]["content"].is_array());
+    }
+
+    // --- dispatch_trace with a seeded node (non-empty paths) ---
+    //
+    // The Trace capability opens its own connection to the DB file. Seeding
+    // via StorageKey's save_nodes writes to the same file — Trace sees it
+    // after the write is flushed (LadybugDB file-based storage).
+
+    #[test]
+    fn dispatch_trace_with_seeded_function_returns_nonempty_paths() {
+        let kit = fresh_kit();
+        // Seed a Function node via the Storage capability.
+        let storage = kit.require::<crate::kit::StorageKey>().expect("require_storage");
+        let node = crate::model::Node::builder(
+            crate::model::NodeLabel::Function,
+            "seeded_fn",
+            "demo.seeded_fn",
+        )
+        .id("f_seed")
+        .project("demo")
+        .file_path("/src/seeded.rs")
+        .start_line(1)
+        .end_line(5)
+        .language(crate::model::Language::Rust)
+        .build();
+        storage
+            .save_nodes(std::slice::from_ref(&node), crate::model::NodeLabel::Function)
+            .expect("save_nodes");
+
+        // Trace by qualified name — trace.trace() resolves symbols by name.
+        let result = dispatch_trace(&kit, &json!({"symbol": "seeded_fn", "trace_type": "all", "depth": 1}));
+        assert!(result.is_ok(), "trace of seeded fn should succeed: {:?}", result.err());
+        let text = result.expect("trace ok");
+        let parsed: Value = serde_json::from_str(&text).expect("output is JSON");
+        assert_eq!(parsed["symbol"], "seeded_fn");
+    }
+
+    #[test]
+    fn dispatch_impact_with_seeded_function_returns_graph() {
+        let kit = fresh_kit();
+        let storage = kit.require::<crate::kit::StorageKey>().expect("require_storage");
+        let node = crate::model::Node::builder(
+            crate::model::NodeLabel::Function,
+            "impacted_fn",
+            "demo.impacted_fn",
+        )
+        .id("f_imp")
+        .project("demo")
+        .file_path("/src/imp.rs")
+        .start_line(10)
+        .end_line(20)
+        .language(crate::model::Language::Rust)
+        .build();
+        storage
+            .save_nodes(std::slice::from_ref(&node), crate::model::NodeLabel::Function)
+            .expect("save_nodes");
+
+        let result = dispatch_impact(&kit, &json!({"symbol": "impacted_fn", "depth": 1}));
+        assert!(result.is_ok(), "impact of seeded fn should succeed: {:?}", result.err());
     }
 }

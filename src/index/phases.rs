@@ -711,3 +711,41 @@ const _: () = {
     assert_send_sync::<ResolveOutput>();
     assert_send_sync::<LoadOutput>();
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- git_head_commit ---
+
+    #[test]
+    fn git_head_commit_non_git_dir_returns_empty() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // A plain TempDir is not a git repo → git rev-parse fails → empty string.
+        let commit = git_head_commit(tmp.path());
+        assert_eq!(commit, "", "non-git dir should return empty commit hash");
+    }
+
+    #[test]
+    fn git_head_commit_codenexus_repo_returns_nonempty() {
+        // The CodeNexus project itself is a git repo (we're running tests in it).
+        // This verifies the success path: git found → rev-parse HEAD → trim.
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let commit = git_head_commit(manifest_dir);
+        // If git is not installed, this returns empty — skip the assertion.
+        if let Ok(output) = std::process::Command::new("git")
+            .arg("--version")
+            .output()
+        {
+            if output.status.success() {
+                assert!(!commit.is_empty(), "CodeNexus repo should have a HEAD commit");
+                // A git commit hash is 40 hex chars (SHA-1) or 64 (SHA-256).
+                assert!(
+                    commit.len() == 40 || commit.len() == 64,
+                    "commit hash has unexpected length {}: {commit}",
+                    commit.len()
+                );
+            }
+        }
+    }
+}

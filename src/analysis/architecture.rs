@@ -427,7 +427,8 @@ impl<'a> ArchitectureAnalyzer<'a> {
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
+/// // `package_prefix` is crate-private; see unit tests for verified behavior.
 /// # use codenexus::analysis::architecture::package_prefix;
 /// assert_eq!(package_prefix("com.example.Foo"), Some("com.example"));
 /// assert_eq!(package_prefix("demo.foo"), Some("demo.foo"));

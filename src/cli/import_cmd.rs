@@ -517,4 +517,100 @@ mod tests {
             ram_first: false,
         };
     }
+
+    // --- zstd_decompress error paths ---
+
+    #[test]
+    fn zstd_decompress_invalid_payload_returns_invalid_input() {
+        if skip_without_zstd() {
+            return;
+        }
+        // Feed garbage that isn't a valid zstd frame → zstd exits non-zero.
+        let result = zstd_decompress(b"this is not zstd data");
+        let err = result.expect_err("garbage input should error");
+        assert_eq!(err.exit_code(), 1, "InvalidInput → exit 1");
+        match err {
+            CliError::InvalidInput(msg) => assert!(msg.contains("zstd decompression failed")),
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn zstd_decompress_empty_input_returns_invalid_input() {
+        if skip_without_zstd() {
+            return;
+        }
+        // Empty input → zstd exits non-zero (no frame to decode).
+        let result = zstd_decompress(b"");
+        assert!(result.is_err(), "empty input should error");
+        match result {
+            Err(CliError::InvalidInput(_)) => {}
+            Err(other) => panic!("expected InvalidInput, got {other:?}"),
+            Ok(_) => panic!("should not succeed"),
+        }
+    }
+
+    // --- run() truncated manifest (header claims more bytes than file has) ---
+
+    #[test]
+    fn run_import_truncated_manifest_returns_invalid_input() {
+        let dir = TempDir::new().unwrap();
+        let artifact = dir.path().join("trunc.zst");
+        let mut out = File::create(&artifact).unwrap();
+        out.write_all(&ARTIFACT_MAGIC).unwrap();
+        // Claim manifest is 1000 bytes, but write no manifest bytes.
+        out.write_all(&1000u32.to_le_bytes()).unwrap();
+        // File ends here — only 8 bytes total, but header says 1008.
+
+        let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from("/tmp/_unused_trunc.lbug")))
+            .expect("build_kit");
+        let args = make_args(artifact.to_str().unwrap(), "/tmp/out.lbug");
+        let err = run(&kit, &args).expect_err("truncated manifest should error");
+        assert_eq!(err.exit_code(), 1);
+        match err {
+            CliError::InvalidInput(msg) => assert!(msg.contains("truncated")),
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    // --- run() artifact with manifest deserialization failure ---
+
+    #[test]
+    fn run_import_malformed_manifest_returns_error() {
+        let dir = TempDir::new().unwrap();
+        let artifact = dir.path().join("bad_manifest.zst");
+        let mut out = File::create(&artifact).unwrap();
+        out.write_all(&ARTIFACT_MAGIC).unwrap();
+        // 10 bytes of "manifest" that isn't valid JSON.
+        let bad_manifest = b"not json!";
+        let len = u32::try_from(bad_manifest.len()).unwrap();
+        out.write_all(&len.to_le_bytes()).unwrap();
+        out.write_all(bad_manifest).unwrap();
+
+        let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from("/tmp/_unused_badm.lbug")))
+            .expect("build_kit");
+        let args = make_args(artifact.to_str().unwrap(), "/tmp/out.lbug");
+        let err = run(&kit, &args).expect_err("malformed manifest should error");
+        // serde_json deserialization failure → CliError::Json → exit 3.
+        assert_eq!(err.exit_code(), 3, "Json error → exit 3");
+    }
+
+    // --- run() with unwritable db path returns Io error ---
+
+    #[test]
+    fn run_import_unwritable_db_path_returns_error() {
+        if skip_without_zstd() {
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+        let payload = b"db-bytes";
+        let artifact = build_test_artifact(dir.path(), "u.zst", payload);
+        // /nonexistent/dir/out.lbug — parent dir doesn't exist → File::create fails.
+        let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from("/tmp/_unused_uw.lbug")))
+            .expect("build_kit");
+        let args = make_args(artifact.to_str().unwrap(), "/nonexistent/dir/out.lbug");
+        let err = run(&kit, &args).expect_err("unwritable db path should error");
+        // Io error → exit 2 (CliError::Io maps to exit code 2).
+        assert_ne!(err.exit_code(), 0, "should fail");
+    }
 }

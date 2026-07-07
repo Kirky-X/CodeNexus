@@ -423,4 +423,83 @@ mod tests {
             result.err()
         );
     }
+
+    // --- filter_results direct unit tests ---
+
+    fn make_result(name: &str, label: &str, file: Option<&str>) -> SearchResult {
+        SearchResult {
+            name: name.to_string(),
+            label: label.to_string(),
+            file_path: file.map(|s| s.to_string()),
+            start_line: Some(1),
+            qualified_name: None,
+            score: 1.0,
+        }
+    }
+
+    #[test]
+    fn filter_results_no_filter_passes_all_through() {
+        let results = vec![
+            make_result("a", "Function", Some("/x.rs")),
+            make_result("b", "Class", Some("/y.rs")),
+        ];
+        let out = filter_results(results, None, &None);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn filter_results_kind_filter_keeps_only_matching_label() {
+        let results = vec![
+            make_result("a", "Function", Some("/x.rs")),
+            make_result("b", "Class", Some("/y.rs")),
+            make_result("c", "Function", Some("/z.rs")),
+        ];
+        let out = filter_results(results, Some(NodeLabel::Function), &None);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|r| r.label == "Function"));
+    }
+
+    #[test]
+    fn filter_results_file_filter_keeps_only_matching_file() {
+        let results = vec![
+            make_result("a", "Function", Some("/x.rs")),
+            make_result("b", "Class", Some("/y.rs")),
+        ];
+        let out = filter_results(results, None, &Some("/x.rs".to_string()));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "a");
+    }
+
+    #[test]
+    fn filter_results_both_filters_require_both_matches() {
+        let results = vec![
+            make_result("a", "Function", Some("/x.rs")),
+            make_result("b", "Function", Some("/y.rs")),
+            make_result("c", "Class", Some("/x.rs")),
+        ];
+        let out = filter_results(results, Some(NodeLabel::Function), &Some("/x.rs".to_string()));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "a");
+    }
+
+    #[test]
+    fn filter_results_empty_input_returns_empty() {
+        let out = filter_results(Vec::new(), Some(NodeLabel::Function), &None);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn filter_results_kind_filter_no_matches_returns_empty() {
+        let results = vec![make_result("a", "Class", Some("/x.rs"))];
+        let out = filter_results(results, Some(NodeLabel::Function), &None);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn filter_results_file_filter_none_file_path_does_not_match() {
+        // A result with file_path=None should not match a file filter.
+        let results = vec![make_result("a", "Function", None)];
+        let out = filter_results(results, None, &Some("/x.rs".to_string()));
+        assert!(out.is_empty());
+    }
 }

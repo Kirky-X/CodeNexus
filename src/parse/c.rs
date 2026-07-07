@@ -1503,4 +1503,149 @@ void normal_func(int x) {
             .count();
         assert_eq!(contains_count, 0, "B1 fix: macro should have 0 CONTAINS edges");
     }
+
+    // --- P1-2: function declarations in headers ---
+
+    #[test]
+    fn extracts_function_declaration_in_header() {
+        // `int foo(int x);` at top level → Function node (declaration, no body).
+        let src = "int foo(int x);\n";
+        let result = extract(src);
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1, "should extract 1 function declaration");
+        assert_eq!(funcs[0].name, "foo");
+        assert!(funcs[0].signature.is_some(), "declaration should have signature");
+        assert_eq!(funcs[0].start_line, Some(1));
+    }
+
+    #[test]
+    fn function_declaration_does_not_create_global_var() {
+        // A function declaration must not be double-counted as a global var.
+        let src = "int declare_only(int x);\n";
+        let result = extract(src);
+        let globals: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::GlobalVar)
+            .collect();
+        assert!(globals.is_empty(), "function declaration should not create a global var");
+    }
+
+    #[test]
+    fn pointer_function_declaration_extracted() {
+        // `int *get_ptr(void);` — pointer_declarator wrapping function_declarator.
+        let src = "int *get_ptr(void);\n";
+        let result = extract(src);
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1, "pointer function declaration should be extracted");
+        assert_eq!(funcs[0].name, "get_ptr");
+    }
+
+    #[test]
+    fn multiple_function_declarations_in_header() {
+        let src = "int add(int a, int b);\nint sub(int a, int b);\n";
+        let result = extract(src);
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 2, "should extract 2 function declarations");
+        let names: Vec<_> = funcs.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"add"));
+        assert!(names.contains(&"sub"));
+    }
+
+    // --- P1-1: anonymous struct/enum in typedef ---
+
+    #[test]
+    fn anonymous_struct_in_typedef_creates_struct_node() {
+        // `typedef struct { int x; int y; } Point;` → Typedef + Struct node.
+        let src = "typedef struct { int x; int y; } Point;\n";
+        let result = extract(src);
+        let structs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Struct)
+            .collect();
+        assert_eq!(structs.len(), 1, "anonymous struct should create a Struct node");
+        assert_eq!(structs[0].name, "Point", "struct should use the typedef name");
+        let typedefs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Typedef)
+            .collect();
+        assert_eq!(typedefs.len(), 1, "typedef should also be extracted");
+    }
+
+    #[test]
+    fn anonymous_enum_in_typedef_creates_enum_node() {
+        // `typedef enum { RED, GREEN, BLUE } Color;` → Typedef + Enum node.
+        let src = "typedef enum { RED, GREEN, BLUE } Color;\n";
+        let result = extract(src);
+        let enums: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Enum)
+            .collect();
+        assert_eq!(enums.len(), 1, "anonymous enum should create an Enum node");
+        assert_eq!(enums[0].name, "Color", "enum should use the typedef name");
+    }
+
+    // --- callee_name edge cases ---
+
+    #[test]
+    fn parenthesized_call_expression_extracts_callee() {
+        // `(func)(arg)` — parenthesized_expression callee.
+        let src = "void wrapper(void) { (func)(42); }\n";
+        let result = extract(src);
+        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(callees.contains(&"func"), "parenthesized call should extract callee name");
+    }
+
+    #[test]
+    fn call_expression_result_as_callee() {
+        // `get_fn()(arg)` — call_expression whose function is another call_expression.
+        // The inner callee (get_fn) should be extracted.
+        let src = "void caller(void) { get_fn()(42); }\n";
+        let result = extract(src);
+        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(callees.contains(&"get_fn"), "chained call should extract inner callee");
+    }
+
+    // --- empty/error edge cases ---
+
+    #[test]
+    fn struct_without_name_skipped() {
+        // Anonymous struct without typedef context should not create a node.
+        let src = "struct { int x; };\n";
+        let result = extract(src);
+        let structs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Struct)
+            .collect();
+        assert!(structs.is_empty(), "unnamed struct without typedef should not be extracted");
+    }
+
+    #[test]
+    fn struct_without_body_skipped() {
+        // Forward declaration: `struct Point;` — no body, no extraction.
+        let src = "struct Point;\n";
+        let result = extract(src);
+        let structs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Struct)
+            .collect();
+        assert!(structs.is_empty(), "struct without body should not be extracted");
+    }
 }

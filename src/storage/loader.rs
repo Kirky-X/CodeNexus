@@ -1244,4 +1244,438 @@ mod tests {
         assert!(content.contains("CALLS"));
         assert!(content.contains("demo"));
     }
+
+    // --- node_to_row coverage for remaining NodeLabel variants ---
+
+    #[test]
+    fn node_to_row_constructor_has_thirteen_columns() {
+        let node = Node::builder(NodeLabel::Constructor, "ctor", "proj.ctor")
+            .id("ctor_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .end_line(5)
+            .signature("fn ctor()")
+            .return_type("Self")
+            .is_exported(true)
+            .docstring("ctor")
+            .properties(serde_json::json!({"content": "body"}))
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Constructor);
+        assert_eq!(row.len(), 13);
+        assert_eq!(row[0], "ctor_1");
+        assert_eq!(row[5], "1");
+        assert_eq!(row[6], "5");
+        assert_eq!(row[7], "fn ctor()");
+        assert_eq!(row[8], "Self");
+        assert_eq!(row[9], "true");
+        assert_eq!(row[10], "ctor");
+        assert_eq!(row[11], "body");
+        assert_eq!(row[12], "proj");
+    }
+
+    #[test]
+    fn node_to_row_handler_has_thirteen_columns() {
+        let node = Node::builder(NodeLabel::Handler, "on_click", "proj.on_click")
+            .id("h_1")
+            .project("demo")
+            .file_path("/src/ui.rs")
+            .start_line(10)
+            .end_line(20)
+            .signature("fn on_click()")
+            .return_type("void")
+            .is_exported(false)
+            .docstring("click handler")
+            .properties(serde_json::json!({"content": "handler body"}))
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Handler);
+        assert_eq!(row.len(), 13);
+        assert_eq!(row[9], "false");
+        assert_eq!(row[11], "handler body");
+    }
+
+    #[test]
+    fn node_to_row_middleware_has_thirteen_columns() {
+        let node = Node::builder(NodeLabel::Middleware, "auth", "proj.auth")
+            .id("mw_1")
+            .project("demo")
+            .file_path("/src/mw.rs")
+            .start_line(1)
+            .end_line(10)
+            .signature("fn auth()")
+            .return_type("Response")
+            .is_exported(true)
+            .docstring("auth mw")
+            .properties(serde_json::json!({"content": "mw body"}))
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Middleware);
+        assert_eq!(row.len(), 13);
+        assert_eq!(row[7], "fn auth()");
+    }
+
+    #[test]
+    fn node_to_row_test_has_thirteen_columns() {
+        let node = Node::builder(NodeLabel::Test, "test_foo", "proj.test_foo")
+            .id("test_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .end_line(5)
+            .signature("fn test_foo()")
+            .return_type("()")
+            .is_exported(false)
+            .docstring("tests foo")
+            .properties(serde_json::json!({"content": "assert!()"}))
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Test);
+        assert_eq!(row.len(), 13);
+        assert_eq!(row[2], "test_foo");
+    }
+
+    #[test]
+    fn node_to_row_record_has_ten_columns() {
+        let node = Node::builder(NodeLabel::Record, "Rec", "proj.Rec")
+            .id("rec_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .end_line(5)
+            .is_exported(true)
+            .docstring("a record")
+            .properties(serde_json::json!({"content": "record body"}))
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Record);
+        assert_eq!(row.len(), 11);
+        assert_eq!(row[5], "1");
+        assert_eq!(row[6], "5");
+        assert_eq!(row[7], "true");
+        assert_eq!(row[8], "a record");
+        assert_eq!(row[9], "record body");
+        assert_eq!(row[10], "proj");
+    }
+
+    #[test]
+    fn node_to_row_delegate_has_ten_columns() {
+        let node = Node::builder(NodeLabel::Delegate, "Action", "proj.Action")
+            .id("del_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .end_line(3)
+            .is_exported(false)
+            .docstring("delegate")
+            .properties(serde_json::json!({"content": "delegate body"}))
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Delegate);
+        assert_eq!(row.len(), 11);
+        assert_eq!(row[7], "false");
+    }
+
+    #[test]
+    fn node_to_row_union_has_ten_columns() {
+        let node = Node::builder(NodeLabel::Union, "U", "proj.U")
+            .id("union_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .end_line(3)
+            .is_exported(true)
+            .docstring("a union")
+            .properties(serde_json::json!({"content": "union body"}))
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Union);
+        assert_eq!(row.len(), 11);
+        assert_eq!(row[8], "a union");
+    }
+
+    #[test]
+    fn node_to_row_service_has_ten_columns() {
+        let node = Node::builder(NodeLabel::Service, "AuthService", "proj.AuthService")
+            .id("svc_1")
+            .project("demo")
+            .file_path("/src/svc.rs")
+            .start_line(1)
+            .end_line(20)
+            .is_exported(true)
+            .docstring("auth service")
+            .properties(serde_json::json!({"content": "service body"}))
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Service);
+        assert_eq!(row.len(), 11);
+        assert_eq!(row[2], "AuthService");
+    }
+
+    #[test]
+    fn node_to_row_property_has_nine_columns() {
+        let node = Node::builder(NodeLabel::Property, "name", "proj.name")
+            .id("prop_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .end_line(2)
+            .return_type("String")
+            .is_exported(true)
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Property);
+        assert_eq!(row.len(), 10);
+        assert_eq!(row[5], "1");
+        assert_eq!(row[6], "2");
+        assert_eq!(row[7], "String");
+        assert_eq!(row[8], "true");
+        assert_eq!(row[9], "proj");
+    }
+
+    #[test]
+    fn node_to_row_field_has_nine_columns() {
+        let node = Node::builder(NodeLabel::Field, "x", "proj.x")
+            .id("field_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .end_line(1)
+            .return_type("i32")
+            .is_exported(false)
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Field);
+        assert_eq!(row.len(), 10);
+        assert_eq!(row[7], "i32");
+        assert_eq!(row[8], "false");
+    }
+
+    #[test]
+    fn node_to_row_annotation_has_eight_columns() {
+        let node = Node::builder(NodeLabel::Annotation, "Deprecated", "proj.Deprecated")
+            .id("ann_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .end_line(1)
+            .docstring("deprecated")
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Annotation);
+        assert_eq!(row.len(), 9);
+        assert_eq!(row[5], "1");
+        assert_eq!(row[6], "1");
+        assert_eq!(row[7], "deprecated");
+        assert_eq!(row[8], "proj");
+    }
+
+    #[test]
+    fn node_to_row_variant_has_eight_columns() {
+        let node = Node::builder(NodeLabel::Variant, "A", "proj.A")
+            .id("var_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .end_line(1)
+            .docstring("variant A")
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Variant);
+        assert_eq!(row.len(), 9);
+        assert_eq!(row[7], "variant A");
+    }
+
+    #[test]
+    fn node_to_row_event_has_eight_columns() {
+        let node = Node::builder(NodeLabel::Event, "OnClick", "proj.OnClick")
+            .id("evt_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .end_line(1)
+            .docstring("click event")
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Event);
+        assert_eq!(row.len(), 9);
+        assert_eq!(row[2], "OnClick");
+    }
+
+    #[test]
+    fn node_to_row_section_has_eight_columns() {
+        let node = Node::builder(NodeLabel::Section, "intro", "proj.intro")
+            .id("sec_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .end_line(10)
+            .docstring("intro section")
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Section);
+        assert_eq!(row.len(), 9);
+        assert_eq!(row[7], "intro section");
+    }
+
+    #[test]
+    fn node_to_row_template_has_eight_columns() {
+        let node = Node::builder(NodeLabel::Template, "T", "proj.T")
+            .id("tpl_1")
+            .project("demo")
+            .file_path("/src/lib.rs")
+            .start_line(1)
+            .end_line(1)
+            .properties(serde_json::json!({"templateParams": "<T: Clone>"}))
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Template);
+        assert_eq!(row.len(), 9);
+        assert_eq!(row[5], "1");
+        assert_eq!(row[6], "1");
+        assert_eq!(row[7], "<T: Clone>");
+        assert_eq!(row[8], "proj");
+    }
+
+    #[test]
+    fn node_to_row_endpoint_has_nine_columns() {
+        let node = Node::builder(NodeLabel::Endpoint, "create_user", "proj.create_user")
+            .id("ep_1")
+            .project("demo")
+            .file_path("/src/api.rs")
+            .start_line(1)
+            .end_line(10)
+            .properties(serde_json::json!({"httpMethod": "POST", "path": "/users"}))
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Endpoint);
+        assert_eq!(row.len(), 10);
+        assert_eq!(row[5], "1");
+        assert_eq!(row[6], "10");
+        assert_eq!(row[7], "POST");
+        assert_eq!(row[8], "/users");
+        assert_eq!(row[9], "proj");
+    }
+
+    #[test]
+    fn node_to_row_route_has_nine_columns() {
+        let node = Node::builder(NodeLabel::Route, "list_users", "proj.list_users")
+            .id("rt_1")
+            .project("demo")
+            .file_path("/src/api.rs")
+            .start_line(1)
+            .end_line(5)
+            .properties(serde_json::json!({"httpMethod": "GET", "path": "/users"}))
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Route);
+        assert_eq!(row.len(), 10);
+        assert_eq!(row[7], "GET");
+        assert_eq!(row[8], "/users");
+    }
+
+    #[test]
+    fn node_to_row_process_has_four_columns() {
+        let node = Node::builder(NodeLabel::Process, "worker", "proj.worker")
+            .id("proc_1")
+            .project("demo")
+            .docstring("background worker")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Process);
+        assert_eq!(row.len(), 5);
+        assert_eq!(row[0], "proc_1");
+        assert_eq!(row[1], "demo");
+        assert_eq!(row[2], "worker");
+        assert_eq!(row[3], "proj.worker");
+        assert_eq!(row[4], "background worker");
+    }
+
+    #[test]
+    fn node_to_row_community_has_four_columns() {
+        let node = Node::builder(NodeLabel::Community, "cluster_a", "proj.cluster_a")
+            .id("comm_1")
+            .project("demo")
+            .docstring("a community")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Community);
+        assert_eq!(row.len(), 5);
+        assert_eq!(row[4], "a community");
+    }
+
+    #[test]
+    fn node_to_row_database_has_six_columns() {
+        let node = Node::builder(NodeLabel::Database, "main_db", "proj.main_db")
+            .id("db_1")
+            .project("demo")
+            .file_path("/db/main")
+            .properties(serde_json::json!({"dbType": "postgres"}))
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Database);
+        assert_eq!(row.len(), 7);
+        assert_eq!(row[0], "db_1");
+        assert_eq!(row[1], "demo");
+        assert_eq!(row[2], "main_db");
+        assert_eq!(row[3], "proj.main_db");
+        assert_eq!(row[4], "/db/main");
+        assert_eq!(row[5], "postgres");
+        assert_eq!(row[6], "proj");
+    }
+
+    #[test]
+    fn node_to_row_config_has_six_columns() {
+        let node = Node::builder(NodeLabel::Config, "app_config", "proj.app_config")
+            .id("cfg_1")
+            .project("demo")
+            .file_path("/config/app.toml")
+            .properties(serde_json::json!({"configType": "toml"}))
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Config);
+        assert_eq!(row.len(), 7);
+        assert_eq!(row[5], "toml");
+        assert_eq!(row[6], "proj");
+    }
+
+    #[test]
+    fn node_to_row_tool_has_six_columns() {
+        let node = Node::builder(NodeLabel::Tool, "lint", "proj.lint")
+            .id("tool_1")
+            .project("demo")
+            .file_path("/tools/lint")
+            .properties(serde_json::json!({"toolType": "linter"}))
+            .parent_qn("proj")
+            .build();
+        let row = node_to_row(&node, NodeLabel::Tool);
+        assert_eq!(row.len(), 7);
+        assert_eq!(row[5], "linter");
+        assert_eq!(row[6], "proj");
+    }
+
+    #[test]
+    fn node_to_row_embedding_has_eight_columns() {
+        let node = Node::builder(NodeLabel::Embedding, "emb", "proj.emb")
+            .id("emb_1")
+            .project("demo")
+            .start_line(1)
+            .end_line(10)
+            .properties(serde_json::json!({
+                "nodeId": "func_1",
+                "chunkIndex": 0,
+                "embedding": "[0.1,0.2]",
+                "contentHash": "abc123"
+            }))
+            .build();
+        let row = node_to_row(&node, NodeLabel::Embedding);
+        assert_eq!(row.len(), 8);
+        assert_eq!(row[0], "emb_1");
+        assert_eq!(row[1], "func_1");
+        assert_eq!(row[2], "demo");
+        assert_eq!(row[3], "0");
+        assert_eq!(row[4], "1");
+        assert_eq!(row[5], "10");
+        assert_eq!(row[6], "[0.1,0.2]");
+        assert_eq!(row[7], "abc123");
+    }
 }

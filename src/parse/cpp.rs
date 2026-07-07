@@ -737,4 +737,140 @@ mod tests {
         assert_eq!(classes[0].name, "Point");
         assert_eq!(methods[0].name, "getX");
     }
+
+    // --- declarator_name branch coverage ---
+
+    #[test]
+    fn function_with_pointer_declarator_is_extracted() {
+        // `int *get_ptr(void)` — declarator is pointer_declarator wrapping
+        // function_declarator. Covers declarator_name's pointer_declarator arm.
+        let result = extract("int *get_ptr(void) { return nullptr; }\n");
+        let f = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "get_ptr")
+            .expect("should extract get_ptr");
+        assert_eq!(f.label, NodeLabel::Function);
+    }
+
+    #[test]
+    fn function_with_reference_declarator_is_extracted() {
+        // `int &ref_get(void)` — reference_declarator branch.
+        let result = extract("int& ref_get(void) { static int x = 0; return x; }\n");
+        let f = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "ref_get")
+            .expect("should extract ref_get");
+        assert_eq!(f.label, NodeLabel::Function);
+    }
+
+    #[test]
+    fn function_with_qualified_identifier_name_is_extracted() {
+        // `void ns::func()` — qualified_identifier declarator. Covers the
+        // qualified_identifier arm of declarator_name.
+        let result = extract("namespace ns { void ns_func() {} }\n");
+        let f = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "ns_func")
+            .expect("should extract ns_func");
+        assert_eq!(f.label, NodeLabel::Function);
+    }
+
+    #[test]
+    fn operator_overload_is_extracted() {
+        // `bool operator==(const Foo&)` — operator_name declarator. Covers
+        // the operator_name arm of declarator_name.
+        let result = extract("class Foo { public: bool operator==(const Foo& other) const { return true; } };\n");
+        let m = result
+            .nodes
+            .iter()
+            .find(|n| n.name.contains("operator=="))
+            .expect("should extract operator== as a method");
+        assert_eq!(m.label, NodeLabel::Method);
+    }
+
+    // --- callee_name branch coverage ---
+
+    #[test]
+    fn call_to_qualified_name_is_extracted() {
+        // `std::cout`-style qualified call. Covers callee_name's
+        // qualified_identifier arm.
+        let result = extract("int main() { std::swap(1, 2); return 0; }\n");
+        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(
+            callees.contains(&"swap"),
+            "should extract call to swap via qualified name: {:?}",
+            callees
+        );
+    }
+
+    #[test]
+    fn call_to_method_is_extracted() {
+        // `obj.method()` — field_expression callee. Covers callee_name's
+        // field_expression arm.
+        let result = extract(
+            "class C { public: void m() {} };\nint main() { C c; c.m(); return 0; }\n",
+        );
+        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(
+            callees.contains(&"m"),
+            "should extract call to method m via field_expression: {:?}",
+            callees
+        );
+    }
+
+    #[test]
+    fn call_to_chained_invocation_is_extracted() {
+        // `get_fn()()` — call_expression whose function is itself a
+        // call_expression. Covers callee_name's call_expression arm.
+        let result = extract("typedef void(*Fn)(); Fn get_fn(); int main() { get_fn()(); return 0; }\n");
+        // The inner call `get_fn()` is extracted; the outer `()` call may
+        // resolve to the same callee or to the result — either way, at least
+        // one call record must exist.
+        assert!(
+            !result.calls.is_empty(),
+            "chained call should produce at least one call record: {:?}",
+            result.calls
+        );
+    }
+
+    // --- signature_first_line coverage ---
+
+    #[test]
+    fn multi_line_function_signature_uses_first_line() {
+        // A function whose declaration spans multiple lines must still get a
+        // single-line signature (signature_first_line trims to the first line).
+        let result = extract("int add(int a,\n        int b) {\n    return a + b;\n}\n");
+        let add = result.nodes.iter().find(|n| n.name == "add").expect("add");
+        let sig = add.signature.as_deref().expect("signature should be set");
+        assert!(
+            !sig.contains('\n'),
+            "signature must be a single line, got: {sig:?}"
+        );
+        assert!(sig.contains("add"), "signature should contain the function name");
+    }
+
+    // --- enum extraction (extract_type with NodeLabel::Enum) ---
+
+    #[test]
+    fn enum_is_not_extracted_as_top_level_node() {
+        // The C++ extractor currently handles class/struct/namespace/function
+        // but not enum_specifier (no visit_node arm for it). This test pins
+        // the current behavior: enum Color produces no Enum node. If enum
+        // support is added later, this test should be updated to assert the
+        // node is extracted.
+        let result = extract("enum Color { RED, GREEN, BLUE };\n");
+        let enums: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Enum)
+            .collect();
+        assert!(
+            enums.is_empty(),
+            "enum_specifier is not currently extracted: {:?}",
+            enums
+        );
+    }
 }

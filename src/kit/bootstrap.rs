@@ -574,4 +574,61 @@ mod tests {
             "convenience helper must return the same Arc"
         );
     }
+
+    /// `require_parser`, `require_extractor`, `require_indexer`, and
+    /// `require_resolver` must all return their registered capabilities.
+    /// These are the remaining KitExt convenience helpers not exercised by
+    /// `build_kit_require_returns_registered_arc`.
+    #[test]
+    fn convenience_helpers_return_registered_capabilities() {
+        use crate::kit::bootstrap::KitExt;
+        let config = KitBootstrapConfig::new(PathBuf::from(":memory:"));
+        let kit = build_kit(&config).expect("build_kit");
+
+        // require_parser returns Arc<dyn ParserRegistry> — create_parser works.
+        let parser = kit.require_parser().expect("require_parser");
+        let langs = parser.supported_languages();
+        assert!(!langs.is_empty(), "parser should support at least one language");
+
+        // require_extractor returns Arc<dyn ExtractorRegistry> — get_extractor works.
+        let extractor = kit.require_extractor().expect("require_extractor");
+        let ext_langs = extractor.supported_languages();
+        assert!(!ext_langs.is_empty(), "extractor should support at least one language");
+
+        // require_indexer returns Arc<dyn Indexer>.
+        let _indexer = kit.require_indexer().expect("require_indexer");
+
+        // require_resolver returns Arc<dyn Resolver>.
+        let _resolver = kit.require_resolver().expect("require_resolver");
+    }
+
+    /// Each convenience helper's returned `Arc` must be pointer-equal to the
+    /// `Arc` returned by a direct `require::<Key>()` call (they delegate, so
+    /// they must return the same registration).
+    #[test]
+    fn convenience_helpers_all_match_direct_require() {
+        use crate::kit::bootstrap::KitExt;
+        let config = KitBootstrapConfig::new(PathBuf::from(":memory:"));
+        let kit = build_kit(&config).expect("build_kit");
+
+        let parser_helper = kit.require_parser().expect("require_parser");
+        let parser_direct: Arc<dyn crate::parse::capability::ParserRegistry> =
+            kit.require::<ParserKey>().expect("require::<ParserKey>");
+        assert!(Arc::ptr_eq(&parser_helper, &parser_direct));
+
+        let extractor_helper = kit.require_extractor().expect("require_extractor");
+        let extractor_direct: Arc<dyn crate::parse::capability::ExtractorRegistry> =
+            kit.require::<ExtractorKey>().expect("require::<ExtractorKey>");
+        assert!(Arc::ptr_eq(&extractor_helper, &extractor_direct));
+
+        let indexer_helper = kit.require_indexer().expect("require_indexer");
+        let indexer_direct: Arc<dyn crate::index::capability::Indexer> =
+            kit.require::<IndexerKey>().expect("require::<IndexerKey>");
+        assert!(Arc::ptr_eq(&indexer_helper, &indexer_direct));
+
+        let resolver_helper = kit.require_resolver().expect("require_resolver");
+        let resolver_direct: Arc<dyn crate::resolve::capability::Resolver> =
+            kit.require::<ResolverKey>().expect("require::<ResolverKey>");
+        assert!(Arc::ptr_eq(&resolver_helper, &resolver_direct));
+    }
 }
