@@ -362,4 +362,52 @@ mod tests {
         assert!((edge.confidence - 0.9).abs() < f32::EPSILON);
         assert_eq!(edge.reason.as_deref(), Some("assignment: y = x"));
     }
+
+    #[test]
+    fn trace_self_loop_dataflow_returns_empty() {
+        // x -> x DataFlows: cycle prevention skips self, so no paths.
+        let mut g = Graph::new();
+        g.add_node(make_var("x", "x"));
+        g.add_edge(Edge::new("x", "x", EdgeType::DataFlows, "proj"));
+        let tracer = DataFlowTracer::new(&g);
+        let paths = tracer.trace(&"x".to_string(), 3);
+        assert!(paths.is_empty(), "self-loop should be skipped by cycle prevention");
+    }
+
+    #[test]
+    fn trace_diamond_graph_returns_all_four_paths() {
+        // x -> y, x -> z, y -> w, z -> w (diamond).
+        // Expect 4 paths: x->y, x->z, x->y->w, x->z->w.
+        let mut g = Graph::new();
+        g.add_node(make_var("x", "x"));
+        g.add_node(make_var("y", "y"));
+        g.add_node(make_var("z", "z"));
+        g.add_node(make_var("w", "w"));
+        g.add_edge(Edge::new("x", "y", EdgeType::DataFlows, "proj"));
+        g.add_edge(Edge::new("x", "z", EdgeType::DataFlows, "proj"));
+        g.add_edge(Edge::new("y", "w", EdgeType::DataFlows, "proj"));
+        g.add_edge(Edge::new("z", "w", EdgeType::DataFlows, "proj"));
+        let tracer = DataFlowTracer::new(&g);
+        let paths = tracer.trace(&"x".to_string(), 5);
+        assert_eq!(paths.len(), 4, "diamond should yield 4 paths");
+        assert_eq!(paths.iter().filter(|p| p.depth == 1).count(), 2);
+        assert_eq!(paths.iter().filter(|p| p.depth == 2).count(), 2);
+        // Both depth-2 paths should end at w.
+        for p in paths.iter().filter(|p| p.depth == 2) {
+            assert_eq!(p.nodes.last().unwrap().name, "w");
+        }
+    }
+
+    #[test]
+    fn trace_depth_far_exceeding_graph_diameter_terminates() {
+        // x -> y, depth 100: should return 1 path (x->y) without infinite loop.
+        let mut g = Graph::new();
+        g.add_node(make_var("x", "x"));
+        g.add_node(make_var("y", "y"));
+        g.add_edge(Edge::new("x", "y", EdgeType::DataFlows, "proj"));
+        let tracer = DataFlowTracer::new(&g);
+        let paths = tracer.trace(&"x".to_string(), 100);
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].depth, 1);
+    }
 }

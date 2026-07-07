@@ -746,4 +746,47 @@ mod tests {
             "CallResolver should not process assignments"
         );
     }
+
+    // --- Import lookup fallthrough ---
+
+    #[test]
+    fn resolve_call_import_lookup_falls_through_when_symbol_not_in_table() {
+        // Import references "bar" but "bar" is not in the symbol table →
+        // is_imported=true but lookup returns empty → falls through to
+        // project-level exported lookup, which also fails → None.
+        let mut a_result = make_result("a.rs", vec![]);
+        a_result.imports.push(ImportInfo {
+            source_file: "b.rs".to_string(),
+            imported_names: vec!["bar".to_string()],
+            line: 1,
+        });
+        let results = vec![a_result];
+        let table = build_symbol_table(&results, "proj");
+        let resolver = CallResolver::new(&table, "proj").with_imports(&results);
+
+        let resolved = resolver.resolve_call("a.rs", "bar");
+        assert!(
+            resolved.is_none(),
+            "imported but non-existent symbol → None"
+        );
+    }
+
+    #[test]
+    fn resolve_call_with_unregistered_file_falls_through_to_project_lookup() {
+        // resolve_call on a file not in self.imports → unwrap_or(&[]) path
+        // (line 163-166), then falls through to project-level lookup.
+        let bar_node = make_exported_node("bar", "b.rs", "proj", NodeLabel::Function);
+        let bar_result = make_result("b.rs", vec![bar_node]);
+        let results = vec![bar_result];
+        let table = build_symbol_table(&results, "proj");
+
+        // Don't call with_imports → self.imports is empty for "a.rs".
+        let resolver = CallResolver::new(&table, "proj");
+        let resolved = resolver.resolve_call("a.rs", "bar");
+        assert!(resolved.is_some(), "should find via project-level export");
+        let (qn, confidence, tier) = resolved.unwrap();
+        assert_eq!(qn, "proj.b.rs.bar");
+        assert!((confidence - 0.80).abs() < 1e-6);
+        assert_eq!(tier, ConfidenceTier::Global);
+    }
 }

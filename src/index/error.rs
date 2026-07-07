@@ -322,4 +322,117 @@ mod tests {
         assert!(msg.contains("cycle"), "got: {msg}");
         assert_eq!(err.exit_code(), 2);
     }
+
+    // --- From<PhaseError>: verify each infrastructure variant maps to Storage ---
+
+    #[test]
+    fn from_phase_error_missing_dependency_maps_to_storage() {
+        let phase_err = crate::index::pipeline_dag::PhaseError::MissingDependency {
+            phase: "resolve",
+            dep: "scan",
+        };
+        let err: IndexError = phase_err.into();
+        assert!(matches!(err, IndexError::Storage(_)));
+        let msg = err.to_string();
+        assert!(msg.contains("missing dependency"), "got: {msg}");
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn from_phase_error_duplicate_phase_maps_to_storage() {
+        let phase_err = crate::index::pipeline_dag::PhaseError::DuplicatePhase("scan");
+        let err: IndexError = phase_err.into();
+        assert!(matches!(err, IndexError::Storage(_)));
+        let msg = err.to_string();
+        assert!(msg.contains("duplicate"), "got: {msg}");
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn from_phase_error_missing_input_maps_to_storage() {
+        let phase_err = crate::index::pipeline_dag::PhaseError::MissingInput("resolve");
+        let err: IndexError = phase_err.into();
+        assert!(matches!(err, IndexError::Storage(_)));
+        let msg = err.to_string();
+        assert!(msg.contains("missing input"), "got: {msg}");
+    }
+
+    #[test]
+    fn from_phase_error_type_mismatch_maps_to_storage() {
+        let phase_err = crate::index::pipeline_dag::PhaseError::TypeMismatch("scan");
+        let err: IndexError = phase_err.into();
+        assert!(matches!(err, IndexError::Storage(_)));
+        let msg = err.to_string();
+        assert!(msg.contains("type mismatch"), "got: {msg}");
+    }
+
+    // --- From<StorageError>: verify non-Corrupt variants are NOT mapped to DatabaseCorrupt ---
+
+    #[test]
+    fn from_storage_not_found_maps_to_storage_not_database_corrupt() {
+        // Only StorageError::Corrupt should map to DatabaseCorrupt; all other
+        // variants (NotFound, Query, Schema, etc.) must map to Storage.
+        let err: IndexError = StorageError::NotFound("project foo".to_string()).into();
+        assert!(
+            matches!(err, IndexError::Storage(_)),
+            "NotFound should map to Storage, not DatabaseCorrupt"
+        );
+        assert_eq!(err.exit_code(), 2, "Storage exit code is 2, not 4");
+    }
+
+    #[test]
+    fn from_storage_schema_maps_to_storage_not_database_corrupt() {
+        let err: IndexError = StorageError::Schema("unsupported index".to_string()).into();
+        assert!(matches!(err, IndexError::Storage(_)));
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    // --- source() chain: #[from] variants expose inner error ---
+
+    #[test]
+    fn source_chain_for_io_variant_returns_inner_error() {
+        use std::error::Error as _;
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "missing file");
+        let err: IndexError = io_err.into();
+        // Io has #[from], so source() should return the inner io::Error.
+        let source = err.source();
+        assert!(
+            source.is_some(),
+            "Io variant should expose source via #[from]"
+        );
+        assert!(
+            source.unwrap().to_string().contains("missing file"),
+            "source should carry the io error message"
+        );
+    }
+
+    #[test]
+    fn source_chain_for_discover_variant_returns_inner_error() {
+        use std::error::Error as _;
+        let discover_err = DiscoverError::from(std::io::Error::other("permission denied"));
+        let err: IndexError = discover_err.into();
+        // Discover has #[from], so source() should return the inner DiscoverError.
+        assert!(
+            err.source().is_some(),
+            "Discover variant should expose source via #[from]"
+        );
+    }
+
+    #[test]
+    fn source_returns_none_for_storage_variant() {
+        use std::error::Error as _;
+        // Storage does NOT have #[from] or #[source], so source() returns None.
+        let err: IndexError = StorageError::Query("bad cypher".to_string()).into();
+        assert!(
+            err.source().is_none(),
+            "Storage variant should NOT expose source (no #[from]/#[source])"
+        );
+    }
+
+    #[test]
+    fn source_returns_none_for_path_not_found_variant() {
+        use std::error::Error as _;
+        let err = IndexError::PathNotFound("/x".to_string());
+        assert!(err.source().is_none(), "PathNotFound has no inner error");
+    }
 }

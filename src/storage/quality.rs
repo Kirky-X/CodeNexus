@@ -497,6 +497,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_dq004_detects_orphan_source_and_target_independently() {
+        // Edge with BOTH endpoints missing → two violations (one per endpoint).
+        let storage = fresh_storage();
+        storage
+            .save_edges(&[crate::model::Edge::builder(
+                "missing_src",
+                "missing_tgt",
+                EdgeType::Calls,
+                "demo",
+            )
+            .build()])
+            .expect("save_edges");
+
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker.check_edge_integrity().expect("check_edge_integrity");
+        assert_eq!(
+            violations.len(),
+            2,
+            "expected two DQ-004 violations (source + target), got {violations:?}"
+        );
+        assert!(violations.iter().all(|v| v.rule == "DQ-004"));
+        let messages: Vec<&str> =
+            violations.iter().map(|v| v.message.as_str()).collect();
+        assert!(
+            messages.iter().any(|m| m.contains("missing_src") && m.contains("source")),
+            "should report orphan source: {messages:?}"
+        );
+        assert!(
+            messages.iter().any(|m| m.contains("missing_tgt") && m.contains("target")),
+            "should report orphan target: {messages:?}"
+        );
+    }
+
     // --- DQ-005: Project isolation ---
 
     #[test]
@@ -523,6 +557,72 @@ mod tests {
         assert!(
             violations.is_empty(),
             "expected no DQ-005 violations for isolated projects, got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn test_dq005_detects_isolation_violation_for_unknown_project() {
+        // A Function node whose `project` value is not in the Project table
+        // → total count exceeds per-project sum → DQ-005 violation.
+        let storage = fresh_storage();
+        storage.save_project(&sample_project("alpha", "alpha"))
+            .expect("save_project");
+        // Function in known project "alpha".
+        storage.save_nodes(
+            &[sample_function("a1", "alpha", "main", "alpha.main")],
+            NodeLabel::Function,
+        )
+        .expect("save_nodes alpha");
+        // Function in unknown project "ghost" (no matching Project node).
+        storage.save_nodes(
+            &[sample_function("g1", "ghost", "main", "ghost.main")],
+            NodeLabel::Function,
+        )
+        .expect("save_nodes ghost");
+
+        let checker = QualityChecker::new(&*storage);
+        let violations =
+            checker.check_project_isolation().expect("check_project_isolation");
+        assert_eq!(
+            violations.len(),
+            1,
+            "expected exactly one DQ-005 violation, got {violations:?}"
+        );
+        assert_eq!(violations[0].rule, "DQ-005");
+        assert!(
+            violations[0].message.contains("Function"),
+            "violation should mention the table: {}",
+            violations[0].message
+        );
+        assert!(
+            violations[0].message.contains("total 2"),
+            "total should be 2 (alpha + ghost): {}",
+            violations[0].message
+        );
+        assert!(
+            violations[0].message.contains("per-project sum 1"),
+            "per-project sum should be 1 (only alpha): {}",
+            violations[0].message
+        );
+    }
+
+    #[test]
+    fn test_run_all_includes_dq005_violations() {
+        let storage = fresh_storage();
+        storage.save_project(&sample_project("alpha", "alpha"))
+            .expect("save_project");
+        storage.save_nodes(
+            &[sample_function("g1", "ghost", "main", "ghost.main")],
+            NodeLabel::Function,
+        )
+        .expect("save_nodes ghost");
+
+        let checker = QualityChecker::new(&*storage);
+        let report = checker.run_all().expect("run_all");
+        assert!(
+            report.count_for_rule("DQ-005") >= 1,
+            "run_all should aggregate DQ-005 violations, got {:?}",
+            report.violations
         );
     }
 

@@ -323,4 +323,73 @@ mod tests {
         let d = Edge::new("s", "t", EdgeType::Calls, "other");
         assert_ne!(a, d);
     }
+
+    // --- ConfidenceTier: default_score ---
+
+    #[test]
+    fn confidence_tier_default_score_returns_tier_specific_values() {
+        assert!(
+            (ConfidenceTier::SameFile.default_score() - 0.95).abs() < f32::EPSILON,
+            "SameFile → 0.95"
+        );
+        assert!(
+            (ConfidenceTier::ImportScoped.default_score() - 0.90).abs() < f32::EPSILON,
+            "ImportScoped → 0.90"
+        );
+        assert!(
+            (ConfidenceTier::Global.default_score() - 0.50).abs() < f32::EPSILON,
+            "Global → 0.50"
+        );
+    }
+
+    // --- ConfidenceTier: as_db_type ---
+
+    #[test]
+    fn confidence_tier_as_db_type_returns_upper_snake_case_for_all_variants() {
+        assert_eq!(ConfidenceTier::SameFile.as_db_type(), "SAME_FILE");
+        assert_eq!(ConfidenceTier::ImportScoped.as_db_type(), "IMPORT_SCOPED");
+        assert_eq!(ConfidenceTier::Global.as_db_type(), "GLOBAL");
+    }
+
+    // --- ConfidenceTier: Display ---
+
+    #[test]
+    fn confidence_tier_display_outputs_db_type_string() {
+        assert_eq!(format!("{}", ConfidenceTier::SameFile), "SAME_FILE");
+        assert_eq!(format!("{}", ConfidenceTier::ImportScoped), "IMPORT_SCOPED");
+        assert_eq!(format!("{}", ConfidenceTier::Global), "GLOBAL");
+    }
+
+    // --- ConfidenceTier: FromStr ---
+
+    #[test]
+    fn confidence_tier_from_str_parses_all_valid_db_type_strings() {
+        assert_eq!(
+            "SAME_FILE".parse::<ConfidenceTier>().unwrap(),
+            ConfidenceTier::SameFile
+        );
+        assert_eq!(
+            "IMPORT_SCOPED".parse::<ConfidenceTier>().unwrap(),
+            ConfidenceTier::ImportScoped
+        );
+        assert_eq!(
+            "GLOBAL".parse::<ConfidenceTier>().unwrap(),
+            ConfidenceTier::Global
+        );
+    }
+
+    #[test]
+    fn confidence_tier_from_str_rejects_unknown_string_with_descriptive_error() {
+        let result: Result<ConfidenceTier, String> = "BOGUS_TIER".parse();
+        assert!(result.is_err(), "unknown tier string should error");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("unknown ConfidenceTier"),
+            "error should mention the type: {err}"
+        );
+        assert!(
+            err.contains("BOGUS_TIER"),
+            "error should include the rejected input: {err}"
+        );
+    }
 }

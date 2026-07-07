@@ -394,4 +394,28 @@ mod tests {
         let deep = paths.iter().find(|p| p.depth == 2).unwrap();
         assert_eq!(deep.edges[1].edge_type, "FFI_CALLS");
     }
+
+    #[test]
+    fn trace_self_loop_calls_returns_empty() {
+        // a -> a Calls: cycle prevention skips self, so no paths.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_edge(Edge::new("a", "a", EdgeType::Calls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace(&"a".to_string(), 3);
+        assert!(
+            paths.is_empty(),
+            "self-loop should be skipped by cycle prevention"
+        );
+    }
+
+    #[test]
+    fn trace_depth_far_exceeding_graph_diameter_terminates() {
+        // a -> b, depth 100: should return 1 path (a->b) without infinite loop.
+        let g = graph_a_calls_b();
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace(&"a".to_string(), 100);
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].depth, 1);
+    }
 }

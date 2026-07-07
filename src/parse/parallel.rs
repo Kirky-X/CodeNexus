@@ -857,4 +857,136 @@ mod tests {
             other => panic!("expected ParseError::Io, got: {other:?}"),
         }
     }
+
+    // -----------------------------------------------------------------------
+    // LOG-002 (ram-first): file_parsed_ram_first event emission
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn log_002_ram_first_emits_file_parsed_ram_first_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = "fn foo() {}\nfn bar() {}\n";
+        let file = make_file(dir.path(), "a.rs", source, Some(Language::Rust));
+
+        let mut compressed = RamFirstSources::new();
+        compressed.insert(file.path.clone(), compress_source(source));
+
+        let captured = capture_tracing_debug(|| {
+            let _ = parallel_parse_ram_first(&[file], &compressed, "proj");
+        });
+
+        assert!(
+            captured.contains("file_parsed_ram_first"),
+            "LOG-002: file_parsed_ram_first event should be emitted, got: {captured:?}"
+        );
+        assert!(
+            captured.contains("a.rs"),
+            "event should carry the file path, got: {captured:?}"
+        );
+        assert!(
+            captured.contains("nodes"),
+            "event should carry the nodes field, got: {captured:?}"
+        );
+    }
+
+    #[test]
+    fn log_002_ram_first_warns_on_disk_fallback() {
+        // File NOT in compressed map → warn! about fallback should be captured.
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_file(dir.path(), "a.rs", "fn foo() {}", Some(Language::Rust));
+
+        let compressed = RamFirstSources::new();
+        let captured = capture_tracing_debug(|| {
+            let _ = parallel_parse_ram_first(&[file], &compressed, "proj");
+        });
+
+        assert!(
+            captured.contains("RAM-first"),
+            "warn event should mention RAM-first, got: {captured:?}"
+        );
+        assert!(
+            captured.contains("falling back to disk read"),
+            "warn event should mention disk fallback, got: {captured:?}"
+        );
+        assert!(
+            captured.contains("a.rs"),
+            "warn event should carry the file path, got: {captured:?}"
+        );
+    }
+
+    #[test]
+    fn log_002_ram_first_no_event_on_decompress_failure() {
+        // Corrupted LZ4 → decompress fails → file_parsed_ram_first should NOT
+        // be emitted (failure path, not success path).
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_file(dir.path(), "a.rs", "fn foo() {}", Some(Language::Rust));
+
+        let mut compressed = RamFirstSources::new();
+        compressed.insert(file.path.clone(), vec![0xFF; 8]);
+
+        let captured = capture_tracing_debug(|| {
+            let _ = parallel_parse_ram_first(&[file], &compressed, "proj");
+        });
+
+        assert!(
+            !captured.contains("file_parsed_ram_first"),
+            "file_parsed_ram_first should NOT be emitted on decompress failure, got: {captured:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // parallel_parse_ram_first: multiple files in compressed map
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ram_first_multiple_compressed_files_all_parsed() {
+        let dir = tempfile::tempdir().unwrap();
+        let src_a = "fn a() {}";
+        let src_b = "fn b() {}\nfn c() {}\n";
+        let file_a = make_file(dir.path(), "a.rs", src_a, Some(Language::Rust));
+        let file_b = make_file(dir.path(), "b.rs", src_b, Some(Language::Rust));
+
+        let mut compressed = RamFirstSources::new();
+        compressed.insert(file_a.path.clone(), compress_source(src_a));
+        compressed.insert(file_b.path.clone(), compress_source(src_b));
+
+        let result = parallel_parse_ram_first(&[file_a, file_b], &compressed, "proj");
+        assert_eq!(result.files_parsed, 2, "got errors: {:?}", result.errors);
+        assert_eq!(result.files_failed, 0);
+        assert_eq!(result.results.len(), 2);
+        // Verify all function names are extracted.
+        let all_names: Vec<&str> = result
+            .results
+            .iter()
+            .flat_map(|r| r.nodes.iter().map(|n| n.name.as_str()))
+            .collect();
+        assert!(all_names.contains(&"a"), "should extract a: {all_names:?}");
+        assert!(all_names.contains(&"b"), "should extract b: {all_names:?}");
+        assert!(all_names.contains(&"c"), "should extract c: {all_names:?}");
+    }
+
+    #[test]
+    fn ram_first_all_files_failed_returns_empty_results() {
+        // All files have corrupted LZ4 → all fail → empty results.
+        let dir = tempfile::tempdir().unwrap();
+        let file_a = make_file(dir.path(), "a.rs", "fn foo() {}", Some(Language::Rust));
+        let file_b = make_file(dir.path(), "b.rs", "fn bar() {}", Some(Language::Rust));
+
+        let mut compressed = RamFirstSources::new();
+        compressed.insert(file_a.path.clone(), vec![0xFF; 4]);
+        compressed.insert(file_b.path.clone(), vec![0xFF; 4]);
+
+        let result = parallel_parse_ram_first(&[file_a, file_b], &compressed, "proj");
+        assert_eq!(result.files_parsed, 0);
+        assert_eq!(result.files_failed, 2);
+        assert!(result.results.is_empty());
+        assert_eq!(result.errors.len(), 2);
+        // Every error should mention LZ4 decompress failure.
+        for (_, msg) in &result.errors {
+            assert!(
+                msg.contains("LZ4 decompress failed"),
+                "expected LZ4 failure, got: {msg}"
+            );
+        }
+    }
 }

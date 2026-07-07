@@ -842,4 +842,207 @@ mod tests {
             "idempotent: no duplicate edges"
         );
     }
+
+    // ====================================================================
+    // Early-return paths in CrossServiceLinker::link
+    // ====================================================================
+
+    #[test]
+    fn link_returns_empty_when_routes_exist_but_no_callers() {
+        // Routes exist, but no Function/Method nodes → callers empty → early
+        // return with empty Vec (line 109).
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r1", "demo", "/api/users");
+        // Deliberately create no functions/methods.
+
+        let s = storage(&kit);
+        let linker = CrossServiceLinker::new(&*s, "demo");
+        let links = linker.link().expect("link");
+        assert!(links.is_empty(), "routes but no callers → empty links");
+    }
+
+    // ====================================================================
+    // match_parameterized: static-segment mismatch
+    // ====================================================================
+
+    #[test]
+    fn match_parameterized_returns_false_when_static_segment_differs() {
+        // Pattern has a `:param` but a non-parameter segment doesn't match.
+        // Covers the `else if *p != *l { return false; }` branch.
+        assert!(
+            !match_parameterized("/api/users/:id", "/api/products/123"),
+            "mismatched static segment should not match"
+        );
+        assert!(
+            !match_parameterized("/foo/:id/bar", "/foo/123/baz"),
+            "mismatched trailing static segment should not match"
+        );
+    }
+
+    // ====================================================================
+    // match_wildcard: multi-star patterns
+    // ====================================================================
+
+    #[test]
+    fn match_wildcard_skips_empty_middle_part_from_double_star() {
+        // `**` splits to ["", ""] as middle parts — the empty middle part
+        // should be skipped via `continue` (line 350-351).
+        assert!(
+            match_wildcard("/api/**/end", "/api/foo/bar/end"),
+            "double-star should match any path between /api/ and /end"
+        );
+    }
+
+    #[test]
+    fn match_wildcard_finds_middle_literal_between_two_stars() {
+        // Two wildcards with literal content between them — exercises the
+        // `rest.find(part)` match arm (lines 353-356).
+        assert!(
+            match_wildcard("/api/*/x/*/end", "/api/v1/x/data/end"),
+            "should find '/x/' between wildcards"
+        );
+        // Middle literal not found → None arm (line 356).
+        assert!(
+            !match_wildcard("/api/*/x/*/end", "/api/v1/y/data/end"),
+            "should fail when middle literal '/x/' is absent"
+        );
+    }
+
+    #[test]
+    fn match_wildcard_rejects_when_last_part_is_not_suffix() {
+        // Last segment of pattern doesn't match the suffix of literal.
+        // Covers `return false` for non-empty last not matching ends_with.
+        assert!(
+            !match_wildcard("/api/*/users", "/api/v2/products"),
+            "should fail when literal doesn't end with '/users'"
+        );
+    }
+
+    // ====================================================================
+    // extract_string_literals: escape-sequence coverage
+    // ====================================================================
+
+    #[test]
+    fn extract_string_literals_decodes_escaped_backslash() {
+        // `\\` in source → single `\` in extracted literal (lines 387-389).
+        let content = r#"let s = "path\\to";"#;
+        let lits = extract_string_literals(content);
+        assert_eq!(lits, vec![r"path\to".to_string()]);
+    }
+
+    #[test]
+    fn extract_string_literals_decodes_escaped_newline() {
+        // `\n` in source → actual newline char (lines 392-394).
+        let content = r#"let s = "line1\nline2";"#;
+        let lits = extract_string_literals(content);
+        assert_eq!(lits, vec!["line1\nline2".to_string()]);
+    }
+
+    #[test]
+    fn extract_string_literals_decodes_escaped_tab() {
+        // `\t` in source → actual tab char (lines 397-399).
+        let content = r#"let s = "col1\tcol2";"#;
+        let lits = extract_string_literals(content);
+        assert_eq!(lits, vec!["col1\tcol2".to_string()]);
+    }
+
+    #[test]
+    fn extract_string_literals_preserves_backslash_for_unknown_escape() {
+        // Unknown escape `\y` → backslash is kept, `y` processed normally
+        // (lines 402-404, the `_` match arm).
+        let content = r#"let s = "x\y";"#;
+        let lits = extract_string_literals(content);
+        assert_eq!(lits, vec![r"x\y".to_string()]);
+    }
+
+    // ====================================================================
+    // match_wildcard: no-star pattern direct invocation
+    // ====================================================================
+
+    #[test]
+    fn match_wildcard_no_star_pattern_compares_literal_equality() {
+        // match_wildcard is normally only called from match_route when the
+        // pattern contains `*`. Calling it directly with a no-star pattern
+        // hits the `parts.len() == 1` early return (line 342), which
+        // reduces to byte-equality comparison.
+        assert!(
+            match_wildcard("/api/users", "/api/users"),
+            "no-star pattern equal to literal → true"
+        );
+        assert!(
+            !match_wildcard("/api/users", "/api/products"),
+            "no-star pattern different from literal → false"
+        );
+        assert!(
+            match_wildcard("", ""),
+            "empty no-star pattern matches empty literal"
+        );
+    }
+
+    // ====================================================================
+    // load_routes / load_callers / load_existing_edges: defensive row-shape
+    // guards. LadybugDB always returns the requested number of columns
+    // (NULL for missing properties), so row.len() < N is never true with
+    // well-formed Cypher RETURN clauses. These tests verify the happy path
+    // for nodes created with minimal property sets, confirming the guards
+    // are defensive (not reachable through normal storage behavior).
+    // ====================================================================
+
+    #[test]
+    fn link_handles_route_node_with_null_optional_properties() {
+        // Route node created with only the required id/project/path fields.
+        // Missing properties (name, qualifiedName, etc.) are NULL in the DB,
+        // but load_routes only reads id and path → row has 2 elements →
+        // the row.len() < 2 guard is not triggered (it's a defensive check).
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        // Create a minimal Route node with only id, project, and path.
+        let cypher = format!(
+            "CREATE (:Route {{id: 'r1', project: 'demo', path: '/api/users'}});"
+        );
+        s.execute(&cypher).expect("create minimal route");
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"fetch("/api/users");"#,
+        );
+
+        let linker = CrossServiceLinker::new(&*s, "demo");
+        let links = linker.link().expect("link");
+        assert_eq!(links.len(), 1, "minimal Route node should still match");
+        assert_eq!(links[0].route_id, "r1");
+        assert_eq!(links[0].match_type, MatchType::Exact);
+    }
+
+    #[test]
+    fn link_handles_caller_node_with_null_optional_properties() {
+        // Function node created with only the fields load_callers reads
+        // (id, filePath, startLine, content). Missing properties are NULL
+        // but the row still has 4 elements → row.len() < 4 guard is not
+        // triggered (defensive only).
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        create_route(&kit, "r1", "demo", "/api/users");
+        // Create a minimal Function node with only the fields load_callers
+        // reads. Other required columns are omitted (NULL in DB).
+        let cypher = format!(
+            "CREATE (:Function {{id: 'f1', project: 'demo', filePath: '/src/caller.rs', \
+             startLine: 5, content: 'fetch(\"/api/users\")'}});"
+        );
+        s.execute(&cypher).expect("create minimal function");
+
+        let linker = CrossServiceLinker::new(&*s, "demo");
+        let links = linker.link().expect("link");
+        assert_eq!(links.len(), 1, "minimal Function node should still match");
+        assert_eq!(links[0].caller_id, "f1");
+        assert_eq!(links[0].caller_line, 5);
+    }
 }

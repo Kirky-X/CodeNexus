@@ -805,4 +805,298 @@ mod tests {
         );
         client.shutdown().expect("shutdown");
     }
+
+    // -----------------------------------------------------------------------
+    // Mock-channel tests: send_request / send_raw_request / make_position_params
+    //
+    // These tests construct a `Session` backed by in-memory crossbeam channels
+    // instead of a real rust-analyzer subprocess. The `Child` is a `true`
+    // process (exits immediately) — only `send_request` / `send_raw_request`
+    // touch the channels, not `child`.
+    // -----------------------------------------------------------------------
+
+    /// Build a `Session` backed by in-memory channels.
+    ///
+    /// Returns `(session, reader_tx, writer_rx)`:
+    /// - `reader_tx`: push mock `Message::Response` / `Message::Notification`
+    ///   values for `send_request` to consume via `connection.receiver`.
+    /// - `writer_rx`: inspect `Message::Request` / `Message::Notification`
+    ///   values that `send_request` / `send_raw_request` pushed to
+    ///   `connection.sender`.
+    fn mock_session() -> (Session, Sender<Message>, Receiver<Message>) {
+        let child = Command::new("true")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn true");
+        let (writer_tx, writer_rx): (Sender<Message>, Receiver<Message>) = bounded(16);
+        let (reader_tx, reader_rx): (Sender<Message>, Receiver<Message>) = bounded(16);
+        let writer_handle = thread::spawn(|| {});
+        let reader_handle = thread::spawn(|| {});
+        let connection = Connection { sender: writer_tx, receiver: reader_rx };
+        let session = Session {
+            child,
+            connection,
+            _reader_handle: reader_handle,
+            _writer_handle: writer_handle,
+            next_request_id: 1,
+        };
+        (session, reader_tx, writer_rx)
+    }
+
+    /// Build `HoverParams` for testing — the specific values don't matter
+    /// since we only test the transport layer, not the params serialization.
+    fn make_hover_params() -> HoverParams {
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: Url::parse("file:///tmp/x.rs").unwrap(),
+                },
+                position: Position { line: 0, character: 0 },
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+        }
+    }
+
+    // --- make_position_params ---
+
+    #[test]
+    fn make_position_params_builds_correct_uri_and_position() {
+        let params = make_position_params(Path::new("/tmp/lib.rs"), 10, 20)
+            .expect("absolute path should succeed");
+        assert_eq!(params.text_document.uri.as_str(), "file:///tmp/lib.rs");
+        assert_eq!(params.position.line, 10);
+        assert_eq!(params.position.character, 20);
+    }
+
+    #[test]
+    fn make_position_params_rejects_relative_path() {
+        let result = make_position_params(Path::new("relative.rs"), 0, 0);
+        assert!(
+            matches!(result, Err(LspError::Communication(_))),
+            "relative path should be rejected, got: {result:?}"
+        );
+    }
+
+    // --- send_request: timeout when no response ---
+
+    #[test]
+    fn send_request_times_out_when_no_response_arrives() {
+        // No response pushed → recv_timeout fires after REQUEST_TIMEOUT_MS.
+        let (mut session, _reader_tx, _writer_rx) = mock_session();
+        let result = send_request::<HoverRequest>(&mut session, make_hover_params());
+        match result {
+            Err(LspError::Timeout(ms)) => {
+                assert_eq!(ms, REQUEST_TIMEOUT_MS, "timeout should carry the threshold");
+            }
+            other => panic!("expected LspError::Timeout, got: {other:?}"),
+        }
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
+
+    // --- send_request: disconnect when reader channel closes ---
+
+    #[test]
+    fn send_request_returns_communication_error_on_disconnect() {
+        let (mut session, reader_tx, _writer_rx) = mock_session();
+        drop(reader_tx); // disconnect reader → recv_timeout → Disconnected
+        let result = send_request::<HoverRequest>(&mut session, make_hover_params());
+        match result {
+            Err(LspError::Communication(msg)) => {
+                assert!(
+                    msg.contains("server connection closed"),
+                    "should mention disconnect, got: {msg}"
+                );
+            }
+            other => panic!("expected LspError::Communication, got: {other:?}"),
+        }
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
+
+    // --- send_request: drains server-initiated notifications ---
+
+    #[test]
+    fn send_request_drains_server_notifications_before_response() {
+        let (mut session, reader_tx, _writer_rx) = mock_session();
+        // Pre-push a server notification, then the matching response.
+        let notif = Notification {
+            method: "window/logMessage".to_string(),
+            params: serde_json::json!({ "type": 3, "message": "indexing" }),
+        };
+        reader_tx.send(Message::Notification(notif)).unwrap();
+        let response = Response {
+            id: RequestId::from(1),
+            result: Some(serde_json::Value::Null),
+            error: None,
+        };
+        reader_tx.send(Message::Response(response)).unwrap();
+
+        let result = send_request::<HoverRequest>(&mut session, make_hover_params());
+        assert!(
+            result.is_ok(),
+            "should drain notification and return response: {:?}",
+            result.err()
+        );
+        // Null → Option<Hover>::None.
+        assert_eq!(result.unwrap(), None);
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
+
+    // --- send_request: drains server-initiated requests ---
+
+    #[test]
+    fn send_request_drains_server_requests_before_response() {
+        let (mut session, reader_tx, _writer_rx) = mock_session();
+        // Pre-push a server-initiated request, then the matching response.
+        let server_req = Request {
+            id: RequestId::from(99),
+            method: "workspace/configuration".to_string(),
+            params: serde_json::Value::Null,
+        };
+        reader_tx.send(Message::Request(server_req)).unwrap();
+        let response = Response {
+            id: RequestId::from(1),
+            result: Some(serde_json::Value::Null),
+            error: None,
+        };
+        reader_tx.send(Message::Response(response)).unwrap();
+
+        let result = send_request::<HoverRequest>(&mut session, make_hover_params());
+        assert!(result.is_ok(), "drained server request: {:?}", result.err());
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
+
+    // --- send_request: skips stale (wrong-id) responses ---
+
+    #[test]
+    fn send_request_skips_stale_response_with_wrong_id() {
+        let (mut session, reader_tx, _writer_rx) = mock_session();
+        // Stale response (id=999, doesn't match our request id=1).
+        let stale = Response {
+            id: RequestId::from(999),
+            result: Some(serde_json::Value::Null),
+            error: None,
+        };
+        reader_tx.send(Message::Response(stale)).unwrap();
+        // Correct response (id=1).
+        let correct = Response {
+            id: RequestId::from(1),
+            result: Some(serde_json::Value::Null),
+            error: None,
+        };
+        reader_tx.send(Message::Response(correct)).unwrap();
+
+        let result = send_request::<HoverRequest>(&mut session, make_hover_params());
+        assert!(result.is_ok(), "should skip stale and return correct: {:?}", result.err());
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
+
+    // --- send_request: sender disconnect (writer channel closed) ---
+
+    #[test]
+    fn send_request_returns_error_when_writer_channel_disconnects() {
+        let (mut session, _reader_tx, writer_rx) = mock_session();
+        drop(writer_rx); // disconnect writer → send() fails
+        let result = send_request::<HoverRequest>(&mut session, make_hover_params());
+        match result {
+            Err(LspError::Communication(msg)) => {
+                assert!(msg.contains("send request"), "got: {msg}");
+            }
+            other => panic!("expected LspError::Communication, got: {other:?}"),
+        }
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
+
+    // --- send_request: server error response ---
+
+    #[test]
+    fn send_request_surfaces_server_error_response() {
+        let (mut session, reader_tx, _writer_rx) = mock_session();
+        let err_response = Response {
+            id: RequestId::from(1),
+            result: None,
+            error: Some(lsp_server::ResponseError {
+                code: -32603,
+                message: "internal server error".to_string(),
+                data: None,
+            }),
+        };
+        reader_tx.send(Message::Response(err_response)).unwrap();
+
+        let result = send_request::<HoverRequest>(&mut session, make_hover_params());
+        match result {
+            Err(LspError::Communication(msg)) => {
+                assert!(msg.contains("server error"), "got: {msg}");
+                assert!(msg.contains("-32603"), "got: {msg}");
+            }
+            other => panic!("expected LspError::Communication, got: {other:?}"),
+        }
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
+
+    // --- send_raw_request: pushes message to writer channel ---
+
+    #[test]
+    fn send_raw_request_enqueues_request_with_correct_id_and_method() {
+        let (mut session, _reader_tx, writer_rx) = mock_session();
+        send_raw_request(&mut session, "shutdown", serde_json::Value::Null);
+        let msg = writer_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("should receive the shutdown request");
+        match msg {
+            Message::Request(req) => {
+                assert_eq!(req.method, "shutdown");
+                assert_eq!(req.id, RequestId::from(1));
+                assert_eq!(req.params, serde_json::Value::Null);
+            }
+            other => panic!("expected Message::Request, got: {other:?}"),
+        }
+        // next_request_id should have been incremented.
+        assert_eq!(session.next_request_id, 2);
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
+
+    // --- shutdown with an active session ---
+
+    #[test]
+    fn shutdown_with_active_session_returns_ok_and_clears_session() {
+        let (session, _reader_tx, _writer_rx) = mock_session();
+        let client = RustAnalyzerClient::new();
+        *client.session.lock().unwrap() = Some(session);
+        let result = client.shutdown();
+        assert!(result.is_ok(), "shutdown should succeed: {:?}", result.err());
+        assert!(
+            client.session.lock().unwrap().is_none(),
+            "session should be cleared after shutdown"
+        );
+    }
+
+    // --- start is idempotent when a session is already active ---
+
+    #[test]
+    fn start_is_idempotent_when_session_already_active() {
+        let (session, _reader_tx, _writer_rx) = mock_session();
+        let client = RustAnalyzerClient::new();
+        *client.session.lock().unwrap() = Some(session);
+        let workspace = std::env::temp_dir();
+        let result = client.start(&workspace);
+        assert!(
+            result.is_ok(),
+            "start with existing session should be Ok (no-op): {result:?}"
+        );
+        assert!(
+            client.session.lock().unwrap().is_some(),
+            "session should still be active"
+        );
+        // Clean up the mock session.
+        let _ = client.shutdown();
+    }
 }

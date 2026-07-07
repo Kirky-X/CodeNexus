@@ -669,4 +669,92 @@ mod tests {
             ConfidenceTier::ImportScoped
         );
     }
+
+    #[test]
+    fn resolve_types_skips_duplicate_file_path_in_results() {
+        // Two ExtractResults with the same file_path — the second result
+        // should be skipped by the `result_to_graph_fp.contains_key` guard.
+        let class_a = make_class("A", "a.py", Language::Python);
+
+        let mut result1 = ExtractResult::new("a.py", Language::Python);
+        result1.push_node(class_a.clone());
+        let mut result2 = ExtractResult::new("a.py", Language::Python);
+        result2.push_node(class_a);
+
+        let results = vec![result1, result2];
+        let table = build_symbol_table(&results, "proj");
+
+        let mut graph = Graph::new();
+        graph.add_node(make_class("A", "a.py", Language::Python));
+        // Dangling edge to force resolve_types to iterate results.
+        add_extends(&mut graph, "proj.a.py.A", "proj.a.py.Nonexistent");
+
+        let resolver = TypeResolver::new(&table);
+        let fixed = resolver.resolve_types(&results, &mut graph);
+        // Edge is unresolvable → no fix, but duplicate path is exercised.
+        assert!(fixed.is_empty(), "unresolvable edge → no fix");
+    }
+
+    #[test]
+    fn resolve_types_fixes_dangling_uses_type_edge() {
+        // UsesType is in RESOLVABLE_EDGE_TYPES but not previously tested.
+        let type_a = make_class("TypeA", "a.py", Language::Python);
+        let user_b = make_class("UserB", "b.py", Language::Python);
+        let (results, table) =
+            build_results_and_table(vec![(type_a, "a.py"), (user_b, "b.py")]);
+
+        let mut graph = Graph::new();
+        graph.add_node(make_class("TypeA", "a.py", Language::Python));
+        graph.add_node(make_class("UserB", "b.py", Language::Python));
+        // Dangling: UserB uses proj.b.py.TypeA (wrong file).
+        graph.add_edge(Edge::new(
+            "proj.b.py.UserB",
+            "proj.b.py.TypeA",
+            EdgeType::UsesType,
+            "proj",
+        ));
+
+        let resolver = TypeResolver::new(&table);
+        let fixed = resolver.resolve_types(&results, &mut graph);
+        assert_eq!(fixed.len(), 1, "should fix the dangling UsesType edge");
+        assert_eq!(graph.edges[0].target, "proj.a.py.TypeA");
+        assert_eq!(graph.edges[0].edge_type, EdgeType::UsesType);
+    }
+
+    #[test]
+    fn resolve_types_skips_when_resolved_qn_equals_current_target() {
+        // Edge case: the type name resolves to a FQN that equals the current
+        // (dangling) edge target. This happens when the symbol table has an
+        // entry for the type but the graph doesn't have a node with that FQN.
+        // Covers L248: `if resolved_qn == edge.target { continue; }`.
+        //
+        // Setup: class A is in the symbol table (via ExtractResult) but NOT
+        // in the graph. Class B is in both. Both are in file b.py. Edge
+        // B -> proj.b.py.A is dangling (A not in graph). resolve_type finds
+        // A via file-level lookup (same file as B) → returns "proj.b.py.A"
+        // which equals edge.target → L248 continue → no fix.
+        let class_a = make_class("A", "b.py", Language::Python);
+        let class_b = make_class("B", "b.py", Language::Python);
+        let (results, table) =
+            build_results_and_table(vec![(class_a, "b.py"), (class_b, "b.py")]);
+
+        let mut graph = Graph::new();
+        // Only add B to the graph — A is in the symbol table but not the graph.
+        graph.add_node(make_class("B", "b.py", Language::Python));
+        // Dangling edge: B extends proj.b.py.A (A is in symbol table but not graph).
+        add_extends(&mut graph, "proj.b.py.B", "proj.b.py.A");
+
+        let resolver = TypeResolver::new(&table);
+        let fixed = resolver.resolve_types(&results, &mut graph);
+        // resolved_qn ("proj.b.py.A") == edge.target ("proj.b.py.A") → skip.
+        assert!(
+            fixed.is_empty(),
+            "resolved_qn == current target → no fix needed"
+        );
+        // Edge target unchanged.
+        assert_eq!(graph.edges[0].target, "proj.b.py.A");
+        // Confidence/tier unchanged (still default 1.0 / Global from Edge::new).
+        assert!((graph.edges[0].confidence - 1.0).abs() < f32::EPSILON);
+        assert_eq!(graph.edges[0].confidence_tier, ConfidenceTier::Global);
+    }
 }
