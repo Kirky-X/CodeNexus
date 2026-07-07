@@ -9,6 +9,8 @@
 
 use serde::Serialize;
 
+use crate::model::Language;
+
 /// Complexity severity level for a single metric.
 ///
 /// Variant order matters: `Green < Yellow < Red` via derived `Ord`.
@@ -134,9 +136,58 @@ impl ComplexityEntry {
     }
 }
 
+/// Returns true if the given tree-sitter node type is a branch/decision node
+/// for the specified language.
+pub fn is_branch_node(language: Language, node_type: &str) -> bool {
+    #[allow(unreachable_patterns)]
+    match language {
+        #[cfg(feature = "lang-rust")]
+        Language::Rust => matches!(
+            node_type,
+            "if_expression"
+                | "match_expression"
+                | "for_expression"
+                | "while_expression"
+                | "loop_expression"
+        ),
+        #[cfg(feature = "lang-c")]
+        Language::C => matches!(
+            node_type,
+            "if_statement" | "for_statement" | "while_statement" | "switch_statement"
+        ),
+        #[cfg(feature = "lang-cpp")]
+        Language::Cpp => matches!(
+            node_type,
+            "if_statement" | "for_statement" | "while_statement" | "switch_statement"
+        ),
+        #[cfg(feature = "lang-python")]
+        Language::Python => matches!(
+            node_type,
+            "if_statement" | "for_statement" | "while_statement" | "try_statement"
+        ),
+        #[cfg(feature = "lang-typescript")]
+        Language::TypeScript => matches!(
+            node_type,
+            "if_statement" | "for_statement" | "while_statement" | "switch_case"
+        ),
+        #[cfg(feature = "lang-go")]
+        Language::Go => matches!(node_type, "if_statement" | "for_statement" | "switch"),
+        #[cfg(feature = "lang-java")]
+        Language::Java => matches!(
+            node_type,
+            "if_statement" | "for_statement" | "while_statement" | "switch_expression"
+        ),
+        #[cfg(feature = "lang-fortran")]
+        Language::Fortran => matches!(node_type, "if_statement" | "do_statement"),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- T005: is_branch_node tests ---
 
     #[test]
     fn from_cyclomatic_classification() {
@@ -216,5 +267,42 @@ mod tests {
         let thresholds = ComplexityThresholds::default();
         entry.overall_severity = entry.compute_overall_severity(&thresholds);
         assert_eq!(entry.overall_severity, Severity::Yellow);
+    }
+
+    // --- T005: is_branch_node tests ---
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn is_branch_node_rust() {
+        assert!(is_branch_node(Language::Rust, "if_expression"));
+        assert!(is_branch_node(Language::Rust, "match_expression"));
+        assert!(is_branch_node(Language::Rust, "for_expression"));
+        assert!(is_branch_node(Language::Rust, "while_expression"));
+        assert!(is_branch_node(Language::Rust, "loop_expression"));
+    }
+
+    #[cfg(feature = "lang-python")]
+    #[test]
+    fn is_branch_node_python() {
+        assert!(is_branch_node(Language::Python, "if_statement"));
+        assert!(is_branch_node(Language::Python, "for_statement"));
+        assert!(is_branch_node(Language::Python, "while_statement"));
+    }
+
+    #[cfg(feature = "lang-typescript")]
+    #[test]
+    fn is_branch_node_typescript() {
+        assert!(is_branch_node(Language::TypeScript, "if_statement"));
+        assert!(is_branch_node(Language::TypeScript, "for_statement"));
+        assert!(is_branch_node(Language::TypeScript, "while_statement"));
+        assert!(is_branch_node(Language::TypeScript, "switch_case"));
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn is_branch_node_non_branch_returns_false() {
+        assert!(!is_branch_node(Language::Rust, "identifier"));
+        assert!(!is_branch_node(Language::Rust, "string_literal"));
+        assert!(!is_branch_node(Language::Rust, "totally_made_up_node"));
     }
 }
