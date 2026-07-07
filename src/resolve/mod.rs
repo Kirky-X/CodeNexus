@@ -75,7 +75,16 @@ pub fn build_symbol_table(results: &[ExtractResult], project: &str) -> ProjectSy
         for node in &result.nodes {
             let entity_name = &node.name;
             let language = node.language.unwrap_or(result.language);
-            let fqn = FqnGenerator::generate(project, &result.file_path, entity_name, language, None);
+            // Use the parser-generated qualified_name (includes disambiguator
+            // like #tests) so symbol table FQNs match node IDs in the graph.
+            // Falling back to FqnGenerator with None would drop the
+            // disambiguator, causing edge source/target mismatch and
+            // breaking delete_file_nodes_batch edge cleanup (ADR-014).
+            let fqn = if node.qualified_name.is_empty() {
+                FqnGenerator::generate(project, &result.file_path, entity_name, language, None)
+            } else {
+                node.qualified_name.clone()
+            };
             let entry = SymbolEntry::new(
                 entity_name.clone(),
                 fqn,
@@ -154,7 +163,28 @@ mod tests {
     use crate::ir::{CallInfo, ImportInfo};
 
     fn make_node(name: &str, label: NodeLabel, language: Language) -> Node {
-        Node::builder(label, name, "placeholder")
+        // qualified_name left empty so build_symbol_table falls back to
+        // FqnGenerator::generate (matching pre-fix behaviour for these
+        // legacy tests). Tests that need a disambiguator use make_node_with_fqn.
+        let mut node = Node::builder(label, name, String::new())
+            .language(language)
+            .build();
+        node.qualified_name.clear();
+        node
+    }
+
+    /// Creates a node with a proper FQN as qualified_name (matching what
+    /// the parser would set), so build_symbol_table uses it directly.
+    fn make_node_with_fqn(
+        name: &str,
+        label: NodeLabel,
+        language: Language,
+        file_path: &str,
+        project: &str,
+        disambiguator: Option<&str>,
+    ) -> Node {
+        let qn = FqnGenerator::generate(project, file_path, name, language, disambiguator);
+        Node::builder(label, name, qn)
             .language(language)
             .build()
     }
@@ -452,18 +482,18 @@ mod tests {
 
     #[test]
     fn resolve_all_combines_calls_and_dataflows() {
-        let foo_node = Node::builder(NodeLabel::Function, "foo", "qn")
-            .language(Language::Rust)
-            .file_path("a.rs")
-            .is_exported(true)
-            .build();
-        let bar_node = Node::builder(NodeLabel::Function, "bar", "qn")
-            .language(Language::Rust)
-            .file_path("a.rs")
-            .is_exported(true)
-            .build();
         let foo_qn = FqnGenerator::generate("proj", "a.rs", "foo", Language::Rust, None);
         let bar_qn = FqnGenerator::generate("proj", "a.rs", "bar", Language::Rust, None);
+        let foo_node = Node::builder(NodeLabel::Function, "foo", foo_qn.clone())
+            .language(Language::Rust)
+            .file_path("a.rs")
+            .is_exported(true)
+            .build();
+        let bar_node = Node::builder(NodeLabel::Function, "bar", bar_qn.clone())
+            .language(Language::Rust)
+            .file_path("a.rs")
+            .is_exported(true)
+            .build();
 
         let mut result = ExtractResult::new("a.rs", Language::Rust);
         result.nodes = vec![foo_node, bar_node];
@@ -531,12 +561,12 @@ mod tests {
 
     #[test]
     fn resolve_all_adds_edges_to_graph() {
-        let foo_node = Node::builder(NodeLabel::Function, "foo", "qn")
+        let foo_qn = FqnGenerator::generate("proj", "a.rs", "foo", Language::Rust, None);
+        let foo_node = Node::builder(NodeLabel::Function, "foo", foo_qn.clone())
             .language(Language::Rust)
             .file_path("a.rs")
             .is_exported(true)
             .build();
-        let foo_qn = FqnGenerator::generate("proj", "a.rs", "foo", Language::Rust, None);
 
         let mut result = ExtractResult::new("a.rs", Language::Rust);
         result.nodes = vec![foo_node];
@@ -566,5 +596,61 @@ mod tests {
         assert_eq!(graph.edge_count(), 1);
         let neighbors = graph.neighbors(&foo_qn, Some(crate::model::EdgeType::Calls));
         assert_eq!(neighbors.len(), 1);
+    }
+
+    // --- Bug 1: build_symbol_table must use node.qualified_name (with
+    // disambiguator) so symbol table FQNs match node IDs in the graph. ---
+
+    #[test]
+    fn build_symbol_table_uses_qualified_name_with_disambiguator() {
+        // A function inside `mod tests` gets a #tests disambiguator in its
+        // qualified_name (set by the parser). build_symbol_table must use
+        // that qualified_name, not regenerate without the disambiguator.
+        let node = make_node_with_fqn(
+            "my_test",
+            NodeLabel::Function,
+            Language::Rust,
+            "src/lib.rs",
+            "proj",
+            Some("tests"),
+        );
+        // The qualified_name should include #tests.
+        assert_eq!(
+            node.qualified_name,
+            "proj.src.lib.rs.my_test#tests",
+            "test setup: qualified_name must include disambiguator"
+        );
+
+        let result = make_result("src/lib.rs", Language::Rust, vec![node]);
+        let table = build_symbol_table(&[result], "proj");
+        let entry = table.lookup_exact("my_test").unwrap();
+        // The symbol table FQN must match the node's qualified_name.
+        assert_eq!(
+            entry.qn,
+            "proj.src.lib.rs.my_test#tests",
+            "symbol table FQN must include disambiguator (matches node ID)"
+        );
+    }
+
+    #[test]
+    fn build_symbol_table_qualified_name_matches_node_id_for_deletion() {
+        // Regression: when a node has a disambiguator, the symbol table FQN
+        // must match the node ID so delete_file_nodes_batch can find edges.
+        let node = make_node_with_fqn(
+            "helper",
+            NodeLabel::Function,
+            Language::Rust,
+            "src/util.rs",
+            "proj",
+            Some("impl"),
+        );
+        let expected_id = node.qualified_name.clone();
+        let result = make_result("src/util.rs", Language::Rust, vec![node]);
+        let table = build_symbol_table(&[result], "proj");
+        let entry = table.lookup_exact("helper").unwrap();
+        assert_eq!(
+            entry.qn, expected_id,
+            "FQN must match node ID for edge cleanup to work"
+        );
     }
 }

@@ -357,7 +357,22 @@ impl<'a> DataFlowResolver<'a> {
         if let Some(entry) = self.symbol_table.lookup_in_file(file, name).first() {
             return entry.qn.clone();
         }
-        if let Some(entry) = self.symbol_table.lookup(name).first() {
+        // Cross-file lookup: only match exported/global symbols. Local
+        // variables (Variable, Parameter) in other files must NOT match,
+        // otherwise common names like "dir", "x", "y" create spurious
+        // cross-file READS/WRITES edges.
+        if let Some(entry) = self
+            .symbol_table
+            .lookup_exported(name)
+            .into_iter()
+            .next()
+            .or_else(|| {
+                self.symbol_table
+                    .lookup(name)
+                    .into_iter()
+                    .find(|e| matches!(e.label, NodeLabel::GlobalVar | NodeLabel::Static | NodeLabel::Const))
+            })
+        {
             return entry.qn.clone();
         }
         // Fallback: use FqnGenerator so the ID matches node-table conventions
@@ -568,9 +583,9 @@ mod tests {
 
     #[test]
     fn resolve_var_identifier_finds_variable_via_global_lookup() {
-        // Variable x defined in file B, used in file A → lookup_in_file fails,
-        // global lookup (line 360-361) finds x from B.
-        let x_node = make_node("x", "b.rs", "proj", NodeLabel::Variable);
+        // GlobalVar x defined in file B, used in file A → lookup_in_file fails,
+        // cross-file lookup matches GlobalVar/Static/Const labels (ADR-014).
+        let x_node = make_node("x", "b.rs", "proj", NodeLabel::GlobalVar);
         let results = vec![
             make_result("a.rs", vec![]),
             make_result("b.rs", vec![x_node]),
@@ -1202,5 +1217,84 @@ mod tests {
 
         assert_eq!(edges.len(), 1, "only the DataFlows edge should be present");
         assert!(edges.iter().all(|e| e.edge_type == EdgeType::DataFlows));
+    }
+
+    // --- Bug 2: resolve_var_identifier must NOT match local variables
+    // across files. Common names like "dir", "x" in different files should
+    // not create spurious cross-file READS edges. ---
+
+    #[test]
+    fn resolve_reads_does_not_match_local_var_across_files() {
+        // File a.rs: function foo reads local variable "dir"
+        // File b.rs: has a local Variable node named "dir"
+        // The READS edge should target a.rs.dir (fallback), NOT b.rs.dir.
+        let foo_node = make_node("foo", "a.rs", "proj", NodeLabel::Function);
+        let dir_in_b = make_node("dir", "b.rs", "proj", NodeLabel::Variable);
+
+        let mut result_a = make_result("a.rs", vec![foo_node]);
+        result_a.reads.push(ReadInfo {
+            reader_qn: Some("foo".to_string()),
+            var_name: "dir".to_string(),
+            line: 5,
+        });
+        let result_b = make_result("b.rs", vec![dir_in_b]);
+
+        let results = vec![result_a, result_b];
+        let table = build_symbol_table(&results, "proj");
+        let mut graph = Graph::new();
+
+        let resolver = DataFlowResolver::new(&table, "proj");
+        let edges = resolver.resolve_reads(&results, &mut graph);
+
+        assert_eq!(edges.len(), 1, "should create 1 READS edge");
+        let edge = &edges[0];
+        // Target must be in a.rs (same file as reader), not b.rs.
+        assert!(
+            edge.target.starts_with("proj.a.rs."),
+            "READS target must be same-file fallback (proj.a.rs.dir), got: {}",
+            edge.target
+        );
+        assert!(
+            !edge.target.contains("b.rs"),
+            "READS must not cross-file match local variable: got {}",
+            edge.target
+        );
+    }
+
+    #[test]
+    fn resolve_reads_matches_exported_var_across_files() {
+        // File a.rs: function foo reads variable "CONFIG"
+        // File b.rs: has an exported Const node named "CONFIG"
+        // The READS edge SHOULD target b.rs.CONFIG (legitimate cross-file).
+        let foo_node = make_node("foo", "a.rs", "proj", NodeLabel::Function);
+        let config_node = Node::builder(NodeLabel::Const, "CONFIG", "proj.b.rs.CONFIG")
+            .file_path("b.rs")
+            .project("proj")
+            .language(Language::Rust)
+            .is_exported(true)
+            .build();
+
+        let mut result_a = make_result("a.rs", vec![foo_node]);
+        result_a.reads.push(ReadInfo {
+            reader_qn: Some("foo".to_string()),
+            var_name: "CONFIG".to_string(),
+            line: 5,
+        });
+        let result_b = make_result("b.rs", vec![config_node]);
+
+        let results = vec![result_a, result_b];
+        let table = build_symbol_table(&results, "proj");
+        let mut graph = Graph::new();
+
+        let resolver = DataFlowResolver::new(&table, "proj");
+        let edges = resolver.resolve_reads(&results, &mut graph);
+
+        assert_eq!(edges.len(), 1, "should create 1 READS edge");
+        let edge = &edges[0];
+        // Target should be the exported const in b.rs.
+        assert_eq!(
+            edge.target, "proj.b.rs.CONFIG",
+            "READS should match exported const across files"
+        );
     }
 }
