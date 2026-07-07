@@ -302,4 +302,28 @@ mod tests {
             .expect("require::<IndexerKey>");
         assert!(Arc::ptr_eq(&indexer, &required));
     }
+
+    /// `IndexerModuleBuilder::default()` is equivalent to `new()` — both
+    /// produce a builder with no config set, so `build()` must fail.
+    #[test]
+    fn builder_default_is_equivalent_to_new() {
+        let result = IndexerModuleBuilder::default().build();
+        assert!(result.is_err(), "default builder has no config, should fail");
+    }
+
+    /// `index_incremental` on an empty directory returns zero files indexed,
+    /// mirroring the behaviour of `index` (Task 2.7 incremental path).
+    #[test]
+    fn capability_index_incremental_empty_dir_returns_zero_files() {
+        let cap = IndexerModuleBuilder::new()
+            .config(IndexConfig::in_memory())
+            .build()
+            .expect("build");
+        let tmp = TempDir::new().unwrap();
+        let result = cap
+            .index_incremental(tmp.path(), "empty", false)
+            .expect("index_incremental on empty dir");
+        assert_eq!(result.files_indexed, 0, "empty dir → 0 files indexed");
+        assert_eq!(result.files_skipped, 0);
+    }
 }

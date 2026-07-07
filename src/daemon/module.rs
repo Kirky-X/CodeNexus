@@ -302,4 +302,12 @@ mod tests {
         assert_eq!(cfg.db_path, PathBuf::from("/tmp/db.lbug"));
         assert_eq!(cfg.debounce_ms, DEFAULT_DEBOUNCE_MS);
     }
+
+    /// `DaemonModuleBuilder::default()` is equivalent to `new()` — both
+    /// produce a builder with no config set, so `build()` must fail.
+    #[test]
+    fn builder_default_is_equivalent_to_new() {
+        let result = DaemonModuleBuilder::default().build();
+        assert!(result.is_err(), "default builder has no config, should fail");
+    }
 }

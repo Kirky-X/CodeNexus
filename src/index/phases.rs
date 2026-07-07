@@ -748,4 +748,22 @@ mod tests {
             }
         }
     }
+
+    // --- phase_err helper ---
+
+    #[test]
+    fn phase_err_wraps_index_error_as_execution_failed() {
+        let err = IndexError::PathNotFound("/no/such/dir".to_string());
+        let phase = phase_err("scan", err);
+        match phase {
+            PhaseError::ExecutionFailed { phase, inner } => {
+                assert_eq!(phase, "scan");
+                assert!(
+                    inner.to_string().contains("/no/such/dir"),
+                    "inner error should carry original message: {inner}"
+                );
+            }
+            other => panic!("expected ExecutionFailed, got {other:?}"),
+        }
+    }
 }
