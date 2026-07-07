@@ -695,4 +695,166 @@ mod tests {
             "LOG-002: file_parsed should NOT be emitted on parse failure, got: {captured:?}"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // parallel_parse_ram_first (H15/D9): LZ4-compressed in-memory parsing
+    // -----------------------------------------------------------------------
+
+    /// Helper: LZ4-compress a source string with the size prefix that
+    /// `decompress_size_prepended` expects (4-byte LE original size + raw
+    /// LZ4 block). `lz4_flex` 0.11 does not expose `compress_prepared`
+    /// directly, so we assemble the frame manually.
+    fn compress_source(source: &str) -> Vec<u8> {
+        let compressed = lz4_flex::compress(source.as_bytes());
+        let mut result = (source.len() as u32).to_le_bytes().to_vec();
+        result.extend(compressed);
+        result
+    }
+
+    #[test]
+    fn ram_first_parses_from_compressed_buffer() {
+        // Happy path: file is in the compressed map, decompress + parse.
+        let dir = tempfile::tempdir().unwrap();
+        let source = "fn foo() {}\nfn bar() {}\n";
+        let file = make_file(dir.path(), "a.rs", source, Some(Language::Rust));
+
+        let mut compressed = RamFirstSources::new();
+        compressed.insert(file.path.clone(), compress_source(source));
+
+        let result = parallel_parse_ram_first(&[file], &compressed, "proj");
+        assert_eq!(result.files_parsed, 1, "got errors: {:?}", result.errors);
+        assert_eq!(result.files_failed, 0);
+        assert_eq!(result.results.len(), 1);
+        let names: Vec<&str> =
+            result.results[0].nodes.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"foo"), "should extract foo: {names:?}");
+        assert!(names.contains(&"bar"), "should extract bar: {names:?}");
+    }
+
+    #[test]
+    fn ram_first_falls_back_to_disk_when_not_in_map() {
+        // File not in compressed map → fallback to disk read (still succeeds).
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_file(dir.path(), "a.rs", "fn foo() {}", Some(Language::Rust));
+
+        let compressed = RamFirstSources::new();
+        let result = parallel_parse_ram_first(&[file], &compressed, "proj");
+        assert_eq!(result.files_parsed, 1, "got errors: {:?}", result.errors);
+        assert_eq!(result.files_failed, 0);
+        assert_eq!(result.results.len(), 1);
+    }
+
+    #[test]
+    fn ram_first_lz4_decompress_failure_is_collected() {
+        // Corrupted LZ4 bytes → decompress fails → error collected, batch continues.
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_file(dir.path(), "a.rs", "fn foo() {}", Some(Language::Rust));
+
+        let mut compressed = RamFirstSources::new();
+        compressed.insert(file.path.clone(), vec![0xFF; 8]);
+
+        let result = parallel_parse_ram_first(&[file], &compressed, "proj");
+        assert_eq!(result.files_parsed, 0);
+        assert_eq!(result.files_failed, 1);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].0, "a.rs");
+        assert!(
+            result.errors[0].1.contains("LZ4 decompress failed"),
+            "got: {}",
+            result.errors[0].1
+        );
+    }
+
+    #[test]
+    fn ram_first_utf8_decode_failure_is_collected() {
+        // Valid LZ4 but invalid UTF-8 → UTF-8 decode fails → error collected.
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_file(dir.path(), "a.rs", "fn foo() {}", Some(Language::Rust));
+
+        let invalid_utf8: Vec<u8> = vec![0xFF, 0xFE, 0xFD, 0x80];
+        let mut compressed = RamFirstSources::new();
+        let mut prepared = (invalid_utf8.len() as u32).to_le_bytes().to_vec();
+        prepared.extend(lz4_flex::compress(&invalid_utf8));
+        compressed.insert(file.path.clone(), prepared);
+
+        let result = parallel_parse_ram_first(&[file], &compressed, "proj");
+        assert_eq!(result.files_parsed, 0);
+        assert_eq!(result.files_failed, 1);
+        assert!(
+            result.errors[0].1.contains("UTF-8 decode failed"),
+            "got: {}",
+            result.errors[0].1
+        );
+    }
+
+    #[test]
+    fn ram_first_unknown_language_is_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_file(dir.path(), "a.rs", "fn foo() {}", None);
+
+        let compressed = RamFirstSources::new();
+        let result = parallel_parse_ram_first(&[file], &compressed, "proj");
+        assert_eq!(result.files_parsed, 0);
+        assert_eq!(result.files_failed, 1);
+        assert!(result.errors[0].1.contains("unknown language"));
+    }
+
+    #[test]
+    fn ram_first_mixed_success_fallback_and_failure() {
+        // One file in map (success), one not in map (fallback disk read),
+        // one with corrupted LZ4 (failure). Verify all three paths in one batch.
+        let dir = tempfile::tempdir().unwrap();
+        let src_a = "fn a() {}";
+        let file_a = make_file(dir.path(), "a.rs", src_a, Some(Language::Rust));
+        let file_b = make_file(dir.path(), "b.rs", "fn b() {}", Some(Language::Rust));
+        let file_c = make_file(dir.path(), "c.rs", "fn c() {}", Some(Language::Rust));
+
+        let mut compressed = RamFirstSources::new();
+        compressed.insert(file_a.path.clone(), compress_source(src_a));
+        // file_b intentionally NOT in map → disk fallback
+        compressed.insert(file_c.path.clone(), vec![0xFF; 4]); // corrupt LZ4
+
+        let files = vec![file_a, file_b, file_c];
+        let result = parallel_parse_ram_first(&files, &compressed, "proj");
+        assert_eq!(result.files_parsed, 2, "a + b should parse; got: {:?}", result.errors);
+        assert_eq!(result.files_failed, 1);
+        assert_eq!(result.results.len(), 2);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].0, "c.rs");
+    }
+
+    #[test]
+    fn ram_first_empty_file_list_returns_empty() {
+        let compressed = RamFirstSources::new();
+        let result = parallel_parse_ram_first(&[], &compressed, "proj");
+        assert_eq!(result.files_parsed, 0);
+        assert_eq!(result.files_failed, 0);
+        assert!(result.results.is_empty());
+        assert!(result.errors.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_single: IO error for missing file
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_single_io_error_for_missing_file() {
+        let file = FileInfo {
+            path: std::path::PathBuf::from("/nonexistent/path/missing.rs"),
+            relative_path: "missing.rs".to_string(),
+            language: Some(Language::Rust),
+            size: 0,
+        };
+        let result = parse_single(&file, "proj");
+        assert!(result.is_err(), "expected error for missing file, got: {result:?}");
+        match result.unwrap_err() {
+            ParseError::Io { file_path, .. } => {
+                assert!(
+                    file_path.contains("missing.rs"),
+                    "error should carry file path, got: {file_path}"
+                );
+            }
+            other => panic!("expected ParseError::Io, got: {other:?}"),
+        }
+    }
 }

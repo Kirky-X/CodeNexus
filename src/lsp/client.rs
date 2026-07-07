@@ -609,30 +609,32 @@ mod tests {
     }
 
     #[test]
-    fn extract_first_location_from_link_uses_target_location() {
+    fn extract_first_location_from_link_uses_target_uri_and_range() {
+        // GotoDefinitionResponse::Link carries LocationLink { target_uri,
+        // target_range, ... } — extract_first_location reassembles a
+        // Location from those fields so callers see a uniform shape across
+        // all three response variants.
         let target_uri = Url::parse("file:///tmp/target.rs").unwrap();
-        let target_loc = lsp_types::Location {
-            uri: target_uri.clone(),
-            range: lsp_types::Range {
-                start: Position { line: 10, character: 2 },
-                end: Position { line: 10, character: 8 },
-            },
+        let target_range = lsp_types::Range {
+            start: Position { line: 10, character: 2 },
+            end: Position { line: 10, character: 8 },
         };
         let link = lsp_types::LocationLink {
             origin_selection_range: None,
             target_uri: target_uri.clone(),
-            target_range: target_loc.range,
-            target_selection_range: target_loc.range,
+            target_range,
+            target_selection_range: target_range,
         };
-        // GotoDefinitionResponse::Link carries the raw fields; reconstruct
-        // the Location from target_uri + target_range (matches our extraction
-        // logic).
-        let _ = link;
-        // We can't easily construct GotoDefinitionResponse::Link without
-        // re-implementing the variant's exact shape — skip and rely on the
-        // Scalar/Array tests for coverage. The Link branch is one line of
-        // code (`link.target_location`) and is exercised by the ignored
-        // rust-analyzer integration test below.
+        let resp = Some(GotoDefinitionResponse::Link(vec![link]));
+        let result = extract_first_location(resp).expect("Link should yield a Location");
+        assert_eq!(result.uri, target_uri);
+        assert_eq!(result.range, target_range);
+    }
+
+    #[test]
+    fn extract_first_location_from_empty_link_returns_none() {
+        let resp = Some(GotoDefinitionResponse::Link(vec![]));
+        assert_eq!(extract_first_location(resp), None);
     }
 
     #[test]
@@ -649,6 +651,78 @@ mod tests {
         let result = path_to_url(Path::new("/tmp/lib.rs"));
         assert!(result.is_ok(), "absolute path should be accepted: {result:?}");
         assert_eq!(result.unwrap().as_str(), "file:///tmp/lib.rs");
+    }
+
+    // --- decode_response: server error, null result, type mismatch ---
+
+    #[test]
+    fn decode_response_returns_communication_error_when_server_reports_error() {
+        let resp = Response {
+            id: RequestId::from(1),
+            result: None,
+            error: Some(lsp_server::ResponseError {
+                code: -32603,
+                message: "internal error".to_string(),
+                data: None,
+            }),
+        };
+        let result: Result<lsp_types::InitializeResult, _> = decode_response::<Initialize>(resp);
+        match result {
+            Err(LspError::Communication(msg)) => {
+                assert!(msg.contains("server error"), "got: {msg}");
+                assert!(msg.contains("-32603"), "got: {msg}");
+                assert!(msg.contains("internal error"), "got: {msg}");
+            }
+            other => panic!("expected LspError::Communication, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_response_decodes_absent_result_as_none_for_option_types() {
+        // HoverRequest::Result = Option<Hover>; an absent result field should
+        // decode to None (serde_json::Value::Null → None for Option<T>).
+        let resp = Response {
+            id: RequestId::from(1),
+            result: None,
+            error: None,
+        };
+        let result: Result<Option<lsp_types::Hover>, _> = decode_response::<HoverRequest>(resp);
+        assert!(result.is_ok(), "got: {:?}", result.err());
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn decode_response_returns_error_when_result_does_not_match_type() {
+        // Provide a result that cannot deserialize as InitializeResult (a struct).
+        let resp = Response {
+            id: RequestId::from(1),
+            result: Some(serde_json::Value::String("not a struct".into())),
+            error: None,
+        };
+        let result: Result<lsp_types::InitializeResult, _> = decode_response::<Initialize>(resp);
+        assert!(
+            matches!(result, Err(LspError::Communication(_))),
+            "expected Communication error, got: {result:?}"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("decode response"), "got: {msg}");
+    }
+
+    // --- send_notification: channel disconnect ---
+
+    #[test]
+    fn send_notification_returns_error_when_channel_disconnected() {
+        // Drop the receiver so the sender's send() fails with a Disconnected
+        // error, which send_notification must surface as LspError::Communication.
+        let (sender, receiver) = bounded::<Message>(1);
+        drop(receiver);
+        let (_dummy_tx, dummy_rx) = bounded::<Message>(1);
+        let conn = Connection { sender, receiver: dummy_rx };
+        let result = send_notification(&conn, "some/method", &serde_json::Value::Null);
+        assert!(
+            matches!(result, Err(LspError::Communication(_))),
+            "expected Communication error, got: {result:?}"
+        );
     }
 
     // --- Happy-path integration tests (require real rust-analyzer on PATH) ---

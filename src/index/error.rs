@@ -101,9 +101,9 @@ impl From<crate::storage::error::StorageError> for IndexError {
 /// impl downcasts it back so the CLI produces the correct exit code.
 /// Non-`IndexError` failures (infrastructure errors like cycles, missing deps)
 /// fall back to [`IndexError::Storage`].
-impl From<super::pipeline_dag::PhaseError> for IndexError {
-    fn from(e: super::pipeline_dag::PhaseError) -> Self {
-        use super::pipeline_dag::PhaseError;
+impl From<crate::index::pipeline_dag::PhaseError> for IndexError {
+    fn from(e: crate::index::pipeline_dag::PhaseError) -> Self {
+        use crate::index::pipeline_dag::PhaseError;
         match e {
             PhaseError::ExecutionFailed { inner, .. } => match inner.downcast::<IndexError>() {
                 Ok(boxed) => *boxed,
@@ -260,5 +260,66 @@ mod tests {
     fn error_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<IndexError>();
+    }
+
+    // --- From<StorageError::Corrupt> maps to DatabaseCorrupt (exit code 4) ---
+
+    #[test]
+    fn from_storage_corrupt_maps_to_database_corrupt() {
+        // StorageError::Corrupt must be mapped to IndexError::DatabaseCorrupt
+        // (exit code 4) rather than IndexError::Storage (exit code 2) so the
+        // CLI produces the correct exit code for corrupt databases.
+        let err: IndexError = StorageError::Corrupt("schema mismatch".to_string()).into();
+        assert!(matches!(err, IndexError::DatabaseCorrupt(_)));
+        let msg = err.to_string();
+        assert!(msg.contains("database corrupt"), "got: {msg}");
+        assert!(msg.contains("schema mismatch"), "got: {msg}");
+        assert_eq!(err.exit_code(), 4);
+    }
+
+    // --- From<PhaseError> conversions ---
+
+    #[test]
+    fn from_phase_error_execution_failed_with_index_error_preserves_variant() {
+        // When a phase boxes an IndexError, the From impl downcasts it back
+        // so the CLI produces the correct exit code for the original variant
+        // (Rule 12: fail loud, preserve the original error type).
+        let original = IndexError::Parse("syntax error".to_string());
+        let phase_err: crate::index::pipeline_dag::PhaseError =
+            crate::index::pipeline_dag::PhaseError::ExecutionFailed {
+                phase: "parse",
+                inner: Box::new(original),
+            };
+        let err: IndexError = phase_err.into();
+        assert!(matches!(err, IndexError::Parse(_)));
+        assert_eq!(err.exit_code(), 0, "Parse variant should keep exit code 0");
+    }
+
+    #[test]
+    fn from_phase_error_execution_failed_with_non_index_error_maps_to_storage() {
+        // Non-IndexError failures (e.g. io::Error) fall back to Storage(Query).
+        let phase_err: crate::index::pipeline_dag::PhaseError =
+            crate::index::pipeline_dag::PhaseError::ExecutionFailed {
+                phase: "scan",
+                inner: Box::new(std::io::Error::other("infra failure")),
+            };
+        let err: IndexError = phase_err.into();
+        assert!(matches!(err, IndexError::Storage(_)));
+        let msg = err.to_string();
+        assert!(msg.contains("infra failure"), "got: {msg}");
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn from_phase_error_non_execution_failed_maps_to_storage() {
+        // Infrastructure errors (Cycle, MissingDependency, etc.) map to
+        // Storage(Query) so the CLI exits with a non-zero code.
+        let phase_err: crate::index::pipeline_dag::PhaseError =
+            crate::index::pipeline_dag::PhaseError::Cycle("a, b".to_string());
+        let err: IndexError = phase_err.into();
+        assert!(matches!(err, IndexError::Storage(_)));
+        let msg = err.to_string();
+        assert!(msg.contains("cycle"), "got: {msg}");
+        assert_eq!(err.exit_code(), 2);
     }
 }
