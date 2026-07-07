@@ -469,7 +469,9 @@ pub(crate) fn now_unix_seconds() -> i64 {
 // and a `&mut [Node]` slice so the graceful-degradation contract (R-lsp-004:
 // "LSP server 启动失败时，索引不中断" / "LSP 查询超时时，跳过该符号的语义
 // 增强，不中断索引") can be unit-tested without spawning a real rust-analyzer
-// subprocess. The CLI handler delegates the per-symbol hover logic here.
+// subprocess. The CLI handler has its own DB-backed implementation; this pure
+// function exists solely for unit-testing the graceful-degradation contract
+// with a mock provider.
 
 /// LSP-driven `semantic_type` enhancement for in-memory nodes (R-lsp-004).
 ///
@@ -495,7 +497,7 @@ pub(crate) fn now_unix_seconds() -> i64 {
 /// * `nodes` - The nodes to enhance **in place**. Non-`Function`/`Method`
 ///   nodes and non-`.rs` files are left untouched.
 /// * `workspace` - The workspace root passed to `provider.start()` (used by
-///   rust-analyzer as `rootUri`).
+///   rust-analyzer as `workspaceFolders[0].uri`).
 #[cfg(all(test, feature = "lsp"))]
 pub(crate) fn enhance_with_lsp(
     provider: &dyn crate::lsp::LspProvider,

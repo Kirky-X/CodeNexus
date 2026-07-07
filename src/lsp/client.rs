@@ -139,7 +139,8 @@ impl LspProvider for RustAnalyzerClient {
             next_request_id: 1,
         };
 
-        // 3. Send `initialize` with `rootUri = workspace`.
+        // 3. Send `initialize` with `workspace_folders` (lsp-types 0.95:
+        // root_uri is deprecated).
         let root_uri = path_to_url(workspace)?;
         let init_params = InitializeParams {
             process_id: Some(std::process::id()),
