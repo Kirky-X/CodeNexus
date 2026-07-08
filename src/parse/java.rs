@@ -189,7 +189,7 @@ fn extract_class(
         result,
     );
     let signature = node_text(node, source).map(signature_first_line).map(String::from);
-    let mut builder = ModelNode::builder(label, name, qn)
+    let mut builder = ModelNode::builder(label, name, qn.clone())
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
@@ -202,6 +202,96 @@ fn extract_class(
     let model_node = builder.build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.push_node(model_node);
+
+    extract_heritage(node, source, ctx, &qn, result);
+}
+
+/// Extracts EXTENDS and IMPLEMENTS edges from a class/interface declaration.
+///
+/// tree-sitter-java exposes heritage differently for classes vs interfaces:
+/// - `class_declaration` fields: `superclass` (extends), `interfaces` (implements)
+/// - `interface_declaration`: `extends_interfaces` is a named **child**, not a
+///   field (per node-types.json), so it must be found by iterating named children.
+///
+/// Target FQNs are best-effort (same-file scope); cross-file resolution is
+/// deferred to the type resolver.
+fn extract_heritage(
+    node: Node,
+    source: &str,
+    ctx: &VisitContext<'_>,
+    class_qn: &str,
+    result: &mut ExtractResult,
+) {
+    // EXTENDS: class `extends Bar` (field `superclass`)
+    if let Some(superclass) = node.child_by_field_name("superclass") {
+        for_each_type_name(superclass, source, &mut |parent_name| {
+            let parent_qn = make_qn(ctx.file_path, &parent_name, ctx.project, None);
+            result.edges.push(Edge::new(
+                class_qn.to_string(),
+                parent_qn,
+                EdgeType::Extends,
+                ctx.project,
+            ));
+        });
+    }
+
+    // IMPLEMENTS: class `implements Runnable` (field `interfaces`)
+    if let Some(interfaces) = node.child_by_field_name("interfaces") {
+        for_each_type_name(interfaces, source, &mut |iface_name| {
+            let iface_qn = make_qn(ctx.file_path, &iface_name, ctx.project, None);
+            result.edges.push(Edge::new(
+                class_qn.to_string(),
+                iface_qn,
+                EdgeType::Implements,
+                ctx.project,
+            ));
+        });
+    }
+
+    // EXTENDS: interface `extends Bar, Baz`. `extends_interfaces` is a named
+    // child of `interface_declaration` (not a field), so scan named children.
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(child) = node.named_child(i) {
+            if child.kind() == "extends_interfaces" {
+                for_each_type_name(child, source, &mut |parent_name| {
+                    let parent_qn = make_qn(ctx.file_path, &parent_name, ctx.project, None);
+                    result.edges.push(Edge::new(
+                        class_qn.to_string(),
+                        parent_qn,
+                        EdgeType::Extends,
+                        ctx.project,
+                    ));
+                });
+            }
+        }
+    }
+}
+
+/// Recursively walks wrapper nodes (`superclass`, `super_interfaces`,
+/// `extends_interfaces`, `type_list`) and invokes `f` for each concrete type
+/// name found (`type_identifier`, `scoped_type_identifier`, `generic_type`).
+fn for_each_type_name<F: FnMut(String)>(node: Node, source: &str, f: &mut F) {
+    match node.kind() {
+        "type_identifier" | "identifier" | "scoped_type_identifier" => {
+            if let Some(text) = node_text(node, source) {
+                f(text.to_string());
+            }
+        }
+        "generic_type" => {
+            // `List<String>` — extract the raw type name (first child).
+            if let Some(child) = node.named_child(0) {
+                for_each_type_name(child, source, f);
+            }
+        }
+        "superclass" | "super_interfaces" | "extends_interfaces" | "type_list" => {
+            for i in 0..node.named_child_count() as u32 {
+                if let Some(child) = node.named_child(i) {
+                    for_each_type_name(child, source, f);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn extract_method(
@@ -608,5 +698,98 @@ mod tests {
         assert_eq!(methods.len(), 1, "should extract method bar");
         assert_eq!(classes[0].name, "Foo");
         assert_eq!(methods[0].name, "bar");
+    }
+
+    #[test]
+    fn extracts_extends_edge() {
+        let result = extract("class Foo extends Bar {}\n");
+        let extends_edges: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Extends)
+            .collect();
+        assert_eq!(
+            extends_edges.len(),
+            1,
+            "should extract 1 EXTENDS edge: {:?}",
+            result.edges
+        );
+        assert!(
+            extends_edges[0].source.contains("Foo"),
+            "source should be Foo: {}",
+            extends_edges[0].source
+        );
+        assert!(
+            extends_edges[0].target.contains("Bar"),
+            "target should be Bar: {}",
+            extends_edges[0].target
+        );
+    }
+
+    #[test]
+    fn extracts_implements_edge() {
+        let result = extract("class Foo implements Runnable {}\n");
+        let impl_edges: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Implements)
+            .collect();
+        assert_eq!(
+            impl_edges.len(),
+            1,
+            "should extract 1 IMPLEMENTS edge: {:?}",
+            result.edges
+        );
+        assert!(impl_edges[0].source.contains("Foo"));
+        assert!(impl_edges[0].target.contains("Runnable"));
+    }
+
+    #[test]
+    fn extracts_multiple_implements() {
+        let result = extract("class Foo implements A, B {}\n");
+        let impl_edges: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Implements)
+            .collect();
+        assert_eq!(
+            impl_edges.len(),
+            2,
+            "should extract 2 IMPLEMENTS edges: {:?}",
+            result.edges
+        );
+    }
+
+    #[test]
+    fn extracts_extends_and_implements() {
+        let result = extract("class Foo extends Bar implements Baz {}\n");
+        let extends_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Extends)
+            .count();
+        let impl_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Implements)
+            .count();
+        assert_eq!(extends_count, 1, "should have 1 EXTENDS");
+        assert_eq!(impl_count, 1, "should have 1 IMPLEMENTS");
+    }
+
+    #[test]
+    fn interface_extends_interface() {
+        let result = extract("interface Foo extends Bar {}\n");
+        let extends_edges: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Extends)
+            .collect();
+        assert_eq!(
+            extends_edges.len(),
+            1,
+            "interface extends should produce EXTENDS edge: {:?}",
+            result.edges
+        );
     }
 }
