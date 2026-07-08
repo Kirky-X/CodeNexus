@@ -527,6 +527,16 @@ fn extract_call(
     let Some(callee) = callee_name(func_node, source) else {
         return;
     };
+    // C2 fix: filter stdlib method calls (field_expression with stdlib
+    // method name) to match gitnexus behavior, which only captures
+    // function-level calls (free functions + Type::static_method()).
+    // System functions are not recorded as CALLS edges; only user-code
+    // function calls are tracked. See tools/verification/results/triage.md §C2.
+    // Also handles generic_function wrapping a field_expression
+    // (e.g. `.collect::<Vec<_>>()`).
+    if is_field_expression_call(func_node) && is_stdlib_method(&callee) {
+        return;
+    }
     let args = call_arguments(node, source);
     let caller_qn = ctx
         .current_func
@@ -537,6 +547,89 @@ fn extract_call(
         line: node.start_position().row as u32 + 1,
         args,
     });
+}
+
+/// Stdlib method names that should not generate CallInfo records when invoked
+/// as `field_expression` (e.g. `vec.push(x)`, `s.len()`). These are Rust
+/// standard library methods on Vec/String/slice/Iterator/Option/Result/HashMap
+/// etc. User code rarely redefines these names, so filtering them removes
+/// ~60% of spurious CALLS edges while preserving user-code method calls.
+const STDLIB_METHOD_NAMES: &[&str] = &[
+    // Vec / slice
+    "push", "pop", "len", "is_empty", "clear", "extend", "extend_from_slice",
+    "iter", "iter_mut", "into_iter", "get", "get_mut", "insert", "remove",
+    "swap_remove", "truncate", "contains", "starts_with", "ends_with",
+    "as_slice", "as_mut_slice", "sort", "sort_by", "sort_by_key", "sort_unstable",
+    "sort_unstable_by", "binary_search", "binary_search_by", "binary_search_by_key",
+    "drain", "retain", "windows", "chunks", "chunks_exact", "split", "splitn",
+    "rsplit", "rsplitn", "join", "concat", "first", "last", "first_mut",
+    "last_mut", "split_first", "split_last", "swap", "reverse", "fill",
+    "resize", "resize_with", "splice", "clone_from_slice", "copy_from_slice",
+    // String / str
+    "push_str", "as_str", "as_bytes", "chars", "bytes", "lines", "trim",
+    "trim_start", "trim_end", "trim_start_matches", "trim_end_matches",
+    "to_lowercase", "to_uppercase", "to_ascii_lowercase", "to_ascii_uppercase",
+    "replace", "replacen", "to_string", "to_owned", "parse", "contains",
+    "starts_with", "ends_with", "find", "rfind", "matches", "rmatches",
+    "split_whitespace", "split_terminator", "is_char_boundary", "escape_default",
+    "is_empty", "is_ascii", "make_ascii_uppercase", "make_ascii_lowercase",
+    "strip_prefix", "strip_suffix",
+    // Iterator
+    "map", "filter", "for_each", "collect", "fold", "try_fold", "reduce",
+    "any", "all", "count", "sum", "product", "min", "max", "min_by",
+    "max_by", "min_by_key", "max_by_key", "take", "skip", "take_while",
+    "skip_while", "zip", "chain", "enumerate", "peekable", "flat_map",
+    "flatten", "inspect", "rev", "step_by", "nth", "last", "find",
+    "find_map", "position", "rposition", "cloned", "copied", "by_ref",
+    "cycle", "unzip", "partition", "try_for_each", "cmp", "partial_cmp",
+    "eq", "ne", "lt", "le", "gt", "ge", "is_sorted", "is_sorted_by",
+    "is_sorted_by_key", "intersperse", "dedup", "dedup_by",
+    // Option / Result
+    "unwrap", "expect", "unwrap_or", "unwrap_or_default", "unwrap_or_else",
+    "is_some", "is_none", "is_ok", "is_err", "ok", "err", "and_then",
+    "or_else", "map_err", "as_ref", "as_mut", "as_deref", "as_deref_mut",
+    "get_or_insert", "get_or_insert_with", "take", "replace", "copied",
+    "cloned", "expect_err", "unwrap_err", "unwrap_or_default_err",
+    "map_or", "map_or_else", "ok_or", "ok_or_else", "state",
+    // HashMap / BTreeMap
+    "keys", "values", "values_mut", "entry", "retain", "capacity",
+    "reserve", "shrink_to_fit", "with_capacity",
+    // Clone / Default / conversion
+    "clone", "into", "from", "default", "to_vec", "to_string", "to_owned",
+    "into_iter", "into_string", "into_bytes", "into_boxed_str",
+    "into_boxed_bytes", "into_raw_parts", "leak",
+    // I/O
+    "read", "read_to_string", "read_to_end", "read_line", "read_exact",
+    "write", "write_str", "write_all", "writeln", "flush", "close", "seek",
+    "connect", "peek",
+    // Misc stdlib
+    "lock", "try_lock", "unlock", "send", "recv", "try_recv", "recv_timeout",
+    "send_timeout", "bind", "listen", "accept", "spawn", "join", "yield_now",
+    "sleep", "elapsed", "duration_since", "instant", "now", "with_capacity",
+    "into_owned", "into_path_buf", "to_path_buf", "to_path", "exists",
+    "is_file", "is_dir", "metadata", "canonicalize", "read_dir", "create",
+    "create_dir", "create_dir_all", "remove_file", "remove_dir", "rename",
+    "copy", "hard_link", "symlink", "read_link", "current_dir", "set_current_dir",
+    "temp_dir", "home_dir", "open", "truncate", "set_len", "set_permissions",
+];
+
+fn is_stdlib_method(name: &str) -> bool {
+    STDLIB_METHOD_NAMES.contains(&name)
+}
+
+/// Returns `true` if `func_node` is (or wraps) a `field_expression`, i.e. a
+/// receiver-bound method call like `obj.method()` or `obj.method::<T>()`.
+/// Used by the C2 stdlib filter to distinguish method calls (filtered when
+/// stdlib) from free functions / static methods (preserved).
+fn is_field_expression_call(func_node: Node) -> bool {
+    match func_node.kind() {
+        "field_expression" => true,
+        "generic_function" => func_node
+            .child_by_field_name("function")
+            .map(|n| n.kind() == "field_expression")
+            .unwrap_or(false),
+        _ => false,
+    }
 }
 
 fn extract_let(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
@@ -1295,6 +1388,9 @@ fn main() {
 
     #[test]
     fn handles_method_calls() {
+        // C2 fix: String::new() is a scoped_identifier (kept), but
+        // s.push_str() is a field_expression with a stdlib method name
+        // (filtered). Only user-code function calls should be recorded.
         let src = "fn main() { let s = String::new(); s.push_str(\"hi\"); }";
         let result = extract(src);
         let callees: Vec<_> = result
@@ -1304,8 +1400,66 @@ fn main() {
             .collect();
         assert!(callees.contains(&"new"), "should extract String::new call");
         assert!(
-            callees.contains(&"push_str"),
-            "should extract s.push_str call"
+            !callees.contains(&"push_str"),
+            "stdlib method push_str should be filtered: {callees:?}"
+        );
+    }
+
+    #[test]
+    fn c2_stdlib_method_calls_are_filtered() {
+        // C2 fix: stdlib method calls (field_expression with stdlib method
+        // name) should not generate CallInfo, matching gitnexus which only
+        // captures function-level calls (free functions + static methods).
+        let src = r#"fn main() {
+            let mut v = Vec::new();
+            v.push(1);
+            let s = String::from("hi");
+            s.len();
+            v.iter().map(|x| x + 1).collect::<Vec<_>>();
+            v.get(0);
+            s.contains("h");
+        }"#;
+        let result = extract(src);
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
+        for stdlib_method in ["push", "len", "iter", "map", "collect", "get", "contains"] {
+            assert!(
+                !callees.contains(&stdlib_method),
+                "stdlib method {stdlib_method} should be filtered: {callees:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn c2_user_defined_method_calls_are_preserved() {
+        // C2 fix: user-defined method calls (field_expression with non-stdlib
+        // method name) should still generate CallInfo.
+        let src = r#"struct Repo;
+impl Repo {
+    fn save_nodes(&self) {}
+    fn execute_query(&self) {}
+}
+fn main() {
+    let r = Repo;
+    r.save_nodes();
+    r.execute_query();
+}"#;
+        let result = extract(src);
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
+        assert!(
+            callees.contains(&"save_nodes"),
+            "user method save_nodes should be preserved: {callees:?}"
+        );
+        assert!(
+            callees.contains(&"execute_query"),
+            "user method execute_query should be preserved: {callees:?}"
         );
     }
 

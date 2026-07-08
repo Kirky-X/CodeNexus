@@ -112,6 +112,12 @@ impl<'a> CallResolver<'a> {
                 let Some(caller_qn) = &call.caller_qn else { continue; };
                 // Single-line for coverage: tarpaulin attribute continuation
                 let Some((callee_qn, confidence, tier)) = self.resolve_call_internal(caller_file, &call.callee_name, imports) else { continue; };
+                // C2 fix: filter Builder type method calls (callee_qn
+                // disambiguator ends with "Builder") to match gitnexus
+                // which doesn't capture builder pattern method calls.
+                // Builder types: NodeBuilder/EdgeBuilder/*ModuleBuilder etc.
+                // See tools/verification/results/triage.md §C2.
+                if is_builder_type_method(&callee_qn) { continue; }
                 let pair_key = (caller_qn.clone(), callee_qn.clone());
                 if !seen_pairs.insert(pair_key) { continue; }
                 // Single-line for coverage: tarpaulin attribute continuation
@@ -187,6 +193,20 @@ impl<'a> CallResolver<'a> {
 
         None
     }
+}
+
+/// Returns `true` if `callee_qn` is a method on a Builder type.
+///
+/// FQN format: `project.dir.file_full.entity_name#disambiguator`.
+/// Builder type methods have a disambiguator ending with "Builder"
+/// (e.g. `#NodeBuilder`, `#EdgeBuilder`, `#ResolverModuleBuilder`).
+/// These are filtered out to match gitnexus behavior, which doesn't
+/// capture builder pattern method calls as CALLS edges.
+fn is_builder_type_method(callee_qn: &str) -> bool {
+    callee_qn
+        .rfind('#')
+        .map(|idx| callee_qn[idx + 1..].ends_with("Builder"))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -771,5 +791,110 @@ mod tests {
         assert_eq!(qn, "proj.b.rs.bar");
         assert!((confidence - 0.80).abs() < 1e-6);
         assert_eq!(tier, ConfidenceTier::Global);
+    }
+
+    // --- C2 fix: Builder type method filtering ---
+
+    /// Creates a definition node with a disambiguator (e.g. for impl methods).
+    fn make_node_with_disambiguator(
+        name: &str,
+        file: &str,
+        project: &str,
+        label: NodeLabel,
+        disambiguator: Option<&str>,
+    ) -> Node {
+        let qn = FqnGenerator::generate(project, file, name, Language::Rust, disambiguator);
+        Node::builder(label, name, qn)
+            .file_path(file)
+            .project(project)
+            .language(Language::Rust)
+            .build()
+    }
+
+    #[test]
+    fn c2_resolve_calls_filters_builder_type_methods() {
+        // C2 fix: methods on Builder types (callee_qn disambiguator ending
+        // with "Builder") should not generate CALLS edges, matching gitnexus
+        // which doesn't capture builder pattern method calls.
+        // NodeBuilder methods: build/language/file_path/start_line etc.
+        let build_method =
+            make_node_with_disambiguator("build", "a.rs", "proj", NodeLabel::Function, Some("NodeBuilder"));
+        let language_method = make_node_with_disambiguator(
+            "language",
+            "a.rs",
+            "proj",
+            NodeLabel::Function,
+            Some("NodeBuilder"),
+        );
+        let caller_node = make_node("caller", "a.rs", "proj", NodeLabel::Function);
+        let caller_qn = fqn("proj", "a.rs", "caller", Language::Rust);
+
+        let mut result = make_result("a.rs", vec![build_method, language_method, caller_node]);
+        // caller calls NodeBuilder.build() and NodeBuilder.language()
+        result.calls.push(CallInfo {
+            caller_qn: Some(caller_qn.clone()),
+            callee_name: "build".to_string(),
+            line: 5,
+            args: vec![],
+        });
+        result.calls.push(CallInfo {
+            caller_qn: Some(caller_qn.clone()),
+            callee_name: "language".to_string(),
+            line: 6,
+            args: vec![],
+        });
+
+        let results = vec![result];
+        let table = build_symbol_table(&results, "proj");
+        let mut graph = Graph::new();
+        add_nodes_to_graph(&mut graph, &results, "proj");
+
+        let resolver = CallResolver::new(&table, "proj");
+        let edges = resolver.resolve_calls(&results, &mut graph);
+
+        // Builder type method calls should be filtered out.
+        assert!(
+            edges.is_empty(),
+            "Builder type method calls should be filtered: {edges:?}"
+        );
+        assert_eq!(graph.edge_count(), 0);
+    }
+
+    #[test]
+    fn c2_resolve_calls_preserves_non_builder_type_methods() {
+        // C2 fix: methods on non-Builder types (disambiguator NOT ending
+        // with "Builder") should still generate CALLS edges.
+        // Repo methods: save_nodes/execute_query (disambiguator = "Repo").
+        let save_method = make_node_with_disambiguator(
+            "save_nodes",
+            "a.rs",
+            "proj",
+            NodeLabel::Function,
+            Some("Repo"),
+        );
+        let caller_node = make_node("caller", "a.rs", "proj", NodeLabel::Function);
+        let caller_qn = fqn("proj", "a.rs", "caller", Language::Rust);
+        let save_qn = save_method.qualified_name.clone();
+
+        let mut result = make_result("a.rs", vec![save_method, caller_node]);
+        result.calls.push(CallInfo {
+            caller_qn: Some(caller_qn.clone()),
+            callee_name: "save_nodes".to_string(),
+            line: 5,
+            args: vec![],
+        });
+
+        let results = vec![result];
+        let table = build_symbol_table(&results, "proj");
+        let mut graph = Graph::new();
+        add_nodes_to_graph(&mut graph, &results, "proj");
+
+        let resolver = CallResolver::new(&table, "proj");
+        let edges = resolver.resolve_calls(&results, &mut graph);
+
+        // Non-Builder type method calls should be preserved.
+        assert_eq!(edges.len(), 1, "non-Builder method call should be preserved");
+        assert_eq!(edges[0].source, caller_qn);
+        assert_eq!(edges[0].target, save_qn);
     }
 }
