@@ -8,21 +8,21 @@
 // CodeRelation is a NODE table in CodeNexus, so we use WITH clause chaining
 // instead of Cartesian product (LadybugDB does not support `MATCH (a), (b)`).
 MATCH (r:CodeRelation)
-WHERE r.type = 'IMPLEMENTS'
+WHERE r.type = 'IMPLEMENTS' AND r.project = '__PID__'
 WITH r
 MATCH (n:Struct)
 WHERE n.id = r.source
 RETURN n.name AS symbol_name, n.filePath AS file_path
 UNION
 MATCH (r:CodeRelation)
-WHERE r.type = 'IMPLEMENTS'
+WHERE r.type = 'IMPLEMENTS' AND r.project = '__PID__'
 WITH r
 MATCH (n:Enum)
 WHERE n.id = r.source
 RETURN n.name AS symbol_name, n.filePath AS file_path
 UNION
 MATCH (r:CodeRelation)
-WHERE r.type = 'IMPLEMENTS'
+WHERE r.type = 'IMPLEMENTS' AND r.project = '__PID__'
 WITH r
 MATCH (n:Class)
 WHERE n.id = r.source

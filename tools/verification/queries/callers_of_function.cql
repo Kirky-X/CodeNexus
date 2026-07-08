@@ -5,7 +5,7 @@
 
 // === CODENEXUS ===
 MATCH (r:CodeRelation)
-WHERE r.type = 'CALLS'
+WHERE r.type = 'CALLS' AND r.project = '__PID__'
 WITH r
 MATCH (caller:Function)
 WHERE caller.id = r.source

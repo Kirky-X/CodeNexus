@@ -257,7 +257,7 @@ pub fn extract_stats(db_path: &Path, name: &str) -> Result<CodeNexusStats> {
 /// step failed silently or the wrong DB was opened. We must NOT silently
 /// return zero counts — that would hide the failure behind plausible-looking
 /// numbers.
-fn lookup_project_id(
+pub fn lookup_project_id(
     conn: &codenexus::storage::StorageConnection,
     name: &str,
 ) -> Result<String> {

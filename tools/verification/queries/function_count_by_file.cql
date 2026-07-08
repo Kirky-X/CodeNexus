@@ -7,6 +7,7 @@
 
 // === CODENEXUS ===
 MATCH (fn:Function)
+WHERE fn.project = '__PID__'
 RETURN fn.filePath AS symbol_name, fn.filePath AS file_path, count(fn) AS fn_count
 ORDER BY fn_count DESC
 LIMIT 200

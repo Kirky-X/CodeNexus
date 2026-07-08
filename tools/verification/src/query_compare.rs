@@ -99,13 +99,25 @@ pub fn extract_query_for_side(content: &str, side: Side) -> Result<String> {
 /// Uses the first two columns of each row. Missing values become empty
 /// strings (Rule 12: visible, not silent — empty rows are still recorded
 /// so a missing column shows up as `("","")` rather than being dropped).
+///
+/// If `project_id` is provided, all `__PID__` placeholders in `cql` are
+/// replaced with the escaped project_id before execution. This enforces
+/// per-project filtering to prevent cross-project data contamination.
 pub fn execute_codenexus_query(
     db_path: &Path,
     cql: &str,
+    project_id: Option<&str>,
 ) -> Result<Vec<(String, String)>> {
     let repo = codenexus::storage::repository::Repository::open(db_path)
         .with_context(|| format!("failed to open CodeNexus DB at {}", db_path.display()))?;
-    let rows = repo.connection().query(cql)?;
+    let final_cql = match project_id {
+        Some(pid) => {
+            let escaped = codenexus::storage::schema::escape_cypher_string(pid);
+            cql.replace("__PID__", &escaped)
+        }
+        None => cql.to_string(),
+    };
+    let rows = repo.connection().query(&final_cql)?;
     let out = rows
         .into_iter()
         .map(|row| {
@@ -397,7 +409,7 @@ LIMIT 50
         drop(repo);
 
         let cql = "MATCH (p:Project) RETURN p.name AS name, p.id AS id";
-        let rows = execute_codenexus_query(&db_path, cql).expect("execute_codenexus_query");
+        let rows = execute_codenexus_query(&db_path, cql, None).expect("execute_codenexus_query");
         assert_eq!(rows.len(), 1, "expected exactly one Project row");
         assert_eq!(rows[0].0, "demo");
         assert_eq!(rows[0].1, "proj-1");
@@ -409,7 +421,7 @@ LIMIT 50
         // rather than panicking or returning an empty vec. Covers the
         // `with_context` error branch.
         let bogus = std::path::Path::new("/nonexistent/dir/missing.lbug");
-        let err = execute_codenexus_query(bogus, "MATCH (n) RETURN n").unwrap_err();
+        let err = execute_codenexus_query(bogus, "MATCH (n) RETURN n", None).unwrap_err();
         assert!(
             err.to_string().contains("failed to open CodeNexus DB"),
             "expected open-DB error, got: {err}"
@@ -425,7 +437,7 @@ LIMIT 50
         let _ = codenexus::storage::repository::Repository::open(&db_path)
             .expect("Repository::open");
         let cql = "MATCH (p:Project) RETURN p.name AS name, p.id AS id";
-        let rows = execute_codenexus_query(&db_path, cql).expect("execute_codenexus_query");
+        let rows = execute_codenexus_query(&db_path, cql, None).expect("execute_codenexus_query");
         assert!(rows.is_empty(), "expected zero rows for empty Project table");
     }
 
@@ -450,10 +462,45 @@ LIMIT 50
         drop(repo);
 
         let cql = "MATCH (p:Project) RETURN p.name AS name, p.rootPath AS root";
-        let rows = execute_codenexus_query(&db_path, cql).expect("execute_codenexus_query");
+        let rows = execute_codenexus_query(&db_path, cql, None).expect("execute_codenexus_query");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, "nullproj");
         // rootPath was never set → null → coerced to "" by the closure.
         assert_eq!(rows[0].1, "");
+    }
+
+    #[test]
+    fn execute_codenexus_query_replaces_pid_placeholder() {
+        // When project_id is Some, __PID__ in the CQL is replaced with the
+        // escaped project_id before execution. This prevents cross-project
+        // data contamination.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("pid.lbug");
+        let repo = codenexus::storage::repository::Repository::open(&db_path)
+            .expect("Repository::open");
+        let project = codenexus::model::Node::builder(
+            codenexus::model::NodeLabel::Project,
+            "alpha",
+            "alpha",
+        )
+        .id("proj-alpha-id")
+        .build();
+        repo.save_nodes(&[project], codenexus::model::NodeLabel::Project)
+            .expect("save_nodes");
+        drop(repo);
+
+        // __PID__ should be replaced with proj-alpha-id, matching exactly
+        // one Project node.
+        let cql = "MATCH (p:Project) WHERE p.id = '__PID__' RETURN p.name AS name, p.id AS id";
+        let rows =
+            execute_codenexus_query(&db_path, cql, Some("proj-alpha-id")).expect("execute");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "alpha");
+        assert_eq!(rows[0].1, "proj-alpha-id");
+
+        // A non-matching pid should return zero rows.
+        let rows =
+            execute_codenexus_query(&db_path, cql, Some("proj-beta-id")).expect("execute");
+        assert!(rows.is_empty(), "non-matching pid should return zero rows");
     }
 }

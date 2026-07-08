@@ -5,7 +5,7 @@
 
 // === CODENEXUS ===
 MATCH (r:CodeRelation)
-WHERE r.type = 'EXTENDS'
+WHERE r.type = 'EXTENDS' AND r.project = '__PID__'
 WITH r
 MATCH (child:Class)
 WHERE child.id = r.source

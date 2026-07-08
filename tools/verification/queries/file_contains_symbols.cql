@@ -5,7 +5,7 @@
 
 // === CODENEXUS ===
 MATCH (r:CodeRelation)
-WHERE r.type = 'DEFINES'
+WHERE r.type = 'DEFINES' AND r.project = '__PID__'
 WITH r
 MATCH (fn:Function)
 WHERE fn.id = r.target

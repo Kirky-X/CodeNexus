@@ -152,6 +152,14 @@ fn run_query_comparisons(name: &str) -> Result<Vec<(String, QueryDiff)>> {
     let queries_dir = Path::new(QUERIES_DIR);
     let db_path = Path::new(DEFAULT_DB);
 
+    // Look up the CodeNexus project_id by name so CQL queries can filter
+    // by `__PID__` to prevent cross-project data contamination (project
+    // memory hard constraint).
+    let repo = codenexus::storage::repository::Repository::open(db_path)
+        .with_context(|| format!("failed to open CodeNexus DB at {}", db_path.display()))?;
+    let project_id = codenexus_stats::lookup_project_id(repo.connection(), name)?;
+    eprintln!("[query] project '{name}' → id {project_id}");
+
     let mut cql_files: Vec<PathBuf> = std::fs::read_dir(queries_dir)
         .with_context(|| format!("failed to read queries dir {}", queries_dir.display()))?
         .filter_map(|e| e.ok())
@@ -175,7 +183,7 @@ fn run_query_comparisons(name: &str) -> Result<Vec<(String, QueryDiff)>> {
         let cn_cql = query_compare::extract_query_for_side(&content, Side::Codenexus)?;
         let gn_cql = query_compare::extract_query_for_side(&content, Side::Gitnexus)?;
 
-        let cn_results = query_compare::execute_codenexus_query(db_path, &cn_cql)
+        let cn_results = query_compare::execute_codenexus_query(db_path, &cn_cql, Some(&project_id))
             .with_context(|| format!("CodeNexus query failed for {query_name}"))?;
         let gn_results = query_compare::execute_gitnexus_query(name, &gn_cql)
             .with_context(|| format!("gitnexus query failed for {query_name}"))?;

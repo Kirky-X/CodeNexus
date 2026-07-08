@@ -5,7 +5,7 @@
 
 // === CODENEXUS ===
 MATCH (r:CodeRelation)
-WHERE r.type = 'IMPORTS'
+WHERE r.type = 'IMPORTS' AND r.project = '__PID__'
 WITH r
 MATCH (f:File)
 WHERE f.id = r.source

@@ -9,7 +9,7 @@
 // === CODENEXUS ===
 // B8 fix: use parentQn instead of HAS_METHOD edge (CodeNexus doesn't emit it)
 MATCH (m:Method)
-WHERE m.parentQn <> ''
+WHERE m.parentQn <> '' AND m.project = '__PID__'
 RETURN m.name AS symbol_name, m.filePath AS file_path
 ORDER BY symbol_name, file_path
 LIMIT 200
