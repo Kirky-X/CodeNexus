@@ -2,12 +2,21 @@
 // Returns: (symbol_name, file_path) tuples for types that extend another type
 // Tests: EXTENDS edge resolution
 // Note: Rust repos have no EXTENDS edges; expect empty set on both sides.
+// C++ structs use inheritance extensively, so Struct must be matched as well
+// as Class (the original query only matched Class, missing ~52/71 fmt structs).
 
 // === CODENEXUS ===
 MATCH (r:CodeRelation)
 WHERE r.type = 'EXTENDS' AND r.project = '__PID__'
 WITH r
 MATCH (child:Class)
+WHERE child.id = r.source
+RETURN child.name AS symbol_name, child.filePath AS file_path
+UNION
+MATCH (r:CodeRelation)
+WHERE r.type = 'EXTENDS' AND r.project = '__PID__'
+WITH r
+MATCH (child:Struct)
 WHERE child.id = r.source
 RETURN child.name AS symbol_name, child.filePath AS file_path
 ORDER BY symbol_name, file_path
