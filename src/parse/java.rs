@@ -377,21 +377,6 @@ fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
     }
 }
 
-fn push_import_text(node: Node, source: &str, line: u32, result: &mut ExtractResult) {
-    if let Some(text) = node_text(node, source) {
-        let imported_names = text
-            .rsplit('.')
-            .next()
-            .map(|n| vec![n.to_string()])
-            .unwrap_or_default();
-        result.imports.push(ImportInfo {
-            source_file: text.to_string(),
-            imported_names,
-            line,
-        });
-    }
-}
-
 fn extract_call(
     node: Node,
     source: &str,

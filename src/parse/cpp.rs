@@ -253,19 +253,94 @@ fn extract_type(
         result,
     );
     let signature = node_text(node, source).map(signature_first_line).map(String::from);
-    let mut builder = ModelNode::builder(label, name, qn)
+    let mut builder = ModelNode::builder(label, name, qn.clone())
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Cpp)
         .project(ctx.project)
-        .is_global(true);
+        .is_global(true)
+        .is_exported(true);
     if let Some(sig) = signature {
         builder = builder.signature(sig);
     }
     let model_node = builder.build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.push_node(model_node);
+
+    extract_heritage(node, source, ctx, &qn, result);
+}
+
+/// Extracts EXTENDS edges from a class/struct's `base_class_clause`.
+///
+/// tree-sitter-cpp exposes `base_class_clause` as a named **child** of
+/// `class_specifier`/`struct_specifier` (not a field). The clause's named
+/// children are a mix of `access_specifier` (public/private/protected),
+/// `type_identifier`, `qualified_identifier`, and `template_type`. Only the
+/// type nodes produce EXTENDS edges; access specifiers are skipped.
+///
+/// Target FQNs are best-effort (same-file scope); cross-file resolution is
+/// deferred to the type resolver. For `qualified_identifier` (e.g. `ns::Base`)
+/// only the rightmost name is used so the TypeResolver can match it against
+/// the symbol table (which indexes by simple name).
+fn extract_heritage(
+    node: Node,
+    source: &str,
+    ctx: &VisitContext<'_>,
+    class_qn: &str,
+    result: &mut ExtractResult,
+) {
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(child) = node.named_child(i) {
+            if child.kind() == "base_class_clause" {
+                for_each_type_name(child, source, &mut |parent_name| {
+                    let parent_qn = make_qn(ctx.file_path, &parent_name, ctx.project, None);
+                    result.edges.push(Edge::new(
+                        class_qn.to_string(),
+                        parent_qn,
+                        EdgeType::Extends,
+                        ctx.project,
+                    ));
+                });
+            }
+        }
+    }
+}
+
+/// Recursively walks `base_class_clause` and its type children, invoking `f`
+/// for each concrete base class name found.
+///
+/// - `type_identifier` / `identifier` / `namespace_identifier`: emit the text.
+/// - `qualified_identifier` (`ns::Base`): recurse into the `name` field so
+///   only `Base` is emitted (matches symbol-table lookup by simple name).
+/// - `template_type` (`std::vector<int>`): recurse into the `name` field.
+/// - `base_class_clause`: iterate named children (skips `access_specifier`).
+fn for_each_type_name<F: FnMut(String)>(node: Node, source: &str, f: &mut F) {
+    match node.kind() {
+        "type_identifier" | "identifier" | "namespace_identifier" => {
+            if let Some(text) = node_text(node, source) {
+                f(text.to_string());
+            }
+        }
+        "qualified_identifier" => {
+            if let Some(name) = node.child_by_field_name("name") {
+                for_each_type_name(name, source, f);
+            }
+        }
+        "template_type" => {
+            if let Some(name) = node.child_by_field_name("name") {
+                for_each_type_name(name, source, f);
+            }
+        }
+        "base_class_clause" => {
+            for i in 0..node.named_child_count() as u32 {
+                if let Some(child) = node.named_child(i) {
+                    for_each_type_name(child, source, f);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn extract_namespace(
@@ -872,5 +947,138 @@ mod tests {
             "enum_specifier is not currently extracted: {:?}",
             enums
         );
+    }
+
+    // --- EXTENDS heritage extraction (base_class_clause) ---
+
+    #[test]
+    fn class_extends_base_creates_extends_edge() {
+        let result = extract("class Base {};\nclass Derived : public Base {};\n");
+        let extends: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Extends)
+            .collect();
+        assert_eq!(extends.len(), 1, "should have 1 EXTENDS edge: {:?}", extends);
+        assert!(
+            extends[0].source.contains("Derived"),
+            "source should be Derived: {}",
+            extends[0].source
+        );
+        assert!(
+            extends[0].target.contains("Base"),
+            "target should be Base: {}",
+            extends[0].target
+        );
+    }
+
+    #[test]
+    fn struct_extends_base_creates_extends_edge() {
+        let result = extract("struct Base {};\nstruct Derived : Base {};\n");
+        let extends: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Extends)
+            .collect();
+        assert_eq!(extends.len(), 1, "struct should have 1 EXTENDS edge: {:?}", extends);
+        assert!(
+            extends[0].source.contains("Derived"),
+            "source should be Derived: {}",
+            extends[0].source
+        );
+    }
+
+    #[test]
+    fn multiple_inheritance_creates_multiple_extends_edges() {
+        let result =
+            extract("class Base1 {};\nclass Base2 {};\nclass Derived : public Base1, public Base2 {};\n");
+        let extends: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Extends)
+            .collect();
+        assert_eq!(
+            extends.len(),
+            2,
+            "multiple inheritance should have 2 EXTENDS edges: {:?}",
+            extends
+        );
+    }
+
+    #[test]
+    fn class_is_marked_exported() {
+        let result = extract("class Point { public: int x; };\n");
+        let cls = result
+            .nodes
+            .iter()
+            .find(|n| n.label == NodeLabel::Class)
+            .expect("should find class Point");
+        assert!(
+            cls.is_exported,
+            "class should be marked is_exported for TypeResolver strategy 3"
+        );
+    }
+
+    #[test]
+    fn struct_is_marked_exported() {
+        let result = extract("struct Vec { int x; };\n");
+        let st = result
+            .nodes
+            .iter()
+            .find(|n| n.label == NodeLabel::Struct)
+            .expect("should find struct Vec");
+        assert!(
+            st.is_exported,
+            "struct should be marked is_exported for TypeResolver strategy 3"
+        );
+    }
+
+    #[test]
+    fn private_inheritance_creates_extends_edge() {
+        let result = extract("class Base {};\nclass Derived : private Base {};\n");
+        let extends: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Extends)
+            .collect();
+        assert_eq!(
+            extends.len(),
+            1,
+            "private inheritance should still produce 1 EXTENDS edge: {:?}",
+            extends
+        );
+    }
+
+    #[test]
+    fn qualified_base_class_creates_extends_edge() {
+        // `ns::Base` — qualified_identifier in base_class_clause.
+        let result = extract("namespace ns { class Base {}; }\nclass Derived : public ns::Base {};\n");
+        let extends: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Extends)
+            .collect();
+        assert_eq!(
+            extends.len(),
+            1,
+            "qualified base class should produce 1 EXTENDS edge: {:?}",
+            extends
+        );
+        assert!(
+            extends[0].target.contains("Base"),
+            "target should contain Base: {}",
+            extends[0].target
+        );
+    }
+
+    #[test]
+    fn class_without_base_has_no_extends_edge() {
+        let result = extract("class Standalone {};\n");
+        let extends_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Extends)
+            .count();
+        assert_eq!(extends_count, 0, "class without base should have 0 EXTENDS edges");
     }
 }
