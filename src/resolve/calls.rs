@@ -195,17 +195,27 @@ impl<'a> CallResolver<'a> {
     }
 }
 
-/// Returns `true` if `callee_qn` is a method on a Builder type.
+/// Returns `true` if `callee_qn` is a Builder pattern method call.
 ///
 /// FQN format: `project.dir.file_full.entity_name#disambiguator`.
-/// Builder type methods have a disambiguator ending with "Builder"
-/// (e.g. `#NodeBuilder`, `#EdgeBuilder`, `#ResolverModuleBuilder`).
-/// These are filtered out to match gitnexus behavior, which doesn't
-/// capture builder pattern method calls as CALLS edges.
+/// Two Builder pattern shapes are filtered to match gitnexus behavior:
+/// 1. Builder type methods: disambiguator ends with "Builder"
+///    (e.g. `#NodeBuilder`, `#EdgeBuilder`, `#ResolverModuleBuilder`).
+/// 2. Builder entry method: method name is `builder` with a type-name
+///    disambiguator (e.g. `builder#Edge`, `builder#Node`).
+///    `Edge::builder()` and `Node::builder()` are the only 2 entry
+///    methods in CodeNexus, both are Builder pattern entry points.
 fn is_builder_type_method(callee_qn: &str) -> bool {
     callee_qn
         .rfind('#')
-        .map(|idx| callee_qn[idx + 1..].ends_with("Builder"))
+        .map(|idx| {
+            let disambiguator = &callee_qn[idx + 1..];
+            if disambiguator.ends_with("Builder") {
+                return true;
+            }
+            let method_name = callee_qn[..idx].rsplit('.').next().unwrap_or("");
+            method_name == "builder"
+        })
         .unwrap_or(false)
 }
 
@@ -896,5 +906,48 @@ mod tests {
         assert_eq!(edges.len(), 1, "non-Builder method call should be preserved");
         assert_eq!(edges[0].source, caller_qn);
         assert_eq!(edges[0].target, save_qn);
+    }
+
+    #[test]
+    fn c2_resolve_calls_filters_builder_entry_method() {
+        // C2 fix: Builder pattern entry method `Type::builder()` has
+        // disambiguator = type name (e.g. `#Edge`, `#Node`), NOT ending
+        // with "Builder". Filter these to match gitnexus behavior, which
+        // doesn't capture builder pattern entry calls as CALLS edges.
+        // Edge::builder() and Node::builder() are the only 2 entry methods
+        // in CodeNexus, both are Builder pattern entry points.
+        let builder_method = make_node_with_disambiguator(
+            "builder",
+            "a.rs",
+            "proj",
+            NodeLabel::Function,
+            Some("Edge"),
+        );
+        let caller_node = make_node("caller", "a.rs", "proj", NodeLabel::Function);
+        let caller_qn = fqn("proj", "a.rs", "caller", Language::Rust);
+
+        let mut result = make_result("a.rs", vec![builder_method, caller_node]);
+        // caller calls Edge::builder()
+        result.calls.push(CallInfo {
+            caller_qn: Some(caller_qn.clone()),
+            callee_name: "builder".to_string(),
+            line: 5,
+            args: vec![],
+        });
+
+        let results = vec![result];
+        let table = build_symbol_table(&results, "proj");
+        let mut graph = Graph::new();
+        add_nodes_to_graph(&mut graph, &results, "proj");
+
+        let resolver = CallResolver::new(&table, "proj");
+        let edges = resolver.resolve_calls(&results, &mut graph);
+
+        // Builder entry method calls should be filtered out.
+        assert!(
+            edges.is_empty(),
+            "Builder entry method calls should be filtered: {edges:?}"
+        );
+        assert_eq!(graph.edge_count(), 0);
     }
 }
