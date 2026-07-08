@@ -226,6 +226,16 @@ fn resolve_import_target(
     // or absolute `/`). Bare specifiers like "react" or "std::io" are external.
     let is_relative = source_file.starts_with('.') || source_file.starts_with('/');
     if !is_relative {
+        // Strategy 4: C/C++ #include suffix matching.
+        // Bare filenames like "format.h" or partial paths like "fmt/format.h"
+        // that look like file paths (contain a dot) are matched as suffixes of
+        // file_index keys, with path boundary check. Prefers same-directory
+        // matches (standard #include "..." behavior).
+        if source_file.contains('.') {
+            if let Some(id) = resolve_include_suffix(source_file, importer_path, file_index) {
+                return Some(id);
+            }
+        }
         return None;
     }
 
@@ -255,6 +265,50 @@ fn resolve_import_target(
     }
 
     None
+}
+
+/// Resolves a C/C++ `#include` path by suffix-matching against file_index keys.
+///
+/// Bare filenames (`"format.h"`) and partial paths (`"fmt/format.h"`) are
+/// matched as suffixes of file paths in the index, with a path boundary check
+/// (so `"format.h"` matches `"include/fmt/format.h"` but not `"xformat.h"`).
+///
+/// When multiple files match, the standard C++ `#include "..."` behavior is
+/// followed: prefer files in the same directory as the importer, then fall
+/// back to the shortest matching path (closest to project root).
+fn resolve_include_suffix(
+    include_path: &str,
+    importer_path: &str,
+    file_index: &HashMap<String, String>,
+) -> Option<String> {
+    let path_norm = include_path.replace('\\', "/");
+    let importer_dir = importer_path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+
+    let mut same_dir: Option<(&String, &String)> = None;
+    let mut other: Option<(&String, &String)> = None;
+
+    for (rel, id) in file_index {
+        let rel_norm = rel.replace('\\', "/");
+        if rel_norm.ends_with(path_norm.as_str()) {
+            let prefix_len = rel_norm.len() - path_norm.len();
+            if prefix_len == 0 || rel_norm.as_bytes()[prefix_len - 1] == b'/' {
+                let match_dir = rel_norm.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+                if match_dir == importer_dir {
+                    // Same directory — pick shortest path for determinism.
+                    if same_dir.as_ref().map_or(true, |(r, _)| r.len() > rel.len()) {
+                        same_dir = Some((rel, id));
+                    }
+                } else {
+                    // Other directory — pick shortest path (closest to root).
+                    if other.as_ref().map_or(true, |(r, _)| r.len() > rel.len()) {
+                        other = Some((rel, id));
+                    }
+                }
+            }
+        }
+    }
+
+    same_dir.or(other).map(|(_, id)| id.clone())
 }
 
 /// Strips `.js`/`.jsx`/`.mjs`/`.cjs` extensions from a normalised path.
@@ -1307,5 +1361,114 @@ mod tests {
             ".cjs extension should be stripped, resolving to .js file"
         );
         assert_eq!(edges[0].target, "src/config.js");
+    }
+
+    // --- C++ #include suffix matching (bare filename resolution) ---
+
+    #[test]
+    fn resolve_imports_resolves_cpp_include_by_basename() {
+        // C++ #include "format.h" from include/fmt/std.h → include/fmt/format.h
+        // The include path is a bare filename (no ./ prefix), so strategies 1-3
+        // all fail. Strategy 4 (suffix matching) resolves it.
+        let mut std_result = make_result("include/fmt/std.h");
+        std_result.imports.push(crate::ir::ImportInfo {
+            source_file: "format.h".to_string(),
+            imported_names: vec![],
+            line: 11,
+        });
+        let results = vec![std_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("include/fmt/std.h", "proj"));
+        graph.add_node(make_file_node("include/fmt/format.h", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(
+            edges.len(),
+            1,
+            "C++ bare-filename #include should resolve via suffix matching"
+        );
+        assert_eq!(edges[0].source, "include/fmt/std.h");
+        assert_eq!(edges[0].target, "include/fmt/format.h");
+    }
+
+    #[test]
+    fn resolve_imports_resolves_cpp_include_by_partial_path() {
+        // C++ #include "fmt/format.h" → include/fmt/format.h
+        // Partial path suffix match with path boundary check.
+        let mut top_result = make_result("src/main.cpp");
+        top_result.imports.push(crate::ir::ImportInfo {
+            source_file: "fmt/format.h".to_string(),
+            imported_names: vec![],
+            line: 1,
+        });
+        let results = vec![top_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/main.cpp", "proj"));
+        graph.add_node(make_file_node("include/fmt/format.h", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(
+            edges.len(),
+            1,
+            "C++ partial-path #include should resolve via suffix matching"
+        );
+        assert_eq!(edges[0].target, "include/fmt/format.h");
+    }
+
+    #[test]
+    fn resolve_imports_skips_cpp_system_include() {
+        // C++ #include <iostream> — system header, no matching File node.
+        let mut main_result = make_result("src/main.cpp");
+        main_result.imports.push(crate::ir::ImportInfo {
+            source_file: "iostream".to_string(),
+            imported_names: vec![],
+            line: 1,
+        });
+        let results = vec![main_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/main.cpp", "proj"));
+        // No "iostream" file in the project.
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert!(
+            edges.is_empty(),
+            "system header #include <iostream> should not resolve"
+        );
+    }
+
+    #[test]
+    fn resolve_imports_cpp_include_prefers_same_directory() {
+        // When multiple files share the same basename, prefer the one in the
+        // same directory as the importer (standard C++ #include "..." behavior).
+        let mut a_result = make_result("include/fmt/a.h");
+        a_result.imports.push(crate::ir::ImportInfo {
+            source_file: "config.h".to_string(),
+            imported_names: vec![],
+            line: 1,
+        });
+        let results = vec![a_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("include/fmt/a.h", "proj"));
+        graph.add_node(make_file_node("include/fmt/config.h", "proj"));
+        graph.add_node(make_file_node("src/config.h", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(edges.len(), 1, "should create 1 IMPORTS edge");
+        assert_eq!(
+            edges[0].target, "include/fmt/config.h",
+            "should prefer same-directory match over other directories"
+        );
     }
 }
