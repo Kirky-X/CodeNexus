@@ -35,7 +35,7 @@ use crate::index::pipeline::{
 use crate::ir::ExtractResult;
 use crate::model::{Edge, Graph, Node, NodeLabel, new_project_id};
 use crate::parse::parallel::{parallel_parse, parallel_parse_ram_first, RamFirstSources};
-use crate::resolve::{build_symbol_table, resolve_all};
+use crate::resolve::{build_symbol_table, prune_dangling_type_edges_vec, resolve_all};
 use crate::storage::Repository;
 
 use super::pipeline::IndexResult;
@@ -418,6 +418,14 @@ impl Phase for ResolvePhase {
         let symbol_table = build_symbol_table(&parse.results, project_id);
         let resolved_edges = resolve_all(&parse.results, &symbol_table, project_id, &mut graph);
         all_edges.extend(resolved_edges);
+        // Prune dangling type-reference edges (Implements/Extends/UsesType)
+        // from the persisted collection. resolve_all prunes graph.edges, but
+        // all_edges is a separate Vec built from scope.all_edges (parse-phase
+        // edges) + resolved_edges — both unpruned. Without this, dangling
+        // IMPLEMENTS edges (e.g. `impl Display for Foo`) reach the DB.
+        let node_ids: std::collections::HashSet<String> =
+            graph.nodes.keys().cloned().collect();
+        prune_dangling_type_edges_vec(&mut all_edges, &node_ids);
 
         // Collect Parameter and Variable nodes created during dataflow
         // resolution (DQ-004) so they are persisted alongside other nodes.

@@ -78,11 +78,29 @@ fn prune_dangling_type_edges(graph: &mut Graph) -> usize {
     let before = graph.edge_count();
     let node_ids: std::collections::HashSet<String> =
         graph.nodes.keys().cloned().collect();
-    graph.retain_edges(|edge| {
+    prune_dangling_type_edges_vec(&mut graph.edges, &node_ids);
+    before - graph.edge_count()
+}
+
+/// Prunes dangling type-reference edges from a `Vec<Edge>`.
+///
+/// This is the public entry point for callers that persist a separate edge
+/// collection (e.g. `ResolvePhase` in `phases.rs` persists `all_edges`, not
+/// `graph.edges`). The prune inside [`resolve_all`] only affects
+/// `graph.edges`, so the persisted Vec must also be pruned to actually remove
+/// dangling IMPLEMENTS/Extends/UsesType edges from the database.
+///
+/// Returns the count of pruned edges.
+pub fn prune_dangling_type_edges_vec(
+    edges: &mut Vec<Edge>,
+    node_ids: &std::collections::HashSet<String>,
+) -> usize {
+    let before = edges.len();
+    edges.retain(|edge| {
         !PRUNABLE_EDGE_TYPES.contains(&edge.edge_type)
             || node_ids.contains(&edge.target)
     });
-    before - graph.edge_count()
+    before - edges.len()
 }
 
 /// Builds a project-level symbol table from extraction results.
@@ -804,5 +822,48 @@ mod tests {
             .filter(|e| e.edge_type == EdgeType::Calls)
             .count();
         assert_eq!(calls_count, 1, "CALLS edge with dangling target should NOT be pruned");
+    }
+
+    // --- C1 fix: prune persisted edge Vec (not just graph.edges) ---
+    // The caller (phases.rs ResolvePhase) persists `all_edges` (a Vec<Edge>),
+    // not `graph.edges`. The prune inside resolve_all only affects
+    // graph.edges, so the persisted Vec must also be pruned.
+
+    #[test]
+    fn prune_dangling_type_edges_vec_removes_dangling_type_edges() {
+        let mut edges = vec![
+            // dangling: target "Display" not in node_ids
+            Edge::new("proj.a.rs.Foo", "proj.a.rs.Display", EdgeType::Implements, "proj"),
+            // resolvable: target "MyTrait" in node_ids
+            Edge::new("proj.a.rs.Bar", "proj.a.rs.MyTrait", EdgeType::Implements, "proj"),
+            // non-type edge with dangling target — must NOT be pruned
+            Edge::new("proj.a.rs.foo", "proj.a.rs.bar", EdgeType::Calls, "proj"),
+        ];
+        let mut node_ids = std::collections::HashSet::new();
+        node_ids.insert("proj.a.rs.MyTrait".to_string());
+
+        let pruned = prune_dangling_type_edges_vec(&mut edges, &node_ids);
+        assert_eq!(pruned, 1, "1 dangling IMPLEMENTS edge should be pruned");
+        assert_eq!(edges.len(), 2, "2 edges remain (resolvable Implements + Calls)");
+        let implements: Vec<_> = edges.iter()
+            .filter(|e| e.edge_type == EdgeType::Implements)
+            .collect();
+        assert_eq!(implements.len(), 1);
+        assert_eq!(implements[0].target, "proj.a.rs.MyTrait");
+    }
+
+    #[test]
+    fn prune_dangling_type_edges_vec_keeps_extends_and_uses_type_when_resolved() {
+        let mut edges = vec![
+            Edge::new("a", "proj.a.rs.Base", EdgeType::Extends, "proj"),      // resolvable
+            Edge::new("b", "proj.a.rs.Unknown", EdgeType::UsesType, "proj"),  // dangling
+        ];
+        let mut node_ids = std::collections::HashSet::new();
+        node_ids.insert("proj.a.rs.Base".to_string());
+
+        let pruned = prune_dangling_type_edges_vec(&mut edges, &node_ids);
+        assert_eq!(pruned, 1, "only the dangling UsesType edge should be pruned");
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].edge_type, EdgeType::Extends);
     }
 }
