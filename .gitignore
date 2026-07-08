@@ -77,3 +77,8 @@ tools/verification/results/
 lcov.info
 *.lcov
 tarpaulin-report.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
