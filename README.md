@@ -238,6 +238,20 @@ cargo bench
 
 欢迎提交 Issue 和 Pull Request。请确保通过 `cargo test` 和 `cargo clippy -- -D warnings`。
 
+## 路线图
+
+CodeNexus 当前版本 v0.2.1。按当前优先级排序的规划工作：
+
+- [x] v0.1.0 — 多语言索引（C/Rust/Fortran/Python/TypeScript）、图模式（44 种节点类型 + 24 种边类型）、`query`/`trace`/`impact`/`context`/`search`、增量索引、RAM 优先模式、MCP 服务、团队 `export`/`import`、守护进程模式、置信度分层、歧义消解
+- [x] v0.1.x — 稳定性与性能加固：增量重索引覆盖、大仓库内存调优、更多语言专属边提取
+- [x] v0.2.0 — `lsp` feature：LSP 增强提取，超越 tree-sitter 的类型精确解析（rust-analyzer 集成）
+- [x] v0.2.0 — 扩展语言覆盖（Go、Java、C++），由新的 `lang-*` feature 控制
+- [x] v0.2.0 — 分析工具包：死代码检测、架构概览、API 审查（route-map/shape-check/api-impact/tool-map）、社区检测、跨服务链接检测
+- [x] v0.2.1 — AST 复杂度分析：圈/认知复杂度、嵌套深度、函数长度，绿/黄/红三级告警
+- [ ] v0.3.0 — 跨语言数据流端到端追踪（当前已记录边；多跳污点路径需专用查询路径）
+- [ ] v0.3.0 — 向量嵌入默认开启语义搜索（待 ONNX 模型大小与启动开销可接受后）
+- [ ] 未来 — 基于查询门面的 Web UI / 图可视化
+
 ## 许可证
 
 [MIT](LICENSE)
