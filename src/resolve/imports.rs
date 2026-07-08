@@ -236,6 +236,14 @@ fn resolve_import_target(
                 return Some(id);
             }
         }
+        // Strategy 5: Java class import resolution.
+        // Java imports like "com.google.gson.Gson" are dotted package paths
+        // that map to file paths by replacing '.' with '/' and appending
+        // '.java'. Returns None for external deps (JDK, Maven artifacts) that
+        // have no matching local file.
+        if let Some(id) = resolve_java_class_import(source_file, importer_path, file_index) {
+            return Some(id);
+        }
         return None;
     }
 
@@ -309,6 +317,49 @@ fn resolve_include_suffix(
     }
 
     same_dir.or(other).map(|(_, id)| id.clone())
+}
+
+/// Resolves a Java class import by mapping the dotted package path to a file
+/// path and suffix-matching against `file_index`.
+///
+/// Java imports like `com.google.gson.Gson` map to file path
+/// `com/google/gson/Gson.java` (replace `.` with `/`, append `.java`). The
+/// mapped path is then suffix-matched against file_index keys (which may have
+/// a `src/main/java/` prefix in Maven layouts).
+///
+/// For static imports (`com.google.gson.Gson.fromJson`) where the last
+/// component is a member name rather than a class, the parent path is also
+/// tried (`com/google/gson/Gson.java`).
+///
+/// Returns `None` for external dependencies (JDK classes like `java.util.List`,
+/// Maven artifacts) that have no matching local file.
+fn resolve_java_class_import(
+    source_file: &str,
+    importer_path: &str,
+    file_index: &HashMap<String, String>,
+) -> Option<String> {
+    // Java imports are dotted package paths: "com.google.gson.Gson".
+    // A '/' indicates a file path (handled by strategies 3/4), not a package.
+    if source_file.contains('/') || !source_file.contains('.') {
+        return None;
+    }
+
+    // Full path: com.google.gson.Gson → com/google/gson/Gson.java
+    let mapped = format!("{}.java", source_file.replace('.', "/"));
+    if let Some(id) = resolve_include_suffix(&mapped, importer_path, file_index) {
+        return Some(id);
+    }
+
+    // Strip last component (static import member or symbol name):
+    // com.google.gson.Gson.fromJson → com/google/gson/Gson.java
+    if let Some((parent, _)) = source_file.rsplit_once('.') {
+        let mapped = format!("{}.java", parent.replace('.', "/"));
+        if let Some(id) = resolve_include_suffix(&mapped, importer_path, file_index) {
+            return Some(id);
+        }
+    }
+
+    None
 }
 
 /// Strips `.js`/`.jsx`/`.mjs`/`.cjs` extensions from a normalised path.
@@ -1470,5 +1521,120 @@ mod tests {
             edges[0].target, "include/fmt/config.h",
             "should prefer same-directory match over other directories"
         );
+    }
+
+    // --- Java class import resolution (dotted package path) ---
+
+    #[test]
+    fn resolve_imports_resolves_java_class_import() {
+        // Java import "com.google.gson.Gson" → com/google/gson/Gson.java
+        // Dotted package path is mapped to a file path by replacing '.' with
+        // '/' and appending '.java', then suffix-matched against file_index.
+        let mut importer_result = make_result("src/com/google/gson/GsonBuilder.java");
+        importer_result.imports.push(crate::ir::ImportInfo {
+            source_file: "com.google.gson.Gson".to_string(),
+            imported_names: vec!["Gson".to_string()],
+            line: 3,
+        });
+        let results = vec![importer_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/com/google/gson/GsonBuilder.java", "proj"));
+        graph.add_node(make_file_node("src/com/google/gson/Gson.java", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(
+            edges.len(),
+            1,
+            "Java class import should resolve via dotted-path mapping"
+        );
+        assert_eq!(edges[0].source, "src/com/google/gson/GsonBuilder.java");
+        assert_eq!(edges[0].target, "src/com/google/gson/Gson.java");
+    }
+
+    #[test]
+    fn resolve_imports_resolves_java_class_in_maven_layout() {
+        // Maven standard layout: src/main/java/com/google/gson/Gson.java
+        // The Java-mapped path "com/google/gson/Gson.java" suffix-matches.
+        let mut importer_result = make_result("gson/src/main/java/com/google/gson/Gson.java");
+        importer_result.imports.push(crate::ir::ImportInfo {
+            source_file: "com.google.gson.JsonElement".to_string(),
+            imported_names: vec!["JsonElement".to_string()],
+            line: 1,
+        });
+        let results = vec![importer_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("gson/src/main/java/com/google/gson/Gson.java", "proj"));
+        graph.add_node(
+            make_file_node("gson/src/main/java/com/google/gson/JsonElement.java", "proj"),
+        );
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(
+            edges.len(),
+            1,
+            "Java class import should resolve in Maven standard layout"
+        );
+        assert_eq!(
+            edges[0].target,
+            "gson/src/main/java/com/google/gson/JsonElement.java"
+        );
+    }
+
+    #[test]
+    fn resolve_imports_skips_java_stdlib_import() {
+        // java.util.List — JDK class, no matching File node in the project.
+        let mut importer_result = make_result("src/Main.java");
+        importer_result.imports.push(crate::ir::ImportInfo {
+            source_file: "java.util.List".to_string(),
+            imported_names: vec!["List".to_string()],
+            line: 1,
+        });
+        let results = vec![importer_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/Main.java", "proj"));
+        // No java/util/List.java in the project.
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert!(
+            edges.is_empty(),
+            "JDK import (java.util.List) should not resolve to a local file"
+        );
+    }
+
+    #[test]
+    fn resolve_imports_resolves_java_static_import() {
+        // import static com.google.gson.Gson.fromJson;
+        // source_file = "com.google.gson.Gson.fromJson" — the last component
+        // is a static member name, not a class. Strip it and map the parent.
+        let mut importer_result = make_result("src/Test.java");
+        importer_result.imports.push(crate::ir::ImportInfo {
+            source_file: "com.google.gson.Gson.fromJson".to_string(),
+            imported_names: vec!["fromJson".to_string()],
+            line: 1,
+        });
+        let results = vec![importer_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/Test.java", "proj"));
+        graph.add_node(make_file_node("src/com/google/gson/Gson.java", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(
+            edges.len(),
+            1,
+            "Java static import should resolve by stripping the member name"
+        );
+        assert_eq!(edges[0].target, "src/com/google/gson/Gson.java");
     }
 }
