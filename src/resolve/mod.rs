@@ -51,7 +51,39 @@ pub use type_resolver::TypeResolver;
 pub use module::{ResolverModule, ResolverModuleBuilder};
 
 use crate::ir::ExtractResult;
-use crate::model::{Edge, Graph};
+use crate::model::{Edge, EdgeType, Graph};
+
+/// Edge types whose dangling targets are pruned after TypeResolver runs.
+///
+/// These represent type-reference relationships (inheritance/implementation/
+/// usage). If the target can't be resolved to a project node, the edge is
+/// noise (e.g. `impl Display for Foo` where `Display` is a std trait not
+/// indexed in the project). Pruning matches gitnexus behavior.
+const PRUNABLE_EDGE_TYPES: [EdgeType; 3] = [
+    EdgeType::Extends,
+    EdgeType::Implements,
+    EdgeType::UsesType,
+];
+
+/// Removes type-reference edges whose targets are still dangling (not in
+/// `graph.nodes`) after [`TypeResolver`] has attempted resolution.
+///
+/// This prunes IMPLEMENTS/Extends/UsesType edges to std/external types
+/// (e.g. `impl Display for Foo`) that can't be resolved to project-defined
+/// symbols, matching gitnexus behavior (only project-defined type
+/// relationships are retained).
+///
+/// Returns the count of pruned edges.
+fn prune_dangling_type_edges(graph: &mut Graph) -> usize {
+    let before = graph.edge_count();
+    let node_ids: std::collections::HashSet<String> =
+        graph.nodes.keys().cloned().collect();
+    graph.retain_edges(|edge| {
+        !PRUNABLE_EDGE_TYPES.contains(&edge.edge_type)
+            || node_ids.contains(&edge.target)
+    });
+    before - graph.edge_count()
+}
 
 /// Builds a project-level symbol table from extraction results.
 ///
@@ -153,13 +185,17 @@ pub fn resolve_all(
     // in `graph`).
     let type_resolver = TypeResolver::new(symbol_table);
     edges.extend(type_resolver.resolve_types(results, graph));
+    // Prune type-reference edges that TypeResolver could not resolve (e.g.
+    // std trait impls like `impl Display for Foo`). These dangling edges
+    // are noise — the target doesn't exist in the project graph.
+    prune_dangling_type_edges(graph);
     edges
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Language, Node, NodeLabel};
+    use crate::model::{EdgeType, Language, Node, NodeLabel};
     use crate::ir::{CallInfo, ImportInfo};
 
     fn make_node(name: &str, label: NodeLabel, language: Language) -> Node {
@@ -652,5 +688,121 @@ mod tests {
             entry.qn, expected_id,
             "FQN must match node ID for edge cleanup to work"
         );
+    }
+
+    // --- C1: prune unresolvable dangling type edges ---
+
+    #[test]
+    fn resolve_all_prunes_unresolvable_dangling_type_edges() {
+        // C1 fix: std trait impls (Display, Debug, etc.) create dangling
+        // IMPLEMENTS edges that TypeResolver can't resolve. These should be
+        // pruned to match gitnexus behavior (only project-defined type
+        // relationships). Resolvable edges (project-defined traits) must be
+        // kept and resolved.
+        let trait_qn = FqnGenerator::generate("proj", "a.rs", "MyTrait", Language::Rust, None);
+        let trait_node = Node::builder(NodeLabel::Trait, "MyTrait", trait_qn.clone())
+            .id(trait_qn.clone())
+            .language(Language::Rust)
+            .file_path("a.rs")
+            .is_exported(true)
+            .build();
+
+        let foo_qn = FqnGenerator::generate("proj", "a.rs", "Foo", Language::Rust, None);
+        let foo_node = Node::builder(NodeLabel::Struct, "Foo", foo_qn.clone())
+            .id(foo_qn.clone())
+            .language(Language::Rust)
+            .file_path("a.rs")
+            .is_exported(true)
+            .build();
+
+        let bar_qn = FqnGenerator::generate("proj", "b.rs", "Bar", Language::Rust, None);
+        let bar_node = Node::builder(NodeLabel::Struct, "Bar", bar_qn.clone())
+            .id(bar_qn.clone())
+            .language(Language::Rust)
+            .file_path("b.rs")
+            .is_exported(true)
+            .build();
+
+        let result_a = make_result("a.rs", Language::Rust, vec![trait_node.clone(), foo_node.clone()]);
+        let result_b = make_result("b.rs", Language::Rust, vec![bar_node.clone()]);
+        let results = vec![result_a, result_b];
+        let table = build_symbol_table(&results, "proj");
+
+        let mut graph = Graph::new();
+        graph.add_node(trait_node);
+        graph.add_node(foo_node);
+        graph.add_node(bar_node);
+
+        // Dangling: Foo implements Display (std trait, not in project)
+        graph.add_edge(Edge::new(&foo_qn, "proj.a.rs.Display", EdgeType::Implements, "proj"));
+        // Resolvable: Bar implements MyTrait (in a.rs, TypeResolver should fix)
+        graph.add_edge(Edge::new(&bar_qn, "proj.b.rs.MyTrait", EdgeType::Implements, "proj"));
+
+        assert_eq!(graph.edge_count(), 2, "precondition: 2 IMPLEMENTS edges");
+
+        resolve_all(&results, &table, "proj", &mut graph);
+
+        let implements_edges: Vec<_> = graph.edges.iter()
+            .filter(|e| e.edge_type == EdgeType::Implements)
+            .collect();
+        assert_eq!(implements_edges.len(), 1, "dangling IMPLEMENTS edge should be pruned");
+        assert_eq!(implements_edges[0].target, trait_qn, "resolved edge target should be MyTrait");
+    }
+
+    #[test]
+    fn resolve_all_prunes_unresolvable_extends_and_uses_type() {
+        // Same pruning applies to Extends and UsesType edges.
+        let struct_qn = FqnGenerator::generate("proj", "a.rs", "Foo", Language::Rust, None);
+        let struct_node = Node::builder(NodeLabel::Struct, "Foo", struct_qn.clone())
+            .id(struct_qn.clone())
+            .language(Language::Rust)
+            .file_path("a.rs")
+            .is_exported(true)
+            .build();
+
+        let result = make_result("a.rs", Language::Rust, vec![struct_node.clone()]);
+        let results = vec![result];
+        let table = build_symbol_table(&results, "proj");
+
+        let mut graph = Graph::new();
+        graph.add_node(struct_node);
+
+        graph.add_edge(Edge::new(&struct_qn, "proj.a.rs.BaseClass", EdgeType::Extends, "proj"));
+        graph.add_edge(Edge::new(&struct_qn, "proj.a.rs.ExternalType", EdgeType::UsesType, "proj"));
+
+        assert_eq!(graph.edge_count(), 2, "precondition: 2 dangling type edges");
+
+        resolve_all(&results, &table, "proj", &mut graph);
+
+        assert_eq!(graph.edge_count(), 0, "both dangling type edges should be pruned");
+    }
+
+    #[test]
+    fn resolve_all_keeps_non_type_edges_with_dangling_targets() {
+        // CALLS edges with dangling targets should NOT be pruned — only
+        // type-reference edges (Implements/Extends/UsesType) are pruned.
+        let foo_qn = FqnGenerator::generate("proj", "a.rs", "foo", Language::Rust, None);
+        let foo_node = Node::builder(NodeLabel::Function, "foo", foo_qn.clone())
+            .id(foo_qn.clone())
+            .language(Language::Rust)
+            .file_path("a.rs")
+            .is_exported(true)
+            .build();
+
+        let result = make_result("a.rs", Language::Rust, vec![foo_node.clone()]);
+        let results = vec![result];
+        let table = build_symbol_table(&results, "proj");
+
+        let mut graph = Graph::new();
+        graph.add_node(foo_node);
+
+        graph.add_edge(Edge::new(&foo_qn, "proj.a.rs.external_fn", EdgeType::Calls, "proj"));
+
+        resolve_all(&results, &table, "proj", &mut graph);
+
+        let calls_count = graph.edges.iter()
+            .filter(|e| e.edge_type == EdgeType::Calls)
+            .count();
+        assert_eq!(calls_count, 1, "CALLS edge with dangling target should NOT be pruned");
     }
 }
