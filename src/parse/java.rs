@@ -195,7 +195,8 @@ fn extract_class(
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Java)
         .project(ctx.project)
-        .is_global(true);
+        .is_global(true)
+        .is_exported(true);
     if let Some(sig) = signature {
         builder = builder.signature(sig);
     }
@@ -334,30 +335,43 @@ fn extract_method(
 // ---------------------------------------------------------------------------
 
 fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
-    // import_declaration has a `name` field (scoped_identifier for
-    // `java.util.List`, or identifier for single-segment imports) and an
-    // optional `wildcard` child for `import java.util.*`.
+    // import_declaration has no named fields (per node-types.json); its
+    // children are `asterisk` (wildcard), `identifier`, or `scoped_identifier`.
     let line = node.start_position().row as u32 + 1;
+    let mut is_wildcard = false;
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(child) = node.named_child(i) {
+            if child.kind() == "asterisk" {
+                is_wildcard = true;
+                break;
+            }
+        }
+    }
+
     let path = if let Some(name_node) = node.child_by_field_name("name") {
         node_text(name_node, source).map(String::from)
     } else {
-        // Fallback: walk named children for a scoped_identifier/identifier.
+        let mut found = None;
         for i in 0..node.named_child_count() as u32 {
             if let Some(child) = node.named_child(i) {
-                match child.kind() {
-                    "scoped_identifier" | "identifier" => {
-                        return push_import_text(child, source, line, result);
-                    }
-                    _ => {}
+                if child.kind() == "scoped_identifier" || child.kind() == "identifier" {
+                    found = node_text(child, source).map(String::from);
+                    break;
                 }
             }
         }
-        None
+        found
     };
+
     if let Some(p) = path {
+        let imported_names = if is_wildcard {
+            Vec::new()
+        } else {
+            p.rsplit('.').next().map(|n| vec![n.to_string()]).unwrap_or_default()
+        };
         result.imports.push(ImportInfo {
             source_file: p,
-            imported_names: Vec::new(),
+            imported_names,
             line,
         });
     }
@@ -365,9 +379,14 @@ fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
 
 fn push_import_text(node: Node, source: &str, line: u32, result: &mut ExtractResult) {
     if let Some(text) = node_text(node, source) {
+        let imported_names = text
+            .rsplit('.')
+            .next()
+            .map(|n| vec![n.to_string()])
+            .unwrap_or_default();
         result.imports.push(ImportInfo {
             source_file: text.to_string(),
-            imported_names: Vec::new(),
+            imported_names,
             line,
         });
     }
@@ -790,6 +809,36 @@ mod tests {
             1,
             "interface extends should produce EXTENDS edge: {:?}",
             result.edges
+        );
+    }
+
+    #[test]
+    fn class_is_exported() {
+        let result = extract("public class Foo {}\n");
+        let foo = result.nodes.iter().find(|n| n.name == "Foo").unwrap();
+        assert!(foo.is_exported, "Java class should be exported for cross-file resolution");
+    }
+
+    #[test]
+    fn import_populates_imported_names() {
+        let result = extract("import java.util.List;\nclass Foo {}\n");
+        assert_eq!(result.imports.len(), 1);
+        assert_eq!(result.imports[0].source_file, "java.util.List");
+        assert!(
+            result.imports[0].imported_names.contains(&"List".to_string()),
+            "imported_names should contain 'List', got: {:?}",
+            result.imports[0].imported_names
+        );
+    }
+
+    #[test]
+    fn wildcard_import_skips_names() {
+        let result = extract("import java.util.*;\nclass Foo {}\n");
+        assert_eq!(result.imports.len(), 1);
+        assert!(
+            result.imports[0].imported_names.is_empty(),
+            "wildcard import should not populate imported_names, got: {:?}",
+            result.imports[0].imported_names
         );
     }
 }
