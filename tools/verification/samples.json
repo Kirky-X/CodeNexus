@@ -72,6 +72,33 @@
       "commit": "v3.12.0",
       "expected_node_min": 2000,
       "source": "https://github.com/Reference-LAPACK/lapack.git"
+    },
+    {
+      "name": "cobra",
+      "language": "go",
+      "repo_path": "/home/dev/projects/cobra",
+      "gitnexus_name": "cobra",
+      "commit": "ad460ea",
+      "expected_node_min": 500,
+      "source": "https://github.com/spf13/cobra.git"
+    },
+    {
+      "name": "gson",
+      "language": "java",
+      "repo_path": "/home/dev/projects/gson",
+      "gitnexus_name": "gson",
+      "commit": "c9f3fd5",
+      "expected_node_min": 3000,
+      "source": "https://github.com/google/gson.git"
+    },
+    {
+      "name": "fmt",
+      "language": "c_cpp",
+      "repo_path": "/home/dev/projects/fmt",
+      "gitnexus_name": "fmt",
+      "commit": "6dac6ca",
+      "expected_node_min": 300,
+      "source": "https://github.com/fmtlib/fmt.git"
     }
   ]
 }
