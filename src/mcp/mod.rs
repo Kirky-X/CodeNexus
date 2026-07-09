@@ -310,12 +310,92 @@ async fn trace(symbol: String, trace_type: String, depth: u32) -> Result<TraceOu
     Ok(trace_output(result))
 }
 
+// ---------------------------------------------------------------------------
+// Impact tool (T012)
+// ---------------------------------------------------------------------------
+
+/// JSON-serializable impact analysis result.
+///
+/// Contains the subgraph (nodes + edges) reachable from the target symbol
+/// within `depth` hops, plus summary counts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ImpactOutput {
+    /// The symbol that was analyzed.
+    pub symbol: String,
+    /// The traversal depth used.
+    pub depth: u32,
+    /// Number of nodes in the subgraph.
+    pub node_count: usize,
+    /// Number of edges in the subgraph.
+    pub edge_count: usize,
+    /// Nodes in the subgraph (serialized via `serde_json::to_value`).
+    pub nodes: Vec<Value>,
+    /// Edges in the subgraph (serialized via `serde_json::to_value`).
+    pub edges: Vec<Value>,
+}
+
+/// Converts a [`Graph`] into a JSON-serializable [`ImpactOutput`].
+#[cfg(feature = "mcp")]
+fn impact_output(symbol: String, depth: u32, graph: codenexus::model::Graph) -> ImpactOutput {
+    let nodes: Vec<Value> = graph
+        .nodes
+        .values()
+        .map(|n| serde_json::to_value(n).unwrap_or(Value::Null))
+        .collect();
+    let edges: Vec<Value> = graph
+        .edges
+        .iter()
+        .map(|e| serde_json::to_value(e).unwrap_or(Value::Null))
+        .collect();
+    ImpactOutput {
+        node_count: nodes.len(),
+        edge_count: edges.len(),
+        nodes,
+        edges,
+        symbol,
+        depth,
+    }
+}
+
+/// MCP tool: Analyze the blast radius (upstream callers) of changing a symbol.
+///
+/// Returns the subgraph reachable from `symbol` within `depth` hops, including
+/// node/edge counts for quick assessment.
+#[cfg(feature = "mcp")]
+#[service_api(
+    name = "impact",
+    version = "v1",
+    tool_name = "impact",
+    description = "Analyze the blast radius (upstream callers) of changing a symbol."
+)]
+async fn impact(symbol: String, depth: u32) -> Result<ImpactOutput, ApiError> {
+    let kit = kit().ok_or_else(|| {
+        ApiError::internal_error("MCP server not initialized", "mcp_kit_not_initialized")
+    })?;
+    let trace_engine = kit
+        .require::<TraceKey>()
+        .map_err(|e| mcp_error("Failed to resolve trace capability", e))?;
+    let graph = trace_engine
+        .load_graph(&symbol, depth as usize)
+        .map_err(|e| mcp_error("Impact graph load failed", e))?;
+    Ok(impact_output(symbol, depth, graph))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use codenexus::kit::{build_kit, KitBootstrapConfig};
     #[cfg(feature = "mcp")]
     use codenexus::kit::QueryKey;
+    use std::sync::Mutex;
+
+    /// Serializes MCP tests that share the global KIT's database.
+    ///
+    /// `storage.save_edges()` writes a CSV temp file with a fixed name
+    /// ("coderelation.csv"); concurrent calls from multiple tests race on
+    /// that file. This mutex ensures only one MCP test accesses the
+    /// database at a time.
+    static MCP_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// Verifies that `init_kit` stores the Kit in the global `OnceLock`.
     ///
@@ -355,6 +435,7 @@ mod tests {
     #[cfg(feature = "mcp")]
     #[tokio::test]
     async fn query_tool_executes_cypher() {
+        let _guard = MCP_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Ensure kit is initialized (may already be set by another test in
         // the same process — OnceLock is set-once). We check-then-init, but
         // tolerate the race where another test sets KIT between our check
@@ -399,6 +480,7 @@ mod tests {
     #[cfg(feature = "mcp")]
     #[tokio::test]
     async fn trace_tool_returns_paths() {
+        let _guard = MCP_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Ensure kit is initialized (may already be set by another test).
         if kit().is_none() {
             let tmp = tempfile::NamedTempFile::new().expect("create temp db file");
@@ -460,6 +542,74 @@ mod tests {
         assert!(
             !result.paths.is_empty(),
             "paths should be non-empty for a seeded call graph"
+        );
+    }
+
+    /// Verifies the `impact` MCP tool handler loads a subgraph and returns
+    /// non-zero `node_count` for a seeded call graph.
+    #[cfg(feature = "mcp")]
+    #[tokio::test]
+    async fn impact_tool_returns_subgraph() {
+        let _guard = MCP_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Ensure kit is initialized (may already be set by another test).
+        if kit().is_none() {
+            let tmp = tempfile::NamedTempFile::new().expect("create temp db file");
+            let config = KitBootstrapConfig::new(tmp.path().to_path_buf());
+            let built = build_kit(&config).expect("build_kit should succeed");
+            std::mem::forget(tmp);
+            let _ = init_kit(built);
+        }
+
+        // Seed two Function nodes and a CALLS edge.
+        let k = kit().expect("kit should be initialized");
+        let storage = k
+            .require::<codenexus::kit::StorageKey>()
+            .expect("require_storage");
+        let node_a = codenexus::model::Node::builder(
+            codenexus::model::NodeLabel::Function,
+            "impact_caller",
+            "demo.impact_caller",
+        )
+        .id("f_impact_caller")
+        .project("demo")
+        .file_path("/src/impact_caller.rs")
+        .start_line(1)
+        .end_line(5)
+        .language(codenexus::model::Language::Rust)
+        .build();
+        let node_b = codenexus::model::Node::builder(
+            codenexus::model::NodeLabel::Function,
+            "impact_callee",
+            "demo.impact_callee",
+        )
+        .id("f_impact_callee")
+        .project("demo")
+        .file_path("/src/impact_callee.rs")
+        .start_line(1)
+        .end_line(5)
+        .language(codenexus::model::Language::Rust)
+        .build();
+        storage
+            .save_nodes(&[node_a, node_b], codenexus::model::NodeLabel::Function)
+            .expect("save_nodes");
+        let edge = codenexus::model::Edge::new(
+            "f_impact_caller",
+            "f_impact_callee",
+            codenexus::model::EdgeType::Calls,
+            "demo",
+        );
+        storage.save_edges(&[edge]).expect("save_edges");
+
+        // Call the impact handler.
+        let result = impact("impact_caller".to_string(), 1)
+            .await
+            .expect("impact should succeed");
+
+        // Assert the symbol is echoed back and the subgraph is non-empty.
+        assert_eq!(result.symbol, "impact_caller");
+        assert!(
+            result.node_count > 0,
+            "node_count should be > 0 for a seeded symbol"
         );
     }
 }
