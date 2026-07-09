@@ -157,6 +157,122 @@ impl<T, S> SetCount for HashSet<T, S> {
     }
 }
 
+/// Resolves a C++ `#include` path to a concrete file path in the project.
+///
+/// Given the `#include` directive's `source_file` (e.g. `"foo.h"`,
+/// `"fmt/format.h"`), the file issuing the include (`calling_file`), and the
+/// list of all files in the project, returns the matched file path or `None`.
+///
+/// # Resolution strategy (deterministic — Rule 5)
+///
+/// 1. **Suffix match with boundary check**: `source_file` is matched as a
+///    suffix of each file path in `all_files`, with a path boundary check
+///    (so `"format.h"` matches `"include/fmt/format.h"` but not
+///    `"xformat.h"`).
+/// 2. **Same-directory preference**: when multiple files match, prefer the
+///    one in the same directory as `calling_file` (standard C++
+///    `#include "..."` behavior). Among same-directory matches, the shortest
+///    path wins (most specific).
+/// 3. **Shortest-path fallback**: when no same-directory match exists, the
+///    shortest matching path wins (closest to project root).
+/// 4. **No match → `None`**: system headers (`<iostream>`), external libs,
+///    and missing files return `None`.
+///
+/// # Note on `ImportInfo::source_file`
+///
+/// The parse phase (`cpp.rs::extract_include`) already strips `<>`/`"`
+/// wrappers from `#include` directives, so `source_file` is a clean path
+/// like `"foo.h"` or `"fmt/format.h"`, not `"<foo.h>"` or `"\"foo.h\""`.
+///
+/// # Relationship to `imports.rs::resolve_include_suffix`
+///
+/// This function is intentionally separate from
+/// `ImportResolver::resolve_include_suffix` (in `imports.rs`) despite
+/// similar logic:
+/// - Different input: `&[String]` (file paths) vs `HashMap<String, String>`
+///   (file path → node id)
+/// - Different output: file path vs node id
+/// - Different concern: `IncludesGraph` construction (scope filtering) vs
+///   `IMPORTS` edge construction (graph persistence)
+/// - Decoupling: `IncludesGraph` should not depend on `ImportResolver`
+///   internals
+///
+/// # Arguments
+///
+/// * `source_file` - The `#include` path (e.g. `"foo.h"`, `"fmt/format.h"`).
+/// * `calling_file` - The file issuing the `#include` (e.g. `"src/main.cpp"`).
+/// * `all_files` - All file paths in the project (e.g. from `parse.results`).
+///
+/// # Returns
+///
+/// The matched file path (owned `String`), or `None` if no match.
+///
+/// # Examples
+///
+/// ```
+/// use codenexus::resolve::includes_graph::resolve_include;
+///
+/// // Same-directory preference: src/foo.h wins over include/foo.h.
+/// let all = vec!["src/foo.h".to_string(), "include/foo.h".to_string()];
+/// assert_eq!(
+///     resolve_include("foo.h", "src/main.cpp", &all),
+///     Some("src/foo.h".to_string())
+/// );
+///
+/// // No same-directory match: falls back to any project file.
+/// let all = vec!["include/bar.h".to_string()];
+/// assert_eq!(
+///     resolve_include("bar.h", "src/main.cpp", &all),
+///     Some("include/bar.h".to_string())
+/// );
+///
+/// // System header: no match in project files.
+/// let all = vec!["src/main.cpp".to_string()];
+/// assert_eq!(resolve_include("iostream", "src/main.cpp", &all), None);
+/// ```
+pub fn resolve_include(
+    source_file: &str,
+    calling_file: &str,
+    all_files: &[String],
+) -> Option<String> {
+    let path_norm = source_file.replace('\\', "/");
+    let calling_dir = calling_file
+        .rsplit_once('/')
+        .map(|(dir, _)| dir)
+        .unwrap_or("");
+
+    let mut same_dir: Option<&String> = None;
+    let mut other: Option<&String> = None;
+
+    for file in all_files {
+        let file_norm = file.replace('\\', "/");
+        if file_norm.ends_with(path_norm.as_str()) {
+            let prefix_len = file_norm.len() - path_norm.len();
+            // Boundary check: prefix must be empty or end with '/' (so
+            // "format.h" matches "include/fmt/format.h" but not "xformat.h").
+            if prefix_len == 0 || file_norm.as_bytes()[prefix_len - 1] == b'/' {
+                let file_dir = file_norm
+                    .rsplit_once('/')
+                    .map(|(dir, _)| dir)
+                    .unwrap_or("");
+                if file_dir == calling_dir {
+                    // Same directory — pick shortest path for determinism.
+                    if same_dir.as_ref().map_or(true, |s| s.len() > file.len()) {
+                        same_dir = Some(file);
+                    }
+                } else {
+                    // Other directory — pick shortest path (closest to root).
+                    if other.as_ref().map_or(true, |s| s.len() > file.len()) {
+                        other = Some(file);
+                    }
+                }
+            }
+        }
+    }
+
+    same_dir.or(other).cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,5 +478,128 @@ mod tests {
         let mut graph = IncludesGraph::new();
         graph.add_include("a", "a"); // self-edge ignored
         assert!(graph.is_empty());
+    }
+
+    // --- resolve_include (basename matching) ---
+
+    fn make_files(paths: &[&str]) -> Vec<String> {
+        paths.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn resolve_include_quoted_prefers_same_dir() {
+        // Spec T002 Red test: resolve_include("foo.h", "src/main.cpp",
+        // &["src/foo.h", "include/foo.h"]) returns "src/foo.h" (same dir).
+        let all = make_files(&["src/foo.h", "include/foo.h"]);
+        let result = resolve_include("foo.h", "src/main.cpp", &all);
+        assert_eq!(result, Some("src/foo.h".to_string()));
+    }
+
+    #[test]
+    fn resolve_include_angled_matches_anywhere() {
+        // Spec T002 Red test: resolve_include("bar.h", "src/main.cpp",
+        // &["include/bar.h"]) returns "include/bar.h" (no same-dir match,
+        // falls back to any project file).
+        let all = make_files(&["include/bar.h"]);
+        let result = resolve_include("bar.h", "src/main.cpp", &all);
+        assert_eq!(result, Some("include/bar.h".to_string()));
+    }
+
+    #[test]
+    fn resolve_include_no_match_returns_none() {
+        // Spec T002 Red test: <iostream> (system header) → None.
+        let all = make_files(&["src/main.cpp", "src/foo.h"]);
+        let result = resolve_include("iostream", "src/main.cpp", &all);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn resolve_include_partial_path_matches() {
+        // C++ #include "fmt/format.h" → include/fmt/format.h
+        // (partial path suffix match with boundary check).
+        let all = make_files(&["src/main.cpp", "include/fmt/format.h"]);
+        let result = resolve_include("fmt/format.h", "src/main.cpp", &all);
+        assert_eq!(result, Some("include/fmt/format.h".to_string()));
+    }
+
+    #[test]
+    fn resolve_include_boundary_check_rejects_partial_filename() {
+        // "format.h" should NOT match "xformat.h" (no path boundary).
+        let all = make_files(&["src/xformat.h"]);
+        let result = resolve_include("format.h", "src/main.cpp", &all);
+        assert_eq!(result, None, "xformat.h should not match format.h (no boundary)");
+    }
+
+    #[test]
+    fn resolve_include_exact_match_returns_file() {
+        // source_file exactly equals a file path → match (prefix_len == 0).
+        let all = make_files(&["foo.h", "src/main.cpp"]);
+        let result = resolve_include("foo.h", "src/main.cpp", &all);
+        assert_eq!(result, Some("foo.h".to_string()));
+    }
+
+    #[test]
+    fn resolve_include_same_dir_picks_shortest_path() {
+        // When multiple same-directory files match, pick the shortest
+        // (most specific) for determinism.
+        let all = make_files(&["src/a/b.h", "src/b.h"]);
+        // Both match "b.h" and are in "src" directory relative to
+        // calling_file "src/main.cpp". Wait — "src/a/b.h" is in "src/a",
+        // not "src". Let me fix the test.
+        // Actually: calling_dir = "src", "src/a/b.h" dir = "src/a",
+        // "src/b.h" dir = "src". So only "src/b.h" is same-dir.
+        let result = resolve_include("b.h", "src/main.cpp", &all);
+        assert_eq!(result, Some("src/b.h".to_string()));
+    }
+
+    #[test]
+    fn resolve_include_other_dir_picks_shortest_path() {
+        // When no same-directory match, pick the shortest matching path
+        // (closest to project root) for determinism.
+        let all = make_files(&["include/fmt/format.h", "vendor/deep/fmt/format.h"]);
+        let result = resolve_include("fmt/format.h", "src/main.cpp", &all);
+        assert_eq!(
+            result,
+            Some("include/fmt/format.h".to_string()),
+            "shorter path should win when no same-dir match"
+        );
+    }
+
+    #[test]
+    fn resolve_include_empty_source_returns_none() {
+        let all = make_files(&["src/main.cpp"]);
+        let result = resolve_include("", "src/main.cpp", &all);
+        // Empty source_file would match every file (all end with ""), but
+        // boundary check requires prefix_len == 0 or boundary '/'. For
+        // "src/main.cpp" with empty path_norm, prefix_len = 13, and byte
+        // at [12] is 'c' (not '/'), so no match. Returns None.
+        // Actually: "" ends_with "" is true for all strings. prefix_len =
+        // file.len(). boundary check: file.as_bytes()[file.len()-1] is
+        // 'p' (not '/'), so rejected. All files rejected → None.
+        assert_eq!(result, None, "empty source_file should not match anything");
+    }
+
+    #[test]
+    fn resolve_include_empty_all_files_returns_none() {
+        let all: Vec<String> = vec![];
+        let result = resolve_include("foo.h", "src/main.cpp", &all);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn resolve_include_handles_backslash_paths() {
+        // Windows-style paths: backslashes converted to forward slashes.
+        let all = make_files(&["src\\foo.h"]);
+        let result = resolve_include("foo.h", "src\\main.cpp", &all);
+        assert_eq!(result, Some("src\\foo.h".to_string()));
+    }
+
+    #[test]
+    fn resolve_include_calling_file_in_root_no_dir() {
+        // calling_file has no '/' → calling_dir = "". Files in root
+        // (no '/') have file_dir = "" → match as same_dir.
+        let all = make_files(&["foo.h", "src/foo.h"]);
+        let result = resolve_include("foo.h", "main.cpp", &all);
+        assert_eq!(result, Some("foo.h".to_string()), "root-level file preferred when caller is in root");
     }
 }
