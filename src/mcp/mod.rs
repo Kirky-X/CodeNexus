@@ -35,7 +35,7 @@ use codenexus::kit::QueryKey;
 #[cfg(feature = "mcp")]
 use codenexus::kit::TraceKey;
 #[cfg(feature = "mcp")]
-use codenexus::query::QueryResult;
+use codenexus::query::{QueryResult, SearchResult};
 #[cfg(feature = "mcp")]
 use codenexus::trace::{TraceEdge, TraceNode, TraceResult, TraceType};
 #[cfg(feature = "mcp")]
@@ -381,6 +381,69 @@ async fn impact(symbol: String, depth: u32) -> Result<ImpactOutput, ApiError> {
     Ok(impact_output(symbol, depth, graph))
 }
 
+// ---------------------------------------------------------------------------
+// Search tool (T013)
+// ---------------------------------------------------------------------------
+
+/// JSON-serializable search result.
+///
+/// Contains the count and the search results as JSON objects.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SearchOutput {
+    /// Number of results returned.
+    pub count: usize,
+    /// Search results (JSON objects with name/label/filePath/startLine/
+    /// qualifiedName/score).
+    pub results: Vec<Value>,
+}
+
+/// Converts a [`SearchResult`] to a JSON object.
+///
+/// [`SearchResult`] doesn't derive `Serialize`, so we manually map its fields
+/// to a JSON object matching the MCP output schema.
+#[cfg(feature = "mcp")]
+fn search_result_to_json(r: &SearchResult) -> Value {
+    json!({
+        "name": r.name,
+        "label": r.label,
+        "filePath": r.file_path,
+        "startLine": r.start_line,
+        "qualifiedName": r.qualified_name,
+        "score": r.score,
+    })
+}
+
+/// MCP tool: Search for symbols by name or content (full-text or semantic).
+///
+/// When `semantic` is true, uses BM25 full-text search; otherwise uses
+/// structured name search (CONTAINS).
+#[cfg(feature = "mcp")]
+#[service_api(
+    name = "search",
+    version = "v1",
+    tool_name = "search",
+    description = "Search for symbols by name or content (full-text or semantic)."
+)]
+async fn search(text: String, semantic: bool, limit: u32) -> Result<SearchOutput, ApiError> {
+    let kit = kit().ok_or_else(|| {
+        ApiError::internal_error("MCP server not initialized", "mcp_kit_not_initialized")
+    })?;
+    let q = kit
+        .require::<QueryKey>()
+        .map_err(|e| mcp_error("Failed to resolve query capability", e))?;
+    let results = if semantic {
+        q.fulltext_search(&text, None, limit as usize)
+    } else {
+        q.search(&text, None, limit as usize)
+    }
+    .map_err(|e| mcp_error("Search execution failed", e))?;
+    let results: Vec<Value> = results.iter().map(search_result_to_json).collect();
+    Ok(SearchOutput {
+        count: results.len(),
+        results,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -610,6 +673,55 @@ mod tests {
         assert!(
             result.node_count > 0,
             "node_count should be > 0 for a seeded symbol"
+        );
+    }
+
+    /// Verifies the `search` MCP tool handler searches for symbols by name and
+    /// returns a non-empty `SearchOutput`.
+    ///
+    /// Seeds a Function node via the Query module's own connection (matching
+    /// the `query_tool_executes_cypher` pattern — search uses QueryKey's
+    /// connection, so seed via the same connection), then calls the `search`
+    /// handler and asserts the seeded node is returned.
+    #[cfg(feature = "mcp")]
+    #[tokio::test]
+    async fn search_tool_returns_results() {
+        let _guard = MCP_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Ensure kit is initialized (may already be set by another test).
+        if kit().is_none() {
+            let tmp = tempfile::NamedTempFile::new().expect("create temp db file");
+            let config = KitBootstrapConfig::new(tmp.path().to_path_buf());
+            let built = build_kit(&config).expect("build_kit should succeed");
+            std::mem::forget(tmp);
+            let _ = init_kit(built);
+        }
+
+        // Seed a Function node via the Query module's own connection — search
+        // uses QueryKey's connection, so seed via the same connection.
+        let k = kit().expect("kit should be initialized");
+        let query_engine = k.require::<QueryKey>().expect("require_query");
+        query_engine
+            .cypher("CREATE (:Function {id: 'search_tool_test', name: 'searchable_func', qualifiedName: 'demo.searchable_func', filePath: '/src/search.rs', startLine: 1, project: 'demo'});")
+            .expect("seed function");
+
+        // Call the search handler — search for "searchable" (non-semantic).
+        let result = search("searchable".to_string(), false, 10)
+            .await
+            .expect("search should succeed");
+
+        // Assert non-empty results containing the seeded symbol.
+        assert!(
+            result.count > 0,
+            "count should be > 0 for a seeded symbol matching 'searchable'"
+        );
+        let names: Vec<&str> = result
+            .results
+            .iter()
+            .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
+            .collect();
+        assert!(
+            names.iter().any(|n| n.contains("searchable")),
+            "results should contain a symbol with 'searchable' in its name, got: {names:?}"
         );
     }
 }
