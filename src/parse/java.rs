@@ -154,6 +154,17 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             extract_call(node, source, ctx, result);
             visit_children(node, source, ctx, result);
         }
+        "object_creation_expression" => {
+            // BUG-J1: `new Foo()` must be extracted as a call to the
+            // constructor. gitnexus counts `new Foo()` as a CALLS edge.
+            extract_object_creation(node, source, ctx, result);
+            visit_children(node, source, ctx, result);
+        }
+        "explicit_constructor_invocation" => {
+            // BUG-J1: `super()` / `this()` in constructor bodies.
+            extract_explicit_constructor(node, source, ctx, result);
+            visit_children(node, source, ctx, result);
+        }
         _ => {
             visit_children(node, source, ctx, result);
         }
@@ -326,7 +337,9 @@ fn extract_method(
         builder = builder.signature(sig);
     }
     let model_node = builder.build();
-    add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
+    // BUG-J2: methods do NOT get a DEFINES edge. DEFINES semantics is
+    // file -> top-level definition; methods are class members, not
+    // top-level. Only class/interface/enum (extract_class) create DEFINES.
     result.push_node(model_node);
 }
 
@@ -398,6 +411,60 @@ fn extract_call(
     result.calls.push(CallInfo {
         caller_qn,
         callee_name: callee,
+        line: node.start_position().row as u32 + 1,
+        args,
+    });
+}
+
+/// Extracts `new Foo()` (object_creation_expression) as a call to the
+/// constructor (BUG-J1). The callee name is the type name.
+fn extract_object_creation(
+    node: Node,
+    source: &str,
+    ctx: &VisitContext<'_>,
+    result: &mut ExtractResult,
+) {
+    let Some(type_node) = node.child_by_field_name("type") else {
+        return;
+    };
+    let Some(callee) = node_text(type_node, source).map(String::from) else {
+        return;
+    };
+    let args = call_arguments(node, source);
+    let caller_qn = ctx
+        .current_func
+        .map(|name| make_qn(ctx.file_path, name, ctx.project, ctx.current_parent));
+    result.calls.push(CallInfo {
+        caller_qn,
+        callee_name: callee,
+        line: node.start_position().row as u32 + 1,
+        args,
+    });
+}
+
+/// Extracts `super()` / `this()` (explicit_constructor_invocation) as a call
+/// (BUG-J1). The callee name is "super" or "this".
+fn extract_explicit_constructor(
+    node: Node,
+    source: &str,
+    ctx: &VisitContext<'_>,
+    result: &mut ExtractResult,
+) {
+    let text = node_text(node, source).unwrap_or("");
+    let callee = if text.trim_start().starts_with("super") {
+        "super"
+    } else if text.trim_start().starts_with("this") {
+        "this"
+    } else {
+        return;
+    };
+    let args = call_arguments(node, source);
+    let caller_qn = ctx
+        .current_func
+        .map(|name| make_qn(ctx.file_path, name, ctx.project, ctx.current_parent));
+    result.calls.push(CallInfo {
+        caller_qn,
+        callee_name: callee.to_string(),
         line: node.start_position().row as u32 + 1,
         args,
     });
@@ -824,6 +891,65 @@ mod tests {
             result.imports[0].imported_names.is_empty(),
             "wildcard import should not populate imported_names, got: {:?}",
             result.imports[0].imported_names
+        );
+    }
+
+    #[test]
+    fn method_does_not_create_defines_edge() {
+        // BUG-J2: DEFINES edge semantics is file -> top-level definition.
+        // Methods are not top-level (they live inside a class), so they must
+        // NOT produce a DEFINES edge. gitnexus only creates DEFINES for
+        // class/interface/enum. The previous code created one DEFINES per
+        // method, inflating the DEFINES count ~5x on gson.
+        let result = extract("class Foo { void bar() {} void baz() {} }\n");
+        let defines_edges: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Defines)
+            .collect();
+        assert_eq!(
+            defines_edges.len(),
+            1,
+            "only the class should have a DEFINES edge, got {:?}",
+            defines_edges
+        );
+    }
+
+    #[test]
+    fn extracts_object_creation_as_call() {
+        // BUG-J1: `new Foo()` is an object_creation_expression which was not
+        // handled as a call. gitnexus counts `new Foo()` as a CALLS edge to
+        // the constructor. Without this, ~77% of Java CALLS were missed on
+        // gson (CN=1,415 vs GN=6,081).
+        let result = extract("class Foo { Foo make() { return new Foo(); } }\n");
+        let new_calls: Vec<_> = result
+            .calls
+            .iter()
+            .filter(|c| c.callee_name == "Foo")
+            .collect();
+        assert_eq!(
+            new_calls.len(),
+            1,
+            "should extract `new Foo()` as a call to Foo: {:?}",
+            result.calls
+        );
+    }
+
+    #[test]
+    fn extracts_explicit_constructor_invocation_as_call() {
+        // BUG-J1: `super()` and `this()` are explicit_constructor_invocation
+        // nodes which were not handled as calls.
+        let result = extract("class Foo { Foo() { super(); } }\n");
+        let super_calls: Vec<_> = result
+            .calls
+            .iter()
+            .filter(|c| c.callee_name == "super")
+            .collect();
+        assert_eq!(
+            super_calls.len(),
+            1,
+            "should extract `super()` as a call: {:?}",
+            result.calls
         );
     }
 }
