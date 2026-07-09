@@ -93,10 +93,10 @@ pub struct ComplexityThresholds {
     /// classifies `value >= red_min → Green`, `value >= yellow_min → Yellow`,
     /// else `Red`.
     pub maintainability: (u32, u32),
-    /// Time complexity thresholds `(yellow, red)` as ordinal discriminants —
-    /// default `(2, 4)` (ON=2, ON2=4). Replaced by strong `(TimeComplexity,
-    /// TimeComplexity)` in T012.
-    pub time_complexity: (u8, u8),
+    /// Time complexity thresholds `(yellow_max, red_max)` — default
+    /// `(ON, ON2)`. `from_time_complexity` classifies `tc <= yellow → Green`,
+    /// `tc <= red → Yellow`, else `Red` (using `TimeComplexity::Ord`).
+    pub time_complexity: (TimeComplexity, TimeComplexity),
     /// Space complexity thresholds `(yellow, red)` as ordinal discriminants —
     /// default `(0, 1)` (O1=0, ON=1). Replaced by strong `(SpaceComplexity,
     /// SpaceComplexity)` in T015.
@@ -112,7 +112,7 @@ impl Default for ComplexityThresholds {
             func_length: (100, 200),
             halstead_volume: (1000, 8000),
             maintainability: (65, 85),
-            time_complexity: (2, 4),
+            time_complexity: (TimeComplexity::ON, TimeComplexity::ON2),
             space_complexity: (0, 1),
         }
     }
@@ -190,6 +190,21 @@ impl Severity {
             Severity::Red
         }
     }
+
+    /// Classifies time complexity against `thresholds.time_complexity`.
+    ///
+    /// `tc <= yellow → Green`, `tc <= red → Yellow`, else `Red`, using
+    /// `TimeComplexity::Ord` (`O1 < OLogN < ON < ONLogN < ON2 < ON3 < O2N`).
+    pub fn from_time_complexity(tc: TimeComplexity, thresholds: &ComplexityThresholds) -> Severity {
+        let (yellow, red) = thresholds.time_complexity;
+        if tc <= yellow {
+            Severity::Green
+        } else if tc <= red {
+            Severity::Yellow
+        } else {
+            Severity::Red
+        }
+    }
 }
 
 /// A single function's complexity metrics with overall severity.
@@ -221,6 +236,8 @@ pub struct ComplexityEntry {
     pub halstead: HalsteadMetrics,
     /// Maintainability Index (Microsoft 2007, 0-100, higher=better) (T009).
     pub maintainability_index: f64,
+    /// Estimated time complexity class (T012).
+    pub time_complexity: TimeComplexity,
 }
 
 /// Halstead complexity metrics (Halstead 1977). Tracks distinct and total
@@ -257,6 +274,7 @@ impl ComplexityEntry {
             Severity::from_nesting(self.nesting_depth, thresholds),
             Severity::from_func_length(self.function_length, thresholds),
             Severity::from_maintainability(self.maintainability_index, thresholds),
+            Severity::from_time_complexity(self.time_complexity, thresholds),
         ]
         .into_iter()
         .max()
@@ -893,6 +911,12 @@ impl<'a> ComplexityAnalyzer<'a> {
                 let halstead = calc_halstead(&tree, content.as_bytes(), language);
                 let maintainability_index =
                     calc_maintainability_index(cyclomatic, halstead.volume, function_length);
+                let time_complexity = estimate_time_complexity(
+                    &tree,
+                    content.as_bytes(),
+                    language,
+                    &name,
+                );
 
                 let mut entry = ComplexityEntry {
                     name,
@@ -908,6 +932,7 @@ impl<'a> ComplexityAnalyzer<'a> {
                     overall_severity: Severity::Green,
                     halstead,
                     maintainability_index,
+                    time_complexity,
                 };
                 entry.overall_severity = entry.compute_overall_severity(&self.thresholds);
                 entries.push(entry);
@@ -1004,15 +1029,15 @@ mod tests {
         let t = ComplexityThresholds::default();
         assert_eq!(t.halstead_volume, (1000, 8000));
         assert_eq!(t.maintainability, (65, 85));
-        assert_eq!(t.time_complexity, (2, 4));
+        assert_eq!(t.time_complexity, (TimeComplexity::ON, TimeComplexity::ON2));
         assert_eq!(t.space_complexity, (0, 1));
     }
 
     /// Builds a `ComplexityEntry` with the given metric values and placeholder
     /// metadata. `overall_severity` is set to `Green` and should be recomputed
     /// via `compute_overall_severity` in the test. `maintainability_index` is
-    /// set to `100.0` (neutral Green) so it does not pollute the overall
-    /// severity in tests focused on other metrics.
+    /// set to `100.0` and `time_complexity` to `O1` (neutral Green) so they do
+    /// not pollute the overall severity in tests focused on other metrics.
     fn make_entry(cyclomatic: u32, cognitive: u32, nesting: u32, length: u32) -> ComplexityEntry {
         ComplexityEntry {
             name: "f".to_string(),
@@ -1028,6 +1053,7 @@ mod tests {
             overall_severity: Severity::Green,
             halstead: HalsteadMetrics::default(),
             maintainability_index: 100.0,
+            time_complexity: TimeComplexity::O1,
         }
     }
 
@@ -1764,6 +1790,78 @@ fn parallel(a: i32) {
             mi.maintainability_index.is_finite(),
             "MI should be finite, got {}",
             mi.maintainability_index
+        );
+    }
+
+    // --- T012: from_time_complexity + analyze_includes_time_complexity tests ---
+
+    #[test]
+    fn from_time_complexity_classification() {
+        let t = ComplexityThresholds::default();
+        // Default: (yellow=ON, red=ON2).
+        // tc <= ON → Green.
+        assert_eq!(Severity::from_time_complexity(TimeComplexity::O1, &t), Severity::Green);
+        assert_eq!(Severity::from_time_complexity(TimeComplexity::ON, &t), Severity::Green);
+        // ON < tc <= ON2 → Yellow.
+        assert_eq!(Severity::from_time_complexity(TimeComplexity::ONLogN, &t), Severity::Yellow);
+        assert_eq!(Severity::from_time_complexity(TimeComplexity::ON2, &t), Severity::Yellow);
+        // tc > ON2 → Red.
+        assert_eq!(Severity::from_time_complexity(TimeComplexity::ON3, &t), Severity::Red);
+        assert_eq!(Severity::from_time_complexity(TimeComplexity::O2N, &t), Severity::Red);
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn analyze_includes_time_complexity() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Empty function → no loops → O1.
+        create_function_with_content(
+            &kit,
+            "f_tc_empty",
+            "demo",
+            "tc_empty",
+            "demo.tc_empty",
+            "/src/lib.rs",
+            1,
+            1,
+            "fn tc_empty() {}",
+        );
+        // Recursive function → O2N.
+        create_function_with_content(
+            &kit,
+            "f_tc_rec",
+            "demo",
+            "tc_rec",
+            "demo.tc_rec",
+            "/src/lib.rs",
+            1,
+            1,
+            "fn tc_rec(n: i32) { tc_rec(n - 1); }",
+        );
+
+        let storage = storage(&kit);
+        let analyzer = ComplexityAnalyzer::new(&*storage);
+        let result = analyzer.analyze("demo").expect("analyze");
+
+        let empty = result
+            .iter()
+            .find(|e| e.name == "tc_empty")
+            .expect("tc_empty entry");
+        assert_eq!(
+            empty.time_complexity,
+            TimeComplexity::O1,
+            "empty function should be O(1)"
+        );
+
+        let rec = result
+            .iter()
+            .find(|e| e.name == "tc_rec")
+            .expect("tc_rec entry");
+        assert_eq!(
+            rec.time_complexity,
+            TimeComplexity::O2N,
+            "recursive function should be O(2^n)"
         );
     }
 
