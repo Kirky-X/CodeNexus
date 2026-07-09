@@ -181,10 +181,12 @@ pub fn is_branch_node(language: Language, node_type: &str) -> bool {
         Language::Rust => matches!(
             node_type,
             "if_expression"
+                | "if_let_expression"
                 | "match_expression"
                 | "for_expression"
                 | "while_expression"
                 | "loop_expression"
+                | "try_expression"
         ),
         #[cfg(feature = "lang-c")]
         Language::C => matches!(
@@ -194,24 +196,44 @@ pub fn is_branch_node(language: Language, node_type: &str) -> bool {
         #[cfg(feature = "lang-cpp")]
         Language::Cpp => matches!(
             node_type,
-            "if_statement" | "for_statement" | "while_statement" | "switch_statement"
+            "if_statement"
+                | "for_statement"
+                | "while_statement"
+                | "switch_statement"
+                | "try_statement"
+                | "catch_clause"
+                | "throw_statement"
         ),
         #[cfg(feature = "lang-python")]
         Language::Python => matches!(
             node_type,
-            "if_statement" | "for_statement" | "while_statement" | "try_statement"
+            "if_statement"
+                | "for_statement"
+                | "while_statement"
+                | "try_statement"
+                | "except_clause"
         ),
         #[cfg(feature = "lang-typescript")]
         Language::TypeScript => matches!(
             node_type,
-            "if_statement" | "for_statement" | "while_statement" | "switch_case"
+            "if_statement"
+                | "for_statement"
+                | "while_statement"
+                | "switch_case"
+                | "try_statement"
+                | "catch_clause"
         ),
         #[cfg(feature = "lang-go")]
         Language::Go => matches!(node_type, "if_statement" | "for_statement" | "switch"),
         #[cfg(feature = "lang-java")]
         Language::Java => matches!(
             node_type,
-            "if_statement" | "for_statement" | "while_statement" | "switch_expression"
+            "if_statement"
+                | "for_statement"
+                | "while_statement"
+                | "switch_expression"
+                | "try_statement"
+                | "catch_clause"
         ),
         #[cfg(feature = "lang-fortran")]
         Language::Fortran => matches!(node_type, "if_statement" | "do_statement"),
@@ -619,6 +641,42 @@ mod tests {
         assert!(!is_branch_node(Language::Rust, "identifier"));
         assert!(!is_branch_node(Language::Rust, "string_literal"));
         assert!(!is_branch_node(Language::Rust, "totally_made_up_node"));
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn is_branch_node_rust_try_expression() {
+        assert!(is_branch_node(Language::Rust, "try_expression"));
+        assert!(is_branch_node(Language::Rust, "if_let_expression"));
+    }
+
+    #[cfg(feature = "lang-python")]
+    #[test]
+    fn is_branch_node_python_except_clause() {
+        assert!(is_branch_node(Language::Python, "except_clause"));
+        assert!(is_branch_node(Language::Python, "try_statement"));
+    }
+
+    #[cfg(feature = "lang-cpp")]
+    #[test]
+    fn is_branch_node_cpp_throw_statement() {
+        assert!(is_branch_node(Language::Cpp, "throw_statement"));
+        assert!(is_branch_node(Language::Cpp, "try_statement"));
+        assert!(is_branch_node(Language::Cpp, "catch_clause"));
+    }
+
+    #[cfg(feature = "lang-typescript")]
+    #[test]
+    fn is_branch_node_typescript_try_catch() {
+        assert!(is_branch_node(Language::TypeScript, "try_statement"));
+        assert!(is_branch_node(Language::TypeScript, "catch_clause"));
+    }
+
+    #[cfg(feature = "lang-java")]
+    #[test]
+    fn is_branch_node_java_try_catch() {
+        assert!(is_branch_node(Language::Java, "try_statement"));
+        assert!(is_branch_node(Language::Java, "catch_clause"));
     }
 
     // --- T007: calc_cyclomatic tests ---
