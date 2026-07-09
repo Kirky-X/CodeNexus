@@ -252,6 +252,23 @@ impl Severity {
             Severity::Red
         }
     }
+
+    /// Classifies Halstead volume against `thresholds.halstead_volume`.
+    ///
+    /// `value as u32 <= green_max → Green`, `<= yellow_max → Yellow`, else `Red`.
+    /// `green_max = yellow_max / 2` (consistent with `from_cyclomatic`).
+    pub fn from_halstead_volume(value: f64, thresholds: &ComplexityThresholds) -> Severity {
+        let yellow_max = thresholds.halstead_volume.0;
+        let green_max = (yellow_max / 2).max(1);
+        let v = value as u32;
+        if v <= green_max {
+            Severity::Green
+        } else if v <= yellow_max {
+            Severity::Yellow
+        } else {
+            Severity::Red
+        }
+    }
 }
 
 /// A single function's complexity metrics with overall severity.
@@ -322,6 +339,7 @@ impl ComplexityEntry {
             Severity::from_cognitive(self.cognitive, thresholds),
             Severity::from_nesting(self.nesting_depth, thresholds),
             Severity::from_func_length(self.function_length, thresholds),
+            Severity::from_halstead_volume(self.halstead.volume, thresholds),
             Severity::from_maintainability(self.maintainability_index, thresholds),
             Severity::from_time_complexity(self.time_complexity, thresholds),
             Severity::from_space_complexity(self.space_complexity, thresholds),
@@ -2146,6 +2164,57 @@ fn parallel(a: i32) {
             alloc.space_complexity,
             SpaceComplexity::ON,
             "function with Vec::new() should be O(n)"
+        );
+    }
+
+    // --- T025: from_halstead_volume tests ---
+
+    #[test]
+    fn from_halstead_volume_low_is_green() {
+        let t = ComplexityThresholds::default();
+        // Default: (yellow_max=1000, red_max=8000). green_max = 500.
+        assert_eq!(Severity::from_halstead_volume(0.0, &t), Severity::Green);
+        assert_eq!(Severity::from_halstead_volume(100.0, &t), Severity::Green);
+        assert_eq!(Severity::from_halstead_volume(500.0, &t), Severity::Green);
+    }
+
+    #[test]
+    fn from_halstead_volume_mid_is_yellow() {
+        let t = ComplexityThresholds::default();
+        assert_eq!(Severity::from_halstead_volume(501.0, &t), Severity::Yellow);
+        assert_eq!(Severity::from_halstead_volume(1000.0, &t), Severity::Yellow);
+    }
+
+    #[test]
+    fn from_halstead_volume_high_is_red() {
+        let t = ComplexityThresholds::default();
+        assert_eq!(Severity::from_halstead_volume(1001.0, &t), Severity::Red);
+        assert_eq!(Severity::from_halstead_volume(8000.0, &t), Severity::Red);
+        assert_eq!(Severity::from_halstead_volume(10000.0, &t), Severity::Red);
+    }
+
+    #[test]
+    fn from_halstead_volume_custom_thresholds() {
+        let t = ComplexityThresholds {
+            halstead_volume: (100, 500),
+            ..Default::default()
+        };
+        assert_eq!(Severity::from_halstead_volume(50.0, &t), Severity::Green);
+        assert_eq!(Severity::from_halstead_volume(100.0, &t), Severity::Yellow);
+        assert_eq!(Severity::from_halstead_volume(600.0, &t), Severity::Red);
+    }
+
+    #[test]
+    fn compute_overall_severity_includes_halstead_volume() {
+        // Entry with very high halstead volume → should be Red overall.
+        let mut entry = make_entry(5, 5, 2, 20);
+        entry.halstead.volume = 10000.0;
+        let thresholds = ComplexityThresholds::default();
+        entry.overall_severity = entry.compute_overall_severity(&thresholds);
+        assert_eq!(
+            entry.overall_severity,
+            Severity::Red,
+            "high halstead volume should make overall Red"
         );
     }
 
