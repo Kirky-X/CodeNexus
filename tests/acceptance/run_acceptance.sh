@@ -19,7 +19,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 FIXTURES_DIR="${SCRIPT_DIR}/fixtures"
 RESULTS_DIR="${SCRIPT_DIR}/results"
-DB_PATH="${SCRIPT_DIR}/acceptance.lbug"
 VERIFY_RESULTS_DIR="${PROJECT_ROOT}/tools/verification/results"
 SUMMARY_FILE="${RESULTS_DIR}/summary.md"
 
@@ -138,7 +137,7 @@ for project in "${PROJECTS[@]}"; do
   fi
 
   # 2. Index with CodeNexus.
-  run_or_echo cargo run --release --bin codenexus -- index "$fixture_path" --name "$name" --db "$DB_PATH"
+  run_or_echo cargo run --release --bin codenexus -- index "$fixture_path" --name "$name"
 
   # 3. Cross-validate with codenexus-verify.
   #    --gitnexus-binary is a global flag (before the subcommand).
