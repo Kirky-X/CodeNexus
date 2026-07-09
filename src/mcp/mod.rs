@@ -40,6 +40,8 @@ use codenexus::kit::QueryKey;
 #[cfg(feature = "mcp")]
 use codenexus::kit::TraceKey;
 #[cfg(feature = "mcp")]
+use codenexus::query::validate_cypher_subset;
+#[cfg(feature = "mcp")]
 use codenexus::query::{QueryResult, SearchResult};
 #[cfg(feature = "mcp")]
 use codenexus::trace::{TraceEdge, TraceNode, TraceResult, TraceType};
@@ -200,6 +202,8 @@ async fn query(cypher: String) -> Result<QueryOutput, ApiError> {
     let q = kit
         .require::<QueryKey>()
         .map_err(|e| mcp_error("Failed to resolve query capability", e))?;
+    validate_cypher_subset(&cypher)
+        .map_err(|e| mcp_error("Cypher validation failed", e))?;
     let result = q
         .cypher(&cypher)
         .map_err(|e| mcp_error("Query execution failed", e))?;
@@ -418,25 +422,25 @@ fn search_result_to_json(r: &SearchResult) -> Value {
     })
 }
 
-/// MCP tool: Search for symbols by name or content (full-text or semantic).
+/// MCP tool: Search for symbols by name (structured) or content (BM25 full-text).
 ///
-/// When `semantic` is true, uses BM25 full-text search; otherwise uses
+/// When `fulltext` is true, uses BM25 full-text search; otherwise uses
 /// structured name search (CONTAINS).
 #[cfg(feature = "mcp")]
 #[service_api(
     name = "codenexus",
     version = "0.3.0",
     tool_name = "search",
-    description = "Search for symbols by name or content (full-text or semantic)."
+    description = "Search for symbols by name (structured) or content (BM25 full-text)."
 )]
-async fn search(text: String, semantic: bool, limit: u32) -> Result<SearchOutput, ApiError> {
+async fn search(text: String, fulltext: bool, limit: u32) -> Result<SearchOutput, ApiError> {
     let kit = kit().ok_or_else(|| {
         ApiError::internal_error("MCP server not initialized", "mcp_kit_not_initialized")
     })?;
     let q = kit
         .require::<QueryKey>()
         .map_err(|e| mcp_error("Failed to resolve query capability", e))?;
-    let results = if semantic {
+    let results = if fulltext {
         q.fulltext_search(&text, None, limit as usize)
     } else {
         q.search(&text, None, limit as usize)
@@ -591,6 +595,36 @@ mod tests {
         assert_eq!(result.columns, vec!["name".to_string()]);
         assert!(!result.rows.is_empty(), "rows should be non-empty");
         assert_eq!(result.rows[0][0], "query_tool_test");
+    }
+
+    /// Verifies the `query` MCP tool handler rejects destructive Cypher
+    /// clauses (CREATE/DELETE/SET/MERGE/REMOVE/CALL/LOAD CSV/FOREACH) via
+    /// `validate_cypher_subset` (ADR-021).
+    #[cfg(feature = "mcp")]
+    #[tokio::test]
+    async fn query_tool_rejects_destructive_cypher() {
+        let _guard = MCP_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        if kit().is_none() {
+            let tmp = tempfile::NamedTempFile::new().expect("create temp db file");
+            let config = KitBootstrapConfig::new(tmp.path().to_path_buf());
+            let built = build_kit(&config).expect("build_kit should succeed");
+            std::mem::forget(tmp);
+            let _ = init_kit(built);
+        }
+
+        // CREATE clause — must be rejected by validate_cypher_subset.
+        let result = query("CREATE (n:Person {name: 'evil'})".to_string()).await;
+        assert!(
+            result.is_err(),
+            "query handler must reject CREATE clause"
+        );
+
+        // DELETE clause — must also be rejected.
+        let result = query("MATCH (n) DELETE n".to_string()).await;
+        assert!(
+            result.is_err(),
+            "query handler must reject DELETE clause"
+        );
     }
 
     /// Verifies the `trace` MCP tool handler traces a seeded call graph and
@@ -764,7 +798,7 @@ mod tests {
             .cypher("CREATE (:Function {id: 'search_tool_test', name: 'searchable_func', qualifiedName: 'demo.searchable_func', filePath: '/src/search.rs', startLine: 1, project: 'demo'});")
             .expect("seed function");
 
-        // Call the search handler — search for "searchable" (non-semantic).
+        // Call the search handler — search for "searchable" (structured name search).
         let result = search("searchable".to_string(), false, 10)
             .await
             .expect("search should succeed");
