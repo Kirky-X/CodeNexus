@@ -730,6 +730,65 @@ pub fn estimate_time_complexity(
     }
 }
 
+// --- Space complexity estimation (T014) ---
+
+/// Returns true if `text` contains a dynamic-allocation pattern (Rust
+/// collections: `Vec::new()`, `vec![]`, `HashMap::new()`, `BTreeMap::new()`,
+/// `String::new()`). Fixed-size arrays (`[T; N]`) do not match.
+fn has_allocation_pattern(text: &str) -> bool {
+    text.contains("Vec::new(")
+        || text.contains("vec![")
+        || text.contains("HashMap::new(")
+        || text.contains("BTreeMap::new(")
+        || text.contains("String::new(")
+}
+
+/// Returns true if a dynamic allocation occurs inside a loop body (→ O(n^2)).
+fn has_allocation_in_loop(node: Node<'_>, source: &[u8], language: Language) -> bool {
+    if is_loop_node(language, node.kind()) {
+        if let Ok(text) = node.utf8_text(source) {
+            if has_allocation_pattern(text) {
+                return true;
+            }
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if has_allocation_in_loop(child, source, language) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Estimates the space complexity class of a function via allocation pattern
+/// recognition (design D6). Priority (max wins):
+/// 1. Dynamic allocation inside a loop → `O(n^2)`.
+/// 2. Dynamic allocation (anywhere) or direct recursion → `O(n)`.
+/// 3. Default (fixed arrays / no allocation) → `O(1)`.
+pub fn estimate_space_complexity(
+    tree: &tree_sitter::Tree,
+    source: &[u8],
+    language: Language,
+    function_name: &str,
+) -> SpaceComplexity {
+    let root = tree.root_node();
+
+    if has_allocation_in_loop(root, source, language) {
+        return SpaceComplexity::ON2;
+    }
+
+    let has_alloc = std::str::from_utf8(source)
+        .map(has_allocation_pattern)
+        .unwrap_or(false);
+    let has_recursion = has_direct_recursion(root, source, function_name);
+    if has_alloc || has_recursion {
+        return SpaceComplexity::ON;
+    }
+
+    SpaceComplexity::O1
+}
+
 /// Computes cyclomatic complexity (McCabe) for the given parse tree.
 ///
 /// Starts at CC=1 (entry point) and adds 1 for each branch node, each `&&`/`||`
@@ -1483,6 +1542,68 @@ fn f(arr: &mut Vec<i32>, x: i32) -> bool {
         assert!(SpaceComplexity::O1 < SpaceComplexity::ON);
         assert!(SpaceComplexity::ON < SpaceComplexity::ON2);
         assert!(SpaceComplexity::O1 < SpaceComplexity::ON2);
+    }
+
+    // --- T014: estimate_space_complexity tests ---
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn sc_no_allocation_is_o1() {
+        let src = "fn f() { let x = 1; }";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(
+            estimate_space_complexity(&tree, src.as_bytes(), Language::Rust, "f"),
+            SpaceComplexity::O1
+        );
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn sc_vec_new_is_on() {
+        let src = "fn f() { let v = Vec::new(); }";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(
+            estimate_space_complexity(&tree, src.as_bytes(), Language::Rust, "f"),
+            SpaceComplexity::ON
+        );
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn sc_vec_in_loop_is_on2() {
+        let src = "fn f() { for i in 0..n { let v = Vec::new(); } }";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(
+            estimate_space_complexity(&tree, src.as_bytes(), Language::Rust, "f"),
+            SpaceComplexity::ON2
+        );
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn sc_fixed_array_is_o1() {
+        let src = "fn f() { let arr = [0u8; 10]; }";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(
+            estimate_space_complexity(&tree, src.as_bytes(), Language::Rust, "f"),
+            SpaceComplexity::O1
+        );
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn sc_recursive_is_on() {
+        let src = "fn f(n: i32) { f(n - 1); }";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(
+            estimate_space_complexity(&tree, src.as_bytes(), Language::Rust, "f"),
+            SpaceComplexity::ON
+        );
     }
 
     // --- T009: calc_cognitive tests ---
