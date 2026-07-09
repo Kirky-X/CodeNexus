@@ -16,6 +16,12 @@ use tracing_subscriber::EnvFilter;
 use codenexus::cli::{Cli, CliError, Command};
 use codenexus::kit::{build_kit, KitBootstrapConfig};
 
+// MCP server module (v0.3.0, T009) — sdforge-based MCP protocol exposure.
+// Gated by the `mcp` feature. Replaces the hand-written JSON-RPC in
+// `src/cli/mcp_cmd.rs` (which will be deleted in T016).
+#[cfg(feature = "mcp")]
+mod mcp;
+
 /// Initialize the global `tracing` subscriber.
 ///
 /// Events are filtered via the `RUST_LOG` environment variable ([`EnvFilter`])

@@ -92,7 +92,7 @@ lsp = ["dep:lsp-types", "dep:lsp-server", "dep:crossbeam-channel"]
 # MCP server (v0.3.0, T008): sdforge-based MCP protocol exposure. Replaces
 # the hand-written JSON-RPC in `src/cli/mcp_cmd.rs`. `tokio` provides the
 # async runtime for rmcp's stdio transport.
-mcp = ["dep:sdforge", "dep:tokio"]
+mcp = ["dep:sdforge", "dep:rmcp", "dep:tokio"]
 
 [dependencies]
 # Unified module interface & Kit capability registry (T6/unified-architecture
@@ -209,9 +209,12 @@ crossbeam-channel = { version = "0.5", optional = true }
 
 # MCP server via sdforge (v0.3.0, T008): sdforge provides `#[service_api]`
 # macro for declarative tool definition + `mcp::build()` for server
-# construction. `tokio` provides the async runtime needed by rmcp (sdforge's
-# MCP transport layer). Both gated by the `mcp` feature.
+# construction. `rmcp` is the official Rust MCP SDK (used by sdforge for
+# transport) — declared directly so `src/mcp/mod.rs` can use `ServiceExt` and
+# `transport::stdio()`. `tokio` provides the async runtime needed by rmcp.
+# All three gated by the `mcp` feature.
 sdforge = { version = "0.3", default-features = false, features = ["mcp"], optional = true }
+rmcp = { version = "2.1", features = ["transport-io"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"], optional = true }
 
 [dev-dependencies]
