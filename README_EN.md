@@ -60,6 +60,14 @@ Supports **8 languages**: C, Rust, Fortran, Python, TypeScript, Go, Java, C++.
 └──────────────────────────────────────────────┘
 ```
 
+### Source Layout
+
+CodeNexus is split across three entry points:
+
+- `src/lib.rs` — Rust SDK interface (library crate). Embed the indexing pipeline, query facade, or trace engine in another Rust project by depending on the `codenexus` crate.
+- `src/main.rs` — CLI binary. Parses arguments via `clap`, builds a unified `Kit`, and dispatches to command handlers.
+- `src/mcp/mod.rs` — MCP server module (sdforge-based, gated by the `mcp` feature). The hand-written JSON-RPC that previously lived in `src/cli/mcp_cmd.rs` has been replaced by sdforge's declarative `#[service_api]` macro + rmcp stdio transport.
+
 ### Indexing Pipeline
 
 1. **File discovery** — `ignore` crate honors `.gitignore` rules
@@ -118,7 +126,7 @@ cargo build --release
 |---------|---------|-------------|
 | `minimal` | — | Minimal preset: `lang-rust` only |
 | `core` | — | Core preset: `lang-c` + `lang-rust` + `lang-python` |
-| `full` | enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++ + daemon/analysis/complexity/api-review/community/cross-service/lsp |
+| `full` | enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++ + daemon/analysis/complexity/api-review/community/cross-service/lsp/mcp |
 | `lang-c` | — | C language parser (tree-sitter-c) |
 | `lang-rust` | enabled | Rust language parser (tree-sitter-rust) |
 | `lang-fortran` | — | Fortran language parser (tree-sitter-fortran) |
@@ -135,6 +143,7 @@ cargo build --release
 | `api-review` | enabled | API review toolkit (route-map/shape-check/api-impact/tool-map) |
 | `community` | enabled | Community detection (Louvain modularity optimization, depends on petgraph) |
 | `cross-service` | enabled | Cross-service call chain detection (HTTP route pattern matching) |
+| `mcp` | enabled | MCP server via sdforge (replaces hand-written JSON-RPC, stdio transport) |
 
 ```bash
 # Minimal build (Rust only, no daemon/analysis)
@@ -151,6 +160,9 @@ cargo build --release
 
 # Build with vector embedding
 cargo build --release --features embed
+
+# MCP-only build (sdforge MCP server, no daemon/analysis)
+cargo build --release --features mcp
 ```
 
 ### First Index
@@ -324,7 +336,21 @@ CodeNexus exposes two programmatic interfaces:
 
 ### MCP Server (`codenexus mcp`)
 
-A stdio JSON-RPC 2.0 server implementing [Model Context Protocol](https://modelcontextprotocol.io/) (version 2024-11-05). AI agents call it to query the knowledge graph. Run `codenexus setup` once to register the server with your agent; the agent then starts `codenexus mcp` automatically.
+A sdforge-based MCP server over stdio implementing [Model Context Protocol](https://modelcontextprotocol.io/) (version 2024-11-05). The hand-written JSON-RPC layer has been replaced by sdforge's declarative `#[service_api]` macro + rmcp stdio transport. AI agents call it to query the knowledge graph.
+
+**Usage**: `codenexus mcp [--db <DB_PATH>]`
+
+**Tools** (5):
+
+| Tool | Description |
+|------|-------------|
+| `query` | Execute a Cypher query against the knowledge graph |
+| `trace` | Trace a symbol's call/data-flow paths |
+| `impact` | Analyze the impact radius of changing a symbol |
+| `search` | Search symbols by name or content (full-text or semantic) |
+| `context` | Show a 360-degree view of a symbol (callers, callees, processes) |
+
+Run `codenexus setup` once to auto-detect installed agents (Claude Code / Cursor / Codex) and register the server; the agent then starts `codenexus mcp` automatically.
 
 ### Library Crate
 
