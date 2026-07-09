@@ -131,7 +131,7 @@ cargo build --release
 | `embed` | disabled | Vector embedding semantic search (reqwest HTTP + local ONNX inference) |
 | `lsp` | disabled | LSP-enhanced extraction (rust-analyzer integration, semantic type augmentation) |
 | `analysis` | enabled | Dead code detection + architecture overview (pure Cypher aggregation) |
-| `complexity` | enabled | AST complexity analysis (cyclomatic/cognitive complexity, nesting depth, function length, depends on `analysis`) |
+| `complexity` | enabled | AST complexity analysis (cyclomatic/cognitive/nesting/length/Halstead/maintainability/time/space, depends on `analysis`) |
 | `api-review` | enabled | API review toolkit (route-map/shape-check/api-impact/tool-map) |
 | `community` | enabled | Community detection (Louvain modularity optimization, depends on petgraph) |
 | `cross-service` | enabled | Cross-service call chain detection (HTTP route pattern matching) |
@@ -228,13 +228,78 @@ codenexus clean myproject
 | `clean` | Remove a project and its index |
 | `dead-code` | Dead code detection (uncalled functions, `analysis` feature) |
 | `architecture` | Architecture overview (module dependency graph, `analysis` feature) |
-| `complexity` | AST complexity analysis (cyclomatic/cognitive complexity, nesting depth, function length, `complexity` feature) |
+| `complexity` | AST complexity analysis (8 metrics + configurable thresholds, `complexity` feature) |
 | `api-route-map` | HTTP route mapping (API endpoint inventory, `api-review` feature) |
 | `api-shape-check` | API shape check (request/response structure validation, `api-review` feature) |
 | `api-impact` | API change impact analysis (`api-review` feature) |
 | `api-tool-map` | Tool mapping (MCP tool inventory, `api-review` feature) |
 | `community` | Community detection (Louvain modularity optimization, `community` feature) |
 | `cross-service` | Cross-service call chain detection (HTTP route pattern matching, `cross-service` feature) |
+
+## Complexity Analysis
+
+The `complexity` subcommand computes AST complexity metrics for every function in a project, emitting JSON with a `complexity` array and a `summary` aggregate.
+
+### Metrics
+
+| Metric | Field | Description |
+|--------|-------|-------------|
+| Cyclomatic | `cyclomatic` | McCabe 1976 — branch nodes + explicit exits (return/break/continue) + logical operators |
+| Cognitive | `cognitive` | Nesting-weighted SonarQube-style complexity |
+| Nesting depth | `nesting_depth` | Maximum branch-node nesting depth |
+| Function length | `function_length` | End line − start line + 1 |
+| Halstead | `halstead` | Halstead 1977: `n1/n2/N1/N2/volume/difficulty/effort/delivered_bugs` |
+| Maintainability Index | `maintainability_index` | Microsoft 2007 revision, 0-100 (higher = better) |
+| Time complexity | `time_complexity` | AST-pattern estimate: O(1)/O(log n)/O(n)/O(n log n)/O(n^2)/O(n^3)/O(2^n) |
+| Space complexity | `space_complexity` | Allocation-pattern recognition: O(1)/O(n)/O(n^2) |
+
+Each metric is classified Green / Yellow / Red against thresholds; `overall_severity` is the maximum.
+
+### Threshold CLI flags
+
+| Flag | Description |
+|------|-------------|
+| `--cyclomatic-yellow <N>` / `--cyclomatic-red <N>` | Cyclomatic thresholds |
+| `--cognitive-yellow <N>` / `--cognitive-red <N>` | Cognitive thresholds |
+| `--nesting-yellow <N>` / `--nesting-red <N>` | Nesting depth thresholds |
+| `--func-length-yellow <N>` / `--func-length-red <N>` | Function length thresholds |
+| `--halstead-volume-yellow <N>` / `--halstead-volume-red <N>` | Halstead volume thresholds |
+| `--maintainability-yellow <N>` / `--maintainability-red <N>` | Maintainability Index thresholds (higher = better) |
+| `--time-complexity-yellow <O(...)>` / `--time-complexity-red <O(...)>` | Time complexity thresholds |
+| `--space-complexity-yellow <O(...)>` / `--space-complexity-red <O(...)>` | Space complexity thresholds |
+
+`<O(...)>` values: time `O(1)` / `O(log n)` / `O(n)` / `O(n log n)` / `O(n^2)` / `O(n^3)` / `O(2^n)`, space `O(1)` / `O(n)` / `O(n^2)`. Unset flags fall back to defaults.
+
+### Default thresholds
+
+| Metric | Yellow | Red |
+|--------|--------|-----|
+| cyclomatic | 20 | 25 |
+| cognitive | 15 | 20 |
+| nesting | 5 | 6 |
+| func_length | 100 | 200 |
+| halstead_volume | 1000 | 8000 |
+| maintainability | 65 | 85 |
+| time_complexity | O(n) | O(n^2) |
+| space_complexity | O(1) | O(n) |
+
+> `maintainability` is inverted: MI higher = better, so `value >= red → Green`, `value >= yellow → Yellow`, else `Red`.
+
+### Examples
+
+```bash
+# Analyse with default thresholds
+codenexus complexity myproject
+
+# Custom cyclomatic thresholds (yellow=10, red=15)
+codenexus complexity myproject --cyclomatic-yellow 10 --cyclomatic-red 15
+
+# Show only Red functions, sorted by severity
+codenexus complexity myproject --red-only --sort-by-severity
+
+# Custom time complexity thresholds (yellow=O(n log n), red=O(n^2))
+codenexus complexity myproject --time-complexity-yellow "O(n log n)" --time-complexity-red "O(n^2)"
+```
 
 ## Configuration
 

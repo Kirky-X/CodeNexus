@@ -68,7 +68,7 @@ cargo build --release
 | `embed` | 关闭 | 向量嵌入语义搜索（reqwest HTTP + 本地 ONNX 推理） |
 | `lsp` | 关闭 | LSP 增强解析（rust-analyzer 集成，语义类型增强） |
 | `analysis` | 启用 | 死代码检测 + 架构概览（纯 Cypher 聚合） |
-| `complexity` | 启用 | AST 复杂度分析（圈/认知复杂度、嵌套深度、函数长度，依赖 `analysis`） |
+| `complexity` | 启用 | AST 复杂度分析（圈/认知/嵌套/长度/Halstead/可维护性/时间/空间复杂度，依赖 `analysis`） |
 | `api-review` | 启用 | API 审查工具包（route-map/shape-check/api-impact/tool-map） |
 | `community` | 启用 | 社区检测（Louvain 模块度优化，依赖 petgraph） |
 | `cross-service` | 启用 | 跨服务调用链检测（HTTP 路由模式匹配） |
@@ -167,13 +167,78 @@ codenexus clean myproject
 | `clean` | 删除项目及其索引 |
 | `dead-code` | 死代码检测（未被调用的函数，`analysis` feature） |
 | `architecture` | 架构概览（模块依赖图，`analysis` feature） |
-| `complexity` | AST 复杂度分析（圈/认知复杂度、嵌套深度、函数长度，`complexity` feature） |
+| `complexity` | AST 复杂度分析（8 项指标 + 可配置阈值，`complexity` feature） |
 | `api-route-map` | HTTP 路由映射（API 端点清单，`api-review` feature） |
 | `api-shape-check` | API 形状检查（请求/响应结构验证，`api-review` feature） |
 | `api-impact` | API 变更影响分析（`api-review` feature） |
 | `api-tool-map` | 工具映射（MCP 工具清单，`api-review` feature） |
 | `community` | 社区检测（Louvain 模块度优化，`community` feature） |
 | `cross-service` | 跨服务调用链检测（HTTP 路由模式匹配，`cross-service` feature） |
+
+## 复杂度分析（complexity）
+
+`complexity` 子命令对项目内所有函数计算 AST 复杂度指标，输出 JSON（含 `complexity` 数组与 `summary` 统计）。
+
+### 指标
+
+| 指标 | 字段 | 说明 |
+|------|------|------|
+| 圈复杂度 | `cyclomatic` | McCabe 1976，含分支节点 + 显式出口（return/break/continue）+ 逻辑运算符 |
+| 认知复杂度 | `cognitive` | 按嵌套层级加权的 SonarQube 风格复杂度 |
+| 嵌套深度 | `nesting_depth` | 分支节点最大嵌套层数 |
+| 函数长度 | `function_length` | 起止行差 +1 |
+| Halstead 复杂度 | `halstead` | Halstead 1977：`n1/n2/N1/N2/volume/difficulty/effort/delivered_bugs` |
+| 可维护性指数 | `maintainability_index` | Microsoft 2007 修订公式，0-100（越高越好） |
+| 时间复杂度 | `time_complexity` | AST 模式估算：O(1)/O(log n)/O(n)/O(n log n)/O(n^2)/O(n^3)/O(2^n) |
+| 空间复杂度 | `space_complexity` | 分配模式识别：O(1)/O(n)/O(n^2) |
+
+每项指标按阈值分为 Green / Yellow / Red 三级，`overall_severity` 取最高级别。
+
+### 阈值 CLI 参数
+
+| 参数 | 说明 |
+|------|------|
+| `--cyclomatic-yellow <N>` / `--cyclomatic-red <N>` | 圈复杂度阈值 |
+| `--cognitive-yellow <N>` / `--cognitive-red <N>` | 认知复杂度阈值 |
+| `--nesting-yellow <N>` / `--nesting-red <N>` | 嵌套深度阈值 |
+| `--func-length-yellow <N>` / `--func-length-red <N>` | 函数长度阈值 |
+| `--halstead-volume-yellow <N>` / `--halstead-volume-red <N>` | Halstead volume 阈值 |
+| `--maintainability-yellow <N>` / `--maintainability-red <N>` | 可维护性指数阈值（越高越好） |
+| `--time-complexity-yellow <O(...)>` / `--time-complexity-red <O(...)>` | 时间复杂度阈值 |
+| `--space-complexity-yellow <O(...)>` / `--space-complexity-red <O(...)>` | 空间复杂度阈值 |
+
+`<O(...)>` 取值：时间 `O(1)` / `O(log n)` / `O(n)` / `O(n log n)` / `O(n^2)` / `O(n^3)` / `O(2^n)`，空间 `O(1)` / `O(n)` / `O(n^2)`。未设置的参数走默认值。
+
+### 默认阈值
+
+| 指标 | Yellow | Red |
+|------|--------|-----|
+| cyclomatic | 20 | 25 |
+| cognitive | 15 | 20 |
+| nesting | 5 | 6 |
+| func_length | 100 | 200 |
+| halstead_volume | 1000 | 8000 |
+| maintainability | 65 | 85 |
+| time_complexity | O(n) | O(n^2) |
+| space_complexity | O(1) | O(n) |
+
+> `maintainability` 阈值含义反转：MI 越高越好，`value >= red → Green`，`value >= yellow → Yellow`，否则 `Red`。
+
+### 示例
+
+```bash
+# 默认阈值分析
+codenexus complexity myproject
+
+# 自定义圈复杂度阈值（yellow=10, red=15）
+codenexus complexity myproject --cyclomatic-yellow 10 --cyclomatic-red 15
+
+# 仅显示 Red 级函数并按严重度排序
+codenexus complexity myproject --red-only --sort-by-severity
+
+# 自定义时间复杂度阈值（yellow=O(n log n), red=O(n^2)）
+codenexus complexity myproject --time-complexity-yellow "O(n log n)" --time-complexity-red "O(n^2)"
+```
 
 ## 架构
 
