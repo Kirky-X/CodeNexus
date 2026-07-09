@@ -53,44 +53,55 @@ impl Default for ComplexityThresholds {
 }
 
 impl Severity {
-    /// Classifies cyclomatic complexity: `≤10` Green, `≤20` Yellow, else Red.
-    pub fn from_cyclomatic(value: u32) -> Severity {
-        if value <= 10 {
+    /// Classifies cyclomatic complexity against `thresholds.cyclomatic`.
+    ///
+    /// `green_max = yellow_max / 2` (at least 1) per design D1, keeping the
+    /// historical `≤10` Green / `≤20` Yellow default behavior.
+    pub fn from_cyclomatic(value: u32, thresholds: &ComplexityThresholds) -> Severity {
+        let yellow_max = thresholds.cyclomatic.0;
+        let green_max = (yellow_max / 2).max(1);
+        if value <= green_max {
             Severity::Green
-        } else if value <= 20 {
+        } else if value <= yellow_max {
             Severity::Yellow
         } else {
             Severity::Red
         }
     }
 
-    /// Classifies cognitive complexity: `≤10` Green, `≤15` Yellow, else Red.
-    pub fn from_cognitive(value: u32) -> Severity {
-        if value <= 10 {
+    /// Classifies cognitive complexity against `thresholds.cognitive`.
+    pub fn from_cognitive(value: u32, thresholds: &ComplexityThresholds) -> Severity {
+        let yellow_max = thresholds.cognitive.0;
+        let green_max = (yellow_max / 2).max(1);
+        if value <= green_max {
             Severity::Green
-        } else if value <= 15 {
+        } else if value <= yellow_max {
             Severity::Yellow
         } else {
             Severity::Red
         }
     }
 
-    /// Classifies nesting depth: `≤3` Green, `≤5` Yellow, else Red.
-    pub fn from_nesting(value: u32) -> Severity {
-        if value <= 3 {
+    /// Classifies nesting depth against `thresholds.nesting`.
+    pub fn from_nesting(value: u32, thresholds: &ComplexityThresholds) -> Severity {
+        let yellow_max = thresholds.nesting.0;
+        let green_max = (yellow_max / 2).max(1);
+        if value <= green_max {
             Severity::Green
-        } else if value <= 5 {
+        } else if value <= yellow_max {
             Severity::Yellow
         } else {
             Severity::Red
         }
     }
 
-    /// Classifies function length: `≤30` Green, `≤100` Yellow, else Red.
-    pub fn from_func_length(value: u32) -> Severity {
-        if value <= 30 {
+    /// Classifies function length against `thresholds.func_length`.
+    pub fn from_func_length(value: u32, thresholds: &ComplexityThresholds) -> Severity {
+        let yellow_max = thresholds.func_length.0;
+        let green_max = (yellow_max / 2).max(1);
+        if value <= green_max {
             Severity::Green
-        } else if value <= 100 {
+        } else if value <= yellow_max {
             Severity::Yellow
         } else {
             Severity::Red
@@ -127,13 +138,14 @@ pub struct ComplexityEntry {
 
 impl ComplexityEntry {
     /// Computes the overall severity as the highest individual metric severity
-    /// (`Red > Yellow > Green`) by calling the `from_*` classifiers.
-    pub fn compute_overall_severity(&self, _thresholds: &ComplexityThresholds) -> Severity {
+    /// (`Red > Yellow > Green`) by calling the `from_*` classifiers with
+    /// `thresholds`.
+    pub fn compute_overall_severity(&self, thresholds: &ComplexityThresholds) -> Severity {
         [
-            Severity::from_cyclomatic(self.cyclomatic),
-            Severity::from_cognitive(self.cognitive),
-            Severity::from_nesting(self.nesting_depth),
-            Severity::from_func_length(self.function_length),
+            Severity::from_cyclomatic(self.cyclomatic, thresholds),
+            Severity::from_cognitive(self.cognitive, thresholds),
+            Severity::from_nesting(self.nesting_depth, thresholds),
+            Severity::from_func_length(self.function_length, thresholds),
         ]
         .into_iter()
         .max()
@@ -440,30 +452,49 @@ mod tests {
 
     #[test]
     fn from_cyclomatic_classification() {
-        assert_eq!(Severity::from_cyclomatic(5), Severity::Green);
-        assert_eq!(Severity::from_cyclomatic(15), Severity::Yellow);
-        assert_eq!(Severity::from_cyclomatic(30), Severity::Red);
+        let t = ComplexityThresholds::default();
+        assert_eq!(Severity::from_cyclomatic(5, &t), Severity::Green);
+        assert_eq!(Severity::from_cyclomatic(15, &t), Severity::Yellow);
+        assert_eq!(Severity::from_cyclomatic(30, &t), Severity::Red);
     }
 
     #[test]
     fn from_cognitive_classification() {
-        assert_eq!(Severity::from_cognitive(5), Severity::Green);
-        assert_eq!(Severity::from_cognitive(12), Severity::Yellow);
-        assert_eq!(Severity::from_cognitive(25), Severity::Red);
+        let t = ComplexityThresholds::default();
+        assert_eq!(Severity::from_cognitive(5, &t), Severity::Green);
+        assert_eq!(Severity::from_cognitive(12, &t), Severity::Yellow);
+        assert_eq!(Severity::from_cognitive(25, &t), Severity::Red);
     }
 
     #[test]
     fn from_nesting_classification() {
-        assert_eq!(Severity::from_nesting(2), Severity::Green);
-        assert_eq!(Severity::from_nesting(4), Severity::Yellow);
-        assert_eq!(Severity::from_nesting(7), Severity::Red);
+        let t = ComplexityThresholds::default();
+        assert_eq!(Severity::from_nesting(2, &t), Severity::Green);
+        assert_eq!(Severity::from_nesting(4, &t), Severity::Yellow);
+        assert_eq!(Severity::from_nesting(7, &t), Severity::Red);
     }
 
     #[test]
     fn from_func_length_classification() {
-        assert_eq!(Severity::from_func_length(20), Severity::Green);
-        assert_eq!(Severity::from_func_length(50), Severity::Yellow);
-        assert_eq!(Severity::from_func_length(150), Severity::Red);
+        let t = ComplexityThresholds::default();
+        assert_eq!(Severity::from_func_length(20, &t), Severity::Green);
+        // green_max = 100/2 = 50, so 50 is Green; 75 falls in Yellow range.
+        assert_eq!(Severity::from_func_length(50, &t), Severity::Green);
+        assert_eq!(Severity::from_func_length(75, &t), Severity::Yellow);
+        assert_eq!(Severity::from_func_length(150, &t), Severity::Red);
+    }
+
+    #[test]
+    fn severity_uses_custom_thresholds() {
+        // Custom thresholds: cyclomatic (yellow=10, red=12). green_max = 10/2 = 5.
+        let mut custom = ComplexityThresholds::default();
+        custom.cyclomatic = (10, 12);
+        // value 15 > yellow_max(10) → Red. Old hardcoded impl returned Yellow.
+        assert_eq!(Severity::from_cyclomatic(15, &custom), Severity::Red);
+        // value 5 <= green_max(5) → Green.
+        assert_eq!(Severity::from_cyclomatic(5, &custom), Severity::Green);
+        // value 8: 8 > 5, 8 <= 10 → Yellow.
+        assert_eq!(Severity::from_cyclomatic(8, &custom), Severity::Yellow);
     }
 
     #[test]
