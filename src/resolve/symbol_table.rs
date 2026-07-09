@@ -11,6 +11,8 @@ use std::collections::HashMap;
 
 use crate::model::{Language, NodeLabel};
 
+use super::includes_graph::IncludesGraph;
+
 /// A single entry in a symbol table, representing one definition.
 #[derive(Debug, Clone)]
 pub struct SymbolEntry {
@@ -216,6 +218,49 @@ impl ProjectSymbolTable {
         self.lookup(name)
             .into_iter()
             .filter(|e| e.is_exported)
+            .collect()
+    }
+
+    /// Returns exported entries matching `name` that are in scope via
+    /// `#include` relationships (BUG-C4 fix, v0.3.0).
+    ///
+    /// A symbol in file B is a valid resolution target for a call in file A
+    /// if A `#include`s B (directly or transitively). This method:
+    /// 1. Computes the set of files reachable from `calling_file` via
+    ///    `includes_graph.reachable_from()` (includes `calling_file` itself).
+    /// 2. Filters `lookup(name)` to entries that are `is_exported` AND whose
+    ///    `file_path` is in the reachable set.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The simple name of the symbol to look up.
+    /// * `calling_file` - The file path of the caller (absolute, matching
+    ///   `SymbolEntry::file_path` format).
+    /// * `includes_graph` - The C++ `#include` graph (from `ResolvePhase`).
+    ///
+    /// # Returns
+    ///
+    /// Vector of references to matching `SymbolEntry` instances. Empty if no
+    /// exported entry is in scope.
+    ///
+    /// # Note
+    ///
+    /// For non-C++ languages or when `includes_graph` is empty, this method
+    /// returns the same results as [`lookup_exported`](Self::lookup_exported)
+    /// only if `calling_file` itself contains the symbol. For cross-file
+    /// resolution in non-C++ languages, use [`lookup_exported`](Self::lookup_exported)
+    /// directly (import-based scoping is handled by `CallResolver`).
+    #[must_use]
+    pub fn lookup_exported_in_scope(
+        &self,
+        name: &str,
+        calling_file: &str,
+        includes_graph: &IncludesGraph,
+    ) -> Vec<&SymbolEntry> {
+        let reachable = includes_graph.reachable_from(calling_file);
+        self.lookup(name)
+            .into_iter()
+            .filter(|e| e.is_exported && reachable.contains(e.file_path.as_str()))
             .collect()
     }
 
@@ -502,6 +547,117 @@ mod tests {
     fn project_table_lookup_exported_returns_empty_if_not_found() {
         let project = ProjectSymbolTable::new();
         assert!(project.lookup_exported("missing").is_empty());
+    }
+
+    // --- lookup_exported_in_scope (BUG-C4 fix, v0.3.0) ---
+
+    use crate::resolve::includes_graph::IncludesGraph;
+
+    #[test]
+    fn lookup_exported_in_scope_filters_by_include() {
+        // Spec T004 Red test: file A includes B, B has `fn foo()` exported,
+        // C also has `fn foo()` exported. lookup_exported_in_scope("foo", "A",
+        // &graph) returns ONLY B's entry, not C's.
+        let mut project = ProjectSymbolTable::new();
+        project.add_symbol(make_exported_entry("foo", "proj.B.foo", "/abs/B.h"));
+        project.add_symbol(make_exported_entry("foo", "proj.C.foo", "/abs/C.h"));
+
+        let mut graph = IncludesGraph::new();
+        graph.add_include("/abs/A.cpp", "/abs/B.h");
+        // A does NOT include C.
+
+        let results = project.lookup_exported_in_scope("foo", "/abs/A.cpp", &graph);
+        assert_eq!(results.len(), 1, "only B's foo should be in scope");
+        assert_eq!(results[0].qn, "proj.B.foo");
+    }
+
+    #[test]
+    fn lookup_exported_in_scope_includes_same_file() {
+        // A file is always reachable from itself: a function defined in the
+        // same file as the caller is a valid resolution target.
+        let mut project = ProjectSymbolTable::new();
+        project.add_symbol(make_exported_entry("foo", "proj.A.foo", "/abs/A.cpp"));
+
+        let graph = IncludesGraph::new(); // empty — no includes
+        let results = project.lookup_exported_in_scope("foo", "/abs/A.cpp", &graph);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].qn, "proj.A.foo");
+    }
+
+    #[test]
+    fn lookup_exported_in_scope_transitive_include() {
+        // A includes B, B includes C. C has `fn foo()` exported.
+        // Transitive reachability: lookup from A should find C's foo.
+        let mut project = ProjectSymbolTable::new();
+        project.add_symbol(make_exported_entry("foo", "proj.C.foo", "/abs/C.h"));
+
+        let mut graph = IncludesGraph::new();
+        graph.add_include("/abs/A.cpp", "/abs/B.h");
+        graph.add_include("/abs/B.h", "/abs/C.h");
+
+        let results = project.lookup_exported_in_scope("foo", "/abs/A.cpp", &graph);
+        assert_eq!(results.len(), 1, "transitive include should reach C");
+        assert_eq!(results[0].qn, "proj.C.foo");
+    }
+
+    #[test]
+    fn lookup_exported_in_scope_excludes_unreachable() {
+        // B has `fn foo()` exported, but A does NOT include B (directly or
+        // transitively). lookup from A should return empty.
+        let mut project = ProjectSymbolTable::new();
+        project.add_symbol(make_exported_entry("foo", "proj.B.foo", "/abs/B.h"));
+
+        let graph = IncludesGraph::new(); // A does not include B
+        let results = project.lookup_exported_in_scope("foo", "/abs/A.cpp", &graph);
+        assert!(results.is_empty(), "unreachable file should be excluded");
+    }
+
+    #[test]
+    fn lookup_exported_in_scope_filters_non_exported() {
+        // B has `fn foo()` but is_exported=false. A includes B.
+        // lookup should return empty (only exported symbols qualify).
+        let mut project = ProjectSymbolTable::new();
+        project.add_symbol(make_entry("foo", "proj.B.foo", "/abs/B.h")); // not exported
+
+        let mut graph = IncludesGraph::new();
+        graph.add_include("/abs/A.cpp", "/abs/B.h");
+
+        let results = project.lookup_exported_in_scope("foo", "/abs/A.cpp", &graph);
+        assert!(results.is_empty(), "non-exported symbol should be excluded");
+    }
+
+    #[test]
+    fn lookup_exported_in_scope_returns_empty_if_name_not_found() {
+        let mut project = ProjectSymbolTable::new();
+        project.add_symbol(make_exported_entry("foo", "proj.B.foo", "/abs/B.h"));
+
+        let mut graph = IncludesGraph::new();
+        graph.add_include("/abs/A.cpp", "/abs/B.h");
+
+        let results = project.lookup_exported_in_scope("missing", "/abs/A.cpp", &graph);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn lookup_exported_in_scope_multiple_in_scope_entries() {
+        // A includes B and C. Both B and C have `fn foo()` exported.
+        // lookup from A should return both entries.
+        let mut project = ProjectSymbolTable::new();
+        project.add_symbol(make_exported_entry("foo", "proj.B.foo", "/abs/B.h"));
+        project.add_symbol(make_exported_entry("foo", "proj.C.foo", "/abs/C.h"));
+        // D also has foo but A does not include D.
+        project.add_symbol(make_exported_entry("foo", "proj.D.foo", "/abs/D.h"));
+
+        let mut graph = IncludesGraph::new();
+        graph.add_include("/abs/A.cpp", "/abs/B.h");
+        graph.add_include("/abs/A.cpp", "/abs/C.h");
+
+        let results = project.lookup_exported_in_scope("foo", "/abs/A.cpp", &graph);
+        assert_eq!(results.len(), 2, "B and C in scope, D excluded");
+        let qns: Vec<&str> = results.iter().map(|e| e.qn.as_str()).collect();
+        assert!(qns.contains(&"proj.B.foo"));
+        assert!(qns.contains(&"proj.C.foo"));
+        assert!(!qns.contains(&"proj.D.foo"));
     }
 
     #[test]
