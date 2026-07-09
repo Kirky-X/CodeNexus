@@ -241,12 +241,49 @@ pub fn is_branch_node(language: Language, node_type: &str) -> bool {
     }
 }
 
+/// Returns true if the given tree-sitter node type is an exit node (explicit
+/// `return` / `break` / `continue`) for the specified language.
+fn is_exit_node(language: Language, node_type: &str) -> bool {
+    #[allow(unreachable_patterns)]
+    match language {
+        #[cfg(feature = "lang-rust")]
+        Language::Rust => matches!(
+            node_type,
+            "return_expression" | "break_expression" | "continue_expression"
+        ),
+        _ => matches!(
+            node_type,
+            "return_statement" | "break_statement" | "continue_statement"
+        ),
+    }
+}
+
+/// Counts explicit exit nodes (`return` / `break` / `continue`) in the parse
+/// tree. Per McCabe 1976, each explicit exit adds 1 to cyclomatic complexity.
+/// Implicit returns (the trailing expression in a Rust block) are not counted.
+pub fn count_exit_nodes(tree: &tree_sitter::Tree, language: Language) -> u32 {
+    count_exit_nodes_recursive(tree.root_node(), language)
+}
+
+fn count_exit_nodes_recursive(node: Node<'_>, language: Language) -> u32 {
+    let mut count = 0;
+    if is_exit_node(language, node.kind()) {
+        count += 1;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        count += count_exit_nodes_recursive(child, language);
+    }
+    count
+}
+
 /// Computes cyclomatic complexity (McCabe) for the given parse tree.
 ///
 /// Starts at CC=1 (entry point) and adds 1 for each branch node, each `&&`/`||`
-/// operator in binary expressions, and each `match_arm` beyond the first.
+/// operator in binary expressions, each `match_arm` beyond the first, and each
+/// explicit exit node (`return` / `break` / `continue`) per McCabe 1976.
 pub fn calc_cyclomatic(tree: &tree_sitter::Tree, language: Language) -> u32 {
-    1 + cyclomatic_count(tree.root_node(), language)
+    1 + cyclomatic_count(tree.root_node(), language) + count_exit_nodes(tree, language)
 }
 
 fn cyclomatic_count(node: Node<'_>, language: Language) -> u32 {
@@ -715,6 +752,27 @@ fn complex(x: i32) {
         let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
         let tree = parser.parse(src, None).unwrap();
         assert_eq!(calc_cyclomatic(&tree, Language::Rust), 4);
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn count_exit_nodes_rust_return_break_continue() {
+        let src = "fn f() { if x { return 1; } for i in 0..n { if i == 0 { break; } else { continue; } } }";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        // 1 return + 1 break + 1 continue = 3 exit nodes.
+        assert_eq!(count_exit_nodes(&tree, Language::Rust), 3);
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn calc_cyclomatic_with_exits() {
+        // 1 (entry) + 1 (if_expression branch) + 1 (return_expression exit) = 3.
+        // Old impl without exit counting returned 2.
+        let src = "fn f() { if x { return 1; } }";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(calc_cyclomatic(&tree, Language::Rust), 3);
     }
 
     // --- T009: calc_cognitive tests ---
