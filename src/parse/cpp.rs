@@ -241,6 +241,15 @@ fn extract_function(
         result,
     );
     let signature = node_text(node, source).map(signature_first_line).map(String::from);
+    // BUG-C4 (reverted): C++ free functions were candidates for is_exported=true
+    // to enable cross-file call resolution via lookup_exported. However, CodeNexus
+    // does not track #include imports for C++, so lookup_exported cannot
+    // distinguish between same-named functions in different files/namespaces.
+    // Marking free functions as is_exported caused massive over-resolution:
+    // fmt CALLS went from 1,852 (18% under gitnexus's 2,263) to 5,002 (54% OVER).
+    // The original 18% under-resolution is acceptable; the over-resolution is not.
+    // Reverting to is_exported=false (default) until #include import tracking is
+    // implemented for C++.
     let mut builder = ModelNode::builder(label, name, qn.clone())
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -1111,6 +1120,49 @@ mod tests {
             st.is_exported,
             "struct should be marked is_exported for TypeResolver strategy 3"
         );
+    }
+
+    #[test]
+    fn free_function_is_not_exported() {
+        // BUG-C4 (reverted): C++ free functions are NOT is_exported because
+        // CodeNexus lacks #include import tracking, so lookup_exported cannot
+        // distinguish same-named functions in different files. Marking them
+        // caused 54% over-resolution on fmt. Reverted until import tracking
+        // is implemented.
+        let result = extract("int add(int a, int b) { return a + b; }\n");
+        let func = result.nodes.iter().find(|n| n.name == "add").unwrap();
+        assert!(!func.is_exported, "free function should have is_exported=false (reverted BUG-C4)");
+    }
+
+    #[test]
+    fn class_method_is_not_exported() {
+        let result = extract("class Calc { public: int add(int a, int b) { return a + b; } };\n");
+        let method = result.nodes.iter().find(|n| n.name == "add").unwrap();
+        assert!(!method.is_exported, "class method should have is_exported=false");
+    }
+
+    #[test]
+    fn struct_method_is_not_exported() {
+        let result = extract("struct Vec { int length() { return 0; } };\n");
+        let method = result.nodes.iter().find(|n| n.name == "length").unwrap();
+        assert!(!method.is_exported, "struct method should have is_exported=false");
+    }
+
+    #[test]
+    fn out_of_class_method_is_not_exported() {
+        let result = extract("class Foo { public: void bar(); };\nvoid Foo::bar() {}\n");
+        let methods: Vec<_> = result.nodes.iter().filter(|n| n.name == "bar").collect();
+        assert!(!methods.is_empty(), "should find bar method");
+        for m in &methods {
+            assert!(!m.is_exported, "out-of-class method should have is_exported=false");
+        }
+    }
+
+    #[test]
+    fn namespace_function_is_not_exported() {
+        let result = extract("namespace ns { int helper() { return 42; } }\n");
+        let func = result.nodes.iter().find(|n| n.name == "helper").unwrap();
+        assert!(!func.is_exported, "namespace function should have is_exported=false (reverted BUG-C4)");
     }
 
     #[test]
