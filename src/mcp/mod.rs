@@ -31,6 +31,10 @@ use serde_json::Value;
 
 // MCP-feature-gated imports — only needed when building sdforge MCP tools.
 #[cfg(feature = "mcp")]
+use codenexus::cli::context_cmd::{
+    collect_incoming, collect_outgoing, collect_processes, resolve_start_id, ContextOutput,
+};
+#[cfg(feature = "mcp")]
 use codenexus::kit::QueryKey;
 #[cfg(feature = "mcp")]
 use codenexus::kit::TraceKey;
@@ -444,6 +448,61 @@ async fn search(text: String, semantic: bool, limit: u32) -> Result<SearchOutput
     })
 }
 
+// ---------------------------------------------------------------------------
+// Context tool (T014)
+// ---------------------------------------------------------------------------
+
+/// MCP tool: Show a 360-degree view of a symbol (callers, callees, processes).
+///
+/// Loads the BFS subgraph around `symbol` via `TraceKey::load_graph`, resolves
+/// the symbol to a node, then partitions the edges into incoming (callers),
+/// outgoing (callees), and processes (structural participation).
+///
+/// Reuses `context_cmd`'s `collect_incoming`/`collect_outgoing`/`collect_processes`
+/// to avoid duplicating the partitioning logic (Rule 8 — don't create a second
+/// version of existing code).
+#[cfg(feature = "mcp")]
+#[service_api(
+    name = "context",
+    version = "v1",
+    tool_name = "context",
+    description = "Show a 360-degree view of a symbol (callers, callees, processes)."
+)]
+async fn context(symbol: String, depth: u32) -> Result<ContextOutput, ApiError> {
+    let kit = kit().ok_or_else(|| {
+        ApiError::internal_error("MCP server not initialized", "mcp_kit_not_initialized")
+    })?;
+    let trace_engine = kit
+        .require::<TraceKey>()
+        .map_err(|e| mcp_error("Failed to resolve trace capability", e))?;
+    let graph = trace_engine
+        .load_graph(&symbol, depth as usize)
+        .map_err(|e| mcp_error("Context graph load failed", e))?;
+    let start_id = resolve_start_id(&graph, &symbol).ok_or_else(|| {
+        ApiError::InvalidInput {
+            message: format!("symbol not found: {symbol}"),
+            field: Some("symbol".to_string()),
+            value: Some(Value::String(symbol.clone())),
+        }
+    })?;
+    let symbol_node = graph.get_node(&start_id).ok_or_else(|| {
+        ApiError::internal_error(
+            format!("symbol node resolved but not in graph: {symbol}"),
+            "context_node_missing",
+        )
+    })?;
+    let incoming = collect_incoming(&graph, &start_id);
+    let outgoing = collect_outgoing(&graph, &start_id);
+    let processes = collect_processes(&graph, &start_id);
+    Ok(ContextOutput {
+        symbol,
+        node: codenexus::cli::context_cmd::SymbolNodeOutput::from(symbol_node),
+        incoming,
+        outgoing,
+        processes,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,6 +781,108 @@ mod tests {
         assert!(
             names.iter().any(|n| n.contains("searchable")),
             "results should contain a symbol with 'searchable' in its name, got: {names:?}"
+        );
+    }
+
+    /// Verifies the `context` MCP tool handler loads a subgraph and returns a
+    /// 360° view with incoming (callers) and outgoing (callees) edges.
+    ///
+    /// Seeds three Function nodes and two CALLS edges (A→B, A→C) via the
+    /// Storage capability, then calls `context("context_caller", 1)` and
+    /// asserts the result has non-empty `outgoing` (callees) and the symbol
+    /// node is resolved.
+    #[cfg(feature = "mcp")]
+    #[tokio::test]
+    async fn context_tool_returns_360_view() {
+        let _guard = MCP_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        if kit().is_none() {
+            let tmp = tempfile::NamedTempFile::new().expect("create temp db file");
+            let config = KitBootstrapConfig::new(tmp.path().to_path_buf());
+            let built = build_kit(&config).expect("build_kit should succeed");
+            std::mem::forget(tmp);
+            let _ = init_kit(built);
+        }
+
+        // Seed three Function nodes: context_caller calls context_callee_a
+        // and context_callee_b.
+        let k = kit().expect("kit should be initialized");
+        let storage = k
+            .require::<codenexus::kit::StorageKey>()
+            .expect("require_storage");
+        let node_a = codenexus::model::Node::builder(
+            codenexus::model::NodeLabel::Function,
+            "context_caller",
+            "demo.context_caller",
+        )
+        .id("f_context_caller")
+        .project("demo")
+        .file_path("/src/context_caller.rs")
+        .start_line(1)
+        .end_line(5)
+        .language(codenexus::model::Language::Rust)
+        .build();
+        let node_b = codenexus::model::Node::builder(
+            codenexus::model::NodeLabel::Function,
+            "context_callee_a",
+            "demo.context_callee_a",
+        )
+        .id("f_context_callee_a")
+        .project("demo")
+        .file_path("/src/context_callee_a.rs")
+        .start_line(1)
+        .end_line(5)
+        .language(codenexus::model::Language::Rust)
+        .build();
+        let node_c = codenexus::model::Node::builder(
+            codenexus::model::NodeLabel::Function,
+            "context_callee_b",
+            "demo.context_callee_b",
+        )
+        .id("f_context_callee_b")
+        .project("demo")
+        .file_path("/src/context_callee_b.rs")
+        .start_line(1)
+        .end_line(5)
+        .language(codenexus::model::Language::Rust)
+        .build();
+        storage
+            .save_nodes(&[node_a, node_b, node_c], codenexus::model::NodeLabel::Function)
+            .expect("save_nodes");
+        let edge_ab = codenexus::model::Edge::new(
+            "f_context_caller",
+            "f_context_callee_a",
+            codenexus::model::EdgeType::Calls,
+            "demo",
+        );
+        let edge_ac = codenexus::model::Edge::new(
+            "f_context_caller",
+            "f_context_callee_b",
+            codenexus::model::EdgeType::Calls,
+            "demo",
+        );
+        storage.save_edges(&[edge_ab, edge_ac]).expect("save_edges");
+
+        // Call the context handler.
+        let result = context("context_caller".to_string(), 1)
+            .await
+            .expect("context should succeed");
+
+        // Assert the symbol is echoed back and the node is resolved.
+        assert_eq!(result.symbol, "context_caller");
+        assert_eq!(result.node.name, "context_caller");
+        // Outgoing = callees (context_caller calls callee_a and callee_b).
+        assert!(
+            !result.outgoing.is_empty(),
+            "outgoing (callees) should be non-empty for a seeded call graph"
+        );
+        let callee_names: Vec<&str> = result.outgoing.iter().map(|r| r.name.as_str()).collect();
+        assert!(
+            callee_names.contains(&"context_callee_a"),
+            "outgoing should contain context_callee_a, got: {callee_names:?}"
+        );
+        assert!(
+            callee_names.contains(&"context_callee_b"),
+            "outgoing should contain context_callee_b, got: {callee_names:?}"
         );
     }
 }

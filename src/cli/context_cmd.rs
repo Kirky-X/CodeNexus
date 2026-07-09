@@ -11,7 +11,7 @@
 //! loads the BFS subgraph around the symbol via [`TraceEngine::load_graph`],
 //! then partitions the loaded edges into the four sections described above.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::args::ContextArgs;
 use super::error::Result;
@@ -54,7 +54,7 @@ pub fn run(kit: &Kit, args: &ContextArgs) -> Result<()> {
 
 /// Resolves a symbol name to a node id by matching `name` first, then
 /// `qualified_name`. Returns `None` if no node matches.
-fn resolve_start_id(graph: &Graph, symbol: &str) -> Option<NodeId> {
+pub fn resolve_start_id(graph: &Graph, symbol: &str) -> Option<NodeId> {
     let by_name: Vec<&Node> = graph.nodes.values().filter(|n| n.name == symbol).collect();
     if by_name.len() == 1 {
         return Some(by_name[0].id.clone());
@@ -71,7 +71,7 @@ fn resolve_start_id(graph: &Graph, symbol: &str) -> Option<NodeId> {
 }
 
 /// Collects incoming edges (other nodes pointing at `start_id`).
-fn collect_incoming(graph: &Graph, start_id: &NodeId) -> Vec<RelatedNodeOutput> {
+pub fn collect_incoming(graph: &Graph, start_id: &NodeId) -> Vec<RelatedNodeOutput> {
     let mut out: Vec<RelatedNodeOutput> = Vec::new();
     for edge in graph.edges_to(start_id) {
         if let Some(src) = graph.get_node(&edge.source) {
@@ -92,7 +92,7 @@ fn collect_incoming(graph: &Graph, start_id: &NodeId) -> Vec<RelatedNodeOutput> 
 }
 
 /// Collects outgoing edges (`start_id` pointing at other nodes).
-fn collect_outgoing(graph: &Graph, start_id: &NodeId) -> Vec<RelatedNodeOutput> {
+pub fn collect_outgoing(graph: &Graph, start_id: &NodeId) -> Vec<RelatedNodeOutput> {
     let mut out: Vec<RelatedNodeOutput> = Vec::new();
     for edge in graph.edges_from(start_id) {
         if let Some(dst) = graph.get_node(&edge.target) {
@@ -117,7 +117,7 @@ fn collect_outgoing(graph: &Graph, start_id: &NodeId) -> Vec<RelatedNodeOutput> 
 /// Walks both directions of the structural edge types `StepInProcess`,
 /// `EntryPointOf`, `HandlesRoute`, and `HandlesTool` — the symbol may be either
 /// the participant (source) or the process itself (target).
-fn collect_processes(graph: &Graph, start_id: &NodeId) -> Vec<RelatedNodeOutput> {
+pub fn collect_processes(graph: &Graph, start_id: &NodeId) -> Vec<RelatedNodeOutput> {
     const PROCESS_EDGE_TYPES: [EdgeType; 4] = [
         EdgeType::StepInProcess,
         EdgeType::EntryPointOf,
@@ -154,7 +154,7 @@ fn collect_processes(graph: &Graph, start_id: &NodeId) -> Vec<RelatedNodeOutput>
 }
 
 /// JSON-serializable 360° context output.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ContextOutput {
     /// The queried symbol name.
     pub symbol: String,
@@ -169,7 +169,7 @@ pub struct ContextOutput {
 }
 
 /// JSON-serializable view of the resolved symbol node.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SymbolNodeOutput {
     pub name: String,
     pub label: String,
@@ -199,7 +199,7 @@ impl From<&Node> for SymbolNodeOutput {
 }
 
 /// JSON-serializable view of a node related to the symbol by an edge.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RelatedNodeOutput {
     pub name: String,
     pub label: String,
