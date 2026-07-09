@@ -551,25 +551,32 @@ impl Phase for ResolvePhase {
         let mut all_nodes = scope.all_nodes.clone();
         let mut all_edges = scope.all_edges.clone();
 
-        // Resolve calls + dataflow + FFI edges. `TypeResolver::resolve_types`
-        // internally builds a path mapping between `result.file_path` (absolute
-        // in production) and graph nodes' `file_path` (relative, normalized by
-        // ScopeResolutionPhase) so that `imports_map` and `lookup_in_file`
-        // lookups succeed despite the path-format difference. See
-        // TypeResolver::resolve_types for details.
-        let symbol_table = build_symbol_table(&parse.results, project_id);
-        let resolved_edges = resolve_all(&parse.results, &symbol_table, project_id, &mut graph);
-        all_edges.extend(resolved_edges);
-
         // Scheme C (v0.3.0): Build INCLUDES edges for C++ #include directives.
         // C++ #include is handled separately from IMPORTS (which is for
         // TS/Rust/Python/Go/Java) because #include establishes a scope-visible
         // relationship that CallResolver uses for cross-file call resolution
         // (BUG-C4 fix). ImportResolver skips C++ results, so no IMPORTS edges
         // are created for C++ — only INCLUDES edges here.
+        //
+        // MUST run before resolve_all so the IncludesGraph is available to
+        // CallResolver for scope-aware lookup_exported_in_scope (T005).
         let (includes_edges, includes_graph) =
             build_includes_edges(&parse.results, &mut graph, &scope.path_to_rel, project_id);
         all_edges.extend(includes_edges);
+
+        // Resolve calls + dataflow + FFI edges. `TypeResolver::resolve_types`
+        // internally builds a path mapping between `result.file_path` (absolute
+        // in production) and graph nodes' `file_path` (relative, normalized by
+        // ScopeResolutionPhase) so that `imports_map` and `lookup_in_file`
+        // lookups succeed despite the path-format difference. See
+        // TypeResolver::resolve_types for details.
+        //
+        // v0.3.0: includes_graph is passed to CallResolver for scope-aware
+        // call resolution (BUG-C4 fix). Files with #include edges use
+        // lookup_exported_in_scope; others use lookup_exported (backward compat).
+        let symbol_table = build_symbol_table(&parse.results, project_id);
+        let resolved_edges = resolve_all(&parse.results, &symbol_table, project_id, &mut graph, &includes_graph);
+        all_edges.extend(resolved_edges);
 
         // Prune dangling type-reference edges (Implements/Extends/UsesType)
         // from the persisted collection. resolve_all prunes graph.edges, but

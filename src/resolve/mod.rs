@@ -173,6 +173,8 @@ pub fn build_symbol_table(results: &[ExtractResult], project: &str) -> ProjectSy
 /// * `symbol_table` - The project-level symbol table built from `results`.
 /// * `project` - The project name.
 /// * `graph` - The graph to add resolved edges to.
+/// * `includes_graph` - C++ `#include` graph for scope-aware call resolution
+///   (BUG-C4 fix, v0.3.0). Built by `build_includes_edges` before this call.
 ///
 /// # Returns
 ///
@@ -182,9 +184,11 @@ pub fn resolve_all(
     symbol_table: &ProjectSymbolTable,
     project: &str,
     graph: &mut Graph,
+    includes_graph: &IncludesGraph,
 ) -> Vec<Edge> {
     let mut edges = Vec::new();
-    let call_resolver = CallResolver::new(symbol_table, project);
+    let call_resolver = CallResolver::new(symbol_table, project)
+        .with_includes_graph(includes_graph.clone());
     edges.extend(call_resolver.resolve_calls(results, graph));
     let df_resolver = DataFlowResolver::new(symbol_table, project);
     edges.extend(df_resolver.resolve_dataflows(results, graph));
@@ -582,7 +586,7 @@ mod tests {
             }
         }
 
-        let edges = resolve_all(&results, &table, "proj", &mut graph);
+        let edges = resolve_all(&results, &table, "proj", &mut graph, &IncludesGraph::new());
 
         // Should have 1 CALLS edge + 1 DataFlows edge = 2 total.
         assert_eq!(edges.len(), 2);
@@ -612,7 +616,7 @@ mod tests {
     fn resolve_all_empty_results_returns_empty() {
         let table = ProjectSymbolTable::new();
         let mut graph = Graph::new();
-        let edges = resolve_all(&[], &table, "proj", &mut graph);
+        let edges = resolve_all(&[], &table, "proj", &mut graph, &IncludesGraph::new());
         assert!(edges.is_empty());
         assert_eq!(graph.edge_count(), 0);
     }
@@ -648,7 +652,7 @@ mod tests {
             }
         }
 
-        resolve_all(&results, &table, "proj", &mut graph);
+        resolve_all(&results, &table, "proj", &mut graph, &IncludesGraph::new());
 
         // The self-call edge should be in the graph.
         assert_eq!(graph.edge_count(), 1);
@@ -762,7 +766,7 @@ mod tests {
 
         assert_eq!(graph.edge_count(), 2, "precondition: 2 IMPLEMENTS edges");
 
-        resolve_all(&results, &table, "proj", &mut graph);
+        resolve_all(&results, &table, "proj", &mut graph, &IncludesGraph::new());
 
         let implements_edges: Vec<_> = graph.edges.iter()
             .filter(|e| e.edge_type == EdgeType::Implements)
@@ -794,7 +798,7 @@ mod tests {
 
         assert_eq!(graph.edge_count(), 2, "precondition: 2 dangling type edges");
 
-        resolve_all(&results, &table, "proj", &mut graph);
+        resolve_all(&results, &table, "proj", &mut graph, &IncludesGraph::new());
 
         assert_eq!(graph.edge_count(), 0, "both dangling type edges should be pruned");
     }
@@ -820,7 +824,7 @@ mod tests {
 
         graph.add_edge(Edge::new(&foo_qn, "proj.a.rs.external_fn", EdgeType::Calls, "proj"));
 
-        resolve_all(&results, &table, "proj", &mut graph);
+        resolve_all(&results, &table, "proj", &mut graph, &IncludesGraph::new());
 
         let calls_count = graph.edges.iter()
             .filter(|e| e.edge_type == EdgeType::Calls)

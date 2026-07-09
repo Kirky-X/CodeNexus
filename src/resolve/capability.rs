@@ -12,6 +12,7 @@
 use crate::ir::ExtractResult;
 use crate::model::{Edge, Graph};
 
+use super::includes_graph::IncludesGraph;
 use super::symbol_table::ProjectSymbolTable;
 
 /// Capability trait for the Resolver subsystem (calls + dataflow + FFI).
@@ -28,12 +29,16 @@ pub trait Resolver: Send + Sync {
 
     /// Resolves all symbols (calls + dataflows + FFI), adding edges to
     /// `graph`. Returns the resolved edges.
+    ///
+    /// `includes_graph` provides C++ `#include` scope information for
+    /// call resolution (BUG-C4 fix, v0.3.0).
     fn resolve_all(
         &self,
         results: &[ExtractResult],
         symbol_table: &ProjectSymbolTable,
         project: &str,
         graph: &mut Graph,
+        includes_graph: &IncludesGraph,
     ) -> Vec<Edge>;
 }
 

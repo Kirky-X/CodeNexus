@@ -23,6 +23,7 @@ use std::collections::{HashMap, HashSet};
 use crate::model::{ConfidenceTier, Edge, EdgeType, Graph};
 use crate::ir::{ExtractResult, ImportInfo};
 use crate::resolve::ProjectSymbolTable;
+use crate::resolve::includes_graph::IncludesGraph;
 
 /// Confidence for an exact (file-level) call match.
 const CONFIDENCE_EXACT: f32 = 0.95;
@@ -46,6 +47,11 @@ pub struct CallResolver<'a> {
     project: &'a str,
     /// Imports indexed by caller file path, used by [`resolve_call`].
     imports: HashMap<String, Vec<ImportInfo>>,
+    /// C++ `#include` graph for scope-aware call resolution (BUG-C4 fix, v0.3.0).
+    /// When non-empty for a caller file, step 3 (project-level exported lookup)
+    /// uses `lookup_exported_in_scope` instead of `lookup_exported` to prevent
+    /// over-resolution. See T005.
+    includes_graph: IncludesGraph,
 }
 
 impl<'a> CallResolver<'a> {
@@ -61,6 +67,7 @@ impl<'a> CallResolver<'a> {
             symbol_table,
             project,
             imports: HashMap::new(),
+            includes_graph: IncludesGraph::new(),
         }
     }
 
@@ -76,6 +83,20 @@ impl<'a> CallResolver<'a> {
             self.imports
                 .insert(result.file_path.clone(), result.imports.clone());
         }
+        self
+    }
+
+    /// Sets the C++ `#include` graph for scope-aware call resolution
+    /// (BUG-C4 fix, v0.3.0). When the caller file has outgoing #include
+    /// edges in this graph, step 3 (project-level exported lookup) uses
+    /// [`lookup_exported_in_scope`] instead of [`lookup_exported`] to
+    /// prevent over-resolution.
+    ///
+    /// [`lookup_exported_in_scope`]: crate::resolve::symbol_table::ProjectSymbolTable::lookup_exported_in_scope
+    /// [`lookup_exported`]: crate::resolve::symbol_table::ProjectSymbolTable::lookup_exported
+    #[must_use]
+    pub fn with_includes_graph(mut self, graph: IncludesGraph) -> Self {
+        self.includes_graph = graph;
         self
     }
 
@@ -187,7 +208,19 @@ impl<'a> CallResolver<'a> {
         }
 
         // 3. Project-level exported lookup (confidence 0.80, Global)
-        if let Some(entry) = self.symbol_table.lookup_exported(callee_name).first() {
+        // BUG-C4 fix (v0.3.0): For C++ files with #include relationships,
+        // use scope-aware lookup to prevent over-resolution. A symbol in
+        // file B is only a valid target for a call in file A if A #includes
+        // B (directly or transitively). For files without #include edges
+        // (non-C++ or C++ without includes), fall back to global exported
+        // lookup to preserve backward compatibility.
+        let exported = if self.includes_graph.has_outgoing_edges(caller_file) {
+            self.symbol_table
+                .lookup_exported_in_scope(callee_name, caller_file, &self.includes_graph)
+        } else {
+            self.symbol_table.lookup_exported(callee_name)
+        };
+        if let Some(entry) = exported.first() {
             return Some((entry.qn.clone(), CONFIDENCE_PROJECT, ConfidenceTier::Global));
         }
 
@@ -410,6 +443,119 @@ mod tests {
 
         let resolved = resolver.resolve_call("a.rs", "bar");
         assert!(resolved.is_none());
+    }
+
+    // --- resolve_call: scope-aware lookup (BUG-C4 fix, v0.3.0 / T005) ---
+
+    #[test]
+    fn resolve_call_cpp_scoped() {
+        // T005: main.cpp calls foo(). foo.h defines foo() (exported).
+        // bar.cpp also defines foo() (exported). main.cpp #includes foo.h
+        // but NOT bar.cpp. Resolution should point to foo.h's foo, not
+        // bar.cpp's (BUG-C4: over-resolution fix).
+        use crate::resolve::symbol_table::SymbolEntry;
+
+        let mut table = ProjectSymbolTable::new();
+        table.add_symbol(
+            SymbolEntry::new("foo", "proj.foo_h.foo", NodeLabel::Function, "/abs/foo.h", "proj")
+                .with_exported(true),
+        );
+        table.add_symbol(
+            SymbolEntry::new("foo", "proj.bar_cpp.foo", NodeLabel::Function, "/abs/bar.cpp", "proj")
+                .with_exported(true),
+        );
+
+        let mut graph = IncludesGraph::new();
+        graph.add_include("/abs/main.cpp", "/abs/foo.h");
+        // main.cpp does NOT include bar.cpp
+
+        let resolver = CallResolver::new(&table, "proj").with_includes_graph(graph);
+
+        let resolved = resolver.resolve_call("/abs/main.cpp", "foo");
+
+        assert!(resolved.is_some());
+        let (qn, confidence, tier) = resolved.unwrap();
+        assert_eq!(
+            qn, "proj.foo_h.foo",
+            "should resolve to foo.h's foo, not bar.cpp's"
+        );
+        assert!((confidence - 0.80).abs() < 1e-6);
+        assert_eq!(tier, ConfidenceTier::Global);
+    }
+
+    #[test]
+    fn resolve_call_non_cpp_uses_global_when_no_includes() {
+        // T005 backward compat: non-C++ file (no #include edges in graph)
+        // should use global lookup_exported, preserving existing behavior.
+        use crate::resolve::symbol_table::SymbolEntry;
+
+        let mut table = ProjectSymbolTable::new();
+        table.add_symbol(
+            SymbolEntry::new("bar", "proj.b_rs.bar", NodeLabel::Function, "/abs/b.rs", "proj")
+                .with_exported(true),
+        );
+
+        let graph = IncludesGraph::new(); // empty — no #include edges
+
+        let resolver = CallResolver::new(&table, "proj").with_includes_graph(graph);
+
+        let resolved = resolver.resolve_call("/abs/a.rs", "bar");
+
+        assert!(resolved.is_some());
+        let (qn, _, _) = resolved.unwrap();
+        assert_eq!(
+            qn, "proj.b_rs.bar",
+            "non-C++ file should use global lookup (backward compat)"
+        );
+    }
+
+    #[test]
+    fn resolve_call_cpp_scoped_excludes_unreachable() {
+        // T005: main.cpp #includes foo.h. bar.cpp defines foo() (exported).
+        // main.cpp does NOT include bar.cpp. Resolution should return None
+        // (foo is not in scope).
+        use crate::resolve::symbol_table::SymbolEntry;
+
+        let mut table = ProjectSymbolTable::new();
+        table.add_symbol(
+            SymbolEntry::new("foo", "proj.bar_cpp.foo", NodeLabel::Function, "/abs/bar.cpp", "proj")
+                .with_exported(true),
+        );
+
+        let mut graph = IncludesGraph::new();
+        graph.add_include("/abs/main.cpp", "/abs/foo.h");
+        // foo.h has no foo definition; bar.cpp has foo but is NOT included
+
+        let resolver = CallResolver::new(&table, "proj").with_includes_graph(graph);
+
+        let resolved = resolver.resolve_call("/abs/main.cpp", "foo");
+        assert!(resolved.is_none(), "foo in bar.cpp should not be in scope");
+    }
+
+    #[test]
+    fn resolve_call_cpp_scoped_transitive_include() {
+        // T005: main.cpp #includes a.h, a.h #includes b.h.
+        // b.h defines foo() (exported). Transitive reachability should
+        // allow resolution.
+        use crate::resolve::symbol_table::SymbolEntry;
+
+        let mut table = ProjectSymbolTable::new();
+        table.add_symbol(
+            SymbolEntry::new("foo", "proj.b_h.foo", NodeLabel::Function, "/abs/b.h", "proj")
+                .with_exported(true),
+        );
+
+        let mut graph = IncludesGraph::new();
+        graph.add_include("/abs/main.cpp", "/abs/a.h");
+        graph.add_include("/abs/a.h", "/abs/b.h");
+
+        let resolver = CallResolver::new(&table, "proj").with_includes_graph(graph);
+
+        let resolved = resolver.resolve_call("/abs/main.cpp", "foo");
+
+        assert!(resolved.is_some());
+        let (qn, _, _) = resolved.unwrap();
+        assert_eq!(qn, "proj.b_h.foo", "transitive include should reach b.h");
     }
 
     // --- resolve_call: not found ---

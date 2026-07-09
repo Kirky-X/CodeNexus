@@ -132,6 +132,19 @@ impl IncludesGraph {
             .is_some_and(|neighbors| neighbors.contains(to))
     }
 
+    /// Returns `true` if `file` has any direct outgoing `#include` edges.
+    ///
+    /// Used by `CallResolver` to decide whether to use scope-aware lookup
+    /// (`lookup_exported_in_scope`) or fall back to global exported lookup
+    /// (`lookup_exported`). A file with no outgoing #include edges uses
+    /// the global path to preserve backward compatibility for non-C++ files.
+    #[must_use]
+    pub fn has_outgoing_edges(&self, file: &str) -> bool {
+        self.edges
+            .get(file)
+            .is_some_and(|neighbors| !neighbors.is_empty())
+    }
+
     /// Returns the number of direct `#include` edges in the graph.
     #[must_use]
     pub fn edge_count(&self) -> usize {
@@ -322,6 +335,33 @@ mod tests {
         let mut graph = IncludesGraph::new();
         graph.add_include("a", "b");
         assert!(!graph.contains("a", "c"));
+    }
+
+    #[test]
+    fn has_outgoing_edges_true_for_file_with_includes() {
+        let mut graph = IncludesGraph::new();
+        graph.add_include("main.cpp", "foo.h");
+        assert!(graph.has_outgoing_edges("main.cpp"));
+    }
+
+    #[test]
+    fn has_outgoing_edges_false_for_file_without_includes() {
+        let mut graph = IncludesGraph::new();
+        graph.add_include("main.cpp", "foo.h");
+        // foo.h has no outgoing edges (only incoming)
+        assert!(!graph.has_outgoing_edges("foo.h"));
+    }
+
+    #[test]
+    fn has_outgoing_edges_false_for_unknown_file() {
+        let graph = IncludesGraph::new();
+        assert!(!graph.has_outgoing_edges("nonexistent.cpp"));
+    }
+
+    #[test]
+    fn has_outgoing_edges_false_for_empty_graph() {
+        let graph = IncludesGraph::new();
+        assert!(!graph.has_outgoing_edges("any.cpp"));
     }
 
     #[test]
