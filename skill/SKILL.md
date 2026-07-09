@@ -8,7 +8,7 @@ when_to_use: Triggers include "index a codebase", "query the graph", "trace call
 
 ## Description
 
-CodeNexus is a code knowledge graph indexing tool. It parses source code (C, Rust, Fortran, Python, TypeScript) using tree-sitter, builds a queryable graph in LadybugDB, and supports call-chain tracing, data-flow analysis, cross-language FFI tracking, semantic search, change-impact analysis, refactoring proposals, and MCP server integration.
+CodeNexus is a code knowledge graph indexing tool. It parses source code (C, Rust, Fortran, Python, TypeScript, Go, Java, C++) using tree-sitter, builds a queryable graph in LadybugDB, and supports call-chain tracing, data-flow analysis, cross-language FFI tracking, semantic search, change-impact analysis, refactoring proposals, and MCP server integration.
 
 Use this Skill when you need to index a codebase, query its structure, trace function calls or data flow, analyze the impact of changes, search for symbols, watch files for incremental updates, manage projects, export/import graph artifacts, inspect a symbol's 360° context, detect symbols affected by git changes, propose renames, or set up MCP integration with AI agents.
 
@@ -34,7 +34,7 @@ The binary is at `target/release/codenexus` (or `~/.cargo/bin/codenexus` if inst
 cargo install codenexus --features embed
 ```
 
-Feature presets: `minimal` (one language), `core` (C+Rust+Fortran), `full` (all 5 languages + daemon). At least one `lang-*` feature is required — the crate fails to compile otherwise.
+Feature presets: `minimal` (Rust only), `core` (C+Rust+Python), `full` (all 8 languages + daemon + analysis + complexity + api-review + community + cross-service + lsp + mcp). The `mcp` feature enables the sdforge-based MCP server (`codenexus mcp`). At least one `lang-*` feature is required — the crate fails to compile otherwise.
 
 ## Commands
 
@@ -247,7 +247,7 @@ codenexus hook [--db <DB_PATH>]
 
 #### mcp — Serve MCP tools over stdio (H13)
 
-Starts the MCP stdio server, exposing `query`/`trace`/`impact`/`search`/`context` as MCP tools. Launched by AI agents via the config written by `codenexus setup`.
+Starts an sdforge-based MCP server over stdio, exposing 5 tools: `query` (execute Cypher), `trace` (trace symbol paths), `impact` (blast radius analysis), `search` (symbol search), `context` (360° symbol view). Launched by AI agents via the config written by `codenexus setup`. This replaces the previous hand-written JSON-RPC implementation.
 
 ```bash
 codenexus mcp [--db <DB_PATH>]
@@ -330,6 +330,9 @@ codenexus mcp --db /work/graph.lbug
 | Fortran | `.f90`, `.f`, `.f95` | `subroutine`, `function`, `module`, `ISO_C_BINDING`, `call` |
 | Python | `.py` | `def`, `class`, `import`, `__init__.py` |
 | TypeScript | `.ts`, `.tsx` | `function`, `class`, `import`, `export` |
+| Go | `.go` | `func`, `struct`, `interface`, `import` |
+| Java | `.java` | `class`, `method`, `import`, `package` |
+| C++ | `.cpp`, `.cc`, `.cxx`, `.c++`, `.hpp`, `.hh`, `.hxx`, `.h++` | `class`, `function`, `#include`, `namespace`, `template` |
 
 ## Node Types (44)
 
