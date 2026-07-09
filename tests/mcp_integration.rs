@@ -112,6 +112,15 @@ impl McpClient {
     }
 }
 
+/// Ensures the subprocess is killed and reaped even if a test panics,
+/// preventing orphaned `codenexus mcp` processes.
+impl Drop for McpClient {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 #[test]
 fn mcp_server_initializes_and_lists_tools() {
     let tmp = tempfile::NamedTempFile::new().expect("create temp db file");
