@@ -134,9 +134,10 @@ fn run_command(command: Command) -> Result<(), CliError> {
             let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
             codenexus::cli::hook_cmd::run(&kit, &args)
         }
+        #[cfg(feature = "mcp")]
         Command::Mcp(args) => {
             let kit = build_kit(&KitBootstrapConfig::new(PathBuf::from(&args.db)))?;
-            codenexus::cli::mcp_cmd::run(&kit, &args)
+            mcp::run(kit, &args)
         }
         #[cfg(feature = "analysis")]
         Command::DeadCode(args) => {

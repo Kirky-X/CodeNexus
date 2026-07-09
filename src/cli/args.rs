@@ -62,6 +62,7 @@ pub enum Command {
     /// Emit PreToolUse/PostToolUse hook JSON (H13).
     Hook(HookArgs),
     /// Serve MCP tools over stdio (H13).
+    #[cfg(feature = "mcp")]
     Mcp(McpArgs),
     /// Detect dead code (zero-indegree CALLS functions) for a project (T005).
     #[cfg(feature = "analysis")]
@@ -1436,6 +1437,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "mcp")]
     fn cli_parses_mcp_subcommand_defaults() {
         let cli = Cli::parse_from(["codenexus", "mcp"]);
         match cli.command {
@@ -1445,6 +1447,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "mcp")]
     fn cli_parses_mcp_with_db() {
         let cli = Cli::parse_from(["codenexus", "mcp", "--db", "/tmp/x.lbug"]);
         match cli.command {
@@ -1468,6 +1471,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "mcp")]
     fn mcp_args_clone_eq() {
         let a = McpArgs {
             db: "/tmp/x.lbug".into(),
