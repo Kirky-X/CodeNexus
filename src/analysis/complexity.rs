@@ -474,6 +474,22 @@ fn collect_halstead(
     }
 }
 
+// --- Maintainability Index (T008) ---
+
+/// Computes the Maintainability Index (Microsoft 2007 revision).
+///
+/// `MI = max(0, min(100, (171 - 5.2*ln(V) - 0.23*CC - 16.2*ln(LOC)) * 100/171))`
+///
+/// `halstead_volume` and `loc` are clamped to a minimum of `1.0` / `1` before
+/// taking the logarithm, preventing `ln(0)` from producing `NaN`/`-inf`. Higher
+/// MI indicates better maintainability (0=worst, 100=best).
+pub fn calc_maintainability_index(cyclomatic: u32, halstead_volume: f64, loc: u32) -> f64 {
+    let v = halstead_volume.max(1.0);
+    let loc_f = loc.max(1) as f64;
+    let raw = 171.0 - 5.2 * v.ln() - 0.23 * cyclomatic as f64 - 16.2 * loc_f.ln();
+    (raw * 100.0 / 171.0).clamp(0.0, 100.0)
+}
+
 /// Computes cyclomatic complexity (McCabe) for the given parse tree.
 ///
 /// Starts at CC=1 (entry point) and adds 1 for each branch node, each `&&`/`||`
@@ -1002,6 +1018,48 @@ fn complex(x: i32) {
         let m = calc_halstead(&tree, src.as_bytes(), Language::Rust);
         // Empty body → no operators/operands → all-zero default.
         assert_eq!(m, HalsteadMetrics::default());
+    }
+
+    // --- T008: calc_maintainability_index tests ---
+
+    #[test]
+    fn mi_simple_function_high_score() {
+        // CC=1, V=10, LOC=5 → MI ≈ 77.6 (simple, maintainable).
+        let mi = calc_maintainability_index(1, 10.0, 5);
+        assert!(mi.is_finite(), "MI should be finite, got {mi}");
+        assert!(
+            (70.0..=100.0).contains(&mi),
+            "simple function MI should be 70-100, got {mi}"
+        );
+    }
+
+    #[test]
+    fn mi_complex_function_low_score() {
+        // CC=30, V=5000, LOC=200 → MI ≈ 19.9 (complex, hard to maintain).
+        let mi = calc_maintainability_index(30, 5000.0, 200);
+        assert!(mi.is_finite(), "MI should be finite, got {mi}");
+        assert!(
+            mi < 65.0,
+            "complex function MI should be < 65, got {mi}"
+        );
+    }
+
+    #[test]
+    fn mi_zero_volume_clamped() {
+        // V=0 would cause ln(0)=-inf without clamping.
+        let mi = calc_maintainability_index(1, 0.0, 1);
+        assert!(!mi.is_nan(), "MI must not be NaN for zero volume, got {mi}");
+        assert!(mi.is_finite(), "MI should be finite, got {mi}");
+        assert!(mi >= 0.0 && mi <= 100.0, "MI out of range: {mi}");
+    }
+
+    #[test]
+    fn mi_zero_loc_clamped() {
+        // LOC=0 would cause ln(0)=-inf without clamping.
+        let mi = calc_maintainability_index(1, 10.0, 0);
+        assert!(!mi.is_nan(), "MI must not be NaN for zero LOC, got {mi}");
+        assert!(mi.is_finite(), "MI should be finite, got {mi}");
+        assert!(mi >= 0.0 && mi <= 100.0, "MI out of range: {mi}");
     }
 
     // --- T009: calc_cognitive tests ---
