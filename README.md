@@ -192,37 +192,37 @@ codenexus clean myproject
 | 时间复杂度 | `time_complexity` | AST 模式估算：O(1)/O(log n)/O(n)/O(n log n)/O(n^2)/O(n^3)/O(2^n) |
 | 空间复杂度 | `space_complexity` | 分配模式识别：O(1)/O(n)/O(n^2) |
 
-每项指标按阈值分为 Green / Yellow / Red 三级，`overall_severity` 取最高级别。
+每项指标按阈值分为 Green / Yellow / Red / Critical 四级，`overall_severity` 取最高级别。
 
 ### 阈值 CLI 参数
 
 | 参数 | 说明 |
 |------|------|
-| `--cyclomatic-yellow <N>` / `--cyclomatic-red <N>` | 圈复杂度阈值 |
-| `--cognitive-yellow <N>` / `--cognitive-red <N>` | 认知复杂度阈值 |
-| `--nesting-yellow <N>` / `--nesting-red <N>` | 嵌套深度阈值 |
-| `--func-length-yellow <N>` / `--func-length-red <N>` | 函数长度阈值 |
-| `--halstead-volume-yellow <N>` / `--halstead-volume-red <N>` | Halstead volume 阈值 |
-| `--maintainability-yellow <N>` / `--maintainability-red <N>` | 可维护性指数阈值（越高越好） |
-| `--time-complexity-yellow <O(...)>` / `--time-complexity-red <O(...)>` | 时间复杂度阈值 |
-| `--space-complexity-yellow <O(...)>` / `--space-complexity-red <O(...)>` | 空间复杂度阈值 |
+| `--cyclomatic-green <N>` / `--cyclomatic-yellow <N>` / `--cyclomatic-red <N>` | 圈复杂度阈值 |
+| `--cognitive-green <N>` / `--cognitive-yellow <N>` / `--cognitive-red <N>` | 认知复杂度阈值 |
+| `--nesting-green <N>` / `--nesting-yellow <N>` / `--nesting-red <N>` | 嵌套深度阈值 |
+| `--func-length-green <N>` / `--func-length-yellow <N>` / `--func-length-red <N>` | 函数长度阈值 |
+| `--halstead-volume-green <N>` / `--halstead-volume-yellow <N>` / `--halstead-volume-red <N>` | Halstead volume 阈值 |
+| `--maintainability-green <N>` / `--maintainability-yellow <N>` / `--maintainability-red <N>` | 可维护性指数阈值（越高越好） |
+| `--time-complexity-green <O(...)>` / `--time-complexity-yellow <O(...)>` / `--time-complexity-red <O(...)>` | 时间复杂度阈值 |
+| `--space-complexity-yellow <O(...)>` / `--space-complexity-red <O(...)>` | 空间复杂度阈值（3 级，无 Critical） |
 
 `<O(...)>` 取值：时间 `O(1)` / `O(log n)` / `O(n)` / `O(n log n)` / `O(n^2)` / `O(n^3)` / `O(2^n)`，空间 `O(1)` / `O(n)` / `O(n^2)`。未设置的参数走默认值。
 
 ### 默认阈值
 
-| 指标 | Yellow | Red |
-|------|--------|-----|
-| cyclomatic | 20 | 25 |
-| cognitive | 15 | 20 |
-| nesting | 5 | 6 |
-| func_length | 100 | 200 |
-| halstead_volume | 1000 | 8000 |
-| maintainability | 65 | 85 |
-| time_complexity | O(n) | O(n^2) |
-| space_complexity | O(1) | O(n) |
+| 指标 | Green | Yellow | Red |
+|------|-------|--------|-----|
+| cyclomatic | 10 | 20 | 25 |
+| cognitive | 10 | 15 | 20 |
+| nesting | 3 | 5 | 6 |
+| func_length | 30 | 100 | 200 |
+| halstead_volume | 100 | 1000 | 8000 |
+| maintainability | 85 | 65 | 25 |
+| time_complexity | O(log n) | O(n) | O(n^2) |
+| space_complexity | — | O(1) | O(n) |
 
-> `maintainability` 阈值含义反转：MI 越高越好，`value >= red → Green`，`value >= yellow → Yellow`，否则 `Red`。
+> `maintainability` 阈值含义反转：MI 越高越好，`value >= green → Green`，`value >= yellow → Yellow`，`value >= red → Red`，否则 `Critical`。`space_complexity` 只有 3 级（Green/Yellow/Red），无 Critical。
 
 ### 示例
 
@@ -230,14 +230,14 @@ codenexus clean myproject
 # 默认阈值分析
 codenexus complexity myproject
 
-# 自定义圈复杂度阈值（yellow=10, red=15）
-codenexus complexity myproject --cyclomatic-yellow 10 --cyclomatic-red 15
+# 自定义圈复杂度阈值（green=5, yellow=10, red=15）
+codenexus complexity myproject --cyclomatic-green 5 --cyclomatic-yellow 10 --cyclomatic-red 15
 
-# 仅显示 Red 级函数并按严重度排序
+# 仅显示 Red 和 Critical 级函数并按严重度排序
 codenexus complexity myproject --red-only --sort-by-severity
 
-# 自定义时间复杂度阈值（yellow=O(n log n), red=O(n^2)）
-codenexus complexity myproject --time-complexity-yellow "O(n log n)" --time-complexity-red "O(n^2)"
+# 自定义时间复杂度阈值（green=O(1), yellow=O(n log n), red=O(n^2)）
+codenexus complexity myproject --time-complexity-green "O(1)" --time-complexity-yellow "O(n log n)" --time-complexity-red "O(n^2)"
 ```
 
 ## 架构
@@ -312,7 +312,7 @@ CodeNexus 当前版本 v0.2.1。按当前优先级排序的规划工作：
 - [x] v0.2.0 — `lsp` feature：LSP 增强提取，超越 tree-sitter 的类型精确解析（rust-analyzer 集成）
 - [x] v0.2.0 — 扩展语言覆盖（Go、Java、C++），由新的 `lang-*` feature 控制
 - [x] v0.2.0 — 分析工具包：死代码检测、架构概览、API 审查（route-map/shape-check/api-impact/tool-map）、社区检测、跨服务链接检测
-- [x] v0.2.1 — AST 复杂度分析：圈/认知复杂度、嵌套深度、函数长度，绿/黄/红三级告警
+- [x] v0.2.1 — AST 复杂度分析：圈/认知复杂度、嵌套深度、函数长度，绿/黄/红/致命四级告警
 - [ ] v0.3.0 — 跨语言数据流端到端追踪（当前已记录边；多跳污点路径需专用查询路径）
 - [ ] v0.3.0 — 向量嵌入默认开启语义搜索（待 ONNX 模型大小与启动开销可接受后）
 - [ ] 未来 — 基于查询门面的 Web UI / 图可视化

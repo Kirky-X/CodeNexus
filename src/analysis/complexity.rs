@@ -5,7 +5,7 @@
 //!
 //! Provides per-function complexity metrics (cyclomatic, cognitive, nesting
 //! depth, function length) with industry-standard severity classification
-//! (Green / Yellow / Red).
+//! (Green / Yellow / Red / Critical).
 
 use serde::Serialize;
 use std::collections::HashSet;
@@ -21,12 +21,13 @@ use crate::storage::schema::escape_cypher_string;
 
 /// Complexity severity level for a single metric.
 ///
-/// Variant order matters: `Green < Yellow < Red` via derived `Ord`.
+/// Variant order matters: `Green < Yellow < Red < Critical` via derived `Ord`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum Severity {
     Green,
     Yellow,
     Red,
+    Critical,
 }
 
 /// Estimated time complexity class (T010). Variant declaration order defines
@@ -105,46 +106,47 @@ impl FromStr for SpaceComplexity {
     }
 }
 
-/// Industry-standard complexity thresholds stored as `(yellow_max, red_max)`
-/// tuples. `from_*` methods classify values against these thresholds:
-/// `value <= green_max → Green`, `value <= yellow_max → Yellow`, else `Red`.
+/// Industry-standard complexity thresholds stored as `(green, yellow, red)`
+/// triples. `from_*` methods classify values against these thresholds:
+/// `value <= green → Green`, `value <= yellow → Yellow`, `value <= red → Red`,
+/// else `Critical`. `space_complexity` is a 2-tuple `(yellow, red)` (3-level only).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ComplexityThresholds {
-    /// Cyclomatic complexity thresholds `(yellow, red)` — default `(20, 25)`.
-    pub cyclomatic: (u32, u32),
-    /// Cognitive complexity thresholds `(yellow, red)` — default `(15, 20)`.
-    pub cognitive: (u32, u32),
-    /// Nesting depth thresholds `(yellow, red)` — default `(5, 6)`.
-    pub nesting: (u32, u32),
-    /// Function length thresholds `(yellow, red)` — default `(100, 200)`.
-    pub func_length: (u32, u32),
-    /// Halstead volume thresholds `(yellow, red)` — default `(1000, 8000)`.
-    pub halstead_volume: (u32, u32),
-    /// Maintainability Index thresholds `(yellow_min, red_min)` — default
-    /// `(65, 85)`. MI is inverted (higher = better), so `from_maintainability`
-    /// classifies `value >= red_min → Green`, `value >= yellow_min → Yellow`,
-    /// else `Red`.
-    pub maintainability: (u32, u32),
-    /// Time complexity thresholds `(yellow_max, red_max)` — default
-    /// `(ON, ON2)`. `from_time_complexity` classifies `tc <= yellow → Green`,
-    /// `tc <= red → Yellow`, else `Red` (using `TimeComplexity::Ord`).
-    pub time_complexity: (TimeComplexity, TimeComplexity),
+    /// Cyclomatic complexity thresholds `(green, yellow, red)` — default `(10, 20, 25)`.
+    pub cyclomatic: (u32, u32, u32),
+    /// Cognitive complexity thresholds `(green, yellow, red)` — default `(10, 15, 20)`.
+    pub cognitive: (u32, u32, u32),
+    /// Nesting depth thresholds `(green, yellow, red)` — default `(3, 5, 6)`.
+    pub nesting: (u32, u32, u32),
+    /// Function length thresholds `(green, yellow, red)` — default `(30, 100, 200)`.
+    pub func_length: (u32, u32, u32),
+    /// Halstead volume thresholds `(green, yellow, red)` — default `(100, 1000, 8000)`.
+    pub halstead_volume: (u32, u32, u32),
+    /// Maintainability Index thresholds `(green_min, yellow_min, red_min)` — default
+    /// `(85, 65, 25)`. MI is inverted (higher = better), so `from_maintainability`
+    /// classifies `value >= green_min → Green`, `value >= yellow_min → Yellow`,
+    /// `value >= red_min → Red`, else `Critical`.
+    pub maintainability: (u32, u32, u32),
+    /// Time complexity thresholds `(green, yellow, red)` — default
+    /// `(OLogN, ON, ON2)`. `from_time_complexity` classifies `tc <= green → Green`,
+    /// `tc <= yellow → Yellow`, `tc <= red → Red`, else `Critical`.
+    pub time_complexity: (TimeComplexity, TimeComplexity, TimeComplexity),
     /// Space complexity thresholds `(yellow_max, red_max)` — default
-    /// `(O1, ON)`. `from_space_complexity` classifies `sc <= yellow → Green`,
-    /// `sc <= red → Yellow`, else `Red` (using `SpaceComplexity::Ord`).
+    /// `(O1, ON)`. 3-level only (no Critical). `from_space_complexity` classifies
+    /// `sc <= yellow → Green`, `sc <= red → Yellow`, else `Red`.
     pub space_complexity: (SpaceComplexity, SpaceComplexity),
 }
 
 impl Default for ComplexityThresholds {
     fn default() -> Self {
         Self {
-            cyclomatic: (20, 25),
-            cognitive: (15, 20),
-            nesting: (5, 6),
-            func_length: (100, 200),
-            halstead_volume: (1000, 8000),
-            maintainability: (65, 85),
-            time_complexity: (TimeComplexity::ON, TimeComplexity::ON2),
+            cyclomatic: (10, 20, 25),
+            cognitive: (10, 15, 20),
+            nesting: (3, 5, 6),
+            func_length: (30, 100, 200),
+            halstead_volume: (100, 1000, 8000),
+            maintainability: (85, 65, 25),
+            time_complexity: (TimeComplexity::OLogN, TimeComplexity::ON, TimeComplexity::ON2),
             space_complexity: (SpaceComplexity::O1, SpaceComplexity::ON),
         }
     }
@@ -153,95 +155,117 @@ impl Default for ComplexityThresholds {
 impl Severity {
     /// Classifies cyclomatic complexity against `thresholds.cyclomatic`.
     ///
-    /// `green_max = yellow_max / 2` (at least 1) per design D1, keeping the
-    /// historical `≤10` Green / `≤20` Yellow default behavior.
+    /// 4-level: `value <= green → Green`, `<= yellow → Yellow`, `<= red → Red`,
+    /// else `Critical`.
     pub fn from_cyclomatic(value: u32, thresholds: &ComplexityThresholds) -> Severity {
-        let yellow_max = thresholds.cyclomatic.0;
-        let green_max = (yellow_max / 2).max(1);
-        if value <= green_max {
+        let (green, yellow, red) = thresholds.cyclomatic;
+        if value <= green {
             Severity::Green
-        } else if value <= yellow_max {
+        } else if value <= yellow {
             Severity::Yellow
-        } else {
+        } else if value <= red {
             Severity::Red
+        } else {
+            Severity::Critical
         }
     }
 
     /// Classifies cognitive complexity against `thresholds.cognitive`.
+    ///
+    /// 4-level: `value <= green → Green`, `<= yellow → Yellow`, `<= red → Red`,
+    /// else `Critical`.
     pub fn from_cognitive(value: u32, thresholds: &ComplexityThresholds) -> Severity {
-        let yellow_max = thresholds.cognitive.0;
-        let green_max = (yellow_max / 2).max(1);
-        if value <= green_max {
+        let (green, yellow, red) = thresholds.cognitive;
+        if value <= green {
             Severity::Green
-        } else if value <= yellow_max {
+        } else if value <= yellow {
             Severity::Yellow
-        } else {
+        } else if value <= red {
             Severity::Red
+        } else {
+            Severity::Critical
         }
     }
 
     /// Classifies nesting depth against `thresholds.nesting`.
+    ///
+    /// 4-level: `value <= green → Green`, `<= yellow → Yellow`, `<= red → Red`,
+    /// else `Critical`.
     pub fn from_nesting(value: u32, thresholds: &ComplexityThresholds) -> Severity {
-        let yellow_max = thresholds.nesting.0;
-        let green_max = (yellow_max / 2).max(1);
-        if value <= green_max {
+        let (green, yellow, red) = thresholds.nesting;
+        if value <= green {
             Severity::Green
-        } else if value <= yellow_max {
+        } else if value <= yellow {
             Severity::Yellow
-        } else {
+        } else if value <= red {
             Severity::Red
+        } else {
+            Severity::Critical
         }
     }
 
     /// Classifies function length against `thresholds.func_length`.
+    ///
+    /// 4-level: `value <= green → Green`, `<= yellow → Yellow`, `<= red → Red`,
+    /// else `Critical`.
     pub fn from_func_length(value: u32, thresholds: &ComplexityThresholds) -> Severity {
-        let yellow_max = thresholds.func_length.0;
-        let green_max = (yellow_max / 2).max(1);
-        if value <= green_max {
+        let (green, yellow, red) = thresholds.func_length;
+        if value <= green {
             Severity::Green
-        } else if value <= yellow_max {
+        } else if value <= yellow {
             Severity::Yellow
-        } else {
+        } else if value <= red {
             Severity::Red
+        } else {
+            Severity::Critical
         }
     }
 
     /// Classifies Maintainability Index against `thresholds.maintainability`.
     ///
     /// MI is inverted (higher = more maintainable), so classification is
-    /// reversed: `value >= red_min → Green`, `value >= yellow_min → Yellow`,
-    /// else `Red`. `thresholds.maintainability = (yellow_min, red_min)`.
+    /// reversed: `value >= green_min → Green`, `>= yellow_min → Yellow`,
+    /// `>= red_min → Red`, else `Critical`.
+    /// `thresholds.maintainability = (green_min, yellow_min, red_min)`.
     pub fn from_maintainability(value: f64, thresholds: &ComplexityThresholds) -> Severity {
-        let yellow_min = thresholds.maintainability.0 as f64;
-        let red_min = thresholds.maintainability.1 as f64;
-        if value >= red_min {
+        let (green_min, yellow_min, red_min) = thresholds.maintainability;
+        let green_min = green_min as f64;
+        let yellow_min = yellow_min as f64;
+        let red_min = red_min as f64;
+        if value >= green_min {
             Severity::Green
         } else if value >= yellow_min {
             Severity::Yellow
-        } else {
+        } else if value >= red_min {
             Severity::Red
+        } else {
+            Severity::Critical
         }
     }
 
     /// Classifies time complexity against `thresholds.time_complexity`.
     ///
-    /// `tc <= yellow → Green`, `tc <= red → Yellow`, else `Red`, using
-    /// `TimeComplexity::Ord` (`O1 < OLogN < ON < ONLogN < ON2 < ON3 < O2N`).
+    /// 4-level: `tc <= green → Green`, `<= yellow → Yellow`, `<= red → Red`,
+    /// else `Critical`, using `TimeComplexity::Ord`
+    /// (`O1 < OLogN < ON < ONLogN < ON2 < ON3 < O2N`).
     pub fn from_time_complexity(tc: TimeComplexity, thresholds: &ComplexityThresholds) -> Severity {
-        let (yellow, red) = thresholds.time_complexity;
-        if tc <= yellow {
+        let (green, yellow, red) = thresholds.time_complexity;
+        if tc <= green {
             Severity::Green
-        } else if tc <= red {
+        } else if tc <= yellow {
             Severity::Yellow
-        } else {
+        } else if tc <= red {
             Severity::Red
+        } else {
+            Severity::Critical
         }
     }
 
     /// Classifies space complexity against `thresholds.space_complexity`.
     ///
-    /// `sc <= yellow → Green`, `sc <= red → Yellow`, else `Red`, using
-    /// `SpaceComplexity::Ord` (`O1 < ON < ON2`).
+    /// 3-level only (no Critical — only 3 enum variants): `sc <= yellow → Green`,
+    /// `sc <= red → Yellow`, else `Red`, using `SpaceComplexity::Ord`
+    /// (`O1 < ON < ON2`).
     pub fn from_space_complexity(sc: SpaceComplexity, thresholds: &ComplexityThresholds) -> Severity {
         let (yellow, red) = thresholds.space_complexity;
         if sc <= yellow {
@@ -255,17 +279,21 @@ impl Severity {
 
     /// Classifies Halstead volume against `thresholds.halstead_volume`.
     ///
-    /// `value <= green_max → Green`, `<= yellow_max → Yellow`, else `Red`.
-    /// `green_max = yellow_max / 2` (consistent with `from_cyclomatic`).
+    /// 4-level: `value <= green → Green`, `<= yellow → Yellow`, `<= red → Red`,
+    /// else `Critical`.
     pub fn from_halstead_volume(value: f64, thresholds: &ComplexityThresholds) -> Severity {
-        let yellow_max = thresholds.halstead_volume.0 as f64;
-        let green_max = (yellow_max / 2.0).max(1.0);
-        if value <= green_max {
+        let (green, yellow, red) = thresholds.halstead_volume;
+        let green = green as f64;
+        let yellow = yellow as f64;
+        let red = red as f64;
+        if value <= green {
             Severity::Green
-        } else if value <= yellow_max {
+        } else if value <= yellow {
             Severity::Yellow
-        } else {
+        } else if value <= red {
             Severity::Red
+        } else {
+            Severity::Critical
         }
     }
 }
@@ -330,8 +358,8 @@ pub struct HalsteadMetrics {
 
 impl ComplexityEntry {
     /// Computes the overall severity as the highest individual metric severity
-    /// (`Red > Yellow > Green`) by calling the `from_*` classifiers with
-    /// `thresholds`.
+    /// (`Critical > Red > Yellow > Green`) by calling the `from_*` classifiers
+    /// with `thresholds`.
     pub fn compute_overall_severity(&self, thresholds: &ComplexityThresholds) -> Severity {
         [
             Severity::from_cyclomatic(self.cyclomatic, thresholds),
@@ -703,6 +731,28 @@ fn has_direct_recursion(node: Node<'_>, source: &[u8], function_name: &str) -> b
     false
 }
 
+/// Counts the number of direct recursive calls to `function_name` within the
+/// subtree (design D5). Used to distinguish linear recursion (1 call → O(n))
+/// from tree recursion (2+ calls → O(2^n)). Matches `f()` and `self.f()` style
+/// calls, consistent with `has_direct_recursion`.
+fn count_recursive_calls(node: Node<'_>, source: &[u8], function_name: &str) -> usize {
+    let mut count = 0;
+    if node.kind() == "call_expression" {
+        if let Some(func) = node.child_by_field_name("function") {
+            if let Ok(text) = func.utf8_text(source) {
+                if text == function_name || text.ends_with(&format!(".{function_name}")) {
+                    count += 1;
+                }
+            }
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        count += count_recursive_calls(child, source, function_name);
+    }
+    count
+}
+
 /// Returns true if a `while` loop in the subtree contains a binary-search
 /// halving pattern (`(left + right) / 2` or `(left + right) >> 1`). Heuristic
 /// source-text check: the while node text contains `+` and (`/ 2` or `>> 1`).
@@ -730,7 +780,8 @@ fn has_sort_call(source_text: &str) -> bool {
 
 /// Estimates the time complexity class of a function via AST pattern matching
 /// (design D5). Priority cascade (first match wins):
-/// 1. Direct recursion → `O(2^n)` (conservative upper bound).
+/// 1. Tree recursion (2+ self-calls) → `O(2^n)`; linear recursion (1 self-call)
+///    → `O(n)`.
 /// 2. Binary-search halving inside a `while` loop → `O(log n)`.
 /// 3. `.sort(` call → `O(n log n)`.
 /// 4. Loop nesting depth: 0→`O(1)`, 1→`O(n)`, 2→`O(n^2)`, 3+→`O(n^3)`.
@@ -742,8 +793,12 @@ pub fn estimate_time_complexity(
 ) -> TimeComplexity {
     let root = tree.root_node();
 
-    if has_direct_recursion(root, source, function_name) {
-        return TimeComplexity::O2N;
+    let recursion_count = count_recursive_calls(root, source, function_name);
+    if recursion_count >= 2 {
+        return TimeComplexity::O2N; // tree recursion (e.g. fib)
+    }
+    if recursion_count == 1 {
+        return TimeComplexity::ON; // linear recursion (e.g. fact)
     }
 
     if has_binary_search_pattern(root, source, language) {
@@ -824,11 +879,26 @@ pub fn estimate_space_complexity(
     SpaceComplexity::O1
 }
 
+/// Returns true if the child node kind is a short-circuit logical operator
+/// for the specified language (design D4).
+///
+/// - **Python**: `and` / `or` keywords
+/// - **Fortran**: `.and.` / `.or.` (tree-sitter produces lowercase node kinds)
+/// - **C-family** (Rust/C/C++/Go/Java/TypeScript): `&&` / `||`
+fn is_short_circuit_operator(language: Language, _node_kind: &str, child_kind: &str) -> bool {
+    match language {
+        Language::Python => child_kind == "and" || child_kind == "or",
+        Language::Fortran => child_kind == ".and." || child_kind == ".or.",
+        _ => child_kind == "&&" || child_kind == "||",
+    }
+}
+
 /// Computes cyclomatic complexity (McCabe) for the given parse tree.
 ///
-/// Starts at CC=1 (entry point) and adds 1 for each branch node, each `&&`/`||`
-/// operator in binary expressions, each `match_arm` beyond the first, and each
-/// explicit exit node (`return` / `break` / `continue`) per McCabe 1976.
+/// Starts at CC=1 (entry point) and adds 1 for each branch node, each
+/// short-circuit operator (`&&`/`||`/`and`/`or`/`.AND.`/`.OR.`) in binary
+/// expressions, each `match_arm` beyond the first, and each explicit exit
+/// node (`return` / `break` / `continue`) per McCabe 1976.
 pub fn calc_cyclomatic(tree: &tree_sitter::Tree, language: Language) -> u32 {
     1 + cyclomatic_count(tree.root_node(), language) + count_exit_nodes(tree, language)
 }
@@ -841,13 +911,18 @@ fn cyclomatic_count(node: Node<'_>, language: Language) -> u32 {
         count += 1;
     }
 
-    let is_binary = kind == "binary_expression";
+    // binary_expression (C-family) and boolean_operator (Python) can contain
+    // short-circuit operators as children. Fortran tree-sitter uses
+    // `logical_expression` for .AND./.OR. expressions.
+    let is_binary = kind == "binary_expression"
+        || kind == "boolean_operator"
+        || (language == Language::Fortran && kind == "logical_expression");
     let is_match = kind == "match_expression";
     let mut arm_count = 0u32;
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if is_binary && (child.kind() == "&&" || child.kind() == "||") {
+        if is_binary && is_short_circuit_operator(language, kind, child.kind()) {
             count += 1;
         }
         if is_match && child.kind() == "match_arm" {
@@ -865,8 +940,9 @@ fn cyclomatic_count(node: Node<'_>, language: Language) -> u32 {
 
 /// Computes cognitive complexity for the given parse tree.
 ///
-/// Increments by `(1 + nesting_level)` for each branch node and each `&&`/`||`
-/// operator. Nesting level increases when descending into a branch node's body.
+/// Increments by `(1 + nesting_level)` for each branch node and each
+/// short-circuit operator (`&&`/`||`/`and`/`or`/`.AND.`/`.OR.`).
+/// Nesting level increases when descending into a branch node's body.
 pub fn calc_cognitive(tree: &tree_sitter::Tree, language: Language) -> u32 {
     cognitive_count(tree.root_node(), language, 0)
 }
@@ -875,7 +951,12 @@ fn cognitive_count(node: Node<'_>, language: Language, nesting: u32) -> u32 {
     let mut count = 0;
     let kind = node.kind();
     let is_branch = is_branch_node(language, kind);
-    let is_binary = kind == "binary_expression";
+    // binary_expression (C-family) and boolean_operator (Python) can contain
+    // short-circuit operators as children. Fortran tree-sitter uses
+    // `logical_expression` for .AND./.OR. expressions.
+    let is_binary = kind == "binary_expression"
+        || kind == "boolean_operator"
+        || (language == Language::Fortran && kind == "logical_expression");
 
     if is_branch {
         count += 1 + nesting;
@@ -884,7 +965,7 @@ fn cognitive_count(node: Node<'_>, language: Language, nesting: u32) -> u32 {
     let child_nesting = if is_branch { nesting + 1 } else { nesting };
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if is_binary && (child.kind() == "&&" || child.kind() == "||") {
+        if is_binary && is_short_circuit_operator(language, kind, child.kind()) {
             count += 1 + nesting;
         }
         count += cognitive_count(child, language, child_nesting);
@@ -1104,65 +1185,81 @@ mod tests {
     #[test]
     fn from_cyclomatic_classification() {
         let t = ComplexityThresholds::default();
+        // default: (green=10, yellow=20, red=25)
         assert_eq!(Severity::from_cyclomatic(5, &t), Severity::Green);
+        assert_eq!(Severity::from_cyclomatic(10, &t), Severity::Green);
         assert_eq!(Severity::from_cyclomatic(15, &t), Severity::Yellow);
-        assert_eq!(Severity::from_cyclomatic(30, &t), Severity::Red);
+        assert_eq!(Severity::from_cyclomatic(20, &t), Severity::Yellow);
+        assert_eq!(Severity::from_cyclomatic(25, &t), Severity::Red);
+        assert_eq!(Severity::from_cyclomatic(30, &t), Severity::Critical);
     }
 
     #[test]
     fn from_cognitive_classification() {
         let t = ComplexityThresholds::default();
+        // default: (green=10, yellow=15, red=20)
         assert_eq!(Severity::from_cognitive(5, &t), Severity::Green);
+        assert_eq!(Severity::from_cognitive(10, &t), Severity::Green);
         assert_eq!(Severity::from_cognitive(12, &t), Severity::Yellow);
-        assert_eq!(Severity::from_cognitive(25, &t), Severity::Red);
+        assert_eq!(Severity::from_cognitive(15, &t), Severity::Yellow);
+        assert_eq!(Severity::from_cognitive(20, &t), Severity::Red);
+        assert_eq!(Severity::from_cognitive(25, &t), Severity::Critical);
     }
 
     #[test]
     fn from_nesting_classification() {
         let t = ComplexityThresholds::default();
+        // default: (green=3, yellow=5, red=6)
         assert_eq!(Severity::from_nesting(2, &t), Severity::Green);
+        assert_eq!(Severity::from_nesting(3, &t), Severity::Green);
         assert_eq!(Severity::from_nesting(4, &t), Severity::Yellow);
-        assert_eq!(Severity::from_nesting(7, &t), Severity::Red);
+        assert_eq!(Severity::from_nesting(5, &t), Severity::Yellow);
+        assert_eq!(Severity::from_nesting(6, &t), Severity::Red);
+        assert_eq!(Severity::from_nesting(7, &t), Severity::Critical);
     }
 
     #[test]
     fn from_func_length_classification() {
         let t = ComplexityThresholds::default();
+        // default: (green=30, yellow=100, red=200)
         assert_eq!(Severity::from_func_length(20, &t), Severity::Green);
-        // green_max = 100/2 = 50, so 50 is Green; 75 falls in Yellow range.
-        assert_eq!(Severity::from_func_length(50, &t), Severity::Green);
+        assert_eq!(Severity::from_func_length(30, &t), Severity::Green);
+        assert_eq!(Severity::from_func_length(50, &t), Severity::Yellow);
         assert_eq!(Severity::from_func_length(75, &t), Severity::Yellow);
         assert_eq!(Severity::from_func_length(150, &t), Severity::Red);
+        assert_eq!(Severity::from_func_length(250, &t), Severity::Critical);
     }
 
     #[test]
     fn severity_uses_custom_thresholds() {
-        // Custom thresholds: cyclomatic (yellow=10, red=12). green_max = 10/2 = 5.
+        // Custom thresholds: cyclomatic (green=5, yellow=10, red=12).
         let mut custom = ComplexityThresholds::default();
-        custom.cyclomatic = (10, 12);
-        // value 15 > yellow_max(10) → Red. Old hardcoded impl returned Yellow.
-        assert_eq!(Severity::from_cyclomatic(15, &custom), Severity::Red);
-        // value 5 <= green_max(5) → Green.
+        custom.cyclomatic = (5, 10, 12);
+        // value 15 > red(12) → Critical.
+        assert_eq!(Severity::from_cyclomatic(15, &custom), Severity::Critical);
+        // value 5 <= green(5) → Green.
         assert_eq!(Severity::from_cyclomatic(5, &custom), Severity::Green);
         // value 8: 8 > 5, 8 <= 10 → Yellow.
         assert_eq!(Severity::from_cyclomatic(8, &custom), Severity::Yellow);
+        // value 12: 12 > 10, 12 <= 12 → Red.
+        assert_eq!(Severity::from_cyclomatic(12, &custom), Severity::Red);
     }
 
     #[test]
     fn thresholds_default_industry_values() {
         let t = ComplexityThresholds::default();
-        assert_eq!(t.cyclomatic, (20, 25));
-        assert_eq!(t.cognitive, (15, 20));
-        assert_eq!(t.nesting, (5, 6));
-        assert_eq!(t.func_length, (100, 200));
+        assert_eq!(t.cyclomatic, (10, 20, 25));
+        assert_eq!(t.cognitive, (10, 15, 20));
+        assert_eq!(t.nesting, (3, 5, 6));
+        assert_eq!(t.func_length, (30, 100, 200));
     }
 
     #[test]
     fn thresholds_default_includes_new_fields() {
         let t = ComplexityThresholds::default();
-        assert_eq!(t.halstead_volume, (1000, 8000));
-        assert_eq!(t.maintainability, (65, 85));
-        assert_eq!(t.time_complexity, (TimeComplexity::ON, TimeComplexity::ON2));
+        assert_eq!(t.halstead_volume, (100, 1000, 8000));
+        assert_eq!(t.maintainability, (85, 65, 25));
+        assert_eq!(t.time_complexity, (TimeComplexity::OLogN, TimeComplexity::ON, TimeComplexity::ON2));
         assert_eq!(t.space_complexity, (SpaceComplexity::O1, SpaceComplexity::ON));
     }
 
@@ -1194,7 +1291,8 @@ mod tests {
 
     #[test]
     fn compute_overall_severity_red_when_any_red() {
-        let mut entry = make_entry(30, 5, 2, 20);
+        // cyclomatic=22: > 20 (yellow) but <= 25 (red) → Red.
+        let mut entry = make_entry(22, 5, 2, 20);
         let thresholds = ComplexityThresholds::default();
         entry.overall_severity = entry.compute_overall_severity(&thresholds);
         assert_eq!(entry.overall_severity, Severity::Red);
@@ -1325,6 +1423,35 @@ fn complex(x: i32) {
         let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
         let tree = parser.parse(src, None).unwrap();
         assert_eq!(calc_cyclomatic(&tree, Language::Rust), 4);
+    }
+
+    #[cfg(feature = "lang-python")]
+    #[test]
+    fn calc_cyclomatic_python_short_circuit_operators() {
+        // Python `and`/`or` keywords should count as short-circuit operators.
+        // CC = 1 (entry) + 1 (if) + 1 (and) + 1 (or) = 4.
+        let src = "def f(a, b, c):\n    if a and b or c:\n        pass\n";
+        let mut parser = ParserFactory::create_parser(Language::Python).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(
+            calc_cyclomatic(&tree, Language::Python),
+            4,
+            "Python and/or should count as short-circuit operators"
+        );
+    }
+
+    #[cfg(feature = "lang-fortran")]
+    #[test]
+    fn calc_cyclomatic_fortran_short_circuit_operators() {
+        // Fortran .AND./.OR. should count as short-circuit operators.
+        let src = "      SUBROUTINE F(A, B, C)\n      IF (A .AND. B .OR. C) THEN\n      END IF\n      END\n";
+        let mut parser = ParserFactory::create_parser(Language::Fortran).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        let cc = calc_cyclomatic(&tree, Language::Fortran);
+        assert!(
+            cc >= 4,
+            "Fortran .AND./.OR. should count as short-circuit operators, got CC={cc}"
+        );
     }
 
     #[cfg(feature = "lang-rust")]
@@ -1552,14 +1679,39 @@ fn f(arr: &mut Vec<i32>, x: i32) -> bool {
 
     #[cfg(feature = "lang-rust")]
     #[test]
-    fn tc_recursive_is_o2n() {
-        let src = "fn f(n: i32) { f(n - 1); }";
+    fn tc_linear_recursion_is_on() {
+        // 1 self-call → linear recursion → O(n)
+        let src = "fn fact(n: i32) { fact(n - 1); }";
         let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
         let tree = parser.parse(src, None).unwrap();
         assert_eq!(
-            estimate_time_complexity(&tree, src.as_bytes(), Language::Rust, "f"),
+            estimate_time_complexity(&tree, src.as_bytes(), Language::Rust, "fact"),
+            TimeComplexity::ON
+        );
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn tc_tree_recursion_is_o2n() {
+        // 2 self-calls → tree recursion → O(2^n)
+        let src = "fn fib(n: i32) { fib(n - 1) + fib(n - 2) }";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(
+            estimate_time_complexity(&tree, src.as_bytes(), Language::Rust, "fib"),
             TimeComplexity::O2N
         );
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn tc_no_recursion_not_o2n() {
+        // 0 self-calls → not O(2^n)
+        let src = "fn add(a: i32, b: i32) -> i32 { a + b }";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        let tc = estimate_time_complexity(&tree, src.as_bytes(), Language::Rust, "add");
+        assert_ne!(tc, TimeComplexity::O2N);
     }
 
     // --- T013: SpaceComplexity tests ---
@@ -1811,8 +1963,8 @@ fn parallel(a: i32) {
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
         // 9 if-branches → cyclomatic = 1 + 9 = 10. With default thresholds
-        // (yellow=20, green=10), cyclomatic=10 → Green. With custom
-        // (yellow=5, red=8), green_max=2, cyclomatic=10 > 5 → Red.
+        // (green=10, yellow=20, red=25), cyclomatic=10 → Green. With custom
+        // (green=2, yellow=5, red=8), cyclomatic=10 > 8 → Critical.
         let src = "fn f() { if a {} if b {} if c {} if d {} if e {} \
                    if f {} if g {} if h {} if i {} }";
         create_function_with_content(
@@ -1829,19 +1981,19 @@ fn parallel(a: i32) {
 
         let storage = storage(&kit);
         let mut custom = ComplexityThresholds::default();
-        custom.cyclomatic = (5, 8);
+        custom.cyclomatic = (2, 5, 8);
         let analyzer = ComplexityAnalyzer::new_with_thresholds(&*storage, custom);
         let result = analyzer.analyze("demo").expect("analyze");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].cyclomatic, 10, "cyclomatic should be 10");
         assert_eq!(
             result[0].overall_severity,
-            Severity::Red,
-            "custom thresholds should make cyclomatic=10 Red"
+            Severity::Critical,
+            "custom thresholds (red=8) should make cyclomatic=10 Critical"
         );
 
-        // Sanity: with default thresholds, cyclomatic=10 → Green but cognitive=9
-        // → Yellow (green_max=7), so overall = Yellow (not Red).
+        // Sanity: with default thresholds, cyclomatic=10 → Green, so overall
+        // should not be Red or Critical.
         let analyzer_default = ComplexityAnalyzer::new(&*storage);
         let result_default = analyzer_default.analyze("demo").expect("analyze");
         assert_ne!(
@@ -1958,16 +2110,16 @@ fn parallel(a: i32) {
 
     #[test]
     fn from_maintainability_high_is_green() {
-        // Default thresholds: (yellow_min=65, red_min=85). value=90 >= 85 → Green.
+        // Default thresholds: (green_min=85, yellow_min=65, red_min=25).
         let t = ComplexityThresholds::default();
         assert_eq!(Severity::from_maintainability(90.0, &t), Severity::Green);
-        // Boundary: value=85 == red_min → Green.
+        // Boundary: value=85 == green_min → Green.
         assert_eq!(Severity::from_maintainability(85.0, &t), Severity::Green);
     }
 
     #[test]
     fn from_maintainability_mid_is_yellow() {
-        // value=70: 70 >= 65 (yellow_min) but < 85 (red_min) → Yellow.
+        // value=70: 70 >= 65 (yellow_min) but < 85 (green_min) → Yellow.
         let t = ComplexityThresholds::default();
         assert_eq!(Severity::from_maintainability(70.0, &t), Severity::Yellow);
         // Boundary: value=65 == yellow_min → Yellow.
@@ -1976,10 +2128,13 @@ fn parallel(a: i32) {
 
     #[test]
     fn from_maintainability_low_is_red() {
-        // value=50 < 65 (yellow_min) → Red.
+        // value=50: 50 >= 25 (red_min) but < 65 (yellow_min) → Red.
         let t = ComplexityThresholds::default();
         assert_eq!(Severity::from_maintainability(50.0, &t), Severity::Red);
-        assert_eq!(Severity::from_maintainability(0.0, &t), Severity::Red);
+        // Boundary: value=25 == red_min → Red.
+        assert_eq!(Severity::from_maintainability(25.0, &t), Severity::Red);
+        // value=0 < 25 (red_min) → Critical.
+        assert_eq!(Severity::from_maintainability(0.0, &t), Severity::Critical);
     }
 
     #[cfg(feature = "lang-rust")]
@@ -2021,16 +2176,18 @@ fn parallel(a: i32) {
     #[test]
     fn from_time_complexity_classification() {
         let t = ComplexityThresholds::default();
-        // Default: (yellow=ON, red=ON2).
-        // tc <= ON → Green.
+        // Default: (green=OLogN, yellow=ON, red=ON2).
+        // tc <= OLogN → Green.
         assert_eq!(Severity::from_time_complexity(TimeComplexity::O1, &t), Severity::Green);
-        assert_eq!(Severity::from_time_complexity(TimeComplexity::ON, &t), Severity::Green);
-        // ON < tc <= ON2 → Yellow.
-        assert_eq!(Severity::from_time_complexity(TimeComplexity::ONLogN, &t), Severity::Yellow);
-        assert_eq!(Severity::from_time_complexity(TimeComplexity::ON2, &t), Severity::Yellow);
-        // tc > ON2 → Red.
-        assert_eq!(Severity::from_time_complexity(TimeComplexity::ON3, &t), Severity::Red);
-        assert_eq!(Severity::from_time_complexity(TimeComplexity::O2N, &t), Severity::Red);
+        assert_eq!(Severity::from_time_complexity(TimeComplexity::OLogN, &t), Severity::Green);
+        // OLogN < tc <= ON → Yellow.
+        assert_eq!(Severity::from_time_complexity(TimeComplexity::ON, &t), Severity::Yellow);
+        // ON < tc <= ON2 → Red.
+        assert_eq!(Severity::from_time_complexity(TimeComplexity::ONLogN, &t), Severity::Red);
+        assert_eq!(Severity::from_time_complexity(TimeComplexity::ON2, &t), Severity::Red);
+        // tc > ON2 → Critical.
+        assert_eq!(Severity::from_time_complexity(TimeComplexity::ON3, &t), Severity::Critical);
+        assert_eq!(Severity::from_time_complexity(TimeComplexity::O2N, &t), Severity::Critical);
     }
 
     #[cfg(feature = "lang-rust")]
@@ -2050,7 +2207,7 @@ fn parallel(a: i32) {
             1,
             "fn tc_empty() {}",
         );
-        // Recursive function → O2N.
+        // Recursive function (1 self-call) → linear recursion → O(n).
         create_function_with_content(
             &kit,
             "f_tc_rec",
@@ -2083,8 +2240,8 @@ fn parallel(a: i32) {
             .expect("tc_rec entry");
         assert_eq!(
             rec.time_complexity,
-            TimeComplexity::O2N,
-            "recursive function should be O(2^n)"
+            TimeComplexity::ON,
+            "linear recursive function should be O(n)"
         );
     }
 
@@ -2171,49 +2328,53 @@ fn parallel(a: i32) {
     #[test]
     fn from_halstead_volume_low_is_green() {
         let t = ComplexityThresholds::default();
-        // Default: (yellow_max=1000, red_max=8000). green_max = 500.
+        // Default: (green=100, yellow=1000, red=8000).
         assert_eq!(Severity::from_halstead_volume(0.0, &t), Severity::Green);
         assert_eq!(Severity::from_halstead_volume(100.0, &t), Severity::Green);
-        assert_eq!(Severity::from_halstead_volume(500.0, &t), Severity::Green);
     }
 
     #[test]
     fn from_halstead_volume_mid_is_yellow() {
         let t = ComplexityThresholds::default();
-        assert_eq!(Severity::from_halstead_volume(501.0, &t), Severity::Yellow);
+        // 100 < value <= 1000 → Yellow.
+        assert_eq!(Severity::from_halstead_volume(101.0, &t), Severity::Yellow);
+        assert_eq!(Severity::from_halstead_volume(500.0, &t), Severity::Yellow);
         assert_eq!(Severity::from_halstead_volume(1000.0, &t), Severity::Yellow);
     }
 
     #[test]
     fn from_halstead_volume_high_is_red() {
         let t = ComplexityThresholds::default();
+        // 1000 < value <= 8000 → Red.
         assert_eq!(Severity::from_halstead_volume(1001.0, &t), Severity::Red);
         assert_eq!(Severity::from_halstead_volume(8000.0, &t), Severity::Red);
-        assert_eq!(Severity::from_halstead_volume(10000.0, &t), Severity::Red);
+        // value > 8000 → Critical.
+        assert_eq!(Severity::from_halstead_volume(10000.0, &t), Severity::Critical);
     }
 
     #[test]
     fn from_halstead_volume_custom_thresholds() {
         let t = ComplexityThresholds {
-            halstead_volume: (100, 500),
+            halstead_volume: (50, 100, 500),
             ..Default::default()
         };
         assert_eq!(Severity::from_halstead_volume(50.0, &t), Severity::Green);
         assert_eq!(Severity::from_halstead_volume(100.0, &t), Severity::Yellow);
-        assert_eq!(Severity::from_halstead_volume(600.0, &t), Severity::Red);
+        assert_eq!(Severity::from_halstead_volume(400.0, &t), Severity::Red);
+        assert_eq!(Severity::from_halstead_volume(600.0, &t), Severity::Critical);
     }
 
     #[test]
     fn compute_overall_severity_includes_halstead_volume() {
-        // Entry with very high halstead volume → should be Red overall.
+        // Entry with very high halstead volume → should be Critical overall.
         let mut entry = make_entry(5, 5, 2, 20);
         entry.halstead.volume = 10000.0;
         let thresholds = ComplexityThresholds::default();
         entry.overall_severity = entry.compute_overall_severity(&thresholds);
         assert_eq!(
             entry.overall_severity,
-            Severity::Red,
-            "high halstead volume should make overall Red"
+            Severity::Critical,
+            "halstead volume > 8000 should make overall Critical"
         );
     }
 

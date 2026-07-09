@@ -253,37 +253,37 @@ The `complexity` subcommand computes AST complexity metrics for every function i
 | Time complexity | `time_complexity` | AST-pattern estimate: O(1)/O(log n)/O(n)/O(n log n)/O(n^2)/O(n^3)/O(2^n) |
 | Space complexity | `space_complexity` | Allocation-pattern recognition: O(1)/O(n)/O(n^2) |
 
-Each metric is classified Green / Yellow / Red against thresholds; `overall_severity` is the maximum.
+Each metric is classified Green / Yellow / Red / Critical against thresholds; `overall_severity` is the maximum.
 
 ### Threshold CLI flags
 
 | Flag | Description |
 |------|-------------|
-| `--cyclomatic-yellow <N>` / `--cyclomatic-red <N>` | Cyclomatic thresholds |
-| `--cognitive-yellow <N>` / `--cognitive-red <N>` | Cognitive thresholds |
-| `--nesting-yellow <N>` / `--nesting-red <N>` | Nesting depth thresholds |
-| `--func-length-yellow <N>` / `--func-length-red <N>` | Function length thresholds |
-| `--halstead-volume-yellow <N>` / `--halstead-volume-red <N>` | Halstead volume thresholds |
-| `--maintainability-yellow <N>` / `--maintainability-red <N>` | Maintainability Index thresholds (higher = better) |
-| `--time-complexity-yellow <O(...)>` / `--time-complexity-red <O(...)>` | Time complexity thresholds |
-| `--space-complexity-yellow <O(...)>` / `--space-complexity-red <O(...)>` | Space complexity thresholds |
+| `--cyclomatic-green <N>` / `--cyclomatic-yellow <N>` / `--cyclomatic-red <N>` | Cyclomatic thresholds |
+| `--cognitive-green <N>` / `--cognitive-yellow <N>` / `--cognitive-red <N>` | Cognitive thresholds |
+| `--nesting-green <N>` / `--nesting-yellow <N>` / `--nesting-red <N>` | Nesting depth thresholds |
+| `--func-length-green <N>` / `--func-length-yellow <N>` / `--func-length-red <N>` | Function length thresholds |
+| `--halstead-volume-green <N>` / `--halstead-volume-yellow <N>` / `--halstead-volume-red <N>` | Halstead volume thresholds |
+| `--maintainability-green <N>` / `--maintainability-yellow <N>` / `--maintainability-red <N>` | Maintainability Index thresholds (higher = better) |
+| `--time-complexity-green <O(...)>` / `--time-complexity-yellow <O(...)>` / `--time-complexity-red <O(...)>` | Time complexity thresholds |
+| `--space-complexity-yellow <O(...)>` / `--space-complexity-red <O(...)>` | Space complexity thresholds (3-level, no Critical) |
 
 `<O(...)>` values: time `O(1)` / `O(log n)` / `O(n)` / `O(n log n)` / `O(n^2)` / `O(n^3)` / `O(2^n)`, space `O(1)` / `O(n)` / `O(n^2)`. Unset flags fall back to defaults.
 
 ### Default thresholds
 
-| Metric | Yellow | Red |
-|--------|--------|-----|
-| cyclomatic | 20 | 25 |
-| cognitive | 15 | 20 |
-| nesting | 5 | 6 |
-| func_length | 100 | 200 |
-| halstead_volume | 1000 | 8000 |
-| maintainability | 65 | 85 |
-| time_complexity | O(n) | O(n^2) |
-| space_complexity | O(1) | O(n) |
+| Metric | Green | Yellow | Red |
+|--------|-------|--------|-----|
+| cyclomatic | 10 | 20 | 25 |
+| cognitive | 10 | 15 | 20 |
+| nesting | 3 | 5 | 6 |
+| func_length | 30 | 100 | 200 |
+| halstead_volume | 100 | 1000 | 8000 |
+| maintainability | 85 | 65 | 25 |
+| time_complexity | O(log n) | O(n) | O(n^2) |
+| space_complexity | — | O(1) | O(n) |
 
-> `maintainability` is inverted: MI higher = better, so `value >= red → Green`, `value >= yellow → Yellow`, else `Red`.
+> `maintainability` is inverted: MI higher = better, so `value >= green → Green`, `value >= yellow → Yellow`, `value >= red → Red`, else `Critical`. `space_complexity` has only 3 levels (Green/Yellow/Red), no Critical.
 
 ### Examples
 
@@ -291,14 +291,14 @@ Each metric is classified Green / Yellow / Red against thresholds; `overall_seve
 # Analyse with default thresholds
 codenexus complexity myproject
 
-# Custom cyclomatic thresholds (yellow=10, red=15)
-codenexus complexity myproject --cyclomatic-yellow 10 --cyclomatic-red 15
+# Custom cyclomatic thresholds (green=5, yellow=10, red=15)
+codenexus complexity myproject --cyclomatic-green 5 --cyclomatic-yellow 10 --cyclomatic-red 15
 
-# Show only Red functions, sorted by severity
+# Show only Red and Critical functions, sorted by severity
 codenexus complexity myproject --red-only --sort-by-severity
 
-# Custom time complexity thresholds (yellow=O(n log n), red=O(n^2))
-codenexus complexity myproject --time-complexity-yellow "O(n log n)" --time-complexity-red "O(n^2)"
+# Custom time complexity thresholds (green=O(1), yellow=O(n log n), red=O(n^2))
+codenexus complexity myproject --time-complexity-green "O(1)" --time-complexity-yellow "O(n log n)" --time-complexity-red "O(n^2)"
 ```
 
 ## Configuration
@@ -378,7 +378,7 @@ CodeNexus is at v0.2.1. Planned work, ordered by current priority:
 - [x] v0.2.0 — `lsp` feature: LSP-enhanced extraction for type-accurate resolution beyond tree-sitter (rust-analyzer integration)
 - [x] v0.2.0 — Expand language coverage (Go, Java, C++) behind new `lang-*` features
 - [x] v0.2.0 — Analysis toolkit: dead-code detection, architecture overview, API review (route-map/shape-check/api-impact/tool-map), community detection, cross-service link detection
-- [x] v0.2.1 — AST complexity analysis: cyclomatic/cognitive complexity, nesting depth, function length with green/yellow/red severity alerting
+- [x] v0.2.1 — AST complexity analysis: cyclomatic/cognitive complexity, nesting depth, function length with green/yellow/red/critical severity alerting
 - [ ] v0.3.0 — Cross-language data-flow tracing end-to-end (currently edges are recorded; multi-hop taint paths need a dedicated query path)
 - [ ] v0.3.0 — Vector embedding default-on semantic search once ONNX model size and startup cost are acceptable
 - [ ] Future — Web UI / graph visualization on top of the query facade

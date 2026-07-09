@@ -442,7 +442,7 @@ pub struct ArchitectureArgs {
     pub db: String,
 }
 
-/// Arguments for the `complexity` subcommand (v0.2.1).
+/// Arguments for the `complexity` subcommand (v0.3.1).
 ///
 /// Calculates AST-based complexity metrics (cyclomatic, cognitive, nesting
 /// depth, function length) for all functions in a project. Output is a JSON
@@ -455,48 +455,69 @@ pub struct ComplexityArgs {
     /// Database path.
     #[arg(long, default_value = "./codenexus.lbug")]
     pub db: String,
-    /// Only show Red-level high-risk functions.
+    /// Only show Red and Critical high-risk functions.
     #[arg(long)]
     pub red_only: bool,
-    /// Sort output by overall severity (Red first).
+    /// Sort output by overall severity (Critical first).
     #[arg(long)]
     pub sort_by_severity: bool,
+    /// Cyclomatic complexity green threshold (overrides default when set).
+    #[arg(long)]
+    pub cyclomatic_green: Option<u32>,
     /// Cyclomatic complexity yellow threshold (overrides default when set).
     #[arg(long)]
     pub cyclomatic_yellow: Option<u32>,
     /// Cyclomatic complexity red threshold (overrides default when set).
     #[arg(long)]
     pub cyclomatic_red: Option<u32>,
+    /// Cognitive complexity green threshold (overrides default when set).
+    #[arg(long)]
+    pub cognitive_green: Option<u32>,
     /// Cognitive complexity yellow threshold (overrides default when set).
     #[arg(long)]
     pub cognitive_yellow: Option<u32>,
     /// Cognitive complexity red threshold (overrides default when set).
     #[arg(long)]
     pub cognitive_red: Option<u32>,
+    /// Nesting depth green threshold (overrides default when set).
+    #[arg(long)]
+    pub nesting_green: Option<u32>,
     /// Nesting depth yellow threshold (overrides default when set).
     #[arg(long)]
     pub nesting_yellow: Option<u32>,
     /// Nesting depth red threshold (overrides default when set).
     #[arg(long)]
     pub nesting_red: Option<u32>,
+    /// Function length green threshold (overrides default when set).
+    #[arg(long)]
+    pub func_length_green: Option<u32>,
     /// Function length yellow threshold (overrides default when set).
     #[arg(long)]
     pub func_length_yellow: Option<u32>,
     /// Function length red threshold (overrides default when set).
     #[arg(long)]
     pub func_length_red: Option<u32>,
+    /// Halstead volume green threshold (overrides default when set).
+    #[arg(long)]
+    pub halstead_volume_green: Option<u32>,
     /// Halstead volume yellow threshold (overrides default when set).
     #[arg(long)]
     pub halstead_volume_yellow: Option<u32>,
     /// Halstead volume red threshold (overrides default when set).
     #[arg(long)]
     pub halstead_volume_red: Option<u32>,
+    /// Maintainability Index green minimum (overrides default when set).
+    #[arg(long)]
+    pub maintainability_green: Option<u32>,
     /// Maintainability Index yellow minimum (overrides default when set).
     #[arg(long)]
     pub maintainability_yellow: Option<u32>,
     /// Maintainability Index red minimum (overrides default when set).
     #[arg(long)]
     pub maintainability_red: Option<u32>,
+    /// Time complexity green class (e.g. `O(log n)`); overrides default when set.
+    #[arg(long)]
+    pub time_complexity_green: Option<TimeComplexity>,
     /// Time complexity yellow class (e.g. `O(n)`); overrides default when set.
     #[arg(long)]
     pub time_complexity_yellow: Option<TimeComplexity>,
@@ -1943,18 +1964,25 @@ mod tests {
             db: "/tmp/x.lbug".into(),
             red_only: true,
             sort_by_severity: false,
+            cyclomatic_green: None,
             cyclomatic_yellow: Some(5),
             cyclomatic_red: Some(8),
+            cognitive_green: None,
             cognitive_yellow: None,
             cognitive_red: None,
+            nesting_green: None,
             nesting_yellow: None,
             nesting_red: None,
+            func_length_green: None,
             func_length_yellow: None,
             func_length_red: None,
+            halstead_volume_green: None,
             halstead_volume_yellow: None,
             halstead_volume_red: None,
+            maintainability_green: None,
             maintainability_yellow: None,
             maintainability_red: None,
+            time_complexity_green: None,
             time_complexity_yellow: None,
             time_complexity_red: None,
             space_complexity_yellow: None,
