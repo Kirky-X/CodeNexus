@@ -70,6 +70,10 @@ specmark/
 # Verification harness outputs (large, sample-derived; rebuild locally)
 tools/verification/results/
 
+# Acceptance test artifacts (cloned repos + generated reports)
+tests/acceptance/fixtures/
+tests/acceptance/results/
+
 # IDE uploads (transient artifacts, not source of truth)
 .uploads/
 
