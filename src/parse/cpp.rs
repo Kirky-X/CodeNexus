@@ -241,22 +241,19 @@ fn extract_function(
         result,
     );
     let signature = node_text(node, source).map(signature_first_line).map(String::from);
-    // BUG-C4 (reverted): C++ free functions were candidates for is_exported=true
-    // to enable cross-file call resolution via lookup_exported. However, CodeNexus
-    // does not track #include imports for C++, so lookup_exported cannot
-    // distinguish between same-named functions in different files/namespaces.
-    // Marking free functions as is_exported caused massive over-resolution:
-    // fmt CALLS went from 1,852 (18% under gitnexus's 2,263) to 5,002 (54% OVER).
-    // The original 18% under-resolution is acceptable; the over-resolution is not.
-    // Reverting to is_exported=false (default) until #include import tracking is
-    // implemented for C++.
+    // BUG-C4 (resolved, v0.3.0): C++ free functions are now is_exported=true
+    // to enable cross-file call resolution. Over-resolution is prevented by
+    // scope-aware lookup_exported_in_scope (T004/T005) which filters by
+    // #include reachability via IncludesGraph. Methods remain is_exported=false.
+    let is_exported = !is_method;
     let mut builder = ModelNode::builder(label, name, qn.clone())
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Cpp)
         .project(ctx.project)
-        .is_global(!is_method);
+        .is_global(!is_method)
+        .is_exported(is_exported);
     if let Some(p) = parent {
         builder = builder.parent_qn(p);
     }
@@ -1123,15 +1120,13 @@ mod tests {
     }
 
     #[test]
-    fn free_function_is_not_exported() {
-        // BUG-C4 (reverted): C++ free functions are NOT is_exported because
-        // CodeNexus lacks #include import tracking, so lookup_exported cannot
-        // distinguish same-named functions in different files. Marking them
-        // caused 54% over-resolution on fmt. Reverted until import tracking
-        // is implemented.
+    fn cpp_free_function_is_exported() {
+        // BUG-C4 (resolved, v0.3.0): C++ free functions are now is_exported=true
+        // to enable cross-file call resolution. Over-resolution is prevented by
+        // scope-aware lookup_exported_in_scope (T004/T005) via IncludesGraph.
         let result = extract("int add(int a, int b) { return a + b; }\n");
         let func = result.nodes.iter().find(|n| n.name == "add").unwrap();
-        assert!(!func.is_exported, "free function should have is_exported=false (reverted BUG-C4)");
+        assert!(func.is_exported, "free function should have is_exported=true (BUG-C4 resolved)");
     }
 
     #[test]
@@ -1159,10 +1154,10 @@ mod tests {
     }
 
     #[test]
-    fn namespace_function_is_not_exported() {
+    fn cpp_namespace_function_is_exported() {
         let result = extract("namespace ns { int helper() { return 42; } }\n");
         let func = result.nodes.iter().find(|n| n.name == "helper").unwrap();
-        assert!(!func.is_exported, "namespace function should have is_exported=false (reverted BUG-C4)");
+        assert!(func.is_exported, "namespace function should have is_exported=true (BUG-C4 resolved)");
     }
 
     #[test]
