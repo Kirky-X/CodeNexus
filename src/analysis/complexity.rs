@@ -556,6 +556,130 @@ pub fn calc_maintainability_index(cyclomatic: u32, halstead_volume: f64, loc: u3
     (raw * 100.0 / 171.0).clamp(0.0, 100.0)
 }
 
+// --- Time complexity estimation (T011) ---
+
+/// Returns the tree-sitter node kind for `while` loops in `language`.
+fn while_kind(language: Language) -> &'static str {
+    #[allow(unreachable_patterns)]
+    match language {
+        #[cfg(feature = "lang-rust")]
+        Language::Rust => "while_expression",
+        _ => "while_statement",
+    }
+}
+
+/// Returns true if `kind` is a loop construct (`for`/`while`) for `language`.
+fn is_loop_node(language: Language, kind: &str) -> bool {
+    #[allow(unreachable_patterns)]
+    match language {
+        #[cfg(feature = "lang-rust")]
+        Language::Rust => matches!(kind, "for_expression" | "while_expression"),
+        #[cfg(feature = "lang-fortran")]
+        Language::Fortran => matches!(kind, "do_statement"),
+        _ => matches!(kind, "for_statement" | "while_statement"),
+    }
+}
+
+/// Computes the maximum nesting depth of loop nodes in the subtree rooted at
+/// `node`. A non-loop node contributes 0; a loop node contributes 1 plus the
+/// max depth of its children.
+fn max_loop_depth(node: Node<'_>, language: Language) -> u32 {
+    let this_depth = if is_loop_node(language, node.kind()) {
+        1
+    } else {
+        0
+    };
+    let mut max_child = 0u32;
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        max_child = max_child.max(max_loop_depth(child, language));
+    }
+    this_depth + max_child
+}
+
+/// Returns true if `function_name` is invoked directly within the subtree
+/// (direct recursion). Matches `f()` and `self.f()` style calls.
+fn has_direct_recursion(node: Node<'_>, source: &[u8], function_name: &str) -> bool {
+    if node.kind() == "call_expression" {
+        if let Some(func) = node.child_by_field_name("function") {
+            if let Ok(text) = func.utf8_text(source) {
+                if text == function_name || text.ends_with(&format!(".{function_name}")) {
+                    return true;
+                }
+            }
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if has_direct_recursion(child, source, function_name) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns true if a `while` loop in the subtree contains a binary-search
+/// halving pattern (`(left + right) / 2` or `(left + right) >> 1`). Heuristic
+/// source-text check: the while node text contains `+` and (`/ 2` or `>> 1`).
+fn has_binary_search_pattern(node: Node<'_>, source: &[u8], language: Language) -> bool {
+    if node.kind() == while_kind(language) {
+        if let Ok(text) = node.utf8_text(source) {
+            if text.contains('+') && (text.contains("/ 2") || text.contains(">> 1")) {
+                return true;
+            }
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if has_binary_search_pattern(child, source, language) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns true if the source text contains a `.sort(` method call (heuristic).
+fn has_sort_call(source_text: &str) -> bool {
+    source_text.contains(".sort(")
+}
+
+/// Estimates the time complexity class of a function via AST pattern matching
+/// (design D5). Priority cascade (first match wins):
+/// 1. Direct recursion → `O(2^n)` (conservative upper bound).
+/// 2. Binary-search halving inside a `while` loop → `O(log n)`.
+/// 3. `.sort(` call → `O(n log n)`.
+/// 4. Loop nesting depth: 0→`O(1)`, 1→`O(n)`, 2→`O(n^2)`, 3+→`O(n^3)`.
+pub fn estimate_time_complexity(
+    tree: &tree_sitter::Tree,
+    source: &[u8],
+    language: Language,
+    function_name: &str,
+) -> TimeComplexity {
+    let root = tree.root_node();
+
+    if has_direct_recursion(root, source, function_name) {
+        return TimeComplexity::O2N;
+    }
+
+    if has_binary_search_pattern(root, source, language) {
+        return TimeComplexity::OLogN;
+    }
+
+    if let Ok(source_text) = std::str::from_utf8(source) {
+        if has_sort_call(source_text) {
+            return TimeComplexity::ONLogN;
+        }
+    }
+
+    let depth = max_loop_depth(root, language);
+    match depth {
+        0 => TimeComplexity::O1,
+        1 => TimeComplexity::ON,
+        2 => TimeComplexity::ON2,
+        _ => TimeComplexity::ON3,
+    }
+}
+
 /// Computes cyclomatic complexity (McCabe) for the given parse tree.
 ///
 /// Starts at CC=1 (entry point) and adds 1 for each branch node, each `&&`/`||`
@@ -1172,6 +1296,109 @@ fn complex(x: i32) {
         assert!(TimeComplexity::OLogN < TimeComplexity::ON);
         assert!(TimeComplexity::ON2 < TimeComplexity::ON3);
         assert!(TimeComplexity::ON3 < TimeComplexity::O2N);
+    }
+
+    // --- T011: estimate_time_complexity tests ---
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn tc_empty_function_is_o1() {
+        let src = "fn f() {}";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(
+            estimate_time_complexity(&tree, src.as_bytes(), Language::Rust, "f"),
+            TimeComplexity::O1
+        );
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn tc_single_loop_is_on() {
+        let src = "fn f() { for i in 0..n { } }";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(
+            estimate_time_complexity(&tree, src.as_bytes(), Language::Rust, "f"),
+            TimeComplexity::ON
+        );
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn tc_nested_loops_is_on2() {
+        let src = "fn f() { for i in 0..n { for j in 0..n { } } }";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(
+            estimate_time_complexity(&tree, src.as_bytes(), Language::Rust, "f"),
+            TimeComplexity::ON2
+        );
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn tc_triple_nested_loops_is_on3() {
+        let src = "fn f() { for i in 0..n { for j in 0..n { for k in 0..n { } } } }";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(
+            estimate_time_complexity(&tree, src.as_bytes(), Language::Rust, "f"),
+            TimeComplexity::ON3
+        );
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn tc_binary_search_is_ologn() {
+        let src = r#"
+fn f(arr: &[i32], target: i32) -> i32 {
+    let mut left = 0;
+    let mut right = arr.len() as i32 - 1;
+    while left <= right {
+        let mid = (left + right) / 2;
+        if arr[mid as usize] == target { return mid; }
+        if arr[mid as usize] < target { left = mid + 1; }
+        else { right = mid - 1; }
+    }
+    -1
+}
+"#;
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(
+            estimate_time_complexity(&tree, src.as_bytes(), Language::Rust, "f"),
+            TimeComplexity::OLogN
+        );
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn tc_sort_then_binary_search_is_onlogn() {
+        let src = r#"
+fn f(arr: &mut Vec<i32>, x: i32) -> bool {
+    arr.sort();
+    arr.binary_search(&x).is_ok()
+}
+"#;
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(
+            estimate_time_complexity(&tree, src.as_bytes(), Language::Rust, "f"),
+            TimeComplexity::ONLogN
+        );
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn tc_recursive_is_o2n() {
+        let src = "fn f(n: i32) { f(n - 1); }";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(
+            estimate_time_complexity(&tree, src.as_bytes(), Language::Rust, "f"),
+            TimeComplexity::O2N
+        );
     }
 
     // --- T009: calc_cognitive tests ---
