@@ -929,6 +929,22 @@ mod dispatch_tests {
             db: "./x.lbug".into(),
             red_only: false,
             sort_by_severity: false,
+            cyclomatic_yellow: None,
+            cyclomatic_red: None,
+            cognitive_yellow: None,
+            cognitive_red: None,
+            nesting_yellow: None,
+            nesting_red: None,
+            func_length_yellow: None,
+            func_length_red: None,
+            halstead_volume_yellow: None,
+            halstead_volume_red: None,
+            maintainability_yellow: None,
+            maintainability_red: None,
+            time_complexity_yellow: None,
+            time_complexity_red: None,
+            space_complexity_yellow: None,
+            space_complexity_red: None,
         };
         #[cfg(feature = "api-review")]
         let _ = RouteMapArgs {

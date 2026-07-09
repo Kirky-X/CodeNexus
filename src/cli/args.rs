@@ -10,6 +10,9 @@
 
 use clap::{Parser, Subcommand};
 
+#[cfg(feature = "complexity")]
+use crate::analysis::complexity::{SpaceComplexity, TimeComplexity};
+
 /// Top-level CLI parser.
 ///
 /// Wraps [`Command`] so `main.rs` can call [`Cli::parse`] and dispatch on the
@@ -458,6 +461,54 @@ pub struct ComplexityArgs {
     /// Sort output by overall severity (Red first).
     #[arg(long)]
     pub sort_by_severity: bool,
+    /// Cyclomatic complexity yellow threshold (overrides default when set).
+    #[arg(long)]
+    pub cyclomatic_yellow: Option<u32>,
+    /// Cyclomatic complexity red threshold (overrides default when set).
+    #[arg(long)]
+    pub cyclomatic_red: Option<u32>,
+    /// Cognitive complexity yellow threshold (overrides default when set).
+    #[arg(long)]
+    pub cognitive_yellow: Option<u32>,
+    /// Cognitive complexity red threshold (overrides default when set).
+    #[arg(long)]
+    pub cognitive_red: Option<u32>,
+    /// Nesting depth yellow threshold (overrides default when set).
+    #[arg(long)]
+    pub nesting_yellow: Option<u32>,
+    /// Nesting depth red threshold (overrides default when set).
+    #[arg(long)]
+    pub nesting_red: Option<u32>,
+    /// Function length yellow threshold (overrides default when set).
+    #[arg(long)]
+    pub func_length_yellow: Option<u32>,
+    /// Function length red threshold (overrides default when set).
+    #[arg(long)]
+    pub func_length_red: Option<u32>,
+    /// Halstead volume yellow threshold (overrides default when set).
+    #[arg(long)]
+    pub halstead_volume_yellow: Option<u32>,
+    /// Halstead volume red threshold (overrides default when set).
+    #[arg(long)]
+    pub halstead_volume_red: Option<u32>,
+    /// Maintainability Index yellow minimum (overrides default when set).
+    #[arg(long)]
+    pub maintainability_yellow: Option<u32>,
+    /// Maintainability Index red minimum (overrides default when set).
+    #[arg(long)]
+    pub maintainability_red: Option<u32>,
+    /// Time complexity yellow class (e.g. `O(n)`); overrides default when set.
+    #[arg(long)]
+    pub time_complexity_yellow: Option<TimeComplexity>,
+    /// Time complexity red class (e.g. `O(n^2)`); overrides default when set.
+    #[arg(long)]
+    pub time_complexity_red: Option<TimeComplexity>,
+    /// Space complexity yellow class (e.g. `O(1)`); overrides default when set.
+    #[arg(long)]
+    pub space_complexity_yellow: Option<SpaceComplexity>,
+    /// Space complexity red class (e.g. `O(n)`); overrides default when set.
+    #[arg(long)]
+    pub space_complexity_red: Option<SpaceComplexity>,
 }
 
 /// Arguments for the `api-route-map` subcommand (T008, v0.2.0).
@@ -1892,7 +1943,78 @@ mod tests {
             db: "/tmp/x.lbug".into(),
             red_only: true,
             sort_by_severity: false,
+            cyclomatic_yellow: Some(5),
+            cyclomatic_red: Some(8),
+            cognitive_yellow: None,
+            cognitive_red: None,
+            nesting_yellow: None,
+            nesting_red: None,
+            func_length_yellow: None,
+            func_length_red: None,
+            halstead_volume_yellow: None,
+            halstead_volume_red: None,
+            maintainability_yellow: None,
+            maintainability_red: None,
+            time_complexity_yellow: None,
+            time_complexity_red: None,
+            space_complexity_yellow: None,
+            space_complexity_red: None,
         };
         assert_eq!(a, a.clone());
+    }
+
+    #[test]
+    #[cfg(feature = "complexity")]
+    fn cli_parses_complexity_with_threshold_flags() {
+        let cli = Cli::parse_from([
+            "codenexus",
+            "complexity",
+            "demo",
+            "--cyclomatic-yellow",
+            "5",
+            "--cyclomatic-red",
+            "8",
+        ]);
+        match cli.command {
+            Command::Complexity(args) => {
+                assert_eq!(args.project, "demo");
+                assert_eq!(args.cyclomatic_yellow, Some(5));
+                assert_eq!(args.cyclomatic_red, Some(8));
+                // Untouched thresholds default to None.
+                assert_eq!(args.cognitive_yellow, None);
+                assert_eq!(args.cognitive_red, None);
+                assert_eq!(args.time_complexity_yellow, None);
+                assert_eq!(args.space_complexity_red, None);
+            }
+            other => panic!("expected Complexity, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "complexity")]
+    fn cli_parses_complexity_with_enum_threshold_flags() {
+        // TimeComplexity / SpaceComplexity use FromStr via clap value_parser.
+        let cli = Cli::parse_from([
+            "codenexus",
+            "complexity",
+            "demo",
+            "--time-complexity-yellow",
+            "O(n log n)",
+            "--space-complexity-red",
+            "O(n^2)",
+        ]);
+        match cli.command {
+            Command::Complexity(args) => {
+                assert_eq!(
+                    args.time_complexity_yellow,
+                    Some(crate::analysis::complexity::TimeComplexity::ONLogN)
+                );
+                assert_eq!(
+                    args.space_complexity_red,
+                    Some(crate::analysis::complexity::SpaceComplexity::ON2)
+                );
+            }
+            other => panic!("expected Complexity, got {other:?}"),
+        }
     }
 }
