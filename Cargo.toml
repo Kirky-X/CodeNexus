@@ -210,6 +210,11 @@ rust_decimal = "1.37"
 # Cross-platform RSS sampling for memory benchmarks (design.md Decision 2).
 sysinfo = "0.30"
 
+[build-dependencies]
+# Used by build.rs to locate OpenSSL via pkg-config (required by lbug's C++
+# httplib::SSLClient extension).
+pkg-config = "0.3"
+
 # ============================================================================
 # BENCHMARKS
 # ============================================================================

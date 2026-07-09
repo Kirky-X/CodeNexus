@@ -399,6 +399,7 @@ dependencies = [
  "pest",
  "pest_derive",
  "petgraph",
+ "pkg-config",
  "rayon",
  "reqwest",
  "rust_decimal",
