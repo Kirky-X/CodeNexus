@@ -255,15 +255,14 @@ impl Severity {
 
     /// Classifies Halstead volume against `thresholds.halstead_volume`.
     ///
-    /// `value as u32 <= green_max → Green`, `<= yellow_max → Yellow`, else `Red`.
+    /// `value <= green_max → Green`, `<= yellow_max → Yellow`, else `Red`.
     /// `green_max = yellow_max / 2` (consistent with `from_cyclomatic`).
     pub fn from_halstead_volume(value: f64, thresholds: &ComplexityThresholds) -> Severity {
-        let yellow_max = thresholds.halstead_volume.0;
-        let green_max = (yellow_max / 2).max(1);
-        let v = value as u32;
-        if v <= green_max {
+        let yellow_max = thresholds.halstead_volume.0 as f64;
+        let green_max = (yellow_max / 2.0).max(1.0);
+        if value <= green_max {
             Severity::Green
-        } else if v <= yellow_max {
+        } else if value <= yellow_max {
             Severity::Yellow
         } else {
             Severity::Red
@@ -294,7 +293,7 @@ pub struct ComplexityEntry {
     pub nesting_depth: u32,
     /// Function length in lines.
     pub function_length: u32,
-    /// Highest severity across all four metrics.
+    /// Highest severity across all configured metrics.
     pub overall_severity: Severity,
     /// Halstead complexity metrics (T007).
     pub halstead: HalsteadMetrics,
