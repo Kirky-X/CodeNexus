@@ -95,8 +95,50 @@ pub fn extract_from_source(
     language: Language,
     project: &str,
 ) -> Result<ExtractResult> {
+    let language = maybe_upgrade_h_to_cpp(file_path_str, source, language);
     let extractor = super::get_extractor(language);
     extractor.extract(source, file_path_str, project)
+}
+
+/// Upgrades a `.h` file from C to C++ when its content contains C++-only
+/// syntax (BUG-C3). `.h` is ambiguous between C and C++; `from_extension`
+/// maps it to C by default. This function inspects the source for C++-only
+/// keywords (`namespace`, `template`, `class`, access specifiers) and
+/// upgrades to Cpp when found, so C++ class/struct definitions in headers
+/// are not lost.
+#[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
+fn maybe_upgrade_h_to_cpp(file_path_str: &str, source: &str, language: Language) -> Language {
+    if language == Language::C {
+        if let Some(ext) = std::path::Path::new(file_path_str)
+            .extension()
+            .and_then(|e| e.to_str())
+        {
+            if ext.eq_ignore_ascii_case("h") && detect_cpp_header(source) {
+                return Language::Cpp;
+            }
+        }
+    }
+    language
+}
+
+#[cfg(not(all(feature = "lang-c", feature = "lang-cpp")))]
+fn maybe_upgrade_h_to_cpp(_file_path_str: &str, _source: &str, language: Language) -> Language {
+    language
+}
+
+/// Returns true if the source contains C++-only syntax markers.
+///
+/// `namespace`, `template`, and `class` are not C keywords, so their
+/// presence (as a word followed by whitespace) strongly indicates C++.
+/// Access specifiers (`public:` etc.) are also C++-only.
+#[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
+fn detect_cpp_header(source: &str) -> bool {
+    source.contains("namespace ")
+        || source.contains("template ")
+        || source.contains("class ")
+        || source.contains("public:")
+        || source.contains("private:")
+        || source.contains("protected:")
 }
 
 #[cfg(test)]
@@ -560,5 +602,59 @@ mod tests {
 
         let result = extractors[0].extract("x", "a.rs", "p").unwrap();
         assert_eq!(result.nodes.len(), 1);
+    }
+
+    // --- BUG-C3: .h file C/C++ content detection ---
+
+    #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
+    #[test]
+    fn extract_from_source_upgrades_h_with_class_to_cpp() {
+        // BUG-C3: .h files with C++ syntax (class/namespace/template) should
+        // be parsed as C++, not C. Without this, C++ class/struct definitions
+        // in .h files are lost (fmt class=77 vs 414, struct=268 vs 576).
+        let src = "class Foo { public: int x; };\n";
+        let result = extract_from_source("test.h", src, Language::C, "proj").unwrap();
+        assert_eq!(
+            result.language,
+            Language::Cpp,
+            ".h with class keyword should be upgraded to C++"
+        );
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(
+            classes.len(),
+            1,
+            "C++ class in .h should be extracted: {:?}",
+            result.nodes
+        );
+    }
+
+    #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
+    #[test]
+    fn extract_from_source_upgrades_h_with_namespace_to_cpp() {
+        let src = "namespace ns { void foo() {} }\n";
+        let result = extract_from_source("test.h", src, Language::C, "proj").unwrap();
+        assert_eq!(result.language, Language::Cpp);
+    }
+
+    #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
+    #[test]
+    fn extract_from_source_keeps_h_without_cpp_keywords_as_c() {
+        // A pure C header should remain parsed as C.
+        let src = "#ifndef FOO_H\n#define FOO_H\nint add(int a, int b);\n#endif\n";
+        let result = extract_from_source("test.h", src, Language::C, "proj").unwrap();
+        assert_eq!(result.language, Language::C, "pure C header should stay C");
+    }
+
+    #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
+    #[test]
+    fn extract_from_source_does_not_upgrade_c_file() {
+        // .c files must never be upgraded to C++ even if they contain C++ keywords.
+        let src = "int add(int a, int b) { return a + b; }\n";
+        let result = extract_from_source("test.c", src, Language::C, "proj").unwrap();
+        assert_eq!(result.language, Language::C, ".c file must stay C");
     }
 }

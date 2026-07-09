@@ -144,6 +144,20 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             };
             visit_children(node, source, &child_ctx, result);
         }
+        "enum_specifier" => {
+            // BUG-C2: enum_specifier was not handled, so C++ enums were
+            // silently dropped. Extract as Enum node (gitnexus extracts enums).
+            extract_type(node, source, ctx, result, NodeLabel::Enum);
+            let name = type_name(node, source);
+            let child_ctx = VisitContext {
+                file_path: ctx.file_path,
+                project: ctx.project,
+                current_func: ctx.current_func,
+                current_parent: name.as_deref(),
+                in_template: ctx.in_template,
+            };
+            visit_children(node, source, &child_ctx, result);
+        }
         "namespace_definition" => {
             extract_namespace(node, source, ctx, result);
             let name = type_name(node, source);
@@ -207,14 +221,22 @@ fn extract_function(
     // A namespace-scoped function is still a Function (not a Method), so we
     // walk the ancestor chain to distinguish class/struct scope from
     // namespace scope (mirrors python.rs `is_inside_class`).
-    let is_method = is_inside_class_or_struct(node);
+    let is_inside = is_inside_class_or_struct(node);
+    // BUG-C1: out-of-class method definitions (`void Foo::bar() {}`) have a
+    // qualified_identifier declarator. Detect the qualifier (class name) so
+    // these are classified as Method, not Function.
+    let qualifier = extract_qualifier(node, source);
+    let is_method = is_inside || qualifier.is_some();
     let label = if is_method {
         NodeLabel::Method
     } else {
         NodeLabel::Function
     };
+    // Use the qualifier (from Foo::bar) as parent if present, otherwise the
+    // enclosing scope from ctx.current_parent (for in-class methods).
+    let parent: Option<&str> = qualifier.as_deref().or(ctx.current_parent);
     let qn = dedupe_qn(
-        make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent),
+        make_qn(ctx.file_path, &name, ctx.project, parent),
         node.start_position().row as u32 + 1,
         result,
     );
@@ -226,8 +248,8 @@ fn extract_function(
         .language(Language::Cpp)
         .project(ctx.project)
         .is_global(!is_method);
-    if let Some(parent) = ctx.current_parent {
-        builder = builder.parent_qn(parent);
+    if let Some(p) = parent {
+        builder = builder.parent_qn(p);
     }
     if let Some(sig) = signature {
         builder = builder.signature(sig);
@@ -435,6 +457,35 @@ fn is_inside_class_or_struct(node: Node) -> bool {
         }
     }
     false
+}
+
+/// Extracts the qualifier (class/namespace name) from a function_definition
+/// whose declarator is a `qualified_identifier` (BUG-C1).
+///
+/// For `void Foo::bar() {}`, returns `Some("Foo")`. For a plain function
+/// `void bar() {}`, returns `None`. Unwraps intermediate declarator nodes
+/// (function_declarator, pointer_declarator, etc.) to reach the
+/// qualified_identifier.
+fn extract_qualifier(node: Node, source: &str) -> Option<String> {
+    let declarator = node.child_by_field_name("declarator")?;
+    qualifier_from_declarator(declarator, source)
+}
+
+/// Recursively unwraps declarator nodes to find a `qualified_identifier`
+/// and extract its `scope` field (the class/namespace name).
+fn qualifier_from_declarator(node: Node, source: &str) -> Option<String> {
+    match node.kind() {
+        "qualified_identifier" => {
+            let scope = node.child_by_field_name("scope")?;
+            node_text(scope, source).map(String::from)
+        }
+        "function_declarator" | "pointer_declarator" | "reference_declarator"
+        | "array_declarator" | "parenthesized_declarator" => {
+            let inner = node.child_by_field_name("declarator")?;
+            qualifier_from_declarator(inner, source)
+        }
+        _ => None,
+    }
 }
 
 /// Extracts the `name` field from a class/struct/namespace declaration.
@@ -930,22 +981,51 @@ mod tests {
     // --- enum extraction (extract_type with NodeLabel::Enum) ---
 
     #[test]
-    fn enum_is_not_extracted_as_top_level_node() {
-        // The C++ extractor currently handles class/struct/namespace/function
-        // but not enum_specifier (no visit_node arm for it). This test pins
-        // the current behavior: enum Color produces no Enum node. If enum
-        // support is added later, this test should be updated to assert the
-        // node is extracted.
+    fn enum_is_extracted_as_top_level_node() {
+        // BUG-C2: enum_specifier should be extracted as an Enum node.
+        // Previously enum was not extracted at all (the old test pinned the
+        // missing behavior). gitnexus extracts enums; without this, C++
+        // enum counts are zero in CodeNexus.
         let result = extract("enum Color { RED, GREEN, BLUE };\n");
         let enums: Vec<_> = result
             .nodes
             .iter()
             .filter(|n| n.label == NodeLabel::Enum)
             .collect();
-        assert!(
-            enums.is_empty(),
-            "enum_specifier is not currently extracted: {:?}",
-            enums
+        assert_eq!(
+            enums.len(),
+            1,
+            "should extract 1 enum: {:?}",
+            result.nodes
+        );
+        assert_eq!(enums[0].name, "Color");
+    }
+
+    #[test]
+    fn out_of_class_method_definition_is_classified_as_method() {
+        // BUG-C1: `void Foo::bar() {}` is an out-of-class method definition.
+        // The declarator is a qualified_identifier (Foo::bar). The previous
+        // is_inside_class_or_struct only checked ancestors, not the declarator,
+        // so this was misclassified as Function. It should be Method with
+        // parent_qn = "Foo".
+        let src = "class Foo {};\nvoid Foo::bar() {}\n";
+        let result = extract(src);
+        let bar = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "bar")
+            .expect("should extract bar");
+        assert_eq!(
+            bar.label,
+            NodeLabel::Method,
+            "out-of-class Foo::bar should be Method, not Function: {:?}",
+            bar.label
+        );
+        assert_eq!(
+            bar.parent_qn.as_deref(),
+            Some("Foo"),
+            "parent_qn should be Foo: {:?}",
+            bar.parent_qn
         );
     }
 
