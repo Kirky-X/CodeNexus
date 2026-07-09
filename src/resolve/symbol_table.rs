@@ -7,7 +7,7 @@
 //! project-level table aggregates file tables and provides global lookup
 //! across all files.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::model::{Language, NodeLabel};
 
@@ -257,7 +257,8 @@ impl ProjectSymbolTable {
         calling_file: &str,
         includes_graph: &IncludesGraph,
     ) -> Vec<&SymbolEntry> {
-        let reachable = includes_graph.reachable_from(calling_file);
+        let mut reachable = HashSet::new();
+        includes_graph.fill_reachable_from(calling_file, &mut reachable);
         self.lookup(name)
             .into_iter()
             .filter(|e| e.is_exported && reachable.contains(e.file_path.as_str()))

@@ -106,21 +106,45 @@ impl IncludesGraph {
     /// `HashSet<&str>` with lifetimes tied to `&self`. Empty set if `start`
     /// has no outgoing edges AND is not a key in `edges` (still returns
     /// `{start}` because a file always reaches itself).
+    ///
+    /// For hot-path callers that invoke this repeatedly, prefer
+    /// [`fill_reachable_from`](Self::fill_reachable_from) to reuse a buffer
+    /// and avoid per-call allocation.
     pub fn reachable_from<'a>(&'a self, start: &'a str) -> HashSet<&'a str> {
-        let mut visited: HashSet<&str> = HashSet::new();
-        visited.insert(start);
+        let mut out = HashSet::new();
+        self.fill_reachable_from(start, &mut out);
+        out
+    }
+
+    /// Fills `out` with all files reachable from `start` via `#include` chains
+    /// (transitive closure), **including `start` itself**.
+    ///
+    /// This is the zero-allocation variant of
+    /// [`reachable_from`](Self::reachable_from): it writes into a
+    /// caller-provided buffer instead of allocating a new `HashSet` on each
+    /// call. Callers that invoke this in a hot loop (e.g.
+    /// `lookup_exported_in_scope` during call resolution) can reuse the same
+    /// buffer across calls to avoid repeated allocations.
+    ///
+    /// # Algorithm
+    ///
+    /// BFS over the adjacency list, identical to `reachable_from`. Clears
+    /// `out` before populating to ensure correctness across repeated calls
+    /// with the same buffer.
+    pub fn fill_reachable_from<'a>(&'a self, start: &'a str, out: &mut HashSet<&'a str>) {
+        out.clear();
+        out.insert(start);
         let mut queue: Vec<&str> = vec![start];
         while let Some(current) = queue.pop() {
             if let Some(neighbors) = self.edges.get(current) {
                 for next in neighbors {
                     let next: &str = next;
-                    if visited.insert(next) {
+                    if out.insert(next) {
                         queue.push(next);
                     }
                 }
             }
         }
-        visited
     }
 
     /// Returns `true` if `from` directly includes `to` (no transitive closure).
@@ -487,6 +511,49 @@ mod tests {
         assert!(reachable_from_a.contains("b"));
         assert!(!reachable_from_a.contains("c"), "disconnected node should not be reachable");
         assert!(!reachable_from_a.contains("d"), "disconnected node should not be reachable");
+    }
+
+    // --- fill_reachable_from (zero-allocation variant) ---
+
+    #[test]
+    fn fill_reachable_from_reuses_buffer() {
+        // Graph: a→b→c. fill_reachable_from("a", &mut buf) should fill buf
+        // with a/b/c. Then fill_reachable_from("b", &mut buf) should clear
+        // and fill with b/c only (verifying clear works).
+        let mut graph = IncludesGraph::new();
+        graph.add_include("a", "b");
+        graph.add_include("b", "c");
+
+        let mut buf: HashSet<&str> = HashSet::new();
+
+        // First call: from "a" → {a, b, c}
+        graph.fill_reachable_from("a", &mut buf);
+        assert!(buf.contains("a"), "start node should be in buffer");
+        assert!(buf.contains("b"), "direct neighbor should be in buffer");
+        assert!(buf.contains("c"), "transitive neighbor should be in buffer");
+        assert_eq!(buf.len(), 3);
+
+        // Second call: from "b" → {b, c} (a must be cleared)
+        graph.fill_reachable_from("b", &mut buf);
+        assert!(buf.contains("b"), "start node should be in buffer");
+        assert!(buf.contains("c"), "transitive neighbor should be in buffer");
+        assert!(!buf.contains("a"), "stale entry from previous call must be cleared");
+        assert_eq!(buf.len(), 2, "buffer should only contain b and c after clear+fill");
+    }
+
+    #[test]
+    fn fill_reachable_from_matches_reachable_from() {
+        // fill_reachable_from and reachable_from must produce identical results.
+        let mut graph = IncludesGraph::new();
+        graph.add_include("main.cpp", "a.h");
+        graph.add_include("a.h", "b.h");
+        graph.add_include("b.h", "c.h");
+        graph.add_include("main.cpp", "c.h"); // diamond
+
+        let expected = graph.reachable_from("main.cpp");
+        let mut buf = HashSet::new();
+        graph.fill_reachable_from("main.cpp", &mut buf);
+        assert_eq!(expected, buf, "fill_reachable_from must match reachable_from output");
     }
 
     // --- edge_count / is_empty ---
