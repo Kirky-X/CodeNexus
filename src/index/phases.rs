@@ -430,6 +430,15 @@ fn build_includes_edges(
     // resolve_include matches #include paths as suffixes of these paths.
     let all_files: Vec<String> = file_index.keys().cloned().collect();
 
+    // Build rel→abs reverse map for IncludesGraph keys. IncludesGraph stores
+    // ABSOLUTE paths (matching SymbolEntry.file_path and CallResolver's
+    // caller_file, both from result.file_path) so that lookup_exported_in_scope
+    // can filter entries by file_path without format conversion.
+    let mut rel_to_abs: HashMap<&String, &String> = HashMap::new();
+    for (abs, rel) in path_to_rel {
+        rel_to_abs.insert(rel, abs);
+    }
+
     for result in results {
         // Only C++ #include produces INCLUDES edges (scheme C).
         // C and other languages are handled by ImportResolver as IMPORTS.
@@ -452,6 +461,11 @@ fn build_includes_edges(
             );
             continue;
         };
+
+        // IncludesGraph source key: absolute path (result.file_path).
+        // In tests where path_to_rel is empty, result.file_path is already
+        // the "absolute" path (relative path used as-is).
+        let source_abs = &result.file_path;
 
         for import in &result.imports {
             if import.source_file.is_empty() {
@@ -485,7 +499,15 @@ fn build_includes_edges(
             .build();
             graph.add_edge(edge.clone());
             edges.push(edge);
-            includes_graph.add_include(&source_rel, &target_rel);
+
+            // IncludesGraph target key: convert target_rel back to absolute
+            // via rel_to_abs map. In tests (path_to_rel empty), fallback to
+            // target_rel (which is already the "absolute" path in test context).
+            let target_abs = rel_to_abs
+                .get(&target_rel)
+                .map(|s| s.to_string())
+                .unwrap_or(target_rel.clone());
+            includes_graph.add_include(source_abs, &target_abs);
         }
     }
 
@@ -1052,6 +1074,8 @@ mod tests {
     fn build_includes_edges_with_absolute_paths() {
         // Production scenario: result.file_path is absolute, path_to_rel
         // maps it to relative, graph File nodes use relative paths.
+        // IncludesGraph keys should be ABSOLUTE (matching SymbolEntry.file_path
+        // and caller_file, both from result.file_path).
         let mut graph = Graph::new();
         graph.add_node(make_file_node("src/main.cpp", "proj", Language::Cpp));
         graph.add_node(make_file_node("src/foo.h", "proj", Language::Cpp));
@@ -1069,6 +1093,10 @@ mod tests {
             "/home/dev/proj/src/main.cpp".to_string(),
             "src/main.cpp".to_string(),
         );
+        path_to_rel.insert(
+            "/home/dev/proj/src/foo.h".to_string(),
+            "src/foo.h".to_string(),
+        );
 
         let (edges, includes_graph) =
             build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
@@ -1076,7 +1104,11 @@ mod tests {
         assert_eq!(edges.len(), 1, "absolute source path should resolve via path_to_rel");
         assert_eq!(edges[0].source, "src/main.cpp");
         assert_eq!(edges[0].target, "src/foo.h");
-        assert!(includes_graph.contains("src/main.cpp", "src/foo.h"));
+        // IncludesGraph uses absolute paths (for SymbolEntry.file_path matching).
+        assert!(
+            includes_graph.contains("/home/dev/proj/src/main.cpp", "/home/dev/proj/src/foo.h"),
+            "IncludesGraph keys should be absolute paths (matching SymbolEntry.file_path)"
+        );
     }
 
     #[test]
