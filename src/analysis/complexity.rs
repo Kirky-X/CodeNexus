@@ -9,6 +9,8 @@
 
 use serde::Serialize;
 use std::collections::HashSet;
+use std::fmt;
+use std::str::FromStr;
 use tree_sitter::Node;
 
 use crate::model::Language;
@@ -25,6 +27,50 @@ pub enum Severity {
     Green,
     Yellow,
     Red,
+}
+
+/// Estimated time complexity class (T010). Variant declaration order defines
+/// the derived `Ord` ordering: `O1 < OLogN < ON < ONLogN < ON2 < ON3 < O2N`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub enum TimeComplexity {
+    O1,
+    OLogN,
+    ON,
+    ONLogN,
+    ON2,
+    ON3,
+    O2N,
+}
+
+impl fmt::Display for TimeComplexity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::O1 => write!(f, "O(1)"),
+            Self::OLogN => write!(f, "O(log n)"),
+            Self::ON => write!(f, "O(n)"),
+            Self::ONLogN => write!(f, "O(n log n)"),
+            Self::ON2 => write!(f, "O(n^2)"),
+            Self::ON3 => write!(f, "O(n^3)"),
+            Self::O2N => write!(f, "O(2^n)"),
+        }
+    }
+}
+
+impl FromStr for TimeComplexity {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "O(1)" => Ok(Self::O1),
+            "O(log n)" => Ok(Self::OLogN),
+            "O(n)" => Ok(Self::ON),
+            "O(n log n)" => Ok(Self::ONLogN),
+            "O(n^2)" => Ok(Self::ON2),
+            "O(n^3)" => Ok(Self::ON3),
+            "O(2^n)" => Ok(Self::O2N),
+            _ => Err(format!("unknown time complexity: {s}")),
+        }
+    }
 }
 
 /// Industry-standard complexity thresholds stored as `(yellow_max, red_max)`
@@ -1086,6 +1132,46 @@ fn complex(x: i32) {
         assert!(!mi.is_nan(), "MI must not be NaN for zero LOC, got {mi}");
         assert!(mi.is_finite(), "MI should be finite, got {mi}");
         assert!(mi >= 0.0 && mi <= 100.0, "MI out of range: {mi}");
+    }
+
+    // --- T010: TimeComplexity tests ---
+
+    #[test]
+    fn time_complexity_display_format() {
+        assert_eq!(TimeComplexity::O1.to_string(), "O(1)");
+        assert_eq!(TimeComplexity::OLogN.to_string(), "O(log n)");
+        assert_eq!(TimeComplexity::ON.to_string(), "O(n)");
+        assert_eq!(TimeComplexity::ONLogN.to_string(), "O(n log n)");
+        assert_eq!(TimeComplexity::ON2.to_string(), "O(n^2)");
+        assert_eq!(TimeComplexity::ON3.to_string(), "O(n^3)");
+        assert_eq!(TimeComplexity::O2N.to_string(), "O(2^n)");
+    }
+
+    #[test]
+    fn time_complexity_fromstr_parses() {
+        assert_eq!("O(1)".parse::<TimeComplexity>().unwrap(), TimeComplexity::O1);
+        assert_eq!("O(log n)".parse::<TimeComplexity>().unwrap(), TimeComplexity::OLogN);
+        assert_eq!("O(n)".parse::<TimeComplexity>().unwrap(), TimeComplexity::ON);
+        assert_eq!(
+            "O(n log n)".parse::<TimeComplexity>().unwrap(),
+            TimeComplexity::ONLogN
+        );
+        assert_eq!("O(n^2)".parse::<TimeComplexity>().unwrap(), TimeComplexity::ON2);
+        assert_eq!("O(n^3)".parse::<TimeComplexity>().unwrap(), TimeComplexity::ON3);
+        assert_eq!("O(2^n)".parse::<TimeComplexity>().unwrap(), TimeComplexity::O2N);
+        // Unknown string → error.
+        assert!("O(n!)".parse::<TimeComplexity>().is_err());
+    }
+
+    #[test]
+    fn time_complexity_ord_ordering() {
+        // Variant declaration order defines Ord: O1 < OLogN < ON < ONLogN < ON2 < ON3 < O2N.
+        assert!(TimeComplexity::O1 < TimeComplexity::ON);
+        assert!(TimeComplexity::ON < TimeComplexity::ON2);
+        assert!(TimeComplexity::O1 < TimeComplexity::ON2);
+        assert!(TimeComplexity::OLogN < TimeComplexity::ON);
+        assert!(TimeComplexity::ON2 < TimeComplexity::ON3);
+        assert!(TimeComplexity::ON3 < TimeComplexity::O2N);
     }
 
     // --- T009: calc_cognitive tests ---
