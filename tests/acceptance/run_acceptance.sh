@@ -49,7 +49,7 @@ done
 PROJECTS=(
   "serde|serde-rs/serde|v1.0.219|rust"
   "requests|psf/requests|v2.32.3|python"
-  "vscode-uri|microsoft/vscode-uri|v0.3.0|typescript"
+  "vscode-uri|microsoft/vscode-uri|v3.0.2|typescript"
   "redis|redis/redis|7.4.2|c"
   "gin|gin-gonic/gin|v1.10.0|go"
   "jackson-databind|FasterXML/jackson-databind|jackson-databind-2.18.2|java"
@@ -84,14 +84,21 @@ check_gitnexus() {
 }
 
 # Sum all values in a JSON object field.
+# Rule 12: surface jq errors explicitly — do NOT silence with 2>/dev/null.
 sum_json_values() {
   local json_file="$1"
   local key="$2"
-  if [[ -f "$json_file" ]]; then
-    jq "[.${key}[].] | add" "$json_file" 2>/dev/null || echo "N/A"
-  else
+  if [[ ! -f "$json_file" ]]; then
     echo "N/A"
+    return
   fi
+  local result
+  if ! result=$(jq "[.${key}[]] | add" "$json_file" 2>&1); then
+    echo "ERROR: jq failed on $json_file for key '$key': $result" >&2
+    echo "N/A"
+    return
+  fi
+  echo "$result"
 }
 
 # --- Main ---
