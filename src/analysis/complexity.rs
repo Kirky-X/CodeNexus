@@ -73,6 +73,38 @@ impl FromStr for TimeComplexity {
     }
 }
 
+/// Estimated space complexity class (T013). Variant declaration order defines
+/// the derived `Ord` ordering: `O1 < ON < ON2`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub enum SpaceComplexity {
+    O1,
+    ON,
+    ON2,
+}
+
+impl fmt::Display for SpaceComplexity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::O1 => write!(f, "O(1)"),
+            Self::ON => write!(f, "O(n)"),
+            Self::ON2 => write!(f, "O(n^2)"),
+        }
+    }
+}
+
+impl FromStr for SpaceComplexity {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "O(1)" => Ok(Self::O1),
+            "O(n)" => Ok(Self::ON),
+            "O(n^2)" => Ok(Self::ON2),
+            _ => Err(format!("unknown space complexity: {s}")),
+        }
+    }
+}
+
 /// Industry-standard complexity thresholds stored as `(yellow_max, red_max)`
 /// tuples. `from_*` methods classify values against these thresholds:
 /// `value <= green_max → Green`, `value <= yellow_max → Yellow`, else `Red`.
@@ -1425,6 +1457,32 @@ fn f(arr: &mut Vec<i32>, x: i32) -> bool {
             estimate_time_complexity(&tree, src.as_bytes(), Language::Rust, "f"),
             TimeComplexity::O2N
         );
+    }
+
+    // --- T013: SpaceComplexity tests ---
+
+    #[test]
+    fn space_complexity_display_format() {
+        assert_eq!(SpaceComplexity::O1.to_string(), "O(1)");
+        assert_eq!(SpaceComplexity::ON.to_string(), "O(n)");
+        assert_eq!(SpaceComplexity::ON2.to_string(), "O(n^2)");
+    }
+
+    #[test]
+    fn space_complexity_fromstr() {
+        assert_eq!("O(1)".parse::<SpaceComplexity>().unwrap(), SpaceComplexity::O1);
+        assert_eq!("O(n)".parse::<SpaceComplexity>().unwrap(), SpaceComplexity::ON);
+        assert_eq!("O(n^2)".parse::<SpaceComplexity>().unwrap(), SpaceComplexity::ON2);
+        // Unknown string → error.
+        assert!("O(n^3)".parse::<SpaceComplexity>().is_err());
+    }
+
+    #[test]
+    fn space_complexity_ord_ordering() {
+        // Variant declaration order defines Ord: O1 < ON < ON2.
+        assert!(SpaceComplexity::O1 < SpaceComplexity::ON);
+        assert!(SpaceComplexity::ON < SpaceComplexity::ON2);
+        assert!(SpaceComplexity::O1 < SpaceComplexity::ON2);
     }
 
     // --- T009: calc_cognitive tests ---
