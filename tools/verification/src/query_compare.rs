@@ -143,8 +143,12 @@ pub fn execute_codenexus_query(
 /// Errors (corruption, repo-not-found) propagate; binder exceptions are
 /// surfaced as empty results with a warning (some labels don't exist for
 /// every language).
-pub fn execute_gitnexus_query(repo: &str, cql: &str) -> Result<Vec<(String, String)>> {
-    let response = gitnexus_client::run_cypher(repo, cql)?;
+pub fn execute_gitnexus_query(
+    repo: &str,
+    cql: &str,
+    gitnexus_binary: Option<&Path>,
+) -> Result<Vec<(String, String)>> {
+    let response = gitnexus_client::run_cypher(repo, cql, gitnexus_binary)?;
     let rows = match response {
         gitnexus_client::CypherResponse::Rows { rows, .. } => rows,
         gitnexus_client::CypherResponse::Empty => Vec::new(),

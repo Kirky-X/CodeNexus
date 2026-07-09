@@ -23,6 +23,10 @@ use type_map::TypeMap;
 #[derive(Parser, Debug)]
 #[command(name = "codenexus-verify", version, about)]
 struct Cli {
+    /// Path to the gitnexus binary. If omitted, searches PATH.
+    #[arg(long, global = true)]
+    gitnexus_binary: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -73,18 +77,19 @@ enum Command {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let gitnexus_binary = cli.gitnexus_binary.as_deref();
     match cli.command {
         Command::Single {
             repo,
             name,
             language,
             resume,
-        } => run_single_orchestrator(&repo, &name, &language, resume),
+        } => run_single_orchestrator(&repo, &name, &language, resume, gitnexus_binary),
         Command::Batch {
             corpus,
             resume,
             only,
-        } => run_batch(&corpus, resume, &only),
+        } => run_batch(&corpus, resume, &only, gitnexus_binary),
         Command::FetchSamples { corpus } => run_fetch_samples(&corpus),
     }
 }
@@ -110,6 +115,7 @@ fn run_single_orchestrator(
     name: &str,
     language: &str,
     resume: bool,
+    gitnexus_binary: Option<&Path>,
 ) -> Result<()> {
     // 1. CodeNexus side: index + extract + write codenexus.json
     let codenexus_stats = codenexus_stats::run_single(repo, name, language, resume)?;
@@ -129,13 +135,13 @@ fn run_single_orchestrator(
             }
             Err(e) => {
                 eprintln!("[resume] no usable gitnexus reference for `{name}` ({e}); fetching fresh");
-                let stats = gitnexus_client::fetch_reference(name)?;
+                let stats = gitnexus_client::fetch_reference(name, gitnexus_binary)?;
                 let _ = gitnexus_client::write_reference(name, &stats)?;
                 stats
             }
         }
     } else {
-        let stats = gitnexus_client::fetch_reference(name)?;
+        let stats = gitnexus_client::fetch_reference(name, gitnexus_binary)?;
         let gn_path = gitnexus_client::write_reference(name, &stats)?;
         eprintln!("[ok] wrote {gn_path:?}");
         stats
@@ -145,7 +151,7 @@ fn run_single_orchestrator(
     let type_map = TypeMap::load(&PathBuf::from(TYPE_MAP_PATH))?;
 
     // 4. Run all 8 query comparisons
-    let query_diffs = run_query_comparisons(name)?;
+    let query_diffs = run_query_comparisons(name, gitnexus_binary)?;
 
     // 5. Generate + write report
     let markdown = report::generate_report(
@@ -170,7 +176,10 @@ fn run_single_orchestrator(
 
 /// Execute all .cql files in the queries directory against both sides and
 /// collect the diffs.
-fn run_query_comparisons(name: &str) -> Result<Vec<(String, QueryDiff)>> {
+fn run_query_comparisons(
+    name: &str,
+    gitnexus_binary: Option<&Path>,
+) -> Result<Vec<(String, QueryDiff)>> {
     let queries_dir = Path::new(QUERIES_DIR);
     let db_path = Path::new(DEFAULT_DB);
 
@@ -207,7 +216,7 @@ fn run_query_comparisons(name: &str) -> Result<Vec<(String, QueryDiff)>> {
 
         let cn_results = query_compare::execute_codenexus_query(db_path, &cn_cql, Some(&project_id))
             .with_context(|| format!("CodeNexus query failed for {query_name}"))?;
-        let gn_results = query_compare::execute_gitnexus_query(name, &gn_cql)
+        let gn_results = query_compare::execute_gitnexus_query(name, &gn_cql, gitnexus_binary)
             .with_context(|| format!("gitnexus query failed for {query_name}"))?;
 
         let diff = query_compare::compare_query_results(&cn_results, &gn_results);
@@ -227,7 +236,12 @@ fn run_query_comparisons(name: &str) -> Result<Vec<(String, QueryDiff)>> {
 }
 
 /// Batch dispatcher (task 8.7).
-fn run_batch(corpus: &PathBuf, resume: bool, only: &[String]) -> Result<()> {
+fn run_batch(
+    corpus: &PathBuf,
+    resume: bool,
+    only: &[String],
+    gitnexus_binary: Option<&Path>,
+) -> Result<()> {
     let content = std::fs::read_to_string(corpus)
         .with_context(|| format!("failed to read corpus {}", corpus.display()))?;
     let corpus: serde_json::Value = serde_json::from_str(&content)
@@ -260,7 +274,7 @@ fn run_batch(corpus: &PathBuf, resume: bool, only: &[String]) -> Result<()> {
         }
 
         eprintln!("\n=== batch: {name} ({language}) ===");
-        match run_single_orchestrator(Path::new(repo_path), name, language, resume) {
+        match run_single_orchestrator(Path::new(repo_path), name, language, resume, gitnexus_binary) {
             Ok(()) => {
                 // Read the generated report to extract severity counts.
                 let report_path = Path::new("tools/verification/results")
@@ -337,4 +351,44 @@ fn run_fetch_samples(corpus: &Path) -> Result<()> {
         anyhow::bail!("fetch_samples.sh exited with {status}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gitnexus_binary_flag_parses() {
+        let cli = Cli::parse_from([
+            "codenexus-verify",
+            "--gitnexus-binary",
+            "/usr/local/bin/gitnexus",
+            "single",
+            "--repo",
+            ".",
+            "--name",
+            "test",
+            "--language",
+            "rust",
+        ]);
+        assert_eq!(
+            cli.gitnexus_binary,
+            Some(PathBuf::from("/usr/local/bin/gitnexus"))
+        );
+    }
+
+    #[test]
+    fn gitnexus_binary_none_uses_path() {
+        let cli = Cli::parse_from([
+            "codenexus-verify",
+            "single",
+            "--repo",
+            ".",
+            "--name",
+            "test",
+            "--language",
+            "rust",
+        ]);
+        assert!(cli.gitnexus_binary.is_none());
+    }
 }

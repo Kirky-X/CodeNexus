@@ -82,8 +82,16 @@ const CORRUPTION_PATTERNS: &[&str] = &[
 /// Task 4.1: Execute a Cypher query against gitnexus via subprocess.
 ///
 /// Returns the parsed response. Caller decides how to handle `Error`.
-pub fn run_cypher(repo: &str, query: &str) -> Result<CypherResponse> {
-    let output = Command::new("gitnexus")
+///
+/// When `gitnexus_binary` is `Some(path)`, invokes that binary directly;
+/// when `None`, searches PATH for `gitnexus`.
+pub fn run_cypher(
+    repo: &str,
+    query: &str,
+    gitnexus_binary: Option<&Path>,
+) -> Result<CypherResponse> {
+    let binary = gitnexus_binary.unwrap_or_else(|| Path::new("gitnexus"));
+    let output = Command::new(binary)
         .args(["cypher", "--repo", repo, query])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -184,9 +192,12 @@ fn split_row(line: &str) -> Vec<String> {
 ///
 /// Per-label binder errors (Table X does not exist) are recorded as 0, not
 /// fatal. DB corruption aborts with `ReferenceUnavailable`.
-pub fn fetch_reference(repo_name: &str) -> Result<GitnexusStats> {
+pub fn fetch_reference(
+    repo_name: &str,
+    gitnexus_binary: Option<&Path>,
+) -> Result<GitnexusStats> {
     let mut node_counts = BTreeMap::new();
-    match run_cypher(repo_name, "MATCH (n) RETURN label(n) AS lbl, count(*) AS c ORDER BY lbl") {
+    match run_cypher(repo_name, "MATCH (n) RETURN label(n) AS lbl, count(*) AS c ORDER BY lbl", gitnexus_binary) {
         Ok(CypherResponse::Rows { rows, .. }) => {
             for row in &rows {
                 if row.len() < 2 {
@@ -214,7 +225,7 @@ pub fn fetch_reference(repo_name: &str) -> Result<GitnexusStats> {
     }
 
     let mut edge_counts = BTreeMap::new();
-    match run_cypher(repo_name, "MATCH ()-[r:CodeRelation]->() RETURN r.type AS t, count(*) AS c ORDER BY t") {
+    match run_cypher(repo_name, "MATCH ()-[r:CodeRelation]->() RETURN r.type AS t, count(*) AS c ORDER BY t", gitnexus_binary) {
         Ok(CypherResponse::Rows { rows, .. }) => {
             for row in &rows {
                 if row.len() < 2 {
@@ -238,7 +249,7 @@ pub fn fetch_reference(repo_name: &str) -> Result<GitnexusStats> {
     }
 
     let mut file_count = 0u64;
-    match run_cypher(repo_name, "MATCH (f:File) RETURN count(*) AS c") {
+    match run_cypher(repo_name, "MATCH (f:File) RETURN count(*) AS c", gitnexus_binary) {
         Ok(CypherResponse::Rows { rows, .. }) => {
             if let Some(row) = rows.first() {
                 if let Some(cell) = row.first() {
