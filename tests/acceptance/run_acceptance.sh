@@ -139,7 +139,16 @@ for project in "${PROJECTS[@]}"; do
   # 2. Index with CodeNexus.
   run_or_echo cargo run --release --bin codenexus -- index "$fixture_path" --name "$name"
 
-  # 3. Cross-validate with codenexus-verify.
+  # 3. Index with gitnexus (reference index for cross-validation).
+  #    --skip-agents-md avoids polluting the fixture's AGENTS.md.
+  echo "[gitnexus] analyzing ${name}..."
+  if ! $DRY_RUN; then
+    gitnexus analyze --skip-agents-md "$fixture_path" 2>&1 | tail -3 || true
+  else
+    echo "[dry-run] gitnexus analyze --skip-agents-md $fixture_path"
+  fi
+
+  # 4. Cross-validate with codenexus-verify.
   #    --gitnexus-binary is a global flag (before the subcommand).
   VERIFY_CMD=(cargo run --release --bin codenexus-verify --)
   if [[ -n "$GITNEXUS_BINARY" ]]; then
