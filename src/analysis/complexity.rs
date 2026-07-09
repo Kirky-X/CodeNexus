@@ -310,6 +310,13 @@ impl<'a> ComplexityAnalyzer<'a> {
         }
     }
 
+    /// Creates a new analyzer with caller-supplied `thresholds`, overriding
+    /// the defaults used by [`new`](Self::new).
+    #[must_use]
+    pub fn new_with_thresholds(storage: &'a dyn Storage, thresholds: ComplexityThresholds) -> Self {
+        Self { storage, thresholds }
+    }
+
     /// Returns complexity entries for every `Function`/`Method` node in
     /// `project` whose `content` is non-empty and whose language is supported.
     ///
@@ -777,6 +784,52 @@ fn parallel(a: i32) {
         let analyzer = ComplexityAnalyzer::new(&*storage);
         let result = analyzer.analyze("demo").expect("analyze");
         assert!(result.is_empty(), "empty DB should yield no complexity entries");
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn new_with_thresholds_overrides_default() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // 9 if-branches → cyclomatic = 1 + 9 = 10. With default thresholds
+        // (yellow=20, green=10), cyclomatic=10 → Green. With custom
+        // (yellow=5, red=8), green_max=2, cyclomatic=10 > 5 → Red.
+        let src = "fn f() { if a {} if b {} if c {} if d {} if e {} \
+                   if f {} if g {} if h {} if i {} }";
+        create_function_with_content(
+            &kit,
+            "f_thresh",
+            "demo",
+            "f",
+            "demo.f",
+            "/src/lib.rs",
+            1,
+            1,
+            src,
+        );
+
+        let storage = storage(&kit);
+        let mut custom = ComplexityThresholds::default();
+        custom.cyclomatic = (5, 8);
+        let analyzer = ComplexityAnalyzer::new_with_thresholds(&*storage, custom);
+        let result = analyzer.analyze("demo").expect("analyze");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].cyclomatic, 10, "cyclomatic should be 10");
+        assert_eq!(
+            result[0].overall_severity,
+            Severity::Red,
+            "custom thresholds should make cyclomatic=10 Red"
+        );
+
+        // Sanity: with default thresholds, cyclomatic=10 → Green but cognitive=9
+        // → Yellow (green_max=7), so overall = Yellow (not Red).
+        let analyzer_default = ComplexityAnalyzer::new(&*storage);
+        let result_default = analyzer_default.analyze("demo").expect("analyze");
+        assert_ne!(
+            result_default[0].overall_severity,
+            Severity::Red,
+            "default thresholds should not make this function Red"
+        );
     }
 
     #[cfg(feature = "lang-rust")]
