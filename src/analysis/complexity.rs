@@ -39,6 +39,21 @@ pub struct ComplexityThresholds {
     pub nesting: (u32, u32),
     /// Function length thresholds `(yellow, red)` — default `(100, 200)`.
     pub func_length: (u32, u32),
+    /// Halstead volume thresholds `(yellow, red)` — default `(1000, 8000)`.
+    pub halstead_volume: (u32, u32),
+    /// Maintainability Index thresholds `(yellow_min, red_min)` — default
+    /// `(65, 85)`. MI is inverted (higher = better), so `from_maintainability`
+    /// classifies `value >= red_min → Green`, `value >= yellow_min → Yellow`,
+    /// else `Red`.
+    pub maintainability: (u32, u32),
+    /// Time complexity thresholds `(yellow, red)` as ordinal discriminants —
+    /// default `(2, 4)` (ON=2, ON2=4). Replaced by strong `(TimeComplexity,
+    /// TimeComplexity)` in T012.
+    pub time_complexity: (u8, u8),
+    /// Space complexity thresholds `(yellow, red)` as ordinal discriminants —
+    /// default `(0, 1)` (O1=0, ON=1). Replaced by strong `(SpaceComplexity,
+    /// SpaceComplexity)` in T015.
+    pub space_complexity: (u8, u8),
 }
 
 impl Default for ComplexityThresholds {
@@ -48,6 +63,10 @@ impl Default for ComplexityThresholds {
             cognitive: (15, 20),
             nesting: (5, 6),
             func_length: (100, 200),
+            halstead_volume: (1000, 8000),
+            maintainability: (65, 85),
+            time_complexity: (2, 4),
+            space_complexity: (0, 1),
         }
     }
 }
@@ -511,6 +530,15 @@ mod tests {
         assert_eq!(t.cognitive, (15, 20));
         assert_eq!(t.nesting, (5, 6));
         assert_eq!(t.func_length, (100, 200));
+    }
+
+    #[test]
+    fn thresholds_default_includes_new_fields() {
+        let t = ComplexityThresholds::default();
+        assert_eq!(t.halstead_volume, (1000, 8000));
+        assert_eq!(t.maintainability, (65, 85));
+        assert_eq!(t.time_complexity, (2, 4));
+        assert_eq!(t.space_complexity, (0, 1));
     }
 
     /// Builds a `ComplexityEntry` with the given metric values and placeholder
