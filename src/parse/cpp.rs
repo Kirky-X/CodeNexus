@@ -1208,4 +1208,76 @@ mod tests {
             .count();
         assert_eq!(extends_count, 0, "class without base should have 0 EXTENDS edges");
     }
+
+    #[test]
+    fn cpp_multifile_call_graph_resolved() {
+        // T007: End-to-end test for multi-file C++ call graph with #include
+        // scoping (BUG-C4 fix verification).
+        //
+        // Scenario (header-only definition — common C++ pattern like STL):
+        // - main.cpp: #includes "foo.h", calls foo()
+        // - foo.h:    defines void foo() {} (is_exported=true after T006)
+        // - bar.cpp:  defines void foo() {} (unrelated, NOT included by main.cpp)
+        //
+        // Assertions:
+        // 1. main.cpp → foo.h has an INCLUDES edge in the IncludesGraph
+        // 2. main.cpp's foo() call resolves to foo.h's foo (reachable via #include)
+        // 3. Does NOT resolve to bar.cpp's foo (not reachable via #include)
+        //
+        // Note: The classic header/implementation split (foo.h declaration +
+        // foo.cpp definition) is a known limitation — IncludesGraph only tracks
+        // #include edges, not declaration→definition linking. For the call to
+        // resolve, the definition must be in a file reachable via #include.
+        use crate::resolve::{build_symbol_table, resolve_include, CallResolver, IncludesGraph};
+
+        let ext = CppExtractor::new();
+
+        let main_src = "#include \"foo.h\"\nint main() { foo(); return 0; }\n";
+        let foo_h_src = "void foo() {}\n";
+        let bar_src = "void foo() {}\n";
+
+        let main_result = ext.extract(main_src, "/abs/main.cpp", "proj").unwrap();
+        let foo_h_result = ext.extract(foo_h_src, "/abs/foo.h", "proj").unwrap();
+        let bar_result = ext.extract(bar_src, "/abs/bar.cpp", "proj").unwrap();
+
+        let results = vec![main_result, foo_h_result, bar_result];
+
+        // Build IncludesGraph from #include directives using resolve_include.
+        let all_files: Vec<String> = results.iter().map(|r| r.file_path.clone()).collect();
+        let mut graph = IncludesGraph::new();
+        for result in &results {
+            for imp in &result.imports {
+                if let Some(resolved) = resolve_include(&imp.source_file, &result.file_path, &all_files) {
+                    graph.add_include(&result.file_path, &resolved);
+                }
+            }
+        }
+
+        // Assertion 1: main.cpp → foo.h INCLUDES edge exists.
+        assert!(
+            graph.contains("/abs/main.cpp", "/abs/foo.h"),
+            "main.cpp should #include foo.h"
+        );
+        assert!(
+            !graph.contains("/abs/main.cpp", "/abs/bar.cpp"),
+            "main.cpp should NOT #include bar.cpp"
+        );
+
+        // Build symbol table and resolver.
+        let table = build_symbol_table(&results, "proj");
+        let resolver = CallResolver::new(&table, "proj").with_includes_graph(graph);
+
+        // Assertion 2 & 3: call resolution with scope-aware filtering.
+        let resolved = resolver.resolve_call("/abs/main.cpp", "foo");
+        assert!(resolved.is_some(), "foo() call should resolve to foo.h's foo");
+        let (qn, _confidence, _tier) = resolved.unwrap();
+        assert!(
+            qn.contains("foo.h"),
+            "should resolve to foo.h's foo, got: {qn}"
+        );
+        assert!(
+            !qn.contains("bar.cpp"),
+            "should NOT resolve to bar.cpp's foo, got: {qn}"
+        );
+    }
 }
