@@ -8,6 +8,7 @@
 //! (Green / Yellow / Red).
 
 use serde::Serialize;
+use std::collections::HashSet;
 use tree_sitter::Node;
 
 use crate::model::Language;
@@ -155,6 +156,29 @@ pub struct ComplexityEntry {
     pub overall_severity: Severity,
 }
 
+/// Halstead complexity metrics (Halstead 1977). Tracks distinct and total
+/// operator/operand counts plus derived volume, difficulty, effort, and
+/// delivered-bug estimates.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Default)]
+pub struct HalsteadMetrics {
+    /// Distinct operator count (n1).
+    pub n1: u32,
+    /// Distinct operand count (n2).
+    pub n2: u32,
+    /// Total operator occurrences (N1).
+    pub n1_total: u32,
+    /// Total operand occurrences (N2).
+    pub n2_total: u32,
+    /// Volume V = (N1+N2) * log2(n1+n2).
+    pub volume: f64,
+    /// Difficulty D = (n1/2) * (N2/n2).
+    pub difficulty: f64,
+    /// Effort E = D * V.
+    pub effort: f64,
+    /// Delivered bugs B = E^(2/3) / 3000.
+    pub delivered_bugs: f64,
+}
+
 impl ComplexityEntry {
     /// Computes the overall severity as the highest individual metric severity
     /// (`Red > Yellow > Green`) by calling the `from_*` classifiers with
@@ -275,6 +299,177 @@ fn count_exit_nodes_recursive(node: Node<'_>, language: Language) -> u32 {
         count += count_exit_nodes_recursive(child, language);
     }
     count
+}
+
+// --- Halstead complexity (T006) ---
+
+/// Returns the tree-sitter node kind for the function body block of `language`,
+/// or `None` for languages without a clear body container (e.g. Fortran).
+fn halstead_body_kind(language: Language) -> Option<&'static str> {
+    #[allow(unreachable_patterns)]
+    match language {
+        #[cfg(feature = "lang-rust")]
+        Language::Rust => Some("block"),
+        #[cfg(feature = "lang-python")]
+        Language::Python => Some("block"),
+        #[cfg(feature = "lang-c")]
+        Language::C => Some("compound_statement"),
+        #[cfg(feature = "lang-cpp")]
+        Language::Cpp => Some("compound_statement"),
+        #[cfg(feature = "lang-java")]
+        Language::Java => Some("block"),
+        #[cfg(feature = "lang-go")]
+        Language::Go => Some("block"),
+        #[cfg(feature = "lang-typescript")]
+        Language::TypeScript => Some("statement_block"),
+        _ => None,
+    }
+}
+
+/// DFS for the first node of `kind` in the subtree rooted at `node`.
+fn find_first_node_of_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+    if node.kind() == kind {
+        return Some(node);
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(found) = find_first_node_of_kind(child, kind) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Returns true if `kind` is an operator-expression node whose anonymous
+/// children are operator tokens (e.g. `+` in a `binary_expression`).
+fn is_operator_expression(kind: &str) -> bool {
+    matches!(
+        kind,
+        "binary_expression"
+            | "unary_expression"
+            | "assignment_expression"
+            | "update_expression"
+            | "binary_operator"
+            | "boolean_operator"
+            | "comparison_operator"
+            | "not_operator"
+            | "assignment"
+            | "augmented_assignment"
+    )
+}
+
+/// Returns true if `kind` is an operand node (identifier or literal).
+fn is_operand_kind(kind: &str) -> bool {
+    kind == "identifier" || kind.ends_with("_literal")
+}
+
+/// Computes Halstead complexity metrics for the given parse tree.
+///
+/// Traverses the function body (or full tree if no body is found) collecting
+/// operator tokens from operator-expression nodes and operand text from
+/// identifier/literal nodes. Derived metrics follow Halstead 1977:
+/// `V = N * log2(n)`, `D = (n1/2) * (N2/n2)`, `E = D * V`, `B = E^(2/3)/3000`.
+pub fn calc_halstead(
+    tree: &tree_sitter::Tree,
+    source: &[u8],
+    language: Language,
+) -> HalsteadMetrics {
+    let root = tree.root_node();
+    let start = halstead_body_kind(language)
+        .and_then(|kind| find_first_node_of_kind(root, kind))
+        .unwrap_or(root);
+
+    let mut ops_distinct: HashSet<&'static str> = HashSet::new();
+    let mut ops_total: u32 = 0;
+    let mut operands_distinct: HashSet<String> = HashSet::new();
+    let mut operands_total: u32 = 0;
+
+    collect_halstead(
+        start,
+        source,
+        &mut ops_distinct,
+        &mut ops_total,
+        &mut operands_distinct,
+        &mut operands_total,
+    );
+
+    let n1 = ops_distinct.len() as u32;
+    let n2 = operands_distinct.len() as u32;
+    let n1_total = ops_total;
+    let n2_total = operands_total;
+
+    let n = (n1 + n2) as f64;
+    let volume = if n > 0.0 {
+        (n1_total + n2_total) as f64 * n.log2()
+    } else {
+        0.0
+    };
+    let difficulty = if n2 > 0 {
+        (n1 as f64 / 2.0) * (n2_total as f64 / n2 as f64)
+    } else {
+        0.0
+    };
+    let effort = difficulty * volume;
+    let delivered_bugs = effort.powf(2.0 / 3.0) / 3000.0;
+
+    HalsteadMetrics {
+        n1,
+        n2,
+        n1_total,
+        n2_total,
+        volume,
+        difficulty,
+        effort,
+        delivered_bugs,
+    }
+}
+
+fn collect_halstead(
+    node: Node<'_>,
+    source: &[u8],
+    ops_distinct: &mut HashSet<&'static str>,
+    ops_total: &mut u32,
+    operands_distinct: &mut HashSet<String>,
+    operands_total: &mut u32,
+) {
+    let kind = node.kind();
+
+    if is_operator_expression(kind) {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if !child.is_named() {
+                // Anonymous child = operator token (e.g. `+`, `==`, `=`).
+                ops_distinct.insert(child.kind());
+                *ops_total += 1;
+            } else {
+                collect_halstead(
+                    child,
+                    source,
+                    ops_distinct,
+                    ops_total,
+                    operands_distinct,
+                    operands_total,
+                );
+            }
+        }
+    } else if is_operand_kind(kind) {
+        if let Ok(text) = node.utf8_text(source) {
+            operands_distinct.insert(text.to_string());
+            *operands_total += 1;
+        }
+    } else {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            collect_halstead(
+                child,
+                source,
+                ops_distinct,
+                ops_total,
+                operands_distinct,
+                operands_total,
+            );
+        }
+    }
 }
 
 /// Computes cyclomatic complexity (McCabe) for the given parse tree.
@@ -773,6 +968,35 @@ fn complex(x: i32) {
         let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
         let tree = parser.parse(src, None).unwrap();
         assert_eq!(calc_cyclomatic(&tree, Language::Rust), 3);
+    }
+
+    // --- T006: calc_halstead tests ---
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn calc_halstead_rust_simple_addition() {
+        let src = "fn add(a: i32, b: i32) -> i32 { a + b }";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        let m = calc_halstead(&tree, src.as_bytes(), Language::Rust);
+        // `+` is the one distinct operator → n1 >= 1, N1 >= 1.
+        assert!(m.n1 >= 1, "n1 (distinct operators) should be >= 1, got {}", m.n1);
+        assert!(m.n1_total >= 1, "N1 (total operators) should be >= 1, got {}", m.n1_total);
+        // `a` and `b` are operands → n2 >= 2, N2 >= 2.
+        assert!(m.n2 >= 2, "n2 (distinct operands) should be >= 2, got {}", m.n2);
+        assert!(m.n2_total >= 2, "N2 (total operands) should be >= 2, got {}", m.n2_total);
+        assert!(m.volume > 0.0, "volume should be > 0, got {}", m.volume);
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn calc_halstead_empty_function() {
+        let src = "fn empty() {}";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        let m = calc_halstead(&tree, src.as_bytes(), Language::Rust);
+        // Empty body → no operators/operands → all-zero default.
+        assert_eq!(m, HalsteadMetrics::default());
     }
 
     // --- T009: calc_cognitive tests ---
