@@ -127,6 +127,23 @@ impl Severity {
             Severity::Red
         }
     }
+
+    /// Classifies Maintainability Index against `thresholds.maintainability`.
+    ///
+    /// MI is inverted (higher = more maintainable), so classification is
+    /// reversed: `value >= red_min → Green`, `value >= yellow_min → Yellow`,
+    /// else `Red`. `thresholds.maintainability = (yellow_min, red_min)`.
+    pub fn from_maintainability(value: f64, thresholds: &ComplexityThresholds) -> Severity {
+        let yellow_min = thresholds.maintainability.0 as f64;
+        let red_min = thresholds.maintainability.1 as f64;
+        if value >= red_min {
+            Severity::Green
+        } else if value >= yellow_min {
+            Severity::Yellow
+        } else {
+            Severity::Red
+        }
+    }
 }
 
 /// A single function's complexity metrics with overall severity.
@@ -156,6 +173,8 @@ pub struct ComplexityEntry {
     pub overall_severity: Severity,
     /// Halstead complexity metrics (T007).
     pub halstead: HalsteadMetrics,
+    /// Maintainability Index (Microsoft 2007, 0-100, higher=better) (T009).
+    pub maintainability_index: f64,
 }
 
 /// Halstead complexity metrics (Halstead 1977). Tracks distinct and total
@@ -191,6 +210,7 @@ impl ComplexityEntry {
             Severity::from_cognitive(self.cognitive, thresholds),
             Severity::from_nesting(self.nesting_depth, thresholds),
             Severity::from_func_length(self.function_length, thresholds),
+            Severity::from_maintainability(self.maintainability_index, thresholds),
         ]
         .into_iter()
         .max()
@@ -701,6 +721,8 @@ impl<'a> ComplexityAnalyzer<'a> {
                 let nesting_depth = calc_nesting_depth(&tree, language);
                 let function_length = end_line.saturating_sub(start_line) + 1;
                 let halstead = calc_halstead(&tree, content.as_bytes(), language);
+                let maintainability_index =
+                    calc_maintainability_index(cyclomatic, halstead.volume, function_length);
 
                 let mut entry = ComplexityEntry {
                     name,
@@ -715,6 +737,7 @@ impl<'a> ComplexityAnalyzer<'a> {
                     function_length,
                     overall_severity: Severity::Green,
                     halstead,
+                    maintainability_index,
                 };
                 entry.overall_severity = entry.compute_overall_severity(&self.thresholds);
                 entries.push(entry);
@@ -817,7 +840,9 @@ mod tests {
 
     /// Builds a `ComplexityEntry` with the given metric values and placeholder
     /// metadata. `overall_severity` is set to `Green` and should be recomputed
-    /// via `compute_overall_severity` in the test.
+    /// via `compute_overall_severity` in the test. `maintainability_index` is
+    /// set to `100.0` (neutral Green) so it does not pollute the overall
+    /// severity in tests focused on other metrics.
     fn make_entry(cyclomatic: u32, cognitive: u32, nesting: u32, length: u32) -> ComplexityEntry {
         ComplexityEntry {
             name: "f".to_string(),
@@ -832,6 +857,7 @@ mod tests {
             function_length: length,
             overall_severity: Severity::Green,
             halstead: HalsteadMetrics::default(),
+            maintainability_index: 100.0,
         }
     }
 
@@ -1363,6 +1389,68 @@ fn parallel(a: i32) {
             empty.halstead,
             HalsteadMetrics::default(),
             "empty function should have all-zero halstead"
+        );
+    }
+
+    // --- T009: from_maintainability + analyze_includes_mi tests ---
+
+    #[test]
+    fn from_maintainability_high_is_green() {
+        // Default thresholds: (yellow_min=65, red_min=85). value=90 >= 85 → Green.
+        let t = ComplexityThresholds::default();
+        assert_eq!(Severity::from_maintainability(90.0, &t), Severity::Green);
+        // Boundary: value=85 == red_min → Green.
+        assert_eq!(Severity::from_maintainability(85.0, &t), Severity::Green);
+    }
+
+    #[test]
+    fn from_maintainability_mid_is_yellow() {
+        // value=70: 70 >= 65 (yellow_min) but < 85 (red_min) → Yellow.
+        let t = ComplexityThresholds::default();
+        assert_eq!(Severity::from_maintainability(70.0, &t), Severity::Yellow);
+        // Boundary: value=65 == yellow_min → Yellow.
+        assert_eq!(Severity::from_maintainability(65.0, &t), Severity::Yellow);
+    }
+
+    #[test]
+    fn from_maintainability_low_is_red() {
+        // value=50 < 65 (yellow_min) → Red.
+        let t = ComplexityThresholds::default();
+        assert_eq!(Severity::from_maintainability(50.0, &t), Severity::Red);
+        assert_eq!(Severity::from_maintainability(0.0, &t), Severity::Red);
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn analyze_includes_mi() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f_mi",
+            "demo",
+            "mi",
+            "demo.mi",
+            "/src/lib.rs",
+            1,
+            1,
+            "fn mi(a: i32, b: i32) -> i32 { a + b }",
+        );
+
+        let storage = storage(&kit);
+        let analyzer = ComplexityAnalyzer::new(&*storage);
+        let result = analyzer.analyze("demo").expect("analyze");
+        assert_eq!(result.len(), 1);
+        let mi = &result[0];
+        assert!(
+            (0.0..=100.0).contains(&mi.maintainability_index),
+            "MI should be 0-100, got {}",
+            mi.maintainability_index
+        );
+        assert!(
+            mi.maintainability_index.is_finite(),
+            "MI should be finite, got {}",
+            mi.maintainability_index
         );
     }
 
