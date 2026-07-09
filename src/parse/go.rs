@@ -74,6 +74,7 @@ impl Extractor for GoExtractor {
             file_path,
             project,
             current_func: None,
+            current_parent: None,
         };
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
@@ -93,6 +94,9 @@ struct VisitContext<'a> {
     file_path: &'a str,
     project: &'a str,
     current_func: Option<&'a str>,
+    /// The receiver type for methods (used as FQN disambiguator in caller_qn
+    /// so calls from same-name methods on different types aren't deduplicated).
+    current_parent: Option<&'a str>,
 }
 
 fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
@@ -104,16 +108,24 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
                 file_path: ctx.file_path,
                 project: ctx.project,
                 current_func: name.as_deref(),
+                current_parent: None,
             };
             visit_children(node, source, &child_ctx, result);
         }
         "method_declaration" => {
             extract_method(node, source, ctx, result);
             let name = method_name(node, source);
+            // The receiver type is propagated as current_parent so that
+            // extract_call can build a receiver-disambiguated caller_qn
+            // (BUG-G1: methods on different types with the same name must
+            // produce distinct caller_qns to avoid over-deduplication in
+            // resolve_calls).
+            let receiver = receiver_type_name(node, source);
             let child_ctx = VisitContext {
                 file_path: ctx.file_path,
                 project: ctx.project,
                 current_func: name.as_deref(),
+                current_parent: receiver.as_deref(),
             };
             visit_children(node, source, &child_ctx, result);
         }
@@ -320,7 +332,7 @@ fn extract_call(
     let args = call_arguments(node, source);
     let caller_qn = ctx
         .current_func
-        .map(|name| make_qn(ctx.file_path, name, ctx.project, None));
+        .map(|name| make_qn(ctx.file_path, name, ctx.project, ctx.current_parent));
     result.calls.push(CallInfo {
         caller_qn,
         callee_name: callee,
@@ -714,6 +726,37 @@ mod tests {
         assert_ne!(
             methods[0].qualified_name, methods[1].qualified_name,
             "methods on different types must have distinct FQNs"
+        );
+    }
+
+    #[test]
+    fn method_calls_from_different_types_have_distinct_caller_qn() {
+        // BUG-G1: Two methods named Run on different types both call helper().
+        // caller_qn must include the receiver type so resolve_calls doesn't
+        // deduplicate their CALLS edges.
+        let src = "package main\nfunc helper() {}\ntype A struct{}\ntype B struct{}\nfunc (a A) Run() { helper() }\nfunc (b B) Run() { helper() }\n";
+        let result = extract(src);
+        let run_calls: Vec<_> = result
+            .calls
+            .iter()
+            .filter(|c| c.callee_name == "helper")
+            .collect();
+        assert_eq!(run_calls.len(), 2, "should extract 2 calls to helper");
+        assert_ne!(
+            run_calls[0].caller_qn, run_calls[1].caller_qn,
+            "caller_qn for Run on A and B must be distinct (include receiver type)"
+        );
+        assert!(
+            run_calls[0].caller_qn.as_ref().unwrap().contains("A")
+                || run_calls[1].caller_qn.as_ref().unwrap().contains("A"),
+            "one caller_qn should contain receiver type A: {:?}",
+            run_calls
+        );
+        assert!(
+            run_calls[0].caller_qn.as_ref().unwrap().contains("B")
+                || run_calls[1].caller_qn.as_ref().unwrap().contains("B"),
+            "one caller_qn should contain receiver type B: {:?}",
+            run_calls
         );
     }
 
