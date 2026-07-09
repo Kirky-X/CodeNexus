@@ -6,9 +6,11 @@
 # diff report.
 #
 # Usage:
-#   bash tests/acceptance/run_acceptance.sh [--dry-run] [--gitnexus-binary <path>]
+#   bash tests/acceptance/run_acceptance.sh [--dry-run] [--clean] [--force] [--gitnexus-binary <path>]
 #
 # --dry-run            Echo commands without executing (validates syntax only).
+# --clean              Remove all fixtures, results, and the acceptance DB, then exit.
+# --force              Force re-indexing even if the DB already exists.
 # --gitnexus-binary P  Path to gitnexus binary (default: search PATH).
 #
 # Requires: git, jq, cargo. Run from the CodeNexus project root.
@@ -21,15 +23,32 @@ FIXTURES_DIR="${SCRIPT_DIR}/fixtures"
 RESULTS_DIR="${SCRIPT_DIR}/results"
 VERIFY_RESULTS_DIR="${PROJECT_ROOT}/tools/verification/results"
 SUMMARY_FILE="${RESULTS_DIR}/summary.md"
+ACCEPTANCE_DB="${PROJECT_ROOT}/codenexus.lbug"
 
 # --- Parse arguments ---
 DRY_RUN=false
+FORCE=false
 GITNEXUS_BINARY=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)
       DRY_RUN=true
+      shift
+      ;;
+    --clean)
+      echo "[clean] removing fixtures, results, and acceptance DB..."
+      rm -rf "$FIXTURES_DIR" "$RESULTS_DIR" "$ACCEPTANCE_DB"
+      for p in serde requests vscode-uri redis gin jackson-databind fmt OpenBLAS; do
+        rm -f "${VERIFY_RESULTS_DIR}/${p}.codenexus.json" \
+              "${VERIFY_RESULTS_DIR}/${p}.gitnexus.json" \
+              "${VERIFY_RESULTS_DIR}/${p}.report.md" 2>/dev/null || true
+      done
+      echo "[clean] done."
+      exit 0
+      ;;
+    --force)
+      FORCE=true
       shift
       ;;
     --gitnexus-binary)
@@ -39,7 +58,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "ERROR: unknown argument: $1" >&2
-      echo "Usage: $0 [--dry-run] [--gitnexus-binary <path>]" >&2
+      echo "Usage: $0 [--dry-run] [--clean] [--force] [--gitnexus-binary <path>]" >&2
       exit 1
       ;;
   esac
@@ -143,8 +162,15 @@ for project in "${PROJECTS[@]}"; do
     run_or_echo git clone --depth 1 --branch "$tag" "https://github.com/${repo}.git" "$fixture_path"
   fi
 
-  # 2. Index with CodeNexus.
-  run_or_echo cargo run --release --bin codenexus -- index "$fixture_path" --name "$name"
+  # 2. Index with CodeNexus (skip if DB exists unless --force).
+  if ! $DRY_RUN && [[ -f "$ACCEPTANCE_DB" ]] && ! $FORCE; then
+    echo "[skip] index (DB exists: ${ACCEPTANCE_DB}, use --force to re-index)"
+  else
+    if ! $DRY_RUN && $FORCE && [[ -f "$ACCEPTANCE_DB" ]]; then
+      rm -f "$ACCEPTANCE_DB"
+    fi
+    run_or_echo cargo run --release --bin codenexus -- index "$fixture_path" --name "$name"
+  fi
 
   # 3. Index with gitnexus (reference index for cross-validation).
   #    --skip-agents-md avoids polluting the fixture's AGENTS.md.
