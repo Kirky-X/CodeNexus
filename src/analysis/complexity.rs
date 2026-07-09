@@ -129,10 +129,10 @@ pub struct ComplexityThresholds {
     /// `(ON, ON2)`. `from_time_complexity` classifies `tc <= yellow → Green`,
     /// `tc <= red → Yellow`, else `Red` (using `TimeComplexity::Ord`).
     pub time_complexity: (TimeComplexity, TimeComplexity),
-    /// Space complexity thresholds `(yellow, red)` as ordinal discriminants —
-    /// default `(0, 1)` (O1=0, ON=1). Replaced by strong `(SpaceComplexity,
-    /// SpaceComplexity)` in T015.
-    pub space_complexity: (u8, u8),
+    /// Space complexity thresholds `(yellow_max, red_max)` — default
+    /// `(O1, ON)`. `from_space_complexity` classifies `sc <= yellow → Green`,
+    /// `sc <= red → Yellow`, else `Red` (using `SpaceComplexity::Ord`).
+    pub space_complexity: (SpaceComplexity, SpaceComplexity),
 }
 
 impl Default for ComplexityThresholds {
@@ -145,7 +145,7 @@ impl Default for ComplexityThresholds {
             halstead_volume: (1000, 8000),
             maintainability: (65, 85),
             time_complexity: (TimeComplexity::ON, TimeComplexity::ON2),
-            space_complexity: (0, 1),
+            space_complexity: (SpaceComplexity::O1, SpaceComplexity::ON),
         }
     }
 }
@@ -237,6 +237,21 @@ impl Severity {
             Severity::Red
         }
     }
+
+    /// Classifies space complexity against `thresholds.space_complexity`.
+    ///
+    /// `sc <= yellow → Green`, `sc <= red → Yellow`, else `Red`, using
+    /// `SpaceComplexity::Ord` (`O1 < ON < ON2`).
+    pub fn from_space_complexity(sc: SpaceComplexity, thresholds: &ComplexityThresholds) -> Severity {
+        let (yellow, red) = thresholds.space_complexity;
+        if sc <= yellow {
+            Severity::Green
+        } else if sc <= red {
+            Severity::Yellow
+        } else {
+            Severity::Red
+        }
+    }
 }
 
 /// A single function's complexity metrics with overall severity.
@@ -270,6 +285,8 @@ pub struct ComplexityEntry {
     pub maintainability_index: f64,
     /// Estimated time complexity class (T012).
     pub time_complexity: TimeComplexity,
+    /// Estimated space complexity class (T015).
+    pub space_complexity: SpaceComplexity,
 }
 
 /// Halstead complexity metrics (Halstead 1977). Tracks distinct and total
@@ -307,6 +324,7 @@ impl ComplexityEntry {
             Severity::from_func_length(self.function_length, thresholds),
             Severity::from_maintainability(self.maintainability_index, thresholds),
             Severity::from_time_complexity(self.time_complexity, thresholds),
+            Severity::from_space_complexity(self.space_complexity, thresholds),
         ]
         .into_iter()
         .max()
@@ -1008,6 +1026,12 @@ impl<'a> ComplexityAnalyzer<'a> {
                     language,
                     &name,
                 );
+                let space_complexity = estimate_space_complexity(
+                    &tree,
+                    content.as_bytes(),
+                    language,
+                    &name,
+                );
 
                 let mut entry = ComplexityEntry {
                     name,
@@ -1024,6 +1048,7 @@ impl<'a> ComplexityAnalyzer<'a> {
                     halstead,
                     maintainability_index,
                     time_complexity,
+                    space_complexity,
                 };
                 entry.overall_severity = entry.compute_overall_severity(&self.thresholds);
                 entries.push(entry);
@@ -1121,14 +1146,15 @@ mod tests {
         assert_eq!(t.halstead_volume, (1000, 8000));
         assert_eq!(t.maintainability, (65, 85));
         assert_eq!(t.time_complexity, (TimeComplexity::ON, TimeComplexity::ON2));
-        assert_eq!(t.space_complexity, (0, 1));
+        assert_eq!(t.space_complexity, (SpaceComplexity::O1, SpaceComplexity::ON));
     }
 
     /// Builds a `ComplexityEntry` with the given metric values and placeholder
     /// metadata. `overall_severity` is set to `Green` and should be recomputed
     /// via `compute_overall_severity` in the test. `maintainability_index` is
-    /// set to `100.0` and `time_complexity` to `O1` (neutral Green) so they do
-    /// not pollute the overall severity in tests focused on other metrics.
+    /// set to `100.0`, `time_complexity` to `O1`, and `space_complexity` to
+    /// `O1` (neutral Green) so they do not pollute the overall severity in
+    /// tests focused on other metrics.
     fn make_entry(cyclomatic: u32, cognitive: u32, nesting: u32, length: u32) -> ComplexityEntry {
         ComplexityEntry {
             name: "f".to_string(),
@@ -1145,6 +1171,7 @@ mod tests {
             halstead: HalsteadMetrics::default(),
             maintainability_index: 100.0,
             time_complexity: TimeComplexity::O1,
+            space_complexity: SpaceComplexity::O1,
         }
     }
 
@@ -2041,6 +2068,84 @@ fn parallel(a: i32) {
             rec.time_complexity,
             TimeComplexity::O2N,
             "recursive function should be O(2^n)"
+        );
+    }
+
+    // --- T015: from_space_complexity + analyze_includes_space_complexity tests ---
+
+    #[test]
+    fn from_space_complexity_classification() {
+        let t = ComplexityThresholds::default();
+        // Default: (yellow=O1, red=ON).
+        // sc <= O1 → Green.
+        assert_eq!(
+            Severity::from_space_complexity(SpaceComplexity::O1, &t),
+            Severity::Green
+        );
+        // O1 < sc <= ON → Yellow.
+        assert_eq!(
+            Severity::from_space_complexity(SpaceComplexity::ON, &t),
+            Severity::Yellow
+        );
+        // sc > ON → Red.
+        assert_eq!(
+            Severity::from_space_complexity(SpaceComplexity::ON2, &t),
+            Severity::Red
+        );
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn analyze_includes_space_complexity() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Empty function → no allocation → O1.
+        create_function_with_content(
+            &kit,
+            "f_sc_empty",
+            "demo",
+            "sc_empty",
+            "demo.sc_empty",
+            "/src/lib.rs",
+            1,
+            1,
+            "fn sc_empty() {}",
+        );
+        // Function with dynamic allocation → ON.
+        create_function_with_content(
+            &kit,
+            "f_sc_alloc",
+            "demo",
+            "sc_alloc",
+            "demo.sc_alloc",
+            "/src/lib.rs",
+            1,
+            1,
+            "fn sc_alloc() { let v = Vec::new(); }",
+        );
+
+        let storage = storage(&kit);
+        let analyzer = ComplexityAnalyzer::new(&*storage);
+        let result = analyzer.analyze("demo").expect("analyze");
+
+        let empty = result
+            .iter()
+            .find(|e| e.name == "sc_empty")
+            .expect("sc_empty entry");
+        assert_eq!(
+            empty.space_complexity,
+            SpaceComplexity::O1,
+            "empty function should be O(1)"
+        );
+
+        let alloc = result
+            .iter()
+            .find(|e| e.name == "sc_alloc")
+            .expect("sc_alloc entry");
+        assert_eq!(
+            alloc.space_complexity,
+            SpaceComplexity::ON,
+            "function with Vec::new() should be O(n)"
         );
     }
 
