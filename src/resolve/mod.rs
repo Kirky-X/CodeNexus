@@ -46,7 +46,7 @@ pub use cross_lang::{FfiResolver, MatchStrategy};
 pub use dataflow::DataFlowResolver;
 pub use error::{ResolveError, Result};
 pub use fqn::FqnGenerator;
-pub use includes_graph::IncludesGraph;
+pub use includes_graph::{IncludesGraph, resolve_include};
 pub use imports::ImportResolver;
 pub use mro::{mro_for, MroResolver, MroStrategy};
 pub use scope::{Scope, ScopeChain, ScopeContext, ScopeResolver, ScopeResolverRegistry};

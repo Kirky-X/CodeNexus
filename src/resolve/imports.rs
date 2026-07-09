@@ -33,7 +33,7 @@ use std::path::Path;
 use tracing::warn;
 
 use crate::ir::ExtractResult;
-use crate::model::{ConfidenceTier, Edge, EdgeType, Graph, NodeLabel};
+use crate::model::{ConfidenceTier, Edge, EdgeType, Graph, Language, NodeLabel};
 
 /// Confidence for an IMPORTS edge (structural, explicit in syntax).
 /// Matches the lower bound of `EdgeType::Imports::confidence_range()` = (0.95, 1.0).
@@ -89,8 +89,14 @@ impl<'a> ImportResolver<'a> {
         let mut seen_pairs: HashSet<(String, String)> = HashSet::new();
 
         for result in results {
+            // Scheme C (v0.3.0): C++ #include edges are handled by ResolvePhase
+            // as EdgeType::Includes (scope-aware). Skip C++ here to avoid
+            // duplicate IMPORTS edges — see phases.rs ResolvePhase::run.
+            if result.language == Language::Cpp {
+                continue;
+            }
             // result.file_path is absolute in production (e.g.
-            // `/home/dev/.../src/lib.rs`) but file_index keys are relative
+            // /home/dev/.../src/lib.rs) but file_index keys are relative
             // (e.g. `src/lib.rs`). find_file_in_index handles this mismatch.
             let (source_file_id, importer_rel_path) = match find_file_in_index(&file_index, &result.file_path) {
                 Some((id, rel)) => (id, rel),
@@ -527,6 +533,11 @@ mod tests {
     /// Creates an `ExtractResult` for the given file.
     fn make_result(file_path: &str) -> ExtractResult {
         ExtractResult::new(file_path, Language::TypeScript)
+    }
+
+    /// Creates a C++ `ExtractResult` for the given file.
+    fn make_result_cpp(file_path: &str) -> ExtractResult {
+        ExtractResult::new(file_path, Language::Cpp)
     }
 
     // --- resolve_imports: explicit import ---
@@ -1414,14 +1425,18 @@ mod tests {
         assert_eq!(edges[0].target, "src/config.js");
     }
 
-    // --- C++ #include suffix matching (bare filename resolution) ---
+    // --- C++ #include: skipped by ImportResolver (scheme C, v0.3.0) ---
+    // C++ #include is handled by ResolvePhase as EdgeType::Includes edges.
+    // ImportResolver skips Language::Cpp results entirely — these tests
+    // verify that NO IMPORTS edges are created for C++ #include directives,
+    // regardless of whether a matching file exists.
 
     #[test]
-    fn resolve_imports_resolves_cpp_include_by_basename() {
-        // C++ #include "format.h" from include/fmt/std.h → include/fmt/format.h
-        // The include path is a bare filename (no ./ prefix), so strategies 1-3
-        // all fail. Strategy 4 (suffix matching) resolves it.
-        let mut std_result = make_result("include/fmt/std.h");
+    fn resolve_imports_skips_cpp_include_by_basename() {
+        // C++ #include "format.h" — previously resolved via suffix matching
+        // to IMPORTS edge. Scheme C: skipped entirely (INCLUDES edge built
+        // by ResolvePhase instead).
+        let mut std_result = make_result_cpp("include/fmt/std.h");
         std_result.imports.push(crate::ir::ImportInfo {
             source_file: "format.h".to_string(),
             imported_names: vec![],
@@ -1436,20 +1451,17 @@ mod tests {
         let resolver = ImportResolver::new("proj");
         let edges = resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(
-            edges.len(),
-            1,
-            "C++ bare-filename #include should resolve via suffix matching"
+        assert!(
+            edges.is_empty(),
+            "C++ #include should NOT produce IMPORTS edges (scheme C: handled by ResolvePhase)"
         );
-        assert_eq!(edges[0].source, "include/fmt/std.h");
-        assert_eq!(edges[0].target, "include/fmt/format.h");
     }
 
     #[test]
-    fn resolve_imports_resolves_cpp_include_by_partial_path() {
-        // C++ #include "fmt/format.h" → include/fmt/format.h
-        // Partial path suffix match with path boundary check.
-        let mut top_result = make_result("src/main.cpp");
+    fn resolve_imports_skips_cpp_include_by_partial_path() {
+        // C++ #include "fmt/format.h" — previously resolved via partial path
+        // suffix matching. Scheme C: skipped entirely.
+        let mut top_result = make_result_cpp("src/main.cpp");
         top_result.imports.push(crate::ir::ImportInfo {
             source_file: "fmt/format.h".to_string(),
             imported_names: vec![],
@@ -1464,18 +1476,17 @@ mod tests {
         let resolver = ImportResolver::new("proj");
         let edges = resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(
-            edges.len(),
-            1,
-            "C++ partial-path #include should resolve via suffix matching"
+        assert!(
+            edges.is_empty(),
+            "C++ partial-path #include should NOT produce IMPORTS edges (scheme C)"
         );
-        assert_eq!(edges[0].target, "include/fmt/format.h");
     }
 
     #[test]
     fn resolve_imports_skips_cpp_system_include() {
         // C++ #include <iostream> — system header, no matching File node.
-        let mut main_result = make_result("src/main.cpp");
+        // Scheme C: C++ is skipped entirely, so no IMPORTS edge regardless.
+        let mut main_result = make_result_cpp("src/main.cpp");
         main_result.imports.push(crate::ir::ImportInfo {
             source_file: "iostream".to_string(),
             imported_names: vec![],
@@ -1485,41 +1496,39 @@ mod tests {
 
         let mut graph = Graph::new();
         graph.add_node(make_file_node("src/main.cpp", "proj"));
-        // No "iostream" file in the project.
 
         let resolver = ImportResolver::new("proj");
         let edges = resolver.resolve_imports(&results, &mut graph);
 
         assert!(
             edges.is_empty(),
-            "system header #include <iostream> should not resolve"
+            "C++ system header #include should NOT produce IMPORTS edges (scheme C)"
         );
     }
 
     #[test]
-    fn resolve_imports_cpp_include_prefers_same_directory() {
-        // When multiple files share the same basename, prefer the one in the
-        // same directory as the importer (standard C++ #include "..." behavior).
-        let mut a_result = make_result("include/fmt/a.h");
-        a_result.imports.push(crate::ir::ImportInfo {
-            source_file: "config.h".to_string(),
+    fn resolve_imports_skips_cpp_include_even_when_target_exists() {
+        // Scheme C regression guard: even when a matching file exists,
+        // C++ #include must NOT produce an IMPORTS edge. The INCLUDES edge
+        // is built separately by ResolvePhase::build_includes_edges.
+        let mut main_result = make_result_cpp("src/main.cpp");
+        main_result.imports.push(crate::ir::ImportInfo {
+            source_file: "foo.h".to_string(),
             imported_names: vec![],
             line: 1,
         });
-        let results = vec![a_result];
+        let results = vec![main_result];
 
         let mut graph = Graph::new();
-        graph.add_node(make_file_node("include/fmt/a.h", "proj"));
-        graph.add_node(make_file_node("include/fmt/config.h", "proj"));
-        graph.add_node(make_file_node("src/config.h", "proj"));
+        graph.add_node(make_file_node("src/main.cpp", "proj"));
+        graph.add_node(make_file_node("src/foo.h", "proj"));
 
         let resolver = ImportResolver::new("proj");
         let edges = resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "should create 1 IMPORTS edge");
-        assert_eq!(
-            edges[0].target, "include/fmt/config.h",
-            "should prefer same-directory match over other directories"
+        assert!(
+            edges.is_empty(),
+            "C++ #include must NOT produce IMPORTS edges even when target file exists (scheme C)"
         );
     }
 

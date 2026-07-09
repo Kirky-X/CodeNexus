@@ -33,13 +33,19 @@ use crate::index::pipeline::{
     build_file_nodes, now_unix_seconds, with_retry, DEFAULT_MAX_RETRIES,
 };
 use crate::ir::ExtractResult;
-use crate::model::{Edge, Graph, Node, NodeLabel, new_project_id};
+use crate::model::{ConfidenceTier, Edge, EdgeType, Graph, Language, Node, NodeLabel, new_project_id};
 use crate::parse::parallel::{parallel_parse, parallel_parse_ram_first, RamFirstSources};
-use crate::resolve::{build_symbol_table, prune_dangling_type_edges_vec, resolve_all};
+use crate::resolve::{
+    build_symbol_table, prune_dangling_type_edges_vec, resolve_all, IncludesGraph, resolve_include,
+};
 use crate::storage::Repository;
 
 use super::pipeline::IndexResult;
 use super::pipeline_dag::{Phase, PhaseError, PipelineCtx};
+
+/// Confidence for an INCLUDES edge (structural, explicit in syntax).
+/// Matches the lower bound of `EdgeType::Includes::confidence_range()` = (0.95, 1.0).
+const CONFIDENCE_INCLUDES: f32 = 0.95;
 
 // ---------------------------------------------------------------------------
 // Phase I/O structs
@@ -103,12 +109,15 @@ pub struct ScopeOutput {
 pub struct ResolveOutput {
     /// All nodes to persist (definition + file + parameter + variable).
     pub all_nodes: Vec<Node>,
-    /// All edges to persist (definition + resolved).
+    /// All edges to persist (definition + resolved + INCLUDES).
     pub all_edges: Vec<Edge>,
     /// Number of files parsed (for IndexResult).
     pub files_parsed: usize,
     /// Number of files skipped (for IndexResult).
     pub files_skipped: usize,
+    /// C++ `#include` graph for scope-aware call resolution (BUG-C4 fix).
+    /// Populated by `build_includes_edges`; consumed by `CallResolver` (T005).
+    pub includes_graph: IncludesGraph,
 }
 
 /// Typed output of [`LoadPhase`], extracted by [`Pipeline::run`].
@@ -373,6 +382,117 @@ impl Phase for ScopeResolutionPhase {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: build INCLUDES edges for C++ #include (scheme C, v0.3.0)
+// ---------------------------------------------------------------------------
+
+/// Builds `EdgeType::Includes` edges for C++ `#include` directives and
+/// populates an [`IncludesGraph`] for downstream scope-aware resolution.
+///
+/// Scheme C (v0.3.0): C++ `#include` is handled separately from other
+/// languages' import statements. [`ImportResolver`] skips C++ results (no
+/// IMPORTS edges for C++); this function builds INCLUDES edges instead.
+/// Other languages (TS/Rust/Python/Go/Java) are unaffected — they continue
+/// to produce IMPORTS edges via `ImportResolver`.
+///
+/// # Arguments
+///
+/// * `results` - Parse results (only C++ results are processed; others skipped).
+/// * `graph` - The graph to add INCLUDES edges to (must contain File nodes
+///   created by [`ScopeResolutionPhase`]).
+/// * `path_to_rel` - Absolute→relative path mapping (from [`ScopeOutput`]).
+/// * `project_id` - The project id for edge construction.
+///
+/// # Returns
+///
+/// A tuple of `(edges, includes_graph)`:
+/// - `edges`: all created INCLUDES edges (also added to `graph`)
+/// - `includes_graph`: populated graph for `lookup_exported_in_scope` (T004)
+fn build_includes_edges(
+    results: &[ExtractResult],
+    graph: &mut Graph,
+    path_to_rel: &HashMap<String, String>,
+    project_id: &str,
+) -> (Vec<Edge>, IncludesGraph) {
+    let mut edges = Vec::new();
+    let mut includes_graph = IncludesGraph::new();
+
+    // Build file_path → node_id index from File nodes (file_path is relative,
+    // normalized by ScopeResolutionPhase). Used for both source and target
+    // File node id lookup.
+    let mut file_index: HashMap<String, String> = HashMap::new();
+    for node in graph.nodes_by_label(NodeLabel::File) {
+        if let Some(fp) = &node.file_path {
+            file_index.entry(fp.clone()).or_insert_with(|| node.id.clone());
+        }
+    }
+
+    // All relative file paths — used by resolve_include for suffix matching.
+    // resolve_include matches #include paths as suffixes of these paths.
+    let all_files: Vec<String> = file_index.keys().cloned().collect();
+
+    for result in results {
+        // Only C++ #include produces INCLUDES edges (scheme C).
+        // C and other languages are handled by ImportResolver as IMPORTS.
+        if result.language != Language::Cpp {
+            continue;
+        }
+
+        // Convert absolute file_path to relative for File node lookup.
+        // In tests, file_path may already be relative (path_to_rel won't
+        // have it as a key, so fall back to the original).
+        let source_rel = path_to_rel
+            .get(&result.file_path)
+            .cloned()
+            .unwrap_or_else(|| result.file_path.clone());
+
+        let Some(source_file_id) = file_index.get(&source_rel).cloned() else {
+            warn!(
+                file = %result.file_path,
+                "INCLUDES source File node not found; skipping #include edges for this file"
+            );
+            continue;
+        };
+
+        for import in &result.imports {
+            if import.source_file.is_empty() {
+                continue;
+            }
+
+            // resolve_include does suffix matching on all_files (relative
+            // paths). Returns a relative path that exists in all_files.
+            let Some(target_rel) = resolve_include(&import.source_file, &source_rel, &all_files)
+            else {
+                // System header (<iostream>) or external lib — no match.
+                // Not warned: system headers are common and expected.
+                continue;
+            };
+
+            // target_rel came from all_files (file_index keys), so this
+            // lookup is guaranteed to succeed. The guard is defensive only.
+            let Some(target_file_id) = file_index.get(&target_rel).cloned() else {
+                continue;
+            };
+
+            let edge = Edge::builder(
+                source_file_id.clone(),
+                target_file_id.clone(),
+                EdgeType::Includes,
+                project_id,
+            )
+            .confidence(CONFIDENCE_INCLUDES)
+            .confidence_tier(ConfidenceTier::ImportScoped)
+            .start_line(import.line)
+            .build();
+            graph.add_edge(edge.clone());
+            edges.push(edge);
+            includes_graph.add_include(&source_rel, &target_rel);
+        }
+    }
+
+    (edges, includes_graph)
+}
+
+// ---------------------------------------------------------------------------
 // Phase 4: ResolvePhase
 // ---------------------------------------------------------------------------
 
@@ -418,6 +538,17 @@ impl Phase for ResolvePhase {
         let symbol_table = build_symbol_table(&parse.results, project_id);
         let resolved_edges = resolve_all(&parse.results, &symbol_table, project_id, &mut graph);
         all_edges.extend(resolved_edges);
+
+        // Scheme C (v0.3.0): Build INCLUDES edges for C++ #include directives.
+        // C++ #include is handled separately from IMPORTS (which is for
+        // TS/Rust/Python/Go/Java) because #include establishes a scope-visible
+        // relationship that CallResolver uses for cross-file call resolution
+        // (BUG-C4 fix). ImportResolver skips C++ results, so no IMPORTS edges
+        // are created for C++ — only INCLUDES edges here.
+        let (includes_edges, includes_graph) =
+            build_includes_edges(&parse.results, &mut graph, &scope.path_to_rel, project_id);
+        all_edges.extend(includes_edges);
+
         // Prune dangling type-reference edges (Implements/Extends/UsesType)
         // from the persisted collection. resolve_all prunes graph.edges, but
         // all_edges is a separate Vec built from scope.all_edges (parse-phase
@@ -446,6 +577,7 @@ impl Phase for ResolvePhase {
             all_edges,
             files_parsed: parse.files_parsed,
             files_skipped: scan.diff.unchanged.len(),
+            includes_graph,
         })
     }
 }
@@ -773,5 +905,227 @@ mod tests {
             }
             other => panic!("expected ExecutionFailed, got {other:?}"),
         }
+    }
+
+    // --- build_includes_edges (scheme C: C++ #include → INCLUDES edges) ---
+
+    /// Creates a File node with id = file_path = name (mirrors imports.rs tests).
+    fn make_file_node(path: &str, project: &str, lang: Language) -> Node {
+        Node::builder(NodeLabel::File, path, path)
+            .id(path)
+            .project(project)
+            .file_path(path)
+            .language(lang)
+            .build()
+    }
+
+    #[test]
+    fn build_includes_edges_for_cpp() {
+        // C++ main.cpp #include "foo.h" → 1 INCLUDES edge main.cpp → foo.h.
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/main.cpp", "proj", Language::Cpp));
+        graph.add_node(make_file_node("src/foo.h", "proj", Language::Cpp));
+
+        let mut main_result = ExtractResult::new("src/main.cpp", Language::Cpp);
+        main_result.imports.push(crate::ir::ImportInfo {
+            source_file: "foo.h".to_string(),
+            imported_names: vec![],
+            line: 1,
+        });
+        let results = vec![main_result];
+
+        let path_to_rel = HashMap::new();
+        let (edges, includes_graph) =
+            build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
+
+        assert_eq!(edges.len(), 1, "should create 1 INCLUDES edge");
+        assert_eq!(edges[0].edge_type, EdgeType::Includes);
+        assert_eq!(edges[0].source, "src/main.cpp");
+        assert_eq!(edges[0].target, "src/foo.h");
+        assert_eq!(
+            edges[0].confidence_tier,
+            ConfidenceTier::ImportScoped,
+            "INCLUDES edges use ImportScoped tier (matches IMPORTS pattern)"
+        );
+        assert!(
+            includes_graph.contains("src/main.cpp", "src/foo.h"),
+            "IncludesGraph should have direct edge main.cpp → foo.h"
+        );
+    }
+
+    #[test]
+    fn build_includes_edges_skips_non_cpp_languages() {
+        // TypeScript import should NOT produce INCLUDES edges (only C++ does).
+        // TS imports are handled by ImportResolver as IMPORTS edges.
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/main.ts", "proj", Language::TypeScript));
+        graph.add_node(make_file_node("src/utils.ts", "proj", Language::TypeScript));
+
+        let mut ts_result = ExtractResult::new("src/main.ts", Language::TypeScript);
+        ts_result.imports.push(crate::ir::ImportInfo {
+            source_file: "./utils.ts".to_string(),
+            imported_names: vec!["foo".to_string()],
+            line: 1,
+        });
+        let results = vec![ts_result];
+
+        let path_to_rel = HashMap::new();
+        let (edges, includes_graph) =
+            build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
+
+        assert!(
+            edges.is_empty(),
+            "non-C++ languages should NOT produce INCLUDES edges"
+        );
+        assert!(
+            includes_graph.is_empty(),
+            "IncludesGraph should be empty for non-C++ results"
+        );
+    }
+
+    #[test]
+    fn build_includes_edges_skips_system_headers() {
+        // C++ #include <iostream> — system header, no matching File node.
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/main.cpp", "proj", Language::Cpp));
+        // No "iostream" file in the project.
+
+        let mut main_result = ExtractResult::new("src/main.cpp", Language::Cpp);
+        main_result.imports.push(crate::ir::ImportInfo {
+            source_file: "iostream".to_string(),
+            imported_names: vec![],
+            line: 1,
+        });
+        let results = vec![main_result];
+
+        let path_to_rel = HashMap::new();
+        let (edges, includes_graph) =
+            build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
+
+        assert!(
+            edges.is_empty(),
+            "system header #include <iostream> should not produce INCLUDES edge"
+        );
+        assert!(includes_graph.is_empty());
+    }
+
+    #[test]
+    fn build_includes_edges_populates_transitive_graph() {
+        // Chained #include: main.cpp → foo.h → bar.h.
+        // IncludesGraph should have both edges; reachable_from("main.cpp")
+        // should include foo.h and bar.h (transitive closure).
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/main.cpp", "proj", Language::Cpp));
+        graph.add_node(make_file_node("src/foo.h", "proj", Language::Cpp));
+        graph.add_node(make_file_node("src/bar.h", "proj", Language::Cpp));
+
+        let mut main_result = ExtractResult::new("src/main.cpp", Language::Cpp);
+        main_result.imports.push(crate::ir::ImportInfo {
+            source_file: "foo.h".to_string(),
+            imported_names: vec![],
+            line: 1,
+        });
+        let mut foo_result = ExtractResult::new("src/foo.h", Language::Cpp);
+        foo_result.imports.push(crate::ir::ImportInfo {
+            source_file: "bar.h".to_string(),
+            imported_names: vec![],
+            line: 1,
+        });
+        let results = vec![main_result, foo_result];
+
+        let path_to_rel = HashMap::new();
+        let (edges, includes_graph) =
+            build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
+
+        assert_eq!(edges.len(), 2, "should create 2 INCLUDES edges");
+        assert!(includes_graph.contains("src/main.cpp", "src/foo.h"));
+        assert!(includes_graph.contains("src/foo.h", "src/bar.h"));
+
+        // Transitive closure: main.cpp reaches foo.h, bar.h, and itself.
+        let reachable = includes_graph.reachable_from("src/main.cpp");
+        assert!(reachable.contains("src/main.cpp"));
+        assert!(reachable.contains("src/foo.h"));
+        assert!(reachable.contains("src/bar.h"));
+    }
+
+    #[test]
+    fn build_includes_edges_with_absolute_paths() {
+        // Production scenario: result.file_path is absolute, path_to_rel
+        // maps it to relative, graph File nodes use relative paths.
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/main.cpp", "proj", Language::Cpp));
+        graph.add_node(make_file_node("src/foo.h", "proj", Language::Cpp));
+
+        let mut main_result = ExtractResult::new("/home/dev/proj/src/main.cpp", Language::Cpp);
+        main_result.imports.push(crate::ir::ImportInfo {
+            source_file: "foo.h".to_string(),
+            imported_names: vec![],
+            line: 1,
+        });
+        let results = vec![main_result];
+
+        let mut path_to_rel = HashMap::new();
+        path_to_rel.insert(
+            "/home/dev/proj/src/main.cpp".to_string(),
+            "src/main.cpp".to_string(),
+        );
+
+        let (edges, includes_graph) =
+            build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
+
+        assert_eq!(edges.len(), 1, "absolute source path should resolve via path_to_rel");
+        assert_eq!(edges[0].source, "src/main.cpp");
+        assert_eq!(edges[0].target, "src/foo.h");
+        assert!(includes_graph.contains("src/main.cpp", "src/foo.h"));
+    }
+
+    #[test]
+    fn build_includes_edges_partial_path_include() {
+        // C++ #include "fmt/format.h" → include/fmt/format.h (suffix match).
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/main.cpp", "proj", Language::Cpp));
+        graph.add_node(make_file_node("include/fmt/format.h", "proj", Language::Cpp));
+
+        let mut main_result = ExtractResult::new("src/main.cpp", Language::Cpp);
+        main_result.imports.push(crate::ir::ImportInfo {
+            source_file: "fmt/format.h".to_string(),
+            imported_names: vec![],
+            line: 1,
+        });
+        let results = vec![main_result];
+
+        let path_to_rel = HashMap::new();
+        let (edges, _includes_graph) =
+            build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
+
+        assert_eq!(edges.len(), 1, "partial-path #include should resolve via suffix matching");
+        assert_eq!(edges[0].target, "include/fmt/format.h");
+    }
+
+    #[test]
+    fn build_includes_edges_skips_when_source_file_not_in_graph() {
+        // C++ result exists but no File node for it in the graph.
+        // Should skip gracefully (no panic, no edges).
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/foo.h", "proj", Language::Cpp));
+        // No File node for "src/main.cpp".
+
+        let mut main_result = ExtractResult::new("src/main.cpp", Language::Cpp);
+        main_result.imports.push(crate::ir::ImportInfo {
+            source_file: "foo.h".to_string(),
+            imported_names: vec![],
+            line: 1,
+        });
+        let results = vec![main_result];
+
+        let path_to_rel = HashMap::new();
+        let (edges, includes_graph) =
+            build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
+
+        assert!(
+            edges.is_empty(),
+            "no edges when source File node not in graph"
+        );
+        assert!(includes_graph.is_empty());
     }
 }
