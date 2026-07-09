@@ -130,7 +130,7 @@ impl Severity {
 }
 
 /// A single function's complexity metrics with overall severity.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ComplexityEntry {
     /// Short function name (e.g. `parse_file`).
     pub name: String,
@@ -154,6 +154,8 @@ pub struct ComplexityEntry {
     pub function_length: u32,
     /// Highest severity across all four metrics.
     pub overall_severity: Severity,
+    /// Halstead complexity metrics (T007).
+    pub halstead: HalsteadMetrics,
 }
 
 /// Halstead complexity metrics (Halstead 1977). Tracks distinct and total
@@ -682,6 +684,7 @@ impl<'a> ComplexityAnalyzer<'a> {
                 let cognitive = calc_cognitive(&tree, language);
                 let nesting_depth = calc_nesting_depth(&tree, language);
                 let function_length = end_line.saturating_sub(start_line) + 1;
+                let halstead = calc_halstead(&tree, content.as_bytes(), language);
 
                 let mut entry = ComplexityEntry {
                     name,
@@ -695,6 +698,7 @@ impl<'a> ComplexityAnalyzer<'a> {
                     nesting_depth,
                     function_length,
                     overall_severity: Severity::Green,
+                    halstead,
                 };
                 entry.overall_severity = entry.compute_overall_severity(&self.thresholds);
                 entries.push(entry);
@@ -811,6 +815,7 @@ mod tests {
             nesting_depth: nesting,
             function_length: length,
             overall_severity: Severity::Green,
+            halstead: HalsteadMetrics::default(),
         }
     }
 
@@ -1250,6 +1255,57 @@ fn parallel(a: i32) {
         assert!(bar.cognitive > 0, "bar cognitive should be > 0, got {}", bar.cognitive);
         assert_eq!(bar.nesting_depth, 3, "bar nesting (if>for>if = 3 levels)");
         assert_eq!(bar.function_length, 5, "bar length");
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn analyze_includes_halstead_metrics() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Function with an operator (`+`) → halstead.volume > 0.
+        create_function_with_content(
+            &kit,
+            "f_add",
+            "demo",
+            "add",
+            "demo.add",
+            "/src/lib.rs",
+            1,
+            1,
+            "fn add(a: i32, b: i32) -> i32 { a + b }",
+        );
+        // Empty function → halstead all-zero (default).
+        create_function_with_content(
+            &kit,
+            "f_empty",
+            "demo",
+            "empty",
+            "demo.empty",
+            "/src/lib.rs",
+            1,
+            1,
+            "fn empty() {}",
+        );
+
+        let storage = storage(&kit);
+        let analyzer = ComplexityAnalyzer::new(&*storage);
+        let mut result = analyzer.analyze("demo").expect("analyze");
+        result.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+
+        let add = result.iter().find(|e| e.name == "add").expect("add entry");
+        assert!(
+            add.halstead.volume > 0.0,
+            "add should have volume > 0, got {}",
+            add.halstead.volume
+        );
+        assert!(add.halstead.n2 >= 2, "add should have >= 2 operands");
+
+        let empty = result.iter().find(|e| e.name == "empty").expect("empty entry");
+        assert_eq!(
+            empty.halstead,
+            HalsteadMetrics::default(),
+            "empty function should have all-zero halstead"
+        );
     }
 
     // --- T015: detect_language tests ---

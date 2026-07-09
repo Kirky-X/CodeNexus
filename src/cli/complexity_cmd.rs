@@ -9,7 +9,7 @@ use crate::analysis::complexity::{ComplexityAnalyzer, ComplexityEntry, Severity}
 use crate::kit::{Kit, StorageKey};
 
 /// JSON-serializable complexity output.
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
 pub struct ComplexityOutput {
     /// The queried project name.
     pub project: String,
