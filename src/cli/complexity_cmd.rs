@@ -5,7 +5,7 @@
 
 use super::args::ComplexityArgs;
 use super::error::Result;
-use crate::analysis::complexity::{ComplexityAnalyzer, ComplexityEntry, Severity};
+use crate::analysis::complexity::{ComplexityAnalyzer, ComplexityEntry, ComplexityThresholds, Severity};
 use crate::kit::{Kit, StorageKey};
 
 /// JSON-serializable complexity output.
@@ -49,7 +49,8 @@ pub struct ComplexitySummary {
 /// database failures during the Cypher queries.
 pub fn run(kit: &Kit, args: &ComplexityArgs) -> Result<()> {
     let storage = kit.require::<StorageKey>()?;
-    let analyzer = ComplexityAnalyzer::new(&*storage);
+    let thresholds = build_thresholds(args);
+    let analyzer = ComplexityAnalyzer::new_with_thresholds(&*storage, thresholds);
     let entries = analyzer.analyze(&args.project)?;
     let summary = compute_summary(&entries);
     let mut filtered = entries;
@@ -67,6 +68,64 @@ pub fn run(kit: &Kit, args: &ComplexityArgs) -> Result<()> {
     let json = serde_json::to_string(&output)?;
     println!("{json}");
     Ok(())
+}
+
+/// Builds [`ComplexityThresholds`] from `args`, starting from
+/// [`ComplexityThresholds::default`] and overriding each pair member only when
+/// the corresponding `Option<u32>` / `Option<TimeComplexity>` /
+/// `Option<SpaceComplexity>` flag is `Some`. `None` flags fall through to the
+/// default value for that metric.
+fn build_thresholds(args: &ComplexityArgs) -> ComplexityThresholds {
+    let mut t = ComplexityThresholds::default();
+    if let Some(y) = args.cyclomatic_yellow {
+        t.cyclomatic.0 = y;
+    }
+    if let Some(r) = args.cyclomatic_red {
+        t.cyclomatic.1 = r;
+    }
+    if let Some(y) = args.cognitive_yellow {
+        t.cognitive.0 = y;
+    }
+    if let Some(r) = args.cognitive_red {
+        t.cognitive.1 = r;
+    }
+    if let Some(y) = args.nesting_yellow {
+        t.nesting.0 = y;
+    }
+    if let Some(r) = args.nesting_red {
+        t.nesting.1 = r;
+    }
+    if let Some(y) = args.func_length_yellow {
+        t.func_length.0 = y;
+    }
+    if let Some(r) = args.func_length_red {
+        t.func_length.1 = r;
+    }
+    if let Some(y) = args.halstead_volume_yellow {
+        t.halstead_volume.0 = y;
+    }
+    if let Some(r) = args.halstead_volume_red {
+        t.halstead_volume.1 = r;
+    }
+    if let Some(y) = args.maintainability_yellow {
+        t.maintainability.0 = y;
+    }
+    if let Some(r) = args.maintainability_red {
+        t.maintainability.1 = r;
+    }
+    if let Some(y) = args.time_complexity_yellow {
+        t.time_complexity.0 = y;
+    }
+    if let Some(r) = args.time_complexity_red {
+        t.time_complexity.1 = r;
+    }
+    if let Some(y) = args.space_complexity_yellow {
+        t.space_complexity.0 = y;
+    }
+    if let Some(r) = args.space_complexity_red {
+        t.space_complexity.1 = r;
+    }
+    t
 }
 
 /// Computes aggregate severity counts over `entries`.
@@ -92,6 +151,7 @@ fn compute_summary(entries: &[ComplexityEntry]) -> ComplexitySummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::complexity::{ComplexityThresholds, SpaceComplexity, TimeComplexity};
     use crate::cli::args::ComplexityArgs;
     use crate::kit::{build_kit, KitBootstrapConfig, StorageKey};
     use crate::storage::schema::escape_cypher_string;
@@ -286,6 +346,101 @@ mod tests {
         assert!(
             filtered.iter().all(|e| e.overall_severity == Severity::Red),
             "red_only should retain only Red entries"
+        );
+    }
+
+    // --- T017: build_thresholds + run wiring tests ---
+
+    #[test]
+    fn build_thresholds_uses_defaults_when_none() {
+        // All threshold fields None → build_thresholds returns default.
+        let args = make_args("demo", "/tmp/x.lbug");
+        let t = build_thresholds(&args);
+        assert_eq!(t, ComplexityThresholds::default());
+    }
+
+    #[test]
+    fn build_thresholds_overrides_when_some() {
+        // Every threshold field set → build_thresholds folds them onto default.
+        let mut args = make_args("demo", "/tmp/x.lbug");
+        args.cyclomatic_yellow = Some(5);
+        args.cyclomatic_red = Some(8);
+        args.cognitive_yellow = Some(7);
+        args.cognitive_red = Some(10);
+        args.nesting_yellow = Some(3);
+        args.nesting_red = Some(4);
+        args.func_length_yellow = Some(50);
+        args.func_length_red = Some(100);
+        args.halstead_volume_yellow = Some(500);
+        args.halstead_volume_red = Some(4000);
+        args.maintainability_yellow = Some(60);
+        args.maintainability_red = Some(80);
+        args.time_complexity_yellow = Some(TimeComplexity::O1);
+        args.time_complexity_red = Some(TimeComplexity::ON);
+        args.space_complexity_yellow = Some(SpaceComplexity::O1);
+        args.space_complexity_red = Some(SpaceComplexity::ON2);
+
+        let t = build_thresholds(&args);
+        assert_eq!(t.cyclomatic, (5, 8));
+        assert_eq!(t.cognitive, (7, 10));
+        assert_eq!(t.nesting, (3, 4));
+        assert_eq!(t.func_length, (50, 100));
+        assert_eq!(t.halstead_volume, (500, 4000));
+        assert_eq!(t.maintainability, (60, 80));
+        assert_eq!(t.time_complexity, (TimeComplexity::O1, TimeComplexity::ON));
+        assert_eq!(t.space_complexity, (SpaceComplexity::O1, SpaceComplexity::ON2));
+    }
+
+    #[test]
+    #[cfg(feature = "lang-rust")]
+    fn run_uses_custom_thresholds() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // 9 if-branches → cyclomatic = 1 + 9 = 10. With default thresholds
+        // (yellow=20, green=10), cyclomatic=10 → Green. With custom
+        // (yellow=5, red=8), green_max=2, cyclomatic=10 > 8 → Red.
+        let src = "fn f() { if a {} if b {} if c {} if d {} if e {} \
+                   if f {} if g {} if h {} if i {} }";
+        create_function_with_content(
+            &kit,
+            "f_thresh",
+            "demo",
+            "f",
+            "demo.f",
+            "/src/lib.rs",
+            1,
+            1,
+            src,
+        );
+
+        let mut args = make_args("demo", db.to_str().unwrap());
+        args.cyclomatic_yellow = Some(5);
+        args.cyclomatic_red = Some(8);
+
+        // run must accept custom-threshold args and succeed.
+        let result = run(&kit, &args);
+        assert!(result.is_ok(), "run should succeed: {:?}", result.err());
+
+        // build_thresholds must produce thresholds that make this function Red.
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let thresholds = build_thresholds(&args);
+        let analyzer = ComplexityAnalyzer::new_with_thresholds(&*storage, thresholds);
+        let entries = analyzer.analyze("demo").expect("analyze");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].cyclomatic, 10, "cyclomatic should be 10");
+        assert_eq!(
+            entries[0].overall_severity,
+            Severity::Red,
+            "custom thresholds (yellow=5, red=8) should make cyclomatic=10 Red"
+        );
+
+        // Sanity: default thresholds should not make this function Red.
+        let analyzer_default = ComplexityAnalyzer::new(&*storage);
+        let entries_default = analyzer_default.analyze("demo").expect("analyze");
+        assert_ne!(
+            entries_default[0].overall_severity,
+            Severity::Red,
+            "default thresholds should not make this function Red"
         );
     }
 }
