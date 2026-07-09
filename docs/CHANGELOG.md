@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _No unreleased changes yet._
 
+## [0.3.0] - 2026-07-10
+
+### Added
+
+- **sdforge MCP framework integration** — replaced hand-written JSON-RPC in `src/cli/mcp_cmd.rs` with sdforge's declarative `#[service_api]` macro + rmcp stdio transport. 5 MCP tools exposed: `query`, `trace`, `impact`, `search`, `context`. New `mcp` feature flag gates sdforge/rmcp/tokio dependencies.
+- **C++ #include tracking** — `INCLUDES` edge type for C++ `#include` directives (separate from `IMPORTS` used by other languages). `IncludesGraph` data structure + `resolve_include` basename matching + `lookup_exported_in_scope` for #include-scoped cross-file call resolution. Fixes BUG-C4 (C++ free functions now correctly `is_exported=true`).
+- **Complexity analysis** (v0.2.1) — cyclomatic, cognitive, nesting depth, and function-length metrics with 4-level severity classification (Green/Yellow/Red/Critical). `complexity` feature flag.
+- **Dead-code detection** (`dead-code` command, `analysis` feature) — identifies unreachable functions.
+- **Architecture overview** (`architecture` command, `analysis` feature) — graph-based architecture summary.
+- **Community detection** (`community` command, `community` feature) — Louvain modularity optimization on the CALLS graph.
+- **Cross-service link detection** (`cross-service` command, `cross-service` feature) — matches HTTP route patterns against caller string literals.
+- **API review toolkit** (`api-route-map`, `api-shape-check`, `api-impact`, `api-tool-map` commands, `api-review` feature) — route maps, shape checks, API impact analysis, tool mappings.
+- **LSP semantic type resolution** (`lsp-goto-def`, `lsp-hover` commands, `lsp` feature, v0.2.0) — subprocess integration with rust-analyzer for IDE-grade definition/hover queries.
+- **Go, Java, C++ language support** — tree-sitter grammars for Go (`lang-go`), Java (`lang-java`), C++ (`lang-cpp`). Total supported languages: 8.
+
+### Changed
+
+- **lib.rs / main.rs boundary clarified** — `src/lib.rs` exposes the Rust SDK interface; `src/main.rs` wraps it for CLI + MCP via sdforge. The `mcp` subcommand is handled by the binary's `mcp` module (`src/mcp/mod.rs`), not a `*_cmd` module in the library.
+- **CLI dispatch refactored** — `Command::Mcp` variant is feature-gated and dispatched to `mcp::run(kit, args)` in the binary, not through the library's `cli::dispatch`.
+- **Feature presets updated** — `core` now includes C+Rust+Python (was C+Rust+Fortran). `full` includes all 8 languages + daemon + analysis + complexity + api-review + community + cross-service + lsp + mcp.
+
+### Fixed
+
+- **BUG-C4: C++ cross-file call resolution** — C++ free functions were not marked `is_exported=true`, causing cross-file CALLS edges to fail resolution. Fixed by enabling `is_exported` for C++ free functions (non-methods).
+
 ## [0.1.0] - 2026-06-29
 
 Initial public release. CodeNexus indexes source code into a queryable knowledge graph using tree-sitter for parsing and LadybugDB for graph storage, with a Cypher subset query interface, symbol tracing, impact analysis, and a Model Context Protocol (MCP) server for AI agent integration.
@@ -70,5 +95,6 @@ Initial public release. CodeNexus indexes source code into a queryable knowledge
 - **Database corruption detection** — corrupt LadybugDB files are detected at startup and reported with a distinct exit code (4) instead of being loaded into a half-valid state.
 - **`.env` files ignored by default** in `.gitignore`, with an explicit `!.env.example` allow-list so the template is tracked but real secrets never are.
 
-[Unreleased]: https://github.com/Kirky-X/codenexus/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Kirky-X/codenexus/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.0
 [0.1.0]: https://github.com/Kirky-X/codenexus/releases/tag/v0.1.0
