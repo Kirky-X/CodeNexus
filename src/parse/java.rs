@@ -323,13 +323,19 @@ fn extract_method(
         result,
     );
     let signature = node_text(node, source).map(signature_first_line).map(String::from);
+    // BUG-J3: set is_exported based on visibility. Non-private methods are
+    // callable cross-file (within visibility rules) and must be findable via
+    // lookup_exported. Private methods are only callable within the same class
+    // (file-level lookup suffices).
+    let is_exported = !has_private_modifier(node, source);
     let mut builder = ModelNode::builder(NodeLabel::Method, name, qn.clone())
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Java)
         .project(ctx.project)
-        .is_global(false);
+        .is_global(false)
+        .is_exported(is_exported);
     if let Some(parent) = ctx.current_parent {
         builder = builder.parent_qn(parent);
     }
@@ -483,6 +489,31 @@ fn type_name(node: Node, source: &str) -> Option<String> {
 fn method_name(node: Node, source: &str) -> Option<String> {
     let name_node = node.child_by_field_name("name")?;
     node_text(name_node, source).map(String::from)
+}
+
+/// Returns true if the method/constructor declaration has a `private`
+/// modifier. Used to set `is_exported=false` on private methods so they
+/// are not resolved via project-level `lookup_exported` (private methods
+/// are only callable within the same class, findable via file-level lookup).
+///
+/// tree-sitter-java wraps modifiers in a `modifiers` container node (a named
+/// child of `method_declaration`/`constructor_declaration`). The container's
+/// text is the space-separated modifier keywords (e.g. "private static").
+/// We check for the `private` keyword with word boundaries to avoid
+/// false matches on identifiers like `privateData`.
+fn has_private_modifier(node: Node, source: &str) -> bool {
+    let mut modifiers: Option<Node> = None;
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(child) = node.named_child(i) {
+            if child.kind() == "modifiers" {
+                modifiers = Some(child);
+                break;
+            }
+        }
+    }
+    let Some(modifiers) = modifiers else { return false; };
+    let Some(text) = node_text(modifiers, source) else { return false; };
+    text.split_whitespace().any(|kw| kw == "private")
 }
 
 fn call_arguments(node: Node, source: &str) -> Vec<String> {
@@ -869,6 +900,51 @@ mod tests {
         let result = extract("public class Foo {}\n");
         let foo = result.nodes.iter().find(|n| n.name == "Foo").unwrap();
         assert!(foo.is_exported, "Java class should be exported for cross-file resolution");
+    }
+
+    #[test]
+    fn public_method_is_exported() {
+        // BUG-J3: Java methods must have is_exported set based on visibility
+        // so resolve_calls can find them via lookup_exported for cross-file
+        // call resolution (same-package calls without explicit imports).
+        let result = extract("class Foo { public void bar() {} }\n");
+        let bar = result.nodes.iter().find(|n| n.name == "bar").unwrap();
+        assert!(bar.is_exported, "public method should have is_exported=true");
+    }
+
+    #[test]
+    fn protected_method_is_exported() {
+        let result = extract("class Foo { protected void bar() {} }\n");
+        let bar = result.nodes.iter().find(|n| n.name == "bar").unwrap();
+        assert!(bar.is_exported, "protected method should have is_exported=true");
+    }
+
+    #[test]
+    fn package_private_method_is_exported() {
+        let result = extract("class Foo { void bar() {} }\n");
+        let bar = result.nodes.iter().find(|n| n.name == "bar").unwrap();
+        assert!(bar.is_exported, "package-private method should have is_exported=true");
+    }
+
+    #[test]
+    fn private_method_is_not_exported() {
+        let result = extract("class Foo { private void bar() {} }\n");
+        let bar = result.nodes.iter().find(|n| n.name == "bar").unwrap();
+        assert!(!bar.is_exported, "private method should have is_exported=false");
+    }
+
+    #[test]
+    fn public_static_method_is_exported() {
+        let result = extract("class Foo { public static void bar() {} }\n");
+        let bar = result.nodes.iter().find(|n| n.name == "bar").unwrap();
+        assert!(bar.is_exported, "public static method should have is_exported=true");
+    }
+
+    #[test]
+    fn private_static_method_is_not_exported() {
+        let result = extract("class Foo { private static void bar() {} }\n");
+        let bar = result.nodes.iter().find(|n| n.name == "bar").unwrap();
+        assert!(!bar.is_exported, "private static method should have is_exported=false");
     }
 
     #[test]
