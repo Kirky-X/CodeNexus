@@ -49,7 +49,7 @@ use super::error::{CliError, Result};
 /// MCP server entry written into agent config files.
 ///
 /// Points the agent at `codenexus mcp` so the agent can launch CodeNexus as a
-/// subprocess MCP server (see [`crate::cli::mcp_cmd`]).
+/// subprocess MCP server (see the `mcp` binary module in `src/mcp/mod.rs`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct McpServerEntry {
     /// Binary name (assumes `codenexus` is on `PATH`).

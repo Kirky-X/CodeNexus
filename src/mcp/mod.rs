@@ -3,8 +3,9 @@
 
 //! MCP server module (v0.3.0, T009) — sdforge-based MCP protocol exposure.
 //!
-//! Replaces the hand-written JSON-RPC in `src/cli/mcp_cmd.rs` with sdforge's
-//! declarative `#[service_api]` macro + rmcp stdio transport.
+//! Replaces the hand-written JSON-RPC that was previously in
+//! `src/cli/mcp_cmd.rs` (deleted in T016) with sdforge's declarative
+//! `#[service_api]` macro + rmcp stdio transport.
 //!
 //! # Architecture
 //!
@@ -133,7 +134,7 @@ pub fn run(kit: Kit, _args: &McpArgs) -> CliResult<()> {
 // Query tool (T010)
 // ---------------------------------------------------------------------------
 
-/// JSON-serializable query result (migrated from `cli::mcp_cmd::QueryOutput`).
+/// JSON-serializable query result (migrated from the former `cli::mcp_cmd::QueryOutput`).
 ///
 /// Mirrors [`QueryResult`] but with `Serialize`/`Deserialize` for MCP transport.
 ///
@@ -209,7 +210,7 @@ async fn query(cypher: String) -> Result<QueryOutput, ApiError> {
 // Trace tool (T011)
 // ---------------------------------------------------------------------------
 
-/// JSON-serializable trace result (migrated from `cli::mcp_cmd::TraceOutput`).
+/// JSON-serializable trace result (migrated from the former `cli::mcp_cmd::TraceOutput`).
 ///
 /// Mirrors [`TraceResult`] but with `Serialize`/`Deserialize` for MCP transport.
 /// [`TraceNode`] and [`TraceEdge`] don't derive `Serialize`, so they are
@@ -530,7 +531,7 @@ mod tests {
     fn mcp_run_initializes_kit() {
         // Build a minimal Kit with an in-memory database.
         // std::mem::forget keeps the temp file alive for the process lifetime
-        // (matching the pattern in `cli::mcp_cmd::tests::fresh_kit`) so other
+        // (matching the pattern in the former `cli::mcp_cmd::tests::fresh_kit`) so other
         // tests using the global KIT can still access the database.
         let tmp = tempfile::NamedTempFile::new().expect("create temp db file");
         let config = KitBootstrapConfig::new(tmp.path().to_path_buf());
@@ -598,7 +599,7 @@ mod tests {
     /// Seeds two Function nodes and a CALLS edge via the Storage capability
     /// (the Trace capability opens its own DB connection — Storage writes are
     /// visible to Trace after flushing, matching the pattern in
-    /// `cli::mcp_cmd::tests`).
+    /// `cli::mcp_cmd::tests`, now migrated to this module).
     #[cfg(feature = "mcp")]
     #[tokio::test]
     async fn trace_tool_returns_paths() {

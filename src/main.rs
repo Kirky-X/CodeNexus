@@ -17,8 +17,8 @@ use codenexus::cli::{Cli, CliError, Command};
 use codenexus::kit::{build_kit, KitBootstrapConfig};
 
 // MCP server module (v0.3.0, T009) — sdforge-based MCP protocol exposure.
-// Gated by the `mcp` feature. Replaces the hand-written JSON-RPC in
-// `src/cli/mcp_cmd.rs` (which will be deleted in T016).
+// Gated by the `mcp` feature. Replaces the hand-written JSON-RPC that was
+// previously in `src/cli/mcp_cmd.rs` (deleted in T016).
 #[cfg(feature = "mcp")]
 mod mcp;
 

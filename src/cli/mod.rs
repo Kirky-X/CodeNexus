@@ -8,7 +8,8 @@
 //! setup/hook/mcp. Each subcommand has its own `*_cmd` module with
 //! a `run(kit, args) -> Result<()>` entry point; [`main.rs`] builds a unified
 //! [`Kit`] and dispatches to the matching handler based on the parsed
-//! [`Command`].
+//! [`Command`]. The `mcp` subcommand is handled by the binary's `mcp` module
+//! (sdforge-based, gated by the `mcp` feature) rather than a `*_cmd` module.
 //!
 //! # Exit codes (PRD §4.1.6)
 //!
@@ -50,7 +51,6 @@ pub mod index_cmd;
 #[cfg(feature = "lsp")]
 pub mod lsp_cmd;
 pub mod list_cmd;
-pub mod mcp_cmd;
 pub mod query_cmd;
 pub mod rename_cmd;
 #[cfg(feature = "api-review")]
@@ -72,7 +72,7 @@ mod dispatch_tests {
     use super::*;
     use crate::cli::args::{
         CleanArgs, ContextArgs, DetectChangesArgs, ExportArgs, HookArgs, ImpactArgs, ImportArgs,
-        IndexArgs, ListArgs, McpArgs, QueryArgs, RenameArgs, SearchArgs, SetupArgs, StatusArgs,
+        IndexArgs, ListArgs, QueryArgs, RenameArgs, SearchArgs, SetupArgs, StatusArgs,
         TraceArgs,
     };
     #[cfg(feature = "daemon")]
@@ -87,6 +87,8 @@ mod dispatch_tests {
     use crate::cli::args::CommunityArgs;
     #[cfg(feature = "cross-service")]
     use crate::cli::args::CrossServiceArgs;
+    #[cfg(feature = "mcp")]
+    use crate::cli::args::McpArgs;
     use crate::kit::{build_kit, Kit, KitBootstrapConfig, StorageKey};
     use clap::Parser;
 
@@ -119,7 +121,10 @@ mod dispatch_tests {
             Command::Rename(args) => rename_cmd::run(kit, &args),
             Command::Setup(args) => setup_cmd::run(&args),
             Command::Hook(args) => hook_cmd::run(kit, &args),
-            Command::Mcp(args) => mcp_cmd::run(kit, &args),
+            #[cfg(feature = "mcp")]
+            Command::Mcp(_) => Err(CliError::InvalidInput(
+                "MCP dispatch is handled by the binary, not the library".to_string(),
+            )),
             #[cfg(feature = "analysis")]
             Command::DeadCode(args) => dead_code_cmd::run(kit, &args),
             #[cfg(feature = "analysis")]
@@ -909,6 +914,7 @@ mod dispatch_tests {
         let _ = HookArgs {
             db: "./x.lbug".into(),
         };
+        #[cfg(feature = "mcp")]
         let _ = McpArgs {
             db: "./x.lbug".into(),
         };
