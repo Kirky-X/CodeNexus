@@ -188,8 +188,8 @@ fn mcp_error<E: std::error::Error + Send + Sync + 'static>(
 /// serializes the [`QueryOutput`] into the MCP response.
 #[cfg(feature = "mcp")]
 #[service_api(
-    name = "query",
-    version = "v1",
+    name = "codenexus",
+    version = "0.3.0",
     tool_name = "query",
     description = "Execute a Cypher query against the CodeNexus knowledge graph."
 )]
@@ -292,8 +292,8 @@ fn trace_edge_to_json(e: &TraceEdge) -> Value {
 /// from the MCP input and serializes the [`TraceOutput`] into the MCP response.
 #[cfg(feature = "mcp")]
 #[service_api(
-    name = "trace",
-    version = "v1",
+    name = "codenexus",
+    version = "0.3.0",
     tool_name = "trace",
     description = "Trace a symbol's call and/or data-flow paths."
 )]
@@ -368,8 +368,8 @@ fn impact_output(symbol: String, depth: u32, graph: codenexus::model::Graph) -> 
 /// node/edge counts for quick assessment.
 #[cfg(feature = "mcp")]
 #[service_api(
-    name = "impact",
-    version = "v1",
+    name = "codenexus",
+    version = "0.3.0",
     tool_name = "impact",
     description = "Analyze the blast radius (upstream callers) of changing a symbol."
 )]
@@ -424,8 +424,8 @@ fn search_result_to_json(r: &SearchResult) -> Value {
 /// structured name search (CONTAINS).
 #[cfg(feature = "mcp")]
 #[service_api(
-    name = "search",
-    version = "v1",
+    name = "codenexus",
+    version = "0.3.0",
     tool_name = "search",
     description = "Search for symbols by name or content (full-text or semantic)."
 )]
@@ -464,8 +464,8 @@ async fn search(text: String, semantic: bool, limit: u32) -> Result<SearchOutput
 /// version of existing code).
 #[cfg(feature = "mcp")]
 #[service_api(
-    name = "context",
-    version = "v1",
+    name = "codenexus",
+    version = "0.3.0",
     tool_name = "context",
     description = "Show a 360-degree view of a symbol (callers, callees, processes)."
 )]
