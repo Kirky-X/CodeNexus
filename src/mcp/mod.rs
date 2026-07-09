@@ -161,7 +161,11 @@ fn query_output(r: QueryResult) -> QueryOutput {
     }
 }
 
-/// Wraps an error as an `ApiError::Internal` with a timestamp-based `error_id`.
+/// Wraps an error as an `ApiError::Internal` with a unique `error_id`.
+///
+/// Uses a process-level `AtomicU64` counter to guarantee uniqueness without
+/// depending on the system clock (which may jump backwards via NTP or produce
+/// duplicate nanosecond timestamps).
 ///
 /// Used by MCP tool handlers to convert subsystem errors (`KitError`,
 /// `QueryError`, etc.) into the sdforge error type expected by the
@@ -171,14 +175,9 @@ fn mcp_error<E: std::error::Error + Send + Sync + 'static>(
     message: impl Into<String>,
     source: E,
 ) -> ApiError {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let error_id = format!(
-        "{:016x}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    );
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static ERROR_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let error_id = format!("err-{:016x}", ERROR_COUNTER.fetch_add(1, Ordering::Relaxed));
     ApiError::internal_with_source(message, error_id, source)
 }
 
@@ -624,6 +623,42 @@ mod tests {
         assert!(
             result.is_err(),
             "query handler must reject DELETE clause"
+        );
+    }
+
+    /// Verifies that `mcp_error` produces unique `error_id` values across
+    /// consecutive calls, using the process-level `AtomicU64` counter rather
+    /// than the system clock (which may jump backwards via NTP or produce
+    /// duplicate nanosecond timestamps).
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn mcp_error_id_is_unique() {
+        let err1 = mcp_error(
+            "test error 1",
+            std::io::Error::new(std::io::ErrorKind::Other, "boom 1"),
+        );
+        let err2 = mcp_error(
+            "test error 2",
+            std::io::Error::new(std::io::ErrorKind::Other, "boom 2"),
+        );
+
+        let id1 = match err1 {
+            ApiError::Internal { ref error_id, .. } => error_id.clone(),
+            _ => panic!("expected ApiError::Internal, got {err1:?}"),
+        };
+        let id2 = match err2 {
+            ApiError::Internal { ref error_id, .. } => error_id.clone(),
+            _ => panic!("expected ApiError::Internal, got {err2:?}"),
+        };
+
+        assert_ne!(id1, id2, "error_id must be unique across calls");
+        assert!(
+            id1.starts_with("err-"),
+            "error_id should have err- prefix, got: {id1}"
+        );
+        assert!(
+            id2.starts_with("err-"),
+            "error_id should have err- prefix, got: {id2}"
         );
     }
 
