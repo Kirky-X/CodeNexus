@@ -162,6 +162,14 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
 // Definition extractors
 // ---------------------------------------------------------------------------
 
+/// Returns true if `name` starts with an uppercase ASCII letter, following
+/// Go's visibility rule: uppercase = exported (public), lowercase = unexported
+/// (package-private). Used to set `is_exported` on Go nodes so the
+/// `CallResolver` can resolve cross-file calls via `lookup_exported`.
+fn is_exported_name(name: &str) -> bool {
+    name.chars().next().map_or(false, |c| c.is_ascii_uppercase())
+}
+
 fn extract_function(
     node: Node,
     source: &str,
@@ -177,13 +185,15 @@ fn extract_function(
         result,
     );
     let signature = node_text(node, source).map(signature_first_line).map(String::from);
+    let is_exported = is_exported_name(&name);
     let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Go)
         .project(ctx.project)
-        .is_global(true);
+        .is_global(true)
+        .is_exported(is_exported);
     if let Some(sig) = signature {
         builder = builder.signature(sig);
     }
@@ -210,13 +220,15 @@ fn extract_method(
         result,
     );
     let signature = node_text(node, source).map(signature_first_line).map(String::from);
+    let is_exported = is_exported_name(&name);
     let mut builder = ModelNode::builder(NodeLabel::Method, name, qn.clone())
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Go)
         .project(ctx.project)
-        .is_global(false);
+        .is_global(false)
+        .is_exported(is_exported);
     if let Some(parent) = &receiver_type {
         builder = builder.parent_qn(parent.clone());
     }
@@ -253,6 +265,7 @@ fn extract_type_spec(
         node.start_position().row as u32 + 1,
         result,
     );
+    let is_exported = is_exported_name(&name);
     let model_node = ModelNode::builder(label, name, qn)
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -260,6 +273,7 @@ fn extract_type_spec(
         .language(Language::Go)
         .project(ctx.project)
         .is_global(true)
+        .is_exported(is_exported)
         .build();
     add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
     result.push_node(model_node);
@@ -758,6 +772,43 @@ mod tests {
             "one caller_qn should contain receiver type B: {:?}",
             run_calls
         );
+    }
+
+    #[test]
+    fn exported_function_has_is_exported_true() {
+        // BUG-G2: Go exported symbols (uppercase first letter) must have
+        // is_exported=true so resolve_calls can find them via lookup_exported.
+        let result = extract("package main\nfunc Foo() {}\n");
+        let func = result.nodes.iter().find(|n| n.label == NodeLabel::Function).unwrap();
+        assert!(func.is_exported, "exported function Foo should have is_exported=true");
+    }
+
+    #[test]
+    fn unexported_function_has_is_exported_false() {
+        let result = extract("package main\nfunc bar() {}\n");
+        let func = result.nodes.iter().find(|n| n.label == NodeLabel::Function).unwrap();
+        assert!(!func.is_exported, "unexported function bar should have is_exported=false");
+    }
+
+    #[test]
+    fn exported_method_has_is_exported_true() {
+        let result = extract("package main\ntype T struct{}\nfunc (t T) Execute() {}\n");
+        let method = result.nodes.iter().find(|n| n.label == NodeLabel::Method).unwrap();
+        assert!(method.is_exported, "exported method Execute should have is_exported=true");
+    }
+
+    #[test]
+    fn unexported_method_has_is_exported_false() {
+        let result = extract("package main\ntype T struct{}\nfunc (t T) hidden() {}\n");
+        let method = result.nodes.iter().find(|n| n.label == NodeLabel::Method).unwrap();
+        assert!(!method.is_exported, "unexported method hidden should have is_exported=false");
+    }
+
+    #[test]
+    fn exported_type_has_is_exported_true() {
+        let result = extract("package main\ntype Command struct{}\n");
+        let typ = result.nodes.iter().find(|n| n.label == NodeLabel::Struct).unwrap();
+        assert!(typ.is_exported, "exported type Command should have is_exported=true");
     }
 
 }
