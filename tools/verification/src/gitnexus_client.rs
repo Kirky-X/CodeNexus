@@ -276,6 +276,23 @@ pub fn write_reference(name: &str, stats: &GitnexusStats) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Load a previously-written gitnexus reference from
+/// `tools/verification/results/<name>.gitnexus.json`. Used by the
+/// orchestrator's `--resume` path when a fresh `gitnexus cypher` fetch is
+/// unavailable (e.g. gitnexus DB version mismatch between the indexed DB
+/// and the installed binary). Returns an error if the file does not exist
+/// or is not valid JSON (Rule 12: fail loud — silently treating a missing
+/// reference as zero counts would produce a misleading PASS report).
+pub fn load_reference(name: &str) -> Result<GitnexusStats> {
+    let dir = Path::new("tools/verification/results");
+    let path = dir.join(format!("{name}.gitnexus.json"));
+    let bytes = std::fs::read(&path)
+        .with_context(|| format!("failed to read gitnexus reference {}", path.display()))?;
+    let stats: GitnexusStats = serde_json::from_slice(&bytes)
+        .with_context(|| format!("failed to parse gitnexus reference {}", path.display()))?;
+    Ok(stats)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

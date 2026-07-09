@@ -114,10 +114,32 @@ fn run_single_orchestrator(
     // 1. CodeNexus side: index + extract + write codenexus.json
     let codenexus_stats = codenexus_stats::run_single(repo, name, language, resume)?;
 
-    // 2. gitnexus side: fetch reference + write gitnexus.json
-    let gitnexus_stats = gitnexus_client::fetch_reference(name)?;
-    let gn_path = gitnexus_client::write_reference(name, &gitnexus_stats)?;
-    eprintln!("[ok] wrote {gn_path:?}");
+    // 2. gitnexus side: fetch reference + write gitnexus.json.
+    //    When --resume is set and a previously-written reference JSON exists,
+    //    load it directly. This bypasses `gitnexus cypher` subprocess calls,
+    //    which is necessary when the installed gitnexus binary cannot read
+    //    the indexed DB (e.g. storage version mismatch between the DB
+    //    producer and the binary in PATH). Falls back to a fresh fetch
+    //    when the JSON is absent so the default non-resume flow is unchanged.
+    let gitnexus_stats = if resume {
+        match gitnexus_client::load_reference(name) {
+            Ok(stats) => {
+                eprintln!("[resume] loaded gitnexus reference for `{name}` from disk");
+                stats
+            }
+            Err(e) => {
+                eprintln!("[resume] no usable gitnexus reference for `{name}` ({e}); fetching fresh");
+                let stats = gitnexus_client::fetch_reference(name)?;
+                let _ = gitnexus_client::write_reference(name, &stats)?;
+                stats
+            }
+        }
+    } else {
+        let stats = gitnexus_client::fetch_reference(name)?;
+        let gn_path = gitnexus_client::write_reference(name, &stats)?;
+        eprintln!("[ok] wrote {gn_path:?}");
+        stats
+    };
 
     // 3. Load type map
     let type_map = TypeMap::load(&PathBuf::from(TYPE_MAP_PATH))?;
