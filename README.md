@@ -38,6 +38,9 @@ CodeNexus 将源代码仓库索引为可查询的知识图谱。它使用 [tree-
 ## 安装
 
 ```bash
+# 从 crates.io 安装（默认 full 预设，含全部 8 语言 + 所有功能）
+cargo install codenexus
+
 # 从源码构建
 git clone https://github.com/Kirky-X/codenexus.git
 cd codenexus
@@ -45,6 +48,9 @@ cargo install --path .
 
 # 或直接编译
 cargo build --release
+
+# 仅构建 MCP 功能（不含全部语言）
+cargo build --release --features mcp
 ```
 
 ### Feature 开关
@@ -55,7 +61,7 @@ cargo build --release
 |---------|------|------|
 | `minimal` | — | 最小预设：仅 `lang-rust` |
 | `core` | — | 核心预设：`lang-c` + `lang-rust` + `lang-python` |
-| `full` | 启用 | 完整预设：`core` + Fortran/TypeScript/Go/Java/C++ + daemon/analysis/complexity/api-review/community/cross-service/lsp |
+| `full` | 启用 | 完整预设：`core` + Fortran/TypeScript/Go/Java/C++ + daemon/analysis/complexity/api-review/community/cross-service/lsp/mcp |
 | `lang-c` | — | C 语言解析器（tree-sitter-c） |
 | `lang-rust` | 启用 | Rust 语言解析器（tree-sitter-rust） |
 | `lang-fortran` | — | Fortran 语言解析器（tree-sitter-fortran） |
@@ -72,6 +78,7 @@ cargo build --release
 | `api-review` | 启用 | API 审查工具包（route-map/shape-check/api-impact/tool-map） |
 | `community` | 启用 | 社区检测（Louvain 模块度优化，依赖 petgraph） |
 | `cross-service` | 启用 | 跨服务调用链检测（HTTP 路由模式匹配） |
+| `mcp` | 启用 | MCP 服务器（sdforge + rmcp stdio 传输，替代手写 JSON-RPC） |
 
 ```bash
 # 最小构建（仅 Rust，不含 daemon/analysis）
@@ -160,7 +167,7 @@ codenexus clean myproject
 | `import` | 导入制品 → LadybugDB（可选 `--reindex` 增量补齐本地差异） |
 | `setup` | 自动检测已安装的智能体（Claude Code/Cursor/Codex）并写入 MCP 配置 |
 | `hook` | 输出 PreToolUse/PostToolUse JSON（exit 0，永不阻塞） |
-| `mcp` | stdio MCP 服务（JSON-RPC 2.0，协议 2024-11-05） |
+| `mcp` | sdforge-based stdio MCP 服务（`mcp` feature） |
 | `daemon` | 启动文件监视守护进程 |
 | `status` | 查看索引状态 |
 | `list` | 列出所有已索引项目 |
@@ -174,6 +181,28 @@ codenexus clean myproject
 | `api-tool-map` | 工具映射（MCP 工具清单，`api-review` feature） |
 | `community` | 社区检测（Louvain 模块度优化，`community` feature） |
 | `cross-service` | 跨服务调用链检测（HTTP 路由模式匹配，`cross-service` feature） |
+
+## MCP 集成
+
+CodeNexus v0.3.0 使用 [sdforge](https://crates.io/crates/sdforge) 提供 MCP（Model Context Protocol）服务器，通过 rmcp stdio 传输暴露 5 个工具：
+
+| 工具 | 说明 |
+|------|------|
+| `query` | 执行 Cypher 查询 |
+| `trace` | 追踪符号调用/数据流路径 |
+| `impact` | 分析符号变更影响半径（上游调用者子图） |
+| `search` | 按名称或内容搜索符号（结构化 / BM25 全文） |
+| `context` | 360° 符号视图（调用者/被调用者/所属流程） |
+
+```bash
+# 启动 MCP 服务（stdio）
+codenexus mcp [--db <DB_PATH>]
+
+# 自动检测智能体并写入 MCP 配置
+codenexus setup
+```
+
+`setup` 自动检测已安装的 Claude Code（`~/.claude/`）、Cursor（`~/.cursor/`）、Codex（`~/.codex/`），并写入对应的 MCP 配置文件，指向 `codenexus mcp`。使用 `--force` 可跳过确认提示覆盖已有配置。
 
 ## 复杂度分析（complexity）
 
@@ -242,6 +271,19 @@ codenexus complexity myproject --time-complexity-green "O(1)" --time-complexity-
 
 ## 架构
 
+### 三层源码结构
+
+| 层 | 入口 | 说明 |
+|----|------|------|
+| Rust SDK | `src/lib.rs` | 库 crate，暴露公共 API（模型/解析/存储/索引/查询/追踪/CLI 模块） |
+| CLI 二进制 | `src/main.rs` | 使用 lib 的命令行入口，dispatch 到 `cli::*_cmd::run` 处理器 |
+| MCP 服务器 | `src/mcp/mod.rs` | sdforge-based MCP 协议暴露，位于二进制内，由 `mcp` feature 门控 |
+
+> v0.3.0 起，MCP 服务器基于 sdforge 的 `#[service_api]` 宏 + rmcp stdio 传输，
+> 替代了此前 `src/cli/mcp_cmd.rs` 中的手写 JSON-RPC 实现（该文件已删除）。
+
+### 索引管线
+
 ```
 ┌─────────────────────────────────────────────┐
 │                   CLI (clap)                 │
@@ -305,7 +347,7 @@ cargo bench
 
 ## 路线图
 
-CodeNexus 当前版本 v0.2.1。按当前优先级排序的规划工作：
+CodeNexus 当前版本 v0.3.0。按当前优先级排序的规划工作：
 
 - [x] v0.1.0 — 多语言索引（C/Rust/Fortran/Python/TypeScript）、图模式（44 种节点类型 + 24 种边类型）、`query`/`trace`/`impact`/`context`/`search`、增量索引、RAM 优先模式、MCP 服务、团队 `export`/`import`、守护进程模式、置信度分层、歧义消解
 - [x] v0.1.x — 稳定性与性能加固：增量重索引覆盖、大仓库内存调优、更多语言专属边提取
@@ -313,6 +355,7 @@ CodeNexus 当前版本 v0.2.1。按当前优先级排序的规划工作：
 - [x] v0.2.0 — 扩展语言覆盖（Go、Java、C++），由新的 `lang-*` feature 控制
 - [x] v0.2.0 — 分析工具包：死代码检测、架构概览、API 审查（route-map/shape-check/api-impact/tool-map）、社区检测、跨服务链接检测
 - [x] v0.2.1 — AST 复杂度分析：圈/认知复杂度、嵌套深度、函数长度，绿/黄/红/致命四级告警
+- [x] v0.3.0 — sdforge-based MCP 服务器：`#[service_api]` 宏 + rmcp stdio 传输，替代手写 JSON-RPC；5 个工具（query/trace/impact/search/context）
 - [ ] v0.3.0 — 跨语言数据流端到端追踪（当前已记录边；多跳污点路径需专用查询路径）
 - [ ] v0.3.0 — 向量嵌入默认开启语义搜索（待 ONNX 模型大小与启动开销可接受后）
 - [ ] 未来 — 基于查询门面的 Web UI / 图可视化
