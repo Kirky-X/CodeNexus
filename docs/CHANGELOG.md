@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _No unreleased changes yet._
 
+## [0.3.1] - 2026-07-10
+
+### Fixed
+
+- **fix(mcp): rename search `semantic`→`fulltext` + add cypher validation in `query`** — the MCP `search` tool's `semantic` parameter was renamed to `fulltext` to accurately reflect its behavior (BM25 full-text search vs structured name search). The `query` MCP tool now validates input via `validate_cypher_subset` (ADR-021) before execution, rejecting destructive Cypher clauses.
+- **fix(mcp): use `AtomicU64` counter for unique `error_id`** — `mcp_error` now generates unique `error_id` values via a process-level `AtomicU64` counter instead of timestamps, guaranteeing uniqueness under concurrent calls.
+- **fix(test): implement `Drop` for `McpClient`** — the test helper `McpClient` in `tests/mcp_integration.rs` now implements `Drop` to kill the MCP subprocess on drop, preventing orphaned processes from accumulating across test runs.
+
+### Changed
+
+- **perf(resolve): add `fill_reachable_from`** — `IncludesGraph` gains a `fill_reachable_from` method that writes into a caller-provided `HashSet` buffer, avoiding per-call allocation when the caller already has a reusable set.
+- **ci(release): restructure release workflow** — `.github/workflows/release.yml` now has a `verify` job (build + test) that gates all downstream release work, prerelease detection (`-rc`/`-beta`/`-alpha` suffixes), and conditional `crates.io` publication (skipped when `CARGO_REGISTRY_TOKEN` is not set).
+
 ## [0.3.0] - 2026-07-10
 
 ### Added
@@ -95,6 +108,7 @@ Initial public release. CodeNexus indexes source code into a queryable knowledge
 - **Database corruption detection** — corrupt LadybugDB files are detected at startup and reported with a distinct exit code (4) instead of being loaded into a half-valid state.
 - **`.env` files ignored by default** in `.gitignore`, with an explicit `!.env.example` allow-list so the template is tracked but real secrets never are.
 
-[Unreleased]: https://github.com/Kirky-X/codenexus/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Kirky-X/codenexus/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.1
 [0.3.0]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.0
 [0.1.0]: https://github.com/Kirky-X/codenexus/releases/tag/v0.1.0
