@@ -1,34 +1,66 @@
-# Release workflow — builds cross-platform binaries and publishes a GitHub
-# Release when a `v*` tag is pushed. Also publishes to crates.io.
+# Release workflow — verifies, builds cross-platform binaries, publishes a
+# GitHub Release with binary assets, and publishes to crates.io.
 #
-# Trigger:  git tag v0.1.0 && git push origin v0.1.0
+# Trigger:  git tag v0.3.1 && git push origin v0.3.1
+# Manual:   workflow_dispatch from GitHub Actions UI
 #
 # Produces:
 #   - codenexus-x86_64-unknown-linux-gnu.tar.gz
 #   - codenexus-aarch64-apple-darwin.tar.gz
 #   - codenexus-x86_64-apple-darwin.tar.gz
 #   - codenexus-x86_64-pc-windows-msvc.zip
-#   - crates.io publication (codenexus 0.1.0)
+#   - GitHub Release with auto-generated release notes + binary assets
+#   - crates.io publication (codenexus <version>)
 
 name: Release
 
 on:
   push:
     tags:
-      - "v*"
+      - "v*.*.*"
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   # --------------------------------------------------------------------------
-  # Job 1: Build cross-platform binaries
+  # Job 1: Verify — build + test before any release work
+  # --------------------------------------------------------------------------
+  verify:
+    name: Verify Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Verify build (full features)
+        run: cargo build --release --features full
+
+      - name: Verify tests pass
+        run: cargo test --features full --no-fail-fast
+
+  # --------------------------------------------------------------------------
+  # Job 2: Build cross-platform binaries
   # --------------------------------------------------------------------------
   build:
     name: Build ${{ matrix.target }}
+    needs: verify
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -63,8 +95,7 @@ jobs:
           sudo apt-get install -y libssl-dev pkg-config
 
       - name: Build release binary
-        run: |
-          cargo build --release --target ${{ matrix.target }} --features full
+        run: cargo build --release --target ${{ matrix.target }} --features full
 
       - name: Package (Unix)
         if: matrix.archive == 'tar.gz'
@@ -86,13 +117,13 @@ jobs:
           path: |
             codenexus-${{ matrix.target }}.tar.gz
             codenexus-${{ matrix.target }}.zip
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   # --------------------------------------------------------------------------
-  # Job 2: Create GitHub Release and upload assets
+  # Job 3: Create GitHub Release with binary assets
   # --------------------------------------------------------------------------
-  release:
-    name: Publish GitHub Release
+  github-release:
+    name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
 
@@ -119,29 +150,39 @@ jobs:
             artifacts/*.tar.gz
             artifacts/*.zip
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # --------------------------------------------------------------------------
-  # Job 3: Publish to crates.io
+  # Job 4: Publish to crates.io (conditional on token)
   # --------------------------------------------------------------------------
   publish-crates:
     name: Publish to crates.io
-    needs: build
+    needs: github-release
     runs-on: ubuntu-latest
+    env:
+      HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
 
     steps:
       - name: Checkout
+        if: env.HAS_TOKEN == 'true'
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
+        if: env.HAS_TOKEN == 'true'
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install dependencies
+        if: env.HAS_TOKEN == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev pkg-config
 
       - name: Publish to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} --allow-dirty
+        if: env.HAS_TOKEN == 'true'
+        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Skip (no token)
+        if: env.HAS_TOKEN != 'true'
+        run: echo "CARGO_REGISTRY_TOKEN not set — skipping crates.io publication"
