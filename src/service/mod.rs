@@ -12,20 +12,33 @@
 //! because sdforge's `#[service_api]` macro generates standalone functions
 //! that cannot accept injected state.
 
+pub mod architecture;
+pub mod api_impact;
 pub mod clean;
+pub mod community;
+pub mod complexity;
 pub mod context;
+pub mod cross_service;
+pub mod daemon;
+pub mod dead_code;
 pub mod detect_changes;
 pub mod error;
 pub mod export;
+pub mod hook;
 pub mod impact;
 pub mod import;
 pub mod index;
 pub mod list;
+pub mod lsp;
 pub mod query;
 pub mod rename;
+pub mod route_map;
 pub mod runtime;
 pub mod search;
+pub mod setup;
+pub mod shape_check;
 pub mod status;
+pub mod tool_map;
 pub mod trace;
 
 pub use runtime::{init_kit, kit};

@@ -1,0 +1,126 @@
+// Copyright (c) 2026 Kirky.X. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+//! `shape-check` service: validate API endpoint schema consistency.
+
+use serde::Serialize;
+
+#[cfg(feature = "api-review")]
+use crate::analysis::api_review::{ApiReviewer, ShapeViolation};
+#[cfg(feature = "api-review")]
+use crate::kit::{Kit, StorageKey};
+#[cfg(all(feature = "cli", feature = "api-review"))]
+use crate::service::error::kit_not_initialized;
+#[cfg(all(feature = "cli", feature = "api-review"))]
+use crate::service::runtime::kit;
+use crate::cli::error::CliError;
+
+#[cfg(all(feature = "cli", feature = "api-review"))]
+use sdforge::prelude::ApiError;
+#[cfg(all(feature = "cli", feature = "api-review"))]
+use sdforge::service_api;
+
+/// JSON-serializable shape-check output.
+#[cfg(feature = "api-review")]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ShapeCheckOutput {
+    pub project: String,
+    pub violations: Vec<ShapeViolation>,
+}
+
+/// Core logic — resolves storage, runs shape_check, prints JSON.
+#[cfg(feature = "api-review")]
+fn shape_check_core(kit: &Kit, project: &str) -> Result<(), CliError> {
+    let storage = kit.require::<StorageKey>()?;
+    let reviewer = ApiReviewer::new(&*storage);
+    let violations: Vec<ShapeViolation> = reviewer.shape_check(project)?;
+    let output = ShapeCheckOutput {
+        project: project.to_string(),
+        violations,
+    };
+    let json = serde_json::to_string(&output)?;
+    println!("{json}");
+    Ok(())
+}
+
+/// Maps `CliError` to `ApiError` at the service boundary.
+#[cfg(all(feature = "cli", feature = "api-review"))]
+fn to_api_error(e: CliError) -> ApiError {
+    match e {
+        CliError::InvalidInput(msg) => ApiError::InvalidInput {
+            message: msg,
+            field: None,
+            value: None,
+        },
+        other => ApiError::internal_error(format!("{other}"), "shape_check_error"),
+    }
+}
+
+/// CLI wrapper — prints result to stdout as JSON.
+#[cfg(all(feature = "cli", feature = "api-review"))]
+#[service_api(
+    name = "codenexus",
+    version = "0.3.2",
+    tool_name = "shape_check",
+    description = "Validate API endpoint schema consistency.",
+    cli = true,
+)]
+async fn shape_check(project: String) -> Result<(), ApiError> {
+    let kit = kit().ok_or_else(kit_not_initialized)?;
+    shape_check_core(&kit, &project).map_err(to_api_error)?;
+    Ok(())
+}
+
+#[cfg(all(test, feature = "cli", feature = "api-review"))]
+mod tests {
+    use super::*;
+    use crate::kit::{build_kit, KitBootstrapConfig, StorageKey};
+    use tempfile::TempDir;
+
+    fn fresh_db_path() -> std::path::PathBuf {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("svc_shape_check_testdb");
+        std::mem::forget(dir);
+        path
+    }
+
+    fn build_kit_for_db(db: &std::path::Path) -> Kit {
+        let config = KitBootstrapConfig::new(db.to_path_buf());
+        build_kit(&config).expect("build_kit")
+    }
+
+    #[test]
+    fn core_succeeds_on_empty_db() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let result = shape_check_core(&kit, "demo");
+        assert!(result.is_ok(), "core should succeed: {:?}", result.err());
+    }
+
+    #[test]
+    fn core_with_endpoint() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageKey>().expect("require_storage");
+        storage.execute("CREATE (:Endpoint {id: 'e1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', expectedSchema: '{\"name\":\"string\"}', parentQn: ''});").expect("create endpoint");
+        let result = shape_check_core(&kit, "demo");
+        assert!(result.is_ok(), "core should succeed: {:?}", result.err());
+    }
+
+    #[test]
+    fn output_serializes_to_json() {
+        let out = ShapeCheckOutput {
+            project: "demo".into(),
+            violations: vec![ShapeViolation {
+                endpoint: "/api/users".into(),
+                expected_schema: r#"{"name":"string"}"#.into(),
+                actual_schema: r#"{"name":"number"}"#.into(),
+                severity: "mismatch".into(),
+            }],
+        };
+        let json = serde_json::to_string(&out).unwrap();
+        assert!(json.contains("\"project\":\"demo\""));
+        assert!(json.contains("\"violations\""));
+        assert!(json.contains("\"mismatch\""));
+    }
+}
