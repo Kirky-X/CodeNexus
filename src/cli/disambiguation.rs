@@ -651,7 +651,7 @@ mod tests {
         }];
         let err = fail_loud("x", candidates);
         assert!(matches!(err, CliError::InvalidInput(_)));
-        assert_eq!(err.exit_code(), 1);
+        assert_eq!(err.exit_code(), 2);
     }
 
     // --- AmbiguousOutput serialization ---

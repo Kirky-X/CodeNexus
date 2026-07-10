@@ -356,7 +356,7 @@ mod tests {
         seed_ambiguous_symbols(&kit);
         let args = make_args("handle", 3, db.to_str().unwrap());
         let err = run(&kit, &args).expect_err("ambiguous symbol should fail");
-        assert_eq!(err.exit_code(), 1, "ambiguous → InvalidInput → exit 1");
+        assert_eq!(err.exit_code(), 2, "ambiguous → InvalidInput → exit 2");
     }
 
     #[test]

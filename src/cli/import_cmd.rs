@@ -339,7 +339,7 @@ mod tests {
             .expect("build_kit");
         let args = make_args("/nonexistent/artifact.zst", "/tmp/out.lbug");
         let err = run(&kit, &args).expect_err("missing artifact should error");
-        assert_eq!(err.exit_code(), 1);
+        assert_eq!(err.exit_code(), 2);
         match err {
             CliError::InvalidInput(msg) => assert!(msg.contains("does not exist")),
             other => panic!("expected InvalidInput, got {other:?}"),
@@ -356,7 +356,7 @@ mod tests {
             .expect("build_kit");
         let args = make_args(bad_artifact.to_str().unwrap(), "/tmp/out.lbug");
         let err = run(&kit, &args).expect_err("bad magic should error");
-        assert_eq!(err.exit_code(), 1);
+        assert_eq!(err.exit_code(), 2);
         match err {
             CliError::InvalidInput(msg) => assert!(msg.contains("magic")),
             other => panic!("expected InvalidInput, got {other:?}"),
@@ -374,7 +374,7 @@ mod tests {
             .expect("build_kit");
         let args = make_args(tiny.to_str().unwrap(), "/tmp/out.lbug");
         let err = run(&kit, &args).expect_err("truncated header should error");
-        assert_eq!(err.exit_code(), 1);
+        assert_eq!(err.exit_code(), 2);
     }
 
     #[test]
@@ -403,7 +403,7 @@ mod tests {
             .expect("build_kit");
         let args = make_args(artifact.to_str().unwrap(), "/tmp/out.lbug");
         let err = run(&kit, &args).expect_err("version mismatch should error");
-        assert_eq!(err.exit_code(), 1);
+        assert_eq!(err.exit_code(), 2);
         match err {
             CliError::InvalidInput(msg) => assert!(msg.contains("version")),
             other => panic!("expected InvalidInput, got {other:?}"),
@@ -429,7 +429,7 @@ mod tests {
             name: Some("demo".into()),
         };
         let err = run(&kit, &args).expect_err("--reindex without --path should error");
-        assert_eq!(err.exit_code(), 1);
+        assert_eq!(err.exit_code(), 2);
         match err {
             CliError::InvalidInput(msg) => assert!(msg.contains("--path")),
             other => panic!("expected InvalidInput, got {other:?}"),
@@ -455,7 +455,7 @@ mod tests {
             name: None,
         };
         let err = run(&kit, &args).expect_err("--reindex without --name should error");
-        assert_eq!(err.exit_code(), 1);
+        assert_eq!(err.exit_code(), 2);
         match err {
             CliError::InvalidInput(msg) => assert!(msg.contains("--name")),
             other => panic!("expected InvalidInput, got {other:?}"),
@@ -528,7 +528,7 @@ mod tests {
         // Feed garbage that isn't a valid zstd frame → zstd exits non-zero.
         let result = zstd_decompress(b"this is not zstd data");
         let err = result.expect_err("garbage input should error");
-        assert_eq!(err.exit_code(), 1, "InvalidInput → exit 1");
+        assert_eq!(err.exit_code(), 2, "InvalidInput → exit 2");
         match err {
             CliError::InvalidInput(msg) => assert!(msg.contains("zstd decompression failed")),
             other => panic!("expected InvalidInput, got {other:?}"),
@@ -566,7 +566,7 @@ mod tests {
             .expect("build_kit");
         let args = make_args(artifact.to_str().unwrap(), "/tmp/out.lbug");
         let err = run(&kit, &args).expect_err("truncated manifest should error");
-        assert_eq!(err.exit_code(), 1);
+        assert_eq!(err.exit_code(), 2);
         match err {
             CliError::InvalidInput(msg) => assert!(msg.contains("truncated")),
             other => panic!("expected InvalidInput, got {other:?}"),
@@ -592,7 +592,7 @@ mod tests {
         let args = make_args(artifact.to_str().unwrap(), "/tmp/out.lbug");
         let err = run(&kit, &args).expect_err("malformed manifest should error");
         // serde_json deserialization failure → CliError::Json → exit 3.
-        assert_eq!(err.exit_code(), 3, "Json error → exit 3");
+        assert_eq!(err.exit_code(), 1, "Json error → exit 1");
     }
 
     // --- run() with unwritable db path returns Io error ---

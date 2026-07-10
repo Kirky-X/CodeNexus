@@ -831,7 +831,7 @@ mod tests {
         let kit = build_kit_for_db(db.to_str().unwrap());
         let err = rename_core(&kit, "foo", "1bad", None, false)
             .expect_err("invalid name should error");
-        assert_eq!(err.exit_code(), 1, "InvalidInput → exit 1");
+        assert_eq!(err.exit_code(), 2, "InvalidInput → exit 2");
     }
 
     #[test]
@@ -840,7 +840,7 @@ mod tests {
         let kit = build_kit_for_db(db.to_str().unwrap());
         let err = rename_core(&kit, "foo", "bar", None, true)
             .expect_err("apply without path should error");
-        assert_eq!(err.exit_code(), 1, "InvalidInput → exit 1");
+        assert_eq!(err.exit_code(), 2, "InvalidInput → exit 2");
     }
 
     #[test]

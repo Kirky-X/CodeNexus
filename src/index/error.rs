@@ -14,7 +14,7 @@
 //! | `DatabaseCorrupt`  | 4         | LadybugDB files are corrupt.             |
 //! | `Discover`         | 1         | File discovery failed.                   |
 //! | `Parse`            | —         | Parse failure (skip file, continue).     |
-//! | `Io`               | 3         | IO error (memory/disk).                  |
+//! | `Io`               | 1         | IO error (memory/disk).                  |
 
 use thiserror::Error;
 
@@ -73,7 +73,7 @@ impl IndexError {
             IndexError::Storage(_) => 2,
             IndexError::Discover(_) => 1,
             IndexError::Parse(_) => 0,
-            IndexError::Io(_) => 3,
+            IndexError::Io(_) => 1,
         }
     }
 }
@@ -231,9 +231,9 @@ mod tests {
     }
 
     #[test]
-    fn exit_code_io_is_3() {
+    fn exit_code_io_is_1() {
         let err: IndexError = std::io::Error::other("x").into();
-        assert_eq!(err.exit_code(), 3);
+        assert_eq!(err.exit_code(), 1);
     }
 
     // --- Debug ---

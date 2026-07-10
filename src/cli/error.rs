@@ -1,22 +1,22 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! CLI error types with PRD §4.1.6 exit-code mapping.
+//! CLI error types with exit-code mapping for the unified sdforge CLI.
 //!
 //! [`CliError`] wraps the underlying subsystem errors ([`IndexError`],
 //! [`QueryError`], [`TraceError`], [`StorageError`]) and surfaces a uniform
 //! [`exit_code`](CliError::exit_code) so `main.rs` can `std::process::exit`
 //! with the correct status.
 //!
-//! # Exit codes (PRD §4.1.6)
+//! # Exit codes (v0.3.2 unified CLI)
 //!
-//! | Code | Meaning                | Source                              |
-//! |------|------------------------|-------------------------------------|
-//! | 0    | success                | —                                   |
-//! | 1    | input error            | path not found, bad args            |
-//! | 2    | database locked / IO   | storage error, query error          |
-//! | 3    | system error           | IO error (memory/disk)              |
-//! | 4    | database corrupt       | corrupt database                    |
+//! | Code | Meaning                | Variants                              |
+//! |------|------------------------|---------------------------------------|
+//! | 0    | success                | —                                     |
+//! | 1    | internal/system error  | Internal, Io, Kit, Json, Daemon       |
+//! | 2    | client error           | InvalidInput, ProjectNotFound, Query, Trace, Storage |
+//! | 3    | (reserved)             | —                                     |
+//! | 4    | not found / corrupt    | NotFound, Index(corrupt), Kit(corrupt)|
 
 use thiserror::Error;
 use tracing::error;
@@ -70,47 +70,52 @@ pub enum CliError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
+    /// A resource was not found (symbol, project, file, etc.).
+    #[error("not found: {0}")]
+    NotFound(String),
+
+    /// An internal/system error (unexpected failure, not user-caused).
+    #[error("internal error: {0}")]
+    Internal(String),
+
     /// A project was not found in the database.
     #[error("project not found: {0}")]
     ProjectNotFound(String),
 
     /// A Kit registry error (missing capability, build failure, etc.).
     ///
-    /// Maps to exit code 3 (system error) — Kit failures are programming /
-    /// bootstrap bugs, not user input or database issues.
+    /// Maps to exit code 1 (system error), or 4 if the underlying cause is
+    /// database corruption. Kit failures are programming / bootstrap bugs,
+    /// not user input or database issues.
     #[error("kit error: {0}")]
     Kit(#[from] KitError),
 }
 
 impl CliError {
-    /// Returns the process exit code the CLI should use for this error,
-    /// following PRD §4.1.6.
+    /// Returns the process exit code the CLI should use for this error.
     #[must_use]
     pub fn exit_code(&self) -> i32 {
         let code = match self {
             // Index errors carry their own exit-code mapping.
             CliError::Index(e) => e.exit_code(),
-            // Input validation failures → exit 1.
-            CliError::InvalidInput(_) => 1,
-            // Missing project → input error → exit 1.
-            CliError::ProjectNotFound(_) => 1,
-            // IO errors (disk/memory) → exit 3.
-            CliError::Io(_) => 3,
-            // JSON serialization is a system error → exit 3.
-            CliError::Json(_) => 3,
-            // Query/Trace/Storage errors are database-side → exit 2 by default.
+            // Input validation failures → exit 2.
+            CliError::InvalidInput(_) => 2,
+            // Missing project → input error → exit 2.
+            CliError::ProjectNotFound(_) => 2,
+            // Resource not found → exit 4.
+            CliError::NotFound(_) => 4,
+            // Internal/system errors → exit 1.
+            CliError::Internal(_) => 1,
+            CliError::Io(_) => 1,
+            CliError::Json(_) => 1,
+            // Query/Trace/Storage errors are database-side → exit 2.
             CliError::Query(_) => 2,
             CliError::Trace(_) => 2,
             CliError::Storage(_) => 2,
-            // Daemon errors (notify watcher / IO) are system errors → exit 3.
+            // Daemon errors (notify watcher / IO) are system errors → exit 1.
             #[cfg(feature = "daemon")]
-            CliError::Daemon(_) => 3,
-            // Kit errors (missing capability, build failure) → exit 3 by
-            // default, but if the underlying source is a database-corruption
-            // error (StorageError::Corrupt or IndexError::DatabaseCorrupt),
-            // surface exit 4 so `codenexus index` on a corrupt DB returns the
-            // PRD §4.1.6 corrupt-database exit code even when build_kit
-            // fails before the index command runs.
+            CliError::Daemon(_) => 1,
+            // Kit errors → exit 1 (system error), or 4 if corrupt.
             CliError::Kit(e) => kit_exit_code(e),
         };
         error!(
@@ -126,16 +131,15 @@ impl CliError {
 /// Resolves the exit code for a [`CliError::Kit`] by walking the error
 /// source chain.
 ///
-/// `build_kit` runs before any CLI command (Task 2.14); when the database is
-/// corrupt, `StorageModuleBuilder::build` fails and the error is wrapped as
-/// `KitError::BuildFailed { source: Box<StorageError::Corrupt> }`. The
-/// default `Kit → exit 3` mapping would mask the corruption, so this helper
-/// traverses `Error::source()` looking for:
+/// `build_kit` runs before any CLI command; when the database is corrupt,
+/// `StorageModuleBuilder::build` fails and the error is wrapped as
+/// `KitError::BuildFailed { source: Box<StorageError::Corrupt> }`. This
+/// helper traverses `Error::source()` looking for:
 ///
 /// - [`IndexError::DatabaseCorrupt`] → exit 4
 /// - [`StorageError::Corrupt`] → exit 4
 ///
-/// If neither is found, falls back to exit 3 (system error).
+/// Falls back to exit 1 (system error) if neither is found.
 fn kit_exit_code(e: &KitError) -> i32 {
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(e);
     while let Some(err) = current {
@@ -151,7 +155,32 @@ fn kit_exit_code(e: &KitError) -> i32 {
         }
         current = err.source();
     }
-    3
+    1
+}
+
+/// Converts an [`ApiError`] (from sdforge) into a [`CliError`].
+///
+/// Mapping (design.md §3.1):
+/// - `InvalidInput` → `CliError::InvalidInput` (exit 2)
+/// - `Internal` → `CliError::Internal` (exit 1), prints error_id to stderr
+/// - `NotFound` → `CliError::NotFound` (exit 4)
+/// - All other variants → `CliError::Internal` (exit 1)
+#[cfg(any(feature = "cli", feature = "mcp"))]
+impl From<sdforge::prelude::ApiError> for CliError {
+    fn from(e: sdforge::prelude::ApiError) -> Self {
+        use sdforge::prelude::ApiError;
+        match e {
+            ApiError::InvalidInput { message, .. } => CliError::InvalidInput(message),
+            ApiError::Internal {
+                message, error_id, ..
+            } => {
+                eprintln!("[error_id: {error_id}] {message}");
+                CliError::Internal(message)
+            }
+            ApiError::NotFound { resource, .. } => CliError::NotFound(resource),
+            other => CliError::Internal(format!("Unexpected error: {other}")),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -257,34 +286,46 @@ mod tests {
     }
 
     #[test]
-    fn exit_code_index_io_is_3() {
+    fn exit_code_index_io_is_1() {
         let err: CliError = IndexError::Io(std::io::Error::other("x")).into();
-        assert_eq!(err.exit_code(), 3);
+        assert_eq!(err.exit_code(), 1);
     }
 
     #[test]
-    fn exit_code_invalid_input_is_1() {
+    fn exit_code_invalid_input_is_2() {
         let err = CliError::InvalidInput("x".to_string());
-        assert_eq!(err.exit_code(), 1);
+        assert_eq!(err.exit_code(), 2);
     }
 
     #[test]
-    fn exit_code_project_not_found_is_1() {
+    fn exit_code_project_not_found_is_2() {
         let err = CliError::ProjectNotFound("x".to_string());
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_internal_is_1() {
+        let err = CliError::Internal("unexpected failure".to_string());
         assert_eq!(err.exit_code(), 1);
     }
 
     #[test]
-    fn exit_code_io_is_3() {
-        let err = CliError::Io(std::io::Error::other("x"));
-        assert_eq!(err.exit_code(), 3);
+    fn exit_code_not_found_is_4() {
+        let err = CliError::NotFound("symbol foo".to_string());
+        assert_eq!(err.exit_code(), 4);
     }
 
     #[test]
-    fn exit_code_json_is_3() {
+    fn exit_code_io_is_1() {
+        let err = CliError::Io(std::io::Error::other("x"));
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    #[test]
+    fn exit_code_json_is_1() {
         let json_err = serde_json::from_str::<serde_json::Value>("bad").unwrap_err();
         let err: CliError = json_err.into();
-        assert_eq!(err.exit_code(), 3);
+        assert_eq!(err.exit_code(), 1);
     }
 
     #[test]
@@ -307,9 +348,9 @@ mod tests {
 
     #[test]
     #[cfg(feature = "daemon")]
-    fn exit_code_daemon_is_3() {
+    fn exit_code_daemon_is_1() {
         let err: CliError = DaemonError::Io(std::io::Error::other("x")).into();
-        assert_eq!(err.exit_code(), 3, "daemon error → exit 3 (system error)");
+        assert_eq!(err.exit_code(), 1, "daemon error → exit 1 (system error)");
     }
 
     // --- From conversions ---
@@ -433,7 +474,7 @@ mod tests {
 
         let captured = capture_tracing(|| {
             let code = err.exit_code();
-            assert_eq!(code, 1);
+            assert_eq!(code, 2);
         });
 
         assert!(
@@ -506,22 +547,22 @@ mod tests {
     }
 
     /// `KitError::MissingCapability` (no source chain) falls back to the
-    /// default Kit exit code 3 (system error).
+    /// default Kit exit code 1 (system error).
     #[test]
-    fn exit_code_kit_missing_capability_is_3() {
+    fn exit_code_kit_missing_capability_is_1() {
         let kit_err = KitError::MissingCapability { key: "storage" };
         let err: CliError = kit_err.into();
         assert_eq!(
             err.exit_code(),
-            3,
-            "Kit(MissingCapability) → exit 3 (default system error)"
+            1,
+            "Kit(MissingCapability) → exit 1 (default system error)"
         );
     }
 
     /// `KitError::BuildFailed` wrapping a non-corruption error (e.g. plain
-    /// `std::io::Error`) must fall back to exit code 3, not 4.
+    /// `std::io::Error`) must fall back to exit code 1, not 4.
     #[test]
-    fn exit_code_kit_build_failed_with_other_error_is_3() {
+    fn exit_code_kit_build_failed_with_other_error_is_1() {
         let kit_err = KitError::BuildFailed {
             module: "parser",
             source: Box::new(std::io::Error::other("config missing")),
@@ -529,8 +570,50 @@ mod tests {
         let err: CliError = kit_err.into();
         assert_eq!(
             err.exit_code(),
-            3,
-            "Kit(BuildFailed{{io::Error}}) → exit 3 (default system error)"
+            1,
+            "Kit(BuildFailed{{io::Error}}) → exit 1 (default system error)"
         );
+    }
+
+    // --- From<ApiError> conversion (design.md §3.1) ---
+
+    #[test]
+    fn from_api_error_invalid_input_maps_to_cli_invalid_input() {
+        let api_err = sdforge::prelude::ApiError::invalid_input(
+            "bad cypher",
+            Some("query".to_string()),
+            None,
+        );
+        let cli_err: CliError = api_err.into();
+        assert!(matches!(cli_err, CliError::InvalidInput(_)));
+        assert_eq!(cli_err.exit_code(), 2);
+    }
+
+    #[test]
+    fn from_api_error_internal_maps_to_cli_internal() {
+        let api_err =
+            sdforge::prelude::ApiError::internal_error("boom", "err-deadbeef");
+        let cli_err: CliError = api_err.into();
+        assert!(matches!(cli_err, CliError::Internal(_)));
+        assert_eq!(cli_err.exit_code(), 1);
+    }
+
+    #[test]
+    fn from_api_error_not_found_maps_to_cli_not_found() {
+        let api_err = sdforge::prelude::ApiError::not_found(
+            "symbol",
+            Some("foo".to_string()),
+        );
+        let cli_err: CliError = api_err.into();
+        assert!(matches!(cli_err, CliError::NotFound(_)));
+        assert_eq!(cli_err.exit_code(), 4);
+    }
+
+    #[test]
+    fn from_api_error_other_variant_maps_to_cli_internal() {
+        let api_err = sdforge::prelude::ApiError::authentication_failed("no token");
+        let cli_err: CliError = api_err.into();
+        assert!(matches!(cli_err, CliError::Internal(_)));
+        assert_eq!(cli_err.exit_code(), 1);
     }
 }

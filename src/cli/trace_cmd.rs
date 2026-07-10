@@ -336,13 +336,13 @@ mod tests {
     // --- run() error cases ---
 
     #[test]
-    fn run_trace_unknown_type_returns_exit_code_1() {
+    fn run_trace_unknown_type_returns_exit_code_2() {
         let db = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         seed_call_graph(&kit);
         let args = make_args("a", "bogus", 3, db.to_str().unwrap());
         let err = run(&kit, &args).expect_err("unknown type should error");
-        assert_eq!(err.exit_code(), 1, "invalid input → exit 1");
+        assert_eq!(err.exit_code(), 2, "invalid input → exit 2");
     }
 
     #[test]
@@ -547,7 +547,7 @@ mod tests {
         seed_ambiguous_symbols(&kit);
         let args = make_args("handle", "calls", 3, db.to_str().unwrap());
         let err = run(&kit, &args).expect_err("ambiguous symbol should fail");
-        assert_eq!(err.exit_code(), 1, "ambiguous → InvalidInput → exit 1");
+        assert_eq!(err.exit_code(), 2, "ambiguous → InvalidInput → exit 2");
     }
 
     #[test]

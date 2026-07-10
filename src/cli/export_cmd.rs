@@ -392,7 +392,7 @@ mod tests {
             .expect("build_kit");
         let args = make_args("/nonexistent/path/xyz.lbug", "/tmp/out.zst");
         let err = run(&kit, &args).expect_err("missing db should error");
-        assert_eq!(err.exit_code(), 1, "InvalidInput → exit 1");
+        assert_eq!(err.exit_code(), 2, "InvalidInput → exit 2");
         match err {
             CliError::InvalidInput(msg) => {
                 assert!(msg.contains("does not exist"), "got: {msg}");

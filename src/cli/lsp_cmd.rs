@@ -383,7 +383,7 @@ mod tests {
         let err = LspError::ServerStart("binary not found".to_string());
         let cli_err = lsp_error_to_cli(err);
         assert!(matches!(cli_err, CliError::InvalidInput(_)));
-        assert_eq!(cli_err.exit_code(), 1);
+        assert_eq!(cli_err.exit_code(), 2);
     }
 
     #[test]

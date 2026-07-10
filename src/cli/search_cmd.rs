@@ -399,7 +399,7 @@ mod tests {
             kind: Some("BogusLabel".to_string()),
         };
         let err = run(&kit, &args).expect_err("invalid kind should error");
-        assert_eq!(err.exit_code(), 1, "invalid kind → exit 1");
+        assert_eq!(err.exit_code(), 2, "invalid kind → exit 2");
     }
 
     #[test]

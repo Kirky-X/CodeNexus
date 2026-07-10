@@ -570,7 +570,7 @@ diff --git a/added.rs b/added.rs
         let kit = build_kit_for_db(db.to_str().unwrap());
         let args = make_args("/nonexistent/path/xyz", db.to_str().unwrap(), "unstaged");
         let err = run(&kit, &args).expect_err("nonexistent path should error");
-        assert_eq!(err.exit_code(), 1, "InvalidInput → exit 1");
+        assert_eq!(err.exit_code(), 2, "InvalidInput → exit 2");
     }
 
     #[test]
@@ -580,7 +580,7 @@ diff --git a/added.rs b/added.rs
         let kit = build_kit_for_db(db.to_str().unwrap());
         let args = make_args(tmp.path().to_str().unwrap(), db.to_str().unwrap(), "bogus");
         let err = run(&kit, &args).expect_err("invalid mode should error");
-        assert_eq!(err.exit_code(), 1, "InvalidInput → exit 1");
+        assert_eq!(err.exit_code(), 2, "InvalidInput → exit 2");
     }
 
     #[test]
@@ -599,7 +599,7 @@ diff --git a/added.rs b/added.rs
                 return;
             }
         };
-        assert_eq!(err.exit_code(), 1, "non-git path → InvalidInput → exit 1");
+        assert_eq!(err.exit_code(), 2, "non-git path → InvalidInput → exit 2");
     }
 
     #[test]

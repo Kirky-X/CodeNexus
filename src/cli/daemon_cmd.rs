@@ -134,7 +134,7 @@ mod tests {
             matches!(err, CliError::InvalidInput(_)),
             "应为 InvalidInput，实际: {err:?}"
         );
-        assert_eq!(err.exit_code(), 1, "输入错误 → 退出码 1");
+        assert_eq!(err.exit_code(), 2, "输入错误 → 退出码 2");
     }
 
     #[test]

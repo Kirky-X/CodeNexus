@@ -186,7 +186,7 @@ mod tests {
     // --- run() error cases ---
 
     #[test]
-    fn run_clean_missing_project_returns_exit_code_1() {
+    fn run_clean_missing_project_returns_exit_code_2() {
         let db = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let storage = kit.require::<StorageKey>().expect("require_storage");
@@ -195,7 +195,7 @@ mod tests {
             .unwrap();
         let args = make_args("nonexistent", db.to_str().unwrap());
         let err = run(&kit, &args).expect_err("missing project should error");
-        assert_eq!(err.exit_code(), 1, "ProjectNotFound → exit 1");
+        assert_eq!(err.exit_code(), 2, "ProjectNotFound → exit 2");
     }
 
     #[test]
@@ -204,7 +204,7 @@ mod tests {
         let kit = build_kit_for_db(db.to_str().unwrap());
         let args = make_args("demo", db.to_str().unwrap());
         let err = run(&kit, &args).expect_err("empty db should error");
-        assert_eq!(err.exit_code(), 1, "ProjectNotFound → exit 1");
+        assert_eq!(err.exit_code(), 2, "ProjectNotFound → exit 2");
     }
 
     // Note: `run_clean_missing_db_returns_error` was removed because the

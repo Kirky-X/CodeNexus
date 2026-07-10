@@ -111,7 +111,7 @@ mod tests {
         let err = daemon_core(&kit, "/nonexistent/path/xyz", "demo")
             .expect_err("nonexistent path should error");
         assert!(matches!(err, CliError::InvalidInput(_)));
-        assert_eq!(err.exit_code(), 1, "input error → exit 1");
+        assert_eq!(err.exit_code(), 2, "input error → exit 2");
     }
 
     #[test]

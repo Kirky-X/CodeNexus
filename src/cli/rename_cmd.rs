@@ -621,7 +621,7 @@ mod tests {
         let kit = build_kit_for_db(db.to_str().unwrap());
         let args = make_args("foo", "1bad", db.to_str().unwrap(), None, false);
         let err = run(&kit, &args).expect_err("invalid name should error");
-        assert_eq!(err.exit_code(), 1, "InvalidInput → exit 1");
+        assert_eq!(err.exit_code(), 2, "InvalidInput → exit 2");
     }
 
     #[test]
@@ -630,7 +630,7 @@ mod tests {
         let kit = build_kit_for_db(db.to_str().unwrap());
         let args = make_args("foo", "bar", db.to_str().unwrap(), None, true);
         let err = run(&kit, &args).expect_err("--apply without --path should error");
-        assert_eq!(err.exit_code(), 1, "InvalidInput → exit 1");
+        assert_eq!(err.exit_code(), 2, "InvalidInput → exit 2");
     }
 
     #[test]

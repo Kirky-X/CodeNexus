@@ -230,7 +230,7 @@ mod dispatch_tests {
             db.to_str().unwrap(),
         ]);
         let err = dispatch(&kit, cli).expect_err("nonexistent path should error");
-        assert_eq!(err.exit_code(), 1, "输入错误 → 退出码 1");
+        assert_eq!(err.exit_code(), 2, "输入错误 → 退出码 2");
     }
 
     #[test]
@@ -387,7 +387,7 @@ mod dispatch_tests {
             db.to_str().unwrap(),
         ]);
         let err = dispatch(&kit, cli).expect_err("nonexistent path should error");
-        assert_eq!(err.exit_code(), 1, "InvalidInput → exit 1");
+        assert_eq!(err.exit_code(), 2, "InvalidInput → exit 2");
     }
 
     #[test]
@@ -404,7 +404,7 @@ mod dispatch_tests {
             db.to_str().unwrap(),
         ]);
         let err = dispatch(&kit, cli).expect_err("invalid name should error");
-        assert_eq!(err.exit_code(), 1, "InvalidInput → exit 1");
+        assert_eq!(err.exit_code(), 2, "InvalidInput → exit 2");
     }
 
     #[test]
@@ -711,7 +711,7 @@ mod dispatch_tests {
     }
 
     #[test]
-    fn dispatch_clean_missing_project_returns_exit_code_1() {
+    fn dispatch_clean_missing_project_returns_exit_code_2() {
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let cli = Cli::parse_from([
@@ -722,11 +722,11 @@ mod dispatch_tests {
             db.to_str().unwrap(),
         ]);
         let err = dispatch(&kit, cli).expect_err("missing project should error");
-        assert_eq!(err.exit_code(), 1, "ProjectNotFound → exit 1");
+        assert_eq!(err.exit_code(), 2, "ProjectNotFound → exit 2");
     }
 
     #[test]
-    fn dispatch_trace_unknown_type_returns_exit_code_1() {
+    fn dispatch_trace_unknown_type_returns_exit_code_2() {
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let cli = Cli::parse_from([
@@ -739,7 +739,7 @@ mod dispatch_tests {
             db.to_str().unwrap(),
         ]);
         let err = dispatch(&kit, cli).expect_err("unknown type should error");
-        assert_eq!(err.exit_code(), 1, "InvalidInput → exit 1");
+        assert_eq!(err.exit_code(), 2, "InvalidInput → exit 2");
     }
 
     // --- End-to-end: index then query ---
