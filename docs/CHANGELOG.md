@@ -20,7 +20,7 @@ _No unreleased changes yet._
 ### Changed
 
 - **perf(resolve): add `fill_reachable_from`** — `IncludesGraph` gains a `fill_reachable_from` method that writes into a caller-provided `HashSet` buffer, avoiding per-call allocation when the caller already has a reusable set.
-- **ci(release): restructure release workflow** — `.github/workflows/release.yml` now has a `verify` job (build + test) that gates all downstream release work, prerelease detection (`-rc`/`-beta`/`-alpha` suffixes), and conditional `crates.io` publication (skipped when `CARGO_REGISTRY_TOKEN` is not set).
+- **ci(release): source-only GitHub Release** — `.github/workflows/release.yml` now creates a GitHub Release (auto-generated notes + prerelease detection on `-rc`/`-beta`/`-alpha` suffixes) when a `v*` tag is pushed. GitHub auto-attaches the tag's source archives (zip/tar.gz); no binary compilation or `crates.io` publish.
 
 ## [0.3.0] - 2026-07-10
 
