@@ -121,10 +121,7 @@ mod tests {
     #[test]
     fn tokenize_acronym_prefix() {
         // HTTPClient → HTTP | Client
-        assert_eq!(
-            codenexus_tokenize("HTTPClient"),
-            vec!["http", "client"]
-        );
+        assert_eq!(codenexus_tokenize("HTTPClient"), vec!["http", "client"]);
     }
 
     #[test]
@@ -166,26 +163,17 @@ mod tests {
 
     #[test]
     fn tokenize_multiple_separators() {
-        assert_eq!(
-            codenexus_tokenize("parse__file"),
-            vec!["parse", "file"]
-        );
+        assert_eq!(codenexus_tokenize("parse__file"), vec!["parse", "file"]);
     }
 
     #[test]
     fn tokenize_hyphen_separator() {
-        assert_eq!(
-            codenexus_tokenize("parse-file"),
-            vec!["parse", "file"]
-        );
+        assert_eq!(codenexus_tokenize("parse-file"), vec!["parse", "file"]);
     }
 
     #[test]
     fn tokenize_dot_separator() {
-        assert_eq!(
-            codenexus_tokenize("parse.file"),
-            vec!["parse", "file"]
-        );
+        assert_eq!(codenexus_tokenize("parse.file"), vec!["parse", "file"]);
     }
 
     #[test]
@@ -207,10 +195,7 @@ mod tests {
     #[test]
     fn tokenize_mixed_acronyms() {
         // XMLParser → XML | Parser
-        assert_eq!(
-            codenexus_tokenize("XMLParser"),
-            vec!["xml", "parser"]
-        );
+        assert_eq!(codenexus_tokenize("XMLParser"), vec!["xml", "parser"]);
     }
 
     #[test]

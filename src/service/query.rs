@@ -42,8 +42,7 @@ async fn query_core(cypher: String) -> Result<QueryOutput, ApiError> {
     let q = kit
         .require::<QueryKey>()
         .map_err(|e| wrap_error("Failed to resolve query capability", e))?;
-    validate_cypher_subset(&cypher)
-        .map_err(|e| wrap_error("Cypher validation failed", e))?;
+    validate_cypher_subset(&cypher).map_err(|e| wrap_error("Cypher validation failed", e))?;
     let result = q
         .cypher(&cypher)
         .map_err(|e| wrap_error("Query execution failed", e))?;
@@ -53,16 +52,15 @@ async fn query_core(cypher: String) -> Result<QueryOutput, ApiError> {
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
 #[service_api(
-    name = "codenexus",
+    name = "query",
     version = "0.3.2",
-    tool_name = "query",
     description = "Execute a Cypher query against the CodeNexus knowledge graph.",
-    cli = true,
+    cli = true
 )]
 async fn query(cypher: String) -> Result<(), ApiError> {
     let result = query_core(cypher).await?;
-    let json = serde_json::to_string(&result)
-        .map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let json =
+        serde_json::to_string(&result).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }
@@ -70,10 +68,10 @@ async fn query(cypher: String) -> Result<(), ApiError> {
 /// MCP wrapper — returns result for MCP protocol.
 #[cfg(feature = "mcp")]
 #[service_api(
-    name = "codenexus",
+    name = "query",
     version = "0.3.2",
     tool_name = "query",
-    description = "Execute a Cypher query against the CodeNexus knowledge graph.",
+    description = "Execute a Cypher query against the CodeNexus knowledge graph."
 )]
 async fn query_mcp(cypher: String) -> Result<QueryOutput, ApiError> {
     query_core(cypher).await

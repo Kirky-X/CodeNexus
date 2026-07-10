@@ -348,7 +348,10 @@ mod tests {
     fn builder_default_equals_new() {
         // Default impl must produce the same state as new() (no config).
         let default_builder = TraceModuleBuilder::default();
-        assert!(default_builder.build().is_err(), "default builder should require config");
+        assert!(
+            default_builder.build().is_err(),
+            "default builder should require config"
+        );
     }
 
     #[test]

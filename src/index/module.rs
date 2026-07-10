@@ -252,14 +252,8 @@ mod tests {
         );
 
         let result = cap.index(tmp.path(), "demo", false).expect("index");
-        assert!(
-            result.files_indexed > 0,
-            "should index files: {result:?}"
-        );
-        assert!(
-            result.nodes_created > 0,
-            "should create nodes: {result:?}"
-        );
+        assert!(result.files_indexed > 0, "should index files: {result:?}");
+        assert!(result.nodes_created > 0, "should create nodes: {result:?}");
         assert!(!result.project_id.is_empty(), "project_id should be set");
     }
 
@@ -276,11 +270,7 @@ mod tests {
             matches!(err, IndexError::PathNotFound(_)),
             "expected PathNotFound, got {err:?}"
         );
-        assert_eq!(
-            err.exit_code(),
-            1,
-            "PRD §4.1.6: path not found → exit 1"
-        );
+        assert_eq!(err.exit_code(), 1, "PRD §4.1.6: path not found → exit 1");
     }
 
     /// Verify the full Kit registration flow works end-to-end.
@@ -297,9 +287,7 @@ mod tests {
 
         assert!(kit.contains::<IndexerKey>());
 
-        let required = kit
-            .require::<IndexerKey>()
-            .expect("require::<IndexerKey>");
+        let required = kit.require::<IndexerKey>().expect("require::<IndexerKey>");
         assert!(Arc::ptr_eq(&indexer, &required));
     }
 
@@ -308,7 +296,10 @@ mod tests {
     #[test]
     fn builder_default_is_equivalent_to_new() {
         let result = IndexerModuleBuilder::default().build();
-        assert!(result.is_err(), "default builder has no config, should fail");
+        assert!(
+            result.is_err(),
+            "default builder has no config, should fail"
+        );
     }
 
     /// `index_incremental` on an empty directory returns zero files indexed,

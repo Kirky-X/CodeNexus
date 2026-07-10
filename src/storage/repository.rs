@@ -118,10 +118,7 @@ impl Repository {
             )));
         }
         let root_path = str_prop(node, "rootPath");
-        let language = node
-            .language
-            .map(|l| l.to_string())
-            .unwrap_or_default();
+        let language = node.language.map(|l| l.to_string()).unwrap_or_default();
         let file_count = i64_prop(node, "fileCount");
         let indexed_at = i64_prop(node, "indexedAt");
         let last_commit = str_prop(node, "lastCommit");
@@ -190,9 +187,7 @@ impl Repository {
     pub fn delete_project(&self, project_id: &str) -> Result<()> {
         let escaped = escape_cypher_string(project_id);
         // Delete CodeRelation rows for the project.
-        let cypher = format!(
-            "MATCH (r:CodeRelation) WHERE r.project = '{escaped}' DELETE r;"
-        );
+        let cypher = format!("MATCH (r:CodeRelation) WHERE r.project = '{escaped}' DELETE r;");
         self.conn.execute(&cypher)?;
         // Delete nodes from every node table that has a `project` column.
         // Project itself is matched by id; all other tables by `project`.
@@ -289,11 +284,7 @@ impl Repository {
             );
             if let Ok(rows) = self.conn.query(&select) {
                 for row in rows {
-                    if let Some(id) = row
-                        .first()
-                        .and_then(|v| v.as_str())
-                        .map(String::from)
-                    {
+                    if let Some(id) = row.first().and_then(|v| v.as_str()).map(String::from) {
                         orphan_ids.push(id);
                     }
                 }
@@ -381,11 +372,7 @@ impl Repository {
             );
             if let Ok(rows) = self.conn.query(&select) {
                 for row in rows {
-                    if let Some(id) = row
-                        .first()
-                        .and_then(|v| v.as_str())
-                        .map(String::from)
-                    {
+                    if let Some(id) = row.first().and_then(|v| v.as_str()).map(String::from) {
                         orphan_ids.push(id);
                     }
                 }
@@ -481,10 +468,7 @@ impl Storage for Repository {
         Repository::save_edges(self, edges)
     }
 
-    fn get_project(
-        &self,
-        id: &str,
-    ) -> std::result::Result<Option<ProjectRecord>, StorageError> {
+    fn get_project(&self, id: &str) -> std::result::Result<Option<ProjectRecord>, StorageError> {
         Repository::get_project(self, id)
     }
 
@@ -552,11 +536,7 @@ fn row_to_project(row: Vec<serde_json::Value>) -> ProjectRecord {
             .map(String::from)
             .unwrap_or_default()
     };
-    let get_i64 = |idx: usize| -> i64 {
-        row.get(idx)
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0)
-    };
+    let get_i64 = |idx: usize| -> i64 { row.get(idx).and_then(|v| v.as_i64()).unwrap_or(0) };
     ProjectRecord {
         id: get_str(0),
         name: get_str(1),
@@ -576,11 +556,7 @@ fn row_to_function(row: Vec<serde_json::Value>) -> FunctionRecord {
             .map(String::from)
             .unwrap_or_default()
     };
-    let get_i64 = |idx: usize| -> i64 {
-        row.get(idx)
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0)
-    };
+    let get_i64 = |idx: usize| -> i64 { row.get(idx).and_then(|v| v.as_i64()).unwrap_or(0) };
     FunctionRecord {
         id: get_str(0),
         name: get_str(1),
@@ -720,7 +696,8 @@ mod tests {
             sample_function("f1", "demo", "main", "demo.main"),
             sample_function("f2", "demo", "helper", "demo.helper"),
         ];
-        repo.save_nodes(&nodes, NodeLabel::Function).expect("save_nodes");
+        repo.save_nodes(&nodes, NodeLabel::Function)
+            .expect("save_nodes");
 
         let funcs = repo.query_functions("demo").expect("query_functions");
         assert_eq!(funcs.len(), 2);
@@ -746,7 +723,8 @@ mod tests {
             .signature("#define M x")
             .properties(serde_json::json!({"content": "#define M x"}))
             .build();
-        repo.save_nodes(&[node], NodeLabel::Macro).expect("save_nodes Macro");
+        repo.save_nodes(&[node], NodeLabel::Macro)
+            .expect("save_nodes Macro");
 
         let rows = repo
             .connection()
@@ -822,7 +800,8 @@ mod tests {
     #[test]
     fn delete_project_only_removes_specified_project() {
         let repo = fresh_repo();
-        repo.save_project(&sample_project("alpha", "alpha")).unwrap();
+        repo.save_project(&sample_project("alpha", "alpha"))
+            .unwrap();
         repo.save_project(&sample_project("beta", "beta")).unwrap();
         repo.save_nodes(
             &[sample_function("f1", "alpha", "main", "alpha.main")],
@@ -894,11 +873,15 @@ mod tests {
 
         // Same path, different projects → different hashes.
         assert_eq!(
-            repo.get_file_hash("/src/main.rs", "alpha").unwrap().as_deref(),
+            repo.get_file_hash("/src/main.rs", "alpha")
+                .unwrap()
+                .as_deref(),
             Some("hash_alpha")
         );
         assert_eq!(
-            repo.get_file_hash("/src/main.rs", "beta").unwrap().as_deref(),
+            repo.get_file_hash("/src/main.rs", "beta")
+                .unwrap()
+                .as_deref(),
             Some("hash_beta")
         );
     }
@@ -997,7 +980,7 @@ mod tests {
         repo.save_edges(&[Edge::builder("f1", "f2", EdgeType::Calls, "demo")
             .start_line(3)
             .build()])
-        .unwrap();
+            .unwrap();
 
         // Sanity: edge exists.
         let rows = repo
@@ -1078,7 +1061,8 @@ mod tests {
     fn multi_project_isolation_br_index_004() {
         // Two projects coexist; querying/deleting one never affects the other.
         let repo = fresh_repo();
-        repo.save_project(&sample_project("alpha", "alpha")).unwrap();
+        repo.save_project(&sample_project("alpha", "alpha"))
+            .unwrap();
         repo.save_project(&sample_project("beta", "beta")).unwrap();
 
         repo.save_nodes(
@@ -1182,7 +1166,9 @@ mod tests {
     fn repository_impl_storage_init_schema_works() {
         let repo = fresh_repo();
         let storage: &dyn Storage = &repo;
-        let report = storage.init_schema().expect("init_schema via Storage trait");
+        let report = storage
+            .init_schema()
+            .expect("init_schema via Storage trait");
         // Idempotent — schema already initialized by fresh_repo.
         let _ = report.skipped_count;
     }
@@ -1194,7 +1180,9 @@ mod tests {
         storage
             .execute("CREATE (:Project {id: 'p1', name: 'demo', rootPath: '/', language: 'rust', fileCount: 0, indexedAt: 0, lastCommit: ''});")
             .expect("execute via Storage trait");
-        let rows = storage.query("MATCH (p:Project) RETURN p.name AS name;").expect("query via Storage trait");
+        let rows = storage
+            .query("MATCH (p:Project) RETURN p.name AS name;")
+            .expect("query via Storage trait");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0][0].as_str(), Some("demo"));
     }
@@ -1203,7 +1191,9 @@ mod tests {
     fn repository_impl_storage_save_and_get_project() {
         let repo = fresh_repo();
         let storage: &dyn Storage = &repo;
-        storage.save_project(&sample_project("demo", "demo")).expect("save_project");
+        storage
+            .save_project(&sample_project("demo", "demo"))
+            .expect("save_project");
         let proj = storage.get_project("demo").expect("get_project");
         assert!(proj.is_some());
         assert_eq!(proj.unwrap().name, "demo");
@@ -1213,8 +1203,12 @@ mod tests {
     fn repository_impl_storage_list_projects() {
         let repo = fresh_repo();
         let storage: &dyn Storage = &repo;
-        storage.save_project(&sample_project("alpha", "alpha")).unwrap();
-        storage.save_project(&sample_project("beta", "beta")).unwrap();
+        storage
+            .save_project(&sample_project("alpha", "alpha"))
+            .unwrap();
+        storage
+            .save_project(&sample_project("beta", "beta"))
+            .unwrap();
         let projects = storage.list_projects().expect("list_projects");
         assert_eq!(projects.len(), 2);
     }
@@ -1223,9 +1217,13 @@ mod tests {
     fn repository_impl_storage_save_nodes_and_query_functions() {
         let repo = fresh_repo();
         let storage: &dyn Storage = &repo;
-        storage.save_project(&sample_project("demo", "demo")).unwrap();
+        storage
+            .save_project(&sample_project("demo", "demo"))
+            .unwrap();
         let nodes = vec![sample_function("f1", "demo", "main", "demo.main")];
-        storage.save_nodes(&nodes, NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&nodes, NodeLabel::Function)
+            .expect("save_nodes");
         let funcs = storage.query_functions("demo").expect("query_functions");
         assert_eq!(funcs.len(), 1);
         assert_eq!(funcs[0].name, "main");
@@ -1249,11 +1247,18 @@ mod tests {
     fn repository_impl_storage_get_file_hash() {
         let repo = fresh_repo();
         let storage: &dyn Storage = &repo;
-        storage.save_project(&sample_project("demo", "demo")).unwrap();
         storage
-            .save_nodes(&[sample_file("f1", "demo", "/src/main.rs", "abc123")], NodeLabel::File)
+            .save_project(&sample_project("demo", "demo"))
             .unwrap();
-        let hash = storage.get_file_hash("/src/main.rs", "demo").expect("get_file_hash");
+        storage
+            .save_nodes(
+                &[sample_file("f1", "demo", "/src/main.rs", "abc123")],
+                NodeLabel::File,
+            )
+            .unwrap();
+        let hash = storage
+            .get_file_hash("/src/main.rs", "demo")
+            .expect("get_file_hash");
         assert_eq!(hash.as_deref(), Some("abc123"));
     }
 
@@ -1261,14 +1266,24 @@ mod tests {
     fn repository_impl_storage_get_all_file_hashes() {
         let repo = fresh_repo();
         let storage: &dyn Storage = &repo;
-        storage.save_project(&sample_project("demo", "demo")).unwrap();
         storage
-            .save_nodes(&[sample_file("f1", "demo", "/src/a.rs", "hash1")], NodeLabel::File)
+            .save_project(&sample_project("demo", "demo"))
             .unwrap();
         storage
-            .save_nodes(&[sample_file("f2", "demo", "/src/b.rs", "hash2")], NodeLabel::File)
+            .save_nodes(
+                &[sample_file("f1", "demo", "/src/a.rs", "hash1")],
+                NodeLabel::File,
+            )
             .unwrap();
-        let hashes = storage.get_all_file_hashes("demo").expect("get_all_file_hashes");
+        storage
+            .save_nodes(
+                &[sample_file("f2", "demo", "/src/b.rs", "hash2")],
+                NodeLabel::File,
+            )
+            .unwrap();
+        let hashes = storage
+            .get_all_file_hashes("demo")
+            .expect("get_all_file_hashes");
         assert_eq!(hashes.len(), 2);
     }
 
@@ -1276,7 +1291,9 @@ mod tests {
     fn repository_impl_storage_delete_project() {
         let repo = fresh_repo();
         let storage: &dyn Storage = &repo;
-        storage.save_project(&sample_project("demo", "demo")).unwrap();
+        storage
+            .save_project(&sample_project("demo", "demo"))
+            .unwrap();
         storage.delete_project("demo").expect("delete_project");
         assert!(storage.get_project("demo").unwrap().is_none());
     }
@@ -1285,14 +1302,24 @@ mod tests {
     fn repository_impl_storage_delete_file_nodes() {
         let repo = fresh_repo();
         let storage: &dyn Storage = &repo;
-        storage.save_project(&sample_project("demo", "demo")).unwrap();
         storage
-            .save_nodes(&[sample_file("f1", "demo", "/src/main.rs", "abc")], NodeLabel::File)
+            .save_project(&sample_project("demo", "demo"))
             .unwrap();
         storage
-            .save_nodes(&[sample_function("f1", "demo", "main", "demo.main")], NodeLabel::Function)
+            .save_nodes(
+                &[sample_file("f1", "demo", "/src/main.rs", "abc")],
+                NodeLabel::File,
+            )
             .unwrap();
-        storage.delete_file_nodes("/src/main.rs", "demo").expect("delete_file_nodes");
+        storage
+            .save_nodes(
+                &[sample_function("f1", "demo", "main", "demo.main")],
+                NodeLabel::Function,
+            )
+            .unwrap();
+        storage
+            .delete_file_nodes("/src/main.rs", "demo")
+            .expect("delete_file_nodes");
         let file_rows = storage.query("MATCH (f:File) RETURN f.id;").unwrap();
         assert!(file_rows.is_empty());
     }
@@ -1316,7 +1343,10 @@ mod tests {
         repo.delete_file_nodes_batch(&["/src/a.rs".to_string(), "/src/b.rs".to_string()], "demo")
             .expect("delete_file_nodes_batch");
 
-        let rows = repo.connection().query("MATCH (f:File) RETURN f.filePath AS p;").unwrap();
+        let rows = repo
+            .connection()
+            .query("MATCH (f:File) RETURN f.filePath AS p;")
+            .unwrap();
         assert_eq!(rows.len(), 1, "only /src/c.rs should remain");
         assert_eq!(rows[0][0].as_str(), Some("/src/c.rs"));
     }
@@ -1325,12 +1355,19 @@ mod tests {
     fn delete_file_nodes_batch_empty_list_is_noop() {
         let repo = fresh_repo();
         repo.save_project(&sample_project("demo", "demo")).unwrap();
-        repo.save_nodes(&[sample_file("f1", "demo", "/src/a.rs", "h1")], NodeLabel::File)
+        repo.save_nodes(
+            &[sample_file("f1", "demo", "/src/a.rs", "h1")],
+            NodeLabel::File,
+        )
+        .unwrap();
+
+        repo.delete_file_nodes_batch(&[], "demo")
+            .expect("empty batch noop");
+
+        let rows = repo
+            .connection()
+            .query("MATCH (f:File) RETURN f.filePath AS p;")
             .unwrap();
-
-        repo.delete_file_nodes_batch(&[], "demo").expect("empty batch noop");
-
-        let rows = repo.connection().query("MATCH (f:File) RETURN f.filePath AS p;").unwrap();
         assert_eq!(rows.len(), 1, "file should still exist");
     }
 
@@ -1352,7 +1389,10 @@ mod tests {
         repo.delete_file_nodes_batch(&paths, "demo")
             .expect("batch delete deleted+changed");
 
-        let rows = repo.connection().query("MATCH (f:File) RETURN f.filePath AS p;").unwrap();
+        let rows = repo
+            .connection()
+            .query("MATCH (f:File) RETURN f.filePath AS p;")
+            .unwrap();
         assert!(rows.is_empty(), "both files should be deleted");
     }
 }

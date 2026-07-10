@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Dead code detection (T005, v0.1.5).
+//! Dead code detection.
 //!
 //! Identifies `Function`/`Method` nodes with zero incoming `CALLS` edges that
 //! are not entry points (e.g. `main`) or test functions (`test_*` / `*_test`).
@@ -175,7 +175,10 @@ impl<'a> DeadCodeDetector<'a> {
     }
 
     /// Builds a `filePath -> language` map from the `File` table for `project`.
-    fn load_file_languages(&self, project: &str) -> StorageResult<std::collections::HashMap<String, String>> {
+    fn load_file_languages(
+        &self,
+        project: &str,
+    ) -> StorageResult<std::collections::HashMap<String, String>> {
         let escaped = escape_cypher_string(project);
         let cypher = format!(
             "MATCH (f:File) WHERE f.project = '{escaped}' \
@@ -234,7 +237,7 @@ fn glob_helper(p: &[char], t: &[char]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig, Kit, StorageKey};
+    use crate::kit::{build_kit, Kit, KitBootstrapConfig, StorageKey};
     use tempfile::TempDir;
 
     /// Returns a fresh on-disk database path inside a temp dir.
@@ -257,7 +260,15 @@ mod tests {
     }
 
     /// Creates a Function node via direct Cypher.
-    fn create_function(kit: &Kit, id: &str, project: &str, name: &str, qn: &str, file: &str, line: u32) {
+    fn create_function(
+        kit: &Kit,
+        id: &str,
+        project: &str,
+        name: &str,
+        qn: &str,
+        file: &str,
+        line: u32,
+    ) {
         let storage = storage(kit);
         let end_line = line + 10;
         let cypher = format!(
@@ -276,7 +287,15 @@ mod tests {
     }
 
     /// Creates a Method node via direct Cypher.
-    fn create_method(kit: &Kit, id: &str, project: &str, name: &str, qn: &str, file: &str, line: u32) {
+    fn create_method(
+        kit: &Kit,
+        id: &str,
+        project: &str,
+        name: &str,
+        qn: &str,
+        file: &str,
+        line: u32,
+    ) {
         let storage = storage(kit);
         let end_line = line + 10;
         let cypher = format!(
@@ -295,7 +314,13 @@ mod tests {
     }
 
     /// Creates a CALLS edge from `caller_id` to `callee_id`.
-    fn create_calls_edge(kit: &Kit, edge_id: &str, caller_id: &str, callee_id: &str, project: &str) {
+    fn create_calls_edge(
+        kit: &Kit,
+        edge_id: &str,
+        caller_id: &str,
+        callee_id: &str,
+        project: &str,
+    ) {
         let storage = storage(kit);
         let cypher = format!(
             "CREATE (:CodeRelation {{id: '{}', source: '{}', target: '{}', type: 'CALLS', \
@@ -376,7 +401,15 @@ mod tests {
         // `foo` has no incoming CALLS edges; `main` also has no incoming
         // edges but is excluded as an entry point.
         create_function(&kit, "f_foo", "demo", "foo", "demo.foo", "/src/lib.rs", 1);
-        create_function(&kit, "f_main", "demo", "main", "demo.main", "/src/main.rs", 1);
+        create_function(
+            &kit,
+            "f_main",
+            "demo",
+            "main",
+            "demo.main",
+            "/src/main.rs",
+            1,
+        );
         create_file(&kit, "file1", "demo", "/src/lib.rs", "rust");
         create_file(&kit, "file2", "demo", "/src/main.rs", "rust");
 
@@ -385,14 +418,26 @@ mod tests {
         let result = detector.detect("demo", &["main"]).expect("detect");
         let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"foo"), "foo should be dead: {:?}", names);
-        assert!(!names.contains(&"main"), "main should be excluded: {:?}", names);
+        assert!(
+            !names.contains(&"main"),
+            "main should be excluded: {:?}",
+            names
+        );
     }
 
     #[test]
     fn detect_excludes_entry_points() {
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        create_function(&kit, "f_main", "demo", "main", "demo.main", "/src/main.rs", 1);
+        create_function(
+            &kit,
+            "f_main",
+            "demo",
+            "main",
+            "demo.main",
+            "/src/main.rs",
+            1,
+        );
         create_function(&kit, "f_foo", "demo", "foo", "demo.foo", "/src/lib.rs", 1);
         create_file(&kit, "file1", "demo", "/src/main.rs", "rust");
 
@@ -410,8 +455,24 @@ mod tests {
         let kit = build_kit_for_db(&db);
         // `test_foo` matches the default `test_*` pattern and is excluded
         // even though it has zero incoming CALLS edges.
-        create_function(&kit, "f_test_foo", "demo", "test_foo", "demo.test_foo", "/src/lib.rs", 1);
-        create_function(&kit, "f_foo_test", "demo", "foo_test", "demo.foo_test", "/src/lib.rs", 10);
+        create_function(
+            &kit,
+            "f_test_foo",
+            "demo",
+            "test_foo",
+            "demo.test_foo",
+            "/src/lib.rs",
+            1,
+        );
+        create_function(
+            &kit,
+            "f_foo_test",
+            "demo",
+            "foo_test",
+            "demo.foo_test",
+            "/src/lib.rs",
+            10,
+        );
         create_function(&kit, "f_foo", "demo", "foo", "demo.foo", "/src/lib.rs", 20);
 
         let storage = storage(&kit);
@@ -428,7 +489,15 @@ mod tests {
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
         // A Method node with zero incoming CALLS edges is dead code.
-        create_method(&kit, "m_1", "demo", "helper", "demo.Class.helper", "/src/lib.rs", 5);
+        create_method(
+            &kit,
+            "m_1",
+            "demo",
+            "helper",
+            "demo.Class.helper",
+            "/src/lib.rs",
+            5,
+        );
         create_file(&kit, "file1", "demo", "/src/lib.rs", "rust");
 
         let storage = storage(&kit);
@@ -443,7 +512,15 @@ mod tests {
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
         // `main` calls `foo`; `foo` has an incoming CALLS edge and is NOT dead.
-        create_function(&kit, "f_main", "demo", "main", "demo.main", "/src/main.rs", 1);
+        create_function(
+            &kit,
+            "f_main",
+            "demo",
+            "main",
+            "demo.main",
+            "/src/main.rs",
+            1,
+        );
         create_function(&kit, "f_foo", "demo", "foo", "demo.foo", "/src/lib.rs", 1);
         create_calls_edge(&kit, "e1", "f_main", "f_foo", "demo");
 
@@ -465,7 +542,10 @@ mod tests {
         let storage = storage(&kit);
         let detector = DeadCodeDetector::new(&*storage);
         let result = detector.detect("demo", &["main"]).expect("detect");
-        let entry = result.iter().find(|e| e.name == "foo").expect("foo should be dead");
+        let entry = result
+            .iter()
+            .find(|e| e.name == "foo")
+            .expect("foo should be dead");
         assert_eq!(entry.language, "python");
     }
 
@@ -478,7 +558,10 @@ mod tests {
         let storage = storage(&kit);
         let detector = DeadCodeDetector::new(&*storage);
         let result = detector.detect("demo", &["main"]).expect("detect");
-        let entry = result.iter().find(|e| e.name == "foo").expect("foo should be dead");
+        let entry = result
+            .iter()
+            .find(|e| e.name == "foo")
+            .expect("foo should be dead");
         assert_eq!(entry.reason, "zero incoming CALLS edges");
     }
 

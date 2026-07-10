@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Cross-service link detection (T010, v0.2.0).
+//! Cross-service link detection.
 //!
 //! Matches HTTP route patterns against string literals found in caller
 //! function bodies, then persists `CROSS_SERVICE_CALLS` edges into the
@@ -123,11 +123,7 @@ impl<'a> CrossServiceLinker<'a> {
                     if let Some(match_type) = match_route(&route.path, literal) {
                         let edge_key = (caller.id.clone(), route.id.clone());
                         if !existing_edges.contains(&edge_key) {
-                            self.persist_edge(
-                                &next_edge_id,
-                                &caller.id,
-                                &route.id,
-                            )?;
+                            self.persist_edge(&next_edge_id, &caller.id, &route.id)?;
                             next_edge_id += 1;
                         }
                         links.push(CrossServiceLink {
@@ -233,7 +229,10 @@ impl<'a> CrossServiceLinker<'a> {
 
     /// Returns the next edge id to use for new `CROSS_SERVICE_CALLS` edges.
     /// Uses a deterministic prefix + 1-based index to keep ids readable.
-    fn next_edge_id(&self, existing: &std::collections::HashSet<(String, String)>) -> StorageResult<u64> {
+    fn next_edge_id(
+        &self,
+        existing: &std::collections::HashSet<(String, String)>,
+    ) -> StorageResult<u64> {
         let escaped = escape_cypher_string(&self.project);
         let cypher = format!(
             "MATCH (e:CodeRelation) WHERE e.type = 'CROSS_SERVICE_CALLS' \
@@ -507,7 +506,10 @@ mod tests {
 
     #[test]
     fn match_route_exact() {
-        assert_eq!(match_route("/api/users", "/api/users"), Some(MatchType::Exact));
+        assert_eq!(
+            match_route("/api/users", "/api/users"),
+            Some(MatchType::Exact)
+        );
     }
 
     #[test]
@@ -570,14 +572,20 @@ mod tests {
     #[test]
     fn match_route_exact_takes_precedence_over_parameterized() {
         // Pattern without `:` should match exactly, not parameterized.
-        assert_eq!(match_route("/api/users", "/api/users"), Some(MatchType::Exact));
+        assert_eq!(
+            match_route("/api/users", "/api/users"),
+            Some(MatchType::Exact)
+        );
     }
 
     #[test]
     fn extract_string_literals_basic() {
         let content = r#"let url = "/api/users"; fetch("/api/users/123");"#;
         let lits = extract_string_literals(content);
-        assert_eq!(lits, vec!["/api/users".to_string(), "/api/users/123".to_string()]);
+        assert_eq!(
+            lits,
+            vec!["/api/users".to_string(), "/api/users/123".to_string()]
+        );
     }
 
     #[test]
@@ -596,7 +604,10 @@ mod tests {
     #[test]
     fn extract_string_literals_skips_unterminated() {
         let lits = extract_string_literals("let s = \"unterminated;");
-        assert!(lits.is_empty(), "unterminated string should yield no literal");
+        assert!(
+            lits.is_empty(),
+            "unterminated string should yield no literal"
+        );
     }
 
     // ====================================================================
@@ -999,9 +1010,7 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let s = storage(&kit);
         // Create a minimal Route node with only id, project, and path.
-        let cypher = format!(
-            "CREATE (:Route {{id: 'r1', project: 'demo', path: '/api/users'}});"
-        );
+        let cypher = format!("CREATE (:Route {{id: 'r1', project: 'demo', path: '/api/users'}});");
         s.execute(&cypher).expect("create minimal route");
         create_function_with_content(
             &kit,

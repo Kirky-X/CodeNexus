@@ -168,10 +168,7 @@ impl Storage for StorageCapability {
             .execute(cypher)
     }
 
-    fn query(
-        &self,
-        cypher: &str,
-    ) -> Result<Vec<Vec<serde_json::Value>>, StorageError> {
+    fn query(&self, cypher: &str) -> Result<Vec<Vec<serde_json::Value>>, StorageError> {
         self.inner
             .lock()
             .expect("storage lock poisoned")
@@ -186,11 +183,7 @@ impl Storage for StorageCapability {
             .save_project(node)
     }
 
-    fn save_nodes(
-        &self,
-        nodes: &[Node],
-        label: NodeLabel,
-    ) -> Result<(), StorageError> {
+    fn save_nodes(&self, nodes: &[Node], label: NodeLabel) -> Result<(), StorageError> {
         self.inner
             .lock()
             .expect("storage lock poisoned")
@@ -204,10 +197,7 @@ impl Storage for StorageCapability {
             .save_edges(edges)
     }
 
-    fn get_project(
-        &self,
-        id: &str,
-    ) -> Result<Option<ProjectRecord>, StorageError> {
+    fn get_project(&self, id: &str) -> Result<Option<ProjectRecord>, StorageError> {
         self.inner
             .lock()
             .expect("storage lock poisoned")
@@ -221,10 +211,7 @@ impl Storage for StorageCapability {
             .list_projects()
     }
 
-    fn query_functions(
-        &self,
-        project: &str,
-    ) -> Result<Vec<FunctionRecord>, StorageError> {
+    fn query_functions(&self, project: &str) -> Result<Vec<FunctionRecord>, StorageError> {
         self.inner
             .lock()
             .expect("storage lock poisoned")
@@ -242,10 +229,7 @@ impl Storage for StorageCapability {
             .get_file_hash(file_path, project)
     }
 
-    fn get_all_file_hashes(
-        &self,
-        project: &str,
-    ) -> Result<Vec<(String, String)>, StorageError> {
+    fn get_all_file_hashes(&self, project: &str) -> Result<Vec<(String, String)>, StorageError> {
         self.inner
             .lock()
             .expect("storage lock poisoned")
@@ -259,11 +243,7 @@ impl Storage for StorageCapability {
             .delete_project(project_id)
     }
 
-    fn delete_file_nodes(
-        &self,
-        file_path: &str,
-        project: &str,
-    ) -> Result<(), StorageError> {
+    fn delete_file_nodes(&self, file_path: &str, project: &str) -> Result<(), StorageError> {
         self.inner
             .lock()
             .expect("storage lock poisoned")
@@ -488,6 +468,9 @@ mod tests {
     fn builder_default_equals_new() {
         // Default impl must produce the same state as new() (no config).
         let default_builder = StorageModuleBuilder::default();
-        assert!(default_builder.build().is_err(), "default builder should require config");
+        assert!(
+            default_builder.build().is_err(),
+            "default builder should require config"
+        );
     }
 }

@@ -96,10 +96,7 @@ mod tests {
     fn ambiguous_symbol_display_lists_candidates() {
         let err = TraceError::AmbiguousSymbol {
             symbol: "bar".to_string(),
-            candidates: vec![
-                "proj.a.rs.bar".to_string(),
-                "proj.b.rs.bar".to_string(),
-            ],
+            candidates: vec!["proj.a.rs.bar".to_string(), "proj.b.rs.bar".to_string()],
         };
         let msg = err.to_string();
         assert!(msg.contains("bar"), "message should contain name: {msg}");
@@ -197,8 +194,7 @@ mod tests {
     #[test]
     fn std_error_trait_object_works() {
         // Verify std::error::Error is implemented (can be boxed as trait object).
-        let err: Box<dyn std::error::Error> =
-            Box::new(TraceError::SymbolNotFound("x".to_string()));
+        let err: Box<dyn std::error::Error> = Box::new(TraceError::SymbolNotFound("x".to_string()));
         assert_eq!(err.to_string(), "symbol not found: x");
     }
 }

@@ -116,7 +116,7 @@ pub fn embedding_table_ddl() -> String {
 ///
 /// Includes 18 B-tree secondary indexes, 18 FTS (full-text search) indexes
 /// (3 on `content` columns of `Function`/`Class`/`Method` per DDD §6, plus
-/// 15 on `name` columns of all symbol tables per H11/T004 v0.1.4), and 1
+/// 15 on `name` columns of all symbol tables), and 1
 /// VECTOR index on `Embedding.embedding` with cosine distance (DDD §6).
 ///
 /// LadybugDB may not support every index type; [`crate::storage::connection`]
@@ -148,11 +148,11 @@ pub fn index_ddl() -> Vec<String> {
         "CREATE FTS INDEX fts_function_content ON Function(content);".to_string(),
         "CREATE FTS INDEX fts_class_content ON Class(content);".to_string(),
         "CREATE FTS INDEX fts_method_content ON Method(content);".to_string(),
-        // --- FTS indexes (H11 / T004 v0.1.4): BM25 over symbol `name` columns ---
+        // --- FTS indexes: BM25 over symbol `name` columns ---
         // Used by `FullTextSearcher` for identifier-aware BM25 search. The
         // `codenexus_tokenizer` (Rust-side) splits camelCase/snake_case before
         // querying, enabling `parse` to match `parseFile` / `parse_file`.
-        // T004 (v0.1.4) extended coverage from 3 tables to all 15 symbol
+        // Extended coverage from 3 tables to all 15 symbol
         // tables. `Macro` is backtick-escaped because it is a reserved keyword
         // (see [`is_reserved_keyword`]).
         "CREATE FTS INDEX fts_function_name ON Function(name);".to_string(),
@@ -187,10 +187,7 @@ pub fn index_ddl() -> Vec<String> {
 /// break schema init (Task 2.1 regression).
 #[must_use]
 pub fn all_init_ddl() -> Vec<String> {
-    let mut ddl: Vec<String> = node_table_ddl()
-        .into_iter()
-        .map(|(_, stmt)| stmt)
-        .collect();
+    let mut ddl: Vec<String> = node_table_ddl().into_iter().map(|(_, stmt)| stmt).collect();
     ddl.push(relation_table_ddl());
     ddl.extend(index_ddl());
     ddl
@@ -203,7 +200,15 @@ pub fn all_init_ddl() -> Vec<String> {
 #[must_use]
 pub fn node_table_columns(label: NodeLabel) -> &'static [&'static str] {
     match label {
-        NodeLabel::Project => &["id", "name", "rootPath", "language", "fileCount", "indexedAt", "lastCommit"],
+        NodeLabel::Project => &[
+            "id",
+            "name",
+            "rootPath",
+            "language",
+            "fileCount",
+            "indexedAt",
+            "lastCommit",
+        ],
         NodeLabel::Folder => &["id", "project", "name", "filePath"],
         NodeLabel::File => &[
             "id",
@@ -214,8 +219,19 @@ pub fn node_table_columns(label: NodeLabel) -> &'static [&'static str] {
             "hash",
             "lineCount",
         ],
-        NodeLabel::Module => &["id", "project", "name", "qualifiedName", "filePath", "parentQn"],
-        NodeLabel::Class | NodeLabel::Struct | NodeLabel::Enum | NodeLabel::Trait | NodeLabel::Interface => &[
+        NodeLabel::Module => &[
+            "id",
+            "project",
+            "name",
+            "qualifiedName",
+            "filePath",
+            "parentQn",
+        ],
+        NodeLabel::Class
+        | NodeLabel::Struct
+        | NodeLabel::Enum
+        | NodeLabel::Trait
+        | NodeLabel::Interface => &[
             "id",
             "project",
             "name",
@@ -358,7 +374,14 @@ pub fn node_table_columns(label: NodeLabel) -> &'static [&'static str] {
             "typedefType",
             "parentQn",
         ],
-        NodeLabel::Namespace => &["id", "project", "name", "qualifiedName", "filePath", "parentQn"],
+        NodeLabel::Namespace => &[
+            "id",
+            "project",
+            "name",
+            "qualifiedName",
+            "filePath",
+            "parentQn",
+        ],
         NodeLabel::Constructor | NodeLabel::Handler | NodeLabel::Middleware | NodeLabel::Test => &[
             "id",
             "project",
@@ -446,13 +469,9 @@ pub fn node_table_columns(label: NodeLabel) -> &'static [&'static str] {
             "path",
             "parentQn",
         ],
-        NodeLabel::Process | NodeLabel::Community => &[
-            "id",
-            "project",
-            "name",
-            "qualifiedName",
-            "docstring",
-        ],
+        NodeLabel::Process | NodeLabel::Community => {
+            &["id", "project", "name", "qualifiedName", "docstring"]
+        }
         NodeLabel::Database => &[
             "id",
             "project",
@@ -514,10 +533,12 @@ pub fn relation_table_columns() -> &'static [&'static str] {
 /// Builds the exact DDL statement for a single node label.
 fn ddl_for_label(label: NodeLabel) -> String {
     match label {
-        NodeLabel::Project => "CREATE NODE TABLE Project (id STRING, name STRING, rootPath STRING, \
+        NodeLabel::Project => {
+            "CREATE NODE TABLE Project (id STRING, name STRING, rootPath STRING, \
              language STRING, fileCount INT64, indexedAt INT64, lastCommit STRING, \
              PRIMARY KEY (id));"
-            .to_string(),
+                .to_string()
+        }
         NodeLabel::Folder => "CREATE NODE TABLE Folder (id STRING, project STRING, name STRING, \
              filePath STRING, PRIMARY KEY (id));"
             .to_string(),
@@ -705,10 +726,7 @@ mod tests {
     #[test]
     fn escape_cypher_string_escapes_backslash_and_quote() {
         // Backslash is escaped first, then single quote.
-        assert_eq!(
-            escape_cypher_string("it's a \\test"),
-            "it\\'s a \\\\test"
-        );
+        assert_eq!(escape_cypher_string("it's a \\test"), "it\\'s a \\\\test");
         assert_eq!(escape_cypher_string("plain"), "plain");
         assert_eq!(escape_cypher_string("'quoted'"), "\\'quoted\\'");
         assert_eq!(escape_cypher_string("back\\slash"), "back\\\\slash");
@@ -928,7 +946,7 @@ mod tests {
 
     #[test]
     fn index_ddl_contains_fts_indexes_for_name_columns() {
-        // H11 / T004 (v0.1.4): FTS indexes on the `name` column of all 15
+        // FTS indexes on the `name` column of all 15
         // symbol-bearing tables for identifier-aware BM25 search via
         // codenexus_tokenizer.
         let indexes = index_ddl();
@@ -1010,7 +1028,9 @@ mod tests {
         assert!(ddl.iter().any(|s| s.contains("Embedding")));
         assert!(ddl.iter().any(|s| s.contains("CREATE INDEX")));
         assert!(ddl.iter().any(|s| s.to_ascii_uppercase().contains("FTS")));
-        assert!(ddl.iter().any(|s| s.to_ascii_uppercase().contains("VECTOR")));
+        assert!(ddl
+            .iter()
+            .any(|s| s.to_ascii_uppercase().contains("VECTOR")));
     }
 
     #[test]
@@ -1050,7 +1070,15 @@ mod tests {
         let cols = node_table_columns(NodeLabel::Project);
         assert_eq!(
             cols,
-            &["id", "name", "rootPath", "language", "fileCount", "indexedAt", "lastCommit"]
+            &[
+                "id",
+                "name",
+                "rootPath",
+                "language",
+                "fileCount",
+                "indexedAt",
+                "lastCommit"
+            ]
         );
     }
 

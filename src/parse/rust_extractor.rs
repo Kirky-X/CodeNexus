@@ -288,12 +288,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
 // Definition extractors
 // ---------------------------------------------------------------------------
 
-fn extract_function(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
     };
@@ -515,12 +510,7 @@ fn extract_use(node: Node, source: &str, result: &mut ExtractResult) {
     });
 }
 
-fn extract_call(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(func_node) = node.child_by_field_name("function") else {
         return;
     };
@@ -556,61 +546,279 @@ fn extract_call(
 /// ~60% of spurious CALLS edges while preserving user-code method calls.
 const STDLIB_METHOD_NAMES: &[&str] = &[
     // Vec / slice
-    "push", "pop", "len", "is_empty", "clear", "extend", "extend_from_slice",
-    "iter", "iter_mut", "into_iter", "get", "get_mut", "insert", "remove",
-    "swap_remove", "truncate", "contains", "starts_with", "ends_with",
-    "as_slice", "as_mut_slice", "sort", "sort_by", "sort_by_key", "sort_unstable",
-    "sort_unstable_by", "binary_search", "binary_search_by", "binary_search_by_key",
-    "drain", "retain", "windows", "chunks", "chunks_exact", "split", "splitn",
-    "rsplit", "rsplitn", "join", "concat", "first", "last", "first_mut",
-    "last_mut", "split_first", "split_last", "swap", "reverse", "fill",
-    "resize", "resize_with", "splice", "clone_from_slice", "copy_from_slice",
+    "push",
+    "pop",
+    "len",
+    "is_empty",
+    "clear",
+    "extend",
+    "extend_from_slice",
+    "iter",
+    "iter_mut",
+    "into_iter",
+    "get",
+    "get_mut",
+    "insert",
+    "remove",
+    "swap_remove",
+    "truncate",
+    "contains",
+    "starts_with",
+    "ends_with",
+    "as_slice",
+    "as_mut_slice",
+    "sort",
+    "sort_by",
+    "sort_by_key",
+    "sort_unstable",
+    "sort_unstable_by",
+    "binary_search",
+    "binary_search_by",
+    "binary_search_by_key",
+    "drain",
+    "retain",
+    "windows",
+    "chunks",
+    "chunks_exact",
+    "split",
+    "splitn",
+    "rsplit",
+    "rsplitn",
+    "join",
+    "concat",
+    "first",
+    "last",
+    "first_mut",
+    "last_mut",
+    "split_first",
+    "split_last",
+    "swap",
+    "reverse",
+    "fill",
+    "resize",
+    "resize_with",
+    "splice",
+    "clone_from_slice",
+    "copy_from_slice",
     // String / str
-    "push_str", "as_str", "as_bytes", "chars", "bytes", "lines", "trim",
-    "trim_start", "trim_end", "trim_start_matches", "trim_end_matches",
-    "to_lowercase", "to_uppercase", "to_ascii_lowercase", "to_ascii_uppercase",
-    "replace", "replacen", "to_string", "to_owned", "parse", "contains",
-    "starts_with", "ends_with", "find", "rfind", "matches", "rmatches",
-    "split_whitespace", "split_terminator", "is_char_boundary", "escape_default",
-    "is_empty", "is_ascii", "make_ascii_uppercase", "make_ascii_lowercase",
-    "strip_prefix", "strip_suffix",
+    "push_str",
+    "as_str",
+    "as_bytes",
+    "chars",
+    "bytes",
+    "lines",
+    "trim",
+    "trim_start",
+    "trim_end",
+    "trim_start_matches",
+    "trim_end_matches",
+    "to_lowercase",
+    "to_uppercase",
+    "to_ascii_lowercase",
+    "to_ascii_uppercase",
+    "replace",
+    "replacen",
+    "to_string",
+    "to_owned",
+    "parse",
+    "contains",
+    "starts_with",
+    "ends_with",
+    "find",
+    "rfind",
+    "matches",
+    "rmatches",
+    "split_whitespace",
+    "split_terminator",
+    "is_char_boundary",
+    "escape_default",
+    "is_empty",
+    "is_ascii",
+    "make_ascii_uppercase",
+    "make_ascii_lowercase",
+    "strip_prefix",
+    "strip_suffix",
     // Iterator
-    "map", "filter", "for_each", "collect", "fold", "try_fold", "reduce",
-    "any", "all", "count", "sum", "product", "min", "max", "min_by",
-    "max_by", "min_by_key", "max_by_key", "take", "skip", "take_while",
-    "skip_while", "zip", "chain", "enumerate", "peekable", "flat_map",
-    "flatten", "inspect", "rev", "step_by", "nth", "last", "find",
-    "find_map", "position", "rposition", "cloned", "copied", "by_ref",
-    "cycle", "unzip", "partition", "try_for_each", "cmp", "partial_cmp",
-    "eq", "ne", "lt", "le", "gt", "ge", "is_sorted", "is_sorted_by",
-    "is_sorted_by_key", "intersperse", "dedup", "dedup_by",
+    "map",
+    "filter",
+    "for_each",
+    "collect",
+    "fold",
+    "try_fold",
+    "reduce",
+    "any",
+    "all",
+    "count",
+    "sum",
+    "product",
+    "min",
+    "max",
+    "min_by",
+    "max_by",
+    "min_by_key",
+    "max_by_key",
+    "take",
+    "skip",
+    "take_while",
+    "skip_while",
+    "zip",
+    "chain",
+    "enumerate",
+    "peekable",
+    "flat_map",
+    "flatten",
+    "inspect",
+    "rev",
+    "step_by",
+    "nth",
+    "last",
+    "find",
+    "find_map",
+    "position",
+    "rposition",
+    "cloned",
+    "copied",
+    "by_ref",
+    "cycle",
+    "unzip",
+    "partition",
+    "try_for_each",
+    "cmp",
+    "partial_cmp",
+    "eq",
+    "ne",
+    "lt",
+    "le",
+    "gt",
+    "ge",
+    "is_sorted",
+    "is_sorted_by",
+    "is_sorted_by_key",
+    "intersperse",
+    "dedup",
+    "dedup_by",
     // Option / Result
-    "unwrap", "expect", "unwrap_or", "unwrap_or_default", "unwrap_or_else",
-    "is_some", "is_none", "is_ok", "is_err", "ok", "err", "and_then",
-    "or_else", "map_err", "as_ref", "as_mut", "as_deref", "as_deref_mut",
-    "get_or_insert", "get_or_insert_with", "take", "replace", "copied",
-    "cloned", "expect_err", "unwrap_err", "unwrap_or_default_err",
-    "map_or", "map_or_else", "ok_or", "ok_or_else", "state",
+    "unwrap",
+    "expect",
+    "unwrap_or",
+    "unwrap_or_default",
+    "unwrap_or_else",
+    "is_some",
+    "is_none",
+    "is_ok",
+    "is_err",
+    "ok",
+    "err",
+    "and_then",
+    "or_else",
+    "map_err",
+    "as_ref",
+    "as_mut",
+    "as_deref",
+    "as_deref_mut",
+    "get_or_insert",
+    "get_or_insert_with",
+    "take",
+    "replace",
+    "copied",
+    "cloned",
+    "expect_err",
+    "unwrap_err",
+    "unwrap_or_default_err",
+    "map_or",
+    "map_or_else",
+    "ok_or",
+    "ok_or_else",
+    "state",
     // HashMap / BTreeMap
-    "keys", "values", "values_mut", "entry", "retain", "capacity",
-    "reserve", "shrink_to_fit", "with_capacity",
+    "keys",
+    "values",
+    "values_mut",
+    "entry",
+    "retain",
+    "capacity",
+    "reserve",
+    "shrink_to_fit",
+    "with_capacity",
     // Clone / Default / conversion
-    "clone", "into", "from", "default", "to_vec", "to_string", "to_owned",
-    "into_iter", "into_string", "into_bytes", "into_boxed_str",
-    "into_boxed_bytes", "into_raw_parts", "leak",
+    "clone",
+    "into",
+    "from",
+    "default",
+    "to_vec",
+    "to_string",
+    "to_owned",
+    "into_iter",
+    "into_string",
+    "into_bytes",
+    "into_boxed_str",
+    "into_boxed_bytes",
+    "into_raw_parts",
+    "leak",
     // I/O
-    "read", "read_to_string", "read_to_end", "read_line", "read_exact",
-    "write", "write_str", "write_all", "writeln", "flush", "close", "seek",
-    "connect", "peek",
+    "read",
+    "read_to_string",
+    "read_to_end",
+    "read_line",
+    "read_exact",
+    "write",
+    "write_str",
+    "write_all",
+    "writeln",
+    "flush",
+    "close",
+    "seek",
+    "connect",
+    "peek",
     // Misc stdlib
-    "lock", "try_lock", "unlock", "send", "recv", "try_recv", "recv_timeout",
-    "send_timeout", "bind", "listen", "accept", "spawn", "join", "yield_now",
-    "sleep", "elapsed", "duration_since", "instant", "now", "with_capacity",
-    "into_owned", "into_path_buf", "to_path_buf", "to_path", "exists",
-    "is_file", "is_dir", "metadata", "canonicalize", "read_dir", "create",
-    "create_dir", "create_dir_all", "remove_file", "remove_dir", "rename",
-    "copy", "hard_link", "symlink", "read_link", "current_dir", "set_current_dir",
-    "temp_dir", "home_dir", "open", "truncate", "set_len", "set_permissions",
+    "lock",
+    "try_lock",
+    "unlock",
+    "send",
+    "recv",
+    "try_recv",
+    "recv_timeout",
+    "send_timeout",
+    "bind",
+    "listen",
+    "accept",
+    "spawn",
+    "join",
+    "yield_now",
+    "sleep",
+    "elapsed",
+    "duration_since",
+    "instant",
+    "now",
+    "with_capacity",
+    "into_owned",
+    "into_path_buf",
+    "to_path_buf",
+    "to_path",
+    "exists",
+    "is_file",
+    "is_dir",
+    "metadata",
+    "canonicalize",
+    "read_dir",
+    "create",
+    "create_dir",
+    "create_dir_all",
+    "remove_file",
+    "remove_dir",
+    "rename",
+    "copy",
+    "hard_link",
+    "symlink",
+    "read_link",
+    "current_dir",
+    "set_current_dir",
+    "temp_dir",
+    "home_dir",
+    "open",
+    "truncate",
+    "set_len",
+    "set_permissions",
 ];
 
 fn is_stdlib_method(name: &str) -> bool {
@@ -1029,10 +1237,11 @@ fn pattern_name(node: Node, source: &str) -> Option<String> {
             // with invalid characters (brackets, commas) that corrupt CSV
             // imports.
             let text = node_text(node, source)?;
-            if text
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '_')
-                && text.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
+            if text.chars().all(|c| c.is_alphanumeric() || c == '_')
+                && text
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_alphabetic() || c == '_')
             {
                 Some(text.to_string())
             } else {
@@ -1324,7 +1533,10 @@ fn main() {
             .iter()
             .filter(|e| e.edge_type == EdgeType::Contains)
             .count();
-        assert_eq!(contains_count, 0, "B1 fix: no CONTAINS edges should be emitted");
+        assert_eq!(
+            contains_count, 0,
+            "B1 fix: no CONTAINS edges should be emitted"
+        );
     }
 
     #[test]
@@ -1996,8 +2208,14 @@ impl Foo { fn new() -> Self { Self } }
         let result = extract(src);
         let writes: Vec<_> = result.writes.iter().map(|w| w.var_name.as_str()).collect();
         // pattern_name extracts only the first binding of a tuple pattern.
-        assert!(writes.contains(&"a"), "should write first binding a: {writes:?}");
-        assert!(!writes.contains(&"b"), "should not write b (only first binding extracted): {writes:?}");
+        assert!(
+            writes.contains(&"a"),
+            "should write first binding a: {writes:?}"
+        );
+        assert!(
+            !writes.contains(&"b"),
+            "should not write b (only first binding extracted): {writes:?}"
+        );
     }
 
     #[test]
@@ -2005,7 +2223,10 @@ impl Foo { fn new() -> Self { Self } }
         let src = "fn main() { let x = 1; let &y = &x; }";
         let result = extract(src);
         let writes: Vec<_> = result.writes.iter().map(|w| w.var_name.as_str()).collect();
-        assert!(writes.contains(&"y"), "should write y from reference pattern: {writes:?}");
+        assert!(
+            writes.contains(&"y"),
+            "should write y from reference pattern: {writes:?}"
+        );
     }
 
     #[test]
@@ -2015,14 +2236,21 @@ impl Foo { fn new() -> Self { Self } }
         let writes: Vec<_> = result.writes.iter().map(|w| w.var_name.as_str()).collect();
         // pattern_name returns the type name for a struct pattern (`P`), not
         // the field name (`x`).
-        assert!(writes.contains(&"P"), "should write type name P from struct pattern: {writes:?}");
+        assert!(
+            writes.contains(&"P"),
+            "should write type name P from struct pattern: {writes:?}"
+        );
     }
 
     #[test]
     fn parenthesized_call_expression() {
         let src = "fn foo() -> fn() { bar } fn bar() {} fn main() { (foo())(); }";
         let result = extract(src);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             callees.contains(&"foo"),
             "should extract call to foo: {callees:?}"
@@ -2034,7 +2262,11 @@ impl Foo { fn new() -> Self { Self } }
         // `foo()()` — the outer call's function is itself a call_expression.
         let src = "fn foo() -> fn() { bar } fn bar() {} fn main() { foo()(); }";
         let result = extract(src);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             callees.contains(&"foo"),
             "should extract outer call to foo: {callees:?}"
@@ -2106,11 +2338,7 @@ pub mod other {
         sorted.sort();
         let before = sorted.len();
         sorted.dedup();
-        assert_eq!(
-            sorted.len(),
-            before,
-            "FQN collision detected: {impl_qns:?}"
-        );
+        assert_eq!(sorted.len(), before, "FQN collision detected: {impl_qns:?}");
     }
 
     #[test]
@@ -2146,8 +2374,14 @@ pub mod other {
             .collect();
         assert_eq!(modules.len(), 2, "should extract 2 Module nodes");
         let names: Vec<_> = modules.iter().map(|n| n.name.as_str()).collect();
-        assert!(names.contains(&"network"), "mod network; should be a Module");
-        assert!(names.contains(&"parser"), "mod parser {{}} should be a Module");
+        assert!(
+            names.contains(&"network"),
+            "mod network; should be a Module"
+        );
+        assert!(
+            names.contains(&"parser"),
+            "mod parser {{}} should be a Module"
+        );
         for m in &modules {
             assert_eq!(m.language, Some(Language::Rust));
             assert!(m.is_global, "top-level mod should be global");
@@ -2176,7 +2410,10 @@ pub mod other {
             .iter()
             .filter(|e| e.edge_type == EdgeType::Contains && e.target == module_node.id)
             .count();
-        assert_eq!(contains_count, 0, "B1 fix: Module should have 0 CONTAINS edges");
+        assert_eq!(
+            contains_count, 0,
+            "B1 fix: Module should have 0 CONTAINS edges"
+        );
     }
 
     // --- IMPLEMENTS edge: generic trait target stripping (ADR-014 regression) ---
@@ -2246,7 +2483,13 @@ impl From<std::io::Error> for SecureNotifyError {
         // Edge IDs (source, target, start_line) must be unique.
         let mut edge_keys: Vec<(String, String, u32)> = implements
             .iter()
-            .map(|e| (e.source.clone(), e.target.clone(), e.start_line.unwrap_or(0)))
+            .map(|e| {
+                (
+                    e.source.clone(),
+                    e.target.clone(),
+                    e.start_line.unwrap_or(0),
+                )
+            })
             .collect();
         let total = edge_keys.len();
         edge_keys.sort();

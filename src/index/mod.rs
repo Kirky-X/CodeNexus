@@ -20,10 +20,10 @@
 //!   Resolve, Confidence, Load) for Task 2.5.
 
 pub mod capability;
-pub mod module;
 pub mod error;
 pub mod hash;
 pub mod incremental;
+pub mod module;
 pub mod phases;
 pub mod pipeline;
 pub mod pipeline_dag;
@@ -31,6 +31,6 @@ pub mod pipeline_dag;
 pub use error::{IndexError, Result};
 pub use hash::{compute_content_hash, compute_file_hash};
 pub use incremental::{diff_files, FileDiff};
-pub use pipeline::{IndexFacade, IndexResult, Pipeline};
-pub use pipeline_dag::{Phase, PhaseError, PipelineCtx, Pipeline as DagPipeline};
 pub use module::{IndexConfig, IndexerModule, IndexerModuleBuilder};
+pub use pipeline::{IndexFacade, IndexResult, Pipeline};
+pub use pipeline_dag::{Phase, PhaseError, Pipeline as DagPipeline, PipelineCtx};

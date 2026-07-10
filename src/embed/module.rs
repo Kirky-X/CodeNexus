@@ -199,7 +199,10 @@ impl EmbedClient for EmbedCapability {
                 *guard = Some(client);
             }
             // unwrap is safe: we just ensured it's Some.
-            guard.as_ref().expect("local_client initialized").embed(texts)
+            guard
+                .as_ref()
+                .expect("local_client initialized")
+                .embed(texts)
         } else {
             // Remote HTTP mode — create a fresh OpenAIEmbedClient per call.
             if !self.config.has_api_key() {

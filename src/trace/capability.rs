@@ -42,11 +42,7 @@ pub trait TraceEngine: Send + Sync {
     /// via [`trace`](Self::trace) (that returns a [`TraceResult`], not the
     /// graph itself). The concrete impl delegates to
     /// [`load_graph_for_symbol`](super::graph_loader::load_graph_for_symbol).
-    fn load_graph(
-        &self,
-        symbol: &str,
-        depth: usize,
-    ) -> std::result::Result<Graph, TraceError>;
+    fn load_graph(&self, symbol: &str, depth: usize) -> std::result::Result<Graph, TraceError>;
 }
 
 /// Compile-time assertion that `TraceEngine` is object-safe and `Send + Sync`.

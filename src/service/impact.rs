@@ -64,16 +64,15 @@ async fn impact_core(symbol: String, depth: u32) -> Result<ImpactOutput, ApiErro
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
 #[service_api(
-    name = "codenexus",
+    name = "impact",
     version = "0.3.2",
-    tool_name = "impact",
     description = "Analyze the blast radius (upstream callers) of changing a symbol.",
-    cli = true,
+    cli = true
 )]
 async fn impact(symbol: String, depth: u32) -> Result<(), ApiError> {
     let result = impact_core(symbol, depth).await?;
-    let json = serde_json::to_string(&result)
-        .map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let json =
+        serde_json::to_string(&result).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }
@@ -81,10 +80,10 @@ async fn impact(symbol: String, depth: u32) -> Result<(), ApiError> {
 /// MCP wrapper — returns result for MCP protocol.
 #[cfg(feature = "mcp")]
 #[service_api(
-    name = "codenexus",
+    name = "impact",
     version = "0.3.2",
     tool_name = "impact",
-    description = "Analyze the blast radius (upstream callers) of changing a symbol.",
+    description = "Analyze the blast radius (upstream callers) of changing a symbol."
 )]
 async fn impact_mcp(symbol: String, depth: u32) -> Result<ImpactOutput, ApiError> {
     impact_core(symbol, depth).await

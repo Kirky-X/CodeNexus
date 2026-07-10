@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! AST complexity analysis (T001-T004, v0.2.1).
+//! AST complexity analysis.
 //!
 //! Provides per-function complexity metrics (cyclomatic, cognitive, nesting
 //! depth, function length) with industry-standard severity classification
@@ -30,7 +30,7 @@ pub enum Severity {
     Critical,
 }
 
-/// Estimated time complexity class (T010). Variant declaration order defines
+/// Estimated time complexity class. Variant declaration order defines
 /// the derived `Ord` ordering: `O1 < OLogN < ON < ONLogN < ON2 < ON3 < O2N`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum TimeComplexity {
@@ -74,7 +74,7 @@ impl FromStr for TimeComplexity {
     }
 }
 
-/// Estimated space complexity class (T013). Variant declaration order defines
+/// Estimated space complexity class. Variant declaration order defines
 /// the derived `Ord` ordering: `O1 < ON < ON2`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum SpaceComplexity {
@@ -146,7 +146,11 @@ impl Default for ComplexityThresholds {
             func_length: (30, 100, 200),
             halstead_volume: (100, 1000, 8000),
             maintainability: (85, 65, 25),
-            time_complexity: (TimeComplexity::OLogN, TimeComplexity::ON, TimeComplexity::ON2),
+            time_complexity: (
+                TimeComplexity::OLogN,
+                TimeComplexity::ON,
+                TimeComplexity::ON2,
+            ),
             space_complexity: (SpaceComplexity::O1, SpaceComplexity::ON),
         }
     }
@@ -266,7 +270,10 @@ impl Severity {
     /// 3-level only (no Critical — only 3 enum variants): `sc <= yellow → Green`,
     /// `sc <= red → Yellow`, else `Red`, using `SpaceComplexity::Ord`
     /// (`O1 < ON < ON2`).
-    pub fn from_space_complexity(sc: SpaceComplexity, thresholds: &ComplexityThresholds) -> Severity {
+    pub fn from_space_complexity(
+        sc: SpaceComplexity,
+        thresholds: &ComplexityThresholds,
+    ) -> Severity {
         let (yellow, red) = thresholds.space_complexity;
         if sc <= yellow {
             Severity::Green
@@ -323,13 +330,13 @@ pub struct ComplexityEntry {
     pub function_length: u32,
     /// Highest severity across all configured metrics.
     pub overall_severity: Severity,
-    /// Halstead complexity metrics (T007).
+    /// Halstead complexity metrics.
     pub halstead: HalsteadMetrics,
-    /// Maintainability Index (Microsoft 2007, 0-100, higher=better) (T009).
+    /// Maintainability Index (Microsoft 2007, 0-100, higher=better).
     pub maintainability_index: f64,
-    /// Estimated time complexity class (T012).
+    /// Estimated time complexity class.
     pub time_complexity: TimeComplexity,
-    /// Estimated space complexity class (T015).
+    /// Estimated space complexity class.
     pub space_complexity: SpaceComplexity,
 }
 
@@ -482,7 +489,7 @@ fn count_exit_nodes_recursive(node: Node<'_>, language: Language) -> u32 {
     count
 }
 
-// --- Halstead complexity (T006) ---
+// --- Halstead complexity ---
 
 /// Returns the tree-sitter node kind for the function body block of `language`,
 /// or `None` for languages without a clear body container (e.g. Fortran).
@@ -653,7 +660,7 @@ fn collect_halstead(
     }
 }
 
-// --- Maintainability Index (T008) ---
+// --- Maintainability Index ---
 
 /// Computes the Maintainability Index (Microsoft 2007 revision).
 ///
@@ -669,7 +676,7 @@ pub fn calc_maintainability_index(cyclomatic: u32, halstead_volume: f64, loc: u3
     (raw * 100.0 / 171.0).clamp(0.0, 100.0)
 }
 
-// --- Time complexity estimation (T011) ---
+// --- Time complexity estimation ---
 
 /// Returns the tree-sitter node kind for `while` loops in `language`.
 fn while_kind(language: Language) -> &'static str {
@@ -820,7 +827,7 @@ pub fn estimate_time_complexity(
     }
 }
 
-// --- Space complexity estimation (T014) ---
+// --- Space complexity estimation ---
 
 /// Returns true if `text` contains a dynamic-allocation pattern (Rust
 /// collections: `Vec::new()`, `vec![]`, `HashMap::new()`, `BTreeMap::new()`,
@@ -984,7 +991,11 @@ pub fn calc_nesting_depth(tree: &tree_sitter::Tree, language: Language) -> u32 {
 
 fn nesting_depth_count(node: Node<'_>, language: Language, current_depth: u32) -> u32 {
     let is_branch = is_branch_node(language, node.kind());
-    let this_depth = if is_branch { current_depth + 1 } else { current_depth };
+    let this_depth = if is_branch {
+        current_depth + 1
+    } else {
+        current_depth
+    };
     let mut max_depth = if is_branch { this_depth } else { 0 };
 
     let mut cursor = node.walk();
@@ -1020,7 +1031,10 @@ impl<'a> ComplexityAnalyzer<'a> {
     /// the defaults used by [`new`](Self::new).
     #[must_use]
     pub fn new_with_thresholds(storage: &'a dyn Storage, thresholds: ComplexityThresholds) -> Self {
-        Self { storage, thresholds }
+        Self {
+            storage,
+            thresholds,
+        }
     }
 
     /// Returns complexity entries for every `Function`/`Method` node in
@@ -1072,9 +1086,7 @@ impl<'a> ComplexityAnalyzer<'a> {
 
                 // Skip nodes with empty content (nothing to parse).
                 if content.is_empty() {
-                    eprintln!(
-                        "warning: skipping {qualified_name} ({file_path}): empty content"
-                    );
+                    eprintln!("warning: skipping {qualified_name} ({file_path}): empty content");
                     continue;
                 }
 
@@ -1104,9 +1116,7 @@ impl<'a> ComplexityAnalyzer<'a> {
                 let tree = match parser.parse(&content, None) {
                     Some(t) => t,
                     None => {
-                        eprintln!(
-                            "warning: skipping {qualified_name} ({file_path}): parse failed"
-                        );
+                        eprintln!("warning: skipping {qualified_name} ({file_path}): parse failed");
                         continue;
                     }
                 };
@@ -1118,18 +1128,10 @@ impl<'a> ComplexityAnalyzer<'a> {
                 let halstead = calc_halstead(&tree, content.as_bytes(), language);
                 let maintainability_index =
                     calc_maintainability_index(cyclomatic, halstead.volume, function_length);
-                let time_complexity = estimate_time_complexity(
-                    &tree,
-                    content.as_bytes(),
-                    language,
-                    &name,
-                );
-                let space_complexity = estimate_space_complexity(
-                    &tree,
-                    content.as_bytes(),
-                    language,
-                    &name,
-                );
+                let time_complexity =
+                    estimate_time_complexity(&tree, content.as_bytes(), language, &name);
+                let space_complexity =
+                    estimate_space_complexity(&tree, content.as_bytes(), language, &name);
 
                 let mut entry = ComplexityEntry {
                     name,
@@ -1180,7 +1182,7 @@ mod tests {
     use crate::parse::parser_factory::ParserFactory;
     use tempfile::TempDir;
 
-    // --- T005: is_branch_node tests ---
+    // --- is_branch_node tests ---
 
     #[test]
     fn from_cyclomatic_classification() {
@@ -1259,8 +1261,18 @@ mod tests {
         let t = ComplexityThresholds::default();
         assert_eq!(t.halstead_volume, (100, 1000, 8000));
         assert_eq!(t.maintainability, (85, 65, 25));
-        assert_eq!(t.time_complexity, (TimeComplexity::OLogN, TimeComplexity::ON, TimeComplexity::ON2));
-        assert_eq!(t.space_complexity, (SpaceComplexity::O1, SpaceComplexity::ON));
+        assert_eq!(
+            t.time_complexity,
+            (
+                TimeComplexity::OLogN,
+                TimeComplexity::ON,
+                TimeComplexity::ON2
+            )
+        );
+        assert_eq!(
+            t.space_complexity,
+            (SpaceComplexity::O1, SpaceComplexity::ON)
+        );
     }
 
     /// Builds a `ComplexityEntry` with the given metric values and placeholder
@@ -1314,7 +1326,7 @@ mod tests {
         assert_eq!(entry.overall_severity, Severity::Yellow);
     }
 
-    // --- T005: is_branch_node tests ---
+    // --- is_branch_node tests ---
 
     #[cfg(feature = "lang-rust")]
     #[test]
@@ -1387,7 +1399,7 @@ mod tests {
         assert!(is_branch_node(Language::Java, "catch_clause"));
     }
 
-    // --- T007: calc_cyclomatic tests ---
+    // --- calc_cyclomatic tests ---
 
     #[cfg(feature = "lang-rust")]
     #[test]
@@ -1475,7 +1487,7 @@ fn complex(x: i32) {
         assert_eq!(calc_cyclomatic(&tree, Language::Rust), 3);
     }
 
-    // --- T006: calc_halstead tests ---
+    // --- calc_halstead tests ---
 
     #[cfg(feature = "lang-rust")]
     #[test]
@@ -1485,11 +1497,27 @@ fn complex(x: i32) {
         let tree = parser.parse(src, None).unwrap();
         let m = calc_halstead(&tree, src.as_bytes(), Language::Rust);
         // `+` is the one distinct operator → n1 >= 1, N1 >= 1.
-        assert!(m.n1 >= 1, "n1 (distinct operators) should be >= 1, got {}", m.n1);
-        assert!(m.n1_total >= 1, "N1 (total operators) should be >= 1, got {}", m.n1_total);
+        assert!(
+            m.n1 >= 1,
+            "n1 (distinct operators) should be >= 1, got {}",
+            m.n1
+        );
+        assert!(
+            m.n1_total >= 1,
+            "N1 (total operators) should be >= 1, got {}",
+            m.n1_total
+        );
         // `a` and `b` are operands → n2 >= 2, N2 >= 2.
-        assert!(m.n2 >= 2, "n2 (distinct operands) should be >= 2, got {}", m.n2);
-        assert!(m.n2_total >= 2, "N2 (total operands) should be >= 2, got {}", m.n2_total);
+        assert!(
+            m.n2 >= 2,
+            "n2 (distinct operands) should be >= 2, got {}",
+            m.n2
+        );
+        assert!(
+            m.n2_total >= 2,
+            "N2 (total operands) should be >= 2, got {}",
+            m.n2_total
+        );
         assert!(m.volume > 0.0, "volume should be > 0, got {}", m.volume);
     }
 
@@ -1504,7 +1532,7 @@ fn complex(x: i32) {
         assert_eq!(m, HalsteadMetrics::default());
     }
 
-    // --- T008: calc_maintainability_index tests ---
+    // --- calc_maintainability_index tests ---
 
     #[test]
     fn mi_simple_function_high_score() {
@@ -1522,10 +1550,7 @@ fn complex(x: i32) {
         // CC=30, V=5000, LOC=200 → MI ≈ 19.9 (complex, hard to maintain).
         let mi = calc_maintainability_index(30, 5000.0, 200);
         assert!(mi.is_finite(), "MI should be finite, got {mi}");
-        assert!(
-            mi < 65.0,
-            "complex function MI should be < 65, got {mi}"
-        );
+        assert!(mi < 65.0, "complex function MI should be < 65, got {mi}");
     }
 
     #[test]
@@ -1546,7 +1571,7 @@ fn complex(x: i32) {
         assert!(mi >= 0.0 && mi <= 100.0, "MI out of range: {mi}");
     }
 
-    // --- T010: TimeComplexity tests ---
+    // --- TimeComplexity tests ---
 
     #[test]
     fn time_complexity_display_format() {
@@ -1561,16 +1586,34 @@ fn complex(x: i32) {
 
     #[test]
     fn time_complexity_fromstr_parses() {
-        assert_eq!("O(1)".parse::<TimeComplexity>().unwrap(), TimeComplexity::O1);
-        assert_eq!("O(log n)".parse::<TimeComplexity>().unwrap(), TimeComplexity::OLogN);
-        assert_eq!("O(n)".parse::<TimeComplexity>().unwrap(), TimeComplexity::ON);
+        assert_eq!(
+            "O(1)".parse::<TimeComplexity>().unwrap(),
+            TimeComplexity::O1
+        );
+        assert_eq!(
+            "O(log n)".parse::<TimeComplexity>().unwrap(),
+            TimeComplexity::OLogN
+        );
+        assert_eq!(
+            "O(n)".parse::<TimeComplexity>().unwrap(),
+            TimeComplexity::ON
+        );
         assert_eq!(
             "O(n log n)".parse::<TimeComplexity>().unwrap(),
             TimeComplexity::ONLogN
         );
-        assert_eq!("O(n^2)".parse::<TimeComplexity>().unwrap(), TimeComplexity::ON2);
-        assert_eq!("O(n^3)".parse::<TimeComplexity>().unwrap(), TimeComplexity::ON3);
-        assert_eq!("O(2^n)".parse::<TimeComplexity>().unwrap(), TimeComplexity::O2N);
+        assert_eq!(
+            "O(n^2)".parse::<TimeComplexity>().unwrap(),
+            TimeComplexity::ON2
+        );
+        assert_eq!(
+            "O(n^3)".parse::<TimeComplexity>().unwrap(),
+            TimeComplexity::ON3
+        );
+        assert_eq!(
+            "O(2^n)".parse::<TimeComplexity>().unwrap(),
+            TimeComplexity::O2N
+        );
         // Unknown string → error.
         assert!("O(n!)".parse::<TimeComplexity>().is_err());
     }
@@ -1586,7 +1629,7 @@ fn complex(x: i32) {
         assert!(TimeComplexity::ON3 < TimeComplexity::O2N);
     }
 
-    // --- T011: estimate_time_complexity tests ---
+    // --- estimate_time_complexity tests ---
 
     #[cfg(feature = "lang-rust")]
     #[test]
@@ -1714,7 +1757,7 @@ fn f(arr: &mut Vec<i32>, x: i32) -> bool {
         assert_ne!(tc, TimeComplexity::O2N);
     }
 
-    // --- T013: SpaceComplexity tests ---
+    // --- SpaceComplexity tests ---
 
     #[test]
     fn space_complexity_display_format() {
@@ -1725,9 +1768,18 @@ fn f(arr: &mut Vec<i32>, x: i32) -> bool {
 
     #[test]
     fn space_complexity_fromstr() {
-        assert_eq!("O(1)".parse::<SpaceComplexity>().unwrap(), SpaceComplexity::O1);
-        assert_eq!("O(n)".parse::<SpaceComplexity>().unwrap(), SpaceComplexity::ON);
-        assert_eq!("O(n^2)".parse::<SpaceComplexity>().unwrap(), SpaceComplexity::ON2);
+        assert_eq!(
+            "O(1)".parse::<SpaceComplexity>().unwrap(),
+            SpaceComplexity::O1
+        );
+        assert_eq!(
+            "O(n)".parse::<SpaceComplexity>().unwrap(),
+            SpaceComplexity::ON
+        );
+        assert_eq!(
+            "O(n^2)".parse::<SpaceComplexity>().unwrap(),
+            SpaceComplexity::ON2
+        );
         // Unknown string → error.
         assert!("O(n^3)".parse::<SpaceComplexity>().is_err());
     }
@@ -1740,7 +1792,7 @@ fn f(arr: &mut Vec<i32>, x: i32) -> bool {
         assert!(SpaceComplexity::O1 < SpaceComplexity::ON2);
     }
 
-    // --- T014: estimate_space_complexity tests ---
+    // --- estimate_space_complexity tests ---
 
     #[cfg(feature = "lang-rust")]
     #[test]
@@ -1802,7 +1854,7 @@ fn f(arr: &mut Vec<i32>, x: i32) -> bool {
         );
     }
 
-    // --- T009: calc_cognitive tests ---
+    // --- calc_cognitive tests ---
 
     #[cfg(feature = "lang-rust")]
     #[test]
@@ -1848,7 +1900,7 @@ fn flat(a: i32) {
         assert_eq!(calc_cognitive(&tree, Language::Rust), 0);
     }
 
-    // --- T011: calc_nesting_depth tests ---
+    // --- calc_nesting_depth tests ---
 
     #[cfg(feature = "lang-rust")]
     #[test]
@@ -1897,7 +1949,7 @@ fn parallel(a: i32) {
         assert_eq!(calc_nesting_depth(&tree, Language::Rust), 3);
     }
 
-    // --- T013: ComplexityAnalyzer tests ---
+    // --- ComplexityAnalyzer tests ---
 
     /// Returns a fresh on-disk database path inside a temp dir.
     fn fresh_db_path() -> std::path::PathBuf {
@@ -1954,7 +2006,10 @@ fn parallel(a: i32) {
         let storage = storage(&kit);
         let analyzer = ComplexityAnalyzer::new(&*storage);
         let result = analyzer.analyze("demo").expect("analyze");
-        assert!(result.is_empty(), "empty DB should yield no complexity entries");
+        assert!(
+            result.is_empty(),
+            "empty DB should yield no complexity entries"
+        );
     }
 
     #[cfg(feature = "lang-rust")]
@@ -2050,7 +2105,11 @@ fn parallel(a: i32) {
 
         let bar = result.iter().find(|e| e.name == "bar").expect("bar entry");
         assert_eq!(bar.cyclomatic, 4, "bar cyclomatic");
-        assert!(bar.cognitive > 0, "bar cognitive should be > 0, got {}", bar.cognitive);
+        assert!(
+            bar.cognitive > 0,
+            "bar cognitive should be > 0, got {}",
+            bar.cognitive
+        );
         assert_eq!(bar.nesting_depth, 3, "bar nesting (if>for>if = 3 levels)");
         assert_eq!(bar.function_length, 5, "bar length");
     }
@@ -2098,7 +2157,10 @@ fn parallel(a: i32) {
         );
         assert!(add.halstead.n2 >= 2, "add should have >= 2 operands");
 
-        let empty = result.iter().find(|e| e.name == "empty").expect("empty entry");
+        let empty = result
+            .iter()
+            .find(|e| e.name == "empty")
+            .expect("empty entry");
         assert_eq!(
             empty.halstead,
             HalsteadMetrics::default(),
@@ -2106,7 +2168,7 @@ fn parallel(a: i32) {
         );
     }
 
-    // --- T009: from_maintainability + analyze_includes_mi tests ---
+    // --- from_maintainability + analyze_includes_mi tests ---
 
     #[test]
     fn from_maintainability_high_is_green() {
@@ -2171,23 +2233,44 @@ fn parallel(a: i32) {
         );
     }
 
-    // --- T012: from_time_complexity + analyze_includes_time_complexity tests ---
+    // --- from_time_complexity + analyze_includes_time_complexity tests ---
 
     #[test]
     fn from_time_complexity_classification() {
         let t = ComplexityThresholds::default();
         // Default: (green=OLogN, yellow=ON, red=ON2).
         // tc <= OLogN → Green.
-        assert_eq!(Severity::from_time_complexity(TimeComplexity::O1, &t), Severity::Green);
-        assert_eq!(Severity::from_time_complexity(TimeComplexity::OLogN, &t), Severity::Green);
+        assert_eq!(
+            Severity::from_time_complexity(TimeComplexity::O1, &t),
+            Severity::Green
+        );
+        assert_eq!(
+            Severity::from_time_complexity(TimeComplexity::OLogN, &t),
+            Severity::Green
+        );
         // OLogN < tc <= ON → Yellow.
-        assert_eq!(Severity::from_time_complexity(TimeComplexity::ON, &t), Severity::Yellow);
+        assert_eq!(
+            Severity::from_time_complexity(TimeComplexity::ON, &t),
+            Severity::Yellow
+        );
         // ON < tc <= ON2 → Red.
-        assert_eq!(Severity::from_time_complexity(TimeComplexity::ONLogN, &t), Severity::Red);
-        assert_eq!(Severity::from_time_complexity(TimeComplexity::ON2, &t), Severity::Red);
+        assert_eq!(
+            Severity::from_time_complexity(TimeComplexity::ONLogN, &t),
+            Severity::Red
+        );
+        assert_eq!(
+            Severity::from_time_complexity(TimeComplexity::ON2, &t),
+            Severity::Red
+        );
         // tc > ON2 → Critical.
-        assert_eq!(Severity::from_time_complexity(TimeComplexity::ON3, &t), Severity::Critical);
-        assert_eq!(Severity::from_time_complexity(TimeComplexity::O2N, &t), Severity::Critical);
+        assert_eq!(
+            Severity::from_time_complexity(TimeComplexity::ON3, &t),
+            Severity::Critical
+        );
+        assert_eq!(
+            Severity::from_time_complexity(TimeComplexity::O2N, &t),
+            Severity::Critical
+        );
     }
 
     #[cfg(feature = "lang-rust")]
@@ -2245,7 +2328,7 @@ fn parallel(a: i32) {
         );
     }
 
-    // --- T015: from_space_complexity + analyze_includes_space_complexity tests ---
+    // --- from_space_complexity + analyze_includes_space_complexity tests ---
 
     #[test]
     fn from_space_complexity_classification() {
@@ -2323,7 +2406,7 @@ fn parallel(a: i32) {
         );
     }
 
-    // --- T025: from_halstead_volume tests ---
+    // --- from_halstead_volume tests ---
 
     #[test]
     fn from_halstead_volume_low_is_green() {
@@ -2349,7 +2432,10 @@ fn parallel(a: i32) {
         assert_eq!(Severity::from_halstead_volume(1001.0, &t), Severity::Red);
         assert_eq!(Severity::from_halstead_volume(8000.0, &t), Severity::Red);
         // value > 8000 → Critical.
-        assert_eq!(Severity::from_halstead_volume(10000.0, &t), Severity::Critical);
+        assert_eq!(
+            Severity::from_halstead_volume(10000.0, &t),
+            Severity::Critical
+        );
     }
 
     #[test]
@@ -2361,7 +2447,10 @@ fn parallel(a: i32) {
         assert_eq!(Severity::from_halstead_volume(50.0, &t), Severity::Green);
         assert_eq!(Severity::from_halstead_volume(100.0, &t), Severity::Yellow);
         assert_eq!(Severity::from_halstead_volume(400.0, &t), Severity::Red);
-        assert_eq!(Severity::from_halstead_volume(600.0, &t), Severity::Critical);
+        assert_eq!(
+            Severity::from_halstead_volume(600.0, &t),
+            Severity::Critical
+        );
     }
 
     #[test]
@@ -2378,7 +2467,7 @@ fn parallel(a: i32) {
         );
     }
 
-    // --- T015: detect_language tests ---
+    // --- detect_language tests ---
 
     #[cfg(all(
         feature = "lang-rust",

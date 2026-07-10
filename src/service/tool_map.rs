@@ -7,13 +7,13 @@ use serde::Serialize;
 
 #[cfg(feature = "api-review")]
 use crate::analysis::api_review::{ApiReviewer, ToolEntry};
+use crate::cli::error::CliError;
 #[cfg(feature = "api-review")]
 use crate::kit::{Kit, StorageKey};
 #[cfg(all(feature = "cli", feature = "api-review"))]
 use crate::service::error::kit_not_initialized;
 #[cfg(all(feature = "cli", feature = "api-review"))]
 use crate::service::runtime::kit;
-use crate::cli::error::CliError;
 
 #[cfg(all(feature = "cli", feature = "api-review"))]
 use sdforge::prelude::ApiError;
@@ -59,15 +59,14 @@ fn to_api_error(e: CliError) -> ApiError {
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "api-review"))]
 #[service_api(
-    name = "codenexus",
+    name = "tool_map",
     version = "0.3.2",
-    tool_name = "tool_map",
     description = "List MCP tools and their handler functions.",
-    cli = true,
+    cli = true
 )]
 async fn tool_map(project: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    tool_map_core(&kit, &project).map_err(to_api_error)?;
+    tool_map_core(kit, &project).map_err(to_api_error)?;
     Ok(())
 }
 

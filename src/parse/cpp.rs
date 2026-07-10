@@ -35,10 +35,10 @@ use tree_sitter::Node;
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
 use crate::resolve::FqnGenerator;
 
+use super::dedupe_qn;
 use super::error::{ParseError, Result};
 use super::extractor::{CallInfo, ExtractResult, Extractor, ImportInfo};
 use super::parser_factory::ParserFactory;
-use super::dedupe_qn;
 
 /// C++ language tree-sitter extractor (Adapter pattern).
 pub struct CppExtractor {
@@ -208,12 +208,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
 // Definition extractors
 // ---------------------------------------------------------------------------
 
-fn extract_function(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name) = function_name(node, source) else {
         return;
     };
@@ -240,10 +235,12 @@ fn extract_function(
         node.start_position().row as u32 + 1,
         result,
     );
-    let signature = node_text(node, source).map(signature_first_line).map(String::from);
+    let signature = node_text(node, source)
+        .map(signature_first_line)
+        .map(String::from);
     // BUG-C4 (resolved, v0.3.0): C++ free functions are now is_exported=true
     // to enable cross-file call resolution. Over-resolution is prevented by
-    // scope-aware lookup_exported_in_scope (T004/T005) which filters by
+    // scope-aware lookup_exported_in_scope which filters by
     // #include reachability via IncludesGraph. Methods remain is_exported=false.
     let is_exported = !is_method;
     let mut builder = ModelNode::builder(label, name, qn.clone())
@@ -280,7 +277,9 @@ fn extract_type(
         node.start_position().row as u32 + 1,
         result,
     );
-    let signature = node_text(node, source).map(signature_first_line).map(String::from);
+    let signature = node_text(node, source)
+        .map(signature_first_line)
+        .map(String::from);
     let mut builder = ModelNode::builder(label, name, qn.clone())
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -371,12 +370,7 @@ fn for_each_type_name<F: FnMut(String)>(node: Node, source: &str, f: &mut F) {
     }
 }
 
-fn extract_namespace(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_namespace(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name) = type_name(node, source) else {
         // Anonymous namespace — still recurse to extract its contents.
         return;
@@ -422,12 +416,7 @@ fn extract_include(node: Node, source: &str, result: &mut ExtractResult) {
     }
 }
 
-fn extract_call(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     // call_expression has a `function` field (the callee).
     let Some(func_node) = node.child_by_field_name("function") else {
         return;
@@ -485,8 +474,11 @@ fn qualifier_from_declarator(node: Node, source: &str) -> Option<String> {
             let scope = node.child_by_field_name("scope")?;
             node_text(scope, source).map(String::from)
         }
-        "function_declarator" | "pointer_declarator" | "reference_declarator"
-        | "array_declarator" | "parenthesized_declarator" => {
+        "function_declarator"
+        | "pointer_declarator"
+        | "reference_declarator"
+        | "array_declarator"
+        | "parenthesized_declarator" => {
             let inner = node.child_by_field_name("declarator")?;
             qualifier_from_declarator(inner, source)
         }
@@ -513,11 +505,12 @@ fn function_name(node: Node, source: &str) -> Option<String> {
 /// Recursively unwraps declarator nodes to find the base identifier name.
 fn declarator_name(node: Node, source: &str) -> Option<String> {
     match node.kind() {
-        "identifier" | "field_identifier" => {
-            node_text(node, source).map(String::from)
-        }
-        "function_declarator" | "pointer_declarator" | "reference_declarator"
-        | "array_declarator" | "parenthesized_declarator" => {
+        "identifier" | "field_identifier" => node_text(node, source).map(String::from),
+        "function_declarator"
+        | "pointer_declarator"
+        | "reference_declarator"
+        | "array_declarator"
+        | "parenthesized_declarator" => {
             // These declarator nodes have a `declarator` field pointing to
             // the inner declarator.
             if let Some(inner) = node.child_by_field_name("declarator") {
@@ -651,7 +644,12 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Function)
             .collect();
-        assert_eq!(funcs.len(), 1, "should extract 1 function: {:?}", result.nodes);
+        assert_eq!(
+            funcs.len(),
+            1,
+            "should extract 1 function: {:?}",
+            result.nodes
+        );
         assert_eq!(funcs[0].name, "add");
         assert_eq!(funcs[0].language, Some(Language::Cpp));
         assert_eq!(funcs[0].project, "proj");
@@ -667,7 +665,12 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Class)
             .collect();
-        assert_eq!(classes.len(), 1, "should extract 1 class: {:?}", result.nodes);
+        assert_eq!(
+            classes.len(),
+            1,
+            "should extract 1 class: {:?}",
+            result.nodes
+        );
         assert_eq!(classes[0].name, "Point");
     }
 
@@ -679,7 +682,12 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Struct)
             .collect();
-        assert_eq!(structs.len(), 1, "should extract 1 struct: {:?}", result.nodes);
+        assert_eq!(
+            structs.len(),
+            1,
+            "should extract 1 struct: {:?}",
+            result.nodes
+        );
         assert_eq!(structs[0].name, "Vec");
     }
 
@@ -691,7 +699,12 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Namespace)
             .collect();
-        assert_eq!(namespaces.len(), 1, "should extract 1 namespace: {:?}", result.nodes);
+        assert_eq!(
+            namespaces.len(),
+            1,
+            "should extract 1 namespace: {:?}",
+            result.nodes
+        );
         assert_eq!(namespaces[0].name, "ns");
     }
 
@@ -718,7 +731,12 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Method)
             .collect();
-        assert_eq!(methods.len(), 1, "should extract 1 method: {:?}", result.nodes);
+        assert_eq!(
+            methods.len(),
+            1,
+            "should extract 1 method: {:?}",
+            result.nodes
+        );
         assert_eq!(methods[0].name, "m");
         assert!(!methods[0].is_global, "method should not be global");
         assert_eq!(methods[0].parent_qn.as_deref(), Some("C"));
@@ -726,9 +744,7 @@ mod tests {
 
     #[test]
     fn extracts_template_function() {
-        let result = extract(
-            "template<typename T> T max(T a, T b) { return a > b ? a : b; }\n",
-        );
+        let result = extract("template<typename T> T max(T a, T b) { return a > b ? a : b; }\n");
         // Per spec: extract Template OR Function node named max.
         let max_node = result
             .nodes
@@ -744,9 +760,7 @@ mod tests {
 
     #[test]
     fn extracts_template_class() {
-        let result = extract(
-            "template<typename T> class Stack { T data[10]; };\n",
-        );
+        let result = extract("template<typename T> class Stack { T data[10]; };\n");
         let classes: Vec<_> = result
             .nodes
             .iter()
@@ -772,7 +786,11 @@ mod tests {
     #[test]
     fn creates_defines_edges() {
         let result = extract("int add(int a, int b) { return a + b; }\n");
-        let defines_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Defines).count();
+        let defines_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Defines)
+            .count();
         let node_count = result.nodes.len();
         assert_eq!(defines_count, node_count, "one DEFINES edge per node");
     }
@@ -794,10 +812,12 @@ mod tests {
 
     #[test]
     fn extracts_call_expression() {
-        let result = extract(
-            "int main() { printf(\"hi\"); return 0; }\n",
-        );
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let result = extract("int main() { printf(\"hi\"); return 0; }\n");
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             callees.contains(&"printf"),
             "should extract call to printf: {:?}",
@@ -807,9 +827,7 @@ mod tests {
 
     #[test]
     fn call_has_line_and_args() {
-        let result = extract(
-            "int main() { printf(\"hi\", 1); return 0; }\n",
-        );
+        let result = extract("int main() { printf(\"hi\", 1); return 0; }\n");
         let call = result
             .calls
             .iter()
@@ -914,7 +932,9 @@ mod tests {
     fn operator_overload_is_extracted() {
         // `bool operator==(const Foo&)` — operator_name declarator. Covers
         // the operator_name arm of declarator_name.
-        let result = extract("class Foo { public: bool operator==(const Foo& other) const { return true; } };\n");
+        let result = extract(
+            "class Foo { public: bool operator==(const Foo& other) const { return true; } };\n",
+        );
         let m = result
             .nodes
             .iter()
@@ -930,7 +950,11 @@ mod tests {
         // `std::cout`-style qualified call. Covers callee_name's
         // qualified_identifier arm.
         let result = extract("int main() { std::swap(1, 2); return 0; }\n");
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             callees.contains(&"swap"),
             "should extract call to swap via qualified name: {:?}",
@@ -942,10 +966,13 @@ mod tests {
     fn call_to_method_is_extracted() {
         // `obj.method()` — field_expression callee. Covers callee_name's
         // field_expression arm.
-        let result = extract(
-            "class C { public: void m() {} };\nint main() { C c; c.m(); return 0; }\n",
-        );
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let result =
+            extract("class C { public: void m() {} };\nint main() { C c; c.m(); return 0; }\n");
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             callees.contains(&"m"),
             "should extract call to method m via field_expression: {:?}",
@@ -957,7 +984,8 @@ mod tests {
     fn call_to_chained_invocation_is_extracted() {
         // `get_fn()()` — call_expression whose function is itself a
         // call_expression. Covers callee_name's call_expression arm.
-        let result = extract("typedef void(*Fn)(); Fn get_fn(); int main() { get_fn()(); return 0; }\n");
+        let result =
+            extract("typedef void(*Fn)(); Fn get_fn(); int main() { get_fn()(); return 0; }\n");
         // The inner call `get_fn()` is extracted; the outer `()` call may
         // resolve to the same callee or to the result — either way, at least
         // one call record must exist.
@@ -981,7 +1009,10 @@ mod tests {
             !sig.contains('\n'),
             "signature must be a single line, got: {sig:?}"
         );
-        assert!(sig.contains("add"), "signature should contain the function name");
+        assert!(
+            sig.contains("add"),
+            "signature should contain the function name"
+        );
     }
 
     // --- enum extraction (extract_type with NodeLabel::Enum) ---
@@ -998,12 +1029,7 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Enum)
             .collect();
-        assert_eq!(
-            enums.len(),
-            1,
-            "should extract 1 enum: {:?}",
-            result.nodes
-        );
+        assert_eq!(enums.len(), 1, "should extract 1 enum: {:?}", result.nodes);
         assert_eq!(enums[0].name, "Color");
     }
 
@@ -1045,7 +1071,12 @@ mod tests {
             .iter()
             .filter(|e| e.edge_type == EdgeType::Extends)
             .collect();
-        assert_eq!(extends.len(), 1, "should have 1 EXTENDS edge: {:?}", extends);
+        assert_eq!(
+            extends.len(),
+            1,
+            "should have 1 EXTENDS edge: {:?}",
+            extends
+        );
         assert!(
             extends[0].source.contains("Derived"),
             "source should be Derived: {}",
@@ -1066,7 +1097,12 @@ mod tests {
             .iter()
             .filter(|e| e.edge_type == EdgeType::Extends)
             .collect();
-        assert_eq!(extends.len(), 1, "struct should have 1 EXTENDS edge: {:?}", extends);
+        assert_eq!(
+            extends.len(),
+            1,
+            "struct should have 1 EXTENDS edge: {:?}",
+            extends
+        );
         assert!(
             extends[0].source.contains("Derived"),
             "source should be Derived: {}",
@@ -1076,8 +1112,9 @@ mod tests {
 
     #[test]
     fn multiple_inheritance_creates_multiple_extends_edges() {
-        let result =
-            extract("class Base1 {};\nclass Base2 {};\nclass Derived : public Base1, public Base2 {};\n");
+        let result = extract(
+            "class Base1 {};\nclass Base2 {};\nclass Derived : public Base1, public Base2 {};\n",
+        );
         let extends: Vec<_> = result
             .edges
             .iter()
@@ -1123,24 +1160,33 @@ mod tests {
     fn cpp_free_function_is_exported() {
         // BUG-C4 (resolved, v0.3.0): C++ free functions are now is_exported=true
         // to enable cross-file call resolution. Over-resolution is prevented by
-        // scope-aware lookup_exported_in_scope (T004/T005) via IncludesGraph.
+        // scope-aware lookup_exported_in_scope via IncludesGraph.
         let result = extract("int add(int a, int b) { return a + b; }\n");
         let func = result.nodes.iter().find(|n| n.name == "add").unwrap();
-        assert!(func.is_exported, "free function should have is_exported=true (BUG-C4 resolved)");
+        assert!(
+            func.is_exported,
+            "free function should have is_exported=true (BUG-C4 resolved)"
+        );
     }
 
     #[test]
     fn class_method_is_not_exported() {
         let result = extract("class Calc { public: int add(int a, int b) { return a + b; } };\n");
         let method = result.nodes.iter().find(|n| n.name == "add").unwrap();
-        assert!(!method.is_exported, "class method should have is_exported=false");
+        assert!(
+            !method.is_exported,
+            "class method should have is_exported=false"
+        );
     }
 
     #[test]
     fn struct_method_is_not_exported() {
         let result = extract("struct Vec { int length() { return 0; } };\n");
         let method = result.nodes.iter().find(|n| n.name == "length").unwrap();
-        assert!(!method.is_exported, "struct method should have is_exported=false");
+        assert!(
+            !method.is_exported,
+            "struct method should have is_exported=false"
+        );
     }
 
     #[test]
@@ -1149,7 +1195,10 @@ mod tests {
         let methods: Vec<_> = result.nodes.iter().filter(|n| n.name == "bar").collect();
         assert!(!methods.is_empty(), "should find bar method");
         for m in &methods {
-            assert!(!m.is_exported, "out-of-class method should have is_exported=false");
+            assert!(
+                !m.is_exported,
+                "out-of-class method should have is_exported=false"
+            );
         }
     }
 
@@ -1157,7 +1206,10 @@ mod tests {
     fn cpp_namespace_function_is_exported() {
         let result = extract("namespace ns { int helper() { return 42; } }\n");
         let func = result.nodes.iter().find(|n| n.name == "helper").unwrap();
-        assert!(func.is_exported, "namespace function should have is_exported=true (BUG-C4 resolved)");
+        assert!(
+            func.is_exported,
+            "namespace function should have is_exported=true (BUG-C4 resolved)"
+        );
     }
 
     #[test]
@@ -1179,7 +1231,8 @@ mod tests {
     #[test]
     fn qualified_base_class_creates_extends_edge() {
         // `ns::Base` — qualified_identifier in base_class_clause.
-        let result = extract("namespace ns { class Base {}; }\nclass Derived : public ns::Base {};\n");
+        let result =
+            extract("namespace ns { class Base {}; }\nclass Derived : public ns::Base {};\n");
         let extends: Vec<_> = result
             .edges
             .iter()
@@ -1206,17 +1259,20 @@ mod tests {
             .iter()
             .filter(|e| e.edge_type == EdgeType::Extends)
             .count();
-        assert_eq!(extends_count, 0, "class without base should have 0 EXTENDS edges");
+        assert_eq!(
+            extends_count, 0,
+            "class without base should have 0 EXTENDS edges"
+        );
     }
 
     #[test]
     fn cpp_multifile_call_graph_resolved() {
-        // T007: End-to-end test for multi-file C++ call graph with #include
+        // End-to-end test for multi-file C++ call graph with #include
         // scoping (BUG-C4 fix verification).
         //
         // Scenario (header-only definition — common C++ pattern like STL):
         // - main.cpp: #includes "foo.h", calls foo()
-        // - foo.h:    defines void foo() {} (is_exported=true after T006)
+        // - foo.h:    defines void foo() {} (is_exported=true)
         // - bar.cpp:  defines void foo() {} (unrelated, NOT included by main.cpp)
         //
         // Assertions:
@@ -1247,7 +1303,9 @@ mod tests {
         let mut graph = IncludesGraph::new();
         for result in &results {
             for imp in &result.imports {
-                if let Some(resolved) = resolve_include(&imp.source_file, &result.file_path, &all_files) {
+                if let Some(resolved) =
+                    resolve_include(&imp.source_file, &result.file_path, &all_files)
+                {
                     graph.add_include(&result.file_path, &resolved);
                 }
             }
@@ -1269,7 +1327,10 @@ mod tests {
 
         // Assertion 2 & 3: call resolution with scope-aware filtering.
         let resolved = resolver.resolve_call("/abs/main.cpp", "foo");
-        assert!(resolved.is_some(), "foo() call should resolve to foo.h's foo");
+        assert!(
+            resolved.is_some(),
+            "foo() call should resolve to foo.h's foo"
+        );
         let (qn, _confidence, _tier) = resolved.unwrap();
         assert!(
             qn.contains("foo.h"),

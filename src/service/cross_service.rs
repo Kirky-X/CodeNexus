@@ -41,11 +41,10 @@ fn to_api_error(e: CliError) -> ApiError {
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "cross-service"))]
 #[service_api(
-    name = "codenexus",
+    name = "cross_service",
     version = "0.3.2",
-    tool_name = "cross_service",
     description = "Detect cross-service links by matching HTTP route patterns against caller string literals.",
-    cli = true,
+    cli = true
 )]
 async fn cross_service(project: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
@@ -56,8 +55,8 @@ async fn cross_service(project: String) -> Result<(), ApiError> {
     let linker = CrossServiceLinker::new(&*storage, &project);
     let links = linker.link().map_err(|e| to_api_error(e.into()))?;
     let output = CrossServiceOutput { project, links };
-    let json = serde_json::to_string(&output)
-        .map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let json =
+        serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }

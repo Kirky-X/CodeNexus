@@ -32,10 +32,10 @@ use tree_sitter::Node;
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
 use crate::resolve::FqnGenerator;
 
+use super::dedupe_qn;
 use super::error::{ParseError, Result};
 use super::extractor::{CallInfo, ExtractResult, Extractor, ImportInfo};
 use super::parser_factory::ParserFactory;
-use super::dedupe_qn;
 
 /// Go language tree-sitter extractor (Adapter pattern).
 pub struct GoExtractor {
@@ -167,15 +167,12 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
 /// (package-private). Used to set `is_exported` on Go nodes so the
 /// `CallResolver` can resolve cross-file calls via `lookup_exported`.
 fn is_exported_name(name: &str) -> bool {
-    name.chars().next().map_or(false, |c| c.is_ascii_uppercase())
+    name.chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_uppercase())
 }
 
-fn extract_function(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name) = function_name(node, source) else {
         return;
     };
@@ -184,7 +181,9 @@ fn extract_function(
         node.start_position().row as u32 + 1,
         result,
     );
-    let signature = node_text(node, source).map(signature_first_line).map(String::from);
+    let signature = node_text(node, source)
+        .map(signature_first_line)
+        .map(String::from);
     let is_exported = is_exported_name(&name);
     let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
         .file_path(ctx.file_path)
@@ -202,12 +201,7 @@ fn extract_function(
     result.push_node(model_node);
 }
 
-fn extract_method(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_method(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name) = method_name(node, source) else {
         return;
     };
@@ -219,7 +213,9 @@ fn extract_method(
         node.start_position().row as u32 + 1,
         result,
     );
-    let signature = node_text(node, source).map(signature_first_line).map(String::from);
+    let signature = node_text(node, source)
+        .map(signature_first_line)
+        .map(String::from);
     let is_exported = is_exported_name(&name);
     let mut builder = ModelNode::builder(NodeLabel::Method, name, qn.clone())
         .file_path(ctx.file_path)
@@ -240,12 +236,7 @@ fn extract_method(
     result.push_node(model_node);
 }
 
-fn extract_type_spec(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_type_spec(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
     };
@@ -331,12 +322,7 @@ fn import_spec_path(node: Node, source: &str) -> Option<String> {
     Some(trimmed.to_string())
 }
 
-fn extract_call(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(func_node) = node.child_by_field_name("function") else {
         return;
     };
@@ -508,7 +494,12 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Function)
             .collect();
-        assert_eq!(funcs.len(), 1, "should extract 1 function: {:?}", result.nodes);
+        assert_eq!(
+            funcs.len(),
+            1,
+            "should extract 1 function: {:?}",
+            result.nodes
+        );
         assert_eq!(funcs[0].name, "foo");
         assert_eq!(funcs[0].language, Some(Language::Go));
         assert_eq!(funcs[0].project, "proj");
@@ -524,7 +515,12 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Method)
             .collect();
-        assert_eq!(methods.len(), 1, "should extract 1 method: {:?}", result.nodes);
+        assert_eq!(
+            methods.len(),
+            1,
+            "should extract 1 method: {:?}",
+            result.nodes
+        );
         assert_eq!(methods[0].name, "Bar");
         assert!(!methods[0].is_global, "method should not be global");
         // The receiver type T is used as the FQN disambiguator.
@@ -557,7 +553,12 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Struct)
             .collect();
-        assert_eq!(structs.len(), 1, "should extract 1 struct: {:?}", result.nodes);
+        assert_eq!(
+            structs.len(),
+            1,
+            "should extract 1 struct: {:?}",
+            result.nodes
+        );
         assert_eq!(structs[0].name, "Point");
         assert!(structs[0].is_global);
     }
@@ -570,16 +571,19 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Interface)
             .collect();
-        assert_eq!(ifaces.len(), 1, "should extract 1 interface: {:?}", result.nodes);
+        assert_eq!(
+            ifaces.len(),
+            1,
+            "should extract 1 interface: {:?}",
+            result.nodes
+        );
         assert_eq!(ifaces[0].name, "Reader");
     }
 
     #[test]
     fn extracts_grouped_type_declaration() {
         // `type ( Foo struct{}; Bar interface{} )` produces two type_specs.
-        let result = extract(
-            "package main\ntype (\n\tFoo struct{}\n\tBar interface{}\n)\n",
-        );
+        let result = extract("package main\ntype (\n\tFoo struct{}\n\tBar interface{}\n)\n");
         let structs: Vec<_> = result
             .nodes
             .iter()
@@ -605,11 +609,18 @@ mod tests {
 
     #[test]
     fn extracts_import_list() {
-        let result = extract(
-            "package main\nimport (\n\t\"fmt\"\n\t\"os\"\n)\n",
+        let result = extract("package main\nimport (\n\t\"fmt\"\n\t\"os\"\n)\n");
+        assert_eq!(
+            result.imports.len(),
+            2,
+            "should extract 2 imports: {:?}",
+            result.imports
         );
-        assert_eq!(result.imports.len(), 2, "should extract 2 imports: {:?}", result.imports);
-        let paths: Vec<_> = result.imports.iter().map(|i| i.source_file.as_str()).collect();
+        let paths: Vec<_> = result
+            .imports
+            .iter()
+            .map(|i| i.source_file.as_str())
+            .collect();
         assert!(paths.contains(&"fmt"), "should import fmt: {:?}", paths);
         assert!(paths.contains(&"os"), "should import os: {:?}", paths);
     }
@@ -630,7 +641,10 @@ mod tests {
     #[test]
     fn package_only_returns_empty_result() {
         let result = extract("package main\n");
-        assert!(result.is_empty(), "package decl alone should produce no nodes");
+        assert!(
+            result.is_empty(),
+            "package decl alone should produce no nodes"
+        );
     }
 
     #[test]
@@ -643,7 +657,11 @@ mod tests {
     #[test]
     fn creates_defines_edges() {
         let result = extract("package main\nfunc foo() {}\n");
-        let defines_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Defines).count();
+        let defines_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Defines)
+            .count();
         let node_count = result.nodes.len();
         assert_eq!(defines_count, node_count, "one DEFINES edge per node");
     }
@@ -665,18 +683,22 @@ mod tests {
 
     #[test]
     fn extracts_call_to_function() {
-        let result = extract(
-            "package main\nfunc foo() {}\nfunc main() {\n\tfoo()\n}\n",
+        let result = extract("package main\nfunc foo() {}\nfunc main() {\n\tfoo()\n}\n");
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
+        assert!(
+            callees.contains(&"foo"),
+            "should extract call to foo: {:?}",
+            callees
         );
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
-        assert!(callees.contains(&"foo"), "should extract call to foo: {:?}", callees);
     }
 
     #[test]
     fn call_has_line_and_args() {
-        let result = extract(
-            "package main\nfunc foo() {}\nfunc main() {\n\tfoo(1, 2)\n}\n",
-        );
+        let result = extract("package main\nfunc foo() {}\nfunc main() {\n\tfoo(1, 2)\n}\n");
         let call = result
             .calls
             .iter()
@@ -779,36 +801,70 @@ mod tests {
         // BUG-G2: Go exported symbols (uppercase first letter) must have
         // is_exported=true so resolve_calls can find them via lookup_exported.
         let result = extract("package main\nfunc Foo() {}\n");
-        let func = result.nodes.iter().find(|n| n.label == NodeLabel::Function).unwrap();
-        assert!(func.is_exported, "exported function Foo should have is_exported=true");
+        let func = result
+            .nodes
+            .iter()
+            .find(|n| n.label == NodeLabel::Function)
+            .unwrap();
+        assert!(
+            func.is_exported,
+            "exported function Foo should have is_exported=true"
+        );
     }
 
     #[test]
     fn unexported_function_has_is_exported_false() {
         let result = extract("package main\nfunc bar() {}\n");
-        let func = result.nodes.iter().find(|n| n.label == NodeLabel::Function).unwrap();
-        assert!(!func.is_exported, "unexported function bar should have is_exported=false");
+        let func = result
+            .nodes
+            .iter()
+            .find(|n| n.label == NodeLabel::Function)
+            .unwrap();
+        assert!(
+            !func.is_exported,
+            "unexported function bar should have is_exported=false"
+        );
     }
 
     #[test]
     fn exported_method_has_is_exported_true() {
         let result = extract("package main\ntype T struct{}\nfunc (t T) Execute() {}\n");
-        let method = result.nodes.iter().find(|n| n.label == NodeLabel::Method).unwrap();
-        assert!(method.is_exported, "exported method Execute should have is_exported=true");
+        let method = result
+            .nodes
+            .iter()
+            .find(|n| n.label == NodeLabel::Method)
+            .unwrap();
+        assert!(
+            method.is_exported,
+            "exported method Execute should have is_exported=true"
+        );
     }
 
     #[test]
     fn unexported_method_has_is_exported_false() {
         let result = extract("package main\ntype T struct{}\nfunc (t T) hidden() {}\n");
-        let method = result.nodes.iter().find(|n| n.label == NodeLabel::Method).unwrap();
-        assert!(!method.is_exported, "unexported method hidden should have is_exported=false");
+        let method = result
+            .nodes
+            .iter()
+            .find(|n| n.label == NodeLabel::Method)
+            .unwrap();
+        assert!(
+            !method.is_exported,
+            "unexported method hidden should have is_exported=false"
+        );
     }
 
     #[test]
     fn exported_type_has_is_exported_true() {
         let result = extract("package main\ntype Command struct{}\n");
-        let typ = result.nodes.iter().find(|n| n.label == NodeLabel::Struct).unwrap();
-        assert!(typ.is_exported, "exported type Command should have is_exported=true");
+        let typ = result
+            .nodes
+            .iter()
+            .find(|n| n.label == NodeLabel::Struct)
+            .unwrap();
+        assert!(
+            typ.is_exported,
+            "exported type Command should have is_exported=true"
+        );
     }
-
 }

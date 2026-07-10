@@ -17,13 +17,50 @@ use std::process::Command;
 /// Hardcoded so the verifier does not need to depend on CodeNexus internals
 /// beyond `Repository::open` + raw SQL.
 const NODE_TABLES: &[&str] = &[
-    "Project", "Folder", "File", "Module", "Class", "Struct", "Enum", "Trait",
-    "Impl", "Function", "Method", "Variable", "GlobalVar", "Parameter", "Const",
-    "Static", "Macro", "TypeAlias", "Typedef", "Namespace", "Interface",
-    "Constructor", "Property", "Record", "Delegate", "Annotation", "Template",
-    "Union", "Variant", "Field", "Event", "Handler", "Middleware", "Service",
-    "Endpoint", "Route", "Process", "Database", "Config", "Test", "Section",
-    "Community", "Tool", "Embedding",
+    "Project",
+    "Folder",
+    "File",
+    "Module",
+    "Class",
+    "Struct",
+    "Enum",
+    "Trait",
+    "Impl",
+    "Function",
+    "Method",
+    "Variable",
+    "GlobalVar",
+    "Parameter",
+    "Const",
+    "Static",
+    "Macro",
+    "TypeAlias",
+    "Typedef",
+    "Namespace",
+    "Interface",
+    "Constructor",
+    "Property",
+    "Record",
+    "Delegate",
+    "Annotation",
+    "Template",
+    "Union",
+    "Variant",
+    "Field",
+    "Event",
+    "Handler",
+    "Middleware",
+    "Service",
+    "Endpoint",
+    "Route",
+    "Process",
+    "Database",
+    "Config",
+    "Test",
+    "Section",
+    "Community",
+    "Tool",
+    "Embedding",
 ];
 
 /// Stats extracted from a CodeNexus LadybugDB index.
@@ -107,7 +144,11 @@ pub fn run_single(repo: &Path, name: &str, language: &str, resume: bool) -> Resu
 /// LAPACK: 493K edges) in debug mode are too slow and get killed by signals
 /// (exit status None) mid-index. Release mode completes in seconds.
 pub fn run_index(repo_path: &Path, name: &str) -> Result<()> {
-    eprintln!("[index] codenexus index {} --name {} (release)", repo_path.display(), name);
+    eprintln!(
+        "[index] codenexus index {} --name {} (release)",
+        repo_path.display(),
+        name
+    );
     let output = Command::new("cargo")
         .args([
             "run",
@@ -188,7 +229,9 @@ pub fn extract_stats(db_path: &Path, name: &str) -> Result<CodeNexusStats> {
             // Project table has no `project` column; filter by name instead.
             format!("MATCH (n:Project) WHERE n.name = '{escaped_name}' RETURN count(n) AS c")
         } else {
-            format!("MATCH (n:{escaped_table}) WHERE n.project = '{escaped_pid}' RETURN count(n) AS c")
+            format!(
+                "MATCH (n:{escaped_table}) WHERE n.project = '{escaped_pid}' RETURN count(n) AS c"
+            )
         };
         match conn.query(&cypher) {
             Ok(rows) => {
@@ -306,7 +349,7 @@ fn count_files_by_language(repo_path: &Path, primary_lang: &str) -> BTreeMap<Str
         .git_ignore(true)
         .build();
     for entry in walker.flatten() {
-        if !entry.file_type().map_or(false, |ft| ft.is_file()) {
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
             continue;
         }
         let path = entry.path();
@@ -399,7 +442,10 @@ mod tests {
     fn json_to_u64_handles_uint64_string_quirk() {
         // LadybugDB serializes UInt64 as JSON strings (see connection.rs:267).
         // Covers the `as_str()` branch + successful parse.
-        assert_eq!(json_to_u64(&serde_json::Value::String("12345".into())), 12345);
+        assert_eq!(
+            json_to_u64(&serde_json::Value::String("12345".into())),
+            12345
+        );
     }
 
     #[test]
@@ -417,7 +463,10 @@ mod tests {
     #[test]
     fn json_to_u64_falls_back_to_zero_for_unparseable() {
         // Rule 12: visible 0, not silent drop. Non-numeric strings → 0.
-        assert_eq!(json_to_u64(&serde_json::Value::String("not-a-number".into())), 0);
+        assert_eq!(
+            json_to_u64(&serde_json::Value::String("not-a-number".into())),
+            0
+        );
         // Null/bool/object → 0.
         assert_eq!(json_to_u64(&serde_json::Value::Null), 0);
         assert_eq!(json_to_u64(&serde_json::json!({"k": 1})), 0);
@@ -437,7 +486,8 @@ mod tests {
         )
         .id("uuid-7-a")
         .build();
-        repo.save_nodes(&[project], codenexus::model::NodeLabel::Project).unwrap();
+        repo.save_nodes(&[project], codenexus::model::NodeLabel::Project)
+            .unwrap();
         let conn = repo.connection();
         let id = lookup_project_id(conn, "sample-a").expect("lookup_project_id");
         assert_eq!(id, "uuid-7-a");
@@ -469,20 +519,14 @@ mod tests {
         let db_path = dir.path().join("stats.lbug");
         let repo = codenexus::storage::repository::Repository::open(&db_path).unwrap();
 
-        let alpha = codenexus::model::Node::builder(
-            codenexus::model::NodeLabel::Project,
-            "alpha",
-            "alpha",
-        )
-        .id("alpha-id")
-        .build();
-        let beta = codenexus::model::Node::builder(
-            codenexus::model::NodeLabel::Project,
-            "beta",
-            "beta",
-        )
-        .id("beta-id")
-        .build();
+        let alpha =
+            codenexus::model::Node::builder(codenexus::model::NodeLabel::Project, "alpha", "alpha")
+                .id("alpha-id")
+                .build();
+        let beta =
+            codenexus::model::Node::builder(codenexus::model::NodeLabel::Project, "beta", "beta")
+                .id("beta-id")
+                .build();
         let f1 = codenexus::model::Node::builder(
             codenexus::model::NodeLabel::Function,
             "alpha_fn_a",
@@ -516,8 +560,10 @@ mod tests {
         .start_line(1)
         .end_line(3)
         .build();
-        repo.save_nodes(&[alpha, beta], codenexus::model::NodeLabel::Project).unwrap();
-        repo.save_nodes(&[f1, f2, f3], codenexus::model::NodeLabel::Function).unwrap();
+        repo.save_nodes(&[alpha, beta], codenexus::model::NodeLabel::Project)
+            .unwrap();
+        repo.save_nodes(&[f1, f2, f3], codenexus::model::NodeLabel::Function)
+            .unwrap();
         drop(repo);
 
         let stats = extract_stats(&db_path, "alpha").expect("extract_stats");
@@ -595,7 +641,8 @@ mod tests {
         let path = write_results(name, &stats).expect("write_results");
         assert!(path.exists(), "results file must exist after write_results");
         assert!(
-            path.to_string_lossy().ends_with(&format!("{name}.codenexus.json")),
+            path.to_string_lossy()
+                .ends_with(&format!("{name}.codenexus.json")),
             "expected path to end with {name}.codenexus.json, got {}",
             path.display()
         );

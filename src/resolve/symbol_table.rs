@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn lookup_exported_in_scope_filters_by_include() {
-        // Spec T004 Red test: file A includes B, B has `fn foo()` exported,
+        // Spec Red test: file A includes B, B has `fn foo()` exported,
         // C also has `fn foo()` exported. lookup_exported_in_scope("foo", "A",
         // &graph) returns ONLY B's entry, not C's.
         let mut project = ProjectSymbolTable::new();

@@ -86,9 +86,7 @@ impl IndexError {
 impl From<crate::storage::error::StorageError> for IndexError {
     fn from(e: crate::storage::error::StorageError) -> Self {
         match e {
-            crate::storage::error::StorageError::Corrupt(msg) => {
-                IndexError::DatabaseCorrupt(msg)
-            }
+            crate::storage::error::StorageError::Corrupt(msg) => IndexError::DatabaseCorrupt(msg),
             other => IndexError::Storage(other),
         }
     }

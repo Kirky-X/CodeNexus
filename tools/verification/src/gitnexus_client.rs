@@ -128,7 +128,10 @@ pub fn run_cypher(
         let corruption = CORRUPTION_PATTERNS
             .iter()
             .any(|p| msg.to_lowercase().contains(p));
-        return Ok(CypherResponse::Error { message: msg, corruption });
+        return Ok(CypherResponse::Error {
+            message: msg,
+            corruption,
+        });
     }
 
     let markdown = parsed.markdown.unwrap_or_default();
@@ -165,7 +168,11 @@ fn parse_markdown_table(markdown: &str) -> (Vec<String>, Vec<Vec<String>>) {
     let mut rows = Vec::new();
     for line in lines {
         // Belt-and-braces: skip any stray separator rows.
-        if line.trim().trim_matches(|c: char| c == '|' || c == '-' || c == ':' || c.is_whitespace()).is_empty() {
+        if line
+            .trim()
+            .trim_matches(|c: char| c == '|' || c == '-' || c == ':' || c.is_whitespace())
+            .is_empty()
+        {
             continue;
         }
         rows.push(split_row(line));
@@ -192,12 +199,13 @@ fn split_row(line: &str) -> Vec<String> {
 ///
 /// Per-label binder errors (Table X does not exist) are recorded as 0, not
 /// fatal. DB corruption aborts with `ReferenceUnavailable`.
-pub fn fetch_reference(
-    repo_name: &str,
-    gitnexus_binary: Option<&Path>,
-) -> Result<GitnexusStats> {
+pub fn fetch_reference(repo_name: &str, gitnexus_binary: Option<&Path>) -> Result<GitnexusStats> {
     let mut node_counts = BTreeMap::new();
-    match run_cypher(repo_name, "MATCH (n) RETURN label(n) AS lbl, count(*) AS c ORDER BY lbl", gitnexus_binary) {
+    match run_cypher(
+        repo_name,
+        "MATCH (n) RETURN label(n) AS lbl, count(*) AS c ORDER BY lbl",
+        gitnexus_binary,
+    ) {
         Ok(CypherResponse::Rows { rows, .. }) => {
             for row in &rows {
                 if row.len() < 2 {
@@ -208,7 +216,10 @@ pub fn fetch_reference(
                 node_counts.insert(label, count);
             }
         }
-        Ok(CypherResponse::Error { message, corruption: true }) => {
+        Ok(CypherResponse::Error {
+            message,
+            corruption: true,
+        }) => {
             bail!("gitnexus reference unavailable for `{repo_name}`: {message}");
         }
         Ok(CypherResponse::Error { message, .. }) => {
@@ -225,7 +236,11 @@ pub fn fetch_reference(
     }
 
     let mut edge_counts = BTreeMap::new();
-    match run_cypher(repo_name, "MATCH ()-[r:CodeRelation]->() RETURN r.type AS t, count(*) AS c ORDER BY t", gitnexus_binary) {
+    match run_cypher(
+        repo_name,
+        "MATCH ()-[r:CodeRelation]->() RETURN r.type AS t, count(*) AS c ORDER BY t",
+        gitnexus_binary,
+    ) {
         Ok(CypherResponse::Rows { rows, .. }) => {
             for row in &rows {
                 if row.len() < 2 {
@@ -236,7 +251,10 @@ pub fn fetch_reference(
                 edge_counts.insert(t, c);
             }
         }
-        Ok(CypherResponse::Error { message, corruption: true }) => {
+        Ok(CypherResponse::Error {
+            message,
+            corruption: true,
+        }) => {
             bail!("gitnexus reference unavailable for `{repo_name}`: {message}");
         }
         Ok(CypherResponse::Error { message, .. }) => {
@@ -249,7 +267,11 @@ pub fn fetch_reference(
     }
 
     let mut file_count = 0u64;
-    match run_cypher(repo_name, "MATCH (f:File) RETURN count(*) AS c", gitnexus_binary) {
+    match run_cypher(
+        repo_name,
+        "MATCH (f:File) RETURN count(*) AS c",
+        gitnexus_binary,
+    ) {
         Ok(CypherResponse::Rows { rows, .. }) => {
             if let Some(row) = rows.first() {
                 if let Some(cell) = row.first() {
@@ -257,7 +279,10 @@ pub fn fetch_reference(
                 }
             }
         }
-        Ok(CypherResponse::Error { message, corruption: true }) => {
+        Ok(CypherResponse::Error {
+            message,
+            corruption: true,
+        }) => {
             bail!("gitnexus reference unavailable for `{repo_name}`: {message}");
         }
         Ok(CypherResponse::Error { message, .. }) => {
@@ -344,14 +369,20 @@ mod tests {
     #[test]
     fn corruption_patterns_match_known_errors() {
         assert!(CORRUPTION_PATTERNS.iter().any(|p| {
-            "Mmap for size 8796093022208 failed".to_lowercase().contains(p)
+            "Mmap for size 8796093022208 failed"
+                .to_lowercase()
+                .contains(p)
         }));
         assert!(CORRUPTION_PATTERNS.iter().any(|p| {
-            "Assertion failed ... UNREACHABLE_CODE".to_lowercase().contains(p)
+            "Assertion failed ... UNREACHABLE_CODE"
+                .to_lowercase()
+                .contains(p)
         }));
         // Binder exception must NOT be classified as corruption.
         assert!(!CORRUPTION_PATTERNS.iter().any(|p| {
-            "Binder exception: Table Foo does not exist".to_lowercase().contains(p)
+            "Binder exception: Table Foo does not exist"
+                .to_lowercase()
+                .contains(p)
         }));
     }
 

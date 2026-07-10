@@ -26,11 +26,10 @@ pub struct CleanOutput {
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
 #[service_api(
-    name = "codenexus",
+    name = "clean",
     version = "0.3.2",
-    tool_name = "clean",
     description = "Remove a project and its index by name or id.",
-    cli = true,
+    cli = true
 )]
 async fn clean(project: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
@@ -39,7 +38,9 @@ async fn clean(project: String) -> Result<(), ApiError> {
         .map_err(|e| wrap_error("Failed to resolve storage capability", e))?;
 
     // Find the project by name first, then by id.
-    let projects = storage.list_projects().unwrap_or_default();
+    let projects = storage
+        .list_projects()
+        .map_err(|e| wrap_error("Failed to list projects", e))?;
     let project_id = projects
         .iter()
         .find(|p| p.name == project)
@@ -71,8 +72,8 @@ async fn clean(project: String) -> Result<(), ApiError> {
         project_id,
         deleted: 1,
     };
-    let json = serde_json::to_string(&output)
-        .map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let json =
+        serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }

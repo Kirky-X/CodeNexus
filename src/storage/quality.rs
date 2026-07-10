@@ -100,12 +100,15 @@ impl<'a> QualityChecker<'a> {
     pub fn check_fqn_uniqueness(&self) -> Result<Vec<QualityViolation>> {
         // (project, qualified_name) -> Vec<node_id>
         // Single-line for coverage: tarpaulin attribute continuation
-        let mut seen: std::collections::HashMap<(String, String), Vec<String>> = std::collections::HashMap::new();
+        let mut seen: std::collections::HashMap<(String, String), Vec<String>> =
+            std::collections::HashMap::new();
 
         for label in NodeLabel::all() {
             // Project has no qualifiedName/project columns; skip explicitly
             // to avoid a guaranteed-to-fail query.
-            if label == NodeLabel::Project { continue; }
+            if label == NodeLabel::Project {
+                continue;
+            }
             let table = escape_identifier(label.table_name());
             let cypher = format!(
                 "MATCH (n:{table}) \
@@ -115,7 +118,9 @@ impl<'a> QualityChecker<'a> {
             // Tables without qualifiedName/project columns error here; treat
             // as non-fatal and continue with the next label.
             // Single-line for coverage: tarpaulin attribute continuation
-            let Ok(rows) = self.storage.query(&cypher) else { continue; };
+            let Ok(rows) = self.storage.query(&cypher) else {
+                continue;
+            };
             for row in rows {
                 let project = row
                     .first()
@@ -141,9 +146,16 @@ impl<'a> QualityChecker<'a> {
         let mut violations: Vec<QualityViolation> = seen
             .into_iter()
             .filter(|(_, ids)| ids.len() > 1)
-            .map(|((project, qn), ids)| QualityViolation { rule: "DQ-002",
+            .map(|((project, qn), ids)| QualityViolation {
+                rule: "DQ-002",
                 // Single-line for coverage: tarpaulin attribute continuation
-                message: format!("Duplicate FQN '{}' in project '{}' ({} nodes: {})", qn, project, ids.len(), ids.join(", ")),
+                message: format!(
+                    "Duplicate FQN '{}' in project '{}' ({} nodes: {})",
+                    qn,
+                    project,
+                    ids.len(),
+                    ids.join(", ")
+                ),
                 project: Some(project),
             })
             .collect();
@@ -167,7 +179,9 @@ impl<'a> QualityChecker<'a> {
             let table = escape_identifier(label.table_name());
             let cypher = format!("MATCH (n:{table}) RETURN n.id AS id;");
             // Single-line for coverage: tarpaulin attribute continuation
-            let Ok(rows) = self.storage.query(&cypher) else { continue; };
+            let Ok(rows) = self.storage.query(&cypher) else {
+                continue;
+            };
             for row in rows {
                 if let Some(id) = row.first().and_then(|v| v.as_str()) {
                     all_node_ids.insert(id.to_string());
@@ -185,15 +199,21 @@ impl<'a> QualityChecker<'a> {
             let source = row.first().and_then(|v| v.as_str()).unwrap_or("");
             let target = row.get(1).and_then(|v| v.as_str()).unwrap_or("");
             // Single-line for coverage: tarpaulin attribute continuation
-            let project = row.get(2).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let project = row
+                .get(2)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             if !all_node_ids.contains(source) {
-                violations.push(QualityViolation { rule: "DQ-004",
+                violations.push(QualityViolation {
+                    rule: "DQ-004",
                     message: format!("Orphan edge: source '{}' does not exist", source),
                     project: Some(project.clone()),
                 });
             }
             if !all_node_ids.contains(target) {
-                violations.push(QualityViolation { rule: "DQ-004",
+                violations.push(QualityViolation {
+                    rule: "DQ-004",
                     message: format!("Orphan edge: target '{}' does not exist", target),
                     project: Some(project),
                 });
@@ -216,7 +236,9 @@ impl<'a> QualityChecker<'a> {
 
         let mut violations = Vec::new();
         for label in NodeLabel::all() {
-            if label == NodeLabel::Project { continue; }
+            if label == NodeLabel::Project {
+                continue;
+            }
             let table = escape_identifier(label.table_name());
 
             // Sum counts per known project.
@@ -227,9 +249,15 @@ impl<'a> QualityChecker<'a> {
                     "MATCH (n:{table}) WHERE n.project = '{escaped}' RETURN count(n) AS cnt;"
                 );
                 // Single-line for coverage: tarpaulin attribute continuation
-                let Ok(rows) = self.storage.query(&cypher) else { continue; };
+                let Ok(rows) = self.storage.query(&cypher) else {
+                    continue;
+                };
                 // Single-line for coverage: tarpaulin attribute continuation
-                if let Some(cnt) = rows.first().and_then(|r| r.first()).and_then(|v| v.as_i64()) {
+                if let Some(cnt) = rows
+                    .first()
+                    .and_then(|r| r.first())
+                    .and_then(|v| v.as_i64())
+                {
                     per_project_count += cnt;
                 }
             }
@@ -237,13 +265,25 @@ impl<'a> QualityChecker<'a> {
             // Total count for the table.
             let cypher = format!("MATCH (n:{table}) RETURN count(n) AS cnt;");
             // Single-line for coverage: tarpaulin attribute continuation
-            let Ok(rows) = self.storage.query(&cypher) else { continue; };
+            let Ok(rows) = self.storage.query(&cypher) else {
+                continue;
+            };
             // Single-line for coverage: tarpaulin attribute continuation
-            if let Some(total) = rows.first().and_then(|r| r.first()).and_then(|v| v.as_i64()) {
+            if let Some(total) = rows
+                .first()
+                .and_then(|r| r.first())
+                .and_then(|v| v.as_i64())
+            {
                 if total != per_project_count {
-                    violations.push(QualityViolation { rule: "DQ-005",
+                    violations.push(QualityViolation {
+                        rule: "DQ-005",
                         // Single-line for coverage: tarpaulin attribute continuation
-                        message: format!("Project isolation violation in {}: total {} vs per-project sum {}", label.table_name(), total, per_project_count),
+                        message: format!(
+                            "Project isolation violation in {}: total {} vs per-project sum {}",
+                            label.table_name(),
+                            total,
+                            per_project_count
+                        ),
                         project: None,
                     });
                 }
@@ -268,8 +308,13 @@ impl<'a> QualityChecker<'a> {
             .map(|row| {
                 let id = row.first().and_then(|v| v.as_str()).unwrap_or("");
                 // Single-line for coverage: tarpaulin attribute continuation
-                let project = row.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                QualityViolation { rule: "DQ-006",
+                let project = row
+                    .get(1)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                QualityViolation {
+                    rule: "DQ-006",
                     message: format!("File node '{}' has empty hash", id),
                     project: Some(project),
                 }
@@ -353,11 +398,14 @@ mod tests {
             sample_function("f1", "demo", "main", "demo.main"),
             sample_function("f2", "demo", "other", "demo.main"),
         ];
-        storage.save_nodes(&nodes, NodeLabel::Function)
+        storage
+            .save_nodes(&nodes, NodeLabel::Function)
             .expect("save_nodes");
 
         let checker = QualityChecker::new(&*storage);
-        let violations = checker.check_fqn_uniqueness().expect("check_fqn_uniqueness");
+        let violations = checker
+            .check_fqn_uniqueness()
+            .expect("check_fqn_uniqueness");
         assert_eq!(
             violations.len(),
             1,
@@ -376,11 +424,14 @@ mod tests {
             sample_function("f1", "demo", "main", "demo.main"),
             sample_function("f2", "demo", "helper", "demo.helper"),
         ];
-        storage.save_nodes(&nodes, NodeLabel::Function)
+        storage
+            .save_nodes(&nodes, NodeLabel::Function)
             .expect("save_nodes");
 
         let checker = QualityChecker::new(&*storage);
-        let violations = checker.check_fqn_uniqueness().expect("check_fqn_uniqueness");
+        let violations = checker
+            .check_fqn_uniqueness()
+            .expect("check_fqn_uniqueness");
         assert!(
             violations.is_empty(),
             "expected no DQ-002 violations, got {violations:?}"
@@ -395,11 +446,14 @@ mod tests {
             sample_function("f1", "alpha", "main", "alpha.main"),
             sample_function("f2", "beta", "main", "alpha.main"),
         ];
-        storage.save_nodes(&nodes, NodeLabel::Function)
+        storage
+            .save_nodes(&nodes, NodeLabel::Function)
             .expect("save_nodes");
 
         let checker = QualityChecker::new(&*storage);
-        let violations = checker.check_fqn_uniqueness().expect("check_fqn_uniqueness");
+        let violations = checker
+            .check_fqn_uniqueness()
+            .expect("check_fqn_uniqueness");
         assert!(violations.is_empty(), "got {violations:?}");
     }
 
@@ -409,22 +463,22 @@ mod tests {
     fn test_dq004_detects_orphan_edge() {
         let storage = fresh_storage();
         // Only f1 exists as a node; f2 is a dangling reference.
-        storage.save_nodes(
-            &[sample_function("f1", "demo", "main", "demo.main")],
-            NodeLabel::Function,
-        )
-        .expect("save_nodes");
-        storage.save_edges(&[crate::model::Edge::builder(
-            "f1",
-            "f2_missing",
-            EdgeType::Calls,
-            "demo",
-        )
-        .build()])
-        .expect("save_edges");
+        storage
+            .save_nodes(
+                &[sample_function("f1", "demo", "main", "demo.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+        storage
+            .save_edges(&[
+                crate::model::Edge::builder("f1", "f2_missing", EdgeType::Calls, "demo").build(),
+            ])
+            .expect("save_edges");
 
         let checker = QualityChecker::new(&*storage);
-        let violations = checker.check_edge_integrity().expect("check_edge_integrity");
+        let violations = checker
+            .check_edge_integrity()
+            .expect("check_edge_integrity");
         assert_eq!(
             violations.len(),
             1,
@@ -437,25 +491,23 @@ mod tests {
     #[test]
     fn test_dq004_clean_when_all_edges_valid() {
         let storage = fresh_storage();
-        storage.save_nodes(
-            &[
-                sample_function("f1", "demo", "main", "demo.main"),
-                sample_function("f2", "demo", "helper", "demo.helper"),
-            ],
-            NodeLabel::Function,
-        )
-        .expect("save_nodes");
-        storage.save_edges(&[crate::model::Edge::builder(
-            "f1",
-            "f2",
-            EdgeType::Calls,
-            "demo",
-        )
-        .build()])
-        .expect("save_edges");
+        storage
+            .save_nodes(
+                &[
+                    sample_function("f1", "demo", "main", "demo.main"),
+                    sample_function("f2", "demo", "helper", "demo.helper"),
+                ],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+        storage
+            .save_edges(&[crate::model::Edge::builder("f1", "f2", EdgeType::Calls, "demo").build()])
+            .expect("save_edges");
 
         let checker = QualityChecker::new(&*storage);
-        let violations = checker.check_edge_integrity().expect("check_edge_integrity");
+        let violations = checker
+            .check_edge_integrity()
+            .expect("check_edge_integrity");
         assert!(
             violations.is_empty(),
             "expected no DQ-004 violations, got {violations:?}"
@@ -477,21 +529,26 @@ mod tests {
             .expect("save_edges");
 
         let checker = QualityChecker::new(&*storage);
-        let violations = checker.check_edge_integrity().expect("check_edge_integrity");
+        let violations = checker
+            .check_edge_integrity()
+            .expect("check_edge_integrity");
         assert_eq!(
             violations.len(),
             2,
             "expected two DQ-004 violations (source + target), got {violations:?}"
         );
         assert!(violations.iter().all(|v| v.rule == "DQ-004"));
-        let messages: Vec<&str> =
-            violations.iter().map(|v| v.message.as_str()).collect();
+        let messages: Vec<&str> = violations.iter().map(|v| v.message.as_str()).collect();
         assert!(
-            messages.iter().any(|m| m.contains("missing_src") && m.contains("source")),
+            messages
+                .iter()
+                .any(|m| m.contains("missing_src") && m.contains("source")),
             "should report orphan source: {messages:?}"
         );
         assert!(
-            messages.iter().any(|m| m.contains("missing_tgt") && m.contains("target")),
+            messages
+                .iter()
+                .any(|m| m.contains("missing_tgt") && m.contains("target")),
             "should report orphan target: {messages:?}"
         );
     }
@@ -501,24 +558,29 @@ mod tests {
     #[test]
     fn test_dq005_clean_when_projects_isolated() {
         let storage = fresh_storage();
-        storage.save_project(&sample_project("alpha", "alpha"))
+        storage
+            .save_project(&sample_project("alpha", "alpha"))
             .expect("save_project");
-        storage.save_project(&sample_project("beta", "beta"))
+        storage
+            .save_project(&sample_project("beta", "beta"))
             .expect("save_project");
-        storage.save_nodes(
-            &[sample_function("a1", "alpha", "main", "alpha.main")],
-            NodeLabel::Function,
-        )
-        .expect("save_nodes alpha");
-        storage.save_nodes(
-            &[sample_function("b1", "beta", "main", "beta.main")],
-            NodeLabel::Function,
-        )
-        .expect("save_nodes beta");
+        storage
+            .save_nodes(
+                &[sample_function("a1", "alpha", "main", "alpha.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes alpha");
+        storage
+            .save_nodes(
+                &[sample_function("b1", "beta", "main", "beta.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes beta");
 
         let checker = QualityChecker::new(&*storage);
-        let violations =
-            checker.check_project_isolation().expect("check_project_isolation");
+        let violations = checker
+            .check_project_isolation()
+            .expect("check_project_isolation");
         assert!(
             violations.is_empty(),
             "expected no DQ-005 violations for isolated projects, got {violations:?}"
@@ -530,24 +592,28 @@ mod tests {
         // A Function node whose `project` value is not in the Project table
         // → total count exceeds per-project sum → DQ-005 violation.
         let storage = fresh_storage();
-        storage.save_project(&sample_project("alpha", "alpha"))
+        storage
+            .save_project(&sample_project("alpha", "alpha"))
             .expect("save_project");
         // Function in known project "alpha".
-        storage.save_nodes(
-            &[sample_function("a1", "alpha", "main", "alpha.main")],
-            NodeLabel::Function,
-        )
-        .expect("save_nodes alpha");
+        storage
+            .save_nodes(
+                &[sample_function("a1", "alpha", "main", "alpha.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes alpha");
         // Function in unknown project "ghost" (no matching Project node).
-        storage.save_nodes(
-            &[sample_function("g1", "ghost", "main", "ghost.main")],
-            NodeLabel::Function,
-        )
-        .expect("save_nodes ghost");
+        storage
+            .save_nodes(
+                &[sample_function("g1", "ghost", "main", "ghost.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes ghost");
 
         let checker = QualityChecker::new(&*storage);
-        let violations =
-            checker.check_project_isolation().expect("check_project_isolation");
+        let violations = checker
+            .check_project_isolation()
+            .expect("check_project_isolation");
         assert_eq!(
             violations.len(),
             1,
@@ -574,13 +640,15 @@ mod tests {
     #[test]
     fn test_run_all_includes_dq005_violations() {
         let storage = fresh_storage();
-        storage.save_project(&sample_project("alpha", "alpha"))
+        storage
+            .save_project(&sample_project("alpha", "alpha"))
             .expect("save_project");
-        storage.save_nodes(
-            &[sample_function("g1", "ghost", "main", "ghost.main")],
-            NodeLabel::Function,
-        )
-        .expect("save_nodes ghost");
+        storage
+            .save_nodes(
+                &[sample_function("g1", "ghost", "main", "ghost.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes ghost");
 
         let checker = QualityChecker::new(&*storage);
         let report = checker.run_all().expect("run_all");
@@ -597,17 +665,20 @@ mod tests {
     fn test_dq006_detects_empty_hash() {
         let storage = fresh_storage();
         // One File with a valid hash, one with an empty hash.
-        storage.save_nodes(
-            &[
-                sample_file("f1", "demo", "/a.rs", "sha256:abc"),
-                sample_file("f2", "demo", "/b.rs", ""),
-            ],
-            NodeLabel::File,
-        )
-        .expect("save_nodes");
+        storage
+            .save_nodes(
+                &[
+                    sample_file("f1", "demo", "/a.rs", "sha256:abc"),
+                    sample_file("f2", "demo", "/b.rs", ""),
+                ],
+                NodeLabel::File,
+            )
+            .expect("save_nodes");
 
         let checker = QualityChecker::new(&*storage);
-        let violations = checker.check_hash_integrity().expect("check_hash_integrity");
+        let violations = checker
+            .check_hash_integrity()
+            .expect("check_hash_integrity");
         assert_eq!(
             violations.len(),
             1,
@@ -621,17 +692,20 @@ mod tests {
     #[test]
     fn test_dq006_clean_when_all_hashes_present() {
         let storage = fresh_storage();
-        storage.save_nodes(
-            &[
-                sample_file("f1", "demo", "/a.rs", "sha256:abc"),
-                sample_file("f2", "demo", "/b.rs", "sha256:def"),
-            ],
-            NodeLabel::File,
-        )
-        .expect("save_nodes");
+        storage
+            .save_nodes(
+                &[
+                    sample_file("f1", "demo", "/a.rs", "sha256:abc"),
+                    sample_file("f2", "demo", "/b.rs", "sha256:def"),
+                ],
+                NodeLabel::File,
+            )
+            .expect("save_nodes");
 
         let checker = QualityChecker::new(&*storage);
-        let violations = checker.check_hash_integrity().expect("check_hash_integrity");
+        let violations = checker
+            .check_hash_integrity()
+            .expect("check_hash_integrity");
         assert!(
             violations.is_empty(),
             "expected no DQ-006 violations, got {violations:?}"
@@ -695,20 +769,22 @@ mod tests {
     fn test_run_all_aggregates_violations_from_all_checks() {
         let storage = fresh_storage();
         // DQ-002 violation: duplicate FQN.
-        storage.save_nodes(
-            &[
-                sample_function("f1", "demo", "main", "demo.main"),
-                sample_function("f2", "demo", "other", "demo.main"),
-            ],
-            NodeLabel::Function,
-        )
-        .expect("save_nodes");
+        storage
+            .save_nodes(
+                &[
+                    sample_function("f1", "demo", "main", "demo.main"),
+                    sample_function("f2", "demo", "other", "demo.main"),
+                ],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
         // DQ-006 violation: empty hash.
-        storage.save_nodes(
-            &[sample_file("file_1", "demo", "/a.rs", "")],
-            NodeLabel::File,
-        )
-        .expect("save_nodes file");
+        storage
+            .save_nodes(
+                &[sample_file("file_1", "demo", "/a.rs", "")],
+                NodeLabel::File,
+            )
+            .expect("save_nodes file");
 
         let checker = QualityChecker::new(&*storage);
         let report = checker.run_all().expect("run_all");

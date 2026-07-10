@@ -2,7 +2,7 @@
 # GitHub auto-attaches the source archives (Source code zip/tar.gz) for the
 # tag; no binary compilation is needed.
 #
-# Trigger:  git tag v0.3.1 && git push origin v0.3.1
+# Trigger:  git tag v0.3.2 && git push origin v0.3.2
 
 name: Release
 

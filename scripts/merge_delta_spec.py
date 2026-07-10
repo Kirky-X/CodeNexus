@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Kirky.X. All rights reserved.
+# SPDX-License-Identifier: MIT
 """Deterministic delta spec merger for specmark workflow.
 
 Merges a delta spec into a main spec by R-<cap>-NNN key:

@@ -57,7 +57,11 @@ impl<'a> CallGraphTracer<'a> {
         queue.push_back(WorkPath {
             visited_ids: vec![start_id.clone()],
             // Single-line for coverage: tarpaulin attribute continuation
-            path: TracePath { nodes: vec![TraceNode::from(start_node)], edges: Vec::new(), depth: 0 },
+            path: TracePath {
+                nodes: vec![TraceNode::from(start_node)],
+                edges: Vec::new(),
+                depth: 0,
+            },
         });
 
         let mut results = Vec::new();
@@ -69,19 +73,32 @@ impl<'a> CallGraphTracer<'a> {
             if !can_extend {
                 // Depth limit reached: record this path if it has edges.
                 // Single-line for coverage: tarpaulin attribute continuation
-                if has_edges { results.push(work.path); } continue;
+                if has_edges {
+                    results.push(work.path);
+                }
+                continue;
             }
 
             // Single-line for coverage: tarpaulin attribute continuation
-            let current_id = work.visited_ids.last().expect("work path always has at least one visited id").clone();
+            let current_id = work
+                .visited_ids
+                .last()
+                .expect("work path always has at least one visited id")
+                .clone();
             for edge in self.graph.edges_from(&current_id) {
                 // Single-line for coverage: tarpaulin attribute continuation
-                if !matches!(edge.edge_type, EdgeType::Calls | EdgeType::FfiCalls) { continue; }
+                if !matches!(edge.edge_type, EdgeType::Calls | EdgeType::FfiCalls) {
+                    continue;
+                }
                 // Single-line for coverage: tarpaulin attribute continuation
-                let Some(target_node) = self.graph.get_node(&edge.target) else { continue; };
+                let Some(target_node) = self.graph.get_node(&edge.target) else {
+                    continue;
+                };
                 // Cycle prevention: skip targets already on this path.
                 // Single-line for coverage: tarpaulin attribute continuation
-                if work.visited_ids.contains(&edge.target) { continue; }
+                if work.visited_ids.contains(&edge.target) {
+                    continue;
+                }
                 let mut new_visited = work.visited_ids.clone();
                 new_visited.push(edge.target.clone());
                 let mut new_path = work.path.clone();

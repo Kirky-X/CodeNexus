@@ -65,8 +65,8 @@ Supports **8 languages**: C, Rust, Fortran, Python, TypeScript, Go, Java, C++.
 CodeNexus is split across three entry points:
 
 - `src/lib.rs` — Rust SDK interface (library crate). Embed the indexing pipeline, query facade, or trace engine in another Rust project by depending on the `codenexus` crate.
-- `src/main.rs` — CLI binary. Parses arguments via `clap`, builds a unified `Kit`, and dispatches to command handlers.
-- `src/mcp/mod.rs` — MCP server module (sdforge-based, gated by the `mcp` feature). The hand-written JSON-RPC that previously lived in `src/cli/mcp_cmd.rs` has been replaced by sdforge's declarative `#[service_api]` macro + rmcp stdio transport.
+- `src/main.rs` — CLI binary. Uses sdforge `CliBuilder` + `inventory` to dispatch to `service::*` handlers.
+- `src/service/` — Unified service layer. sdforge `#[service_api]` macro exposes both CLI and MCP interfaces, gated by `cli`/`mcp` features. Each command defines a core function + CLI wrapper + MCP wrapper.
 
 ### Indexing Pipeline
 
@@ -247,6 +247,8 @@ codenexus clean myproject
 | `api-tool-map` | Tool mapping (MCP tool inventory, `api-review` feature) |
 | `community` | Community detection (Louvain modularity optimization, `community` feature) |
 | `cross-service` | Cross-service call chain detection (HTTP route pattern matching, `cross-service` feature) |
+| `lsp-goto-def` | LSP go-to-definition (rust-analyzer integration, `lsp` feature) |
+| `lsp-hover` | LSP hover info (rust-analyzer integration, `lsp` feature) |
 
 ## Complexity Analysis
 
@@ -397,7 +399,7 @@ By participating, you agree to abide by the [Code of Conduct](CODE_OF_CONDUCT.md
 
 ## Roadmap
 
-CodeNexus is at v0.2.1. Planned work, ordered by current priority:
+CodeNexus is at v0.3.2. Planned work, ordered by current priority:
 
 - [x] v0.1.0 — Multi-language indexing (C/Rust/Fortran/Python/TypeScript), graph schema (44 node types + 24 edge types), `query`/`trace`/`impact`/`context`/`search`, incremental indexing, RAM-first mode, MCP server, team `export`/`import`, daemon mode, confidence tiers, disambiguation
 - [x] v0.1.x — Stability and performance hardening: incremental reindex coverage, larger-repo memory tuning, more language-specific edge extraction

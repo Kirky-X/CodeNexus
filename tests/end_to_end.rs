@@ -650,9 +650,7 @@ fn ffi_edge_exists_after_multilang_index() {
     let db = fresh_db_path();
 
     let facade = IndexFacade::new(&db).expect("IndexFacade::new");
-    facade
-        .index(tmp.path(), "multilang", false)
-        .expect("index");
+    facade.index(tmp.path(), "multilang", false).expect("index");
 
     let query = QueryFacade::new(&db).expect("QueryFacade::new");
     // Fetch all CodeRelation rows and filter by type in Rust (robust against
@@ -674,16 +672,13 @@ fn ffi_edge_exists_after_multilang_index() {
     );
 }
 
-/// Verifies that the trace command returns cross-language paths containing
+/// Verifies that the trace engine returns cross-language paths containing
 /// FfiCalls edges after indexing a multilang repo.
 ///
-/// Spec: `ffi_trace_returns_cross_language_path` — indexes
-/// `build_multilang_repo`, calls `trace_cmd::run` for `c_bridge`, and asserts
-/// the loaded trace graph contains at least one FfiCalls edge.
+/// Indexes `build_multilang_repo`, loads the trace graph around `c_bridge`,
+/// and asserts the graph contains at least one FfiCalls edge.
 #[test]
 fn ffi_trace_returns_cross_language_path() {
-    use codenexus::cli::args::TraceArgs;
-    use codenexus::cli::trace_cmd;
     use codenexus::kit::{build_kit, IndexerKey, KitBootstrapConfig, TraceKey};
     use codenexus::model::EdgeType;
 
@@ -697,33 +692,17 @@ fn ffi_trace_returns_cross_language_path() {
         .index(tmp.path(), "multilang", false)
         .expect("index");
 
-    // Exercise the trace command path (spec task 2.4.3). The result is allowed
-    // to be Err if the symbol is ambiguous — the core assertion is on the
-    // loaded graph below (spec task 2.4.4).
-    let args = TraceArgs {
-        symbol: "c_bridge".to_string(),
-        trace_type: "calls".to_string(),
-        depth: 3,
-        db: db.to_str().unwrap().to_string(),
-        min_confidence: None,
-        uid: None,
-        file: None,
-        kind: None,
-    };
-    let _ = trace_cmd::run(&kit, &args);
-
     // Load the trace graph around "c_bridge" and verify FfiCalls edge exists.
     let trace = kit.require::<TraceKey>().expect("require_trace");
     let graph = trace.load_graph("c_bridge", 3).expect("load_graph");
 
     assert!(
-        graph.edges.iter().any(|e| e.edge_type == EdgeType::FfiCalls),
-        "trace 应返回含 FfiCalls 边的跨语言路径，got edges: {:?}",
         graph
             .edges
             .iter()
-            .map(|e| e.edge_type)
-            .collect::<Vec<_>>()
+            .any(|e| e.edge_type == EdgeType::FfiCalls),
+        "trace 应返回含 FfiCalls 边的跨语言路径，got edges: {:?}",
+        graph.edges.iter().map(|e| e.edge_type).collect::<Vec<_>>()
     );
 }
 
@@ -760,8 +739,7 @@ fn corrupt_db_returns_exit_code_4() {
 
     let dir = TempDir::new().unwrap();
     let lbug_file = dir.path().join("corrupt.lbug");
-    std::fs::write(&lbug_file, b"this is not a valid ladybugdb file")
-        .expect("write corrupt file");
+    std::fs::write(&lbug_file, b"this is not a valid ladybugdb file").expect("write corrupt file");
     // Leak the TempDir so the .lbug file survives the test (matches
     // fresh_db_path's pattern).
     std::mem::forget(dir);

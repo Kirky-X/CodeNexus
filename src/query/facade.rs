@@ -75,7 +75,12 @@ impl QueryFacade {
     }
 
     /// General structured search by name (CONTAINS), sorted by relevance.
-    pub fn search(&self, text: &str, project: Option<&str>, limit: usize) -> Result<Vec<SearchResult>> {
+    pub fn search(
+        &self,
+        text: &str,
+        project: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
         let start = Instant::now();
         let result = StructuredSearcher::new(&self.conn).search(text, project, limit);
         let duration_ms = start.elapsed().as_millis().min(u64::MAX as u128) as u64;
@@ -183,9 +188,30 @@ mod tests {
         // Insert functions via direct Cypher CREATE (avoids needing the
         // Repository's CSV loader in the facade tests).
         let funcs = [
-            ("f1", "demo", "parse_file", "demo.parse_file", "/src/main.rs", 1),
-            ("f2", "demo", "parse_line", "demo.parse_line", "/src/main.rs", 10),
-            ("f3", "demo", "read_input", "demo.read_input", "/src/lib.rs", 1),
+            (
+                "f1",
+                "demo",
+                "parse_file",
+                "demo.parse_file",
+                "/src/main.rs",
+                1,
+            ),
+            (
+                "f2",
+                "demo",
+                "parse_line",
+                "demo.parse_line",
+                "/src/main.rs",
+                10,
+            ),
+            (
+                "f3",
+                "demo",
+                "read_input",
+                "demo.read_input",
+                "/src/lib.rs",
+                1,
+            ),
         ];
         for (id, project, name, qn, file, line) in funcs {
             let cypher = format!(
@@ -232,9 +258,7 @@ mod tests {
     fn facade_search_finds_by_name() {
         let facade = fresh_facade();
         seed_fixture(&facade);
-        let results = facade
-            .search("parse", None, 100)
-            .expect("search");
+        let results = facade.search("parse", None, 100).expect("search");
         let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
         assert!(names.contains(&"parse_file"));
         assert!(names.contains(&"parse_line"));
@@ -246,9 +270,7 @@ mod tests {
         // AC-SEARCH-001 via the facade.
         let facade = fresh_facade();
         seed_fixture(&facade);
-        let results = facade
-            .search("parse", None, 100)
-            .expect("search");
+        let results = facade.search("parse", None, 100).expect("search");
         assert!(results.iter().any(|r| r.name.contains("parse")));
     }
 
@@ -283,7 +305,9 @@ mod tests {
             .expect("search_by_file");
         // parse_file, parse_line, Parser are all in /src/main.rs.
         assert_eq!(results.len(), 3);
-        assert!(results.iter().all(|r| r.file_path.as_deref() == Some("/src/main.rs")));
+        assert!(results
+            .iter()
+            .all(|r| r.file_path.as_deref() == Some("/src/main.rs")));
     }
 
     #[test]
@@ -294,7 +318,9 @@ mod tests {
             .fulltext_search("parse", None, 100)
             .expect("fulltext_search");
         assert!(!results.is_empty());
-        assert!(results.iter().all(|r| r.name.to_ascii_lowercase().contains("parse")));
+        assert!(results
+            .iter()
+            .all(|r| r.name.to_ascii_lowercase().contains("parse")));
     }
 
     #[test]
@@ -315,16 +341,18 @@ mod tests {
         facade
             .cypher("CREATE (:Function {id: 'f9', project: 'other', name: 'parse_other', qualifiedName: 'other.parse_other', filePath: '/x.rs', startLine: 1, endLine: 2, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});")
             .expect("create other function");
-        let results = facade
-            .search("parse", Some("demo"), 100)
-            .expect("search");
-        assert!(results.iter().all(|r| r.qualified_name.as_ref().unwrap().starts_with("demo.")));
+        let results = facade.search("parse", Some("demo"), 100).expect("search");
+        assert!(results
+            .iter()
+            .all(|r| r.qualified_name.as_ref().unwrap().starts_with("demo.")));
     }
 
     #[test]
     fn facade_cypher_invalid_returns_error() {
         let facade = fresh_facade();
-        let err = facade.cypher("MATCH (a RETURN a;").expect_err("invalid cypher");
+        let err = facade
+            .cypher("MATCH (a RETURN a;")
+            .expect_err("invalid cypher");
         assert!(matches!(err, QueryError::Storage(_)));
     }
 
@@ -460,7 +488,9 @@ mod tests {
         seed_fixture(&facade);
 
         let captured = capture_tracing_debug(|| {
-            let _ = facade.fulltext_search("parse", None, 100).expect("fulltext");
+            let _ = facade
+                .fulltext_search("parse", None, 100)
+                .expect("fulltext");
         });
 
         assert!(

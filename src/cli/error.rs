@@ -210,10 +210,7 @@ mod tests {
 
     #[test]
     fn io_error_displays_message() {
-        let err = CliError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "missing",
-        ));
+        let err = CliError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "missing"));
         let msg = err.to_string();
         assert!(msg.contains("io error"), "got: {msg}");
         assert!(msg.contains("missing"), "got: {msg}");
@@ -518,7 +515,9 @@ mod tests {
     fn exit_code_kit_build_failed_with_storage_corrupt_is_4() {
         let kit_err = KitError::BuildFailed {
             module: "storage",
-            source: Box::new(StorageError::Corrupt("invalid LadybugDB header".to_string())),
+            source: Box::new(StorageError::Corrupt(
+                "invalid LadybugDB header".to_string(),
+            )),
         };
         let err: CliError = kit_err.into();
         assert_eq!(
@@ -591,8 +590,7 @@ mod tests {
 
     #[test]
     fn from_api_error_internal_maps_to_cli_internal() {
-        let api_err =
-            sdforge::prelude::ApiError::internal_error("boom", "err-deadbeef");
+        let api_err = sdforge::prelude::ApiError::internal_error("boom", "err-deadbeef");
         let cli_err: CliError = api_err.into();
         assert!(matches!(cli_err, CliError::Internal(_)));
         assert_eq!(cli_err.exit_code(), 1);
@@ -600,10 +598,7 @@ mod tests {
 
     #[test]
     fn from_api_error_not_found_maps_to_cli_not_found() {
-        let api_err = sdforge::prelude::ApiError::not_found(
-            "symbol",
-            Some("foo".to_string()),
-        );
+        let api_err = sdforge::prelude::ApiError::not_found("symbol", Some("foo".to_string()));
         let cli_err: CliError = api_err.into();
         assert!(matches!(cli_err, CliError::NotFound(_)));
         assert_eq!(cli_err.exit_code(), 4);

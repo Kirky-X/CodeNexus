@@ -55,15 +55,14 @@ fn to_api_error(e: CliError) -> ApiError {
 /// CLI wrapper — starts the blocking daemon event loop.
 #[cfg(all(feature = "cli", feature = "daemon"))]
 #[service_api(
-    name = "codenexus",
+    name = "daemon",
     version = "0.3.2",
-    tool_name = "daemon",
     description = "Run the file-watcher daemon for incremental indexing.",
-    cli = true,
+    cli = true
 )]
 async fn daemon(path: String, name: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    daemon_core(&kit, &path, &name).map_err(to_api_error)
+    daemon_core(kit, &path, &name).map_err(to_api_error)
 }
 
 #[cfg(all(test, feature = "daemon"))]
@@ -97,8 +96,7 @@ mod tests {
     }
 
     fn build_kit_for_db_with_debounce(db: &str, debounce_ms: u64) -> Kit {
-        let config = KitBootstrapConfig::new(PathBuf::from(db))
-            .with_debounce_ms(debounce_ms);
+        let config = KitBootstrapConfig::new(PathBuf::from(db)).with_debounce_ms(debounce_ms);
         build_kit(&config).expect("build_kit")
     }
 
@@ -120,7 +118,10 @@ mod tests {
         let kit = build_kit_for_db(db.to_str().unwrap());
         let err = daemon_core(&kit, "/no/such/dir", "demo").expect_err("should error");
         let msg = err.to_string();
-        assert!(msg.contains("/no/such/dir"), "error message should contain path: {msg}");
+        assert!(
+            msg.contains("/no/such/dir"),
+            "error message should contain path: {msg}"
+        );
     }
 
     // --- blocking daemon start ---

@@ -16,9 +16,9 @@ use notify_debouncer_full::notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent};
 use tracing::{info, warn};
 
-use crate::discover::is_code_file;
 use crate::daemon::error::DaemonError;
 use crate::daemon::event::{DaemonEvent, EventObserver};
+use crate::discover::is_code_file;
 
 /// 默认防抖窗口（毫秒），BR-DAEMON-001。
 pub const DEFAULT_DEBOUNCE_MS: u64 = 2000;
@@ -175,10 +175,8 @@ impl Daemon {
 
     /// 处理一批防抖后的事件：过滤非代码文件，通知所有观察者。
     fn process_debounced_events(&mut self, events: &[DebouncedEvent]) {
-        let daemon_events: Vec<DaemonEvent> = events
-            .iter()
-            .filter_map(Self::convert_event)
-            .collect();
+        let daemon_events: Vec<DaemonEvent> =
+            events.iter().filter_map(Self::convert_event).collect();
 
         if daemon_events.is_empty() {
             return;
@@ -293,9 +291,7 @@ mod tests {
     }
 
     impl SignalingCountingObserver {
-        fn new(
-            stop: Arc<AtomicBool>,
-        ) -> (Self, Arc<Mutex<usize>>, std::sync::mpsc::Receiver<()>) {
+        fn new(stop: Arc<AtomicBool>) -> (Self, Arc<Mutex<usize>>, std::sync::mpsc::Receiver<()>) {
             let call_count = Arc::new(Mutex::new(0));
             let (tx, rx) = std::sync::mpsc::channel::<()>();
             let signal = Arc::new(Mutex::new(Some(tx)));
@@ -358,9 +354,10 @@ mod tests {
         let (observer, call_count, _events) = CountingObserver::new();
         daemon.add_observer(Box::new(observer));
 
-        let debounced_events = vec![
-            make_event(EventKind::Create(notify_debouncer_full::notify::event::CreateKind::File), "foo.rs"),
-        ];
+        let debounced_events = vec![make_event(
+            EventKind::Create(notify_debouncer_full::notify::event::CreateKind::File),
+            "foo.rs",
+        )];
         daemon.process_debounced_events(&debounced_events);
         assert_eq!(*call_count.lock().unwrap(), 1, "观察者应被调用一次");
     }
@@ -387,10 +384,7 @@ mod tests {
             "lib.c",
         );
         let result = Daemon::convert_event(&event);
-        assert_eq!(
-            result,
-            Some(DaemonEvent::Modify(PathBuf::from("lib.c")))
-        );
+        assert_eq!(result, Some(DaemonEvent::Modify(PathBuf::from("lib.c"))));
     }
 
     #[test]
@@ -400,10 +394,7 @@ mod tests {
             "old.py",
         );
         let result = Daemon::convert_event(&event);
-        assert_eq!(
-            result,
-            Some(DaemonEvent::Remove(PathBuf::from("old.py")))
-        );
+        assert_eq!(result, Some(DaemonEvent::Remove(PathBuf::from("old.py"))));
     }
 
     #[test]
@@ -561,18 +552,9 @@ mod tests {
 
         let db_path = fresh_db_path();
         let facade = IndexFacade::new(&db_path).expect("facade");
-        let observer = IndexObserver::new(
-            facade,
-            "demo".to_string(),
-            tmp.path().to_path_buf(),
-        );
+        let observer = IndexObserver::new(facade, "demo".to_string(), tmp.path().to_path_buf());
 
-        let mut daemon = Daemon::new(
-            tmp.path(),
-            "demo",
-            200,
-            &db_path,
-        );
+        let mut daemon = Daemon::new(tmp.path(), "demo", 200, &db_path);
         daemon.add_observer(Box::new(observer));
 
         let stop = daemon.stop_handle();
@@ -593,18 +575,17 @@ mod tests {
         write_file(tmp.path(), "main.rs", "fn main() {}\n");
 
         let db_path = fresh_db_path();
-        let mut daemon = Daemon::new(
-            tmp.path(),
-            "demo",
-            200,
-            &db_path,
-        );
+        let mut daemon = Daemon::new(tmp.path(), "demo", 200, &db_path);
 
         let start = Instant::now();
         let result = daemon.run_for_duration(Duration::from_millis(500));
         let elapsed = start.elapsed();
 
-        assert!(result.is_ok(), "run_for_duration should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "run_for_duration should succeed: {:?}",
+            result.err()
+        );
         assert!(
             elapsed >= Duration::from_millis(400),
             "应运行至少约 500ms，实际 {:?}",
@@ -625,12 +606,7 @@ mod tests {
         let db_path = fresh_db_path();
         let (observer, call_count, events) = CountingObserver::new();
 
-        let mut daemon = Daemon::new(
-            tmp.path(),
-            "demo",
-            200,
-            &db_path,
-        );
+        let mut daemon = Daemon::new(tmp.path(), "demo", 200, &db_path);
         daemon.add_observer(Box::new(observer));
 
         let handle = thread::spawn(move || daemon.run_for_duration(Duration::from_secs(2)));
@@ -639,7 +615,11 @@ mod tests {
         write_file(tmp.path(), "main.rs", "fn main() { /* v2 */ }\n");
 
         let result = handle.join().expect("thread should join");
-        assert!(result.is_ok(), "run_for_duration should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "run_for_duration should succeed: {:?}",
+            result.err()
+        );
 
         let count = *call_count.lock().unwrap();
         assert!(
@@ -647,10 +627,7 @@ mod tests {
             "AC-DAEMON-001：修改代码文件应触发索引，实际调用次数: {count}"
         );
         let received = events.lock().unwrap();
-        assert!(
-            !received.is_empty(),
-            "应收到至少一个事件"
-        );
+        assert!(!received.is_empty(), "应收到至少一个事件");
     }
 
     #[test]
@@ -661,12 +638,7 @@ mod tests {
         let db_path = fresh_db_path();
         let (observer, _call_count, events) = CountingObserver::new();
 
-        let mut daemon = Daemon::new(
-            tmp.path(),
-            "demo",
-            200,
-            &db_path,
-        );
+        let mut daemon = Daemon::new(tmp.path(), "demo", 200, &db_path);
         daemon.add_observer(Box::new(observer));
 
         let handle = thread::spawn(move || daemon.run_for_duration(Duration::from_secs(2)));
@@ -699,12 +671,7 @@ mod tests {
         write_file(tmp.path(), "b.rs", "fn b() {}\n");
 
         let db_path = fresh_db_path();
-        let mut daemon = Daemon::new(
-            tmp.path(),
-            "demo",
-            2000,
-            &db_path,
-        );
+        let mut daemon = Daemon::new(tmp.path(), "demo", 2000, &db_path);
         let stop = daemon.stop_handle();
         let (observer, call_count, signal_rx) = SignalingCountingObserver::new(Arc::clone(&stop));
         daemon.add_observer(Box::new(observer));
@@ -730,9 +697,7 @@ mod tests {
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 stop.store(true, Ordering::SeqCst);
                 let _ = handle.join();
-                panic!(
-                    "AC-DAEMON-002：6 秒内未收到 on_events 信号，daemon 未触发索引"
-                );
+                panic!("AC-DAEMON-002：6 秒内未收到 on_events 信号，daemon 未触发索引");
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 stop.store(true, Ordering::SeqCst);
@@ -760,12 +725,7 @@ mod tests {
         write_file(tmp.path(), "main.rs", "fn main() {}\n");
 
         let db_path = fresh_db_path();
-        let mut daemon = Daemon::new(
-            tmp.path(),
-            "demo",
-            200,
-            &db_path,
-        );
+        let mut daemon = Daemon::new(tmp.path(), "demo", 200, &db_path);
         let stop = daemon.stop_handle();
 
         let handle = thread::spawn(move || daemon.run());
@@ -774,23 +734,19 @@ mod tests {
         stop.store(true, Ordering::SeqCst);
 
         let result = handle.join().expect("thread should join");
-        assert!(result.is_ok(), "run should stop cleanly: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "run should stop cleanly: {:?}",
+            result.err()
+        );
     }
 
     #[test]
     fn daemon_run_returns_error_for_nonexistent_path() {
         let db_path = fresh_db_path();
-        let mut daemon = Daemon::new(
-            "/nonexistent/path/xyz",
-            "demo",
-            200,
-            &db_path,
-        );
+        let mut daemon = Daemon::new("/nonexistent/path/xyz", "demo", 200, &db_path);
         let result = daemon.run();
-        assert!(
-            result.is_err(),
-            "不存在的路径应返回错误"
-        );
+        assert!(result.is_err(), "不存在的路径应返回错误");
         assert!(
             matches!(result.unwrap_err(), DaemonError::Notify(_)),
             "应为 Notify 错误"
@@ -800,12 +756,7 @@ mod tests {
     #[test]
     fn daemon_run_for_duration_returns_error_for_nonexistent_path() {
         let db_path = fresh_db_path();
-        let mut daemon = Daemon::new(
-            "/nonexistent/path/xyz",
-            "demo",
-            200,
-            &db_path,
-        );
+        let mut daemon = Daemon::new("/nonexistent/path/xyz", "demo", 200, &db_path);
         let result = daemon.run_for_duration(Duration::from_millis(100));
         assert!(result.is_err(), "不存在的路径应返回错误");
     }

@@ -6,10 +6,10 @@
 use serde::Serialize;
 
 use crate::analysis::dead_code::{DeadCodeDetector, DeadCodeEntry};
+use crate::cli::error::CliError;
 use crate::kit::{Kit, StorageKey};
 use crate::service::error::kit_not_initialized;
 use crate::service::runtime::kit;
-use crate::cli::error::CliError;
 
 #[cfg(all(feature = "cli", feature = "analysis"))]
 use sdforge::prelude::ApiError;
@@ -65,15 +65,14 @@ fn to_api_error(e: CliError) -> ApiError {
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "analysis"))]
 #[service_api(
-    name = "codenexus",
+    name = "dead_code",
     version = "0.3.2",
-    tool_name = "dead_code",
     description = "Detect unreferenced (dead) functions in a project.",
-    cli = true,
+    cli = true
 )]
 async fn dead_code(project: String, entry: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    dead_code_core(&kit, &project, &entry).map_err(to_api_error)?;
+    dead_code_core(kit, &project, &entry).map_err(to_api_error)?;
     Ok(())
 }
 

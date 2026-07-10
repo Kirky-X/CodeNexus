@@ -6,10 +6,10 @@
 use serde::Serialize;
 
 use crate::analysis::architecture::{ArchitectureAnalyzer, ArchitectureOverview};
+use crate::cli::error::CliError;
 use crate::kit::{Kit, StorageKey};
 use crate::service::error::kit_not_initialized;
 use crate::service::runtime::kit;
-use crate::cli::error::CliError;
 
 #[cfg(all(feature = "cli", feature = "analysis"))]
 use sdforge::prelude::ApiError;
@@ -53,15 +53,14 @@ fn to_api_error(e: CliError) -> ApiError {
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "analysis"))]
 #[service_api(
-    name = "codenexus",
+    name = "architecture",
     version = "0.3.2",
-    tool_name = "architecture",
     description = "Show high-level architecture overview of a project.",
-    cli = true,
+    cli = true
 )]
 async fn architecture(project: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    architecture_core(&kit, &project).map_err(to_api_error)?;
+    architecture_core(kit, &project).map_err(to_api_error)?;
     Ok(())
 }
 

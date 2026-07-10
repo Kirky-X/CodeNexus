@@ -44,29 +44,21 @@ pub trait Storage: Send + Sync {
     fn execute(&self, cypher: &str) -> std::result::Result<(), StorageError>;
 
     /// Executes a Cypher query and returns all rows as JSON value vectors.
-    fn query(
-        &self,
-        cypher: &str,
-    ) -> std::result::Result<Vec<Vec<serde_json::Value>>, StorageError>;
+    fn query(&self, cypher: &str)
+        -> std::result::Result<Vec<Vec<serde_json::Value>>, StorageError>;
 
     /// Saves a single `Project` node (label must be `NodeLabel::Project`).
     fn save_project(&self, node: &Node) -> std::result::Result<(), StorageError>;
 
     /// Bulk-saves nodes of a single label via CSV `COPY FROM` (ADR-014).
-    fn save_nodes(
-        &self,
-        nodes: &[Node],
-        label: NodeLabel,
-    ) -> std::result::Result<(), StorageError>;
+    fn save_nodes(&self, nodes: &[Node], label: NodeLabel)
+        -> std::result::Result<(), StorageError>;
 
     /// Bulk-saves edges via CSV `COPY FROM` into the `CodeRelation` table.
     fn save_edges(&self, edges: &[Edge]) -> std::result::Result<(), StorageError>;
 
     /// Returns the project with the given id, or `None` if not found.
-    fn get_project(
-        &self,
-        id: &str,
-    ) -> std::result::Result<Option<ProjectRecord>, StorageError>;
+    fn get_project(&self, id: &str) -> std::result::Result<Option<ProjectRecord>, StorageError>;
 
     /// Lists all indexed projects, ordered by name.
     fn list_projects(&self) -> std::result::Result<Vec<ProjectRecord>, StorageError>;

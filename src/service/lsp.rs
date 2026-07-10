@@ -195,11 +195,10 @@ fn to_api_error(e: CliError) -> ApiError {
 /// CLI wrapper for lsp-goto-def — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "lsp"))]
 #[service_api(
-    name = "codenexus",
+    name = "lsp_goto_def",
     version = "0.3.2",
-    tool_name = "lsp_goto_def",
     description = "Query LSP Go-to-Definition for a Rust symbol via rust-analyzer.",
-    cli = true,
+    cli = true
 )]
 async fn lsp_goto_def(
     file: String,
@@ -221,8 +220,8 @@ async fn lsp_goto_def(
         Ok(None) => GotoDefOutput::none(),
         Err(e) => return Err(to_api_error(lsp_error_to_cli(e))),
     };
-    let json = serde_json::to_string(&out)
-        .map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let json =
+        serde_json::to_string(&out).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }
@@ -230,18 +229,12 @@ async fn lsp_goto_def(
 /// CLI wrapper for lsp-hover — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "lsp"))]
 #[service_api(
-    name = "codenexus",
+    name = "lsp_hover",
     version = "0.3.2",
-    tool_name = "lsp_hover",
     description = "Query LSP Hover info for a Rust symbol via rust-analyzer.",
-    cli = true,
+    cli = true
 )]
-async fn lsp_hover(
-    file: String,
-    line: u32,
-    col: u32,
-    workspace: String,
-) -> Result<(), ApiError> {
+async fn lsp_hover(file: String, line: u32, col: u32, workspace: String) -> Result<(), ApiError> {
     let ws = Path::new(&workspace);
     let file_path = resolve_file(&file, ws);
 
@@ -256,8 +249,8 @@ async fn lsp_hover(
         Ok(None) => HoverOutput::none(),
         Err(e) => return Err(to_api_error(lsp_error_to_cli(e))),
     };
-    let json = serde_json::to_string(&out)
-        .map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let json =
+        serde_json::to_string(&out).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }
@@ -298,8 +291,14 @@ mod tests {
         let loc = lsp_types::Location {
             uri: lsp_types::Url::parse("file:///tmp/x.rs").unwrap(),
             range: lsp_types::Range {
-                start: lsp_types::Position { line: 1, character: 2 },
-                end: lsp_types::Position { line: 1, character: 5 },
+                start: lsp_types::Position {
+                    line: 1,
+                    character: 2,
+                },
+                end: lsp_types::Position {
+                    line: 1,
+                    character: 5,
+                },
             },
         };
         let out = GotoDefOutput::from(loc);
@@ -343,8 +342,14 @@ mod tests {
                 value: "x".to_string(),
             }),
             range: Some(Range {
-                start: lsp_types::Position { line: 0, character: 0 },
-                end: lsp_types::Position { line: 0, character: 3 },
+                start: lsp_types::Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: lsp_types::Position {
+                    line: 0,
+                    character: 3,
+                },
             }),
         };
         let out = HoverOutput::from(hover);

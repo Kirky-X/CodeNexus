@@ -185,19 +185,18 @@ mod tests {
 
     #[test]
     fn build_returns_capability() {
-        let cap = ParserFactoryModuleBuilder::new()
-            .build()
-            .expect("build");
+        let cap = ParserFactoryModuleBuilder::new().build().expect("build");
         // supported_languages should return all compiled-in languages.
         let langs = cap.supported_languages();
-        assert!(!langs.is_empty(), "at least one language must be compiled in");
+        assert!(
+            !langs.is_empty(),
+            "at least one language must be compiled in"
+        );
     }
 
     #[test]
     fn capability_creates_parser_for_compiled_languages() {
-        let cap = ParserFactoryModuleBuilder::new()
-            .build()
-            .expect("build");
+        let cap = ParserFactoryModuleBuilder::new().build().expect("build");
         for lang in cap.supported_languages() {
             let parser = cap.create_parser(lang);
             assert!(parser.is_ok(), "create_parser failed for {lang}");
@@ -217,9 +216,7 @@ mod tests {
 
         assert!(kit.contains::<ParserKey>());
 
-        let required = kit
-            .require::<ParserKey>()
-            .expect("require::<ParserKey>");
+        let required = kit.require::<ParserKey>().expect("require::<ParserKey>");
         assert!(Arc::ptr_eq(&parser, &required));
     }
 

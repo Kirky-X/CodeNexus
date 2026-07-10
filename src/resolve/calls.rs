@@ -20,10 +20,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::model::{ConfidenceTier, Edge, EdgeType, Graph};
 use crate::ir::{ExtractResult, ImportInfo};
-use crate::resolve::ProjectSymbolTable;
+use crate::model::{ConfidenceTier, Edge, EdgeType, Graph};
 use crate::resolve::includes_graph::IncludesGraph;
+use crate::resolve::ProjectSymbolTable;
 
 /// Confidence for an exact (file-level) call match.
 const CONFIDENCE_EXACT: f32 = 0.95;
@@ -50,7 +50,7 @@ pub struct CallResolver<'a> {
     /// C++ `#include` graph for scope-aware call resolution (BUG-C4 fix, v0.3.0).
     /// When non-empty for a caller file, step 3 (project-level exported lookup)
     /// uses `lookup_exported_in_scope` instead of `lookup_exported` to prevent
-    /// over-resolution. See T005.
+    /// over-resolution.
     includes_graph: IncludesGraph,
 }
 
@@ -130,19 +130,34 @@ impl<'a> CallResolver<'a> {
             let imports = &result.imports;
             for call in &result.calls {
                 // Single-line for coverage: tarpaulin attribute continuation
-                let Some(caller_qn) = &call.caller_qn else { continue; };
+                let Some(caller_qn) = &call.caller_qn else {
+                    continue;
+                };
                 // Single-line for coverage: tarpaulin attribute continuation
-                let Some((callee_qn, confidence, tier)) = self.resolve_call_internal(caller_file, &call.callee_name, imports) else { continue; };
+                let Some((callee_qn, confidence, tier)) =
+                    self.resolve_call_internal(caller_file, &call.callee_name, imports)
+                else {
+                    continue;
+                };
                 // C2 fix: filter Builder type method calls (callee_qn
                 // disambiguator ends with "Builder") to match gitnexus
                 // which doesn't capture builder pattern method calls.
                 // Builder types: NodeBuilder/EdgeBuilder/*ModuleBuilder etc.
                 // See tools/verification/results/triage.md §C2.
-                if is_builder_type_method(&callee_qn) { continue; }
+                if is_builder_type_method(&callee_qn) {
+                    continue;
+                }
                 let pair_key = (caller_qn.clone(), callee_qn.clone());
-                if !seen_pairs.insert(pair_key) { continue; }
+                if !seen_pairs.insert(pair_key) {
+                    continue;
+                }
                 // Single-line for coverage: tarpaulin attribute continuation
-                let edge = Edge::builder(caller_qn.clone(), callee_qn, EdgeType::Calls, self.project).confidence(confidence).confidence_tier(tier).start_line(call.line).build();
+                let edge =
+                    Edge::builder(caller_qn.clone(), callee_qn, EdgeType::Calls, self.project)
+                        .confidence(confidence)
+                        .confidence_tier(tier)
+                        .start_line(call.line)
+                        .build();
                 graph.add_edge(edge.clone());
                 edges.push(edge);
             }
@@ -177,7 +192,11 @@ impl<'a> CallResolver<'a> {
         callee_name: &str,
     ) -> Option<(String, f32, ConfidenceTier)> {
         // Single-line for coverage: tarpaulin attribute continuation
-        let imports = self.imports.get(caller_file).map(Vec::as_slice).unwrap_or(&[]);
+        let imports = self
+            .imports
+            .get(caller_file)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         self.resolve_call_internal(caller_file, callee_name, imports)
     }
 
@@ -194,16 +213,26 @@ impl<'a> CallResolver<'a> {
     ) -> Option<(String, f32, ConfidenceTier)> {
         // 1. File-level lookup (confidence 0.95, SameFile)
         // Single-line for coverage: tarpaulin attribute continuation
-        if let Some(entry) = self.symbol_table.lookup_in_file(caller_file, callee_name).first() {
+        if let Some(entry) = self
+            .symbol_table
+            .lookup_in_file(caller_file, callee_name)
+            .first()
+        {
             return Some((entry.qn.clone(), CONFIDENCE_EXACT, ConfidenceTier::SameFile));
         }
 
         // 2. Import lookup (confidence 0.90, ImportScoped)
         // Single-line for coverage: tarpaulin attribute continuation
-        let is_imported = imports.iter().any(|imp| imp.imported_names.iter().any(|n| n == callee_name));
+        let is_imported = imports
+            .iter()
+            .any(|imp| imp.imported_names.iter().any(|n| n == callee_name));
         if is_imported {
             if let Some(entry) = self.symbol_table.lookup(callee_name).first() {
-                return Some((entry.qn.clone(), CONFIDENCE_IMPORT, ConfidenceTier::ImportScoped));
+                return Some((
+                    entry.qn.clone(),
+                    CONFIDENCE_IMPORT,
+                    ConfidenceTier::ImportScoped,
+                ));
             }
         }
 
@@ -215,8 +244,11 @@ impl<'a> CallResolver<'a> {
         // (non-C++ or C++ without includes), fall back to global exported
         // lookup to preserve backward compatibility.
         let exported = if self.includes_graph.has_outgoing_edges(caller_file) {
-            self.symbol_table
-                .lookup_exported_in_scope(callee_name, caller_file, &self.includes_graph)
+            self.symbol_table.lookup_exported_in_scope(
+                callee_name,
+                caller_file,
+                &self.includes_graph,
+            )
         } else {
             self.symbol_table.lookup_exported(callee_name)
         };
@@ -255,8 +287,8 @@ fn is_builder_type_method(callee_qn: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Language, Node, NodeLabel};
     use crate::ir::{AssignInfo, CallInfo};
+    use crate::model::{Language, Node, NodeLabel};
     use crate::resolve::{build_symbol_table, FqnGenerator};
 
     /// Generates the FQN for a top-level entity, matching `build_symbol_table`.
@@ -445,11 +477,11 @@ mod tests {
         assert!(resolved.is_none());
     }
 
-    // --- resolve_call: scope-aware lookup (BUG-C4 fix, v0.3.0 / T005) ---
+    // --- resolve_call: scope-aware lookup (BUG-C4 fix, v0.3.0) ---
 
     #[test]
     fn resolve_call_cpp_scoped() {
-        // T005: main.cpp calls foo(). foo.h defines foo() (exported).
+        // main.cpp calls foo(). foo.h defines foo() (exported).
         // bar.cpp also defines foo() (exported). main.cpp #includes foo.h
         // but NOT bar.cpp. Resolution should point to foo.h's foo, not
         // bar.cpp's (BUG-C4: over-resolution fix).
@@ -457,12 +489,24 @@ mod tests {
 
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("foo", "proj.foo_h.foo", NodeLabel::Function, "/abs/foo.h", "proj")
-                .with_exported(true),
+            SymbolEntry::new(
+                "foo",
+                "proj.foo_h.foo",
+                NodeLabel::Function,
+                "/abs/foo.h",
+                "proj",
+            )
+            .with_exported(true),
         );
         table.add_symbol(
-            SymbolEntry::new("foo", "proj.bar_cpp.foo", NodeLabel::Function, "/abs/bar.cpp", "proj")
-                .with_exported(true),
+            SymbolEntry::new(
+                "foo",
+                "proj.bar_cpp.foo",
+                NodeLabel::Function,
+                "/abs/bar.cpp",
+                "proj",
+            )
+            .with_exported(true),
         );
 
         let mut graph = IncludesGraph::new();
@@ -485,14 +529,20 @@ mod tests {
 
     #[test]
     fn resolve_call_non_cpp_uses_global_when_no_includes() {
-        // T005 backward compat: non-C++ file (no #include edges in graph)
+        // Backward compat: non-C++ file (no #include edges in graph)
         // should use global lookup_exported, preserving existing behavior.
         use crate::resolve::symbol_table::SymbolEntry;
 
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("bar", "proj.b_rs.bar", NodeLabel::Function, "/abs/b.rs", "proj")
-                .with_exported(true),
+            SymbolEntry::new(
+                "bar",
+                "proj.b_rs.bar",
+                NodeLabel::Function,
+                "/abs/b.rs",
+                "proj",
+            )
+            .with_exported(true),
         );
 
         let graph = IncludesGraph::new(); // empty — no #include edges
@@ -511,15 +561,21 @@ mod tests {
 
     #[test]
     fn resolve_call_cpp_scoped_excludes_unreachable() {
-        // T005: main.cpp #includes foo.h. bar.cpp defines foo() (exported).
+        // main.cpp #includes foo.h. bar.cpp defines foo() (exported).
         // main.cpp does NOT include bar.cpp. Resolution should return None
         // (foo is not in scope).
         use crate::resolve::symbol_table::SymbolEntry;
 
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("foo", "proj.bar_cpp.foo", NodeLabel::Function, "/abs/bar.cpp", "proj")
-                .with_exported(true),
+            SymbolEntry::new(
+                "foo",
+                "proj.bar_cpp.foo",
+                NodeLabel::Function,
+                "/abs/bar.cpp",
+                "proj",
+            )
+            .with_exported(true),
         );
 
         let mut graph = IncludesGraph::new();
@@ -534,15 +590,21 @@ mod tests {
 
     #[test]
     fn resolve_call_cpp_scoped_transitive_include() {
-        // T005: main.cpp #includes a.h, a.h #includes b.h.
+        // main.cpp #includes a.h, a.h #includes b.h.
         // b.h defines foo() (exported). Transitive reachability should
         // allow resolution.
         use crate::resolve::symbol_table::SymbolEntry;
 
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("foo", "proj.b_h.foo", NodeLabel::Function, "/abs/b.h", "proj")
-                .with_exported(true),
+            SymbolEntry::new(
+                "foo",
+                "proj.b_h.foo",
+                NodeLabel::Function,
+                "/abs/b.h",
+                "proj",
+            )
+            .with_exported(true),
         );
 
         let mut graph = IncludesGraph::new();
@@ -973,8 +1035,13 @@ mod tests {
         // with "Builder") should not generate CALLS edges, matching gitnexus
         // which doesn't capture builder pattern method calls.
         // NodeBuilder methods: build/language/file_path/start_line etc.
-        let build_method =
-            make_node_with_disambiguator("build", "a.rs", "proj", NodeLabel::Function, Some("NodeBuilder"));
+        let build_method = make_node_with_disambiguator(
+            "build",
+            "a.rs",
+            "proj",
+            NodeLabel::Function,
+            Some("NodeBuilder"),
+        );
         let language_method = make_node_with_disambiguator(
             "language",
             "a.rs",
@@ -1049,7 +1116,11 @@ mod tests {
         let edges = resolver.resolve_calls(&results, &mut graph);
 
         // Non-Builder type method calls should be preserved.
-        assert_eq!(edges.len(), 1, "non-Builder method call should be preserved");
+        assert_eq!(
+            edges.len(),
+            1,
+            "non-Builder method call should be preserved"
+        );
         assert_eq!(edges[0].source, caller_qn);
         assert_eq!(edges[0].target, save_qn);
     }

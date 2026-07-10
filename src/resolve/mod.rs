@@ -21,9 +21,9 @@
 //! - [`cross_lang`]: [`FfiResolver`] for resolving FfiCalls edges across
 //!   languages (ADD §7.4, BR-TRACE-008).
 
+pub mod calls;
 pub mod capability;
 pub mod module;
-pub mod calls;
 // Cross-language FFI resolution is only meaningful when both C and Rust are
 // compiled in (Rust extern "C" -> C definitions). Gate the entire module so
 // leaner builds (e.g. `--features minimal`) don't reference unavailable
@@ -33,8 +33,8 @@ pub mod cross_lang;
 pub mod dataflow;
 pub mod error;
 pub mod fqn;
-pub mod includes_graph;
 pub mod imports;
+pub mod includes_graph;
 pub mod mro;
 pub mod scope;
 pub mod symbol_table;
@@ -46,13 +46,13 @@ pub use cross_lang::{FfiResolver, MatchStrategy};
 pub use dataflow::DataFlowResolver;
 pub use error::{ResolveError, Result};
 pub use fqn::FqnGenerator;
-pub use includes_graph::{IncludesGraph, resolve_include};
 pub use imports::ImportResolver;
+pub use includes_graph::{resolve_include, IncludesGraph};
+pub use module::{ResolverModule, ResolverModuleBuilder};
 pub use mro::{mro_for, MroResolver, MroStrategy};
 pub use scope::{Scope, ScopeChain, ScopeContext, ScopeResolver, ScopeResolverRegistry};
 pub use symbol_table::{FileSymbolTable, ProjectSymbolTable, SymbolEntry};
 pub use type_resolver::TypeResolver;
-pub use module::{ResolverModule, ResolverModuleBuilder};
 
 use crate::ir::ExtractResult;
 use crate::model::{Edge, EdgeType, Graph};
@@ -63,11 +63,8 @@ use crate::model::{Edge, EdgeType, Graph};
 /// usage). If the target can't be resolved to a project node, the edge is
 /// noise (e.g. `impl Display for Foo` where `Display` is a std trait not
 /// indexed in the project). Pruning matches gitnexus behavior.
-const PRUNABLE_EDGE_TYPES: [EdgeType; 3] = [
-    EdgeType::Extends,
-    EdgeType::Implements,
-    EdgeType::UsesType,
-];
+const PRUNABLE_EDGE_TYPES: [EdgeType; 3] =
+    [EdgeType::Extends, EdgeType::Implements, EdgeType::UsesType];
 
 /// Removes type-reference edges whose targets are still dangling (not in
 /// `graph.nodes`) after [`TypeResolver`] has attempted resolution.
@@ -80,8 +77,7 @@ const PRUNABLE_EDGE_TYPES: [EdgeType; 3] = [
 /// Returns the count of pruned edges.
 fn prune_dangling_type_edges(graph: &mut Graph) -> usize {
     let before = graph.edge_count();
-    let node_ids: std::collections::HashSet<String> =
-        graph.nodes.keys().cloned().collect();
+    let node_ids: std::collections::HashSet<String> = graph.nodes.keys().cloned().collect();
     prune_dangling_type_edges_vec(&mut graph.edges, &node_ids);
     before - graph.edge_count()
 }
@@ -101,8 +97,7 @@ pub fn prune_dangling_type_edges_vec(
 ) -> usize {
     let before = edges.len();
     edges.retain(|edge| {
-        !PRUNABLE_EDGE_TYPES.contains(&edge.edge_type)
-            || node_ids.contains(&edge.target)
+        !PRUNABLE_EDGE_TYPES.contains(&edge.edge_type) || node_ids.contains(&edge.target)
     });
     before - edges.len()
 }
@@ -187,8 +182,8 @@ pub fn resolve_all(
     includes_graph: &IncludesGraph,
 ) -> Vec<Edge> {
     let mut edges = Vec::new();
-    let call_resolver = CallResolver::new(symbol_table, project)
-        .with_includes_graph(includes_graph.clone());
+    let call_resolver =
+        CallResolver::new(symbol_table, project).with_includes_graph(includes_graph.clone());
     edges.extend(call_resolver.resolve_calls(results, graph));
     let df_resolver = DataFlowResolver::new(symbol_table, project);
     edges.extend(df_resolver.resolve_dataflows(results, graph));
@@ -221,8 +216,8 @@ pub fn resolve_all(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{EdgeType, Language, Node, NodeLabel};
     use crate::ir::{CallInfo, ImportInfo};
+    use crate::model::{EdgeType, Language, Node, NodeLabel};
 
     fn make_node(name: &str, label: NodeLabel, language: Language) -> Node {
         // qualified_name left empty so build_symbol_table falls back to
@@ -246,9 +241,7 @@ mod tests {
         disambiguator: Option<&str>,
     ) -> Node {
         let qn = FqnGenerator::generate(project, file_path, name, language, disambiguator);
-        Node::builder(label, name, qn)
-            .language(language)
-            .build()
+        Node::builder(label, name, qn).language(language).build()
     }
 
     fn make_result(file_path: &str, language: Language, nodes: Vec<Node>) -> ExtractResult {
@@ -341,7 +334,8 @@ mod tests {
         // Direct test of generate_for_module since build_symbol_table uses
         // generate() (top-level entities). Module-nested entities would be
         // handled by a higher-level resolver.
-        let fqn = FqnGenerator::generate_for_module("proj", "src/mod.f90", "mymod", "my_func", None);
+        let fqn =
+            FqnGenerator::generate_for_module("proj", "src/mod.f90", "mymod", "my_func", None);
         assert_eq!(fqn, "proj.src.mod.f90.mymod.my_func");
     }
 
@@ -578,7 +572,8 @@ mod tests {
         // Add nodes to graph with qn as id.
         for r in &results {
             for node in &r.nodes {
-                let qn = FqnGenerator::generate("proj", &r.file_path, &node.name, Language::Rust, None);
+                let qn =
+                    FqnGenerator::generate("proj", &r.file_path, &node.name, Language::Rust, None);
                 let mut g = node.clone();
                 g.id = qn.clone();
                 g.qualified_name = qn;
@@ -644,7 +639,8 @@ mod tests {
         let mut graph = Graph::new();
         for r in &results {
             for node in &r.nodes {
-                let qn = FqnGenerator::generate("proj", &r.file_path, &node.name, Language::Rust, None);
+                let qn =
+                    FqnGenerator::generate("proj", &r.file_path, &node.name, Language::Rust, None);
                 let mut g = node.clone();
                 g.id = qn.clone();
                 g.qualified_name = qn;
@@ -678,8 +674,7 @@ mod tests {
         );
         // The qualified_name should include #tests.
         assert_eq!(
-            node.qualified_name,
-            "proj.src.lib.rs.my_test#tests",
+            node.qualified_name, "proj.src.lib.rs.my_test#tests",
             "test setup: qualified_name must include disambiguator"
         );
 
@@ -688,8 +683,7 @@ mod tests {
         let entry = table.lookup_exact("my_test").unwrap();
         // The symbol table FQN must match the node's qualified_name.
         assert_eq!(
-            entry.qn,
-            "proj.src.lib.rs.my_test#tests",
+            entry.qn, "proj.src.lib.rs.my_test#tests",
             "symbol table FQN must include disambiguator (matches node ID)"
         );
     }
@@ -749,7 +743,11 @@ mod tests {
             .is_exported(true)
             .build();
 
-        let result_a = make_result("a.rs", Language::Rust, vec![trait_node.clone(), foo_node.clone()]);
+        let result_a = make_result(
+            "a.rs",
+            Language::Rust,
+            vec![trait_node.clone(), foo_node.clone()],
+        );
         let result_b = make_result("b.rs", Language::Rust, vec![bar_node.clone()]);
         let results = vec![result_a, result_b];
         let table = build_symbol_table(&results, "proj");
@@ -760,19 +758,38 @@ mod tests {
         graph.add_node(bar_node);
 
         // Dangling: Foo implements Display (std trait, not in project)
-        graph.add_edge(Edge::new(&foo_qn, "proj.a.rs.Display", EdgeType::Implements, "proj"));
+        graph.add_edge(Edge::new(
+            &foo_qn,
+            "proj.a.rs.Display",
+            EdgeType::Implements,
+            "proj",
+        ));
         // Resolvable: Bar implements MyTrait (in a.rs, TypeResolver should fix)
-        graph.add_edge(Edge::new(&bar_qn, "proj.b.rs.MyTrait", EdgeType::Implements, "proj"));
+        graph.add_edge(Edge::new(
+            &bar_qn,
+            "proj.b.rs.MyTrait",
+            EdgeType::Implements,
+            "proj",
+        ));
 
         assert_eq!(graph.edge_count(), 2, "precondition: 2 IMPLEMENTS edges");
 
         resolve_all(&results, &table, "proj", &mut graph, &IncludesGraph::new());
 
-        let implements_edges: Vec<_> = graph.edges.iter()
+        let implements_edges: Vec<_> = graph
+            .edges
+            .iter()
             .filter(|e| e.edge_type == EdgeType::Implements)
             .collect();
-        assert_eq!(implements_edges.len(), 1, "dangling IMPLEMENTS edge should be pruned");
-        assert_eq!(implements_edges[0].target, trait_qn, "resolved edge target should be MyTrait");
+        assert_eq!(
+            implements_edges.len(),
+            1,
+            "dangling IMPLEMENTS edge should be pruned"
+        );
+        assert_eq!(
+            implements_edges[0].target, trait_qn,
+            "resolved edge target should be MyTrait"
+        );
     }
 
     #[test]
@@ -793,14 +810,28 @@ mod tests {
         let mut graph = Graph::new();
         graph.add_node(struct_node);
 
-        graph.add_edge(Edge::new(&struct_qn, "proj.a.rs.BaseClass", EdgeType::Extends, "proj"));
-        graph.add_edge(Edge::new(&struct_qn, "proj.a.rs.ExternalType", EdgeType::UsesType, "proj"));
+        graph.add_edge(Edge::new(
+            &struct_qn,
+            "proj.a.rs.BaseClass",
+            EdgeType::Extends,
+            "proj",
+        ));
+        graph.add_edge(Edge::new(
+            &struct_qn,
+            "proj.a.rs.ExternalType",
+            EdgeType::UsesType,
+            "proj",
+        ));
 
         assert_eq!(graph.edge_count(), 2, "precondition: 2 dangling type edges");
 
         resolve_all(&results, &table, "proj", &mut graph, &IncludesGraph::new());
 
-        assert_eq!(graph.edge_count(), 0, "both dangling type edges should be pruned");
+        assert_eq!(
+            graph.edge_count(),
+            0,
+            "both dangling type edges should be pruned"
+        );
     }
 
     #[test]
@@ -822,14 +853,24 @@ mod tests {
         let mut graph = Graph::new();
         graph.add_node(foo_node);
 
-        graph.add_edge(Edge::new(&foo_qn, "proj.a.rs.external_fn", EdgeType::Calls, "proj"));
+        graph.add_edge(Edge::new(
+            &foo_qn,
+            "proj.a.rs.external_fn",
+            EdgeType::Calls,
+            "proj",
+        ));
 
         resolve_all(&results, &table, "proj", &mut graph, &IncludesGraph::new());
 
-        let calls_count = graph.edges.iter()
+        let calls_count = graph
+            .edges
+            .iter()
             .filter(|e| e.edge_type == EdgeType::Calls)
             .count();
-        assert_eq!(calls_count, 1, "CALLS edge with dangling target should NOT be pruned");
+        assert_eq!(
+            calls_count, 1,
+            "CALLS edge with dangling target should NOT be pruned"
+        );
     }
 
     // --- C1 fix: prune persisted edge Vec (not just graph.edges) ---
@@ -841,9 +882,19 @@ mod tests {
     fn prune_dangling_type_edges_vec_removes_dangling_type_edges() {
         let mut edges = vec![
             // dangling: target "Display" not in node_ids
-            Edge::new("proj.a.rs.Foo", "proj.a.rs.Display", EdgeType::Implements, "proj"),
+            Edge::new(
+                "proj.a.rs.Foo",
+                "proj.a.rs.Display",
+                EdgeType::Implements,
+                "proj",
+            ),
             // resolvable: target "MyTrait" in node_ids
-            Edge::new("proj.a.rs.Bar", "proj.a.rs.MyTrait", EdgeType::Implements, "proj"),
+            Edge::new(
+                "proj.a.rs.Bar",
+                "proj.a.rs.MyTrait",
+                EdgeType::Implements,
+                "proj",
+            ),
             // non-type edge with dangling target — must NOT be pruned
             Edge::new("proj.a.rs.foo", "proj.a.rs.bar", EdgeType::Calls, "proj"),
         ];
@@ -852,8 +903,13 @@ mod tests {
 
         let pruned = prune_dangling_type_edges_vec(&mut edges, &node_ids);
         assert_eq!(pruned, 1, "1 dangling IMPLEMENTS edge should be pruned");
-        assert_eq!(edges.len(), 2, "2 edges remain (resolvable Implements + Calls)");
-        let implements: Vec<_> = edges.iter()
+        assert_eq!(
+            edges.len(),
+            2,
+            "2 edges remain (resolvable Implements + Calls)"
+        );
+        let implements: Vec<_> = edges
+            .iter()
             .filter(|e| e.edge_type == EdgeType::Implements)
             .collect();
         assert_eq!(implements.len(), 1);
@@ -863,14 +919,17 @@ mod tests {
     #[test]
     fn prune_dangling_type_edges_vec_keeps_extends_and_uses_type_when_resolved() {
         let mut edges = vec![
-            Edge::new("a", "proj.a.rs.Base", EdgeType::Extends, "proj"),      // resolvable
-            Edge::new("b", "proj.a.rs.Unknown", EdgeType::UsesType, "proj"),  // dangling
+            Edge::new("a", "proj.a.rs.Base", EdgeType::Extends, "proj"), // resolvable
+            Edge::new("b", "proj.a.rs.Unknown", EdgeType::UsesType, "proj"), // dangling
         ];
         let mut node_ids = std::collections::HashSet::new();
         node_ids.insert("proj.a.rs.Base".to_string());
 
         let pruned = prune_dangling_type_edges_vec(&mut edges, &node_ids);
-        assert_eq!(pruned, 1, "only the dangling UsesType edge should be pruned");
+        assert_eq!(
+            pruned, 1,
+            "only the dangling UsesType edge should be pruned"
+        );
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].edge_type, EdgeType::Extends);
     }

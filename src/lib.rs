@@ -7,19 +7,6 @@
 //! LadybugDB ([`lbug`]) for storage and [`tree_sitter`] for multi-language
 //! parsing. This crate exposes the public API used by the CLI binary and
 //! downstream embedders.
-//!
-//! See the module-level documentation for each subsystem:
-//! - [`model`]: domain entities (nodes, edges, graph).
-//! - [`discover`]: file discovery honoring ignore rules.
-//! - [`parse`]: tree-sitter based multi-language extraction.
-//! - [`resolve`]: symbol resolution and data-flow analysis.
-//! - [`storage`]: LadybugDB persistence layer.
-//! - [`index`]: indexing pipeline facade.
-//! - [`embed`]: optional vector embedding (behind the `embed` feature).
-//! - [`daemon`]: file-watching daemon.
-//! - [`trace`]: call/data-flow tracing engine.
-//! - [`cli`]: command-line interface.
-//! - [`query`]: query engine.
 
 // Compile-time assertion: at least one language feature must be enabled
 // (unified-architecture Phase 1). Without any `lang-*` feature the crate has

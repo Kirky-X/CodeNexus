@@ -170,9 +170,8 @@ impl StorageConnection {
                     report.skipped_count += 1;
                     report.skipped_reasons.push(format!("`{stmt}`: {msg}"));
                 } else {
-                    let schema_err = StorageError::Schema(format!(
-                        "failed to execute DDL `{stmt}`: {msg}"
-                    ));
+                    let schema_err =
+                        StorageError::Schema(format!("failed to execute DDL `{stmt}`: {msg}"));
                     if is_corruption_error(&schema_err) {
                         return Err(StorageError::Corrupt(schema_err.to_string()));
                     }
@@ -270,9 +269,7 @@ pub fn value_to_json(value: Value) -> serde_json::Value {
         Value::Double(d) => serde_json::json!(d),
         Value::String(s) => serde_json::Value::String(s),
         Value::Json(v) => v,
-        Value::Blob(b) => serde_json::Value::String(
-            String::from_utf8_lossy(&b).into_owned(),
-        ),
+        Value::Blob(b) => serde_json::Value::String(String::from_utf8_lossy(&b).into_owned()),
         Value::Date(d) => serde_json::Value::String(d.to_string()),
         Value::Timestamp(t)
         | Value::TimestampTz(t)
@@ -587,7 +584,10 @@ mod tests {
 
     #[test]
     fn value_to_json_converts_int32() {
-        assert_eq!(value_to_json(Value::Int32(70_000)), serde_json::json!(70000));
+        assert_eq!(
+            value_to_json(Value::Int32(70_000)),
+            serde_json::json!(70000)
+        );
     }
 
     #[test]
@@ -597,7 +597,10 @@ mod tests {
 
     #[test]
     fn value_to_json_converts_uint16() {
-        assert_eq!(value_to_json(Value::UInt16(40000)), serde_json::json!(40000));
+        assert_eq!(
+            value_to_json(Value::UInt16(40000)),
+            serde_json::json!(40000)
+        );
     }
 
     #[test]

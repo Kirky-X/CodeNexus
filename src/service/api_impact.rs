@@ -7,13 +7,13 @@ use serde::Serialize;
 
 #[cfg(feature = "api-review")]
 use crate::analysis::api_review::{ApiReviewer, ImpactEntry};
+use crate::cli::error::CliError;
 #[cfg(feature = "api-review")]
 use crate::kit::{Kit, StorageKey};
 #[cfg(all(feature = "cli", feature = "api-review"))]
 use crate::service::error::kit_not_initialized;
 #[cfg(all(feature = "cli", feature = "api-review"))]
 use crate::service::runtime::kit;
-use crate::cli::error::CliError;
 
 #[cfg(all(feature = "cli", feature = "api-review"))]
 use sdforge::prelude::ApiError;
@@ -61,15 +61,14 @@ fn to_api_error(e: CliError) -> ApiError {
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "api-review"))]
 #[service_api(
-    name = "codenexus",
+    name = "api_impact",
     version = "0.3.2",
-    tool_name = "api_impact",
     description = "Trace callers affected by changing an API endpoint.",
-    cli = true,
+    cli = true
 )]
 async fn api_impact(project: String, endpoint: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    api_impact_core(&kit, &project, &endpoint).map_err(to_api_error)?;
+    api_impact_core(kit, &project, &endpoint).map_err(to_api_error)?;
     Ok(())
 }
 

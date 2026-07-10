@@ -3,7 +3,7 @@
 
 //! Import command: decompress a zstd team artifact into the database.
 //!
-//! See `crate::cli::import_cmd` for the artifact format and zstd CLI
+//! See [`crate::service::export`] for the artifact format and zstd CLI
 //! dependency rationale.
 
 use std::fs::File;
@@ -14,7 +14,6 @@ use std::process::{Command, Stdio};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::cli::args::IndexArgs;
 use crate::kit::StorageConfigKey;
 use crate::service::error::{kit_not_initialized, wrap_error};
 use crate::service::export::{ArtifactManifest, ARTIFACT_FORMAT_VERSION, ARTIFACT_MAGIC, ZSTD_BIN};
@@ -36,6 +35,7 @@ pub struct ImportOutput {
 }
 
 /// Decompresses `input` (zstd-compressed bytes) via the system `zstd` CLI.
+#[allow(clippy::result_large_err)]
 fn zstd_decompress(input: &[u8]) -> Result<Vec<u8>, ApiError> {
     let mut child = Command::new(ZSTD_BIN)
         .args(["-q", "-d", "-c"])
@@ -85,18 +85,12 @@ fn zstd_decompress(input: &[u8]) -> Result<Vec<u8>, ApiError> {
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
 #[service_api(
-    name = "codenexus",
+    name = "import",
     version = "0.3.2",
-    tool_name = "import",
     description = "Import a zstd team artifact into the graph database.",
-    cli = true,
+    cli = true
 )]
-async fn import(
-    input: String,
-    reindex: bool,
-    path: String,
-    name: String,
-) -> Result<(), ApiError> {
+async fn import(input: String, reindex: bool, path: String, name: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
     let storage_config = kit
         .config::<StorageConfigKey>()
@@ -114,8 +108,8 @@ async fn import(
         });
     }
 
-    let artifact_bytes = std::fs::read(input_path)
-        .map_err(|e| wrap_error("Failed to read artifact file", e))?;
+    let artifact_bytes =
+        std::fs::read(input_path).map_err(|e| wrap_error("Failed to read artifact file", e))?;
     if artifact_bytes.len() < 8 {
         return Err(ApiError::InvalidInput {
             message: format!(
@@ -172,8 +166,8 @@ async fn import(
     let db_bytes = zstd_decompress(compressed_payload)?;
 
     {
-        let mut out = File::create(&db_path)
-            .map_err(|e| wrap_error("Failed to create database file", e))?;
+        let mut out =
+            File::create(&db_path).map_err(|e| wrap_error("Failed to create database file", e))?;
         out.write_all(&db_bytes)
             .map_err(|e| wrap_error("Failed to write database bytes", e))?;
         out.flush()
@@ -202,17 +196,9 @@ async fn import(
                 value: None,
             });
         }
-        let index_args = IndexArgs {
-            path: path.clone(),
-            name: name.clone(),
-            db: db_path_str.clone(),
-            force: false,
-            lsp: false,
-            embed: false,
-            ram_first: false,
-        };
-        crate::cli::index_cmd::run(kit, &index_args)
-            .map_err(|e| wrap_error("Reindex failed", e))?;
+        let _output =
+            crate::service::index::index_core(kit, &db_path, &path, &name, false, false, false)
+                .map_err(|e| wrap_error("Reindex failed", e))?;
         reindexed = true;
     }
 
@@ -223,8 +209,8 @@ async fn import(
         manifest,
         reindexed,
     };
-    let json = serde_json::to_string(&output)
-        .map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let json =
+        serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }

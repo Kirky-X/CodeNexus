@@ -33,10 +33,10 @@ use tree_sitter::Node;
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
 use crate::resolve::FqnGenerator;
 
+use super::dedupe_qn;
 use super::error::{ParseError, Result};
 use super::extractor::{CallInfo, ExtractResult, Extractor, ImportInfo};
 use super::parser_factory::ParserFactory;
-use super::dedupe_qn;
 
 /// Java language tree-sitter extractor (Adapter pattern).
 pub struct JavaExtractor {
@@ -199,7 +199,9 @@ fn extract_class(
         node.start_position().row as u32 + 1,
         result,
     );
-    let signature = node_text(node, source).map(signature_first_line).map(String::from);
+    let signature = node_text(node, source)
+        .map(signature_first_line)
+        .map(String::from);
     let mut builder = ModelNode::builder(label, name, qn.clone())
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -306,12 +308,7 @@ fn for_each_type_name<F: FnMut(String)>(node: Node, source: &str, f: &mut F) {
     }
 }
 
-fn extract_method(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_method(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name) = method_name(node, source) else {
         return;
     };
@@ -322,7 +319,9 @@ fn extract_method(
         node.start_position().row as u32 + 1,
         result,
     );
-    let signature = node_text(node, source).map(signature_first_line).map(String::from);
+    let signature = node_text(node, source)
+        .map(signature_first_line)
+        .map(String::from);
     // BUG-J3: set is_exported based on visibility. Non-private methods are
     // callable cross-file (within visibility rules) and must be findable via
     // lookup_exported. Private methods are only callable within the same class
@@ -386,7 +385,10 @@ fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
         let imported_names = if is_wildcard {
             Vec::new()
         } else {
-            p.rsplit('.').next().map(|n| vec![n.to_string()]).unwrap_or_default()
+            p.rsplit('.')
+                .next()
+                .map(|n| vec![n.to_string()])
+                .unwrap_or_default()
         };
         result.imports.push(ImportInfo {
             source_file: p,
@@ -396,12 +398,7 @@ fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
     }
 }
 
-fn extract_call(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     // method_invocation has a `name` field (the method name) and an optional
     // `object` field (the receiver expression).
     let Some(name_node) = node.child_by_field_name("name") else {
@@ -511,8 +508,12 @@ fn has_private_modifier(node: Node, source: &str) -> bool {
             }
         }
     }
-    let Some(modifiers) = modifiers else { return false; };
-    let Some(text) = node_text(modifiers, source) else { return false; };
+    let Some(modifiers) = modifiers else {
+        return false;
+    };
+    let Some(text) = node_text(modifiers, source) else {
+        return false;
+    };
     text.split_whitespace().any(|kw| kw == "private")
 }
 
@@ -593,7 +594,12 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Class)
             .collect();
-        assert_eq!(classes.len(), 1, "should extract 1 class: {:?}", result.nodes);
+        assert_eq!(
+            classes.len(),
+            1,
+            "should extract 1 class: {:?}",
+            result.nodes
+        );
         assert_eq!(classes[0].name, "Foo");
         assert_eq!(classes[0].language, Some(Language::Java));
         assert_eq!(classes[0].project, "proj");
@@ -609,7 +615,12 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Interface)
             .collect();
-        assert_eq!(ifaces.len(), 1, "should extract 1 interface: {:?}", result.nodes);
+        assert_eq!(
+            ifaces.len(),
+            1,
+            "should extract 1 interface: {:?}",
+            result.nodes
+        );
         assert_eq!(ifaces[0].name, "Bar");
     }
 
@@ -633,7 +644,12 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Method)
             .collect();
-        assert_eq!(methods.len(), 1, "should extract 1 method: {:?}", result.nodes);
+        assert_eq!(
+            methods.len(),
+            1,
+            "should extract 1 method: {:?}",
+            result.nodes
+        );
         assert_eq!(methods[0].name, "bar");
         assert!(!methods[0].is_global, "method should not be global");
         // The enclosing class name is used as the FQN disambiguator.
@@ -670,7 +686,12 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Method)
             .collect();
-        assert_eq!(methods.len(), 1, "constructor should be a Method: {:?}", result.nodes);
+        assert_eq!(
+            methods.len(),
+            1,
+            "constructor should be a Method: {:?}",
+            result.nodes
+        );
         assert_eq!(methods[0].name, "Foo");
     }
 
@@ -683,13 +704,28 @@ mod tests {
 
     #[test]
     fn extracts_multiple_imports() {
-        let result = extract(
-            "import java.util.List;\nimport java.util.Map;\n",
+        let result = extract("import java.util.List;\nimport java.util.Map;\n");
+        assert_eq!(
+            result.imports.len(),
+            2,
+            "should extract 2 imports: {:?}",
+            result.imports
         );
-        assert_eq!(result.imports.len(), 2, "should extract 2 imports: {:?}", result.imports);
-        let paths: Vec<_> = result.imports.iter().map(|i| i.source_file.as_str()).collect();
-        assert!(paths.contains(&"java.util.List"), "should import List: {:?}", paths);
-        assert!(paths.contains(&"java.util.Map"), "should import Map: {:?}", paths);
+        let paths: Vec<_> = result
+            .imports
+            .iter()
+            .map(|i| i.source_file.as_str())
+            .collect();
+        assert!(
+            paths.contains(&"java.util.List"),
+            "should import List: {:?}",
+            paths
+        );
+        assert!(
+            paths.contains(&"java.util.Map"),
+            "should import Map: {:?}",
+            paths
+        );
     }
 
     #[test]
@@ -715,7 +751,11 @@ mod tests {
     #[test]
     fn creates_defines_edges() {
         let result = extract("class Foo {}\n");
-        let defines_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Defines).count();
+        let defines_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Defines)
+            .count();
         let node_count = result.nodes.len();
         assert_eq!(defines_count, node_count, "one DEFINES edge per node");
     }
@@ -745,10 +785,12 @@ mod tests {
 
     #[test]
     fn extracts_method_invocation() {
-        let result = extract(
-            "class Foo { void run() { doSomething(); } }\n",
-        );
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let result = extract("class Foo { void run() { doSomething(); } }\n");
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             callees.contains(&"doSomething"),
             "should extract call to doSomething: {:?}",
@@ -758,9 +800,7 @@ mod tests {
 
     #[test]
     fn call_has_line_and_args() {
-        let result = extract(
-            "class Foo { void run() { doSomething(1, 2); } }\n",
-        );
+        let result = extract("class Foo { void run() { doSomething(1, 2); } }\n");
         let call = result
             .calls
             .iter()
@@ -899,7 +939,10 @@ mod tests {
     fn class_is_exported() {
         let result = extract("public class Foo {}\n");
         let foo = result.nodes.iter().find(|n| n.name == "Foo").unwrap();
-        assert!(foo.is_exported, "Java class should be exported for cross-file resolution");
+        assert!(
+            foo.is_exported,
+            "Java class should be exported for cross-file resolution"
+        );
     }
 
     #[test]
@@ -909,42 +952,60 @@ mod tests {
         // call resolution (same-package calls without explicit imports).
         let result = extract("class Foo { public void bar() {} }\n");
         let bar = result.nodes.iter().find(|n| n.name == "bar").unwrap();
-        assert!(bar.is_exported, "public method should have is_exported=true");
+        assert!(
+            bar.is_exported,
+            "public method should have is_exported=true"
+        );
     }
 
     #[test]
     fn protected_method_is_exported() {
         let result = extract("class Foo { protected void bar() {} }\n");
         let bar = result.nodes.iter().find(|n| n.name == "bar").unwrap();
-        assert!(bar.is_exported, "protected method should have is_exported=true");
+        assert!(
+            bar.is_exported,
+            "protected method should have is_exported=true"
+        );
     }
 
     #[test]
     fn package_private_method_is_exported() {
         let result = extract("class Foo { void bar() {} }\n");
         let bar = result.nodes.iter().find(|n| n.name == "bar").unwrap();
-        assert!(bar.is_exported, "package-private method should have is_exported=true");
+        assert!(
+            bar.is_exported,
+            "package-private method should have is_exported=true"
+        );
     }
 
     #[test]
     fn private_method_is_not_exported() {
         let result = extract("class Foo { private void bar() {} }\n");
         let bar = result.nodes.iter().find(|n| n.name == "bar").unwrap();
-        assert!(!bar.is_exported, "private method should have is_exported=false");
+        assert!(
+            !bar.is_exported,
+            "private method should have is_exported=false"
+        );
     }
 
     #[test]
     fn public_static_method_is_exported() {
         let result = extract("class Foo { public static void bar() {} }\n");
         let bar = result.nodes.iter().find(|n| n.name == "bar").unwrap();
-        assert!(bar.is_exported, "public static method should have is_exported=true");
+        assert!(
+            bar.is_exported,
+            "public static method should have is_exported=true"
+        );
     }
 
     #[test]
     fn private_static_method_is_not_exported() {
         let result = extract("class Foo { private static void bar() {} }\n");
         let bar = result.nodes.iter().find(|n| n.name == "bar").unwrap();
-        assert!(!bar.is_exported, "private static method should have is_exported=false");
+        assert!(
+            !bar.is_exported,
+            "private static method should have is_exported=false"
+        );
     }
 
     #[test]
@@ -953,7 +1014,9 @@ mod tests {
         assert_eq!(result.imports.len(), 1);
         assert_eq!(result.imports[0].source_file, "java.util.List");
         assert!(
-            result.imports[0].imported_names.contains(&"List".to_string()),
+            result.imports[0]
+                .imported_names
+                .contains(&"List".to_string()),
             "imported_names should contain 'List', got: {:?}",
             result.imports[0].imported_names
         );

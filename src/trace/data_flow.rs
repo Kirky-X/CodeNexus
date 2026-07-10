@@ -58,7 +58,11 @@ impl<'a> DataFlowTracer<'a> {
         queue.push_back(WorkPath {
             visited_ids: vec![start_id.clone()],
             // Single-line for coverage: tarpaulin attribute continuation
-            path: TracePath { nodes: vec![TraceNode::from(start_node)], edges: Vec::new(), depth: 0 },
+            path: TracePath {
+                nodes: vec![TraceNode::from(start_node)],
+                edges: Vec::new(),
+                depth: 0,
+            },
         });
 
         let mut results = Vec::new();
@@ -70,19 +74,35 @@ impl<'a> DataFlowTracer<'a> {
             if !can_extend {
                 // Depth limit reached: record this path if it has edges.
                 // Single-line for coverage: tarpaulin attribute continuation
-                if has_edges { results.push(work.path); } continue;
+                if has_edges {
+                    results.push(work.path);
+                }
+                continue;
             }
 
             // Single-line for coverage: tarpaulin attribute continuation
-            let current_id = work.visited_ids.last().expect("work path always has at least one visited id").clone();
+            let current_id = work
+                .visited_ids
+                .last()
+                .expect("work path always has at least one visited id")
+                .clone();
             for edge in self.graph.edges_from(&current_id) {
                 // Single-line for coverage: tarpaulin attribute continuation
-                if !matches!(edge.edge_type, EdgeType::DataFlows | EdgeType::Reads | EdgeType::Writes) { continue; }
+                if !matches!(
+                    edge.edge_type,
+                    EdgeType::DataFlows | EdgeType::Reads | EdgeType::Writes
+                ) {
+                    continue;
+                }
                 // Single-line for coverage: tarpaulin attribute continuation
-                let Some(target_node) = self.graph.get_node(&edge.target) else { continue; };
+                let Some(target_node) = self.graph.get_node(&edge.target) else {
+                    continue;
+                };
                 // Cycle prevention: skip targets already on this path.
                 // Single-line for coverage: tarpaulin attribute continuation
-                if work.visited_ids.contains(&edge.target) { continue; }
+                if work.visited_ids.contains(&edge.target) {
+                    continue;
+                }
                 let mut new_visited = work.visited_ids.clone();
                 new_visited.push(edge.target.clone());
                 let mut new_path = work.path.clone();
@@ -357,7 +377,10 @@ mod tests {
         g.add_edge(Edge::new("x", "x", EdgeType::DataFlows, "proj"));
         let tracer = DataFlowTracer::new(&g);
         let paths = tracer.trace(&"x".to_string(), 3);
-        assert!(paths.is_empty(), "self-loop should be skipped by cycle prevention");
+        assert!(
+            paths.is_empty(),
+            "self-loop should be skipped by cycle prevention"
+        );
     }
 
     #[test]

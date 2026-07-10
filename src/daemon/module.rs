@@ -198,13 +198,11 @@ struct DaemonCapability {
 impl DaemonRunner for DaemonCapability {
     fn start(&self, watch_path: &Path, project_name: &str) -> Result<(), DaemonError> {
         // Construct the IndexFacade (lazy — opens DB on first index call).
-        let facade = IndexFacade::new(&self.db_path).map_err(|e| {
-            std::io::Error::other(format!("IndexFacade::new: {e}"))
-        })?;
+        let facade = IndexFacade::new(&self.db_path)
+            .map_err(|e| std::io::Error::other(format!("IndexFacade::new: {e}")))?;
 
         // Construct the daemon with the configured debounce window.
-        let mut daemon =
-            Daemon::new(watch_path, project_name, self.debounce_ms, &self.db_path);
+        let mut daemon = Daemon::new(watch_path, project_name, self.debounce_ms, &self.db_path);
 
         // Register the IndexObserver (Observer pattern) — triggers
         // incremental indexing on code-file changes (BR-DAEMON-003).
@@ -308,6 +306,9 @@ mod tests {
     #[test]
     fn builder_default_is_equivalent_to_new() {
         let result = DaemonModuleBuilder::default().build();
-        assert!(result.is_err(), "default builder has no config, should fail");
+        assert!(
+            result.is_err(),
+            "default builder has no config, should fail"
+        );
     }
 }

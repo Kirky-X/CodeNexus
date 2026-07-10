@@ -17,9 +17,7 @@ pub mod module;
 pub mod types;
 
 pub use call_graph::CallGraphTracer;
-pub use context::{
-    collect_incoming, collect_outgoing, collect_processes, resolve_start_id,
-};
+pub use context::{collect_incoming, collect_outgoing, collect_processes, resolve_start_id};
 pub use data_flow::DataFlowTracer;
 pub use error::{Result, TraceError};
 pub use facade::{TraceFacade, TraceType};

@@ -152,7 +152,8 @@ fn find_symbols_in_ranges(
             continue;
         }
         let cols = node_table_columns(label);
-        if !cols.contains(&"filePath") || !cols.contains(&"startLine") || !cols.contains(&"endLine") {
+        if !cols.contains(&"filePath") || !cols.contains(&"startLine") || !cols.contains(&"endLine")
+        {
             continue;
         }
         let table = crate::storage::schema::escape_identifier(label.table_name());
@@ -163,12 +164,36 @@ fn find_symbols_in_ranges(
         );
         let rows = storage.query(&cypher)?;
         for row in rows {
-            let id = row.first().and_then(|v| v.as_str()).map(String::from).unwrap_or_default();
-            let name = row.get(1).and_then(|v| v.as_str()).map(String::from).unwrap_or_default();
-            let qualified_name = row.get(2).and_then(|v| v.as_str()).map(String::from).unwrap_or_default();
-            let file_path = row.get(3).and_then(|v| v.as_str()).map(String::from).unwrap_or_default();
-            let start_line = row.get(4).and_then(|v| v.as_i64()).and_then(|i| u32::try_from(i).ok()).unwrap_or(0);
-            let end_line = row.get(5).and_then(|v| v.as_i64()).and_then(|i| u32::try_from(i).ok()).unwrap_or(0);
+            let id = row
+                .first()
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .unwrap_or_default();
+            let name = row
+                .get(1)
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .unwrap_or_default();
+            let qualified_name = row
+                .get(2)
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .unwrap_or_default();
+            let file_path = row
+                .get(3)
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .unwrap_or_default();
+            let start_line = row
+                .get(4)
+                .and_then(|v| v.as_i64())
+                .and_then(|i| u32::try_from(i).ok())
+                .unwrap_or(0);
+            let end_line = row
+                .get(5)
+                .and_then(|v| v.as_i64())
+                .and_then(|i| u32::try_from(i).ok())
+                .unwrap_or(0);
             if !ranges_overlap(start_line, end_line, ranges) {
                 continue;
             }
@@ -205,9 +230,7 @@ fn count_incoming_edges(
     storage: &dyn crate::storage::capability::Storage,
     id: &str,
 ) -> Result<usize, CliError> {
-    let cypher = format!(
-        "MATCH (r:CodeRelation) WHERE r.target = '{id}' RETURN count(r) AS cnt;"
-    );
+    let cypher = format!("MATCH (r:CodeRelation) WHERE r.target = '{id}' RETURN count(r) AS cnt;");
     let rows = storage.query(&cypher)?;
     let cnt = rows
         .first()
@@ -271,11 +294,10 @@ fn to_api_error(e: CliError) -> ApiError {
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
 #[service_api(
-    name = "codenexus",
+    name = "detect_changes",
     version = "0.3.2",
-    tool_name = "detect_changes",
     description = "Detect symbols affected by uncommitted git changes and classify their risk.",
-    cli = true,
+    cli = true
 )]
 async fn detect_changes(path: String, mode: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
@@ -303,7 +325,9 @@ async fn detect_changes(path: String, mode: String) -> Result<(), ApiError> {
     let mut affected: Vec<AffectedSymbolOutput> = Vec::new();
     for (rel_path, ranges) in &hunks {
         let abs_path = repo_root.join(rel_path);
-        for sym in find_symbols_in_ranges(&*storage, rel_path, &abs_path, ranges).map_err(to_api_error)? {
+        for sym in
+            find_symbols_in_ranges(&*storage, rel_path, &abs_path, ranges).map_err(to_api_error)?
+        {
             affected.push(sym);
         }
     }
@@ -325,8 +349,8 @@ async fn detect_changes(path: String, mode: String) -> Result<(), ApiError> {
         files_changed,
         affected,
     };
-    let json = serde_json::to_string(&output)
-        .map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let json =
+        serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }
@@ -422,12 +446,18 @@ mod tests {
 
     #[test]
     fn parse_diff_path_strips_b_prefix() {
-        assert_eq!(parse_diff_path("b/src/main.rs").as_deref(), Some("src/main.rs"));
+        assert_eq!(
+            parse_diff_path("b/src/main.rs").as_deref(),
+            Some("src/main.rs")
+        );
     }
 
     #[test]
     fn parse_diff_path_no_prefix() {
-        assert_eq!(parse_diff_path("src/main.rs").as_deref(), Some("src/main.rs"));
+        assert_eq!(
+            parse_diff_path("src/main.rs").as_deref(),
+            Some("src/main.rs")
+        );
     }
 
     #[test]
@@ -812,7 +842,10 @@ diff --git a/added.rs b/added.rs
             &[(100, 10)],
         )
         .expect("find_symbols_in_ranges");
-        assert!(affected.is_empty(), "non-overlapping symbol should be skipped");
+        assert!(
+            affected.is_empty(),
+            "non-overlapping symbol should be skipped"
+        );
     }
 
     #[test]
@@ -852,9 +885,12 @@ diff --git a/added.rs b/added.rs
         let kit = build_kit_for_db(db.to_str().unwrap());
         let storage = kit.require::<StorageKey>().expect("require_storage");
         let edges = vec![
-            crate::model::Edge::builder("a", "target", crate::model::EdgeType::Calls, "demo").build(),
-            crate::model::Edge::builder("b", "target", crate::model::EdgeType::Calls, "demo").build(),
-            crate::model::Edge::builder("target", "c", crate::model::EdgeType::Calls, "demo").build(),
+            crate::model::Edge::builder("a", "target", crate::model::EdgeType::Calls, "demo")
+                .build(),
+            crate::model::Edge::builder("b", "target", crate::model::EdgeType::Calls, "demo")
+                .build(),
+            crate::model::Edge::builder("target", "c", crate::model::EdgeType::Calls, "demo")
+                .build(),
         ];
         storage.save_edges(&edges).expect("save_edges");
         let cnt = count_incoming_edges(&*storage, "target").expect("count_incoming_edges");

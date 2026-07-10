@@ -36,6 +36,7 @@
 //! subsystems ad-hoc.
 
 pub mod capability;
+#[allow(clippy::module_inception)]
 pub mod daemon;
 pub mod error;
 pub mod event;

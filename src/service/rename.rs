@@ -73,26 +73,23 @@ fn is_valid_identifier(s: &str) -> bool {
 
 /// Collects candidate files for text edits: the symbol's own file plus all
 /// neighbor files in the loaded subgraph, filtered to those under `root`.
-fn collect_candidate_files(
-    graph: &Graph,
-    start_id: &NodeId,
-    root: &Path,
-) -> Vec<PathBuf> {
+fn collect_candidate_files(graph: &Graph, start_id: &NodeId, root: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = Vec::new();
     let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     let root_canonical = root.to_path_buf();
-    let collect = |node: &Node, files: &mut Vec<PathBuf>, seen: &mut std::collections::HashSet<PathBuf>| {
-        if let Some(fp) = &node.file_path {
-            let p = PathBuf::from(fp);
-            if p.is_absolute() {
-                if p.starts_with(&root_canonical) && seen.insert(p.clone()) {
-                    files.push(p);
+    let collect =
+        |node: &Node, files: &mut Vec<PathBuf>, seen: &mut std::collections::HashSet<PathBuf>| {
+            if let Some(fp) = &node.file_path {
+                let p = PathBuf::from(fp);
+                if p.is_absolute() {
+                    if p.starts_with(&root_canonical) && seen.insert(p.clone()) {
+                        files.push(p);
+                    }
+                } else if seen.insert(root_canonical.join(&p)) {
+                    files.push(root_canonical.join(p));
                 }
-            } else if seen.insert(root_canonical.join(&p)) {
-                files.push(root_canonical.join(p));
             }
-        }
-    };
+        };
     if let Some(node) = graph.get_node(start_id) {
         collect(node, &mut files, &mut seen);
     }
@@ -152,7 +149,8 @@ fn find_word_occurrences(haystack: &str, needle: &str) -> Vec<usize> {
     while i + needle.len() <= bytes.len() {
         if &bytes[i..i + needle.len()] == needle_bytes {
             let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
-            let after_ok = i + needle.len() == bytes.len() || !is_ident_byte(bytes[i + needle.len()]);
+            let after_ok =
+                i + needle.len() == bytes.len() || !is_ident_byte(bytes[i + needle.len()]);
             if before_ok && after_ok {
                 positions.push(i);
             }
@@ -292,11 +290,10 @@ fn to_api_error(e: CliError) -> ApiError {
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
 #[service_api(
-    name = "codenexus",
+    name = "rename",
     version = "0.3.2",
-    tool_name = "rename",
     description = "Propose graph + text edits for renaming a symbol.",
-    cli = true,
+    cli = true
 )]
 async fn rename(from: String, to: String, path: String, apply: bool) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
@@ -310,7 +307,11 @@ async fn rename(from: String, to: String, path: String, apply: bool) -> Result<(
             value: Some(Value::String(to)),
         });
     }
-    let path_opt = if path.is_empty() { None } else { Some(path.as_str()) };
+    let path_opt = if path.is_empty() {
+        None
+    } else {
+        Some(path.as_str())
+    };
     if apply && path_opt.is_none() {
         return Err(ApiError::InvalidInput {
             message: "apply requires path (text edits need a codebase root to scan)".to_string(),
@@ -333,10 +334,12 @@ async fn rename(from: String, to: String, path: String, apply: bool) -> Result<(
         resource: "symbol".to_string(),
         resource_id: Some(from.clone()),
     })?;
-    let symbol_node = graph.get_node(&start_id).ok_or_else(|| ApiError::NotFound {
-        resource: "symbol".to_string(),
-        resource_id: Some(from.clone()),
-    })?;
+    let symbol_node = graph
+        .get_node(&start_id)
+        .ok_or_else(|| ApiError::NotFound {
+            resource: "symbol".to_string(),
+            resource_id: Some(from.clone()),
+        })?;
 
     let old_name = symbol_node.name.clone();
     let old_qn = symbol_node.qualified_name.clone();
@@ -354,13 +357,14 @@ async fn rename(from: String, to: String, path: String, apply: bool) -> Result<(
     let text_edits = match path_opt {
         Some(root) => {
             let candidate_files = collect_candidate_files(&graph, &start_id, Path::new(root));
-            scan_text_edits(Path::new(root), &old_name, &to, &candidate_files).map_err(to_api_error)?
+            scan_text_edits(Path::new(root), &old_name, &to, &candidate_files)
+                .map_err(to_api_error)?
         }
         None => Vec::new(),
     };
 
     if apply {
-        apply_graph_edit(&kit, &graph_edit).map_err(to_api_error)?;
+        apply_graph_edit(kit, &graph_edit).map_err(to_api_error)?;
         apply_text_edits(&text_edits).map_err(to_api_error)?;
     }
 
@@ -371,8 +375,8 @@ async fn rename(from: String, to: String, path: String, apply: bool) -> Result<(
         graph_edit,
         text_edits,
     };
-    let json = serde_json::to_string(&output)
-        .map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let json =
+        serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }
@@ -654,10 +658,7 @@ mod tests {
                 .id("id1")
                 .build(),
         );
-        assert_eq!(
-            resolve_start_id(&graph, "demo.foo").as_deref(),
-            Some("id1")
-        );
+        assert_eq!(resolve_start_id(&graph, "demo.foo").as_deref(), Some("id1"));
     }
 
     // --- collect_candidate_files ---
@@ -687,7 +688,11 @@ mod tests {
         graph.add_edge(Edge::new("f1", "f2", EdgeType::Calls, "demo"));
 
         let files = collect_candidate_files(&graph, &"f1".to_string(), root);
-        assert_eq!(files.len(), 2, "should include both symbol file and neighbor file");
+        assert_eq!(
+            files.len(),
+            2,
+            "should include both symbol file and neighbor file"
+        );
     }
 
     #[test]
@@ -818,7 +823,11 @@ mod tests {
             },
         ];
         let result = apply_text_edits(&edits);
-        assert!(result.is_ok(), "apply_text_edits should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "apply_text_edits should succeed: {:?}",
+            result.err()
+        );
         assert_eq!(std::fs::read_to_string(&file_a).unwrap(), "fn bar() {}\n");
         assert_eq!(std::fs::read_to_string(&file_b).unwrap(), "let bar = 1;\n");
     }
@@ -829,8 +838,8 @@ mod tests {
     fn core_invalid_new_name_returns_error() {
         let db = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
-        let err = rename_core(&kit, "foo", "1bad", None, false)
-            .expect_err("invalid name should error");
+        let err =
+            rename_core(&kit, "foo", "1bad", None, false).expect_err("invalid name should error");
         assert_eq!(err.exit_code(), 2, "InvalidInput → exit 2");
     }
 
@@ -861,7 +870,11 @@ mod tests {
         let storage = kit.require::<StorageKey>().unwrap();
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();
         let result = rename_core(&kit, "a", "b", None, false);
-        assert!(result.is_ok(), "dry-run rename should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "dry-run rename should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -872,11 +885,16 @@ mod tests {
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();
         let tmp = TempDir::new().unwrap();
         let result = rename_core(&kit, "a", "b", Some(tmp.path().to_str().unwrap()), true);
-        assert!(result.is_ok(), "apply rename should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "apply rename should succeed: {:?}",
+            result.err()
+        );
         let rows = storage
             .query("MATCH (n:Function) WHERE n.id = 'f_a' RETURN n.name AS name;")
             .unwrap();
-        let name = rows.first()
+        let name = rows
+            .first()
             .and_then(|r| r.first())
             .and_then(|v| v.as_str())
             .unwrap_or("");

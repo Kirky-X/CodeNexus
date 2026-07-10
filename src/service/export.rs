@@ -3,8 +3,8 @@
 
 //! Export command: compress the database to a zstd team artifact.
 //!
-//! See `crate::cli::export_cmd` for the artifact format and zstd CLI
-//! dependency rationale.
+//! Artifact format: `[magic (4B)] [manifest_len (4B LE)] [manifest JSON] [zstd-compressed DB bytes]`.
+//! The `zstd` CLI binary is required for compression/decompression.
 
 use std::fs::File;
 use std::io::Write;
@@ -57,6 +57,7 @@ pub struct ExportOutput {
 }
 
 /// Compresses `input` bytes via the system `zstd` CLI.
+#[allow(clippy::result_large_err)]
 fn zstd_compress(input: &[u8]) -> Result<Vec<u8>, ApiError> {
     let mut child = Command::new(ZSTD_BIN)
         .args(["-q", "--ultra", format!("-{ZSTD_LEVEL}").as_str(), "-c"])
@@ -106,11 +107,10 @@ fn zstd_compress(input: &[u8]) -> Result<Vec<u8>, ApiError> {
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
 #[service_api(
-    name = "codenexus",
+    name = "export",
     version = "0.3.2",
-    tool_name = "export",
     description = "Export the graph database to a compressed zstd team artifact.",
-    cli = true,
+    cli = true
 )]
 async fn export(output: String, project: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
@@ -129,8 +129,8 @@ async fn export(output: String, project: String) -> Result<(), ApiError> {
         });
     }
 
-    let original_bytes = std::fs::read(&db_path)
-        .map_err(|e| wrap_error("Failed to read database file", e))?;
+    let original_bytes =
+        std::fs::read(&db_path).map_err(|e| wrap_error("Failed to read database file", e))?;
     let original_size = u64::try_from(original_bytes.len()).unwrap_or(0);
     let exported_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -142,7 +142,11 @@ async fn export(output: String, project: String) -> Result<(), ApiError> {
         codenexus_version: env!("CARGO_PKG_VERSION").to_string(),
         exported_at,
         source_db_path: db_path_str,
-        project: if project.is_empty() { None } else { Some(project) },
+        project: if project.is_empty() {
+            None
+        } else {
+            Some(project)
+        },
         original_size,
     };
     let manifest_json = serde_json::to_vec(&manifest)
@@ -157,16 +161,15 @@ async fn export(output: String, project: String) -> Result<(), ApiError> {
             .map_err(|e| wrap_error("Failed to create artifact file", e))?;
         out.write_all(&ARTIFACT_MAGIC)
             .map_err(|e| wrap_error("Failed to write magic", e))?;
-        let manifest_len = u32::try_from(manifest_json.len()).map_err(|_| {
-            ApiError::InvalidInput {
+        let manifest_len =
+            u32::try_from(manifest_json.len()).map_err(|_| ApiError::InvalidInput {
                 message: format!(
                     "manifest too large ({} bytes) — exceeds u32::MAX",
                     manifest_json.len()
                 ),
                 field: None,
                 value: None,
-            }
-        })?;
+            })?;
         out.write_all(&manifest_len.to_le_bytes())
             .map_err(|e| wrap_error("Failed to write manifest length", e))?;
         out.write_all(&manifest_json)
@@ -188,8 +191,8 @@ async fn export(output: String, project: String) -> Result<(), ApiError> {
         codenexus_version: env!("CARGO_PKG_VERSION").to_string(),
         exported_at,
     };
-    let json = serde_json::to_string(&output)
-        .map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let json =
+        serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }

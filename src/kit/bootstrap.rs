@@ -37,8 +37,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::kit::{
-    IntoKitModuleBuilder, Kit, KitError, WithConfig,
-    StorageKey, ParserKey, ExtractorKey, IndexerKey, ResolverKey, QueryKey, TraceKey,
+    ExtractorKey, IndexerKey, IntoKitModuleBuilder, Kit, KitError, ParserKey, QueryKey,
+    ResolverKey, StorageKey, TraceKey, WithConfig,
 };
 
 // Feature-gated keys are only imported when their feature is on, mirroring
@@ -49,11 +49,11 @@ use crate::kit::DaemonKey;
 use crate::kit::EmbedKey;
 
 // Module builders + configs.
-use crate::storage::{StorageConfig, StorageModuleBuilder};
-use crate::parse::{ParserFactoryModuleBuilder, ExtractorRegistryModuleBuilder};
 use crate::index::{IndexConfig, IndexerModuleBuilder};
-use crate::resolve::ResolverModuleBuilder;
+use crate::parse::{ExtractorRegistryModuleBuilder, ParserFactoryModuleBuilder};
 use crate::query::{QueryConfig, QueryModuleBuilder};
+use crate::resolve::ResolverModuleBuilder;
+use crate::storage::{StorageConfig, StorageModuleBuilder};
 use crate::trace::{TraceConfig, TraceModuleBuilder};
 
 #[cfg(feature = "daemon")]
@@ -288,9 +288,8 @@ pub trait KitExt {
     fn require_storage(&self) -> Result<Arc<dyn crate::storage::capability::Storage>, KitError>;
 
     /// Resolves the Parser capability (`Arc<dyn ParserRegistry>`).
-    fn require_parser(
-        &self,
-    ) -> Result<Arc<dyn crate::parse::capability::ParserRegistry>, KitError>;
+    fn require_parser(&self)
+        -> Result<Arc<dyn crate::parse::capability::ParserRegistry>, KitError>;
 
     /// Resolves the Extractor capability (`Arc<dyn ExtractorRegistry>`).
     fn require_extractor(
@@ -301,9 +300,7 @@ pub trait KitExt {
     fn require_indexer(&self) -> Result<Arc<dyn crate::index::capability::Indexer>, KitError>;
 
     /// Resolves the Resolver capability (`Arc<dyn Resolver>`).
-    fn require_resolver(
-        &self,
-    ) -> Result<Arc<dyn crate::resolve::capability::Resolver>, KitError>;
+    fn require_resolver(&self) -> Result<Arc<dyn crate::resolve::capability::Resolver>, KitError>;
 
     /// Resolves the Query capability (`Arc<dyn QueryEngine>`).
     fn require_query(&self) -> Result<Arc<dyn crate::query::capability::QueryEngine>, KitError>;
@@ -313,9 +310,7 @@ pub trait KitExt {
 
     /// Resolves the Daemon capability (`Arc<dyn DaemonRunner>`).
     #[cfg(feature = "daemon")]
-    fn require_daemon(
-        &self,
-    ) -> Result<Arc<dyn crate::daemon::capability::DaemonRunner>, KitError>;
+    fn require_daemon(&self) -> Result<Arc<dyn crate::daemon::capability::DaemonRunner>, KitError>;
 
     /// Resolves the Embed capability (`Arc<dyn EmbedClient>`).
     #[cfg(feature = "embed")]
@@ -343,9 +338,7 @@ impl KitExt for Kit {
         self.require::<IndexerKey>()
     }
 
-    fn require_resolver(
-        &self,
-    ) -> Result<Arc<dyn crate::resolve::capability::Resolver>, KitError> {
+    fn require_resolver(&self) -> Result<Arc<dyn crate::resolve::capability::Resolver>, KitError> {
         self.require::<ResolverKey>()
     }
 
@@ -358,9 +351,7 @@ impl KitExt for Kit {
     }
 
     #[cfg(feature = "daemon")]
-    fn require_daemon(
-        &self,
-    ) -> Result<Arc<dyn crate::daemon::capability::DaemonRunner>, KitError> {
+    fn require_daemon(&self) -> Result<Arc<dyn crate::daemon::capability::DaemonRunner>, KitError> {
         self.require::<DaemonKey>()
     }
 
@@ -449,8 +440,7 @@ mod tests {
     /// `with_debounce_ms` overrides the default.
     #[test]
     fn bootstrap_config_with_debounce_ms_overrides_default() {
-        let config = KitBootstrapConfig::new(PathBuf::from(":memory:"))
-            .with_debounce_ms(500);
+        let config = KitBootstrapConfig::new(PathBuf::from(":memory:")).with_debounce_ms(500);
         assert_eq!(config.debounce_ms, 500);
     }
 
@@ -462,7 +452,10 @@ mod tests {
         use crate::kit::bootstrap::KitExt;
         let config = KitBootstrapConfig::new(PathBuf::from(":memory:"));
         let kit = build_kit(&config).expect("build_kit");
-        assert!(kit.contains::<DaemonKey>(), "DaemonKey missing with daemon feature");
+        assert!(
+            kit.contains::<DaemonKey>(),
+            "DaemonKey missing with daemon feature"
+        );
         let _daemon = kit.require_daemon().expect("require_daemon");
     }
 
@@ -495,7 +488,10 @@ mod tests {
 
         let config = KitBootstrapConfig::new(PathBuf::from(":memory:"));
         let kit = build_kit(&config).expect("build_kit");
-        assert!(kit.contains::<EmbedKey>(), "EmbedKey missing with embed feature");
+        assert!(
+            kit.contains::<EmbedKey>(),
+            "EmbedKey missing with embed feature"
+        );
         let embed = kit.require_embed().expect("require_embed");
         // H10/D7: default is local mode; without a model file, embed() must
         // return Unavailable (not MissingApiKey — no API key needed locally).
@@ -513,7 +509,10 @@ mod tests {
         // H10/D7: remote mode (endpoint=Some) without API key → MissingApiKey.
         std::env::remove_var(crate::embed::API_KEY_ENV);
         std::env::remove_var(crate::embed::OPENAI_API_KEY_ENV);
-        std::env::set_var(crate::embed::EMBED_ENDPOINT_ENV, "https://api.openai.com/v1");
+        std::env::set_var(
+            crate::embed::EMBED_ENDPOINT_ENV,
+            "https://api.openai.com/v1",
+        );
 
         let config = KitBootstrapConfig::new(PathBuf::from(":memory:"));
         let kit = build_kit(&config).expect("build_kit");
@@ -588,12 +587,18 @@ mod tests {
         // require_parser returns Arc<dyn ParserRegistry> — create_parser works.
         let parser = kit.require_parser().expect("require_parser");
         let langs = parser.supported_languages();
-        assert!(!langs.is_empty(), "parser should support at least one language");
+        assert!(
+            !langs.is_empty(),
+            "parser should support at least one language"
+        );
 
         // require_extractor returns Arc<dyn ExtractorRegistry> — get_extractor works.
         let extractor = kit.require_extractor().expect("require_extractor");
         let ext_langs = extractor.supported_languages();
-        assert!(!ext_langs.is_empty(), "extractor should support at least one language");
+        assert!(
+            !ext_langs.is_empty(),
+            "extractor should support at least one language"
+        );
 
         // require_indexer returns Arc<dyn Indexer>.
         let _indexer = kit.require_indexer().expect("require_indexer");
@@ -617,8 +622,9 @@ mod tests {
         assert!(Arc::ptr_eq(&parser_helper, &parser_direct));
 
         let extractor_helper = kit.require_extractor().expect("require_extractor");
-        let extractor_direct: Arc<dyn crate::parse::capability::ExtractorRegistry> =
-            kit.require::<ExtractorKey>().expect("require::<ExtractorKey>");
+        let extractor_direct: Arc<dyn crate::parse::capability::ExtractorRegistry> = kit
+            .require::<ExtractorKey>()
+            .expect("require::<ExtractorKey>");
         assert!(Arc::ptr_eq(&extractor_helper, &extractor_direct));
 
         let indexer_helper = kit.require_indexer().expect("require_indexer");
@@ -627,8 +633,9 @@ mod tests {
         assert!(Arc::ptr_eq(&indexer_helper, &indexer_direct));
 
         let resolver_helper = kit.require_resolver().expect("require_resolver");
-        let resolver_direct: Arc<dyn crate::resolve::capability::Resolver> =
-            kit.require::<ResolverKey>().expect("require::<ResolverKey>");
+        let resolver_direct: Arc<dyn crate::resolve::capability::Resolver> = kit
+            .require::<ResolverKey>()
+            .expect("require::<ResolverKey>");
         assert!(Arc::ptr_eq(&resolver_helper, &resolver_direct));
     }
 }

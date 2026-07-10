@@ -487,11 +487,7 @@ mod tests {
         let dup_count = graph
             .edges
             .iter()
-            .filter(|e| {
-                e.edge_type == EdgeType::Calls
-                    && e.source == "f_a"
-                    && e.target == "f_b"
-            })
+            .filter(|e| e.edge_type == EdgeType::Calls && e.source == "f_a" && e.target == "f_b")
             .count();
         assert_eq!(
             dup_count, 1,
@@ -507,7 +503,10 @@ mod tests {
         let repo = Repository::open(&db).expect("open");
         let edges = fetch_edges_for_node(&repo, "f_a", EdgeDirection::Outgoing).expect("fetch");
         assert!(!edges.is_empty(), "f_a should have outgoing CALLS edges");
-        assert!(edges.iter().all(|e| e.source == "f_a"), "all edges should have f_a as source");
+        assert!(
+            edges.iter().all(|e| e.source == "f_a"),
+            "all edges should have f_a as source"
+        );
     }
 
     #[test]
@@ -518,7 +517,10 @@ mod tests {
         let repo = Repository::open(&db).expect("open");
         let edges = fetch_edges_for_node(&repo, "f_b", EdgeDirection::Incoming).expect("fetch");
         assert!(!edges.is_empty(), "f_b should have incoming CALLS edges");
-        assert!(edges.iter().all(|e| e.target == "f_b"), "all edges should have f_b as target");
+        assert!(
+            edges.iter().all(|e| e.target == "f_b"),
+            "all edges should have f_b as target"
+        );
     }
 
     #[test]

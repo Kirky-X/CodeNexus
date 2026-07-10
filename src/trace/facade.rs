@@ -133,13 +133,19 @@ impl<'a> TraceFacade<'a> {
     /// (P1-1, GitNexus UX).
     fn resolve_symbol(&self, symbol: &str) -> Result<NodeId> {
         // Single-line for coverage: tarpaulin attribute continuation
-        let by_name: Vec<&crate::model::Node> = self.graph.nodes.values().filter(|n| n.name == symbol).collect();
+        let by_name: Vec<&crate::model::Node> = self
+            .graph
+            .nodes
+            .values()
+            .filter(|n| n.name == symbol)
+            .collect();
         if by_name.len() == 1 {
             return Ok(by_name[0].id.clone());
         }
         if by_name.len() > 1 {
             // Single-line for coverage: tarpaulin attribute continuation
-            let candidates: Vec<String> = by_name.iter().map(|n| n.qualified_name.clone()).collect();
+            let candidates: Vec<String> =
+                by_name.iter().map(|n| n.qualified_name.clone()).collect();
             return Err(TraceError::AmbiguousSymbol {
                 symbol: symbol.to_string(),
                 candidates,
@@ -147,7 +153,12 @@ impl<'a> TraceFacade<'a> {
         }
         // Fall back to qualified_name match.
         // Single-line for coverage: tarpaulin attribute continuation
-        let by_qn: Vec<&crate::model::Node> = self.graph.nodes.values().filter(|n| n.qualified_name == symbol).collect();
+        let by_qn: Vec<&crate::model::Node> = self
+            .graph
+            .nodes
+            .values()
+            .filter(|n| n.qualified_name == symbol)
+            .collect();
         if by_qn.len() == 1 {
             return Ok(by_qn[0].id.clone());
         }

@@ -53,7 +53,7 @@ struct CanonicalEntry {
 }
 
 /// Loaded type_map.json with lookup tables for both nodes and edges.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TypeMap {
     /// (raw_type) → CanonicalType, for CodeNexus side.
     codenexus_nodes: HashMap<String, CanonicalType>,
@@ -61,17 +61,6 @@ pub struct TypeMap {
     /// (raw_type) → CanonicalType, for gitnexus side.
     gitnexus_nodes: HashMap<String, CanonicalType>,
     gitnexus_edges: HashMap<String, CanonicalType>,
-}
-
-impl Default for TypeMap {
-    fn default() -> Self {
-        Self {
-            codenexus_nodes: HashMap::new(),
-            codenexus_edges: HashMap::new(),
-            gitnexus_nodes: HashMap::new(),
-            gitnexus_edges: HashMap::new(),
-        }
-    }
 }
 
 impl TypeMap {
@@ -200,7 +189,8 @@ mod tests {
         );
         // analysis_artifact
         let a = CanonicalType::AnalysisArtifact("Community".to_string());
-        tm.codenexus_nodes.insert("Community".to_string(), a.clone());
+        tm.codenexus_nodes
+            .insert("Community".to_string(), a.clone());
         tm.gitnexus_nodes.insert("Community".to_string(), a);
         // edge comparable
         let e = CanonicalType::Comparable("calls".to_string());
@@ -214,7 +204,10 @@ mod tests {
         let tm = make_test_map();
         let cn = tm.normalize_codenexus_node("Function");
         let gn = tm.normalize_gitnexus_node("Function");
-        assert_eq!(cn, gn, "Function should normalize identically on both sides");
+        assert_eq!(
+            cn, gn,
+            "Function should normalize identically on both sides"
+        );
         assert_eq!(cn, CanonicalType::Comparable("function".to_string()));
     }
 

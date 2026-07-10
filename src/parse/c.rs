@@ -26,10 +26,10 @@ use tree_sitter::Node;
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
 use crate::resolve::{FqnGenerator, ScopeContext, ScopeResolverRegistry};
 
+use super::dedupe_qn;
 use super::error::{ParseError, Result};
 use super::extractor::{ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo};
 use super::parser_factory::ParserFactory;
-use super::dedupe_qn;
 
 /// C language tree-sitter extractor (Adapter pattern).
 pub struct CExtractor {
@@ -140,8 +140,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
                     // When inside a struct/class/namespace (current_parent is Some),
                     // append line number to parent so overloaded methods get distinct FQNs.
                     let start_line = node.start_position().row as u32 + 1;
-                    let method_parent =
-                        ctx.current_parent.map(|p| format!("{p}_L{start_line}"));
+                    let method_parent = ctx.current_parent.map(|p| format!("{p}_L{start_line}"));
                     extract_function(node, source, ctx, method_parent.as_deref(), result);
                     let func_name = scope.as_ref().map(|s| s.name.as_str());
                     for i in 0..node.named_child_count() as u32 {
@@ -383,8 +382,11 @@ fn extract_global_var(
         i += 1;
     }
     // If no init_declarator, check for plain declarator children.
-    let has_init = (0..node.named_child_count() as u32)
-        .any(|i| node.named_child(i).map(|c| c.kind() == "init_declarator").unwrap_or(false));
+    let has_init = (0..node.named_child_count() as u32).any(|i| {
+        node.named_child(i)
+            .map(|c| c.kind() == "init_declarator")
+            .unwrap_or(false)
+    });
     if !has_init {
         for i in 0..node.named_child_count() as u32 {
             if let Some(child) = node.named_child(i) {
@@ -404,7 +406,13 @@ fn extract_global_var(
     }
 }
 
-fn push_global_var(name: &str, line: u32, file_path: &str, project: &str, result: &mut ExtractResult) {
+fn push_global_var(
+    name: &str,
+    line: u32,
+    file_path: &str,
+    project: &str,
+    result: &mut ExtractResult,
+) {
     let qn = dedupe_qn(make_qn(file_path, name, project, None), line, result);
     let model_node = ModelNode::builder(NodeLabel::GlobalVar, name.to_string(), qn.clone())
         .file_path(file_path)
@@ -468,12 +476,7 @@ fn find_function_declarator(node: Node) -> Option<Node> {
     }
 }
 
-fn extract_typedef(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_typedef(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     // type_definition has a `type` field and a `declarator` field (type_identifier).
     // Walk all children for type_identifier nodes.
     // Also detect anonymous struct/enum unions inside typedef (P1-1):
@@ -510,8 +513,9 @@ fn extract_typedef(
         for i in 0..node.named_child_count() as u32 {
             if let Some(child) = node.named_child(i) {
                 match child.kind() {
-                    "struct_specifier" if child.child_by_field_name("name").is_none()
-                        && child.child_by_field_name("body").is_some() =>
+                    "struct_specifier"
+                        if child.child_by_field_name("name").is_none()
+                            && child.child_by_field_name("body").is_some() =>
                     {
                         let qn = dedupe_qn(
                             make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent),
@@ -529,8 +533,9 @@ fn extract_typedef(
                         add_definition_edges(ctx.file_path, ctx.project, &model_node, result);
                         result.push_node(model_node);
                     }
-                    "enum_specifier" if child.child_by_field_name("name").is_none()
-                        && child.child_by_field_name("body").is_some() =>
+                    "enum_specifier"
+                        if child.child_by_field_name("name").is_none()
+                            && child.child_by_field_name("body").is_some() =>
                     {
                         let qn = dedupe_qn(
                             make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent),
@@ -555,12 +560,7 @@ fn extract_typedef(
     }
 }
 
-fn extract_struct(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_struct(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     // Only extract if the struct has a name and a body.
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
@@ -588,12 +588,7 @@ fn extract_struct(
     result.push_node(model_node);
 }
 
-fn extract_enum(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_enum(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
     };
@@ -620,12 +615,7 @@ fn extract_enum(
     result.push_node(model_node);
 }
 
-fn extract_macro(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_macro(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     // Both `preproc_def` (`#define FOO 1`) and `preproc_function_def`
     // (`#define MAX(a,b) ...`) expose a `name` field pointing to an
     // `identifier`. Function-like macros additionally carry a `parameters`
@@ -686,12 +676,7 @@ fn extract_include(node: Node, source: &str, result: &mut ExtractResult) {
     });
 }
 
-fn extract_call(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(func_node) = node.child_by_field_name("function") else {
         return;
     };
@@ -908,7 +893,8 @@ int main() {
 
     fn extract(source: &str) -> ExtractResult {
         let ext = CExtractor::new();
-        ext.extract(source, "test.c", "proj").expect("extraction should succeed")
+        ext.extract(source, "test.c", "proj")
+            .expect("extraction should succeed")
     }
 
     #[test]
@@ -925,7 +911,11 @@ int main() {
     #[test]
     fn extracts_two_includes() {
         let result = extract(C_SOURCE);
-        assert_eq!(result.imports.len(), 2, "should extract 2 #include directives");
+        assert_eq!(
+            result.imports.len(),
+            2,
+            "should extract 2 #include directives"
+        );
         assert_eq!(result.imports[0].source_file, "stdio.h");
         assert_eq!(result.imports[1].source_file, "myheader.h");
         assert_eq!(result.imports[0].line, 1);
@@ -935,7 +925,11 @@ int main() {
     #[test]
     fn extracts_typedef() {
         let result = extract(C_SOURCE);
-        let typedefs: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Typedef).collect();
+        let typedefs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Typedef)
+            .collect();
         assert_eq!(typedefs.len(), 1, "should extract 1 typedef");
         assert_eq!(typedefs[0].name, "my_int");
         assert_eq!(typedefs[0].start_line, Some(3));
@@ -1023,7 +1017,11 @@ typedef unsigned short int flex_uint16_t;
     #[test]
     fn extracts_calls() {
         let result = extract(C_SOURCE);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(callees.contains(&"add"), "should extract call to add");
         assert!(callees.contains(&"printf"), "should extract call to printf");
     }
@@ -1044,12 +1042,26 @@ typedef unsigned short int flex_uint16_t;
     fn creates_defines_edges() {
         // B1 fix: CONTAINS emission removed; only DEFINES remains.
         let result = extract(C_SOURCE);
-        let defines_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Defines).count();
+        let defines_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Defines)
+            .count();
         let node_count = result.nodes.len();
-        assert_eq!(defines_count, node_count, "each node should have a DEFINES edge");
+        assert_eq!(
+            defines_count, node_count,
+            "each node should have a DEFINES edge"
+        );
         // B1 fix verification: no CONTAINS edges should be emitted
-        let contains_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Contains).count();
-        assert_eq!(contains_count, 0, "B1 fix: no CONTAINS edges should be emitted");
+        let contains_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Contains)
+            .count();
+        assert_eq!(
+            contains_count, 0,
+            "B1 fix: no CONTAINS edges should be emitted"
+        );
     }
 
     #[test]
@@ -1082,7 +1094,11 @@ typedef unsigned short int flex_uint16_t;
     fn extracts_struct_definition() {
         let src = "struct Point { int x; int y; };";
         let result = extract(src);
-        let structs: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Struct).collect();
+        let structs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Struct)
+            .collect();
         assert_eq!(structs.len(), 1);
         assert_eq!(structs[0].name, "Point");
     }
@@ -1091,7 +1107,11 @@ typedef unsigned short int flex_uint16_t;
     fn extracts_enum_definition() {
         let src = "enum Color { RED, GREEN, BLUE };";
         let result = extract(src);
-        let enums: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Enum).collect();
+        let enums: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Enum)
+            .collect();
         assert_eq!(enums.len(), 1);
         assert_eq!(enums[0].name, "Color");
     }
@@ -1101,15 +1121,27 @@ typedef unsigned short int flex_uint16_t;
         // `struct Point p;` is a declaration, not a definition.
         let src = "struct Point p;";
         let result = extract(src);
-        let structs: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Struct).collect();
-        assert_eq!(structs.len(), 0, "struct without body should not be extracted");
+        let structs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Struct)
+            .collect();
+        assert_eq!(
+            structs.len(),
+            0,
+            "struct without body should not be extracted"
+        );
     }
 
     #[test]
     fn handles_pointer_function_declarator() {
         let src = "int* alloc(int n) { return 0; }";
         let result = extract(src);
-        let funcs: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Function).collect();
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
         assert_eq!(funcs.len(), 1);
         assert_eq!(funcs[0].name, "alloc");
     }
@@ -1146,7 +1178,11 @@ typedef unsigned short int flex_uint16_t;
     fn nested_call_expressions() {
         let src = "int main() { printf(format_str(add(1))); }";
         let result = extract(src);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(callees.contains(&"printf"), "should find printf call");
         assert!(callees.contains(&"add"), "should find nested add call");
     }
@@ -1155,8 +1191,15 @@ typedef unsigned short int flex_uint16_t;
     fn field_expression_call() {
         let src = "int main() { obj.method(); }";
         let result = extract(src);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
-        assert!(callees.contains(&"method"), "should extract method name from field expression");
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
+        assert!(
+            callees.contains(&"method"),
+            "should extract method name from field expression"
+        );
     }
 
     #[test]
@@ -1466,14 +1509,22 @@ void normal_func(int x) {
             .iter()
             .filter(|n| n.label == NodeLabel::Function && n.name == "normal_func")
             .collect();
-        assert_eq!(normal_funcs.len(), 1, "normal function should still be extracted");
+        assert_eq!(
+            normal_funcs.len(),
+            1,
+            "normal function should still be extracted"
+        );
         // The API_SUFFIX macro definition should be extracted as a Macro node.
         let macros: Vec<_> = result
             .nodes
             .iter()
             .filter(|n| n.label == NodeLabel::Macro && n.name == "API_SUFFIX")
             .collect();
-        assert_eq!(macros.len(), 1, "API_SUFFIX macro definition should be extracted as Macro");
+        assert_eq!(
+            macros.len(),
+            1,
+            "API_SUFFIX macro definition should be extracted as Macro"
+        );
     }
 
     #[test]
@@ -1501,7 +1552,10 @@ void normal_func(int x) {
             .iter()
             .filter(|e| e.edge_type == EdgeType::Contains && e.target == macro_node.id)
             .count();
-        assert_eq!(contains_count, 0, "B1 fix: macro should have 0 CONTAINS edges");
+        assert_eq!(
+            contains_count, 0,
+            "B1 fix: macro should have 0 CONTAINS edges"
+        );
     }
 
     // --- P1-2: function declarations in headers ---
@@ -1518,7 +1572,10 @@ void normal_func(int x) {
             .collect();
         assert_eq!(funcs.len(), 1, "should extract 1 function declaration");
         assert_eq!(funcs[0].name, "foo");
-        assert!(funcs[0].signature.is_some(), "declaration should have signature");
+        assert!(
+            funcs[0].signature.is_some(),
+            "declaration should have signature"
+        );
         assert_eq!(funcs[0].start_line, Some(1));
     }
 
@@ -1532,7 +1589,10 @@ void normal_func(int x) {
             .iter()
             .filter(|n| n.label == NodeLabel::GlobalVar)
             .collect();
-        assert!(globals.is_empty(), "function declaration should not create a global var");
+        assert!(
+            globals.is_empty(),
+            "function declaration should not create a global var"
+        );
     }
 
     #[test]
@@ -1545,7 +1605,11 @@ void normal_func(int x) {
             .iter()
             .filter(|n| n.label == NodeLabel::Function)
             .collect();
-        assert_eq!(funcs.len(), 1, "pointer function declaration should be extracted");
+        assert_eq!(
+            funcs.len(),
+            1,
+            "pointer function declaration should be extracted"
+        );
         assert_eq!(funcs[0].name, "get_ptr");
     }
 
@@ -1576,8 +1640,15 @@ void normal_func(int x) {
             .iter()
             .filter(|n| n.label == NodeLabel::Struct)
             .collect();
-        assert_eq!(structs.len(), 1, "anonymous struct should create a Struct node");
-        assert_eq!(structs[0].name, "Point", "struct should use the typedef name");
+        assert_eq!(
+            structs.len(),
+            1,
+            "anonymous struct should create a Struct node"
+        );
+        assert_eq!(
+            structs[0].name, "Point",
+            "struct should use the typedef name"
+        );
         let typedefs: Vec<_> = result
             .nodes
             .iter()
@@ -1607,8 +1678,15 @@ void normal_func(int x) {
         // `(func)(arg)` — parenthesized_expression callee.
         let src = "void wrapper(void) { (func)(42); }\n";
         let result = extract(src);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
-        assert!(callees.contains(&"func"), "parenthesized call should extract callee name");
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
+        assert!(
+            callees.contains(&"func"),
+            "parenthesized call should extract callee name"
+        );
     }
 
     #[test]
@@ -1617,8 +1695,15 @@ void normal_func(int x) {
         // The inner callee (get_fn) should be extracted.
         let src = "void caller(void) { get_fn()(42); }\n";
         let result = extract(src);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
-        assert!(callees.contains(&"get_fn"), "chained call should extract inner callee");
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
+        assert!(
+            callees.contains(&"get_fn"),
+            "chained call should extract inner callee"
+        );
     }
 
     // --- empty/error edge cases ---
@@ -1633,7 +1718,10 @@ void normal_func(int x) {
             .iter()
             .filter(|n| n.label == NodeLabel::Struct)
             .collect();
-        assert!(structs.is_empty(), "unnamed struct without typedef should not be extracted");
+        assert!(
+            structs.is_empty(),
+            "unnamed struct without typedef should not be extracted"
+        );
     }
 
     #[test]
@@ -1646,6 +1734,9 @@ void normal_func(int x) {
             .iter()
             .filter(|n| n.label == NodeLabel::Struct)
             .collect();
-        assert!(structs.is_empty(), "struct without body should not be extracted");
+        assert!(
+            structs.is_empty(),
+            "struct without body should not be extracted"
+        );
     }
 }

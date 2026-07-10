@@ -227,7 +227,11 @@ mod tests {
         );
     }
 
-    #[cfg(all(feature = "lang-rust", feature = "lang-fortran", feature = "lang-typescript"))]
+    #[cfg(all(
+        feature = "lang-rust",
+        feature = "lang-fortran",
+        feature = "lang-typescript"
+    ))]
     #[test]
     fn from_str_parses_mixed_case() {
         assert_eq!("Rust".parse::<Language>().unwrap(), Language::Rust);

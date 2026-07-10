@@ -134,7 +134,9 @@ fn run_single_orchestrator(
                 stats
             }
             Err(e) => {
-                eprintln!("[resume] no usable gitnexus reference for `{name}` ({e}); fetching fresh");
+                eprintln!(
+                    "[resume] no usable gitnexus reference for `{name}` ({e}); fetching fresh"
+                );
                 let stats = gitnexus_client::fetch_reference(name, gitnexus_binary)?;
                 let _ = gitnexus_client::write_reference(name, &stats)?;
                 stats
@@ -165,7 +167,9 @@ fn run_single_orchestrator(
     eprintln!("[ok] wrote {report_path:?}");
 
     // Print summary
-    let overall_pass = query_diffs.iter().all(|(_, d)| matches!(d, QueryDiff::Match { .. }));
+    let overall_pass = query_diffs
+        .iter()
+        .all(|(_, d)| matches!(d, QueryDiff::Match { .. }));
     eprintln!(
         "[done] {} — overall {}",
         name,
@@ -195,7 +199,7 @@ fn run_query_comparisons(
         .with_context(|| format!("failed to read queries dir {}", queries_dir.display()))?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().map_or(false, |ext| ext == "cql"))
+        .filter(|p| p.extension().is_some_and(|ext| ext == "cql"))
         .collect();
     cql_files.sort();
 
@@ -214,8 +218,9 @@ fn run_query_comparisons(
         let cn_cql = query_compare::extract_query_for_side(&content, Side::Codenexus)?;
         let gn_cql = query_compare::extract_query_for_side(&content, Side::Gitnexus)?;
 
-        let cn_results = query_compare::execute_codenexus_query(db_path, &cn_cql, Some(&project_id))
-            .with_context(|| format!("CodeNexus query failed for {query_name}"))?;
+        let cn_results =
+            query_compare::execute_codenexus_query(db_path, &cn_cql, Some(&project_id))
+                .with_context(|| format!("CodeNexus query failed for {query_name}"))?;
         let gn_results = query_compare::execute_gitnexus_query(name, &gn_cql, gitnexus_binary)
             .with_context(|| format!("gitnexus query failed for {query_name}"))?;
 
@@ -226,8 +231,14 @@ fn run_query_comparisons(
             gn_results.len(),
             match &diff {
                 QueryDiff::Match { count } => format!("MATCH({count})"),
-                QueryDiff::CriticalDiff { missing_in_codenexus, missing_in_gitnexus } =>
-                    format!("CRITICAL(missing_cn={}, missing_gn={})", missing_in_codenexus.len(), missing_in_gitnexus.len()),
+                QueryDiff::CriticalDiff {
+                    missing_in_codenexus,
+                    missing_in_gitnexus,
+                } => format!(
+                    "CRITICAL(missing_cn={}, missing_gn={})",
+                    missing_in_codenexus.len(),
+                    missing_in_gitnexus.len()
+                ),
             }
         );
         diffs.push((query_name, diff));
@@ -274,11 +285,17 @@ fn run_batch(
         }
 
         eprintln!("\n=== batch: {name} ({language}) ===");
-        match run_single_orchestrator(Path::new(repo_path), name, language, resume, gitnexus_binary) {
+        match run_single_orchestrator(
+            Path::new(repo_path),
+            name,
+            language,
+            resume,
+            gitnexus_binary,
+        ) {
             Ok(()) => {
                 // Read the generated report to extract severity counts.
-                let report_path = Path::new("tools/verification/results")
-                    .join(format!("{name}.report.md"));
+                let report_path =
+                    Path::new("tools/verification/results").join(format!("{name}.report.md"));
                 let severities = read_severity_counts(&report_path);
                 let overall_pass = severities.critical == 0;
                 summaries.push(report::SampleSummary {
@@ -333,7 +350,11 @@ fn read_severity_counts(report_path: &Path) -> report::SeverityCounts {
             }
         }
     }
-    report::SeverityCounts { critical, major, minor }
+    report::SeverityCounts {
+        critical,
+        major,
+        minor,
+    }
 }
 
 /// Fetch-samples subcommand: delegates to the bash script.

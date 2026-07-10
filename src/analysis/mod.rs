@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Code analysis subsystem (T005/T006).
+//! Code analysis subsystem.
 //!
 //! Provides graph-based analysis capabilities that aggregate over the existing
 //! LadybugDB graph via Cypher queries:

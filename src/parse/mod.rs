@@ -28,9 +28,11 @@
 //! - [`parallel`]: [`parallel_parse`] parses batches of files in parallel with
 //!   rayon (ADR-010), collecting failures without aborting the batch.
 
-pub mod capability;
 #[cfg(feature = "lang-c")]
 pub mod c;
+pub mod capability;
+#[cfg(feature = "lang-cpp")]
+pub mod cpp;
 pub mod dispatcher;
 pub mod error;
 pub mod extractor;
@@ -38,11 +40,9 @@ pub mod extractor;
 pub mod fortran;
 #[cfg(feature = "lang-go")]
 pub mod go;
+pub mod helpers;
 #[cfg(feature = "lang-java")]
 pub mod java;
-#[cfg(feature = "lang-cpp")]
-pub mod cpp;
-pub mod helpers;
 pub mod module;
 pub mod parallel;
 pub mod parser_factory;
@@ -56,6 +56,8 @@ pub mod typescript;
 
 #[cfg(feature = "lang-c")]
 pub use c::CExtractor;
+#[cfg(feature = "lang-cpp")]
+pub use cpp::CppExtractor;
 pub use dispatcher::get_extractor;
 pub use error::{ParseError, Result};
 pub use extractor::{
@@ -66,17 +68,15 @@ pub use extractor::{
 pub use fortran::FortranExtractor;
 #[cfg(feature = "lang-go")]
 pub use go::GoExtractor;
+pub use helpers::dedupe_qn;
 #[cfg(feature = "lang-java")]
 pub use java::JavaExtractor;
-#[cfg(feature = "lang-cpp")]
-pub use cpp::CppExtractor;
-pub use parallel::{
-    parallel_parse, parallel_parse_ram_first, parse_single, ParallelParseResult, RamFirstSources,
-};
-pub use helpers::dedupe_qn;
 pub use module::{
     ExtractorRegistryModule, ExtractorRegistryModuleBuilder, ParserFactoryModule,
     ParserFactoryModuleBuilder,
+};
+pub use parallel::{
+    parallel_parse, parallel_parse_ram_first, parse_single, ParallelParseResult, RamFirstSources,
 };
 pub use parser_factory::ParserFactory;
 pub use parser_pool::{with_thread_pool, ParserGuard, ParserPool};

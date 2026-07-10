@@ -133,9 +133,7 @@ impl PipelineCtx {
     where
         T: Any + Send + Sync,
     {
-        self.values
-            .get(name)
-            .and_then(|v| v.downcast_ref::<T>())
+        self.values.get(name).and_then(|v| v.downcast_ref::<T>())
     }
 
     /// Removes and returns the value of type `T` stored under `name`, if
@@ -328,10 +326,7 @@ impl Pipeline {
         for (&name, phase) in &self.phases {
             for &dep in phase.deps() {
                 if !self.phases.contains_key(dep) {
-                    return Err(PhaseError::MissingDependency {
-                        phase: name,
-                        dep,
-                    });
+                    return Err(PhaseError::MissingDependency { phase: name, dep });
                 }
             }
         }
@@ -361,7 +356,9 @@ impl Pipeline {
             // If it reaches zero, add it to the ready set.
             for (&other, phase) in &self.phases {
                 if phase.deps().contains(&name) {
-                    let entry = in_degree.get_mut(&other).expect("in_degree populated for all");
+                    let entry = in_degree
+                        .get_mut(&other)
+                        .expect("in_degree populated for all");
                     *entry -= 1;
                     if *entry == 0 {
                         ready.insert(other);
@@ -402,18 +399,16 @@ impl Pipeline {
                 .phases
                 .get(name)
                 .expect("topo_sort only returns registered phase names");
-            phase
-                .execute(ctx)
-                .map_err(|e| match e {
-                    // Pass through ExecutionFailed as-is (already carries the
-                    // phase name and boxed inner error).
-                    PhaseError::ExecutionFailed { .. } => e,
-                    PhaseError::MissingInput(_) => PhaseError::MissingInput(name),
-                    other => PhaseError::ExecutionFailed {
-                        phase: name,
-                        inner: Box::new(other),
-                    },
-                })?;
+            phase.execute(ctx).map_err(|e| match e {
+                // Pass through ExecutionFailed as-is (already carries the
+                // phase name and boxed inner error).
+                PhaseError::ExecutionFailed { .. } => e,
+                PhaseError::MissingInput(_) => PhaseError::MissingInput(name),
+                other => PhaseError::ExecutionFailed {
+                    phase: name,
+                    inner: Box::new(other),
+                },
+            })?;
         }
         Ok(())
     }
@@ -591,7 +586,11 @@ mod tests {
         assert_eq!(order.first().copied(), Some("A"));
         assert_eq!(order.last().copied(), Some("D"));
         let mid = &order[1..3];
-        assert_eq!(mid, &["B", "C"], "middle phases must be alphabetical: {order:?}");
+        assert_eq!(
+            mid,
+            &["B", "C"],
+            "middle phases must be alphabetical: {order:?}"
+        );
     }
 
     named_phase!(PhaseIndependent, "Z", &[]);
@@ -859,7 +858,10 @@ mod tests {
         let err = p.run(&mut ctx).unwrap_err();
         assert!(matches!(
             err,
-            PhaseError::MissingDependency { phase: "M", dep: "nonexistent" }
+            PhaseError::MissingDependency {
+                phase: "M",
+                dep: "nonexistent"
+            }
         ));
     }
 
@@ -1035,7 +1037,12 @@ mod tests {
         let recorded = log.lock().unwrap().clone();
         assert_eq!(
             recorded,
-            vec!["A".to_string(), "B".to_string(), "C".to_string(), "D".to_string()],
+            vec![
+                "A".to_string(),
+                "B".to_string(),
+                "C".to_string(),
+                "D".to_string()
+            ],
             "execution order must match topological order"
         );
     }

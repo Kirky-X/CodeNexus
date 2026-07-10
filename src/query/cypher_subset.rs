@@ -99,10 +99,7 @@ mod tests {
     #[test]
     fn validates_optional_match() {
         assert!(
-            validate_cypher_subset(
-                "OPTIONAL MATCH (n:Function) RETURN n.name AS name"
-            )
-            .is_ok()
+            validate_cypher_subset("OPTIONAL MATCH (n:Function) RETURN n.name AS name").is_ok()
         );
     }
 
@@ -156,9 +153,7 @@ mod tests {
 
     #[test]
     fn validates_distinct() {
-        assert!(
-            validate_cypher_subset("MATCH (n:Function) RETURN DISTINCT n.project").is_ok()
-        );
+        assert!(validate_cypher_subset("MATCH (n:Function) RETURN DISTINCT n.project").is_ok());
     }
 
     #[test]
@@ -287,7 +282,8 @@ mod tests {
 
     #[test]
     fn validates_arithmetic_expression() {
-        let q = "MATCH (n:Function) RETURN n.startLine + 1 AS next, n.endLine - n.startLine AS length";
+        let q =
+            "MATCH (n:Function) RETURN n.startLine + 1 AS next, n.endLine - n.startLine AS length";
         assert!(validate_cypher_subset(q).is_ok());
     }
 
@@ -299,18 +295,10 @@ mod tests {
 
     #[test]
     fn validates_directed_rel_both_directions() {
-        assert!(
-            validate_cypher_subset("MATCH (n)<-[:CALLS]-(m) RETURN n.name").is_ok()
-        );
-        assert!(
-            validate_cypher_subset("MATCH (n)-[:CALLS]->(m) RETURN n.name").is_ok()
-        );
-        assert!(
-            validate_cypher_subset("MATCH (n)-[:CALLS]-(m) RETURN n.name").is_ok()
-        );
-        assert!(
-            validate_cypher_subset("MATCH (n)<-[:CALLS]->(m) RETURN n.name").is_ok()
-        );
+        assert!(validate_cypher_subset("MATCH (n)<-[:CALLS]-(m) RETURN n.name").is_ok());
+        assert!(validate_cypher_subset("MATCH (n)-[:CALLS]->(m) RETURN n.name").is_ok());
+        assert!(validate_cypher_subset("MATCH (n)-[:CALLS]-(m) RETURN n.name").is_ok());
+        assert!(validate_cypher_subset("MATCH (n)<-[:CALLS]->(m) RETURN n.name").is_ok());
     }
 
     #[test]

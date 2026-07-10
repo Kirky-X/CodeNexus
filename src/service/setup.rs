@@ -183,7 +183,10 @@ pub fn run_with_home(
         }
     }
 
-    Ok(SetupOutput { configured, skipped })
+    Ok(SetupOutput {
+        configured,
+        skipped,
+    })
 }
 
 /// Reads HOME, detects agents, writes MCP config. Testable entry point.
@@ -299,16 +302,15 @@ fn to_api_error(e: CliError) -> ApiError {
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
 #[service_api(
-    name = "codenexus",
+    name = "setup",
     version = "0.3.2",
-    tool_name = "setup",
     description = "Auto-detect installed AI coding agents and write MCP server config.",
-    cli = true,
+    cli = true
 )]
 async fn setup(force: bool) -> Result<(), ApiError> {
     let output = run(force).map_err(to_api_error)?;
-    let json = serde_json::to_string(&output)
-        .map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let json =
+        serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }
@@ -682,7 +684,11 @@ mod tests {
             Some(h) => std::env::set_var("HOME", h),
             None => std::env::remove_var("HOME"),
         }
-        assert!(result.is_ok(), "run should succeed with a fresh agent: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "run should succeed with a fresh agent: {:?}",
+            result.err()
+        );
         let config_path = home.path().join(".claude.json");
         assert!(config_path.exists(), "config file should be created");
     }

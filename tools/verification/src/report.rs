@@ -161,7 +161,10 @@ pub fn generate_report(
             QueryDiff::Match { count } => {
                 out.push_str(&format!("| {query_name} | MATCH ({count}) | 0 | 0 |\n"));
             }
-            QueryDiff::CriticalDiff { missing_in_codenexus, missing_in_gitnexus } => {
+            QueryDiff::CriticalDiff {
+                missing_in_codenexus,
+                missing_in_gitnexus,
+            } => {
                 severities.critical += 1;
                 out.push_str(&format!(
                     "| {query_name} | CRITICAL | {} | {} |\n",
@@ -178,7 +181,10 @@ pub fn generate_report(
     out.push_str("### CodeNexus-only (not indexed by gitnexus)\n\n");
     out.push_str("| Type | Count |\n|------|-------|\n");
     for (raw, count) in &codenexus_stats.node_counts_by_type {
-        if matches!(type_map.normalize_codenexus_node(raw), CanonicalType::CodenexusOnly(_)) {
+        if matches!(
+            type_map.normalize_codenexus_node(raw),
+            CanonicalType::CodenexusOnly(_)
+        ) {
             out.push_str(&format!("| {raw} | {count} |\n"));
         }
     }
@@ -186,7 +192,10 @@ pub fn generate_report(
     out.push_str("### gitnexus-only (not indexed by CodeNexus)\n\n");
     out.push_str("| Type | Count |\n|------|-------|\n");
     for (raw, count) in &gitnexus_stats.node_counts_by_label {
-        if matches!(type_map.normalize_gitnexus_node(raw), CanonicalType::GitnexusOnly(_)) {
+        if matches!(
+            type_map.normalize_gitnexus_node(raw),
+            CanonicalType::GitnexusOnly(_)
+        ) {
             out.push_str(&format!("| {raw} | {count} |\n"));
         }
     }
@@ -195,18 +204,32 @@ pub fn generate_report(
     out.push_str("| Type | CodeNexus | gitnexus |\n|------|-----------|----------|\n");
     let mut analysis_artifacts: BTreeMap<String, ()> = BTreeMap::new();
     for raw in codenexus_stats.node_counts_by_type.keys() {
-        if matches!(type_map.normalize_codenexus_node(raw), CanonicalType::AnalysisArtifact(_)) {
+        if matches!(
+            type_map.normalize_codenexus_node(raw),
+            CanonicalType::AnalysisArtifact(_)
+        ) {
             analysis_artifacts.insert(raw.clone(), ());
         }
     }
     for raw in gitnexus_stats.node_counts_by_label.keys() {
-        if matches!(type_map.normalize_gitnexus_node(raw), CanonicalType::AnalysisArtifact(_)) {
+        if matches!(
+            type_map.normalize_gitnexus_node(raw),
+            CanonicalType::AnalysisArtifact(_)
+        ) {
             analysis_artifacts.insert(raw.clone(), ());
         }
     }
     for raw in analysis_artifacts.keys() {
-        let cn = codenexus_stats.node_counts_by_type.get(raw).copied().unwrap_or(0);
-        let gn = gitnexus_stats.node_counts_by_label.get(raw).copied().unwrap_or(0);
+        let cn = codenexus_stats
+            .node_counts_by_type
+            .get(raw)
+            .copied()
+            .unwrap_or(0);
+        let gn = gitnexus_stats
+            .node_counts_by_label
+            .get(raw)
+            .copied()
+            .unwrap_or(0);
         out.push_str(&format!("| {raw} | {cn} | {gn} |\n"));
     }
     out.push('\n');
@@ -220,16 +243,25 @@ pub fn generate_report(
         "| Overall | {} |\n",
         if overall_pass { "PASS" } else { "FAIL" },
     ));
-    header.push_str(&format!("| Critical discrepancies | {} |\n", severities.critical));
+    header.push_str(&format!(
+        "| Critical discrepancies | {} |\n",
+        severities.critical
+    ));
     header.push_str(&format!("| Major discrepancies | {} |\n", severities.major));
     header.push_str(&format!("| Minor discrepancies | {} |\n", severities.minor));
     header.push_str(&format!(
         "| CodeNexus file_count (by lang) | {} |\n",
-        codenexus_stats.file_counts_by_language.iter()
+        codenexus_stats
+            .file_counts_by_language
+            .iter()
             .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>().join(", "),
+            .collect::<Vec<_>>()
+            .join(", "),
     ));
-    header.push_str(&format!("| gitnexus file_count | {} |\n", gitnexus_stats.file_count));
+    header.push_str(&format!(
+        "| gitnexus file_count | {} |\n",
+        gitnexus_stats.file_count
+    ));
     header.push('\n');
 
     // Splice header after the title.
@@ -276,7 +308,8 @@ pub fn generate_aggregate_report(summaries: &[SampleSummary]) -> String {
     // Ranking (by critical desc, then major desc, then minor desc).
     let mut ranked: Vec<&SampleSummary> = summaries.iter().collect();
     ranked.sort_by(|a, b| {
-        b.severities.critical
+        b.severities
+            .critical
             .cmp(&a.severities.critical)
             .then_with(|| b.severities.major.cmp(&a.severities.major))
             .then_with(|| b.severities.minor.cmp(&a.severities.minor))
@@ -339,7 +372,11 @@ fn sum_counts_canonical_node(stats: &CodeNexusStats, type_map: &TypeMap, canon: 
 }
 
 /// Sum gitnexus node counts that map to a given canonical type.
-fn sum_counts_canonical_node_gitnexus(stats: &GitnexusStats, type_map: &TypeMap, canon: &str) -> u64 {
+fn sum_counts_canonical_node_gitnexus(
+    stats: &GitnexusStats,
+    type_map: &TypeMap,
+    canon: &str,
+) -> u64 {
     stats
         .node_counts_by_label
         .iter()
@@ -363,7 +400,11 @@ fn sum_counts_canonical_edge(stats: &CodeNexusStats, type_map: &TypeMap, canon: 
 }
 
 /// Sum gitnexus edge counts that map to a given canonical type.
-fn sum_counts_canonical_edge_gitnexus(stats: &GitnexusStats, type_map: &TypeMap, canon: &str) -> u64 {
+fn sum_counts_canonical_edge_gitnexus(
+    stats: &GitnexusStats,
+    type_map: &TypeMap,
+    canon: &str,
+) -> u64 {
     stats
         .edge_counts_by_type
         .iter()
@@ -501,19 +542,31 @@ mod tests {
                 name: "alpha".to_string(),
                 language: "rust".to_string(),
                 overall_pass: true,
-                severities: SeverityCounts { critical: 0, major: 2, minor: 5 },
+                severities: SeverityCounts {
+                    critical: 0,
+                    major: 2,
+                    minor: 5,
+                },
             },
             SampleSummary {
                 name: "bravo".to_string(),
                 language: "python".to_string(),
                 overall_pass: false,
-                severities: SeverityCounts { critical: 3, major: 1, minor: 0 },
+                severities: SeverityCounts {
+                    critical: 3,
+                    major: 1,
+                    minor: 0,
+                },
             },
             SampleSummary {
                 name: "charlie".to_string(),
                 language: "c".to_string(),
                 overall_pass: false,
-                severities: SeverityCounts { critical: 1, major: 0, minor: 1 },
+                severities: SeverityCounts {
+                    critical: 1,
+                    major: 0,
+                    minor: 1,
+                },
             },
         ];
         let report = generate_aggregate_report(&summaries);

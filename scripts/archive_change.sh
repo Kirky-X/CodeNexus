@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Kirky.X. All rights reserved.
+# SPDX-License-Identifier: MIT
 # Deterministic archive executor for specmark workflow.
 #
 # Creates .readonly sentinel, acquires change-level flock, syncs delta specs

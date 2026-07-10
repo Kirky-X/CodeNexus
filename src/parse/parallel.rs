@@ -78,9 +78,9 @@ pub fn parallel_parse(files: &[FileInfo], project: &str) -> ParallelParseResult 
     let results: Vec<Result<ExtractResult, (String, String)>> = files
         .par_iter()
         .map(|file| {
-            let lang = file.language.ok_or_else(|| {
-                (file.relative_path.clone(), "unknown language".to_string())
-            })?;
+            let lang = file
+                .language
+                .ok_or_else(|| (file.relative_path.clone(), "unknown language".to_string()))?;
             let result = extract_file(&file.path, lang, project)
                 .map_err(|e| (file.relative_path.clone(), e.to_string()))?;
             debug!(
@@ -179,9 +179,9 @@ pub fn parallel_parse_ram_first(
     let results: Vec<Result<ExtractResult, (String, String)>> = files
         .par_iter()
         .map(|file| {
-            let lang = file.language.ok_or_else(|| {
-                (file.relative_path.clone(), "unknown language".to_string())
-            })?;
+            let lang = file
+                .language
+                .ok_or_else(|| (file.relative_path.clone(), "unknown language".to_string()))?;
             if let Some(comp_bytes) = compressed.get(&file.path) {
                 // RAM-first path: LZ4-decompress into String, parse, drop.
                 let raw = lz4_flex::decompress_size_prepended(comp_bytes).map_err(|e| {
@@ -196,13 +196,9 @@ pub fn parallel_parse_ram_first(
                         format!("UTF-8 decode failed: {e}"),
                     )
                 })?;
-                let result = extract_from_source(
-                    &file.path.display().to_string(),
-                    &source,
-                    lang,
-                    project,
-                )
-                .map_err(|e| (file.relative_path.clone(), e.to_string()))?;
+                let result =
+                    extract_from_source(&file.path.display().to_string(), &source, lang, project)
+                        .map_err(|e| (file.relative_path.clone(), e.to_string()))?;
                 // `source` dropped here (decompressed bytes released).
                 debug!(
                     event = "file_parsed_ram_first",
@@ -307,7 +303,12 @@ mod tests {
                 "int foo(void) { return 0; }",
                 Some(Language::C),
             ),
-            make_file(dir.path(), "c.py", "def foo(): pass", Some(Language::Python)),
+            make_file(
+                dir.path(),
+                "c.py",
+                "def foo(): pass",
+                Some(Language::Python),
+            ),
         ];
 
         let result = parallel_parse(&files, "proj");
@@ -432,7 +433,11 @@ mod tests {
         let file = make_file(dir.path(), "a.rs", "fn foo() {}", Some(Language::Rust));
 
         let result = parse_single(&file, "proj");
-        assert!(result.is_ok(), "parse_single should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "parse_single should succeed: {:?}",
+            result.err()
+        );
         let result = result.unwrap();
         assert_eq!(result.language, Language::Rust);
         assert!(!result.nodes.is_empty(), "should extract nodes");
@@ -544,7 +549,12 @@ mod tests {
         let files = vec![
             make_file(dir.path(), "a.rs", "fn a() {}", Some(Language::Rust)),
             make_file(dir.path(), "b.py", "def b(): pass", Some(Language::Python)),
-            make_file(dir.path(), "c.c", "int c(void) { return 0; }", Some(Language::C)),
+            make_file(
+                dir.path(),
+                "c.c",
+                "int c(void) { return 0; }",
+                Some(Language::C),
+            ),
         ];
 
         let result = parallel_parse(&files, "proj");
@@ -725,8 +735,11 @@ mod tests {
         assert_eq!(result.files_parsed, 1, "got errors: {:?}", result.errors);
         assert_eq!(result.files_failed, 0);
         assert_eq!(result.results.len(), 1);
-        let names: Vec<&str> =
-            result.results[0].nodes.iter().map(|n| n.name.as_str()).collect();
+        let names: Vec<&str> = result.results[0]
+            .nodes
+            .iter()
+            .map(|n| n.name.as_str())
+            .collect();
         assert!(names.contains(&"foo"), "should extract foo: {names:?}");
         assert!(names.contains(&"bar"), "should extract bar: {names:?}");
     }
@@ -816,7 +829,11 @@ mod tests {
 
         let files = vec![file_a, file_b, file_c];
         let result = parallel_parse_ram_first(&files, &compressed, "proj");
-        assert_eq!(result.files_parsed, 2, "a + b should parse; got: {:?}", result.errors);
+        assert_eq!(
+            result.files_parsed, 2,
+            "a + b should parse; got: {:?}",
+            result.errors
+        );
         assert_eq!(result.files_failed, 1);
         assert_eq!(result.results.len(), 2);
         assert_eq!(result.errors.len(), 1);
@@ -846,7 +863,10 @@ mod tests {
             size: 0,
         };
         let result = parse_single(&file, "proj");
-        assert!(result.is_err(), "expected error for missing file, got: {result:?}");
+        assert!(
+            result.is_err(),
+            "expected error for missing file, got: {result:?}"
+        );
         match result.unwrap_err() {
             ParseError::Io { file_path, .. } => {
                 assert!(

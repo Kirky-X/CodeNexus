@@ -288,18 +288,15 @@ pub fn resolve_include(
             // Boundary check: prefix must be empty or end with '/' (so
             // "format.h" matches "include/fmt/format.h" but not "xformat.h").
             if prefix_len == 0 || file_norm.as_bytes()[prefix_len - 1] == b'/' {
-                let file_dir = file_norm
-                    .rsplit_once('/')
-                    .map(|(dir, _)| dir)
-                    .unwrap_or("");
+                let file_dir = file_norm.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
                 if file_dir == calling_dir {
                     // Same directory — pick shortest path for determinism.
-                    if same_dir.as_ref().map_or(true, |s| s.len() > file.len()) {
+                    if same_dir.as_ref().is_none_or(|s| s.len() > file.len()) {
                         same_dir = Some(file);
                     }
                 } else {
                     // Other directory — pick shortest path (closest to root).
-                    if other.as_ref().map_or(true, |s| s.len() > file.len()) {
+                    if other.as_ref().is_none_or(|s| s.len() > file.len()) {
                         other = Some(file);
                     }
                 }
@@ -340,12 +337,15 @@ mod tests {
 
     #[test]
     fn includes_graph_contains_direct() {
-        // Spec T001 Red test: add_include("a","b") → contains("a","b")==true
+        // Spec Red test: add_include("a","b") → contains("a","b")==true
         // and contains("b","a")==false (directed, not symmetric).
         let mut graph = IncludesGraph::new();
         graph.add_include("a", "b");
         assert!(graph.contains("a", "b"));
-        assert!(!graph.contains("b", "a"), "edge is directed: b→a should not exist");
+        assert!(
+            !graph.contains("b", "a"),
+            "edge is directed: b→a should not exist"
+        );
     }
 
     #[test]
@@ -420,14 +420,23 @@ mod tests {
 
     #[test]
     fn includes_graph_reachable_transitive() {
-        // Spec T001 Red test: a→b, b→c → reachable_from("a") contains a/b/c.
+        // Spec Red test: a→b, b→c → reachable_from("a") contains a/b/c.
         let mut graph = IncludesGraph::new();
         graph.add_include("a", "b");
         graph.add_include("b", "c");
         let reachable = graph.reachable_from("a");
-        assert!(reachable.contains("a"), "start node should be reachable from itself");
-        assert!(reachable.contains("b"), "direct neighbor should be reachable");
-        assert!(reachable.contains("c"), "transitive neighbor should be reachable");
+        assert!(
+            reachable.contains("a"),
+            "start node should be reachable from itself"
+        );
+        assert!(
+            reachable.contains("b"),
+            "direct neighbor should be reachable"
+        );
+        assert!(
+            reachable.contains("c"),
+            "transitive neighbor should be reachable"
+        );
         assert_eq!(reachable.len(), 3);
     }
 
@@ -509,8 +518,14 @@ mod tests {
         let reachable_from_a = graph.reachable_from("a");
         assert!(reachable_from_a.contains("a"));
         assert!(reachable_from_a.contains("b"));
-        assert!(!reachable_from_a.contains("c"), "disconnected node should not be reachable");
-        assert!(!reachable_from_a.contains("d"), "disconnected node should not be reachable");
+        assert!(
+            !reachable_from_a.contains("c"),
+            "disconnected node should not be reachable"
+        );
+        assert!(
+            !reachable_from_a.contains("d"),
+            "disconnected node should not be reachable"
+        );
     }
 
     // --- fill_reachable_from (zero-allocation variant) ---
@@ -537,8 +552,15 @@ mod tests {
         graph.fill_reachable_from("b", &mut buf);
         assert!(buf.contains("b"), "start node should be in buffer");
         assert!(buf.contains("c"), "transitive neighbor should be in buffer");
-        assert!(!buf.contains("a"), "stale entry from previous call must be cleared");
-        assert_eq!(buf.len(), 2, "buffer should only contain b and c after clear+fill");
+        assert!(
+            !buf.contains("a"),
+            "stale entry from previous call must be cleared"
+        );
+        assert_eq!(
+            buf.len(),
+            2,
+            "buffer should only contain b and c after clear+fill"
+        );
     }
 
     #[test]
@@ -553,7 +575,10 @@ mod tests {
         let expected = graph.reachable_from("main.cpp");
         let mut buf = HashSet::new();
         graph.fill_reachable_from("main.cpp", &mut buf);
-        assert_eq!(expected, buf, "fill_reachable_from must match reachable_from output");
+        assert_eq!(
+            expected, buf,
+            "fill_reachable_from must match reachable_from output"
+        );
     }
 
     // --- edge_count / is_empty ---
@@ -595,7 +620,7 @@ mod tests {
 
     #[test]
     fn resolve_include_quoted_prefers_same_dir() {
-        // Spec T002 Red test: resolve_include("foo.h", "src/main.cpp",
+        // Spec Red test: resolve_include("foo.h", "src/main.cpp",
         // &["src/foo.h", "include/foo.h"]) returns "src/foo.h" (same dir).
         let all = make_files(&["src/foo.h", "include/foo.h"]);
         let result = resolve_include("foo.h", "src/main.cpp", &all);
@@ -604,7 +629,7 @@ mod tests {
 
     #[test]
     fn resolve_include_angled_matches_anywhere() {
-        // Spec T002 Red test: resolve_include("bar.h", "src/main.cpp",
+        // Spec Red test: resolve_include("bar.h", "src/main.cpp",
         // &["include/bar.h"]) returns "include/bar.h" (no same-dir match,
         // falls back to any project file).
         let all = make_files(&["include/bar.h"]);
@@ -614,7 +639,7 @@ mod tests {
 
     #[test]
     fn resolve_include_no_match_returns_none() {
-        // Spec T002 Red test: <iostream> (system header) → None.
+        // Spec Red test: <iostream> (system header) → None.
         let all = make_files(&["src/main.cpp", "src/foo.h"]);
         let result = resolve_include("iostream", "src/main.cpp", &all);
         assert_eq!(result, None);
@@ -634,7 +659,10 @@ mod tests {
         // "format.h" should NOT match "xformat.h" (no path boundary).
         let all = make_files(&["src/xformat.h"]);
         let result = resolve_include("format.h", "src/main.cpp", &all);
-        assert_eq!(result, None, "xformat.h should not match format.h (no boundary)");
+        assert_eq!(
+            result, None,
+            "xformat.h should not match format.h (no boundary)"
+        );
     }
 
     #[test]
@@ -707,6 +735,10 @@ mod tests {
         // (no '/') have file_dir = "" → match as same_dir.
         let all = make_files(&["foo.h", "src/foo.h"]);
         let result = resolve_include("foo.h", "main.cpp", &all);
-        assert_eq!(result, Some("foo.h".to_string()), "root-level file preferred when caller is in root");
+        assert_eq!(
+            result,
+            Some("foo.h".to_string()),
+            "root-level file preferred when caller is in root"
+        );
     }
 }

@@ -101,11 +101,7 @@ impl ModuleBuilder<ResolverModule> for ResolverModuleBuilder {
 struct ResolverCapability;
 
 impl Resolver for ResolverCapability {
-    fn build_symbol_table(
-        &self,
-        results: &[ExtractResult],
-        project: &str,
-    ) -> ProjectSymbolTable {
+    fn build_symbol_table(&self, results: &[ExtractResult], project: &str) -> ProjectSymbolTable {
         super::build_symbol_table(results, project)
     }
 
@@ -164,7 +160,8 @@ mod tests {
         let mut graph = Graph::new();
         for r in &results {
             for node in &r.nodes {
-                let qn = FqnGenerator::generate("proj", &r.file_path, &node.name, Language::Rust, None);
+                let qn =
+                    FqnGenerator::generate("proj", &r.file_path, &node.name, Language::Rust, None);
                 let mut g = node.clone();
                 g.id = qn.clone();
                 g.qualified_name = qn;

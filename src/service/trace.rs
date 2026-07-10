@@ -92,16 +92,15 @@ async fn trace_core(
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
 #[service_api(
-    name = "codenexus",
+    name = "trace",
     version = "0.3.2",
-    tool_name = "trace",
     description = "Trace a symbol's call and/or data-flow paths.",
-    cli = true,
+    cli = true
 )]
 async fn trace(symbol: String, trace_type: String, depth: u32) -> Result<(), ApiError> {
     let result = trace_core(symbol, trace_type, depth).await?;
-    let json = serde_json::to_string(&result)
-        .map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let json =
+        serde_json::to_string(&result).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }
@@ -109,10 +108,10 @@ async fn trace(symbol: String, trace_type: String, depth: u32) -> Result<(), Api
 /// MCP wrapper — returns result for MCP protocol.
 #[cfg(feature = "mcp")]
 #[service_api(
-    name = "codenexus",
+    name = "trace",
     version = "0.3.2",
     tool_name = "trace",
-    description = "Trace a symbol's call and/or data-flow paths.",
+    description = "Trace a symbol's call and/or data-flow paths."
 )]
 async fn trace_mcp(
     symbol: String,

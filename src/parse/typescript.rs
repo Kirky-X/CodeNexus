@@ -32,10 +32,12 @@ use tree_sitter::Node;
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
 use crate::resolve::{FqnGenerator, ScopeContext, ScopeResolverRegistry};
 
-use super::error::{ParseError, Result};
-use super::extractor::{AssignInfo, CallInfo, ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo};
-use super::parser_factory::ParserFactory;
 use super::dedupe_qn;
+use super::error::{ParseError, Result};
+use super::extractor::{
+    AssignInfo, CallInfo, ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo,
+};
+use super::parser_factory::ParserFactory;
 
 /// TypeScript language tree-sitter extractor (Adapter pattern).
 pub struct TypeScriptExtractor {
@@ -181,15 +183,36 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         "interface_declaration" => {
             // P2-3: TS interface → Interface (was Trait). Semantic alignment
             // with gitnexus which uses Interface for TS `interface Foo {}`.
-            extract_named_item(node, NodeLabel::Interface, source, ctx.file_path, ctx.project, result);
+            extract_named_item(
+                node,
+                NodeLabel::Interface,
+                source,
+                ctx.file_path,
+                ctx.project,
+                result,
+            );
             visit_children(node, source, ctx, result);
         }
         "enum_declaration" => {
-            extract_named_item(node, NodeLabel::Enum, source, ctx.file_path, ctx.project, result);
+            extract_named_item(
+                node,
+                NodeLabel::Enum,
+                source,
+                ctx.file_path,
+                ctx.project,
+                result,
+            );
             visit_children(node, source, ctx, result);
         }
         "type_alias_declaration" => {
-            extract_named_item(node, NodeLabel::TypeAlias, source, ctx.file_path, ctx.project, result);
+            extract_named_item(
+                node,
+                NodeLabel::TypeAlias,
+                source,
+                ctx.file_path,
+                ctx.project,
+                result,
+            );
         }
         "import_statement" => {
             extract_import(node, source, result);
@@ -217,7 +240,10 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             // not as a `declaration` field. visit_children won't promote it to
             // a Function node, so handle it explicitly here.
             if let Some(value) = node.child_by_field_name("value") {
-                if matches!(value.kind(), "arrow_function" | "function_expression" | "function") {
+                if matches!(
+                    value.kind(),
+                    "arrow_function" | "function_expression" | "function"
+                ) {
                     let start_line = value.start_position().row as u32 + 1;
                     let end_line = value.end_position().row as u32 + 1;
                     let qn = dedupe_qn(
@@ -413,12 +439,7 @@ fn build_and_push_function(
 // Definition extractors
 // ---------------------------------------------------------------------------
 
-fn extract_function(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     // P2-4: anonymous `export default function() {}` has no name field.
     // Use "default" as the name (matches gitnexus behavior for default exports).
     //
@@ -503,12 +524,7 @@ fn extract_class(
     result.push_node(model_node);
 }
 
-fn extract_method(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_method(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
     };
@@ -661,12 +677,7 @@ fn collect_imported_names(node: Node, source: &str, names: &mut Vec<String>) {
     }
 }
 
-fn extract_call(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(func_node) = node.child_by_field_name("function") else {
         return;
     };
@@ -739,11 +750,15 @@ fn extract_lexical_declaration(
     }
 
     for i in 0..node.named_child_count() as u32 {
-        let Some(child) = node.named_child(i) else { continue };
+        let Some(child) = node.named_child(i) else {
+            continue;
+        };
         if child.kind() != "variable_declarator" {
             continue;
         }
-        let Some(name_node) = child.child_by_field_name("name") else { continue };
+        let Some(name_node) = child.child_by_field_name("name") else {
+            continue;
+        };
         // Only simple identifier names produce Const/Function nodes. Object/array
         // destructuring (`const { a, b } = ...`) produces pattern nodes whose
         // text contains braces/commas that corrupt CSV imports — gitnexus also
@@ -762,7 +777,10 @@ fn extract_lexical_declaration(
         // P2-4: arrow_function / function_expression → Function node.
         // `const f = () => {}` and `const g = function() {}` are function
         // definitions gitnexus captures; codenexus previously missed them.
-        if matches!(value_kind, Some("arrow_function") | Some("function_expression")) {
+        if matches!(
+            value_kind,
+            Some("arrow_function") | Some("function_expression")
+        ) {
             let is_exported = is_exported(node);
             let qn = dedupe_qn(
                 make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent),
@@ -1026,10 +1044,17 @@ fn is_ts_read_position(node: Node) -> bool {
         "member_expression" => is_at_field(node, parent, "object"),
         // Declarator name, update operand, definition name, import name —
         // name-defining positions, not reads.
-        "variable_declarator" | "update_expression" | "lexical_declaration"
-        | "variable_declaration" | "function_declaration" | "method_definition"
-        | "class_declaration" | "import_specifier" | "namespace_import"
-        | "import_clause" | "export_statement" => false,
+        "variable_declarator"
+        | "update_expression"
+        | "lexical_declaration"
+        | "variable_declaration"
+        | "function_declaration"
+        | "method_definition"
+        | "class_declaration"
+        | "import_specifier"
+        | "namespace_import"
+        | "import_clause"
+        | "export_statement" => false,
         _ => false,
     }
 }
@@ -1095,7 +1120,8 @@ const result = add(1, 2);
 
     fn extract(source: &str) -> ExtractResult {
         let ext = TypeScriptExtractor::new();
-        ext.extract(source, "test.ts", "proj").expect("extraction should succeed")
+        ext.extract(source, "test.ts", "proj")
+            .expect("extraction should succeed")
     }
 
     #[test]
@@ -1115,7 +1141,9 @@ const result = add(1, 2);
         assert_eq!(result.imports.len(), 1, "should extract 1 import");
         assert_eq!(result.imports[0].source_file, "./foo");
         assert!(
-            result.imports[0].imported_names.contains(&"foo".to_string()),
+            result.imports[0]
+                .imported_names
+                .contains(&"foo".to_string()),
             "imported names should contain foo: {:?}",
             result.imports[0].imported_names
         );
@@ -1124,7 +1152,11 @@ const result = add(1, 2);
     #[test]
     fn extracts_exported_function() {
         let result = extract(TS_SOURCE);
-        let funcs: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Function).collect();
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
         assert_eq!(funcs.len(), 1, "should extract 1 function (add)");
         assert_eq!(funcs[0].name, "add");
         assert!(funcs[0].is_exported, "add should be exported");
@@ -1136,7 +1168,11 @@ const result = add(1, 2);
     #[test]
     fn extracts_class() {
         let result = extract(TS_SOURCE);
-        let classes: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Class).collect();
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
         assert_eq!(classes.len(), 1);
         assert_eq!(classes[0].name, "Point");
     }
@@ -1144,7 +1180,11 @@ const result = add(1, 2);
     #[test]
     fn extracts_methods() {
         let result = extract(TS_SOURCE);
-        let methods: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Method).collect();
+        let methods: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Method)
+            .collect();
         let names: Vec<_> = methods.iter().map(|n| n.name.as_str()).collect();
         assert!(
             names.contains(&"constructor"),
@@ -1161,7 +1201,11 @@ const result = add(1, 2);
     #[test]
     fn extracts_call_to_add() {
         let result = extract(TS_SOURCE);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             callees.contains(&"add"),
             "should extract call to add: {:?}",
@@ -1199,12 +1243,23 @@ const result = add(1, 2);
     fn creates_defines_edges() {
         // B1 fix: CONTAINS emission removed; only DEFINES remains.
         let result = extract(TS_SOURCE);
-        let defines_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Defines).count();
+        let defines_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Defines)
+            .count();
         let node_count = result.nodes.len();
         assert_eq!(defines_count, node_count);
         // B1 fix verification: no CONTAINS edges should be emitted
-        let contains_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Contains).count();
-        assert_eq!(contains_count, 0, "B1 fix: no CONTAINS edges should be emitted");
+        let contains_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Contains)
+            .count();
+        assert_eq!(
+            contains_count, 0,
+            "B1 fix: no CONTAINS edges should be emitted"
+        );
     }
 
     #[test]
@@ -1232,8 +1287,15 @@ const result = add(1, 2);
     fn non_exported_function_not_marked_exported() {
         let src = "function private_fn() {}";
         let result = extract(src);
-        let func = result.nodes.iter().find(|n| n.name == "private_fn").unwrap();
-        assert!(!func.is_exported, "non-exported function should not be exported");
+        let func = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "private_fn")
+            .unwrap();
+        assert!(
+            !func.is_exported,
+            "non-exported function should not be exported"
+        );
     }
 
     #[test]
@@ -1242,11 +1304,19 @@ const result = add(1, 2);
         // alignment with gitnexus).
         let src = "interface Drawable { draw(): void; }";
         let result = extract(src);
-        let interfaces: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Interface).collect();
+        let interfaces: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Interface)
+            .collect();
         assert_eq!(interfaces.len(), 1, "interface should map to Interface");
         assert_eq!(interfaces[0].name, "Drawable");
         // No Trait node should be created for an interface anymore.
-        let traits: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Trait).collect();
+        let traits: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Trait)
+            .collect();
         assert!(traits.is_empty(), "interface must not map to Trait");
     }
 
@@ -1254,7 +1324,11 @@ const result = add(1, 2);
     fn extracts_enum() {
         let src = "enum Color { Red, Green, Blue }";
         let result = extract(src);
-        let enums: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Enum).collect();
+        let enums: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Enum)
+            .collect();
         assert_eq!(enums.len(), 1);
         assert_eq!(enums[0].name, "Color");
     }
@@ -1263,7 +1337,11 @@ const result = add(1, 2);
     fn extracts_type_alias() {
         let src = "type Score = number;";
         let result = extract(src);
-        let aliases: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::TypeAlias).collect();
+        let aliases: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::TypeAlias)
+            .collect();
         assert_eq!(aliases.len(), 1);
         assert_eq!(aliases[0].name, "Score");
     }
@@ -1274,7 +1352,9 @@ const result = add(1, 2);
         let result = extract(src);
         assert_eq!(result.imports.len(), 1);
         assert_eq!(result.imports[0].source_file, "./mod");
-        assert!(result.imports[0].imported_names.contains(&"foo".to_string()));
+        assert!(result.imports[0]
+            .imported_names
+            .contains(&"foo".to_string()));
     }
 
     #[test]
@@ -1283,14 +1363,20 @@ const result = add(1, 2);
         let result = extract(src);
         assert_eq!(result.imports.len(), 1);
         assert_eq!(result.imports[0].source_file, "./utils");
-        assert!(result.imports[0].imported_names.contains(&"utils".to_string()));
+        assert!(result.imports[0]
+            .imported_names
+            .contains(&"utils".to_string()));
     }
 
     #[test]
     fn handles_method_call() {
         let src = "class A { foo() { this.bar(); } }";
         let result = extract(src);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(callees.contains(&"bar"), "should extract this.bar() call");
     }
 
@@ -1299,10 +1385,7 @@ const result = add(1, 2);
         let src = "class A { foo(x: number) { this.x = x; } }";
         let result = extract(src);
         assert!(
-            result
-                .assignments
-                .iter()
-                .any(|a| a.target_name == "x"),
+            result.assignments.iter().any(|a| a.target_name == "x"),
             "should find this.x = x assignment"
         );
     }
@@ -1319,9 +1402,16 @@ const result = add(1, 2);
         // P2-3: interface → Interface (not Trait).
         let src = "export interface Drawable { draw(): void; }";
         let result = extract(src);
-        let interfaces: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Interface).collect();
+        let interfaces: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Interface)
+            .collect();
         assert_eq!(interfaces.len(), 1);
-        assert!(interfaces[0].is_exported, "exported interface should be marked exported");
+        assert!(
+            interfaces[0].is_exported,
+            "exported interface should be marked exported"
+        );
     }
 
     #[test]
@@ -1360,13 +1450,18 @@ const result = add(1, 2);
         // Spec: 顶层调用（无函数上下文）caller_qn 为 None。
         let src = "callee();\n";
         let ext = TypeScriptExtractor::new();
-        let result = ext.extract(src, "main.ts", "proj").expect("extraction should succeed");
+        let result = ext
+            .extract(src, "main.ts", "proj")
+            .expect("extraction should succeed");
         let call = result
             .calls
             .iter()
             .find(|c| c.callee_name == "callee")
             .expect("should find top-level call to callee");
-        assert!(call.caller_qn.is_none(), "top-level call should have None caller_qn");
+        assert!(
+            call.caller_qn.is_none(),
+            "top-level call should have None caller_qn"
+        );
     }
 
     #[test]
@@ -1386,7 +1481,11 @@ Object.defineProperty(el2, 'boom', {
         assert_eq!(gets.len(), 2, "should extract two `get` methods");
         assert_ne!(gets[0].qualified_name, gets[1].qualified_name);
         for g in &gets {
-            assert!(g.qualified_name.contains("#L"), "expected line disambiguator: {}", g.qualified_name);
+            assert!(
+                g.qualified_name.contains("#L"),
+                "expected line disambiguator: {}",
+                g.qualified_name
+            );
         }
     }
 
@@ -1402,13 +1501,21 @@ describe('suite', () => {
 });
 ";
         let result = extract(src);
-        let toplevel = result.nodes.iter().find(|n| n.name == "topLevel").expect("topLevel should exist");
+        let toplevel = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "topLevel")
+            .expect("topLevel should exist");
         assert_eq!(toplevel.qualified_name, "proj.test.ts.topLevel");
         let helpers: Vec<_> = result.nodes.iter().filter(|n| n.name == "helper").collect();
         assert_eq!(helpers.len(), 2);
         assert_ne!(helpers[0].qualified_name, helpers[1].qualified_name);
         for h in &helpers {
-            assert!(h.qualified_name.contains("#L"), "expected line disambiguator: {}", h.qualified_name);
+            assert!(
+                h.qualified_name.contains("#L"),
+                "expected line disambiguator: {}",
+                h.qualified_name
+            );
         }
     }
 
@@ -1430,14 +1537,30 @@ function setupSecond() {
 }
 ";
         let result = extract(src);
-        let executes: Vec<_> = result.nodes.iter().filter(|n| n.name == "execute").collect();
+        let executes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.name == "execute")
+            .collect();
         assert_eq!(executes.len(), 2, "should extract two `execute` methods");
         assert_ne!(executes[0].qualified_name, executes[1].qualified_name);
         // 第一个保留原 FQN（含 #phases parent 消歧符），第二个追加 #L{line}
         let (first, second) = (&executes[0], &executes[1]);
-        assert!(first.qualified_name.contains("#phases"), "first qn: {}", first.qualified_name);
-        assert!(second.qualified_name.contains("#phases"), "second qn: {}", second.qualified_name);
-        assert!(second.qualified_name.contains("#L"), "second should have line dedupe: {}", second.qualified_name);
+        assert!(
+            first.qualified_name.contains("#phases"),
+            "first qn: {}",
+            first.qualified_name
+        );
+        assert!(
+            second.qualified_name.contains("#phases"),
+            "second qn: {}",
+            second.qualified_name
+        );
+        assert!(
+            second.qualified_name.contains("#L"),
+            "second should have line dedupe: {}",
+            second.qualified_name
+        );
     }
 
     // --- P2-2 regression: top-level `const` → Const node ---
@@ -1448,11 +1571,18 @@ function setupSecond() {
         // AssignInfo, no Const node (0 vs gitnexus 1384 in zod).
         let src = "export const MAX_RETRIES = 3;";
         let result = extract(src);
-        let consts: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Const).collect();
+        let consts: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Const)
+            .collect();
         assert_eq!(consts.len(), 1, "should extract 1 Const node");
         assert_eq!(consts[0].name, "MAX_RETRIES");
         assert_eq!(consts[0].language, Some(Language::TypeScript));
-        assert!(consts[0].is_exported, "exported const should be marked exported");
+        assert!(
+            consts[0].is_exported,
+            "exported const should be marked exported"
+        );
         assert!(consts[0].is_global, "top-level const should be global");
     }
 
@@ -1462,7 +1592,11 @@ function setupSecond() {
         // module-level constant — gitnexus applies the same rule.
         let src = "function f() { const local = 1; return local; }";
         let result = extract(src);
-        let consts: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Const).collect();
+        let consts: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Const)
+            .collect();
         assert!(consts.is_empty(), "nested const must NOT be a Const node");
     }
 
@@ -1471,7 +1605,11 @@ function setupSecond() {
         // P2-2: only `const` declarations become Const nodes, not `let`/`var`.
         let src = "export let mutable = 1;";
         let result = extract(src);
-        let consts: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Const).collect();
+        let consts: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Const)
+            .collect();
         assert!(consts.is_empty(), "`let` must NOT produce a Const node");
     }
 
@@ -1487,12 +1625,26 @@ function setupSecond() {
             .iter()
             .filter(|n| n.label == NodeLabel::Function && n.name == "handler")
             .collect();
-        assert_eq!(funcs.len(), 1, "arrow function const should be a Function node");
+        assert_eq!(
+            funcs.len(),
+            1,
+            "arrow function const should be a Function node"
+        );
         assert_eq!(funcs[0].language, Some(Language::TypeScript));
-        assert!(funcs[0].is_exported, "exported arrow function should be marked exported");
+        assert!(
+            funcs[0].is_exported,
+            "exported arrow function should be marked exported"
+        );
         // Must NOT also be a Const node (function-typed const → Function, not Const).
-        let consts: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Const && n.name == "handler").collect();
-        assert!(consts.is_empty(), "arrow function const must not double-count as Const");
+        let consts: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Const && n.name == "handler")
+            .collect();
+        assert!(
+            consts.is_empty(),
+            "arrow function const must not double-count as Const"
+        );
     }
 
     #[test]
@@ -1505,7 +1657,11 @@ function setupSecond() {
             .iter()
             .filter(|n| n.label == NodeLabel::Function && n.name == "callback")
             .collect();
-        assert_eq!(funcs.len(), 1, "function expression const should be a Function node");
+        assert_eq!(
+            funcs.len(),
+            1,
+            "function expression const should be a Function node"
+        );
     }
 
     #[test]
@@ -1661,11 +1817,7 @@ function setupSecond() {
         let result = ext
             .extract(src, "/tmp/demo/main.ts", "proj")
             .expect("extraction should succeed");
-        let y_writes: Vec<_> = result
-            .writes
-            .iter()
-            .filter(|w| w.var_name == "y")
-            .collect();
+        let y_writes: Vec<_> = result.writes.iter().filter(|w| w.var_name == "y").collect();
         assert!(
             y_writes.len() >= 2,
             "y should be written at least twice (let + assignment): {:?}",
@@ -1683,16 +1835,13 @@ function setupSecond() {
     #[test]
     fn update_expression_is_write() {
         // Spec: TypeScript update_expression 写入提取 (BR-TRACE-006)。
-        let src = "function caller(x: number): number {\n    let y = x;\n    y++;\n    return y;\n}\n";
+        let src =
+            "function caller(x: number): number {\n    let y = x;\n    y++;\n    return y;\n}\n";
         let ext = TypeScriptExtractor::new();
         let result = ext
             .extract(src, "/tmp/demo/main.ts", "proj")
             .expect("extraction should succeed");
-        let y_writes: Vec<_> = result
-            .writes
-            .iter()
-            .filter(|w| w.var_name == "y")
-            .collect();
+        let y_writes: Vec<_> = result.writes.iter().filter(|w| w.var_name == "y").collect();
         assert!(
             y_writes.len() >= 2,
             "y should be written at least twice (let + update): {:?}",

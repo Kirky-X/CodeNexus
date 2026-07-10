@@ -44,21 +44,22 @@ impl From<ProjectRecord> for ProjectOutput {
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
 #[service_api(
-    name = "codenexus",
+    name = "list",
     version = "0.3.2",
-    tool_name = "list",
     description = "List all indexed projects in the database.",
-    cli = true,
+    cli = true
 )]
 async fn list() -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
     let storage = kit
         .require::<StorageKey>()
         .map_err(|e| wrap_error("Failed to resolve storage capability", e))?;
-    let projects = storage.list_projects().unwrap_or_default();
+    let projects = storage
+        .list_projects()
+        .map_err(|e| wrap_error("Failed to list projects", e))?;
     let output: Vec<ProjectOutput> = projects.into_iter().map(ProjectOutput::from).collect();
-    let json = serde_json::to_string(&output)
-        .map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let json =
+        serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }

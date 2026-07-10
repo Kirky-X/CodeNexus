@@ -222,7 +222,7 @@ impl<'a, C: ?Sized + EmbedClient> SearchStrategy for SemanticStrategy<'a, C> {
 /// Reciprocal Rank Fusion. On Windows (or when vector support is unavailable),
 /// this degrades to BM25-only.
 ///
-/// # Multi-signal scoring (T011, R-search-002, v0.2.0)
+/// # Multi-signal scoring (R-search-002)
 ///
 /// When [`with_centrality`](Self::with_centrality) and/or
 /// [`with_file_heat`](Self::with_file_heat) are enabled, the fused RRF score
@@ -304,8 +304,7 @@ impl<'a, C: ?Sized + EmbedClient> SearchStrategy for HybridStrategy<'a, C> {
                 Ok(results) => results,
                 Err(EmbedError::EmbeddingTableNotAvailable) | Err(EmbedError::Unavailable(_)) => {
                     // Semantic unavailable — return BM25 only (with multi-signal if enabled).
-                    let results: Vec<SearchResult> =
-                        bm25_results.into_iter().take(limit).collect();
+                    let results: Vec<SearchResult> = bm25_results.into_iter().take(limit).collect();
                     return Ok(apply_multi_signal_if_enabled(
                         self.conn,
                         results,
@@ -330,7 +329,7 @@ impl<'a, C: ?Sized + EmbedClient> SearchStrategy for HybridStrategy<'a, C> {
 }
 
 // ---------------------------------------------------------------------------
-// Multi-signal scoring (T011, R-search-002, v0.2.0)
+// Multi-signal scoring (R-search-002)
 // ---------------------------------------------------------------------------
 
 /// Returns results unchanged if neither signal is enabled or no project filter
@@ -394,7 +393,9 @@ fn apply_multi_signal_scoring(
     }
 
     results.sort_by(|a, b| {
-        b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     results
 }
@@ -1088,7 +1089,7 @@ mod tests {
         let _ = strategy.search("parse", None, 10);
     }
 
-    // --- T011: Multi-signal scoring (R-search-002) ---
+    // --- Multi-signal scoring (R-search-002) ---
 
     /// Seeds a project + two same-named functions (`foo` in /a.rs, `bar` in
     /// /b.rs) where `foo` has 3 CALLS in-edges and `bar` has 0. Both functions
@@ -1157,9 +1158,7 @@ mod tests {
 
         let client = MockEmbedClient::new();
         let strategy = HybridStrategy::new(&conn, &client).with_file_heat(true);
-        let results = strategy
-            .search("handle", Some("demo"), 10)
-            .expect("search");
+        let results = strategy.search("handle", Some("demo"), 10).expect("search");
         assert!(results.len() >= 2, "should find both fnA and fnB");
         let fn_a_rank = results
             .iter()

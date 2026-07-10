@@ -279,8 +279,22 @@ mod tests {
         )
         .expect("create project");
         let funcs = [
-            ("f1", "demo", "parse_file", "demo.parse_file", "/src/main.rs", 1),
-            ("f2", "demo", "parse_line", "demo.parse_line", "/src/main.rs", 10),
+            (
+                "f1",
+                "demo",
+                "parse_file",
+                "demo.parse_file",
+                "/src/main.rs",
+                1,
+            ),
+            (
+                "f2",
+                "demo",
+                "parse_line",
+                "demo.parse_line",
+                "/src/main.rs",
+                10,
+            ),
         ];
         for (id, project, name, qn, file, line) in funcs {
             let cypher = format!(
@@ -367,11 +381,9 @@ mod tests {
             .search_by_file("/src/main.rs", None)
             .expect("search_by_file");
         assert_eq!(results.len(), 2);
-        assert!(
-            results
-                .iter()
-                .all(|r| r.file_path.as_deref() == Some("/src/main.rs"))
-        );
+        assert!(results
+            .iter()
+            .all(|r| r.file_path.as_deref() == Some("/src/main.rs")));
     }
 
     #[test]
@@ -382,11 +394,9 @@ mod tests {
             .fulltext_search("parse", None, 100)
             .expect("fulltext_search");
         assert!(!results.is_empty());
-        assert!(
-            results
-                .iter()
-                .all(|r| r.name.to_ascii_lowercase().contains("parse"))
-        );
+        assert!(results
+            .iter()
+            .all(|r| r.name.to_ascii_lowercase().contains("parse")));
     }
 
     /// Verify the full Kit registration flow works end-to-end.
@@ -411,6 +421,9 @@ mod tests {
     fn builder_default_equals_new() {
         // Default impl must produce the same state as new() (no config).
         let default_builder = QueryModuleBuilder::default();
-        assert!(default_builder.build().is_err(), "default builder should require config");
+        assert!(
+            default_builder.build().is_err(),
+            "default builder should require config"
+        );
     }
 }

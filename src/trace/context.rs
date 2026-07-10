@@ -3,11 +3,12 @@
 
 //! Context graph traversal helpers for the `context` command.
 
-use crate::model::{EdgeType, Graph, NodeId};
 use super::types::RelatedNodeOutput;
+use crate::model::{EdgeType, Graph, NodeId};
 
 pub fn resolve_start_id(graph: &Graph, symbol: &str) -> Option<NodeId> {
-    let by_name: Vec<&crate::model::Node> = graph.nodes.values().filter(|n| n.name == symbol).collect();
+    let by_name: Vec<&crate::model::Node> =
+        graph.nodes.values().filter(|n| n.name == symbol).collect();
     if by_name.len() == 1 {
         return Some(by_name[0].id.clone());
     }
@@ -38,7 +39,11 @@ pub fn collect_incoming(graph: &Graph, start_id: &NodeId) -> Vec<RelatedNodeOutp
             });
         }
     }
-    out.sort_by(|a, b| a.edge_type.cmp(&b.edge_type).then_with(|| a.name.cmp(&b.name)));
+    out.sort_by(|a, b| {
+        a.edge_type
+            .cmp(&b.edge_type)
+            .then_with(|| a.name.cmp(&b.name))
+    });
     out
 }
 
@@ -58,7 +63,11 @@ pub fn collect_outgoing(graph: &Graph, start_id: &NodeId) -> Vec<RelatedNodeOutp
             });
         }
     }
-    out.sort_by(|a, b| a.edge_type.cmp(&b.edge_type).then_with(|| a.name.cmp(&b.name)));
+    out.sort_by(|a, b| {
+        a.edge_type
+            .cmp(&b.edge_type)
+            .then_with(|| a.name.cmp(&b.name))
+    });
     out
 }
 
@@ -82,7 +91,9 @@ pub fn collect_processes(graph: &Graph, start_id: &NodeId) -> Vec<RelatedNodeOut
             None
         };
         let Some(other_id) = other_id else { continue };
-        let Some(other) = graph.get_node(other_id) else { continue };
+        let Some(other) = graph.get_node(other_id) else {
+            continue;
+        };
         out.push(RelatedNodeOutput {
             name: other.name.clone(),
             label: other.label.to_string(),
@@ -94,7 +105,11 @@ pub fn collect_processes(graph: &Graph, start_id: &NodeId) -> Vec<RelatedNodeOut
             edge_reason: edge.reason.clone(),
         });
     }
-    out.sort_by(|a, b| a.edge_type.cmp(&b.edge_type).then_with(|| a.name.cmp(&b.name)));
+    out.sort_by(|a, b| {
+        a.edge_type
+            .cmp(&b.edge_type)
+            .then_with(|| a.name.cmp(&b.name))
+    });
     out
 }
 
@@ -118,18 +133,29 @@ mod tests {
     #[test]
     fn resolve_start_id_by_name() {
         let mut graph = Graph::new();
-        graph.add_node(make_node("id1", "foo", "demo.foo", NodeLabel::Function, "/x.rs", 1));
+        graph.add_node(make_node(
+            "id1",
+            "foo",
+            "demo.foo",
+            NodeLabel::Function,
+            "/x.rs",
+            1,
+        ));
         assert_eq!(resolve_start_id(&graph, "foo").as_deref(), Some("id1"));
     }
 
     #[test]
     fn resolve_start_id_by_qualified_name() {
         let mut graph = Graph::new();
-        graph.add_node(make_node("id1", "foo", "demo.foo", NodeLabel::Function, "/x.rs", 1));
-        assert_eq!(
-            resolve_start_id(&graph, "demo.foo").as_deref(),
-            Some("id1")
-        );
+        graph.add_node(make_node(
+            "id1",
+            "foo",
+            "demo.foo",
+            NodeLabel::Function,
+            "/x.rs",
+            1,
+        ));
+        assert_eq!(resolve_start_id(&graph, "demo.foo").as_deref(), Some("id1"));
     }
 
     #[test]
@@ -141,8 +167,22 @@ mod tests {
     #[test]
     fn collect_incoming_returns_callers() {
         let mut graph = Graph::new();
-        graph.add_node(make_node("a", "a", "demo.a", NodeLabel::Function, "/a.rs", 1));
-        graph.add_node(make_node("b", "b", "demo.b", NodeLabel::Function, "/b.rs", 1));
+        graph.add_node(make_node(
+            "a",
+            "a",
+            "demo.a",
+            NodeLabel::Function,
+            "/a.rs",
+            1,
+        ));
+        graph.add_node(make_node(
+            "b",
+            "b",
+            "demo.b",
+            NodeLabel::Function,
+            "/b.rs",
+            1,
+        ));
         graph.add_edge(Edge::new("a", "b", EdgeType::Calls, "demo"));
         let incoming = collect_incoming(&graph, &"b".to_string());
         assert_eq!(incoming.len(), 1);
@@ -153,8 +193,22 @@ mod tests {
     #[test]
     fn collect_outgoing_returns_callees() {
         let mut graph = Graph::new();
-        graph.add_node(make_node("a", "a", "demo.a", NodeLabel::Function, "/a.rs", 1));
-        graph.add_node(make_node("b", "b", "demo.b", NodeLabel::Function, "/b.rs", 1));
+        graph.add_node(make_node(
+            "a",
+            "a",
+            "demo.a",
+            NodeLabel::Function,
+            "/a.rs",
+            1,
+        ));
+        graph.add_node(make_node(
+            "b",
+            "b",
+            "demo.b",
+            NodeLabel::Function,
+            "/b.rs",
+            1,
+        ));
         graph.add_edge(Edge::new("a", "b", EdgeType::Calls, "demo"));
         let outgoing = collect_outgoing(&graph, &"a".to_string());
         assert_eq!(outgoing.len(), 1);
@@ -165,7 +219,14 @@ mod tests {
     #[test]
     fn collect_processes_finds_step_in_process() {
         let mut graph = Graph::new();
-        graph.add_node(make_node("a", "a", "demo.a", NodeLabel::Function, "/a.rs", 1));
+        graph.add_node(make_node(
+            "a",
+            "a",
+            "demo.a",
+            NodeLabel::Function,
+            "/a.rs",
+            1,
+        ));
         graph.add_node(
             Node::builder(NodeLabel::Process, "checkout", "demo.checkout")
                 .id("p1")
@@ -181,7 +242,14 @@ mod tests {
     #[test]
     fn collect_processes_finds_entry_point_of() {
         let mut graph = Graph::new();
-        graph.add_node(make_node("main", "main", "demo.main", NodeLabel::Function, "/m.rs", 1));
+        graph.add_node(make_node(
+            "main",
+            "main",
+            "demo.main",
+            NodeLabel::Function,
+            "/m.rs",
+            1,
+        ));
         graph.add_node(
             Node::builder(NodeLabel::Process, "bootstrap", "demo.bootstrap")
                 .id("p1")
@@ -197,8 +265,22 @@ mod tests {
     #[test]
     fn collect_processes_ignores_call_edges() {
         let mut graph = Graph::new();
-        graph.add_node(make_node("a", "a", "demo.a", NodeLabel::Function, "/a.rs", 1));
-        graph.add_node(make_node("b", "b", "demo.b", NodeLabel::Function, "/b.rs", 1));
+        graph.add_node(make_node(
+            "a",
+            "a",
+            "demo.a",
+            NodeLabel::Function,
+            "/a.rs",
+            1,
+        ));
+        graph.add_node(make_node(
+            "b",
+            "b",
+            "demo.b",
+            NodeLabel::Function,
+            "/b.rs",
+            1,
+        ));
         graph.add_edge(Edge::new("a", "b", EdgeType::Calls, "demo"));
         let processes = collect_processes(&graph, &"a".to_string());
         assert!(processes.is_empty());

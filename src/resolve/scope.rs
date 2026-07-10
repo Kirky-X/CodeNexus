@@ -11,8 +11,8 @@ use std::collections::HashMap;
 
 use tree_sitter::Node;
 
-use crate::model::{Language, NodeLabel};
 use super::FqnGenerator;
+use crate::model::{Language, NodeLabel};
 
 /// A single scope in a scope chain.
 #[derive(Debug, Clone)]
@@ -220,12 +220,24 @@ impl ScopeResolver for PythonScopeResolver {
                 } else {
                     NodeLabel::Function
                 };
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Python, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Python,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, label, ctx.current_parent))
             }
             "class_definition" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Python, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Python,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, NodeLabel::Class, ctx.current_parent))
             }
             _ => None,
@@ -255,22 +267,51 @@ impl ScopeResolver for RustScopeResolver {
         match node.kind() {
             "function_item" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Rust, ctx.current_parent);
-                Some(build_scope(name, qn, NodeLabel::Function, ctx.current_parent))
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Rust,
+                    ctx.current_parent,
+                );
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Function,
+                    ctx.current_parent,
+                ))
             }
             "struct_item" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Rust, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Rust,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, NodeLabel::Struct, ctx.current_parent))
             }
             "enum_item" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Rust, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Rust,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, NodeLabel::Enum, ctx.current_parent))
             }
             "trait_item" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Rust, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Rust,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, NodeLabel::Trait, ctx.current_parent))
             }
             "impl_item" => {
@@ -279,12 +320,24 @@ impl ScopeResolver for RustScopeResolver {
                 let name = node
                     .child_by_field_name("type")
                     .and_then(|n| node_text(n, ctx.source).map(String::from))?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Rust, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Rust,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, NodeLabel::Impl, ctx.current_parent))
             }
             "mod_item" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Rust, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Rust,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, NodeLabel::Module, ctx.current_parent))
             }
             _ => None,
@@ -316,38 +369,87 @@ impl ScopeResolver for CScopeResolver {
                 // Detect C++ namespace/class/struct blocks misparsed as
                 // function_definition (tree-sitter-c quirk).
                 // Single-line for coverage: tarpaulin attribute continuation
-                let type_text = node.child_by_field_name("type").filter(|n| n.kind() == "type_identifier").and_then(|n| node_text(n, ctx.source));
+                let type_text = node
+                    .child_by_field_name("type")
+                    .filter(|n| n.kind() == "type_identifier")
+                    .and_then(|n| node_text(n, ctx.source));
                 match type_text {
                     Some("namespace") => {
                         // Single-line for coverage: tarpaulin attribute continuation
-                        let name = node.child_by_field_name("declarator").and_then(|n| node_text(n, ctx.source).map(String::from))?;
-                        let qn = make_qn(ctx.file_path, &name, ctx.project, Language::C, ctx.current_parent);
-                        Some(build_scope(name, qn, NodeLabel::Namespace, ctx.current_parent))
+                        let name = node
+                            .child_by_field_name("declarator")
+                            .and_then(|n| node_text(n, ctx.source).map(String::from))?;
+                        let qn = make_qn(
+                            ctx.file_path,
+                            &name,
+                            ctx.project,
+                            Language::C,
+                            ctx.current_parent,
+                        );
+                        Some(build_scope(
+                            name,
+                            qn,
+                            NodeLabel::Namespace,
+                            ctx.current_parent,
+                        ))
                     }
                     Some("class") => {
                         // Single-line for coverage: tarpaulin attribute continuation
-                        let name = node.child_by_field_name("declarator").and_then(|n| node_text(n, ctx.source).map(String::from))?;
-                        let qn = make_qn(ctx.file_path, &name, ctx.project, Language::C, ctx.current_parent);
+                        let name = node
+                            .child_by_field_name("declarator")
+                            .and_then(|n| node_text(n, ctx.source).map(String::from))?;
+                        let qn = make_qn(
+                            ctx.file_path,
+                            &name,
+                            ctx.project,
+                            Language::C,
+                            ctx.current_parent,
+                        );
                         Some(build_scope(name, qn, NodeLabel::Class, ctx.current_parent))
                     }
                     Some("struct") => {
                         // Single-line for coverage: tarpaulin attribute continuation
-                        let name = node.child_by_field_name("declarator").and_then(|n| node_text(n, ctx.source).map(String::from))?;
-                        let qn = make_qn(ctx.file_path, &name, ctx.project, Language::C, ctx.current_parent);
+                        let name = node
+                            .child_by_field_name("declarator")
+                            .and_then(|n| node_text(n, ctx.source).map(String::from))?;
+                        let qn = make_qn(
+                            ctx.file_path,
+                            &name,
+                            ctx.project,
+                            Language::C,
+                            ctx.current_parent,
+                        );
                         Some(build_scope(name, qn, NodeLabel::Struct, ctx.current_parent))
                     }
                     _ => {
                         // Normal C function.
                         let name = c_function_name(node, ctx.source)?;
-                        let qn = make_qn(ctx.file_path, &name, ctx.project, Language::C, ctx.current_parent);
-                        Some(build_scope(name, qn, NodeLabel::Function, ctx.current_parent))
+                        let qn = make_qn(
+                            ctx.file_path,
+                            &name,
+                            ctx.project,
+                            Language::C,
+                            ctx.current_parent,
+                        );
+                        Some(build_scope(
+                            name,
+                            qn,
+                            NodeLabel::Function,
+                            ctx.current_parent,
+                        ))
                     }
                 }
             }
             "struct_specifier" => {
                 // Only treat named structs with a body as scope-introducing.
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::C, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::C,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, NodeLabel::Struct, ctx.current_parent))
             }
             _ => None,
@@ -375,7 +477,11 @@ fn c_declarator_name(node: Node, source: &str) -> Option<String> {
     match node.kind() {
         "identifier" => node_text(node, source).map(String::from),
         // Single-line for coverage: tarpaulin attribute continuation
-        "function_declarator" | "pointer_declarator" | "array_declarator" | "parenthesized_declarator" | "init_declarator" => {
+        "function_declarator"
+        | "pointer_declarator"
+        | "array_declarator"
+        | "parenthesized_declarator"
+        | "init_declarator" => {
             let inner = node.child_by_field_name("declarator")?;
             c_declarator_name(inner, source)
         }
@@ -403,23 +509,62 @@ impl ScopeResolver for FortranScopeResolver {
         match node.kind() {
             "module" => {
                 let name = fortran_statement_name(node, "module_statement", ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Fortran, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Fortran,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, NodeLabel::Module, ctx.current_parent))
             }
             "subroutine" => {
                 let name = fortran_statement_name(node, "subroutine_statement", ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Fortran, ctx.current_parent);
-                Some(build_scope(name, qn, NodeLabel::Function, ctx.current_parent))
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Fortran,
+                    ctx.current_parent,
+                );
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Function,
+                    ctx.current_parent,
+                ))
             }
             "function" => {
                 let name = fortran_statement_name(node, "function_statement", ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Fortran, ctx.current_parent);
-                Some(build_scope(name, qn, NodeLabel::Function, ctx.current_parent))
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Fortran,
+                    ctx.current_parent,
+                );
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Function,
+                    ctx.current_parent,
+                ))
             }
             "program" => {
                 let name = fortran_statement_name(node, "program_statement", ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Fortran, ctx.current_parent);
-                Some(build_scope(name, qn, NodeLabel::Function, ctx.current_parent))
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Fortran,
+                    ctx.current_parent,
+                );
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Function,
+                    ctx.current_parent,
+                ))
             }
             _ => None,
         }
@@ -476,23 +621,57 @@ impl ScopeResolver for TypeScriptScopeResolver {
         match node.kind() {
             "function_declaration" | "generator_function_declaration" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::TypeScript, ctx.current_parent);
-                Some(build_scope(name, qn, NodeLabel::Function, ctx.current_parent))
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::TypeScript,
+                    ctx.current_parent,
+                );
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Function,
+                    ctx.current_parent,
+                ))
             }
             "class_declaration" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::TypeScript, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::TypeScript,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, NodeLabel::Class, ctx.current_parent))
             }
             "method_definition" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::TypeScript, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::TypeScript,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, NodeLabel::Method, ctx.current_parent))
             }
             "interface_declaration" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::TypeScript, ctx.current_parent);
-                Some(build_scope(name, qn, NodeLabel::Interface, ctx.current_parent))
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::TypeScript,
+                    ctx.current_parent,
+                );
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Interface,
+                    ctx.current_parent,
+                ))
             }
             _ => None,
         }
@@ -519,12 +698,29 @@ impl ScopeResolver for GoScopeResolver {
         match node.kind() {
             "function_declaration" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Go, ctx.current_parent);
-                Some(build_scope(name, qn, NodeLabel::Function, ctx.current_parent))
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Go,
+                    ctx.current_parent,
+                );
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Function,
+                    ctx.current_parent,
+                ))
             }
             "method_declaration" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Go, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Go,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, NodeLabel::Method, ctx.current_parent))
             }
             "type_spec" => {
@@ -535,7 +731,13 @@ impl ScopeResolver for GoScopeResolver {
                     Some("interface_type") => NodeLabel::Interface,
                     _ => return None,
                 };
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Go, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Go,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, label, ctx.current_parent))
             }
             _ => None,
@@ -563,22 +765,51 @@ impl ScopeResolver for JavaScopeResolver {
         match node.kind() {
             "class_declaration" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Java, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Java,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, NodeLabel::Class, ctx.current_parent))
             }
             "interface_declaration" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Java, ctx.current_parent);
-                Some(build_scope(name, qn, NodeLabel::Interface, ctx.current_parent))
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Java,
+                    ctx.current_parent,
+                );
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Interface,
+                    ctx.current_parent,
+                ))
             }
             "enum_declaration" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Java, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Java,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, NodeLabel::Enum, ctx.current_parent))
             }
             "method_declaration" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Java, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Java,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, NodeLabel::Method, ctx.current_parent))
             }
             _ => None,
@@ -613,23 +844,52 @@ impl ScopeResolver for CppScopeResolver {
                 } else {
                     NodeLabel::Function
                 };
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Cpp, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Cpp,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, label, ctx.current_parent))
             }
             "class_specifier" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Cpp, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Cpp,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, NodeLabel::Class, ctx.current_parent))
             }
             "struct_specifier" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Cpp, ctx.current_parent);
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Cpp,
+                    ctx.current_parent,
+                );
                 Some(build_scope(name, qn, NodeLabel::Struct, ctx.current_parent))
             }
             "namespace_definition" => {
                 let name = name_field(node, ctx.source)?;
-                let qn = make_qn(ctx.file_path, &name, ctx.project, Language::Cpp, ctx.current_parent);
-                Some(build_scope(name, qn, NodeLabel::Namespace, ctx.current_parent))
+                let qn = make_qn(
+                    ctx.file_path,
+                    &name,
+                    ctx.project,
+                    Language::Cpp,
+                    ctx.current_parent,
+                );
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Namespace,
+                    ctx.current_parent,
+                ))
             }
             _ => None,
         }
@@ -651,8 +911,11 @@ fn cpp_function_name(node: Node, source: &str) -> Option<String> {
 fn cpp_declarator_name(node: Node, source: &str) -> Option<String> {
     match node.kind() {
         "identifier" | "field_identifier" => node_text(node, source).map(String::from),
-        "function_declarator" | "pointer_declarator" | "reference_declarator"
-        | "array_declarator" | "parenthesized_declarator" => {
+        "function_declarator"
+        | "pointer_declarator"
+        | "reference_declarator"
+        | "array_declarator"
+        | "parenthesized_declarator" => {
             let inner = node.child_by_field_name("declarator")?;
             cpp_declarator_name(inner, source)
         }
@@ -1388,7 +1651,9 @@ mod resolver_tests {
     #[test]
     fn fortran_resolves_function() {
         // Covers the `function` arm of FortranScopeResolver.
-        let source = String::from("function myfunc(a) result(r)\n  integer :: a, r\n  r = a\nend function\n");
+        let source = String::from(
+            "function myfunc(a) result(r)\n  integer :: a, r\n  r = a\nend function\n",
+        );
         let tree = parse(Language::Fortran, &source).expect("parse");
         let resolver = FortranScopeResolver;
         let ctx = ScopeContext {
@@ -1483,9 +1748,7 @@ mod resolver_tests {
     #[cfg(feature = "lang-go")]
     #[test]
     fn go_resolves_function_and_method() {
-        let source = String::from(
-            "package main\nfunc foo() {}\nfunc (r Receiver) bar() {}\n",
-        );
+        let source = String::from("package main\nfunc foo() {}\nfunc (r Receiver) bar() {}\n");
         let tree = parse(Language::Go, &source).expect("parse");
         let resolver = GoScopeResolver;
         let ctx = ScopeContext {
@@ -1523,9 +1786,8 @@ mod resolver_tests {
                 }
             }
         }
-        let source = String::from(
-            "package main\ntype Foo struct { x int }\ntype Bar interface { M() }\n",
-        );
+        let source =
+            String::from("package main\ntype Foo struct { x int }\ntype Bar interface { M() }\n");
         let tree = parse(Language::Go, &source).expect("parse");
         let resolver = GoScopeResolver;
         let ctx = ScopeContext {
@@ -1536,9 +1798,15 @@ mod resolver_tests {
         };
         let mut scopes = Vec::new();
         collect_recursive(&resolver, tree.root_node(), &ctx, &mut scopes);
-        let struct_scope = scopes.iter().find(|s| s.label == NodeLabel::Struct).expect("struct");
+        let struct_scope = scopes
+            .iter()
+            .find(|s| s.label == NodeLabel::Struct)
+            .expect("struct");
         assert_eq!(struct_scope.name, "Foo");
-        let iface = scopes.iter().find(|s| s.label == NodeLabel::Interface).expect("interface");
+        let iface = scopes
+            .iter()
+            .find(|s| s.label == NodeLabel::Interface)
+            .expect("interface");
         assert_eq!(iface.name, "Bar");
     }
 
@@ -1626,9 +1894,8 @@ mod resolver_tests {
                 }
             }
         }
-        let source = String::from(
-            "namespace ns { class Foo {}; struct Bar {}; void free_fn() {} }\n",
-        );
+        let source =
+            String::from("namespace ns { class Foo {}; struct Bar {}; void free_fn() {} }\n");
         let tree = parse(Language::Cpp, &source).expect("parse");
         let resolver = CppScopeResolver;
         let ctx = ScopeContext {
@@ -1639,14 +1906,26 @@ mod resolver_tests {
         };
         let mut scopes = Vec::new();
         collect_recursive(&resolver, tree.root_node(), &ctx, &mut scopes);
-        let ns = scopes.iter().find(|s| s.label == NodeLabel::Namespace).expect("namespace");
+        let ns = scopes
+            .iter()
+            .find(|s| s.label == NodeLabel::Namespace)
+            .expect("namespace");
         assert_eq!(ns.name, "ns");
-        let class = scopes.iter().find(|s| s.label == NodeLabel::Class).expect("class");
+        let class = scopes
+            .iter()
+            .find(|s| s.label == NodeLabel::Class)
+            .expect("class");
         assert_eq!(class.name, "Foo");
-        let struct_scope = scopes.iter().find(|s| s.label == NodeLabel::Struct).expect("struct");
+        let struct_scope = scopes
+            .iter()
+            .find(|s| s.label == NodeLabel::Struct)
+            .expect("struct");
         assert_eq!(struct_scope.name, "Bar");
         // free_fn is inside namespace, not class/struct → Function, not Method.
-        let free_fn = scopes.iter().find(|s| s.label == NodeLabel::Function).expect("free function");
+        let free_fn = scopes
+            .iter()
+            .find(|s| s.label == NodeLabel::Function)
+            .expect("free function");
         assert_eq!(free_fn.name, "free_fn");
     }
 
@@ -1750,7 +2029,10 @@ mod resolver_tests {
             current_parent: None,
         };
         let scopes = collect_scopes(&resolver, tree.root_node(), &ctx);
-        let module = scopes.iter().find(|s| s.label == NodeLabel::Module).expect("module");
+        let module = scopes
+            .iter()
+            .find(|s| s.label == NodeLabel::Module)
+            .expect("module");
         assert_eq!(module.name, "mymod");
     }
 
@@ -1792,7 +2074,10 @@ mod resolver_tests {
         // tree-sitter-c either misparses (→ Namespace label) or errors.
         // Either way, this exercises the type_text detection logic.
         if let Some(scope) = scopes.first() {
-            assert!(matches!(scope.label, NodeLabel::Namespace | NodeLabel::Function));
+            assert!(matches!(
+                scope.label,
+                NodeLabel::Namespace | NodeLabel::Function
+            ));
         }
     }
 
@@ -1812,7 +2097,10 @@ mod resolver_tests {
         };
         let scopes = collect_scopes(&resolver, tree.root_node(), &ctx);
         if let Some(scope) = scopes.first() {
-            assert!(matches!(scope.label, NodeLabel::Class | NodeLabel::Function));
+            assert!(matches!(
+                scope.label,
+                NodeLabel::Class | NodeLabel::Function
+            ));
         }
     }
 
@@ -1832,7 +2120,10 @@ mod resolver_tests {
         };
         let scopes = collect_scopes(&resolver, tree.root_node(), &ctx);
         if let Some(scope) = scopes.first() {
-            assert!(matches!(scope.label, NodeLabel::Struct | NodeLabel::Function));
+            assert!(matches!(
+                scope.label,
+                NodeLabel::Struct | NodeLabel::Function
+            ));
         }
     }
 
@@ -1849,8 +2140,18 @@ mod resolver_tests {
             current_parent: None,
         };
         // Walk to find a non-declarator named node.
-        fn find_first_non_declarator<'a>(node: tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
-            if !matches!(node.kind(), "identifier" | "function_declarator" | "pointer_declarator" | "array_declarator" | "parenthesized_declarator" | "init_declarator") {
+        fn find_first_non_declarator<'a>(
+            node: tree_sitter::Node<'a>,
+        ) -> Option<tree_sitter::Node<'a>> {
+            if !matches!(
+                node.kind(),
+                "identifier"
+                    | "function_declarator"
+                    | "pointer_declarator"
+                    | "array_declarator"
+                    | "parenthesized_declarator"
+                    | "init_declarator"
+            ) {
                 return Some(node);
             }
             for i in 0..node.named_child_count() as u32 {
@@ -1897,7 +2198,9 @@ mod resolver_tests {
         let source = String::from("int ns::func();\n");
         let tree = parse(Language::Cpp, &source).expect("parse");
 
-        fn find_qualified_identifier<'a>(node: tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
+        fn find_qualified_identifier<'a>(
+            node: tree_sitter::Node<'a>,
+        ) -> Option<tree_sitter::Node<'a>> {
             if node.kind() == "qualified_identifier" {
                 return Some(node);
             }

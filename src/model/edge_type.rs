@@ -256,7 +256,10 @@ mod tests {
         assert_eq!("MEMBER_OF".parse::<EdgeType>().unwrap(), EdgeType::MemberOf);
         assert_eq!("FFI_CALLS".parse::<EdgeType>().unwrap(), EdgeType::FfiCalls);
         assert_eq!("USES_TYPE".parse::<EdgeType>().unwrap(), EdgeType::UsesType);
-        assert_eq!("DATAFLOWS".parse::<EdgeType>().unwrap(), EdgeType::DataFlows);
+        assert_eq!(
+            "DATAFLOWS".parse::<EdgeType>().unwrap(),
+            EdgeType::DataFlows
+        );
     }
 
     #[test]
@@ -310,7 +313,10 @@ mod tests {
 
     #[test]
     fn serde_serializes_as_variant_name() {
-        assert_eq!(serde_json::to_string(&EdgeType::Calls).unwrap(), "\"Calls\"");
+        assert_eq!(
+            serde_json::to_string(&EdgeType::Calls).unwrap(),
+            "\"Calls\""
+        );
         assert_eq!(
             serde_json::to_string(&EdgeType::FfiCalls).unwrap(),
             "\"FfiCalls\""
@@ -354,8 +360,18 @@ mod tests {
         // CONFIDENCE_PROJECT = 0.80 should be within range.
         let (min, max) = EdgeType::Calls.confidence_range();
         let confidence_project: f32 = 0.80;
-        assert!(confidence_project >= min, "CONFIDENCE_PROJECT {} < min {}", confidence_project, min);
-        assert!(confidence_project <= max, "CONFIDENCE_PROJECT {} > max {}", confidence_project, max);
+        assert!(
+            confidence_project >= min,
+            "CONFIDENCE_PROJECT {} < min {}",
+            confidence_project,
+            min
+        );
+        assert!(
+            confidence_project <= max,
+            "CONFIDENCE_PROJECT {} > max {}",
+            confidence_project,
+            max
+        );
     }
 
     #[test]
@@ -370,10 +386,7 @@ mod tests {
                 (0.0..=1.0).contains(&max),
                 "{edge}: max {max} out of [0.0, 1.0]"
             );
-            assert!(
-                min <= max,
-                "{edge}: min {min} > max {max}"
-            );
+            assert!(min <= max, "{edge}: min {min} > max {max}");
         }
     }
 }

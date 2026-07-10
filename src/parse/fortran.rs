@@ -29,10 +29,12 @@ use tree_sitter::Node;
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
 use crate::resolve::{FqnGenerator, ScopeContext, ScopeResolverRegistry};
 
-use super::error::{ParseError, Result};
-use super::extractor::{CallInfo, ExternInfo, ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo};
-use super::parser_factory::ParserFactory;
 use super::dedupe_qn;
+use super::error::{ParseError, Result};
+use super::extractor::{
+    CallInfo, ExternInfo, ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo,
+};
+use super::parser_factory::ParserFactory;
 
 /// Fortran language tree-sitter extractor (Adapter pattern).
 pub struct FortranExtractor {
@@ -412,17 +414,16 @@ fn first_identifier_child<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str
 // Definition extractors
 // ---------------------------------------------------------------------------
 
-fn extract_module(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_module(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name) = statement_name(node, "module_statement", source) else {
         return;
     };
     let line = node.start_position().row as u32 + 1;
-    let qn = dedupe_qn(make_qn(ctx.file_path, &name, ctx.project, None), line, result);
+    let qn = dedupe_qn(
+        make_qn(ctx.file_path, &name, ctx.project, None),
+        line,
+        result,
+    );
     let model_node = ModelNode::builder(NodeLabel::Module, name, qn)
         .file_path(ctx.file_path)
         .start_line(node.start_position().row as u32 + 1)
@@ -476,12 +477,7 @@ fn extract_subroutine_or_function(
     result.push_node(model_node);
 }
 
-fn extract_program(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_program(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name) = statement_name(node, "program_statement", source) else {
         return;
     };
@@ -625,12 +621,7 @@ fn extract_use(node: Node, source: &str, result: &mut ExtractResult) {
     });
 }
 
-fn extract_call(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     // subroutine_call has an identifier child (the callee) and an argument_list.
     let mut callee = None;
     let mut args = Vec::new();
@@ -841,7 +832,8 @@ end program
 
     fn extract(source: &str) -> ExtractResult {
         let ext = FortranExtractor::new();
-        ext.extract(source, "test.f90", "proj").expect("extraction should succeed")
+        ext.extract(source, "test.f90", "proj")
+            .expect("extraction should succeed")
     }
 
     #[test]
@@ -858,7 +850,11 @@ end program
     #[test]
     fn extracts_module() {
         let result = extract(FORTRAN_SOURCE);
-        let modules: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Module).collect();
+        let modules: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Module)
+            .collect();
         assert_eq!(modules.len(), 1, "should extract 1 module");
         assert_eq!(modules[0].name, "mymod");
         assert_eq!(modules[0].language, Some(Language::Fortran));
@@ -869,7 +865,11 @@ end program
     #[test]
     fn extracts_subroutine() {
         let result = extract(FORTRAN_SOURCE);
-        let funcs: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Function).collect();
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
         let names: Vec<_> = funcs.iter().map(|n| n.name.as_str()).collect();
         assert!(
             names.contains(&"my_sub"),
@@ -881,7 +881,11 @@ end program
     #[test]
     fn extracts_function() {
         let result = extract(FORTRAN_SOURCE);
-        let funcs: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Function).collect();
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
         let names: Vec<_> = funcs.iter().map(|n| n.name.as_str()).collect();
         assert!(
             names.contains(&"my_func"),
@@ -893,7 +897,11 @@ end program
     #[test]
     fn extracts_program() {
         let result = extract(FORTRAN_SOURCE);
-        let funcs: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Function).collect();
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
         let names: Vec<_> = funcs.iter().map(|n| n.name.as_str()).collect();
         assert!(
             names.contains(&"main"),
@@ -907,7 +915,11 @@ end program
         let result = extract(FORTRAN_SOURCE);
         // Two use statements: iso_c_binding and mymod.
         assert_eq!(result.imports.len(), 2, "should extract 2 use statements");
-        let sources: Vec<_> = result.imports.iter().map(|i| i.source_file.as_str()).collect();
+        let sources: Vec<_> = result
+            .imports
+            .iter()
+            .map(|i| i.source_file.as_str())
+            .collect();
         assert!(sources.contains(&"iso_c_binding"));
         assert!(sources.contains(&"mymod"));
     }
@@ -915,7 +927,11 @@ end program
     #[test]
     fn extracts_call_to_my_sub() {
         let result = extract(FORTRAN_SOURCE);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             callees.contains(&"my_sub"),
             "should extract call to my_sub: {:?}",
@@ -980,7 +996,10 @@ end subroutine"#;
         // Plain subroutine without bind(C) -> no externs
         let src = "subroutine my_func(a)\n    integer :: a\nend subroutine\n";
         let result = extract(src);
-        assert!(result.externs.is_empty(), "non-bind(C) should not create extern");
+        assert!(
+            result.externs.is_empty(),
+            "non-bind(C) should not create extern"
+        );
     }
 
     #[test]
@@ -992,7 +1011,11 @@ end subroutine"#;
     integer(c_int) :: y
 end function"#;
         let result = extract(src);
-        assert_eq!(result.externs.len(), 1, "should detect 1 bind(C) FFI on function");
+        assert_eq!(
+            result.externs.len(),
+            1,
+            "should detect 1 bind(C) FFI on function"
+        );
         let ext = &result.externs[0];
         assert_eq!(ext.names, vec!["my_func_c"]);
     }
@@ -1001,12 +1024,23 @@ end function"#;
     fn creates_defines_edges() {
         // B1 fix: CONTAINS emission removed; only DEFINES remains.
         let result = extract(FORTRAN_SOURCE);
-        let defines_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Defines).count();
+        let defines_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Defines)
+            .count();
         let node_count = result.nodes.len();
         assert_eq!(defines_count, node_count);
         // B1 fix verification: no CONTAINS edges should be emitted
-        let contains_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Contains).count();
-        assert_eq!(contains_count, 0, "B1 fix: no CONTAINS edges should be emitted");
+        let contains_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Contains)
+            .count();
+        assert_eq!(
+            contains_count, 0,
+            "B1 fix: no CONTAINS edges should be emitted"
+        );
     }
 
     #[test]
@@ -1026,7 +1060,10 @@ end function"#;
     fn subroutine_has_signature() {
         let result = extract(FORTRAN_SOURCE);
         let my_sub = result.nodes.iter().find(|n| n.name == "my_sub").unwrap();
-        assert!(my_sub.signature.is_some(), "subroutine should have a signature");
+        assert!(
+            my_sub.signature.is_some(),
+            "subroutine should have a signature"
+        );
         assert!(my_sub.signature.as_deref().unwrap().contains("my_sub"));
     }
 
@@ -1041,7 +1078,11 @@ end function"#;
     fn handles_standalone_subroutine() {
         let src = "subroutine foo(a)\n    integer :: a\nend subroutine\n";
         let result = extract(src);
-        let funcs: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Function).collect();
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
         assert_eq!(funcs.len(), 1);
         assert_eq!(funcs[0].name, "foo");
     }
@@ -1050,7 +1091,11 @@ end function"#;
     fn handles_standalone_function() {
         let src = "function bar(x) result(y)\n    integer :: x, y\n    y = x\nend function\n";
         let result = extract(src);
-        let funcs: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Function).collect();
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
         assert_eq!(funcs.len(), 1);
         assert_eq!(funcs[0].name, "bar");
     }
@@ -1300,7 +1345,11 @@ end function"#;
       END SUBROUTINE
 "#;
         let result = extract(src);
-        let calls: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let calls: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             calls.contains(&"SLAMCH"),
             "B10 fix: function call SLAMCH should be extracted: {:?}",
@@ -1320,7 +1369,11 @@ end function"#;
       END SUBROUTINE
 "#;
         let result = extract(src);
-        let calls: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let calls: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             !calls.contains(&"D"),
             "B10 fix: array access D(I) must NOT be extracted as call: {:?}",
@@ -1340,7 +1393,11 @@ end function"#;
       END SUBROUTINE
 "#;
         let result = extract(src);
-        let calls: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let calls: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             !calls.contains(&"D"),
             "array access D(...) should not be a call: {:?}",
@@ -1363,7 +1420,11 @@ end function"#;
       END SUBROUTINE
 "#;
         let result = extract(src);
-        let calls: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let calls: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             calls.contains(&"MAX"),
             "MAX should be captured: {:?}",
@@ -1388,7 +1449,11 @@ end function"#;
       END SUBROUTINE
 "#;
         let result = extract(src);
-        let calls: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let calls: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             calls.contains(&"ABS"),
             "ABS function call should be captured: {:?}",

@@ -756,7 +756,14 @@ mod tests {
         // skips it and continues to the next table.
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function("f1", "demo", "parse", "demo.parse", "/a.rs", 1)],
+            &[sample_function(
+                "f1",
+                "demo",
+                "parse",
+                "demo.parse",
+                "/a.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes");
@@ -771,9 +778,7 @@ mod tests {
         assert!(check.is_err(), "Class table should be gone after DROP");
         let searcher = StructuredSearcher::new(repo.connection());
         // Should still return results from the Function table.
-        let results = searcher
-            .search_by_name("parse", None, 100)
-            .expect("search");
+        let results = searcher.search_by_name("parse", None, 100).expect("search");
         assert!(results.iter().any(|r| r.name == "parse"));
     }
 

@@ -94,7 +94,11 @@ impl FqnGenerator {
         if let Some(d) = disambiguator {
             fqn.push('#');
             for c in d.chars() {
-                fqn.push(if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' });
+                fqn.push(if c.is_ascii_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                });
             }
         }
     }
@@ -150,9 +154,7 @@ impl FqnGenerator {
         // Gated by `lang-python` since it references `Language::Python`
         // (unified-architecture Phase 1).
         #[cfg(feature = "lang-python")]
-        if language == Language::Python
-            && segments.last().is_some_and(|s| s == "__init__.py")
-        {
+        if language == Language::Python && segments.last().is_some_and(|s| s == "__init__.py") {
             segments.pop();
         }
         // Suppress unused-variable warning when lang-python is disabled (the
@@ -222,13 +224,8 @@ mod tests {
 
     #[test]
     fn python_init_py_in_nested_dir() {
-        let fqn = FqnGenerator::generate(
-            "proj",
-            "src/a/b/__init__.py",
-            "Y",
-            Language::Python,
-            None,
-        );
+        let fqn =
+            FqnGenerator::generate("proj", "src/a/b/__init__.py", "Y", Language::Python, None);
         assert_eq!(fqn, "proj.src.a.b.Y");
     }
 
@@ -257,13 +254,8 @@ mod tests {
     #[cfg(feature = "lang-fortran")]
     #[test]
     fn fortran_module_entity() {
-        let fqn = FqnGenerator::generate_for_module(
-            "proj",
-            "src/mod.f90",
-            "mymod",
-            "my_func",
-            None,
-        );
+        let fqn =
+            FqnGenerator::generate_for_module("proj", "src/mod.f90", "mymod", "my_func", None);
         assert_eq!(fqn, "proj.src.mod.f90.mymod.my_func");
     }
 
@@ -283,13 +275,8 @@ mod tests {
     #[cfg(feature = "lang-fortran")]
     #[test]
     fn fortran_module_with_backslash_path() {
-        let fqn = FqnGenerator::generate_for_module(
-            "proj",
-            "src\\physics\\solver.f90",
-            "m",
-            "e",
-            None,
-        );
+        let fqn =
+            FqnGenerator::generate_for_module("proj", "src\\physics\\solver.f90", "m", "e", None);
         assert_eq!(fqn, "proj.src.physics.solver.f90.m.e");
     }
 

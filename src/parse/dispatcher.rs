@@ -8,17 +8,17 @@
 
 use crate::model::Language;
 
-use super::extractor::Extractor;
 #[cfg(feature = "lang-c")]
 use super::c::CExtractor;
+#[cfg(feature = "lang-cpp")]
+use super::cpp::CppExtractor;
+use super::extractor::Extractor;
 #[cfg(feature = "lang-fortran")]
 use super::fortran::FortranExtractor;
 #[cfg(feature = "lang-go")]
 use super::go::GoExtractor;
 #[cfg(feature = "lang-java")]
 use super::java::JavaExtractor;
-#[cfg(feature = "lang-cpp")]
-use super::cpp::CppExtractor;
 #[cfg(feature = "lang-python")]
 use super::python::PythonExtractor;
 #[cfg(feature = "lang-rust")]
@@ -145,10 +145,8 @@ mod tests {
     #[test]
     fn get_extractor_can_be_used_in_collection() {
         let all_langs = Language::all();
-        let extractors: Vec<Box<dyn Extractor>> = all_langs
-            .iter()
-            .map(|&lang| get_extractor(lang))
-            .collect();
+        let extractors: Vec<Box<dyn Extractor>> =
+            all_langs.iter().map(|&lang| get_extractor(lang)).collect();
         assert_eq!(extractors.len(), all_langs.len());
         for (i, lang) in all_langs.iter().enumerate() {
             assert_eq!(extractors[i].language(), *lang);

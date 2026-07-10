@@ -11,13 +11,13 @@ use crate::analysis::complexity::{
     ComplexityAnalyzer, ComplexityEntry, ComplexityThresholds, Severity, SpaceComplexity,
     TimeComplexity,
 };
+use crate::cli::error::CliError;
 #[cfg(feature = "complexity")]
 use crate::kit::{Kit, StorageKey};
 #[cfg(all(feature = "cli", feature = "complexity"))]
 use crate::service::error::kit_not_initialized;
 #[cfg(all(feature = "cli", feature = "complexity"))]
 use crate::service::runtime::kit;
-use crate::cli::error::CliError;
 
 #[cfg(all(feature = "cli", feature = "complexity"))]
 use sdforge::prelude::ApiError;
@@ -130,24 +130,24 @@ fn build_thresholds(
         t.maintainability.2 = maintainability_red;
     }
     if !time_complexity_green.is_empty() {
-        t.time_complexity.0 = TimeComplexity::from_str(time_complexity_green)
-            .map_err(CliError::InvalidInput)?;
+        t.time_complexity.0 =
+            TimeComplexity::from_str(time_complexity_green).map_err(CliError::InvalidInput)?;
     }
     if !time_complexity_yellow.is_empty() {
-        t.time_complexity.1 = TimeComplexity::from_str(time_complexity_yellow)
-            .map_err(CliError::InvalidInput)?;
+        t.time_complexity.1 =
+            TimeComplexity::from_str(time_complexity_yellow).map_err(CliError::InvalidInput)?;
     }
     if !time_complexity_red.is_empty() {
         t.time_complexity.2 =
             TimeComplexity::from_str(time_complexity_red).map_err(CliError::InvalidInput)?;
     }
     if !space_complexity_yellow.is_empty() {
-        t.space_complexity.0 = SpaceComplexity::from_str(space_complexity_yellow)
-            .map_err(CliError::InvalidInput)?;
+        t.space_complexity.0 =
+            SpaceComplexity::from_str(space_complexity_yellow).map_err(CliError::InvalidInput)?;
     }
     if !space_complexity_red.is_empty() {
-        t.space_complexity.1 = SpaceComplexity::from_str(space_complexity_red)
-            .map_err(CliError::InvalidInput)?;
+        t.space_complexity.1 =
+            SpaceComplexity::from_str(space_complexity_red).map_err(CliError::InvalidInput)?;
     }
     Ok(t)
 }
@@ -244,7 +244,7 @@ fn complexity_core(
         });
     }
     if sort_by_severity {
-        filtered.sort_by(|a, b| b.overall_severity.cmp(&a.overall_severity));
+        filtered.sort_by_key(|b| std::cmp::Reverse(b.overall_severity));
     }
     let output = ComplexityOutput {
         project: project.to_string(),
@@ -273,11 +273,10 @@ fn to_api_error(e: CliError) -> ApiError {
 #[cfg(all(feature = "cli", feature = "complexity"))]
 #[allow(clippy::too_many_arguments)]
 #[service_api(
-    name = "codenexus",
+    name = "complexity",
     version = "0.3.2",
-    tool_name = "complexity",
     description = "Analyze AST-based complexity metrics for all functions in a project.",
-    cli = true,
+    cli = true
 )]
 async fn complexity(
     project: String,
@@ -309,7 +308,7 @@ async fn complexity(
 ) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
     complexity_core(
-        &kit,
+        kit,
         &project,
         red_only,
         sort_by_severity,
@@ -405,11 +404,27 @@ mod tests {
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
         create_function_with_content(
-            &kit, "f_simple", "demo", "simple", "demo.simple", "/src/a.rs", 1, 1, "fn simple() {}",
+            &kit,
+            "f_simple",
+            "demo",
+            "simple",
+            "demo.simple",
+            "/src/a.rs",
+            1,
+            1,
+            "fn simple() {}",
         );
         let red_src = "fn red() { if a { if b { if c { if d { if e { if f { if g { if h { if i { if j { if k { if l { if m { if n { if o { if p { if q { if r { if s { if t { if u {} } } } } } } } } } } } } } } } } } } } }";
         create_function_with_content(
-            &kit, "f_red", "demo", "red", "demo.red", "/src/b.rs", 1, 50, red_src,
+            &kit,
+            "f_red",
+            "demo",
+            "red",
+            "demo.red",
+            "/src/b.rs",
+            1,
+            50,
+            red_src,
         );
 
         let storage = kit.require::<StorageKey>().expect("require_storage");
@@ -418,7 +433,11 @@ mod tests {
         let summary = compute_summary(&entries);
         assert_eq!(summary.total, 2, "total functions");
         assert!(summary.green >= 1, "green count: {}", summary.green);
-        assert!(summary.critical >= 1, "critical count: {}", summary.critical);
+        assert!(
+            summary.critical >= 1,
+            "critical count: {}",
+            summary.critical
+        );
 
         let result = complexity_core(
             &kit, "demo", false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
@@ -457,11 +476,27 @@ mod tests {
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
         create_function_with_content(
-            &kit, "f_simple", "demo", "simple", "demo.simple", "/src/a.rs", 1, 1, "fn simple() {}",
+            &kit,
+            "f_simple",
+            "demo",
+            "simple",
+            "demo.simple",
+            "/src/a.rs",
+            1,
+            1,
+            "fn simple() {}",
         );
         let red_src = "fn red() { if a { if b { if c { if d { if e { if f { if g { if h { if i { if j { if k { if l { if m { if n { if o { if p { if q { if r { if s { if t { if u {} } } } } } } } } } } } } } } } } } } }";
         create_function_with_content(
-            &kit, "f_red", "demo", "red", "demo.red", "/src/b.rs", 1, 50, red_src,
+            &kit,
+            "f_red",
+            "demo",
+            "red",
+            "demo.red",
+            "/src/b.rs",
+            1,
+            50,
+            red_src,
         );
 
         let storage = kit.require::<StorageKey>().expect("require_storage");
@@ -508,7 +543,10 @@ mod tests {
             t.time_complexity,
             (TimeComplexity::O1, TimeComplexity::O1, TimeComplexity::ON)
         );
-        assert_eq!(t.space_complexity, (SpaceComplexity::O1, SpaceComplexity::ON2));
+        assert_eq!(
+            t.space_complexity,
+            (SpaceComplexity::O1, SpaceComplexity::ON2)
+        );
     }
 
     #[test]
@@ -527,7 +565,15 @@ mod tests {
         let src = "fn f() { if a {} if b {} if c {} if d {} if e {} \
                    if f {} if g {} if h {} if i {} }";
         create_function_with_content(
-            &kit, "f_thresh", "demo", "f", "demo.f", "/src/lib.rs", 1, 1, src,
+            &kit,
+            "f_thresh",
+            "demo",
+            "f",
+            "demo.f",
+            "/src/lib.rs",
+            1,
+            1,
+            src,
         );
 
         let result = complexity_core(

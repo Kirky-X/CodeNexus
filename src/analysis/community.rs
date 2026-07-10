@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Community detection via the Louvain algorithm (T009, v0.2.0).
+//! Community detection via the Louvain algorithm.
 //!
 //! Identifies functional modules in the call graph by running Louvain
 //! modularity optimization on the `CALLS` edge-induced subgraph. Each
@@ -70,7 +70,7 @@ pub struct Community {
 /// Backed by a `&'a dyn Storage` capability (same pattern as
 /// [`crate::analysis::architecture::ArchitectureAnalyzer`]). The `project`
 /// field is captured at construction time so that [`detect_communities`]
-/// (which takes no `project` argument per the T009 interface contract) can
+/// (which takes no `project` argument per the interface contract) can
 /// filter `CALLS` edges via `WHERE e.project = $project` — required by the
 /// multi-project isolation rule (all queries must scope by `project`).
 ///
@@ -289,7 +289,10 @@ fn louvain(graph: &UnGraph<String, f64>, resolution: f64) -> Vec<usize> {
             .map(|i| {
                 let ni = NodeIndex::new(i);
                 work.edges(ni).map(|e| *e.weight()).sum::<f64>()
-                    + work.edges_connecting(ni, ni).map(|e| *e.weight()).sum::<f64>()
+                    + work
+                        .edges_connecting(ni, ni)
+                        .map(|e| *e.weight())
+                        .sum::<f64>()
             })
             .collect();
 
@@ -337,8 +340,7 @@ fn louvain(graph: &UnGraph<String, f64>, resolution: f64) -> Vec<usize> {
                 // For B = A (staying), Σ_tot,A_after = cur_comm_tot - k_v.
                 let cur_comm_tot_after = cur_comm_tot - k_v;
                 let mut best_comm = v_comm;
-                let mut best_gain =
-                    k_v_in_cur - resolution * k_v * cur_comm_tot_after / m2;
+                let mut best_gain = k_v_in_cur - resolution * k_v * cur_comm_tot_after / m2;
                 for (&c, &k_vc) in &comm_weights {
                     if c == v_comm {
                         continue; // Already computed as the "stay" gain.
@@ -369,15 +371,13 @@ fn louvain(graph: &UnGraph<String, f64>, resolution: f64) -> Vec<usize> {
         // super-node aggregating multiple original nodes; we update
         // partition by mapping orig → work_node → work_comm.
         if _round == 0 {
-            for i in 0..n {
-                partition[i] = work_comm[i];
-            }
+            partition[..n].copy_from_slice(&work_comm[..n]);
         } else {
             // partition[i] currently holds the *super-node id* from the
             // previous round. Replace it with the new community id.
-            for i in 0..n {
-                let prev_super = partition[i];
-                partition[i] = work_comm[prev_super];
+            for slot in partition.iter_mut().take(n) {
+                let prev_super = *slot;
+                *slot = work_comm[prev_super];
             }
         }
 
@@ -457,11 +457,7 @@ fn renumber_communities(partition: &[usize]) -> Vec<usize> {
 /// community `c` (including self-loop contributions), and `m` is the total
 /// edge weight.
 #[cfg(test)]
-fn compute_modularity(
-    graph: &UnGraph<String, f64>,
-    communities: &[usize],
-    resolution: f64,
-) -> f64 {
+fn compute_modularity(graph: &UnGraph<String, f64>, communities: &[usize], resolution: f64) -> f64 {
     let n = graph.node_count();
     if n == 0 || communities.len() != n {
         return 0.0;
@@ -527,10 +523,7 @@ fn compute_modularity(
 ///
 /// Communities are sorted by size descending so the largest module appears
 /// first; ties broken by lexicographic member order for determinism.
-fn build_community_list(
-    graph: &UnGraph<String, f64>,
-    communities: &[usize],
-) -> Vec<Community> {
+fn build_community_list(graph: &UnGraph<String, f64>, communities: &[usize]) -> Vec<Community> {
     use std::collections::HashMap;
     let n = graph.node_count();
     if n == 0 || communities.len() != n {
@@ -692,33 +685,83 @@ mod tests {
     /// communities (the Mr. Hi faction and the Officer faction).
     fn karate_club_graph() -> UnGraph<String, f64> {
         let edges: &[(usize, usize)] = &[
-            (0,1),(0,2),(0,3),(0,4),(0,5),(0,6),(0,7),(0,8),(0,10),(0,11),
-            (0,12),(0,13),(0,17),(0,19),(0,21),(0,31),
-            (1,2),(1,3),(1,7),(1,13),(1,17),(1,19),(1,21),(1,30),
-            (2,3),(2,7),(2,8),(2,9),(2,13),(2,27),(2,28),(2,32),
-            (3,7),(3,12),(3,13),
-            (4,6),(4,10),
-            (5,6),(5,10),(5,16),
-            (6,16),
-            (8,30),(8,32),(8,33),
-            (9,33),
-            (13,33),
-            (14,32),
-            (15,32),(15,33),
-            (18,32),(18,33),
-            (19,33),
-            (20,32),(20,33),
-            (22,32),(22,33),
-            (23,25),(23,27),(23,29),(23,32),(23,33),
-            (24,25),(24,27),(24,31),
-            (25,31),
-            (26,29),(26,33),
-            (27,33),
-            (28,31),(28,33),
-            (29,32),(29,33),
-            (30,32),(30,33),
-            (31,32),(31,33),
-            (32,33),
+            (0, 1),
+            (0, 2),
+            (0, 3),
+            (0, 4),
+            (0, 5),
+            (0, 6),
+            (0, 7),
+            (0, 8),
+            (0, 10),
+            (0, 11),
+            (0, 12),
+            (0, 13),
+            (0, 17),
+            (0, 19),
+            (0, 21),
+            (0, 31),
+            (1, 2),
+            (1, 3),
+            (1, 7),
+            (1, 13),
+            (1, 17),
+            (1, 19),
+            (1, 21),
+            (1, 30),
+            (2, 3),
+            (2, 7),
+            (2, 8),
+            (2, 9),
+            (2, 13),
+            (2, 27),
+            (2, 28),
+            (2, 32),
+            (3, 7),
+            (3, 12),
+            (3, 13),
+            (4, 6),
+            (4, 10),
+            (5, 6),
+            (5, 10),
+            (5, 16),
+            (6, 16),
+            (8, 30),
+            (8, 32),
+            (8, 33),
+            (9, 33),
+            (13, 33),
+            (14, 32),
+            (15, 32),
+            (15, 33),
+            (18, 32),
+            (18, 33),
+            (19, 33),
+            (20, 32),
+            (20, 33),
+            (22, 32),
+            (22, 33),
+            (23, 25),
+            (23, 27),
+            (23, 29),
+            (23, 32),
+            (23, 33),
+            (24, 25),
+            (24, 27),
+            (24, 31),
+            (25, 31),
+            (26, 29),
+            (26, 33),
+            (27, 33),
+            (28, 31),
+            (28, 33),
+            (29, 32),
+            (29, 33),
+            (30, 32),
+            (30, 33),
+            (31, 32),
+            (31, 33),
+            (32, 33),
         ];
         graph_from_edges(edges)
     }
@@ -731,9 +774,7 @@ mod tests {
     fn modularity_of_single_community_is_zero() {
         // A fully-connected K4 graph treated as a single community has
         // modularity Q = 0 (no edges are "unexpected").
-        let g = graph_from_edges(&[
-            (0,1),(0,2),(0,3),(1,2),(1,3),(2,3),
-        ]);
+        let g = graph_from_edges(&[(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]);
         // All nodes in community 0.
         let communities = vec![0; g.node_count()];
         let q = compute_modularity(&g, &communities, 1.0);
@@ -748,12 +789,12 @@ mod tests {
         // Two disjoint K5 cliques → ideal 2-community split → Q ≈ 0.5.
         let mut edges: Vec<(usize, usize)> = Vec::new();
         for i in 0..5 {
-            for j in (i+1)..5 {
+            for j in (i + 1)..5 {
                 edges.push((i, j));
             }
         }
         for i in 5..10 {
-            for j in (i+1)..10 {
+            for j in (i + 1)..10 {
                 edges.push((i, j));
             }
         }
@@ -761,10 +802,7 @@ mod tests {
         // Community 0 = nodes 0..5, community 1 = nodes 5..10.
         let communities: Vec<usize> = (0..10).map(|i| if i < 5 { 0 } else { 1 }).collect();
         let q = compute_modularity(&g, &communities, 1.0);
-        assert!(
-            q > 0.3,
-            "two disconnected K5 cliques → Q > 0.3, got {q}"
-        );
+        assert!(q > 0.3, "two disconnected K5 cliques → Q > 0.3, got {q}");
     }
 
     #[test]
@@ -773,12 +811,12 @@ mod tests {
         // communities, each with 5 members.
         let mut edges: Vec<(usize, usize)> = Vec::new();
         for i in 0..5 {
-            for j in (i+1)..5 {
+            for j in (i + 1)..5 {
                 edges.push((i, j));
             }
         }
         for i in 5..10 {
-            for j in (i+1)..10 {
+            for j in (i + 1)..10 {
                 edges.push((i, j));
             }
         }
@@ -812,9 +850,7 @@ mod tests {
     #[test]
     fn detect_fully_connected_graph_returns_one_community() {
         // K4: all nodes call each other → 1 community.
-        let g = graph_from_edges(&[
-            (0,1),(0,2),(0,3),(1,2),(1,3),(2,3),
-        ]);
+        let g = graph_from_edges(&[(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]);
         let assignment = louvain(&g, 1.0);
         let list = build_community_list(&g, &assignment);
         assert_eq!(list.len(), 1, "fully connected → 1 community");

@@ -98,32 +98,50 @@ impl<'a> ImportResolver<'a> {
             // result.file_path is absolute in production (e.g.
             // /home/dev/.../src/lib.rs) but file_index keys are relative
             // (e.g. `src/lib.rs`). find_file_in_index handles this mismatch.
-            let (source_file_id, importer_rel_path) = match find_file_in_index(&file_index, &result.file_path) {
+            let (source_file_id, importer_rel_path) = match find_file_in_index(
+                &file_index,
+                &result.file_path,
+            ) {
                 Some((id, rel)) => (id, rel),
                 None => {
                     // Single-line for coverage: tarpaulin attribute continuation
-                    warn!(file = %result.file_path, "IMPORTS source File node not found in graph; skipping imports for this file"); continue;
+                    warn!(file = %result.file_path, "IMPORTS source File node not found in graph; skipping imports for this file");
+                    continue;
                 }
             };
 
             for import in &result.imports {
                 // Single-line for coverage: tarpaulin attribute continuation
-                if import.source_file.is_empty() { continue; }
+                if import.source_file.is_empty() {
+                    continue;
+                }
                 // Single-line for coverage: tarpaulin attribute continuation
-                let target_file_id = match resolve_import_target(&import.source_file, &importer_rel_path, &file_index) {
+                let target_file_id = match resolve_import_target(
+                    &import.source_file,
+                    &importer_rel_path,
+                    &file_index,
+                ) {
                     Some(id) => id,
                     None => {
                         // Single-line for coverage: tarpaulin attribute continuation
-                        warn!(import = %import.source_file, importer = %result.file_path, line = import.line, "IMPORTS target unresolved (external module or missing file); skipping"); continue;
+                        warn!(import = %import.source_file, importer = %result.file_path, line = import.line, "IMPORTS target unresolved (external module or missing file); skipping");
+                        continue;
                     }
                 };
 
                 let pair_key = (source_file_id.clone(), target_file_id.clone());
                 // Single-line for coverage: tarpaulin attribute continuation
-                if !seen_pairs.insert(pair_key) { continue; }
+                if !seen_pairs.insert(pair_key) {
+                    continue;
+                }
 
                 // Single-line for coverage: tarpaulin attribute continuation
-                let edge = Edge::builder(source_file_id.clone(), target_file_id, EdgeType::Imports, self.project)
+                let edge = Edge::builder(
+                    source_file_id.clone(),
+                    target_file_id,
+                    EdgeType::Imports,
+                    self.project,
+                )
                 .confidence(CONFIDENCE_IMPORTS)
                 .confidence_tier(ConfidenceTier::ImportScoped)
                 .start_line(import.line)
@@ -189,10 +207,10 @@ fn find_file_in_index(
         let rel_norm = rel.replace('\\', "/");
         if path_norm.ends_with(rel_norm.as_str()) {
             let prefix_len = path_norm.len() - rel_norm.len();
-            if prefix_len == 0 || path_norm.as_bytes()[prefix_len - 1] == b'/' {
-                if best.as_ref().map_or(true, |(r, _)| rel.len() > r.len()) {
-                    best = Some((rel, id));
-                }
+            if (prefix_len == 0 || path_norm.as_bytes()[prefix_len - 1] == b'/')
+                && best.as_ref().is_none_or(|(r, _)| rel.len() > r.len())
+            {
+                best = Some((rel, id));
             }
         }
     }
@@ -296,7 +314,10 @@ fn resolve_include_suffix(
     file_index: &HashMap<String, String>,
 ) -> Option<String> {
     let path_norm = include_path.replace('\\', "/");
-    let importer_dir = importer_path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+    let importer_dir = importer_path
+        .rsplit_once('/')
+        .map(|(dir, _)| dir)
+        .unwrap_or("");
 
     let mut same_dir: Option<(&String, &String)> = None;
     let mut other: Option<(&String, &String)> = None;
@@ -309,12 +330,12 @@ fn resolve_include_suffix(
                 let match_dir = rel_norm.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
                 if match_dir == importer_dir {
                     // Same directory — pick shortest path for determinism.
-                    if same_dir.as_ref().map_or(true, |(r, _)| r.len() > rel.len()) {
+                    if same_dir.as_ref().is_none_or(|(r, _)| r.len() > rel.len()) {
                         same_dir = Some((rel, id));
                     }
                 } else {
                     // Other directory — pick shortest path (closest to root).
-                    if other.as_ref().map_or(true, |(r, _)| r.len() > rel.len()) {
+                    if other.as_ref().is_none_or(|(r, _)| r.len() > rel.len()) {
                         other = Some((rel, id));
                     }
                 }
@@ -954,7 +975,11 @@ mod tests {
         let resolver = ImportResolver::new("proj");
         let edges = resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "crate:: prefix should resolve to src/model.rs");
+        assert_eq!(
+            edges.len(),
+            1,
+            "crate:: prefix should resolve to src/model.rs"
+        );
         assert_eq!(edges[0].source, "src/lib.rs");
         assert_eq!(edges[0].target, "src/model.rs");
     }
@@ -1097,7 +1122,11 @@ mod tests {
         let resolver = ImportResolver::new("proj");
         let edges = resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "super:: with symbol should strip last component");
+        assert_eq!(
+            edges.len(),
+            1,
+            "super:: with symbol should strip last component"
+        );
         assert_eq!(edges[0].target, "src/model.rs");
     }
 
@@ -1204,7 +1233,10 @@ mod tests {
         index.insert("src/lib.rs".to_string(), "id-lib".to_string());
 
         let result = find_file_in_index(&index, "src/lib.rs");
-        assert_eq!(result, Some(("id-lib".to_string(), "src/lib.rs".to_string())));
+        assert_eq!(
+            result,
+            Some(("id-lib".to_string(), "src/lib.rs".to_string()))
+        );
     }
 
     #[test]
@@ -1214,7 +1246,10 @@ mod tests {
         index.insert("src/lib.rs".to_string(), "id-lib".to_string());
 
         let result = find_file_in_index(&index, "/home/dev/projects/CodeNexus/src/lib.rs");
-        assert_eq!(result, Some(("id-lib".to_string(), "src/lib.rs".to_string())));
+        assert_eq!(
+            result,
+            Some(("id-lib".to_string(), "src/lib.rs".to_string()))
+        );
     }
 
     #[test]
@@ -1224,7 +1259,10 @@ mod tests {
         index.insert("xsrc/lib.rs".to_string(), "id-xlib".to_string());
 
         let result = find_file_in_index(&index, "/home/dev/projects/CodeNexus/src/lib.rs");
-        assert_eq!(result, None, "xsrc/lib.rs should not suffix-match src/lib.rs");
+        assert_eq!(
+            result, None,
+            "xsrc/lib.rs should not suffix-match src/lib.rs"
+        );
     }
 
     #[test]
@@ -1314,7 +1352,11 @@ mod tests {
         let resolver = ImportResolver::new("proj");
         let edges = resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "absolute importer + relative TS import should resolve");
+        assert_eq!(
+            edges.len(),
+            1,
+            "absolute importer + relative TS import should resolve"
+        );
         assert_eq!(edges[0].source, "src/a.ts");
         assert_eq!(edges[0].target, "src/b.ts");
     }
@@ -1548,7 +1590,10 @@ mod tests {
         let results = vec![importer_result];
 
         let mut graph = Graph::new();
-        graph.add_node(make_file_node("src/com/google/gson/GsonBuilder.java", "proj"));
+        graph.add_node(make_file_node(
+            "src/com/google/gson/GsonBuilder.java",
+            "proj",
+        ));
         graph.add_node(make_file_node("src/com/google/gson/Gson.java", "proj"));
 
         let resolver = ImportResolver::new("proj");
@@ -1576,10 +1621,14 @@ mod tests {
         let results = vec![importer_result];
 
         let mut graph = Graph::new();
-        graph.add_node(make_file_node("gson/src/main/java/com/google/gson/Gson.java", "proj"));
-        graph.add_node(
-            make_file_node("gson/src/main/java/com/google/gson/JsonElement.java", "proj"),
-        );
+        graph.add_node(make_file_node(
+            "gson/src/main/java/com/google/gson/Gson.java",
+            "proj",
+        ));
+        graph.add_node(make_file_node(
+            "gson/src/main/java/com/google/gson/JsonElement.java",
+            "proj",
+        ));
 
         let resolver = ImportResolver::new("proj");
         let edges = resolver.resolve_imports(&results, &mut graph);

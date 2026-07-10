@@ -153,15 +153,14 @@ fn to_api_error(e: CliError) -> ApiError {
 /// CLI wrapper — reads stdin, prints the decision as JSON.
 #[cfg(feature = "cli")]
 #[service_api(
-    name = "codenexus",
+    name = "hook",
     version = "0.3.2",
-    tool_name = "hook",
     description = "Read a git hook payload from stdin and emit a JSON decision.",
-    cli = true,
+    cli = true
 )]
 async fn hook() -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    run(&kit).map_err(to_api_error)
+    run(kit).map_err(to_api_error)
 }
 
 #[cfg(test)]
@@ -199,10 +198,14 @@ mod tests {
     #[test]
     fn build_decision_read_tool_returns_noop_pass() {
         let kit = fresh_kit();
-        let raw = r#"{"tool_name":"Read","tool_input":{"path":"/etc/passwd"},"phase":"PreToolUse"}"#;
+        let raw =
+            r#"{"tool_name":"Read","tool_input":{"path":"/etc/passwd"},"phase":"PreToolUse"}"#;
         let decision = build_decision(&kit, raw);
         assert_eq!(decision.decision, "pass");
-        assert!(decision.summary.is_none(), "Read must not produce a summary");
+        assert!(
+            decision.summary.is_none(),
+            "Read must not produce a summary"
+        );
     }
 
     #[test]
@@ -235,20 +238,20 @@ mod tests {
     fn build_decision_post_tool_use_rename_emits_summary() {
         let kit = fresh_kit();
         let storage = kit.require::<StorageKey>().expect("require_storage");
-        let node = crate::model::Node::builder(
-            crate::model::NodeLabel::Function,
-            "parse",
-            "demo.parse",
-        )
-        .id("f1")
-        .project("demo")
-        .file_path("/src/a.rs")
-        .start_line(1)
-        .end_line(5)
-        .language(crate::model::Language::Rust)
-        .build();
+        let node =
+            crate::model::Node::builder(crate::model::NodeLabel::Function, "parse", "demo.parse")
+                .id("f1")
+                .project("demo")
+                .file_path("/src/a.rs")
+                .start_line(1)
+                .end_line(5)
+                .language(crate::model::Language::Rust)
+                .build();
         storage
-            .save_nodes(std::slice::from_ref(&node), crate::model::NodeLabel::Function)
+            .save_nodes(
+                std::slice::from_ref(&node),
+                crate::model::NodeLabel::Function,
+            )
             .expect("save_nodes");
         let raw = r#"{"tool_name":"codenexus rename","tool_input":{"from":"parse","to":"parse_file"},"phase":"PostToolUse"}"#;
         let decision = build_decision(&kit, raw);
@@ -308,18 +311,14 @@ mod tests {
     // --- summarize_rename risk classification ---
 
     fn fn_node(id: &str) -> crate::model::Node {
-        crate::model::Node::builder(
-            crate::model::NodeLabel::Function,
-            id,
-            &format!("demo.{id}"),
-        )
-        .id(id)
-        .project("demo")
-        .file_path("/src/demo.rs")
-        .start_line(1)
-        .end_line(10)
-        .language(crate::model::Language::Rust)
-        .build()
+        crate::model::Node::builder(crate::model::NodeLabel::Function, id, &format!("demo.{id}"))
+            .id(id)
+            .project("demo")
+            .file_path("/src/demo.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(crate::model::Language::Rust)
+            .build()
     }
 
     #[test]

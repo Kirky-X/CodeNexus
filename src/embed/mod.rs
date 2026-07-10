@@ -145,9 +145,7 @@ impl EmbeddingConfig {
         let api_key = std::env::var(API_KEY_ENV)
             .or_else(|_| std::env::var(OPENAI_API_KEY_ENV))
             .ok();
-        let model_path = std::env::var(EMBED_MODEL_PATH_ENV)
-            .ok()
-            .map(PathBuf::from);
+        let model_path = std::env::var(EMBED_MODEL_PATH_ENV).ok().map(PathBuf::from);
         Self {
             endpoint,
             api_key,
@@ -265,10 +263,7 @@ mod tests {
     #[test]
     fn config_default_resolves_default_model_path() {
         let cfg = EmbeddingConfig::default();
-        assert_eq!(
-            cfg.resolved_model_path(),
-            PathBuf::from(DEFAULT_MODEL_PATH)
-        );
+        assert_eq!(cfg.resolved_model_path(), PathBuf::from(DEFAULT_MODEL_PATH));
         assert_eq!(
             cfg.resolved_tokenizer_path(),
             PathBuf::from("assets/tokenizer.json")
@@ -339,7 +334,10 @@ mod tests {
         std::env::remove_var(API_KEY_ENV);
         std::env::remove_var(OPENAI_API_KEY_ENV);
         let cfg = EmbeddingConfig::from_env();
-        assert!(cfg.is_remote(), "setting endpoint should enable remote mode");
+        assert!(
+            cfg.is_remote(),
+            "setting endpoint should enable remote mode"
+        );
         assert_eq!(
             cfg.endpoint.as_deref(),
             Some("https://custom.example.com/v1")
@@ -363,7 +361,10 @@ mod tests {
     fn config_from_env_defaults_to_local_when_endpoint_unset() {
         std::env::remove_var(EMBED_ENDPOINT_ENV);
         let cfg = EmbeddingConfig::from_env();
-        assert!(cfg.is_local(), "should default to local when endpoint unset");
+        assert!(
+            cfg.is_local(),
+            "should default to local when endpoint unset"
+        );
     }
 
     #[test]

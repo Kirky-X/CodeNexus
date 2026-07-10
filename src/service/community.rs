@@ -43,11 +43,10 @@ fn to_api_error(e: CliError) -> ApiError {
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "community"))]
 #[service_api(
-    name = "codenexus",
+    name = "community",
     version = "0.3.2",
-    tool_name = "community",
     description = "Detect communities in the CALLS graph via Louvain modularity optimization.",
-    cli = true,
+    cli = true
 )]
 async fn community(project: String, resolution: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
@@ -57,11 +56,13 @@ async fn community(project: String, resolution: String) -> Result<(), ApiError> 
 
     let mut detector = CommunityDetector::new(&*storage, &project);
     if !resolution.is_empty() {
-        let res = resolution.parse::<f64>().map_err(|_| ApiError::InvalidInput {
-            message: format!("invalid resolution '{resolution}' (expected a positive number)"),
-            field: Some("resolution".to_string()),
-            value: Some(Value::String(resolution)),
-        })?;
+        let res = resolution
+            .parse::<f64>()
+            .map_err(|_| ApiError::InvalidInput {
+                message: format!("invalid resolution '{resolution}' (expected a positive number)"),
+                field: Some("resolution".to_string()),
+                value: Some(Value::String(resolution)),
+            })?;
         detector = detector.with_resolution(res);
     }
     let communities = detector
@@ -72,8 +73,8 @@ async fn community(project: String, resolution: String) -> Result<(), ApiError> 
         resolution: detector.resolution(),
         communities,
     };
-    let json = serde_json::to_string(&output)
-        .map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let json =
+        serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }
@@ -145,7 +146,11 @@ mod tests {
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create edge");
         let result = community_core(&kit, "demo", Some(2.0));
-        assert!(result.is_ok(), "run with resolution should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "run with resolution should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]

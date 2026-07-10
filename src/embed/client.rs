@@ -28,9 +28,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-use super::{
-    EmbedError, EmbeddingConfig, Result, EMBEDDING_DIM, EMBED_MODEL_PATH_ENV,
-};
+use super::{EmbedError, EmbeddingConfig, Result, EMBEDDING_DIM, EMBED_MODEL_PATH_ENV};
 
 /// Trait for embedding text into dense vectors.
 ///
@@ -152,11 +150,9 @@ impl EmbedClient for OpenAIEmbedClient {
 
         // endpoint is guaranteed Some by new(), but use as_deref().unwrap_or
         // for defensive programming (avoids panic if config was mutated).
-        let endpoint = self
-            .config
-            .endpoint
-            .as_deref()
-            .ok_or_else(|| EmbedError::Unavailable("endpoint is None in remote mode".to_string()))?;
+        let endpoint = self.config.endpoint.as_deref().ok_or_else(|| {
+            EmbedError::Unavailable("endpoint is None in remote mode".to_string())
+        })?;
         let url = format!("{endpoint}/embeddings");
         let body = EmbeddingRequest {
             model: &self.config.model,
@@ -349,9 +345,10 @@ impl EmbedClient for LocalEmbedClient {
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         let mut results = Vec::with_capacity(texts.len());
         for text in texts {
-            let encoding = self.tokenizer.encode(*text, true).map_err(|e| {
-                EmbedError::Unavailable(format!("tokenization failed: {e}"))
-            })?;
+            let encoding = self
+                .tokenizer
+                .encode(*text, true)
+                .map_err(|e| EmbedError::Unavailable(format!("tokenization failed: {e}")))?;
 
             let input_ids = encoding.get_ids();
             let attention_mask = encoding.get_attention_mask();
@@ -396,9 +393,10 @@ impl EmbedClient for LocalEmbedClient {
                 .map_err(|e| EmbedError::Unavailable(format!("token_type_ids value: {e}")))?;
 
             // Run inference — Session::run requires &mut self, so lock the mutex.
-            let mut session = self.session.lock().map_err(|e| {
-                EmbedError::Unavailable(format!("session mutex poisoned: {e}"))
-            })?;
+            let mut session = self
+                .session
+                .lock()
+                .map_err(|e| EmbedError::Unavailable(format!("session mutex poisoned: {e}")))?;
 
             // `ort::inputs!` returns `[SessionInputValue; N]` directly (not a
             // Result) when all inputs are already `&Value` references.
@@ -729,7 +727,10 @@ mod tests {
         let result = LocalEmbedClient::new(&cfg);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("not found"), "error should mention 'not found': {msg}");
+        assert!(
+            msg.contains("not found"),
+            "error should mention 'not found': {msg}"
+        );
         assert!(
             msg.contains("/nonexistent/model.onnx"),
             "error should mention the path: {msg}"
@@ -750,10 +751,8 @@ mod tests {
         // Shape: [1, 3, 2] — 3 tokens, 2 hidden dims. Flat row-major data.
         let hidden_data = vec![
             // token 0 (masked in)
-            1.0, 2.0,
-            // token 1 (masked out)
-            100.0, 200.0,
-            // token 2 (masked in)
+            1.0, 2.0, // token 1 (masked out)
+            100.0, 200.0, // token 2 (masked in)
             3.0, 4.0,
         ];
         let attention_mask = vec![1u32, 0u32, 1u32];

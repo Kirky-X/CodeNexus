@@ -44,7 +44,11 @@ impl<'a> CypherExecutor<'a> {
         let (columns, rows) = self.conn.query_with_columns(cypher)?;
         let duration_ms = start.elapsed().as_millis().min(u64::MAX as u128) as u64;
         // Single-line for coverage: tarpaulin attribute continuation
-        Ok(QueryResult { columns, rows, duration_ms })
+        Ok(QueryResult {
+            columns,
+            rows,
+            duration_ms,
+        })
     }
 }
 

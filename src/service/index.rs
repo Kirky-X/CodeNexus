@@ -8,7 +8,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::index::IndexResult;
-use crate::kit::{IndexerKey, StorageConfigKey};
+use crate::kit::{IndexerKey, Kit, StorageConfigKey};
 use crate::service::error::{kit_not_initialized, wrap_error};
 use crate::service::runtime::kit;
 use crate::storage::{QualityChecker, Repository};
@@ -44,9 +44,11 @@ impl From<IndexResult> for IndexOutput {
 
 /// LSP-driven `semantic_type` enhancement.
 ///
-/// Duplicates `crate::cli::index_cmd::enhance_with_lsp` because that function
-/// is private. Failures degrade gracefully to pure tree-sitter extraction.
+/// Spawns `rust-analyzer`, queries each Rust symbol's hover info, and writes
+/// the extracted type signature back to the node's `semantic_type` property.
+/// Failures degrade gracefully to pure tree-sitter extraction.
 #[cfg(feature = "lsp")]
+#[allow(clippy::result_large_err)]
 fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Result<(), ApiError> {
     use crate::lsp::{LspError, LspProvider, RustAnalyzerClient};
     use crate::storage::schema::escape_cypher_string;
@@ -54,9 +56,7 @@ fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Resul
     let client = RustAnalyzerClient::new();
 
     if let Err(LspError::ServerStart(msg)) = client.start(workspace) {
-        eprintln!(
-            "[warn] LSP server start failed, degrading to pure tree-sitter: {msg}"
-        );
+        eprintln!("[warn] LSP server start failed, degrading to pure tree-sitter: {msg}");
         return Ok(());
     }
 
@@ -75,10 +75,12 @@ fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Resul
     ];
     let mut rows = Vec::new();
     for q in &queries {
-        let r = repo
-            .connection()
-            .query(q)
-            .map_err(|e| wrap_error("LSP query failed", crate::storage::StorageError::Query(e.to_string())))?;
+        let r = repo.connection().query(q).map_err(|e| {
+            wrap_error(
+                "LSP query failed",
+                crate::storage::StorageError::Query(e.to_string()),
+            )
+        })?;
         rows.extend(r);
     }
 
@@ -137,68 +139,45 @@ fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Resul
         }
     }
 
-    eprintln!(
-        "[info] LSP enhancement: {enhanced} symbol(s) enhanced, {skipped} skipped"
-    );
+    eprintln!("[info] LSP enhancement: {enhanced} symbol(s) enhanced, {skipped} skipped");
 
     let _ = client.shutdown();
     Ok(())
 }
 
-/// CLI wrapper — prints result to stdout as JSON.
-//
-// The Kit is stored in a static `OnceLock` (see `runtime::kit`), so it will
-// never be dropped during the process lifetime. This is functionally
-// equivalent to the `std::mem::forget(kit)` call in `main.rs` — the stale
-// Storage/Query/Trace connections opened at boot never get a chance to
-// checkpoint over the indexer's writes.
+/// Core index pipeline: indexer + DQ checks + CHECKPOINT + optional LSP.
+///
+/// Separated from the `#[service_api]` function for reuse by `import.rs`
+/// reindex logic. Returns the [`IndexOutput`] without printing it — the
+/// caller decides whether to serialize to stdout.
 #[cfg(feature = "cli")]
-#[service_api(
-    name = "codenexus",
-    version = "0.3.2",
-    tool_name = "index",
-    description = "Index a codebase into the knowledge graph.",
-    cli = true,
-)]
-async fn index(
-    path: String,
-    name: String,
+#[allow(clippy::result_large_err)]
+pub(crate) fn index_core(
+    kit: &Kit,
+    db_path: &Path,
+    path: &str,
+    name: &str,
     force: bool,
     lsp: bool,
-    embed: bool,
     ram_first: bool,
-) -> Result<(), ApiError> {
-    if embed {
-        eprintln!(
-            "[warn] --embed flag is deprecated; embedding is controlled by \
-             the `embed` cargo feature (rebuild with --features embed to enable)"
-        );
-    }
-
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let storage_config = kit
-        .config::<StorageConfigKey>()
-        .map_err(|e| wrap_error("Failed to resolve storage config", e))?;
-    let storage_config = storage_config.load();
-    let db_path = storage_config.db_path.clone();
-
-    let path_ref = Path::new(&path);
+) -> Result<IndexOutput, ApiError> {
+    let path_ref = Path::new(path);
     let indexer = kit
         .require::<IndexerKey>()
         .map_err(|e| wrap_error("Failed to resolve indexer capability", e))?;
     let result = if ram_first {
         indexer
-            .index_ram_first(path_ref, &name, force)
+            .index_ram_first(path_ref, name, force)
             .map_err(|e| wrap_error("Index (RAM-first) failed", e))?
     } else {
         indexer
-            .index(path_ref, &name, force)
+            .index(path_ref, name, force)
             .map_err(|e| wrap_error("Index failed", e))?
     };
 
     // Open a FRESH Repository for DQ checks — the Kit's Storage connection
     // was opened at boot (before indexing) and holds a stale MVCC snapshot.
-    let fresh_repo = Repository::open(&db_path)
+    let fresh_repo = Repository::open(db_path)
         .map_err(|e| wrap_error("Failed to open fresh repository for DQ checks", e))?;
     let checker = QualityChecker::new(&fresh_repo);
     let dq_report = checker
@@ -224,14 +203,53 @@ async fn index(
     // R-lsp-004: LSP-enhanced semantic_type extraction.
     #[cfg(feature = "lsp")]
     if lsp {
-        if let Err(err) = enhance_with_lsp(path_ref, &fresh_repo, &name) {
+        if let Err(err) = enhance_with_lsp(path_ref, &fresh_repo, name) {
             eprintln!("[warn] LSP enhancement aborted: {err}");
         }
     }
 
-    let output = IndexOutput::from(result);
-    let json = serde_json::to_string(&output)
-        .map_err(|e| wrap_error("JSON serialization failed", e))?;
+    Ok(IndexOutput::from(result))
+}
+
+/// CLI wrapper — prints result to stdout as JSON.
+//
+// The Kit is stored in a static `OnceLock` (see `runtime::kit`), so it will
+// never be dropped during the process lifetime. This is functionally
+// equivalent to the `std::mem::forget(kit)` call in `main.rs` — the stale
+// Storage/Query/Trace connections opened at boot never get a chance to
+// checkpoint over the indexer's writes.
+#[cfg(feature = "cli")]
+#[service_api(
+    name = "index",
+    version = "0.3.2",
+    description = "Index a codebase into the knowledge graph.",
+    cli = true
+)]
+async fn index(
+    path: String,
+    name: String,
+    force: bool,
+    lsp: bool,
+    embed: bool,
+    ram_first: bool,
+) -> Result<(), ApiError> {
+    if embed {
+        eprintln!(
+            "[warn] --embed flag is deprecated; embedding is controlled by \
+             the `embed` cargo feature (rebuild with --features embed to enable)"
+        );
+    }
+
+    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let storage_config = kit
+        .config::<StorageConfigKey>()
+        .map_err(|e| wrap_error("Failed to resolve storage config", e))?;
+    let storage_config = storage_config.load();
+    let db_path = storage_config.db_path.clone();
+
+    let output = index_core(kit, &db_path, &path, &name, force, lsp, ram_first)?;
+    let json =
+        serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }

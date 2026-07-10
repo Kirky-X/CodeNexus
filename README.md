@@ -181,6 +181,8 @@ codenexus clean myproject
 | `api-tool-map` | 工具映射（MCP 工具清单，`api-review` feature） |
 | `community` | 社区检测（Louvain 模块度优化，`community` feature） |
 | `cross-service` | 跨服务调用链检测（HTTP 路由模式匹配，`cross-service` feature） |
+| `lsp-goto-def` | LSP 定义跳转（rust-analyzer 集成，`lsp` feature） |
+| `lsp-hover` | LSP 悬停信息（rust-analyzer 集成，`lsp` feature） |
 
 ## MCP 集成
 
@@ -275,12 +277,12 @@ codenexus complexity myproject --time-complexity-green "O(1)" --time-complexity-
 
 | 层 | 入口 | 说明 |
 |----|------|------|
-| Rust SDK | `src/lib.rs` | 库 crate，暴露公共 API（模型/解析/存储/索引/查询/追踪/CLI 模块） |
-| CLI 二进制 | `src/main.rs` | 使用 lib 的命令行入口，dispatch 到 `cli::*_cmd::run` 处理器 |
-| MCP 服务器 | `src/mcp/mod.rs` | sdforge-based MCP 协议暴露，位于二进制内，由 `mcp` feature 门控 |
+| Rust SDK | `src/lib.rs` | 库 crate，暴露公共 API（模型/解析/存储/索引/查询/追踪/service 模块） |
+| CLI 二进制 | `src/main.rs` | 使用 sdforge `CliBuilder` + `inventory` 分发到 `service::*` 处理器 |
+| MCP 服务器 | `src/service/` | sdforge `#[service_api]` 宏统一暴露 CLI 和 MCP 接口，由 `cli`/`mcp` feature 门控 |
 
-> v0.3.0 起，MCP 服务器基于 sdforge 的 `#[service_api]` 宏 + rmcp stdio 传输，
-> 替代了此前 `src/cli/mcp_cmd.rs` 中的手写 JSON-RPC 实现（该文件已删除）。
+> v0.3.2 起，CLI 和 MCP 接口通过 sdforge 的 `#[service_api]` 宏统一封装在 `src/service/` 模块中，
+> 每个命令定义 core 函数 + CLI wrapper + MCP wrapper，替代了此前的 `src/cli/*_cmd.rs` 和 `src/mcp/` 模块。
 
 ### 索引管线
 
@@ -347,7 +349,7 @@ cargo bench
 
 ## 路线图
 
-CodeNexus 当前版本 v0.3.0。按当前优先级排序的规划工作：
+CodeNexus 当前版本 v0.3.2。按当前优先级排序的规划工作：
 
 - [x] v0.1.0 — 多语言索引（C/Rust/Fortran/Python/TypeScript）、图模式（44 种节点类型 + 24 种边类型）、`query`/`trace`/`impact`/`context`/`search`、增量索引、RAM 优先模式、MCP 服务、团队 `export`/`import`、守护进程模式、置信度分层、歧义消解
 - [x] v0.1.x — 稳定性与性能加固：增量重索引覆盖、大仓库内存调优、更多语言专属边提取

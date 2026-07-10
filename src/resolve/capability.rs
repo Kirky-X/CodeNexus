@@ -24,8 +24,7 @@ use super::symbol_table::ProjectSymbolTable;
 /// [`resolve_all`](super::resolve_all).
 pub trait Resolver: Send + Sync {
     /// Builds a project-level symbol table from extraction results.
-    fn build_symbol_table(&self, results: &[ExtractResult], project: &str)
-        -> ProjectSymbolTable;
+    fn build_symbol_table(&self, results: &[ExtractResult], project: &str) -> ProjectSymbolTable;
 
     /// Resolves all symbols (calls + dataflows + FFI), adding edges to
     /// `graph`. Returns the resolved edges.

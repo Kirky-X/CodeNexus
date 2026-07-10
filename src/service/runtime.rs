@@ -19,7 +19,8 @@ static KIT: OnceLock<Arc<Kit>> = OnceLock::new();
 ///
 /// Returns `Err` if the Kit has already been initialized (OnceLock is set-once).
 pub fn init_kit(kit: Kit) -> Result<(), String> {
-    KIT.set(Arc::new(kit)).map_err(|_| "Kit already initialized".to_string())
+    KIT.set(Arc::new(kit))
+        .map_err(|_| "Kit already initialized".to_string())
 }
 
 /// Returns the global Kit instance if initialized, or `None` if [`init_kit`]

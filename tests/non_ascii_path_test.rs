@@ -32,7 +32,11 @@ fn test_chinese_directory_name() {
     let db = tmp.path().join("测试.db");
     let facade = IndexFacade::new(&db).expect("facade");
     let result = facade.index(&chinese_dir, "中文项目", false);
-    assert!(result.is_ok(), "indexing Chinese path should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "indexing Chinese path should succeed: {:?}",
+        result.err()
+    );
     let result = result.unwrap();
     assert_eq!(result.files_indexed, 1);
 }
@@ -46,7 +50,11 @@ fn test_chinese_file_name() {
     let db = tmp.path().join("test.db");
     let facade = IndexFacade::new(&db).expect("facade");
     let result = facade.index(tmp.path(), "test", false);
-    assert!(result.is_ok(), "indexing Chinese filename should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "indexing Chinese filename should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -59,7 +67,11 @@ fn test_japanese_directory_name() {
     let db = tmp.path().join("test.db");
     let facade = IndexFacade::new(&db).expect("facade");
     let result = facade.index(&japanese_dir, "プロジェクト", false);
-    assert!(result.is_ok(), "indexing Japanese path should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "indexing Japanese path should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -72,7 +84,11 @@ fn test_korean_directory_name() {
     let db = tmp.path().join("test.db");
     let facade = IndexFacade::new(&db).expect("facade");
     let result = facade.index(&korean_dir, "프로젝트", false);
-    assert!(result.is_ok(), "indexing Korean path should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "indexing Korean path should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -86,9 +102,17 @@ fn test_mixed_ascii_and_non_ascii_paths() {
     let db = tmp.path().join("test.db");
     let facade = IndexFacade::new(&db).expect("facade");
     let result = facade.index(tmp.path(), "mixed", false);
-    assert!(result.is_ok(), "indexing mixed paths should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "indexing mixed paths should succeed: {:?}",
+        result.err()
+    );
     let result = result.unwrap();
-    assert!(result.files_indexed >= 3, "should index at least 3 files, got {}", result.files_indexed);
+    assert!(
+        result.files_indexed >= 3,
+        "should index at least 3 files, got {}",
+        result.files_indexed
+    );
 }
 
 #[test]
@@ -99,7 +123,11 @@ fn test_unicode_project_name() {
     let db = tmp.path().join("test.db");
     let facade = IndexFacade::new(&db).expect("facade");
     let result = facade.index(tmp.path(), "プロジェクト_中文_한국어", false);
-    assert!(result.is_ok(), "Unicode project name should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Unicode project name should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -111,7 +139,11 @@ fn test_non_ascii_db_path() {
     let db = tmp.path().join("数据库.lbug");
     let facade = IndexFacade::new(&db).expect("facade");
     let result = facade.index(tmp.path(), "test", false);
-    assert!(result.is_ok(), "non-ASCII db path should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "non-ASCII db path should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -126,8 +158,16 @@ fn test_walker_discovers_non_ascii_paths() {
     assert_eq!(files.len(), 2, "should discover both files");
     // Verify paths contain the non-ASCII characters
     let paths: Vec<String> = files.iter().map(|f| f.relative_path.clone()).collect();
-    assert!(paths.iter().any(|p| p.contains("中文")), "should find Chinese path: {:?}", paths);
-    assert!(paths.iter().any(|p| p.contains("日本語")), "should find Japanese path: {:?}", paths);
+    assert!(
+        paths.iter().any(|p| p.contains("中文")),
+        "should find Chinese path: {:?}",
+        paths
+    );
+    assert!(
+        paths.iter().any(|p| p.contains("日本語")),
+        "should find Japanese path: {:?}",
+        paths
+    );
 }
 
 #[test]
@@ -145,5 +185,9 @@ fn test_incremental_index_non_ascii_path() {
     // Modify the file and re-index (incremental)
     write_file(tmp.path(), "函数.rs", "fn foo() { /* modified */ }\n");
     let result2 = facade.index_incremental(tmp.path(), "test", false);
-    assert!(result2.is_ok(), "incremental index should succeed: {:?}", result2.err());
+    assert!(
+        result2.is_ok(),
+        "incremental index should succeed: {:?}",
+        result2.err()
+    );
 }

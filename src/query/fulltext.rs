@@ -44,11 +44,11 @@ const SYMBOL_LABELS: &[NodeLabel] = &[
     NodeLabel::Namespace,
 ];
 
-/// FTS indexes on symbol `name` columns (H11 / T004 v0.1.4), created by
+/// FTS indexes on symbol `name` columns, created by
 /// [`crate::storage::schema::index_ddl`]. Each entry pairs the FTS index name
 /// with the [`NodeLabel`] used to tag search results.
 ///
-/// T004 (v0.1.4) extended coverage from 3 tables (Function/Class/Method) to
+/// Extended coverage from 3 tables (Function/Class/Method) to
 /// all 15 symbol-bearing tables so that BM25 search reaches Struct/Enum/Trait/
 /// Macro/Typedef/Namespace/Module/Variable/GlobalVar/Const/Static/TypeAlias.
 const FTS_NAME_INDEXES: &[(&str, NodeLabel)] = &[
@@ -137,7 +137,9 @@ impl<'a> FullTextSearcher<'a> {
         let tokenized = codenexus_tokenize(text);
         if tokenized.is_empty() {
             // Single-line for coverage: tarpaulin attribute continuation
-            return Err(QueryError::InvalidQuery("fulltext query tokenized to empty".to_string()));
+            return Err(QueryError::InvalidQuery(
+                "fulltext query tokenized to empty".to_string(),
+            ));
         }
         let fts_query = tokenized.join(" ");
         let escaped = escape_cypher_string(&fts_query);
@@ -145,7 +147,7 @@ impl<'a> FullTextSearcher<'a> {
         // Query all name-column FTS indexes and merge results.
         let mut all_results = Vec::new();
         for (index_name, label) in FTS_NAME_INDEXES {
-            // T004 (v0.1.4): Namespace and Module tables have no `startLine`
+            // Namespace and Module tables have no `startLine`
             // column; return NULL instead of erroring.
             let line_expr = if node_table_columns(*label).contains(&"startLine") {
                 "node.startLine"
@@ -199,20 +201,25 @@ impl<'a> FullTextSearcher<'a> {
         let tokens = codenexus_tokenize(text);
         if tokens.is_empty() {
             // Single-line for coverage: tarpaulin attribute continuation
-            return Err(QueryError::InvalidQuery("fulltext query tokenized to empty".to_string()));
+            return Err(QueryError::InvalidQuery(
+                "fulltext query tokenized to empty".to_string(),
+            ));
         }
         let or_clauses: Vec<String> = tokens
             .iter()
             .map(|t| {
                 // Single-line for coverage: tarpaulin attribute continuation
-                format!("toLower(n.name) CONTAINS toLower('{}')", escape_cypher_string(t))
+                format!(
+                    "toLower(n.name) CONTAINS toLower('{}')",
+                    escape_cypher_string(t)
+                )
             })
             .collect();
         let where_inner = or_clauses.join(" OR ");
         let mut results = Vec::new();
         for &label in SYMBOL_LABELS {
             let table = escape_identifier(label.table_name());
-            // T004 (v0.1.4): Namespace and Module tables have no `startLine`
+            // Namespace and Module tables have no `startLine`
             // column; return NULL instead of erroring so the fallback path
             // reaches all symbol tables (previously these were silently
             // skipped via `Err(_) => continue`).
@@ -254,14 +261,8 @@ fn rows_to_search_results(
     rows.into_iter()
         .filter_map(|row| {
             let name = row.first().and_then(|v| v.as_str())?.to_string();
-            let qualified_name = row
-                .get(1)
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let file_path = row
-                .get(2)
-                .and_then(|v| v.as_str())
-                .map(String::from);
+            let qualified_name = row.get(1).and_then(|v| v.as_str()).map(String::from);
+            let file_path = row.get(2).and_then(|v| v.as_str()).map(String::from);
             let start_line = row
                 .get(3)
                 .and_then(|v| v.as_i64())
@@ -356,7 +357,14 @@ mod tests {
         Repository::in_memory().expect("in_memory repository")
     }
 
-    fn sample_function(id: &str, project: &str, name: &str, qn: &str, file: &str, line: u32) -> Node {
+    fn sample_function(
+        id: &str,
+        project: &str,
+        name: &str,
+        qn: &str,
+        file: &str,
+        line: u32,
+    ) -> Node {
         Node::builder(NodeLabel::Function, name, qn)
             .id(id)
             .project(project)
@@ -384,9 +392,7 @@ mod tests {
         .expect("save_nodes");
 
         let searcher = FullTextSearcher::new(repo.connection());
-        let results = searcher
-            .search("parse", None, 100)
-            .expect("search");
+        let results = searcher.search("parse", None, 100).expect("search");
         let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
         assert!(names.contains(&"parse_file"));
         assert!(names.contains(&"parse_line"));
@@ -400,16 +406,21 @@ mod tests {
             &[
                 sample_function("f1", "demo", "parse", "demo.parse", "/a.rs", 1),
                 sample_function("f2", "demo", "parse_file", "demo.parse_file", "/a.rs", 5),
-                sample_function("f3", "demo", "my_parse_helper", "demo.my_parse_helper", "/b.rs", 1),
+                sample_function(
+                    "f3",
+                    "demo",
+                    "my_parse_helper",
+                    "demo.my_parse_helper",
+                    "/b.rs",
+                    1,
+                ),
             ],
             NodeLabel::Function,
         )
         .expect("save_nodes");
 
         let searcher = FullTextSearcher::new(repo.connection());
-        let results = searcher
-            .search("parse", None, 100)
-            .expect("search");
+        let results = searcher.search("parse", None, 100).expect("search");
         assert!(!results.is_empty());
         // Exact match should rank first.
         assert_eq!(results[0].name, "parse");
@@ -420,12 +431,26 @@ mod tests {
     fn search_filters_by_project() {
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function("f1", "alpha", "parse", "alpha.parse", "/a.rs", 1)],
+            &[sample_function(
+                "f1",
+                "alpha",
+                "parse",
+                "alpha.parse",
+                "/a.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes alpha");
         repo.save_nodes(
-            &[sample_function("f2", "beta", "parse", "beta.parse", "/b.rs", 1)],
+            &[sample_function(
+                "f2",
+                "beta",
+                "parse",
+                "beta.parse",
+                "/b.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes beta");
@@ -452,12 +477,11 @@ mod tests {
                 i + 1,
             ));
         }
-        repo.save_nodes(&nodes, NodeLabel::Function).expect("save_nodes");
+        repo.save_nodes(&nodes, NodeLabel::Function)
+            .expect("save_nodes");
 
         let searcher = FullTextSearcher::new(repo.connection());
-        let results = searcher
-            .search("parse", None, 3)
-            .expect("search");
+        let results = searcher.search("parse", None, 3).expect("search");
         assert_eq!(results.len(), 3);
     }
 
@@ -487,14 +511,19 @@ mod tests {
     fn search_returns_empty_when_no_match() {
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function("f1", "demo", "main", "demo.main", "/a.rs", 1)],
+            &[sample_function(
+                "f1",
+                "demo",
+                "main",
+                "demo.main",
+                "/a.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes");
         let searcher = FullTextSearcher::new(repo.connection());
-        let results = searcher
-            .search("nonexistent", None, 10)
-            .expect("search");
+        let results = searcher.search("nonexistent", None, 10).expect("search");
         assert!(results.is_empty());
     }
 
@@ -502,15 +531,20 @@ mod tests {
     fn search_populates_search_result_fields() {
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function("f1", "demo", "parse", "demo.parse", "/src/main.rs", 42)],
+            &[sample_function(
+                "f1",
+                "demo",
+                "parse",
+                "demo.parse",
+                "/src/main.rs",
+                42,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes");
 
         let searcher = FullTextSearcher::new(repo.connection());
-        let results = searcher
-            .search("parse", None, 100)
-            .expect("search");
+        let results = searcher.search("parse", None, 100).expect("search");
         assert_eq!(results.len(), 1);
         let r = &results[0];
         assert_eq!(r.name, "parse");
@@ -606,7 +640,14 @@ mod tests {
         // `try_fts_search` success path.
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function("f1", "demo", "parse_file", "demo.parse_file", "/a.rs", 1)],
+            &[sample_function(
+                "f1",
+                "demo",
+                "parse_file",
+                "demo.parse_file",
+                "/a.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes");
@@ -623,9 +664,7 @@ mod tests {
                 .is_ok();
 
         let searcher = FullTextSearcher::new(repo.connection());
-        let results = searcher
-            .search("parse", None, 100)
-            .expect("search");
+        let results = searcher.search("parse", None, 100).expect("search");
         // Whether FTS or fallback was used, we should find the function.
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "parse_file");
@@ -727,8 +766,14 @@ mod tests {
             .fallback_contains_search("parseFile", None, 100)
             .expect("fallback");
         let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
-        assert!(names.contains(&"parse_file"), "parse_file should match parseFile");
-        assert!(!names.contains(&"read_input"), "read_input should not match");
+        assert!(
+            names.contains(&"parse_file"),
+            "parse_file should match parseFile"
+        );
+        assert!(
+            !names.contains(&"read_input"),
+            "read_input should not match"
+        );
     }
 
     #[test]
@@ -750,19 +795,24 @@ mod tests {
         // whichever path is available (FTS or fallback).
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function("f1", "demo", "parse_file", "demo.parse_file", "/a.rs", 1)],
+            &[sample_function(
+                "f1",
+                "demo",
+                "parse_file",
+                "demo.parse_file",
+                "/a.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes");
         let searcher = FullTextSearcher::new(repo.connection());
-        let results = searcher
-            .search("parseFile", None, 100)
-            .expect("search");
+        let results = searcher.search("parseFile", None, 100).expect("search");
         let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
         assert!(names.contains(&"parse_file"));
     }
 
-    // --- T004 (v0.1.4): BM25 FTS index coverage extension ---
+    // --- BM25 FTS index coverage extension ---
 
     /// Helper: builds a minimal node of any symbol-bearing label.
     fn sample_symbol(
@@ -838,9 +888,7 @@ mod tests {
         )
         .expect("save_nodes");
         let searcher = FullTextSearcher::new(repo.connection());
-        let results = searcher
-            .search("Point", None, 100)
-            .expect("search");
+        let results = searcher.search("Point", None, 100).expect("search");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "Point");
         assert_eq!(results[0].label, "Struct");
@@ -863,9 +911,7 @@ mod tests {
         )
         .expect("save_nodes");
         let searcher = FullTextSearcher::new(repo.connection());
-        let results = searcher
-            .search("Color", None, 100)
-            .expect("search");
+        let results = searcher.search("Color", None, 100).expect("search");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "Color");
         assert_eq!(results[0].label, "Enum");
@@ -888,9 +934,7 @@ mod tests {
         )
         .expect("save_nodes");
         let searcher = FullTextSearcher::new(repo.connection());
-        let results = searcher
-            .search("FOO", None, 100)
-            .expect("search");
+        let results = searcher.search("FOO", None, 100).expect("search");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "FOO");
         assert_eq!(results[0].label, "Macro");
@@ -913,9 +957,7 @@ mod tests {
         )
         .expect("save_nodes");
         let searcher = FullTextSearcher::new(repo.connection());
-        let results = searcher
-            .search("graphics", None, 100)
-            .expect("search");
+        let results = searcher.search("graphics", None, 100).expect("search");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "graphics");
         assert_eq!(results[0].label, "Namespace");
@@ -938,9 +980,7 @@ mod tests {
         )
         .expect("save_nodes");
         let searcher = FullTextSearcher::new(repo.connection());
-        let results = searcher
-            .search("Handle", None, 100)
-            .expect("search");
+        let results = searcher.search("Handle", None, 100).expect("search");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "Handle");
         assert_eq!(results[0].label, "Typedef");
@@ -952,7 +992,14 @@ mod tests {
         // token and searching that token must return all three label types.
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function("f1", "demo", "parse", "demo.parse", "/a.rs", 1)],
+            &[sample_function(
+                "f1",
+                "demo",
+                "parse",
+                "demo.parse",
+                "/a.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes function");
@@ -984,9 +1031,7 @@ mod tests {
         .expect("save_nodes enum");
 
         let searcher = FullTextSearcher::new(repo.connection());
-        let results = searcher
-            .search("parse", None, 100)
-            .expect("search");
+        let results = searcher.search("parse", None, 100).expect("search");
         let labels: Vec<&str> = results.iter().map(|r| r.label.as_str()).collect();
         // All three symbol tables should return at least one hit (Function
         // exact match, Struct token match via "Parser" → ["parser"], Enum
@@ -1012,7 +1057,14 @@ mod tests {
         // (table dropped), the loop skips it and continues.
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function("f1", "demo", "parse", "demo.parse", "/a.rs", 1)],
+            &[sample_function(
+                "f1",
+                "demo",
+                "parse",
+                "demo.parse",
+                "/a.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes");

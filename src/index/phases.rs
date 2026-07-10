@@ -29,14 +29,14 @@ use tracing::{info, warn};
 use crate::discover::{FileInfo, Walker};
 use crate::index::error::IndexError;
 use crate::index::incremental::{diff_files, FileDiff};
-use crate::index::pipeline::{
-    build_file_nodes, now_unix_seconds, with_retry, DEFAULT_MAX_RETRIES,
-};
+use crate::index::pipeline::{build_file_nodes, now_unix_seconds, with_retry, DEFAULT_MAX_RETRIES};
 use crate::ir::ExtractResult;
-use crate::model::{ConfidenceTier, Edge, EdgeType, Graph, Language, Node, NodeLabel, new_project_id};
+use crate::model::{
+    new_project_id, ConfidenceTier, Edge, EdgeType, Graph, Language, Node, NodeLabel,
+};
 use crate::parse::parallel::{parallel_parse, parallel_parse_ram_first, RamFirstSources};
 use crate::resolve::{
-    build_symbol_table, prune_dangling_type_edges_vec, resolve_all, IncludesGraph, resolve_include,
+    build_symbol_table, prune_dangling_type_edges_vec, resolve_all, resolve_include, IncludesGraph,
 };
 use crate::storage::Repository;
 
@@ -116,7 +116,7 @@ pub struct ResolveOutput {
     /// Number of files skipped (for IndexResult).
     pub files_skipped: usize,
     /// C++ `#include` graph for scope-aware call resolution (BUG-C4 fix).
-    /// Populated by `build_includes_edges`; consumed by `CallResolver` (T005).
+    /// Populated by `build_includes_edges`; consumed by `CallResolver`.
     pub includes_graph: IncludesGraph,
 }
 
@@ -245,9 +245,7 @@ impl Phase for ParsePhase {
         // H15: RAM-first path uses LZ4-compressed in-memory buffers; the
         // streaming path reads from disk.
         let parse_result = match &self.ram_first_compressed {
-            Some(compressed) => {
-                parallel_parse_ram_first(&to_parse, compressed, &scan.project_id)
-            }
+            Some(compressed) => parallel_parse_ram_first(&to_parse, compressed, &scan.project_id),
             None => parallel_parse(&to_parse, &scan.project_id),
         };
 
@@ -406,7 +404,7 @@ impl Phase for ScopeResolutionPhase {
 ///
 /// A tuple of `(edges, includes_graph)`:
 /// - `edges`: all created INCLUDES edges (also added to `graph`)
-/// - `includes_graph`: populated graph for `lookup_exported_in_scope` (T004)
+/// - `includes_graph`: populated graph for `lookup_exported_in_scope`
 fn build_includes_edges(
     results: &[ExtractResult],
     graph: &mut Graph,
@@ -422,7 +420,9 @@ fn build_includes_edges(
     let mut file_index: HashMap<String, String> = HashMap::new();
     for node in graph.nodes_by_label(NodeLabel::File) {
         if let Some(fp) = &node.file_path {
-            file_index.entry(fp.clone()).or_insert_with(|| node.id.clone());
+            file_index
+                .entry(fp.clone())
+                .or_insert_with(|| node.id.clone());
         }
     }
 
@@ -559,7 +559,7 @@ impl Phase for ResolvePhase {
         // are created for C++ — only INCLUDES edges here.
         //
         // MUST run before resolve_all so the IncludesGraph is available to
-        // CallResolver for scope-aware lookup_exported_in_scope (T005).
+        // CallResolver for scope-aware lookup_exported_in_scope.
         let (includes_edges, includes_graph) =
             build_includes_edges(&parse.results, &mut graph, &scope.path_to_rel, project_id);
         all_edges.extend(includes_edges);
@@ -575,7 +575,13 @@ impl Phase for ResolvePhase {
         // call resolution (BUG-C4 fix). Files with #include edges use
         // lookup_exported_in_scope; others use lookup_exported (backward compat).
         let symbol_table = build_symbol_table(&parse.results, project_id);
-        let resolved_edges = resolve_all(&parse.results, &symbol_table, project_id, &mut graph, &includes_graph);
+        let resolved_edges = resolve_all(
+            &parse.results,
+            &symbol_table,
+            project_id,
+            &mut graph,
+            &includes_graph,
+        );
         all_edges.extend(resolved_edges);
 
         // Prune dangling type-reference edges (Implements/Extends/UsesType)
@@ -583,8 +589,7 @@ impl Phase for ResolvePhase {
         // all_edges is a separate Vec built from scope.all_edges (parse-phase
         // edges) + resolved_edges — both unpruned. Without this, dangling
         // IMPLEMENTS edges (e.g. `impl Display for Foo`) reach the DB.
-        let node_ids: std::collections::HashSet<String> =
-            graph.nodes.keys().cloned().collect();
+        let node_ids: std::collections::HashSet<String> = graph.nodes.keys().cloned().collect();
         prune_dangling_type_edges_vec(&mut all_edges, &node_ids);
 
         // Collect Parameter and Variable nodes created during dataflow
@@ -681,7 +686,10 @@ impl Phase for LoadPhase {
         let mut paths_to_delete: Vec<String> = scan.diff.deleted.clone();
         paths_to_delete.extend(scan.diff.changed.iter().map(|f| f.relative_path.clone()));
         if !paths_to_delete.is_empty() {
-            if let Err(err) = self.repo.delete_file_nodes_batch(&paths_to_delete, project_id) {
+            if let Err(err) = self
+                .repo
+                .delete_file_nodes_batch(&paths_to_delete, project_id)
+            {
                 warn!(
                     file_count = paths_to_delete.len(),
                     error = %err,
@@ -696,19 +704,13 @@ impl Phase for LoadPhase {
         save_nodes_by_label(&self.repo, all_nodes).map_err(|e| phase_err(Self::NAME, e))?;
         if !all_edges.is_empty() {
             with_retry(DEFAULT_MAX_RETRIES, || {
-                self.repo
-                    .save_edges(all_edges)
-                    .map_err(IndexError::from)
+                self.repo.save_edges(all_edges).map_err(IndexError::from)
             })
             .map_err(|e| phase_err(Self::NAME, e))?;
         }
 
         // Step 9: build the IndexResult.
-        let duration_ms = scan
-            .start
-            .elapsed()
-            .as_millis()
-            .min(u64::MAX as u128) as u64;
+        let duration_ms = scan.start.elapsed().as_millis().min(u64::MAX as u128) as u64;
         let files_indexed = resolve.files_parsed;
         let files_skipped = resolve.files_skipped;
         let nodes_created = all_nodes.len();
@@ -761,7 +763,10 @@ impl Phase for LoadPhase {
 /// Treats the project *name* as the stable identifier across re-indexes.
 /// If a project with this name already exists in the DB, reuses its id;
 /// otherwise generates a fresh `proj_<uuid>` id.
-fn lookup_or_create_project_id(repo: &Repository, project_name: &str) -> std::result::Result<String, IndexError> {
+fn lookup_or_create_project_id(
+    repo: &Repository,
+    project_name: &str,
+) -> std::result::Result<String, IndexError> {
     let projects = repo.list_projects().unwrap_or_default();
     for project in projects {
         if project.name == project_name {
@@ -902,12 +907,12 @@ mod tests {
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let commit = git_head_commit(manifest_dir);
         // If git is not installed, this returns empty — skip the assertion.
-        if let Ok(output) = std::process::Command::new("git")
-            .arg("--version")
-            .output()
-        {
+        if let Ok(output) = std::process::Command::new("git").arg("--version").output() {
             if output.status.success() {
-                assert!(!commit.is_empty(), "CodeNexus repo should have a HEAD commit");
+                assert!(
+                    !commit.is_empty(),
+                    "CodeNexus repo should have a HEAD commit"
+                );
                 // A git commit hash is 40 hex chars (SHA-1) or 64 (SHA-256).
                 assert!(
                     commit.len() == 40 || commit.len() == 64,
@@ -1108,7 +1113,11 @@ mod tests {
         let (edges, includes_graph) =
             build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
 
-        assert_eq!(edges.len(), 1, "absolute source path should resolve via path_to_rel");
+        assert_eq!(
+            edges.len(),
+            1,
+            "absolute source path should resolve via path_to_rel"
+        );
         assert_eq!(edges[0].source, "src/main.cpp");
         assert_eq!(edges[0].target, "src/foo.h");
         // IncludesGraph uses absolute paths (for SymbolEntry.file_path matching).
@@ -1123,7 +1132,11 @@ mod tests {
         // C++ #include "fmt/format.h" → include/fmt/format.h (suffix match).
         let mut graph = Graph::new();
         graph.add_node(make_file_node("src/main.cpp", "proj", Language::Cpp));
-        graph.add_node(make_file_node("include/fmt/format.h", "proj", Language::Cpp));
+        graph.add_node(make_file_node(
+            "include/fmt/format.h",
+            "proj",
+            Language::Cpp,
+        ));
 
         let mut main_result = ExtractResult::new("src/main.cpp", Language::Cpp);
         main_result.imports.push(crate::ir::ImportInfo {
@@ -1137,7 +1150,11 @@ mod tests {
         let (edges, _includes_graph) =
             build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
 
-        assert_eq!(edges.len(), 1, "partial-path #include should resolve via suffix matching");
+        assert_eq!(
+            edges.len(),
+            1,
+            "partial-path #include should resolve via suffix matching"
+        );
         assert_eq!(edges[0].target, "include/fmt/format.h");
     }
 

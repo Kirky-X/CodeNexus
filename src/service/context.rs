@@ -8,7 +8,9 @@ use serde_json::Value;
 use crate::kit::TraceKey;
 use crate::service::error::{kit_not_initialized, wrap_error};
 use crate::service::runtime::kit;
-use crate::trace::context::{collect_incoming, collect_outgoing, collect_processes, resolve_start_id};
+use crate::trace::context::{
+    collect_incoming, collect_outgoing, collect_processes, resolve_start_id,
+};
 use crate::trace::types::{ContextOutput, SymbolNodeOutput};
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
@@ -52,16 +54,15 @@ async fn context_core(symbol: String, depth: u32) -> Result<ContextOutput, ApiEr
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
 #[service_api(
-    name = "codenexus",
+    name = "context",
     version = "0.3.2",
-    tool_name = "context",
     description = "Show a 360-degree view of a symbol (callers, callees, processes).",
-    cli = true,
+    cli = true
 )]
 async fn context(symbol: String, depth: u32) -> Result<(), ApiError> {
     let result = context_core(symbol, depth).await?;
-    let json = serde_json::to_string(&result)
-        .map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let json =
+        serde_json::to_string(&result).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }
@@ -69,10 +70,10 @@ async fn context(symbol: String, depth: u32) -> Result<(), ApiError> {
 /// MCP wrapper — returns result for MCP protocol.
 #[cfg(feature = "mcp")]
 #[service_api(
-    name = "codenexus",
+    name = "context",
     version = "0.3.2",
     tool_name = "context",
-    description = "Show a 360-degree view of a symbol (callers, callees, processes).",
+    description = "Show a 360-degree view of a symbol (callers, callees, processes)."
 )]
 async fn context_mcp(symbol: String, depth: u32) -> Result<ContextOutput, ApiError> {
     context_core(symbol, depth).await

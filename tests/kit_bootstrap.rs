@@ -19,14 +19,14 @@
 
 use std::path::PathBuf;
 
-use codenexus::kit::{
-    build_kit, KitBootstrapConfig, ExtractorKey, IndexerKey, ParserKey, QueryKey, ResolverKey,
-    StorageKey, TraceKey,
-};
 #[cfg(feature = "daemon")]
 use codenexus::kit::DaemonKey;
 #[cfg(feature = "embed")]
 use codenexus::kit::EmbedKey;
+use codenexus::kit::{
+    build_kit, ExtractorKey, IndexerKey, KitBootstrapConfig, ParserKey, QueryKey, ResolverKey,
+    StorageKey, TraceKey,
+};
 
 /// In-memory database path — keeps tests hermetic (no on-disk cleanup).
 fn memory_db_path() -> PathBuf {

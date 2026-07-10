@@ -32,7 +32,7 @@ use crate::discover::Walker;
 use crate::index::error::{IndexError, Result};
 use crate::index::hash::compute_file_hash;
 use crate::index::incremental::FileDiff;
-use crate::model::{Language, Node, NodeLabel, new_file_id};
+use crate::model::{new_file_id, Language, Node, NodeLabel};
 use crate::parse::parallel::RamFirstSources;
 use crate::storage::{Repository, StorageError};
 
@@ -85,8 +85,7 @@ where
                 if attempt < max_retries {
                     warn!(
                         attempt = attempt + 1,
-                        max_retries, delay_ms,
-                        "database locked, retrying"
+                        max_retries, delay_ms, "database locked, retrying"
                     );
                     std::thread::sleep(std::time::Duration::from_millis(delay_ms));
                     delay_ms *= 2;
@@ -205,7 +204,12 @@ impl IndexFacade {
     ///
     /// Same as [`index`](Self::index), plus [`IndexError::Io`] if a source
     /// file cannot be read for compression.
-    pub fn index_ram_first(&self, path: &Path, project_name: &str, force: bool) -> Result<IndexResult> {
+    pub fn index_ram_first(
+        &self,
+        path: &Path,
+        project_name: &str,
+        force: bool,
+    ) -> Result<IndexResult> {
         // PRD §4.1.6: path not found → exit code 1.
         if !path.exists() {
             return Err(IndexError::PathNotFound(path.display().to_string()));
@@ -215,16 +219,15 @@ impl IndexFacade {
         // before the DAG runs. ScanPhase will re-discover (cheap) and produce
         // the authoritative diff; the compressed map is keyed by absolute
         // path, so ParsePhase looks up whatever subset ScanPhase selects.
-        let disk_files = Walker::new(path)
-            .discover()
-            .map_err(IndexError::from)?;
+        let disk_files = Walker::new(path).discover().map_err(IndexError::from)?;
 
         // H15: LZ4-compress every discovered file into memory. Files that
         // ScanPhase later marks unchanged (hash match) won't be in `to_parse`,
         // so their compressed bytes are simply never looked up — the small
         // waste of compressing them is preferable to a second scan+hash pass
         // just to filter the set.
-        let mut compressed: RamFirstSources = std::collections::HashMap::with_capacity(disk_files.len());
+        let mut compressed: RamFirstSources =
+            std::collections::HashMap::with_capacity(disk_files.len());
         for file in &disk_files {
             match std::fs::read(&file.path) {
                 Ok(bytes) => {
@@ -363,13 +366,14 @@ impl Pipeline {
             repo: self.repository.clone(),
         })
         .map_err(IndexError::from)?;
-        dag.register(ParsePhase { ram_first_compressed: compressed })
-            .map_err(IndexError::from)?;
+        dag.register(ParsePhase {
+            ram_first_compressed: compressed,
+        })
+        .map_err(IndexError::from)?;
         dag.register(ScopeResolutionPhase)
             .map_err(IndexError::from)?;
         dag.register(ResolvePhase).map_err(IndexError::from)?;
-        dag.register(ConfidencePhase)
-            .map_err(IndexError::from)?;
+        dag.register(ConfidencePhase).map_err(IndexError::from)?;
         dag.register(LoadPhase {
             repo: self.repository.clone(),
         })
@@ -378,13 +382,11 @@ impl Pipeline {
         dag.run(&mut ctx).map_err(IndexError::from)?;
 
         // Extract the final IndexResult from the LoadPhase output.
-        let load_output = ctx
-            .remove::<LoadOutput>(LoadPhase::NAME)
-            .ok_or_else(|| {
-                IndexError::Storage(StorageError::Query(
-                    "load phase did not produce output".to_string(),
-                ))
-            })?;
+        let load_output = ctx.remove::<LoadOutput>(LoadPhase::NAME).ok_or_else(|| {
+            IndexError::Storage(StorageError::Query(
+                "load phase did not produce output".to_string(),
+            ))
+        })?;
 
         // Force a checkpoint so the WAL is flushed to the main DB file before
         // this Pipeline (and its Repository) is dropped. Without this, a
@@ -398,7 +400,11 @@ impl Pipeline {
         // `force_checkpoint_on_close=true` ensures the DB flushes its WAL
         // when the connection is dropped, even if other connections remain
         // open.
-        if let Err(err) = self.repository.connection().execute("CALL force_checkpoint_on_close=true;") {
+        if let Err(err) = self
+            .repository
+            .connection()
+            .execute("CALL force_checkpoint_on_close=true;")
+        {
             warn!(error = %err, "failed to enable force_checkpoint_on_close");
         }
         if let Err(err) = self.repository.connection().execute("CHECKPOINT;") {
@@ -430,16 +436,20 @@ pub(crate) fn build_file_nodes(diff: &FileDiff, project_id: &str) -> Vec<Node> {
         // compile_error! assertion in lib.rs (at least one `lang-*` feature).
         let language = file.language.unwrap_or_else(|| Language::all()[0]);
         let line_count = line_count_of(&file.path).unwrap_or(0);
-        let node = Node::builder(NodeLabel::File, file.relative_path.clone(), file.relative_path.clone())
-            .id(new_file_id())
-            .project(project_id)
-            .file_path(&file.relative_path)
-            .language(language)
-            .properties(serde_json::json!({
-                "hash": hash,
-                "lineCount": line_count,
-            }))
-            .build();
+        let node = Node::builder(
+            NodeLabel::File,
+            file.relative_path.clone(),
+            file.relative_path.clone(),
+        )
+        .id(new_file_id())
+        .project(project_id)
+        .file_path(&file.relative_path)
+        .language(language)
+        .properties(serde_json::json!({
+            "hash": hash,
+            "lineCount": line_count,
+        }))
+        .build();
         nodes.push(node);
     }
     nodes
@@ -464,7 +474,7 @@ pub(crate) fn now_unix_seconds() -> i64 {
 // ---------------------------------------------------------------------------
 //
 // NOTE: The DB-backed wiring that actually runs `rust-analyzer` after an index
-// run lives in `src/cli/index_cmd.rs::enhance_with_lsp` (added in T007). This
+// run lives in `src/cli/index_cmd.rs::enhance_with_lsp`. This
 // pure function is the mock-injectable core: it takes a `&dyn LspProvider`
 // and a `&mut [Node]` slice so the graceful-degradation contract (R-lsp-004:
 // "LSP server 启动失败时，索引不中断" / "LSP 查询超时时，跳过该符号的语义
@@ -577,10 +587,7 @@ fn write_semantic_type(node: &mut crate::model::Node, text: String) {
         }
     }
     if let Some(obj) = node.properties.as_object_mut() {
-        obj.insert(
-            "semantic_type".to_string(),
-            serde_json::Value::String(text),
-        );
+        obj.insert("semantic_type".to_string(), serde_json::Value::String(text));
     }
 }
 
@@ -663,7 +670,11 @@ mod tests {
         let root = tmp.path();
         write_file(root, "main.rs", "fn main() { helper(); }\n");
         write_file(root, "util.c", "int util(void) { return 42; }\n");
-        write_file(root, "math.f90", "subroutine math_sub()\nend subroutine math_sub\n");
+        write_file(
+            root,
+            "math.f90",
+            "subroutine math_sub()\nend subroutine math_sub\n",
+        );
 
         let db_path = fresh_db_path();
         let facade = IndexFacade::new(&db_path).expect("facade");
@@ -725,8 +736,12 @@ mod tests {
         let db_path = fresh_db_path();
         let facade = IndexFacade::new(&db_path).expect("facade");
 
-        let result_a = facade.index(tmp_a.path(), "project_a", false).expect("index A");
-        let result_b = facade.index(tmp_b.path(), "project_b", false).expect("index B");
+        let result_a = facade
+            .index(tmp_a.path(), "project_a", false)
+            .expect("index A");
+        let result_b = facade
+            .index(tmp_b.path(), "project_b", false)
+            .expect("index B");
 
         assert!(result_a.files_indexed > 0);
         assert!(result_b.files_indexed > 0);
@@ -765,10 +780,7 @@ mod tests {
             forced.files_indexed, 2,
             "AC-INDEX-005: --force re-parses all files"
         );
-        assert_eq!(
-            forced.files_skipped, 0,
-            "force must not skip any files"
-        );
+        assert_eq!(forced.files_skipped, 0, "force must not skip any files");
     }
 
     // --- Path not found → error ---
@@ -975,10 +987,7 @@ mod tests {
         diff.added.push(missing);
 
         let nodes = build_file_nodes(&diff, "proj");
-        assert!(
-            nodes.is_empty(),
-            "missing file should produce no File node"
-        );
+        assert!(nodes.is_empty(), "missing file should produce no File node");
     }
 
     #[test]
@@ -1091,8 +1100,14 @@ mod tests {
             "functions should be persisted: {functions:?}"
         );
         let names: Vec<String> = functions.iter().map(|f| f.name.clone()).collect();
-        assert!(names.contains(&"main".to_string()), "main should be persisted");
-        assert!(names.contains(&"helper".to_string()), "helper should be persisted");
+        assert!(
+            names.contains(&"main".to_string()),
+            "main should be persisted"
+        );
+        assert!(
+            names.contains(&"helper".to_string()),
+            "helper should be persisted"
+        );
     }
 
     // --- Pipeline persists project node ---
@@ -1104,7 +1119,9 @@ mod tests {
 
         let db_path = fresh_db_path();
         let facade = IndexFacade::new(&db_path).expect("facade");
-        let result = facade.index(tmp.path(), "my_project", false).expect("index");
+        let result = facade
+            .index(tmp.path(), "my_project", false)
+            .expect("index");
 
         let repo = Repository::open(&db_path).expect("repo");
         let project = repo
@@ -1211,7 +1228,9 @@ mod tests {
         let facade = IndexFacade::new(&db_path).expect("facade");
 
         let captured = capture_tracing(|| {
-            facade.index(tmp.path(), "log_001_started", false).expect("index");
+            facade
+                .index(tmp.path(), "log_001_started", false)
+                .expect("index");
         });
 
         assert!(
@@ -1232,7 +1251,9 @@ mod tests {
         let facade = IndexFacade::new(&db_path).expect("facade");
 
         let captured = capture_tracing(|| {
-            facade.index(tmp.path(), "log_001_completed", false).expect("index");
+            facade
+                .index(tmp.path(), "log_001_completed", false)
+                .expect("index");
         });
 
         assert!(
@@ -1257,7 +1278,9 @@ mod tests {
         let facade = IndexFacade::new(&db_path).expect("facade");
 
         let captured = capture_tracing(|| {
-            facade.index(tmp.path(), "log_006_perf", false).expect("index");
+            facade
+                .index(tmp.path(), "log_006_perf", false)
+                .expect("index");
         });
 
         assert!(
@@ -1288,7 +1311,11 @@ mod tests {
             Ok(42)
         });
         assert_eq!(result.unwrap(), 42);
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "should not retry on success");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "should not retry on success"
+        );
     }
 
     #[test]
@@ -1418,9 +1445,9 @@ mod tests {
             self.hover_calls.fetch_add(1, Ordering::SeqCst);
             match &self.hover_behavior {
                 MockHoverBehavior::Ok(h) => Ok(h.clone()),
-                MockHoverBehavior::Timeout => {
-                    Err(crate::lsp::LspError::Timeout(crate::lsp::REQUEST_TIMEOUT_MS))
-                }
+                MockHoverBehavior::Timeout => Err(crate::lsp::LspError::Timeout(
+                    crate::lsp::REQUEST_TIMEOUT_MS,
+                )),
                 MockHoverBehavior::Communication => Err(crate::lsp::LspError::Communication(
                     "mock: channel closed".into(),
                 )),
@@ -1565,7 +1592,11 @@ mod tests {
 
         let result = enhance_with_lsp(&mock, &mut nodes, Path::new("/workspace"));
 
-        assert!(result.is_ok(), "enhancement should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "enhancement should succeed: {:?}",
+            result.err()
+        );
         assert_eq!(
             mock.hover_calls.load(Ordering::SeqCst),
             1,

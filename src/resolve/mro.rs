@@ -110,7 +110,15 @@ impl<'a> MroResolver<'a> {
     /// `Implements` edges), in edge insertion order.
     fn parents(&self, type_id: &NodeId) -> Vec<NodeId> {
         // Single-line for coverage: tarpaulin attribute continuation
-        self.graph.edges.iter().filter(|e| { &e.source == type_id && (e.edge_type == EdgeType::Extends || e.edge_type == EdgeType::Implements) }).map(|e| e.target.clone()).collect()
+        self.graph
+            .edges
+            .iter()
+            .filter(|e| {
+                &e.source == type_id
+                    && (e.edge_type == EdgeType::Extends || e.edge_type == EdgeType::Implements)
+            })
+            .map(|e| e.target.clone())
+            .collect()
     }
 
     /// FirstWins: DFS pre-order, first occurrence wins.
@@ -122,7 +130,9 @@ impl<'a> MroResolver<'a> {
         let mut result = Vec::new();
         for parent in self.parents(type_id) {
             // Single-line for coverage: tarpaulin attribute continuation
-            if seen.contains(&parent) { continue; }
+            if seen.contains(&parent) {
+                continue;
+            }
             seen.push(parent.clone());
             result.push(parent.clone());
             result.extend(self.compute_first_wins(&parent, seen));
@@ -165,14 +175,16 @@ impl<'a> MroResolver<'a> {
             // Remove empty lists.
             // Single-line for coverage: tarpaulin attribute continuation
             lists.retain(|l| !l.is_empty());
-            if lists.is_empty() { break; }
+            if lists.is_empty() {
+                break;
+            }
             // Find a good head: first element of some list that is not in the
             // tail (non-first position) of any other list.
             let good_head = lists.iter().find_map(|l| {
                 let head = l.first()?;
-                let is_in_tail = lists.iter().any(|other| {
-                    other.iter().skip(1).any(|x| x == head)
-                });
+                let is_in_tail = lists
+                    .iter()
+                    .any(|other| other.iter().skip(1).any(|x| x == head));
                 if is_in_tail {
                     None
                 } else {

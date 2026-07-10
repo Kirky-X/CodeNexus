@@ -157,11 +157,7 @@ fn mcp_server_initializes_and_lists_tools() {
         .and_then(|r| r.get("serverInfo"))
         .and_then(|si| si.get("name"))
         .and_then(|n| n.as_str())
-        .unwrap_or_else(|| {
-            panic!(
-                "initialize response missing serverInfo.name: {init_response}"
-            )
-        });
+        .unwrap_or_else(|| panic!("initialize response missing serverInfo.name: {init_response}"));
     assert!(
         !server_name.is_empty(),
         "serverInfo.name should be non-empty, got: '{server_name}'"
@@ -186,9 +182,7 @@ fn mcp_server_initializes_and_lists_tools() {
         .and_then(|r| r.get("tools"))
         .and_then(|t| t.as_array())
         .unwrap_or_else(|| {
-            panic!(
-                "tools/list response missing result.tools array: {tools_response}"
-            )
+            panic!("tools/list response missing result.tools array: {tools_response}")
         });
 
     let tool_names: Vec<&str> = tools

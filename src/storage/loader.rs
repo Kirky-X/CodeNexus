@@ -95,7 +95,12 @@ impl CsvLoader {
 /// the structural line range is preserved in the dedicated `startLine` and
 /// `endLine` columns. See `tools/verification/results/triage.md` §B6.
 fn sanitize_for_ladybugdb(s: String) -> String {
-    if !s.contains('\\') && !s.contains('"') && !s.contains('\n') && !s.contains('\r') && !s.contains('\t') {
+    if !s.contains('\\')
+        && !s.contains('"')
+        && !s.contains('\n')
+        && !s.contains('\r')
+        && !s.contains('\t')
+    {
         return s;
     }
     s.replace('\\', "/")
@@ -281,7 +286,11 @@ pub fn node_to_row(node: &Node, label: NodeLabel) -> Vec<String> {
             opt_str(&node.file_path),
             opt_str(&node.parent_qn),
         ],
-        NodeLabel::Class | NodeLabel::Struct | NodeLabel::Enum | NodeLabel::Trait | NodeLabel::Interface => vec![
+        NodeLabel::Class
+        | NodeLabel::Struct
+        | NodeLabel::Enum
+        | NodeLabel::Trait
+        | NodeLabel::Interface => vec![
             node.id.clone(),
             node.project.clone(),
             node.name.clone(),
@@ -424,21 +433,23 @@ pub fn node_to_row(node: &Node, label: NodeLabel) -> Vec<String> {
             prop_str(node, "typedefType"),
             opt_str(&node.parent_qn),
         ],
-        NodeLabel::Constructor | NodeLabel::Handler | NodeLabel::Middleware | NodeLabel::Test => vec![
-            node.id.clone(),
-            node.project.clone(),
-            node.name.clone(),
-            node.qualified_name.clone(),
-            opt_str(&node.file_path),
-            opt_line(node.start_line),
-            opt_line(node.end_line),
-            opt_str(&node.signature),
-            opt_str(&node.return_type),
-            node.is_exported.to_string(),
-            opt_str(&node.docstring),
-            prop_str(node, "content"),
-            opt_str(&node.parent_qn),
-        ],
+        NodeLabel::Constructor | NodeLabel::Handler | NodeLabel::Middleware | NodeLabel::Test => {
+            vec![
+                node.id.clone(),
+                node.project.clone(),
+                node.name.clone(),
+                node.qualified_name.clone(),
+                opt_str(&node.file_path),
+                opt_line(node.start_line),
+                opt_line(node.end_line),
+                opt_str(&node.signature),
+                opt_str(&node.return_type),
+                node.is_exported.to_string(),
+                opt_str(&node.docstring),
+                prop_str(node, "content"),
+                opt_str(&node.parent_qn),
+            ]
+        }
         NodeLabel::Record | NodeLabel::Delegate | NodeLabel::Union | NodeLabel::Service => vec![
             node.id.clone(),
             node.project.clone(),
@@ -746,7 +757,10 @@ mod tests {
         let csv = write_nodes_csv(&[node], NodeLabel::Project);
         let lines: Vec<&str> = csv.lines().collect();
         // CSV_DELIMITER is tab; Project header uses tabs.
-        assert_eq!(lines[0], "id\tname\trootPath\tlanguage\tfileCount\tindexedAt\tlastCommit");
+        assert_eq!(
+            lines[0],
+            "id\tname\trootPath\tlanguage\tfileCount\tindexedAt\tlastCommit"
+        );
         assert!(lines[1].contains("proj_001"));
         assert!(lines[1].contains("demo"));
         assert!(lines[1].contains("/repo/demo"));

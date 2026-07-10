@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! API review toolkit (T008, v0.2.0).
+//! API review toolkit.
 //!
 //! Provides four graph-based analysis capabilities over the existing
 //! LadybugDB graph:
@@ -134,7 +134,8 @@ impl<'a> ApiReviewer<'a> {
 
         // (f) Build handler → middleware list map.
         // Single-line for coverage: tarpaulin attribute continuation
-        let mut handler_to_mw: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        let mut handler_to_mw: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
         for (mw_id, h_id) in &uses {
             if let Some(mw_name) = middleware.get(mw_id) {
                 handler_to_mw
@@ -145,7 +146,8 @@ impl<'a> ApiReviewer<'a> {
         }
 
         // (g) Build route → handler map.
-        let mut route_to_handler: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new(); // Single-line for coverage: tarpaulin attribute continuation
+        let mut route_to_handler: std::collections::HashMap<String, (String, String)> =
+            std::collections::HashMap::new(); // Single-line for coverage: tarpaulin attribute continuation
         for (h_id, r_id) in &handles {
             if let Some(h_name) = handlers.get(h_id) {
                 route_to_handler
@@ -158,16 +160,15 @@ impl<'a> ApiReviewer<'a> {
         let mut result: Vec<RouteEntry> = routes
             .into_iter()
             .map(|(id, path, method)| {
-                let (handler_id, handler_name) = route_to_handler.get(&id)
-                    .cloned()
-                    .unwrap_or_default();
-                let mw = handler_to_mw.get(&handler_id)
-                    .cloned()
-                    .unwrap_or_default();
+                let (handler_id, handler_name) =
+                    route_to_handler.get(&id).cloned().unwrap_or_default();
+                let mw = handler_to_mw.get(&handler_id).cloned().unwrap_or_default();
                 RouteEntry {
                     path,
                     method,
-                    handler_id, handler_name, middleware: mw,
+                    handler_id,
+                    handler_name,
+                    middleware: mw,
                 }
             })
             .collect();
@@ -231,11 +232,7 @@ impl<'a> ApiReviewer<'a> {
     ///
     /// Returns [`crate::storage::error::StorageError`] if any Cypher query
     /// fails.
-    pub fn api_impact(
-        &self,
-        project: &str,
-        endpoint: &str,
-    ) -> StorageResult<Vec<ImpactEntry>> {
+    pub fn api_impact(&self, project: &str, endpoint: &str) -> StorageResult<Vec<ImpactEntry>> {
         // (a) Find the Endpoint node by path or name.
         let endpoint_id = match self.find_endpoint(project, endpoint)? {
             Some(id) => id,
@@ -266,13 +263,16 @@ impl<'a> ApiReviewer<'a> {
         let callers = self.load_caller_info(project, &caller_ids)?;
 
         // (e) Build result.
-        let ep_path = self.load_endpoint_path(project, &endpoint_id)?
+        let ep_path = self
+            .load_endpoint_path(project, &endpoint_id)?
             .unwrap_or_default();
         let mut result: Vec<ImpactEntry> = callers
             .into_iter()
             .map(|(name, file, line)| ImpactEntry {
                 endpoint: ep_path.clone(),
-                affected_caller: name, caller_file: file, caller_line: line,
+                affected_caller: name,
+                caller_file: file,
+                caller_line: line,
             })
             .collect();
         // Sort by caller name for determinism.
@@ -298,7 +298,8 @@ impl<'a> ApiReviewer<'a> {
         let handles = self.load_edges(project, "HANDLES")?;
 
         // (d) Build tool → handler map.
-        let mut tool_to_handler: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new(); // Single-line for coverage: tarpaulin attribute continuation
+        let mut tool_to_handler: std::collections::HashMap<String, (String, String)> =
+            std::collections::HashMap::new(); // Single-line for coverage: tarpaulin attribute continuation
         for (h_id, t_id) in &handles {
             if let Some(h_name) = handlers.get(h_id) {
                 tool_to_handler
@@ -311,11 +312,12 @@ impl<'a> ApiReviewer<'a> {
         let mut result: Vec<ToolEntry> = tools
             .into_iter()
             .map(|(id, name)| {
-                let (handler_id, handler_name) = tool_to_handler.get(&id)
-                    .cloned()
-                    .unwrap_or_default();
+                let (handler_id, handler_name) =
+                    tool_to_handler.get(&id).cloned().unwrap_or_default();
                 ToolEntry {
-                    tool_name: name, handler_id, handler_name,
+                    tool_name: name,
+                    handler_id,
+                    handler_name,
                 }
             })
             .collect();
@@ -522,7 +524,11 @@ impl<'a> ApiReviewer<'a> {
     }
 
     /// Loads the `path` of an `Endpoint` by `id`.
-    fn load_endpoint_path(&self, project: &str, endpoint_id: &str) -> StorageResult<Option<String>> {
+    fn load_endpoint_path(
+        &self,
+        project: &str,
+        endpoint_id: &str,
+    ) -> StorageResult<Option<String>> {
         let escaped_project = escape_cypher_string(project);
         let escaped_id = escape_cypher_string(endpoint_id);
         let cypher = format!(
@@ -621,7 +627,14 @@ mod tests {
     }
 
     /// Creates an Endpoint node with an expected schema.
-    fn create_endpoint(kit: &Kit, id: &str, project: &str, path: &str, method: &str, expected_schema: &str) {
+    fn create_endpoint(
+        kit: &Kit,
+        id: &str,
+        project: &str,
+        path: &str,
+        method: &str,
+        expected_schema: &str,
+    ) {
         let storage = storage(kit);
         let cypher = format!(
             "CREATE (:Endpoint {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
@@ -702,7 +715,14 @@ mod tests {
     }
 
     /// Creates a CodeRelation edge.
-    fn create_edge(kit: &Kit, id: &str, source: &str, target: &str, edge_type: &str, project: &str) {
+    fn create_edge(
+        kit: &Kit,
+        id: &str,
+        source: &str,
+        target: &str,
+        edge_type: &str,
+        project: &str,
+    ) {
         let storage = storage(kit);
         let cypher = format!(
             "CREATE (:CodeRelation {{id: '{}', source: '{}', target: '{}', type: '{}', \
@@ -805,7 +825,10 @@ mod tests {
         let entry = &result[0];
         assert_eq!(entry.path, "/api/orphan");
         assert!(entry.handler_id.is_empty(), "handler_id should be empty");
-        assert!(entry.handler_name.is_empty(), "handler_name should be empty");
+        assert!(
+            entry.handler_name.is_empty(),
+            "handler_name should be empty"
+        );
     }
 
     #[test]
@@ -858,7 +881,14 @@ mod tests {
     fn shape_check_finds_mismatch() {
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        create_endpoint(&kit, "e1", "demo", "/api/users", "GET", r#"{"name":"string"}"#);
+        create_endpoint(
+            &kit,
+            "e1",
+            "demo",
+            "/api/users",
+            "GET",
+            r#"{"name":"string"}"#,
+        );
         create_function(&kit, "f1", "demo", "caller", "/src/app.rs", 10);
         // CALLS edge from caller to endpoint with actual schema in reason.
         create_edge_with_reason(
@@ -886,7 +916,14 @@ mod tests {
     fn shape_check_no_violation_when_schemas_match() {
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        create_endpoint(&kit, "e1", "demo", "/api/users", "GET", r#"{"name":"string"}"#);
+        create_endpoint(
+            &kit,
+            "e1",
+            "demo",
+            "/api/users",
+            "GET",
+            r#"{"name":"string"}"#,
+        );
         create_function(&kit, "f1", "demo", "caller", "/src/app.rs", 10);
         create_edge_with_reason(
             &kit,
@@ -901,7 +938,10 @@ mod tests {
         let storage = storage(&kit);
         let reviewer = ApiReviewer::new(&*storage);
         let result = reviewer.shape_check("demo").expect("shape_check");
-        assert!(result.is_empty(), "matching schemas should yield no violations");
+        assert!(
+            result.is_empty(),
+            "matching schemas should yield no violations"
+        );
     }
 
     #[test]
@@ -931,8 +971,22 @@ mod tests {
     fn shape_check_filters_by_project() {
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        create_endpoint(&kit, "e1", "demo", "/api/users", "GET", r#"{"name":"string"}"#);
-        create_endpoint(&kit, "e2", "other", "/api/products", "GET", r#"{"name":"string"}"#);
+        create_endpoint(
+            &kit,
+            "e1",
+            "demo",
+            "/api/users",
+            "GET",
+            r#"{"name":"string"}"#,
+        );
+        create_endpoint(
+            &kit,
+            "e2",
+            "other",
+            "/api/products",
+            "GET",
+            r#"{"name":"string"}"#,
+        );
         create_function(&kit, "f1", "demo", "caller", "/src/app.rs", 10);
         create_edge_with_reason(
             &kit,
@@ -959,7 +1013,9 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let storage = storage(&kit);
         let reviewer = ApiReviewer::new(&*storage);
-        let result = reviewer.api_impact("demo", "/api/users").expect("api_impact");
+        let result = reviewer
+            .api_impact("demo", "/api/users")
+            .expect("api_impact");
         assert!(result.is_empty(), "empty DB should yield no impact");
     }
 
@@ -979,7 +1035,9 @@ mod tests {
 
         let storage = storage(&kit);
         let reviewer = ApiReviewer::new(&*storage);
-        let result = reviewer.api_impact("demo", "/api/users").expect("api_impact");
+        let result = reviewer
+            .api_impact("demo", "/api/users")
+            .expect("api_impact");
         assert_eq!(result.len(), 2, "should have 2 impact entries");
         // Sorted by caller name.
         assert_eq!(result[0].affected_caller, "caller_a");
@@ -1005,7 +1063,9 @@ mod tests {
 
         let storage = storage(&kit);
         let reviewer = ApiReviewer::new(&*storage);
-        let result = reviewer.api_impact("demo", "/api/users").expect("api_impact");
+        let result = reviewer
+            .api_impact("demo", "/api/users")
+            .expect("api_impact");
         assert!(result.is_empty(), "no callers → no impact");
     }
 
@@ -1017,7 +1077,9 @@ mod tests {
 
         let storage = storage(&kit);
         let reviewer = ApiReviewer::new(&*storage);
-        let result = reviewer.api_impact("demo", "/api/nonexistent").expect("api_impact");
+        let result = reviewer
+            .api_impact("demo", "/api/nonexistent")
+            .expect("api_impact");
         assert!(result.is_empty(), "nonexistent endpoint → no impact");
     }
 
@@ -1030,7 +1092,9 @@ mod tests {
 
         let storage = storage(&kit);
         let reviewer = ApiReviewer::new(&*storage);
-        let result = reviewer.api_impact("demo", "/api/users").expect("api_impact");
+        let result = reviewer
+            .api_impact("demo", "/api/users")
+            .expect("api_impact");
         assert!(result.is_empty(), "no handler → no impact");
     }
 
@@ -1053,7 +1117,9 @@ mod tests {
 
         let reviewer = ApiReviewer::new(&*storage);
         // Match by name (not path).
-        let result = reviewer.api_impact("demo", "users_api").expect("api_impact");
+        let result = reviewer
+            .api_impact("demo", "users_api")
+            .expect("api_impact");
         assert_eq!(result.len(), 1, "should find 1 caller by name match");
     }
 
@@ -1100,14 +1166,17 @@ mod tests {
         let entry = &result[0];
         assert_eq!(entry.tool_name, "orphan_tool");
         assert!(entry.handler_id.is_empty(), "handler_id should be empty");
-        assert!(entry.handler_name.is_empty(), "handler_name should be empty");
+        assert!(
+            entry.handler_name.is_empty(),
+            "handler_name should be empty"
+        );
     }
 
     #[test]
     fn tool_map_multiple_tools() {
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        create_tool(&kit, "t1", "demo", "query", );
+        create_tool(&kit, "t1", "demo", "query");
         create_tool(&kit, "t2", "demo", "search");
         create_handler(&kit, "h1", "demo", "query_handler");
         create_handler(&kit, "h2", "demo", "search_handler");

@@ -7,8 +7,8 @@ use std::path::PathBuf;
 
 use tracing::{info, warn};
 
-use crate::index::{IndexError, IndexFacade, IndexResult};
 use crate::daemon::event::{DaemonEvent, EventObserver};
+use crate::index::{IndexError, IndexFacade, IndexResult};
 
 /// 索引观察者：收到事件后触发增量索引（BR-DAEMON-003）。
 ///
@@ -127,11 +127,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let db_path = fresh_db_path();
         let facade = IndexFacade::new(&db_path).expect("facade");
-        let observer = IndexObserver::new(
-            facade,
-            "demo".to_string(),
-            tmp.path().to_path_buf(),
-        );
+        let observer = IndexObserver::new(facade, "demo".to_string(), tmp.path().to_path_buf());
         assert!(!observer.is_indexing(), "初始状态不应在索引中");
         assert_eq!(observer.index_count(), 0, "初始索引次数应为 0");
         assert!(observer.last_result().is_none(), "初始无索引结果");
@@ -145,21 +141,14 @@ mod tests {
 
         let db_path = fresh_db_path();
         let facade = IndexFacade::new(&db_path).expect("facade");
-        let mut observer = IndexObserver::new(
-            facade,
-            "demo".to_string(),
-            tmp.path().to_path_buf(),
-        );
+        let mut observer = IndexObserver::new(facade, "demo".to_string(), tmp.path().to_path_buf());
 
         let events = vec![DaemonEvent::Modify(tmp.path().join("main.rs"))];
         observer.on_events(&events);
 
         assert_eq!(observer.index_count(), 1, "应触发一次索引");
         assert!(!observer.is_indexing(), "索引完成后应清除标志");
-        assert!(
-            observer.last_result().is_some(),
-            "应有索引结果"
-        );
+        assert!(observer.last_result().is_some(), "应有索引结果");
         assert!(observer.last_error().is_none(), "不应有错误");
     }
 
@@ -170,11 +159,7 @@ mod tests {
 
         let db_path = fresh_db_path();
         let facade = IndexFacade::new(&db_path).expect("facade");
-        let mut observer = IndexObserver::new(
-            facade,
-            "demo".to_string(),
-            tmp.path().to_path_buf(),
-        );
+        let mut observer = IndexObserver::new(facade, "demo".to_string(), tmp.path().to_path_buf());
 
         assert!(!observer.is_indexing());
 
@@ -198,15 +183,14 @@ mod tests {
             PathBuf::from("/nonexistent/path/xyz"),
         );
 
-        let events = vec![DaemonEvent::Modify(PathBuf::from("/nonexistent/path/xyz/a.rs"))];
+        let events = vec![DaemonEvent::Modify(PathBuf::from(
+            "/nonexistent/path/xyz/a.rs",
+        ))];
         observer.on_events(&events);
 
         assert_eq!(observer.index_count(), 1, "仍应计数一次触发");
         assert!(!observer.is_indexing(), "失败后也应清除标志");
-        assert!(
-            observer.last_error().is_some(),
-            "应记录错误"
-        );
+        assert!(observer.last_error().is_some(), "应记录错误");
         assert!(observer.last_result().is_none(), "失败时不应有结果");
     }
 
@@ -217,11 +201,7 @@ mod tests {
 
         let db_path = fresh_db_path();
         let facade = IndexFacade::new(&db_path).expect("facade");
-        let mut observer = IndexObserver::new(
-            facade,
-            "demo".to_string(),
-            tmp.path().to_path_buf(),
-        );
+        let mut observer = IndexObserver::new(facade, "demo".to_string(), tmp.path().to_path_buf());
 
         for _ in 0..3 {
             observer.on_events(&[DaemonEvent::Modify(tmp.path().join("a.rs"))]);

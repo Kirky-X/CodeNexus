@@ -123,22 +123,34 @@ mod tests {
 
     #[test]
     fn map_function_kind() {
-        assert_eq!(map_lsp_symbol_kind(SymbolKind::FUNCTION), Some(NodeLabel::Function));
+        assert_eq!(
+            map_lsp_symbol_kind(SymbolKind::FUNCTION),
+            Some(NodeLabel::Function)
+        );
     }
 
     #[test]
     fn map_method_kind() {
-        assert_eq!(map_lsp_symbol_kind(SymbolKind::METHOD), Some(NodeLabel::Method));
+        assert_eq!(
+            map_lsp_symbol_kind(SymbolKind::METHOD),
+            Some(NodeLabel::Method)
+        );
     }
 
     #[test]
     fn map_class_kind() {
-        assert_eq!(map_lsp_symbol_kind(SymbolKind::CLASS), Some(NodeLabel::Class));
+        assert_eq!(
+            map_lsp_symbol_kind(SymbolKind::CLASS),
+            Some(NodeLabel::Class)
+        );
     }
 
     #[test]
     fn map_interface_kind() {
-        assert_eq!(map_lsp_symbol_kind(SymbolKind::INTERFACE), Some(NodeLabel::Interface));
+        assert_eq!(
+            map_lsp_symbol_kind(SymbolKind::INTERFACE),
+            Some(NodeLabel::Interface)
+        );
     }
 
     #[test]
@@ -148,59 +160,92 @@ mod tests {
 
     #[test]
     fn map_struct_kind() {
-        assert_eq!(map_lsp_symbol_kind(SymbolKind::STRUCT), Some(NodeLabel::Struct));
+        assert_eq!(
+            map_lsp_symbol_kind(SymbolKind::STRUCT),
+            Some(NodeLabel::Struct)
+        );
     }
 
     #[test]
     fn map_module_kind() {
-        assert_eq!(map_lsp_symbol_kind(SymbolKind::MODULE), Some(NodeLabel::Module));
+        assert_eq!(
+            map_lsp_symbol_kind(SymbolKind::MODULE),
+            Some(NodeLabel::Module)
+        );
     }
 
     #[test]
     fn map_variable_kind() {
-        assert_eq!(map_lsp_symbol_kind(SymbolKind::VARIABLE), Some(NodeLabel::Variable));
+        assert_eq!(
+            map_lsp_symbol_kind(SymbolKind::VARIABLE),
+            Some(NodeLabel::Variable)
+        );
     }
 
     #[test]
     fn map_constant_kind() {
-        assert_eq!(map_lsp_symbol_kind(SymbolKind::CONSTANT), Some(NodeLabel::Const));
+        assert_eq!(
+            map_lsp_symbol_kind(SymbolKind::CONSTANT),
+            Some(NodeLabel::Const)
+        );
     }
 
     // --- Extended mappings (R-lsp-003 table, optional rows) ---
 
     #[test]
     fn map_namespace_kind() {
-        assert_eq!(map_lsp_symbol_kind(SymbolKind::NAMESPACE), Some(NodeLabel::Namespace));
+        assert_eq!(
+            map_lsp_symbol_kind(SymbolKind::NAMESPACE),
+            Some(NodeLabel::Namespace)
+        );
     }
 
     #[test]
     fn map_property_kind() {
-        assert_eq!(map_lsp_symbol_kind(SymbolKind::PROPERTY), Some(NodeLabel::Property));
+        assert_eq!(
+            map_lsp_symbol_kind(SymbolKind::PROPERTY),
+            Some(NodeLabel::Property)
+        );
     }
 
     #[test]
     fn map_field_kind() {
-        assert_eq!(map_lsp_symbol_kind(SymbolKind::FIELD), Some(NodeLabel::Field));
+        assert_eq!(
+            map_lsp_symbol_kind(SymbolKind::FIELD),
+            Some(NodeLabel::Field)
+        );
     }
 
     #[test]
     fn map_constructor_kind() {
-        assert_eq!(map_lsp_symbol_kind(SymbolKind::CONSTRUCTOR), Some(NodeLabel::Constructor));
+        assert_eq!(
+            map_lsp_symbol_kind(SymbolKind::CONSTRUCTOR),
+            Some(NodeLabel::Constructor)
+        );
     }
 
     #[test]
     fn map_enum_member_kind() {
-        assert_eq!(map_lsp_symbol_kind(SymbolKind::ENUM_MEMBER), Some(NodeLabel::Variant));
+        assert_eq!(
+            map_lsp_symbol_kind(SymbolKind::ENUM_MEMBER),
+            Some(NodeLabel::Variant)
+        );
     }
 
     #[test]
     fn map_event_kind() {
-        assert_eq!(map_lsp_symbol_kind(SymbolKind::EVENT), Some(NodeLabel::Event));
+        assert_eq!(
+            map_lsp_symbol_kind(SymbolKind::EVENT),
+            Some(NodeLabel::Event)
+        );
     }
 
     #[test]
     fn map_type_parameter_kind() {
-        assert_eq!(map_lsp_symbol_kind(SymbolKind::TYPE_PARAMETER), Some(NodeLabel::Typedef));
+        assert_eq!(
+            map_lsp_symbol_kind(SymbolKind::TYPE_PARAMETER),
+            Some(NodeLabel::Typedef)
+        );
     }
 
     // --- R-lsp-003: unknown/unsupported kinds must return None ---

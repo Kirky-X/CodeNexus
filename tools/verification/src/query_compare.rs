@@ -280,8 +280,14 @@ LIMIT 200
         ];
         let diff = compare_query_results(&cn, &gn);
         match diff {
-            QueryDiff::CriticalDiff { missing_in_codenexus, missing_in_gitnexus } => {
-                assert_eq!(missing_in_codenexus, vec![("baz".to_string(), "c.rs".to_string())]);
+            QueryDiff::CriticalDiff {
+                missing_in_codenexus,
+                missing_in_gitnexus,
+            } => {
+                assert_eq!(
+                    missing_in_codenexus,
+                    vec![("baz".to_string(), "c.rs".to_string())]
+                );
                 assert!(missing_in_gitnexus.is_empty());
             }
             other => panic!("expected CriticalDiff, got {other:?}"),
@@ -301,9 +307,15 @@ LIMIT 200
         ];
         let diff = compare_query_results(&cn, &gn);
         match diff {
-            QueryDiff::CriticalDiff { missing_in_codenexus, missing_in_gitnexus } => {
+            QueryDiff::CriticalDiff {
+                missing_in_codenexus,
+                missing_in_gitnexus,
+            } => {
                 assert!(missing_in_codenexus.is_empty());
-                assert_eq!(missing_in_gitnexus, vec![("qux".to_string(), "d.rs".to_string())]);
+                assert_eq!(
+                    missing_in_gitnexus,
+                    vec![("qux".to_string(), "d.rs".to_string())]
+                );
             }
             other => panic!("expected CriticalDiff, got {other:?}"),
         }
@@ -315,9 +327,18 @@ LIMIT 200
         let gn = vec![("bar".to_string(), "b.rs".to_string())];
         let diff = compare_query_results(&cn, &gn);
         match diff {
-            QueryDiff::CriticalDiff { missing_in_codenexus, missing_in_gitnexus } => {
-                assert_eq!(missing_in_codenexus, vec![("bar".to_string(), "b.rs".to_string())]);
-                assert_eq!(missing_in_gitnexus, vec![("foo".to_string(), "a.rs".to_string())]);
+            QueryDiff::CriticalDiff {
+                missing_in_codenexus,
+                missing_in_gitnexus,
+            } => {
+                assert_eq!(
+                    missing_in_codenexus,
+                    vec![("bar".to_string(), "b.rs".to_string())]
+                );
+                assert_eq!(
+                    missing_in_gitnexus,
+                    vec![("foo".to_string(), "a.rs".to_string())]
+                );
             }
             other => panic!("expected CriticalDiff, got {other:?}"),
         }
@@ -398,16 +419,13 @@ LIMIT 50
         // both are returned as strings.
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("cov.lbug");
-        let repo = codenexus::storage::repository::Repository::open(&db_path)
-            .expect("Repository::open");
+        let repo =
+            codenexus::storage::repository::Repository::open(&db_path).expect("Repository::open");
         // Insert a Project node so we have something to query.
-        let project = codenexus::model::Node::builder(
-            codenexus::model::NodeLabel::Project,
-            "demo",
-            "demo",
-        )
-        .id("proj-1")
-        .build();
+        let project =
+            codenexus::model::Node::builder(codenexus::model::NodeLabel::Project, "demo", "demo")
+                .id("proj-1")
+                .build();
         repo.save_nodes(&[project], codenexus::model::NodeLabel::Project)
             .expect("save_nodes");
         drop(repo);
@@ -438,11 +456,14 @@ LIMIT 50
         // error). Covers the no-rows path of the row-mapping closure.
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("empty.lbug");
-        let _ = codenexus::storage::repository::Repository::open(&db_path)
-            .expect("Repository::open");
+        let _ =
+            codenexus::storage::repository::Repository::open(&db_path).expect("Repository::open");
         let cql = "MATCH (p:Project) RETURN p.name AS name, p.id AS id";
         let rows = execute_codenexus_query(&db_path, cql, None).expect("execute_codenexus_query");
-        assert!(rows.is_empty(), "expected zero rows for empty Project table");
+        assert!(
+            rows.is_empty(),
+            "expected zero rows for empty Project table"
+        );
     }
 
     #[test]
@@ -452,8 +473,8 @@ LIMIT 50
         // closure must coerce null → "" (Rule 12: visible empty, not drop).
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("null.lbug");
-        let repo = codenexus::storage::repository::Repository::open(&db_path)
-            .expect("Repository::open");
+        let repo =
+            codenexus::storage::repository::Repository::open(&db_path).expect("Repository::open");
         let project = codenexus::model::Node::builder(
             codenexus::model::NodeLabel::Project,
             "nullproj",
@@ -480,15 +501,12 @@ LIMIT 50
         // data contamination.
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("pid.lbug");
-        let repo = codenexus::storage::repository::Repository::open(&db_path)
-            .expect("Repository::open");
-        let project = codenexus::model::Node::builder(
-            codenexus::model::NodeLabel::Project,
-            "alpha",
-            "alpha",
-        )
-        .id("proj-alpha-id")
-        .build();
+        let repo =
+            codenexus::storage::repository::Repository::open(&db_path).expect("Repository::open");
+        let project =
+            codenexus::model::Node::builder(codenexus::model::NodeLabel::Project, "alpha", "alpha")
+                .id("proj-alpha-id")
+                .build();
         repo.save_nodes(&[project], codenexus::model::NodeLabel::Project)
             .expect("save_nodes");
         drop(repo);
@@ -496,15 +514,13 @@ LIMIT 50
         // __PID__ should be replaced with proj-alpha-id, matching exactly
         // one Project node.
         let cql = "MATCH (p:Project) WHERE p.id = '__PID__' RETURN p.name AS name, p.id AS id";
-        let rows =
-            execute_codenexus_query(&db_path, cql, Some("proj-alpha-id")).expect("execute");
+        let rows = execute_codenexus_query(&db_path, cql, Some("proj-alpha-id")).expect("execute");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, "alpha");
         assert_eq!(rows[0].1, "proj-alpha-id");
 
         // A non-matching pid should return zero rows.
-        let rows =
-            execute_codenexus_query(&db_path, cql, Some("proj-beta-id")).expect("execute");
+        let rows = execute_codenexus_query(&db_path, cql, Some("proj-beta-id")).expect("execute");
         assert!(rows.is_empty(), "non-matching pid should return zero rows");
     }
 }

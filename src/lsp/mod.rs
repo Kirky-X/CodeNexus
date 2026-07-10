@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! LSP semantic type resolution (T007, v0.2.0).
+//! LSP semantic type resolution.
 //!
 //! Integrates external Language Server Protocol servers (e.g. `rust-analyzer`
 //! for Rust) to provide IDE-grade semantic queries — Go-to-Definition,
@@ -113,12 +113,8 @@ pub trait LspProvider: Send + Sync {
     /// `textDocument/hover` — fetch hover info (type signature, docstring)
     /// for the symbol at `(file, line, col)`. Returns `Ok(None)` when the
     /// server has nothing to show.
-    fn hover(
-        &self,
-        file: &Path,
-        line: u32,
-        col: u32,
-    ) -> Result<Option<lsp_types::Hover>, LspError>;
+    fn hover(&self, file: &Path, line: u32, col: u32)
+        -> Result<Option<lsp_types::Hover>, LspError>;
 
     /// Send `shutdown` + `exit` to the server and reap the subprocess.
     ///
@@ -132,7 +128,7 @@ pub trait LspProvider: Send + Sync {
 /// `semantic_type` string (R-lsp-004). Truncates to 200 chars to keep the
 /// property lean.
 ///
-/// Shared by the DB-backed CLI wiring (`cli::index_cmd::enhance_with_lsp`) and
+/// Shared by the service-layer LSP enhancement (`service::index::enhance_with_lsp`) and
 /// the mock-testable pipeline unit (`index::pipeline::enhance_with_lsp`) so the
 /// extraction contract is defined once (Rule 8: no duplicate implementations).
 pub fn extract_hover_text(hover: &lsp_types::Hover) -> Option<String> {

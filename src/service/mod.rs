@@ -12,8 +12,8 @@
 //! because sdforge's `#[service_api]` macro generates standalone functions
 //! that cannot accept injected state.
 
-pub mod architecture;
 pub mod api_impact;
+pub mod architecture;
 pub mod clean;
 pub mod community;
 pub mod complexity;

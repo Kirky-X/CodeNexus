@@ -96,16 +96,26 @@ impl<'a> TypeResolver<'a> {
     ) -> Option<(String, f32, ConfidenceTier)> {
         // 1. File-level lookup (same file).
         // Single-line for coverage: tarpaulin attribute continuation
-        if let Some(entry) = self.symbol_table.lookup_in_file(user_file, type_name).first() {
+        if let Some(entry) = self
+            .symbol_table
+            .lookup_in_file(user_file, type_name)
+            .first()
+        {
             return Some((entry.qn.clone(), CONFIDENCE_EXACT, ConfidenceTier::SameFile));
         }
         // 2. Import-based lookup.
         // Single-line for coverage: tarpaulin attribute continuation
-        let is_imported = imports.iter().any(|imp| imp.imported_names.iter().any(|n| n == type_name));
+        let is_imported = imports
+            .iter()
+            .any(|imp| imp.imported_names.iter().any(|n| n == type_name));
         if is_imported {
             if let Some(entry) = self.symbol_table.lookup(type_name).first() {
                 // Single-line for coverage: tarpaulin attribute continuation
-                return Some((entry.qn.clone(), CONFIDENCE_IMPORT, ConfidenceTier::ImportScoped));
+                return Some((
+                    entry.qn.clone(),
+                    CONFIDENCE_IMPORT,
+                    ConfidenceTier::ImportScoped,
+                ));
             }
         }
         // 3. Project-level exported lookup.
@@ -139,11 +149,7 @@ impl<'a> TypeResolver<'a> {
     ///
     /// A vector of the resolved (fixed) edges. These are the same edges that
     /// were mutated in `graph` — returned for logging/reporting purposes.
-    pub fn resolve_types(
-        &self,
-        results: &[ExtractResult],
-        graph: &mut Graph,
-    ) -> Vec<Edge> {
+    pub fn resolve_types(&self, results: &[ExtractResult], graph: &mut Graph) -> Vec<Edge> {
         // In production, `ExtractResult.file_path` is absolute (set by
         // `extract_file` from `file.path`), while graph nodes' `file_path` is
         // relative (normalized by `ScopeResolutionPhase`, phases.rs:344-346).
@@ -157,12 +163,15 @@ impl<'a> TypeResolver<'a> {
         let mut result_to_graph_fp: HashMap<&str, &str> = HashMap::new();
         for result in results {
             // Skip if we already mapped this file.
-            if result_to_graph_fp.contains_key(result.file_path.as_str()) { continue; }
+            if result_to_graph_fp.contains_key(result.file_path.as_str()) {
+                continue;
+            }
             for node in &result.nodes {
                 if let Some(graph_node) = graph.nodes.get(&node.qualified_name) {
                     if let Some(graph_fp) = graph_node.file_path.as_deref() {
                         // Single-line for coverage: tarpaulin attribute continuation
-                        result_to_graph_fp.insert(result.file_path.as_str(), graph_fp); break;
+                        result_to_graph_fp.insert(result.file_path.as_str(), graph_fp);
+                        break;
                     }
                 }
             }
@@ -171,26 +180,50 @@ impl<'a> TypeResolver<'a> {
         // (absolute), used to translate `source_file` back to the format
         // expected by `symbol_table.lookup_in_file`.
         // Single-line for coverage: tarpaulin attribute continuation
-        let graph_to_result_fp: HashMap<&str, &str> = result_to_graph_fp.iter().map(|(k, v)| (*v, *k)).collect();
+        let graph_to_result_fp: HashMap<&str, &str> =
+            result_to_graph_fp.iter().map(|(k, v)| (*v, *k)).collect();
 
         // Build file_path → imports map, keyed by GRAPH file_path (relative)
         // so it matches `fqn_to_file` values.
         // Single-line for coverage: tarpaulin attribute continuation
-        let imports_map: HashMap<&str, &[ImportInfo]> = results.iter().map(|r| { let key = result_to_graph_fp.get(r.file_path.as_str()).copied().unwrap_or(r.file_path.as_str()); (key, r.imports.as_slice()) }).collect();
+        let imports_map: HashMap<&str, &[ImportInfo]> = results
+            .iter()
+            .map(|r| {
+                let key = result_to_graph_fp
+                    .get(r.file_path.as_str())
+                    .copied()
+                    .unwrap_or(r.file_path.as_str());
+                (key, r.imports.as_slice())
+            })
+            .collect();
 
         // Build fqn → file_path map from graph nodes (for source lookup).
         // Single-line for coverage: tarpaulin attribute continuation
-        let fqn_to_file: HashMap<&str, &str> = graph.nodes.values().filter_map(|n| { n.file_path.as_deref().map(|fp| (n.qualified_name.as_str(), fp)) }).collect();
+        let fqn_to_file: HashMap<&str, &str> = graph
+            .nodes
+            .values()
+            .filter_map(|n| {
+                n.file_path
+                    .as_deref()
+                    .map(|fp| (n.qualified_name.as_str(), fp))
+            })
+            .collect();
 
         let mut resolved_edges = Vec::new();
         for edge in &mut graph.edges {
             // Only fix resolvable edge types.
-            if !RESOLVABLE_EDGE_TYPES.contains(&edge.edge_type) { continue; }
+            if !RESOLVABLE_EDGE_TYPES.contains(&edge.edge_type) {
+                continue;
+            }
             // Skip if target FQN already matches a real node (not dangling).
-            if graph.nodes.contains_key(&edge.target) { continue; }
+            if graph.nodes.contains_key(&edge.target) {
+                continue;
+            }
             // Get the source node's file path (relative, from graph).
             // Single-line for coverage: tarpaulin attribute continuation
-            let Some(&source_file) = fqn_to_file.get(edge.source.as_str()) else { continue; };
+            let Some(&source_file) = fqn_to_file.get(edge.source.as_str()) else {
+                continue;
+            };
             // Extract the type name from the dangling FQN (last component).
             let type_name = edge.target.rsplit('.').next().unwrap_or(&edge.target);
             // Retrieve imports for this file (imports_map keyed by relative
@@ -199,15 +232,24 @@ impl<'a> TypeResolver<'a> {
             // Translate relative source_file back to absolute for symbol table
             // lookup (file table keyed by result.file_path = absolute).
             // Single-line for coverage: tarpaulin attribute continuation
-            let lookup_file = graph_to_result_fp.get(source_file).copied().unwrap_or(source_file);
+            let lookup_file = graph_to_result_fp
+                .get(source_file)
+                .copied()
+                .unwrap_or(source_file);
             // Attempt resolution.
             // Single-line for coverage: tarpaulin attribute continuation
-            let Some((resolved_qn, confidence, tier)) = self.resolve_type(lookup_file, type_name, imports) else { continue; };
+            let Some((resolved_qn, confidence, tier)) =
+                self.resolve_type(lookup_file, type_name, imports)
+            else {
+                continue;
+            };
             // Skip if the resolved FQN is the same as the current target
             // (no change needed — shouldn't happen since target is dangling,
             // but guard against edge cases where the FQN generator produced
             // the correct string but the node just isn't in the graph).
-            if resolved_qn == edge.target { continue; }
+            if resolved_qn == edge.target {
+                continue;
+            }
             // Update the edge in-place.
             edge.target = resolved_qn;
             edge.confidence = confidence;
@@ -253,12 +295,7 @@ mod tests {
     }
 
     fn add_implements(graph: &mut Graph, source: &str, target: &str) {
-        graph.add_edge(Edge::new(
-            source,
-            target,
-            EdgeType::Implements,
-            "proj",
-        ));
+        graph.add_edge(Edge::new(source, target, EdgeType::Implements, "proj"));
     }
 
     fn build_results_and_table(
@@ -268,9 +305,9 @@ mod tests {
             std::collections::HashMap::new();
         for (node, file) in nodes {
             let lang = node.language.unwrap_or(Language::Python);
-            let result = results.entry(file).or_insert_with(|| {
-                ExtractResult::new(file, lang)
-            });
+            let result = results
+                .entry(file)
+                .or_insert_with(|| ExtractResult::new(file, lang));
             result.push_node(node);
         }
         let results_vec: Vec<ExtractResult> = results.into_values().collect();
@@ -298,8 +335,7 @@ mod tests {
     fn resolve_type_import_scoped() {
         let class_a = make_class("A", "a.py", Language::Python);
         let class_b = make_class("B", "b.py", Language::Python);
-        let (results, table) =
-            build_results_and_table(vec![(class_a, "a.py"), (class_b, "b.py")]);
+        let (results, table) = build_results_and_table(vec![(class_a, "a.py"), (class_b, "b.py")]);
         let imports = vec![ImportInfo {
             source_file: "a".to_string(),
             imported_names: vec!["A".to_string()],
@@ -348,8 +384,7 @@ mod tests {
         // The TypeResolver should fix it to B -> proj.a.py.A.
         let class_a = make_class("A", "a.py", Language::Python);
         let class_b = make_class("B", "b.py", Language::Python);
-        let (results, table) =
-            build_results_and_table(vec![(class_a, "a.py"), (class_b, "b.py")]);
+        let (results, table) = build_results_and_table(vec![(class_a, "a.py"), (class_b, "b.py")]);
 
         let mut graph = Graph::new();
         graph.add_node(make_class("A", "a.py", Language::Python));
@@ -384,8 +419,7 @@ mod tests {
         // Edge target exists in the graph — should not be touched.
         let class_a = make_class("A", "a.py", Language::Python);
         let class_b = make_class("B", "b.py", Language::Python);
-        let (results, table) =
-            build_results_and_table(vec![(class_a, "a.py"), (class_b, "b.py")]);
+        let (results, table) = build_results_and_table(vec![(class_a, "a.py"), (class_b, "b.py")]);
 
         let mut graph = Graph::new();
         graph.add_node(make_class("A", "a.py", Language::Python));
@@ -426,10 +460,8 @@ mod tests {
     fn resolve_types_fixes_dangling_implements_edge() {
         let trait_def = make_class("MyTrait", "a.rs", Language::Rust);
         let impl_class = make_class("MyImpl", "b.rs", Language::Rust);
-        let (results, table) = build_results_and_table(vec![
-            (trait_def, "a.rs"),
-            (impl_class, "b.rs"),
-        ]);
+        let (results, table) =
+            build_results_and_table(vec![(trait_def, "a.rs"), (impl_class, "b.rs")]);
 
         let mut graph = Graph::new();
         graph.add_node(make_class("MyTrait", "a.rs", Language::Rust));
@@ -479,8 +511,7 @@ mod tests {
         // lookup.
         let class_a = make_class("A", "a.py", Language::Python);
         let class_b = make_class("B", "b.py", Language::Python);
-        let (results, table) =
-            build_results_and_table(vec![(class_a, "a.py"), (class_b, "b.py")]);
+        let (results, table) = build_results_and_table(vec![(class_a, "a.py"), (class_b, "b.py")]);
 
         let mut graph = Graph::new();
         graph.add_node(make_class("A", "a.py", Language::Python));
@@ -493,10 +524,7 @@ mod tests {
         assert_eq!(fixed.len(), 1);
         assert_eq!(graph.edges[0].target, "proj.a.py.A");
         assert!((graph.edges[0].confidence - 0.80).abs() < f32::EPSILON);
-        assert_eq!(
-            graph.edges[0].confidence_tier,
-            ConfidenceTier::Global
-        );
+        assert_eq!(graph.edges[0].confidence_tier, ConfidenceTier::Global);
     }
 
     #[test]
@@ -611,7 +639,12 @@ mod tests {
         graph.add_node(graph_a);
         graph.add_node(graph_b);
         // Dangling edge: B extends A (wrong file segment in FQN).
-        graph.add_edge(Edge::new(qn_b, "proj.abs.path.b.py.A", EdgeType::Extends, "proj"));
+        graph.add_edge(Edge::new(
+            qn_b,
+            "proj.abs.path.b.py.A",
+            EdgeType::Extends,
+            "proj",
+        ));
 
         let resolver = TypeResolver::new(&table);
         let fixed = resolver.resolve_types(&results, &mut graph);
@@ -625,10 +658,7 @@ mod tests {
             "import-scoped (0.90) should succeed with path mapping; got {}",
             graph.edges[0].confidence
         );
-        assert_eq!(
-            graph.edges[0].confidence_tier,
-            ConfidenceTier::ImportScoped
-        );
+        assert_eq!(graph.edges[0].confidence_tier, ConfidenceTier::ImportScoped);
     }
 
     #[test]
@@ -661,8 +691,7 @@ mod tests {
         // UsesType is in RESOLVABLE_EDGE_TYPES but not previously tested.
         let type_a = make_class("TypeA", "a.py", Language::Python);
         let user_b = make_class("UserB", "b.py", Language::Python);
-        let (results, table) =
-            build_results_and_table(vec![(type_a, "a.py"), (user_b, "b.py")]);
+        let (results, table) = build_results_and_table(vec![(type_a, "a.py"), (user_b, "b.py")]);
 
         let mut graph = Graph::new();
         graph.add_node(make_class("TypeA", "a.py", Language::Python));
@@ -696,8 +725,7 @@ mod tests {
         // which equals edge.target → L248 continue → no fix.
         let class_a = make_class("A", "b.py", Language::Python);
         let class_b = make_class("B", "b.py", Language::Python);
-        let (results, table) =
-            build_results_and_table(vec![(class_a, "b.py"), (class_b, "b.py")]);
+        let (results, table) = build_results_and_table(vec![(class_a, "b.py"), (class_b, "b.py")]);
 
         let mut graph = Graph::new();
         // Only add B to the graph — A is in the symbol table but not the graph.

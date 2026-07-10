@@ -450,10 +450,7 @@ mod tests {
     #[test]
     fn extract_result_is_empty_when_only_some_fields_populated() {
         let mut result = ExtractResult::new("test.rs", Language::Rust);
-        result.push_node(
-            Node::builder(NodeLabel::Function, "foo", "foo")
-                .build(),
-        );
+        result.push_node(Node::builder(NodeLabel::Function, "foo", "foo").build());
         assert!(!result.is_empty(), "result with nodes should not be empty");
 
         let mut result2 = ExtractResult::new("test.rs", Language::Rust);
@@ -471,10 +468,7 @@ mod tests {
     #[test]
     fn extract_result_clone_preserves_data() {
         let mut result = ExtractResult::new("test.rs", Language::Rust);
-        result.push_node(
-            Node::builder(NodeLabel::Function, "foo", "foo")
-                .build(),
-        );
+        result.push_node(Node::builder(NodeLabel::Function, "foo", "foo").build());
         let cloned = result.clone();
         assert_eq!(cloned.file_path, result.file_path);
         assert_eq!(cloned.language, result.language);
@@ -508,7 +502,10 @@ mod tests {
         let temp = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(temp.path(), "fn main() {}").unwrap();
         let result = extract_file(temp.path(), Language::Rust, "proj");
-        assert!(result.is_ok(), "extract_file should succeed for existing file");
+        assert!(
+            result.is_ok(),
+            "extract_file should succeed for existing file"
+        );
         let result = result.unwrap();
         assert_eq!(result.language, Language::Rust);
         // Task 6: extract_file now dispatches to the language-specific extractor.
@@ -552,13 +549,17 @@ mod tests {
 
     #[test]
     fn extractor_trait_can_be_implemented() {
-        let ext = DummyExtractor { lang: Language::Rust };
+        let ext = DummyExtractor {
+            lang: Language::Rust,
+        };
         assert_eq!(ext.language(), Language::Rust);
     }
 
     #[test]
     fn extractor_extract_returns_result_with_nodes() {
-        let ext = DummyExtractor { lang: Language::Rust };
+        let ext = DummyExtractor {
+            lang: Language::Rust,
+        };
         let result = ext.extract("fn main() {}", "test.rs", "proj").unwrap();
         assert_eq!(result.language, Language::Rust);
         assert_eq!(result.file_path, "test.rs");
@@ -571,7 +572,9 @@ mod tests {
 
     #[test]
     fn extractor_extract_empty_source_returns_empty_result() {
-        let ext = DummyExtractor { lang: Language::Python };
+        let ext = DummyExtractor {
+            lang: Language::Python,
+        };
         let result = ext.extract("", "empty.py", "proj").unwrap();
         assert_eq!(result.language, Language::Python);
         assert!(result.nodes.is_empty());
@@ -586,15 +589,21 @@ mod tests {
         fn assert_dyn_extractor_send_sync(x: &dyn Extractor) {
             let _ = &x;
         }
-        let ext = DummyExtractor { lang: Language::Rust };
+        let ext = DummyExtractor {
+            lang: Language::Rust,
+        };
         assert_dyn_extractor_send_sync(&ext);
     }
 
     #[test]
     fn extractor_can_be_used_as_trait_object() {
         let extractors: Vec<Box<dyn Extractor>> = vec![
-            Box::new(DummyExtractor { lang: Language::Rust }),
-            Box::new(DummyExtractor { lang: Language::Python }),
+            Box::new(DummyExtractor {
+                lang: Language::Rust,
+            }),
+            Box::new(DummyExtractor {
+                lang: Language::Python,
+            }),
         ];
         assert_eq!(extractors.len(), 2);
         assert_eq!(extractors[0].language(), Language::Rust);

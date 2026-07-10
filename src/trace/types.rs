@@ -317,7 +317,9 @@ mod tests {
             },
         ];
         v.sort_by(|a, b| {
-            a.edge_type.cmp(&b.edge_type).then_with(|| a.name.cmp(&b.name))
+            a.edge_type
+                .cmp(&b.edge_type)
+                .then_with(|| a.name.cmp(&b.name))
         });
         assert_eq!(v[0].edge_type, "CALLS");
         assert_eq!(v[0].name, "a");

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! `rust-analyzer` LSP client (T007, v0.2.0).
+//! `rust-analyzer` LSP client.
 //!
 //! [`RustAnalyzerClient`] spawns `rust-analyzer` as a subprocess, wires its
 //! stdin/stdout into an [`lsp_server::Connection`] via two background threads,
@@ -30,7 +30,7 @@
 //! The indexing pipeline (R-lsp-004) treats *any* of these as "LSP
 //! unavailable, fall back to pure tree-sitter" — none of them abort the index.
 
-use std::io::{BufReader, BufRead, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Mutex;
@@ -81,7 +81,10 @@ impl RustAnalyzerClient {
     /// is installed in CI.
     #[must_use]
     pub fn with_server_path(server_path: PathBuf) -> Self {
-        Self { server_path, session: Mutex::new(None) }
+        Self {
+            server_path,
+            session: Mutex::new(None),
+        }
     }
 }
 
@@ -240,7 +243,7 @@ impl LspProvider for RustAnalyzerClient {
         // Best-effort teardown — server may already be gone. We send
         // `shutdown` then `exit` per LSP spec §shutdown sequence, but ignore
         // any errors so that a half-broken session still gets reaped.
-        let _ = send_raw_request(&mut session, "shutdown", serde_json::Value::Null);
+        send_raw_request(&mut session, "shutdown", serde_json::Value::Null);
         let _ = send_notification(&session.connection, Exit::METHOD, &serde_json::Value::Null);
 
         // Reap the child (don't leave zombies) — but bound the wait so a
@@ -304,7 +307,10 @@ fn spawn_transport(
         })
         .expect("spawn lsp reader thread");
 
-    let connection = Connection { sender: writer_tx, receiver: reader_rx };
+    let connection = Connection {
+        sender: writer_tx,
+        receiver: reader_rx,
+    };
     (connection, reader_handle, writer_handle)
 }
 
@@ -383,7 +389,10 @@ fn send_notification<P: serde::Serialize>(
 ) -> Result<(), LspError> {
     let params_value =
         serde_json::to_value(params).map_err(|e| LspError::Communication(e.to_string()))?;
-    let notif = Notification { method: method.to_string(), params: params_value };
+    let notif = Notification {
+        method: method.to_string(),
+        params: params_value,
+    };
     conn.sender
         .send(Message::Notification(notif))
         .map_err(|e| LspError::Communication(format!("send notification: {e}")))
@@ -402,10 +411,8 @@ where
         )));
     }
     match resp.result {
-        Some(value) => {
-            serde_json::from_value::<R::Result>(value)
-                .map_err(|e| LspError::Communication(format!("decode response: {e}")))
-        }
+        Some(value) => serde_json::from_value::<R::Result>(value)
+            .map_err(|e| LspError::Communication(format!("decode response: {e}"))),
         None => {
             // No result payload — for `Option<T>` results this means `None`.
             // serde_json will produce `None` from `Value::Null`, but a totally
@@ -444,7 +451,10 @@ fn make_position_params(
     let uri = path_to_url(file)?;
     Ok(TextDocumentPositionParams {
         text_document: TextDocumentIdentifier { uri },
-        position: Position { line, character: col },
+        position: Position {
+            line,
+            character: col,
+        },
     })
 }
 
@@ -510,7 +520,10 @@ mod tests {
     fn shutdown_without_start_returns_ok() {
         let client = RustAnalyzerClient::new();
         let result = client.shutdown();
-        assert!(result.is_ok(), "shutdown before start should be Ok, got: {result:?}");
+        assert!(
+            result.is_ok(),
+            "shutdown before start should be Ok, got: {result:?}"
+        );
     }
 
     // --- R-lsp-002: shutdown after a failed start is still Ok ---
@@ -525,7 +538,10 @@ mod tests {
         let _ = client.start(&workspace);
         // shutdown must still be safe.
         let result = client.shutdown();
-        assert!(result.is_ok(), "shutdown after failed start should be Ok: {result:?}");
+        assert!(
+            result.is_ok(),
+            "shutdown after failed start should be Ok: {result:?}"
+        );
     }
 
     // --- R-lsp-002: definition/hover without start return Communication error ---
@@ -534,21 +550,30 @@ mod tests {
     fn definition_without_start_returns_communication_error() {
         let client = RustAnalyzerClient::new();
         let result = client.definition(Path::new("/tmp/lib.rs"), 0, 0);
-        assert!(matches!(result, Err(LspError::Communication(_))), "got: {result:?}");
+        assert!(
+            matches!(result, Err(LspError::Communication(_))),
+            "got: {result:?}"
+        );
     }
 
     #[test]
     fn type_definition_without_start_returns_communication_error() {
         let client = RustAnalyzerClient::new();
         let result = client.type_definition(Path::new("/tmp/lib.rs"), 0, 0);
-        assert!(matches!(result, Err(LspError::Communication(_))), "got: {result:?}");
+        assert!(
+            matches!(result, Err(LspError::Communication(_))),
+            "got: {result:?}"
+        );
     }
 
     #[test]
     fn hover_without_start_returns_communication_error() {
         let client = RustAnalyzerClient::new();
         let result = client.hover(Path::new("/tmp/lib.rs"), 0, 0);
-        assert!(matches!(result, Err(LspError::Communication(_))), "got: {result:?}");
+        assert!(
+            matches!(result, Err(LspError::Communication(_))),
+            "got: {result:?}"
+        );
     }
 
     // --- Constructor sanity ---
@@ -561,8 +586,7 @@ mod tests {
 
     #[test]
     fn with_server_path_overrides_default() {
-        let client =
-            RustAnalyzerClient::with_server_path(PathBuf::from("/custom/rust-analyzer"));
+        let client = RustAnalyzerClient::with_server_path(PathBuf::from("/custom/rust-analyzer"));
         assert_eq!(client.server_path, PathBuf::from("/custom/rust-analyzer"));
     }
 
@@ -581,8 +605,14 @@ mod tests {
         let loc = lsp_types::Location {
             uri: uri.clone(),
             range: lsp_types::Range {
-                start: Position { line: 0, character: 0 },
-                end: Position { line: 0, character: 5 },
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 5,
+                },
             },
         };
         let resp = Some(GotoDefinitionResponse::Scalar(loc.clone()));
@@ -623,8 +653,14 @@ mod tests {
         // all three response variants.
         let target_uri = Url::parse("file:///tmp/target.rs").unwrap();
         let target_range = lsp_types::Range {
-            start: Position { line: 10, character: 2 },
-            end: Position { line: 10, character: 8 },
+            start: Position {
+                line: 10,
+                character: 2,
+            },
+            end: Position {
+                line: 10,
+                character: 8,
+            },
         };
         let link = lsp_types::LocationLink {
             origin_selection_range: None,
@@ -656,7 +692,10 @@ mod tests {
     #[test]
     fn path_to_url_accepts_absolute_path() {
         let result = path_to_url(Path::new("/tmp/lib.rs"));
-        assert!(result.is_ok(), "absolute path should be accepted: {result:?}");
+        assert!(
+            result.is_ok(),
+            "absolute path should be accepted: {result:?}"
+        );
         assert_eq!(result.unwrap().as_str(), "file:///tmp/lib.rs");
     }
 
@@ -724,7 +763,10 @@ mod tests {
         let (sender, receiver) = bounded::<Message>(1);
         drop(receiver);
         let (_dummy_tx, dummy_rx) = bounded::<Message>(1);
-        let conn = Connection { sender, receiver: dummy_rx };
+        let conn = Connection {
+            sender,
+            receiver: dummy_rx,
+        };
         let result = send_notification(&conn, "some/method", &serde_json::Value::Null);
         assert!(
             matches!(result, Err(LspError::Communication(_))),
@@ -773,9 +815,17 @@ mod tests {
 
         let client = RustAnalyzerClient::new();
         let start_result = client.start(workspace.path());
-        assert!(start_result.is_ok(), "start should succeed: {:?}", start_result.err());
+        assert!(
+            start_result.is_ok(),
+            "start should succeed: {:?}",
+            start_result.err()
+        );
         let shutdown_result = client.shutdown();
-        assert!(shutdown_result.is_ok(), "shutdown should succeed: {:?}", shutdown_result.err());
+        assert!(
+            shutdown_result.is_ok(),
+            "shutdown should succeed: {:?}",
+            shutdown_result.err()
+        );
     }
 
     #[test]
@@ -840,7 +890,10 @@ mod tests {
         let (reader_tx, reader_rx): (Sender<Message>, Receiver<Message>) = bounded(16);
         let writer_handle = thread::spawn(|| {});
         let reader_handle = thread::spawn(|| {});
-        let connection = Connection { sender: writer_tx, receiver: reader_rx };
+        let connection = Connection {
+            sender: writer_tx,
+            receiver: reader_rx,
+        };
         let session = Session {
             child,
             connection,
@@ -859,7 +912,10 @@ mod tests {
                 text_document: TextDocumentIdentifier {
                     uri: Url::parse("file:///tmp/x.rs").unwrap(),
                 },
-                position: Position { line: 0, character: 0 },
+                position: Position {
+                    line: 0,
+                    character: 0,
+                },
             },
             work_done_progress_params: WorkDoneProgressParams::default(),
         }
@@ -998,7 +1054,11 @@ mod tests {
         reader_tx.send(Message::Response(correct)).unwrap();
 
         let result = send_request::<HoverRequest>(&mut session, make_hover_params());
-        assert!(result.is_ok(), "should skip stale and return correct: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "should skip stale and return correct: {:?}",
+            result.err()
+        );
         let _ = session.child.kill();
         let _ = session.child.wait();
     }
@@ -1079,7 +1139,11 @@ mod tests {
         let client = RustAnalyzerClient::new();
         *client.session.lock().unwrap() = Some(session);
         let result = client.shutdown();
-        assert!(result.is_ok(), "shutdown should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "shutdown should succeed: {:?}",
+            result.err()
+        );
         assert!(
             client.session.lock().unwrap().is_none(),
             "session should be cleared after shutdown"
@@ -1123,8 +1187,14 @@ mod tests {
         lsp_types::Location {
             uri: Url::parse("file:///tmp/lib.rs").unwrap(),
             range: lsp_types::Range {
-                start: Position { line: 5, character: 10 },
-                end: Position { line: 5, character: 20 },
+                start: Position {
+                    line: 5,
+                    character: 10,
+                },
+                end: Position {
+                    line: 5,
+                    character: 20,
+                },
             },
         }
     }
@@ -1135,8 +1205,7 @@ mod tests {
         let response = Response {
             id: RequestId::from(1),
             result: Some(
-                serde_json::to_value(GotoDefinitionResponse::Scalar(make_location()))
-                    .unwrap(),
+                serde_json::to_value(GotoDefinitionResponse::Scalar(make_location())).unwrap(),
             ),
             error: None,
         };
@@ -1155,8 +1224,7 @@ mod tests {
         let response = Response {
             id: RequestId::from(1),
             result: Some(
-                serde_json::to_value(GotoDefinitionResponse::Scalar(make_location()))
-                    .unwrap(),
+                serde_json::to_value(GotoDefinitionResponse::Scalar(make_location())).unwrap(),
             ),
             error: None,
         };

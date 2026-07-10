@@ -27,8 +27,8 @@
 //!     -> no name match              -> unresolved
 //! ```
 
-use crate::model::{ConfidenceTier, Edge, EdgeType, Graph, Language, NodeLabel};
 use crate::ir::{ExternInfo, ExtractResult};
+use crate::model::{ConfidenceTier, Edge, EdgeType, Graph, Language, NodeLabel};
 use crate::resolve::ProjectSymbolTable;
 
 /// Confidence for a name+signature FFI match (ADD §7.4).
@@ -323,12 +323,22 @@ impl<'a> FfiResolver<'a> {
             // Use a function in the caller file as the edge source if one
             // exists; otherwise fall back to the file path.
             // Single-line for coverage: tarpaulin attribute continuation
-            let source = self.find_function_in_file(caller_file).unwrap_or_else(|| caller_file.clone());
+            let source = self
+                .find_function_in_file(caller_file)
+                .unwrap_or_else(|| caller_file.clone());
             for extern_info in &result.externs {
                 // Single-line for coverage: tarpaulin attribute continuation
-                if let Some((target_qn, confidence, reason)) = self.resolve_extern(extern_info, caller_file) {
+                if let Some((target_qn, confidence, reason)) =
+                    self.resolve_extern(extern_info, caller_file)
+                {
                     // Single-line for coverage: tarpaulin attribute continuation
-                    let edge = Edge::builder(source.clone(), target_qn, EdgeType::FfiCalls, self.project).confidence(confidence).confidence_tier(ConfidenceTier::Global).reason(reason).start_line(extern_info.line).build();
+                    let edge =
+                        Edge::builder(source.clone(), target_qn, EdgeType::FfiCalls, self.project)
+                            .confidence(confidence)
+                            .confidence_tier(ConfidenceTier::Global)
+                            .reason(reason)
+                            .start_line(extern_info.line)
+                            .build();
                     graph.add_edge(edge.clone());
                     edges.push(edge);
                 }
@@ -370,10 +380,17 @@ impl<'a> FfiResolver<'a> {
 
         for name in &extern_info.names {
             // Single-line for coverage: tarpaulin attribute continuation
-            let candidates = self.symbol_table.lookup(name).into_iter().filter(|e| e.language == Some(extern_info.language)).collect::<Vec<_>>();
+            let candidates = self
+                .symbol_table
+                .lookup(name)
+                .into_iter()
+                .filter(|e| e.language == Some(extern_info.language))
+                .collect::<Vec<_>>();
 
             // Single-line for coverage: tarpaulin attribute continuation
-            if candidates.is_empty() { continue; }
+            if candidates.is_empty() {
+                continue;
+            }
 
             // Try to find a signature match first (NameAndSignature). The
             // confidence is 0.85 when types match, lowered by up to 0.15 when
@@ -384,7 +401,10 @@ impl<'a> FfiResolver<'a> {
                         // Single-line for coverage: tarpaulin attribute continuation
                         if let Some(confidence) = Self::match_by_signature(extern_sig, c_sig) {
                             // Single-line for coverage: tarpaulin attribute continuation
-                            let reason = format!("FFI name+signature match for '{}' ({} -> {})", name, caller_file, candidate.qn);
+                            let reason = format!(
+                                "FFI name+signature match for '{}' ({} -> {})",
+                                name, caller_file, candidate.qn
+                            );
                             return Some((candidate.qn.clone(), confidence, reason));
                         }
                     }
@@ -400,7 +420,10 @@ impl<'a> FfiResolver<'a> {
         }
 
         best_name_only.map(|(qn, name)| {
-            let reason = format!("FFI name-only match for '{}' ({} -> {})", name, caller_file, qn);
+            let reason = format!(
+                "FFI name-only match for '{}' ({} -> {})",
+                name, caller_file, qn
+            );
             (qn, CONFIDENCE_NAME_ONLY, reason)
         })
     }
@@ -460,7 +483,8 @@ impl<'a> FfiResolver<'a> {
         };
 
         // Single-line for coverage: tarpaulin attribute continuation
-        let confidence = CONFIDENCE_NAME_AND_SIG - (1.0 - type_match_ratio) * CONFIDENCE_TYPE_MISMATCH_PENALTY;
+        let confidence =
+            CONFIDENCE_NAME_AND_SIG - (1.0 - type_match_ratio) * CONFIDENCE_TYPE_MISMATCH_PENALTY;
         Some(confidence)
     }
 
@@ -493,7 +517,10 @@ impl<'a> FfiResolver<'a> {
                 depth += 1;
             } else if ch == ')' {
                 depth -= 1;
-                if depth == 0 { end = Some(start + i); break; }
+                if depth == 0 {
+                    end = Some(start + i);
+                    break;
+                }
             }
         }
 
@@ -536,8 +563,8 @@ impl<'a> FfiResolver<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Language, Node, NodeLabel};
     use crate::ir::ExternInfo;
+    use crate::model::{Language, Node, NodeLabel};
     use crate::resolve::{build_symbol_table, FqnGenerator, ProjectSymbolTable, SymbolEntry};
 
     // --- helper functions ---
@@ -570,8 +597,13 @@ mod tests {
     fn add_nodes_to_graph(graph: &mut Graph, results: &[ExtractResult], project: &str) {
         for result in results {
             for node in &result.nodes {
-                let qn =
-                    FqnGenerator::generate(project, &result.file_path, &node.name, result.language, None);
+                let qn = FqnGenerator::generate(
+                    project,
+                    &result.file_path,
+                    &node.name,
+                    result.language,
+                    None,
+                );
                 let mut graph_node = node.clone();
                 graph_node.id = qn.clone();
                 graph_node.qualified_name = qn;
@@ -677,7 +709,10 @@ mod tests {
 
     #[test]
     fn signatures_match_both_zero_params_returns_true() {
-        assert!(FfiResolver::signatures_match(Some("fn foo()"), Some("int foo()")));
+        assert!(FfiResolver::signatures_match(
+            Some("fn foo()"),
+            Some("int foo()")
+        ));
     }
 
     // --- MatchStrategy enum tests ---
@@ -715,8 +750,14 @@ mod tests {
     fn resolve_extern_name_match_returns_some() {
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_function", "proj.c.c_function", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C),
+            SymbolEntry::new(
+                "c_function",
+                "proj.c.c_function",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C),
         );
 
         let resolver = FfiResolver::new(&table, "proj");
@@ -753,9 +794,15 @@ mod tests {
     fn resolve_extern_signature_match_returns_higher_confidence() {
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_function", "proj.c.c_function", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C)
-                .with_signature("int c_function(int, int)"),
+            SymbolEntry::new(
+                "c_function",
+                "proj.c.c_function",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C)
+            .with_signature("int c_function(int, int)"),
         );
 
         let resolver = FfiResolver::new(&table, "proj");
@@ -778,9 +825,15 @@ mod tests {
     fn resolve_extern_signature_mismatch_falls_back_to_name_only() {
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_function", "proj.c.c_function", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C)
-                .with_signature("int c_function(int)"),
+            SymbolEntry::new(
+                "c_function",
+                "proj.c.c_function",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C)
+            .with_signature("int c_function(int)"),
         );
 
         let resolver = FfiResolver::new(&table, "proj");
@@ -802,8 +855,14 @@ mod tests {
     fn resolve_extern_both_signatures_none_returns_name_only() {
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_function", "proj.c.c_function", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C),
+            SymbolEntry::new(
+                "c_function",
+                "proj.c.c_function",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C),
         );
 
         let resolver = FfiResolver::new(&table, "proj");
@@ -825,8 +884,14 @@ mod tests {
     fn resolve_extern_multiple_names_returns_best_match() {
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_function", "proj.c.c_function", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C),
+            SymbolEntry::new(
+                "c_function",
+                "proj.c.c_function",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C),
         );
 
         let resolver = FfiResolver::new(&table, "proj");
@@ -848,14 +913,26 @@ mod tests {
         // Two candidates: one with matching signature, one without.
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_func", "proj.a.c_func", NodeLabel::Function, "a.c", "proj")
-                .with_language(Language::C)
-                .with_signature("int c_func(int)"),
+            SymbolEntry::new(
+                "c_func",
+                "proj.a.c_func",
+                NodeLabel::Function,
+                "a.c",
+                "proj",
+            )
+            .with_language(Language::C)
+            .with_signature("int c_func(int)"),
         );
         table.add_symbol(
-            SymbolEntry::new("c_func", "proj.b.c_func", NodeLabel::Function, "b.c", "proj")
-                .with_language(Language::C)
-                .with_signature("int c_func(int, int)"),
+            SymbolEntry::new(
+                "c_func",
+                "proj.b.c_func",
+                NodeLabel::Function,
+                "b.c",
+                "proj",
+            )
+            .with_language(Language::C)
+            .with_signature("int c_func(int, int)"),
         );
 
         let resolver = FfiResolver::new(&table, "proj");
@@ -878,8 +955,14 @@ mod tests {
     fn resolve_extern_language_mismatch_returns_none() {
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_function", "proj.rs.c_function", NodeLabel::Function, "main.rs", "proj")
-                .with_language(Language::Rust),
+            SymbolEntry::new(
+                "c_function",
+                "proj.rs.c_function",
+                NodeLabel::Function,
+                "main.rs",
+                "proj",
+            )
+            .with_language(Language::Rust),
         );
 
         let resolver = FfiResolver::new(&table, "proj");
@@ -898,8 +981,14 @@ mod tests {
     fn resolve_extern_empty_names_returns_none() {
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_function", "proj.c.c_function", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C),
+            SymbolEntry::new(
+                "c_function",
+                "proj.c.c_function",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C),
         );
 
         let resolver = FfiResolver::new(&table, "proj");
@@ -944,8 +1033,14 @@ mod tests {
     fn resolve_ffi_creates_edge_for_matching_extern() {
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_function", "proj.c.c_function", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C),
+            SymbolEntry::new(
+                "c_function",
+                "proj.c.c_function",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C),
         );
 
         let mut result = ExtractResult::new("main.rs", Language::Rust);
@@ -996,12 +1091,24 @@ mod tests {
     fn resolve_ffi_creates_multiple_edges_for_multiple_externs() {
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_func1", "proj.c.c_func1", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C),
+            SymbolEntry::new(
+                "c_func1",
+                "proj.c.c_func1",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C),
         );
         table.add_symbol(
-            SymbolEntry::new("c_func2", "proj.c.c_func2", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C),
+            SymbolEntry::new(
+                "c_func2",
+                "proj.c.c_func2",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C),
         );
 
         let mut result = ExtractResult::new("main.rs", Language::Rust);
@@ -1052,8 +1159,14 @@ mod tests {
     fn resolve_ffi_uses_file_as_source_when_no_function_found() {
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_function", "proj.c.c_function", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C),
+            SymbolEntry::new(
+                "c_function",
+                "proj.c.c_function",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C),
         );
 
         let mut result = ExtractResult::new("main.rs", Language::Rust);
@@ -1077,17 +1190,35 @@ mod tests {
 
     #[test]
     fn resolve_ffi_uses_function_qn_as_source_when_function_found() {
-        let rust_node = make_node("rust_func", "main.rs", "proj", NodeLabel::Function, Language::Rust);
+        let rust_node = make_node(
+            "rust_func",
+            "main.rs",
+            "proj",
+            NodeLabel::Function,
+            Language::Rust,
+        );
         let rust_qn = FqnGenerator::generate("proj", "main.rs", "rust_func", Language::Rust, None);
 
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("rust_func", rust_qn.clone(), NodeLabel::Function, "main.rs", "proj")
-                .with_language(Language::Rust),
+            SymbolEntry::new(
+                "rust_func",
+                rust_qn.clone(),
+                NodeLabel::Function,
+                "main.rs",
+                "proj",
+            )
+            .with_language(Language::Rust),
         );
         table.add_symbol(
-            SymbolEntry::new("c_function", "proj.c.c_function", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C),
+            SymbolEntry::new(
+                "c_function",
+                "proj.c.c_function",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C),
         );
 
         let mut result = make_result("main.rs", Language::Rust, vec![rust_node]);
@@ -1112,8 +1243,14 @@ mod tests {
     fn resolve_ffi_handles_multiple_results() {
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_func", "proj.c.c_func", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C),
+            SymbolEntry::new(
+                "c_func",
+                "proj.c.c_func",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C),
         );
 
         let mut result_a = ExtractResult::new("a.rs", Language::Rust);
@@ -1144,8 +1281,14 @@ mod tests {
     fn resolve_ffi_adds_edges_to_graph() {
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_function", "proj.c.c_function", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C),
+            SymbolEntry::new(
+                "c_function",
+                "proj.c.c_function",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C),
         );
 
         let mut result = ExtractResult::new("main.rs", Language::Rust);
@@ -1161,16 +1304,25 @@ mod tests {
         let resolver = FfiResolver::new(&table, "proj");
         resolver.resolve_ffi(&results, &mut graph);
 
-        assert!(graph.edges.iter().any(|e| e.edge_type == EdgeType::FfiCalls));
+        assert!(graph
+            .edges
+            .iter()
+            .any(|e| e.edge_type == EdgeType::FfiCalls));
     }
 
     #[test]
     fn resolve_ffi_signature_match_creates_high_confidence_edge() {
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_function", "proj.c.c_function", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C)
-                .with_signature("int c_function(int, int)"),
+            SymbolEntry::new(
+                "c_function",
+                "proj.c.c_function",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C)
+            .with_signature("int c_function(int, int)"),
         );
 
         let mut result = ExtractResult::new("main.rs", Language::Rust);
@@ -1242,7 +1394,10 @@ mod tests {
         assert_eq!(edges[0].target, c_func_qn);
 
         // Verify: graph has edge with type FfiCalls.
-        assert!(graph.edges.iter().any(|e| e.edge_type == EdgeType::FfiCalls));
+        assert!(graph
+            .edges
+            .iter()
+            .any(|e| e.edge_type == EdgeType::FfiCalls));
         let neighbors = graph.neighbors(&rust_func_qn, Some(EdgeType::FfiCalls));
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0].id, c_func_qn);
@@ -1304,8 +1459,14 @@ mod tests {
     fn resolve_extern_fortran_calls_c_function() {
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_func", "proj.c.c_func", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C),
+            SymbolEntry::new(
+                "c_func",
+                "proj.c.c_func",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C),
         );
 
         let resolver = FfiResolver::new(&table, "proj");
@@ -1339,48 +1500,78 @@ mod tests {
 
     #[test]
     fn type_mapper_canonical_type_c_int_maps_to_int32() {
-        assert_eq!(TypeMapper::canonical_type("int", Language::C), Some("int32"));
+        assert_eq!(
+            TypeMapper::canonical_type("int", Language::C),
+            Some("int32")
+        );
     }
 
     #[test]
     fn type_mapper_canonical_type_rust_i32_maps_to_int32() {
-        assert_eq!(TypeMapper::canonical_type("i32", Language::Rust), Some("int32"));
+        assert_eq!(
+            TypeMapper::canonical_type("i32", Language::Rust),
+            Some("int32")
+        );
     }
 
     #[test]
     fn type_mapper_canonical_type_c_long_maps_to_int64() {
-        assert_eq!(TypeMapper::canonical_type("long", Language::C), Some("int64"));
+        assert_eq!(
+            TypeMapper::canonical_type("long", Language::C),
+            Some("int64")
+        );
     }
 
     #[test]
     fn type_mapper_canonical_type_rust_i64_maps_to_int64() {
-        assert_eq!(TypeMapper::canonical_type("i64", Language::Rust), Some("int64"));
+        assert_eq!(
+            TypeMapper::canonical_type("i64", Language::Rust),
+            Some("int64")
+        );
     }
 
     #[test]
     fn type_mapper_canonical_type_c_float_maps_to_float32() {
-        assert_eq!(TypeMapper::canonical_type("float", Language::C), Some("float32"));
+        assert_eq!(
+            TypeMapper::canonical_type("float", Language::C),
+            Some("float32")
+        );
     }
 
     #[test]
     fn type_mapper_canonical_type_rust_f32_maps_to_float32() {
-        assert_eq!(TypeMapper::canonical_type("f32", Language::Rust), Some("float32"));
+        assert_eq!(
+            TypeMapper::canonical_type("f32", Language::Rust),
+            Some("float32")
+        );
     }
 
     #[test]
     fn type_mapper_canonical_type_c_double_maps_to_float64() {
-        assert_eq!(TypeMapper::canonical_type("double", Language::C), Some("float64"));
+        assert_eq!(
+            TypeMapper::canonical_type("double", Language::C),
+            Some("float64")
+        );
     }
 
     #[test]
     fn type_mapper_canonical_type_rust_f64_maps_to_float64() {
-        assert_eq!(TypeMapper::canonical_type("f64", Language::Rust), Some("float64"));
+        assert_eq!(
+            TypeMapper::canonical_type("f64", Language::Rust),
+            Some("float64")
+        );
     }
 
     #[test]
     fn type_mapper_canonical_type_c_char_star_maps_to_string() {
-        assert_eq!(TypeMapper::canonical_type("char*", Language::C), Some("string"));
-        assert_eq!(TypeMapper::canonical_type("char *", Language::C), Some("string"));
+        assert_eq!(
+            TypeMapper::canonical_type("char*", Language::C),
+            Some("string")
+        );
+        assert_eq!(
+            TypeMapper::canonical_type("char *", Language::C),
+            Some("string")
+        );
     }
 
     #[test]
@@ -1397,55 +1588,82 @@ mod tests {
 
     #[test]
     fn type_mapper_canonical_type_c_void_maps_to_void() {
-        assert_eq!(TypeMapper::canonical_type("void", Language::C), Some("void"));
+        assert_eq!(
+            TypeMapper::canonical_type("void", Language::C),
+            Some("void")
+        );
     }
 
     #[test]
     fn type_mapper_canonical_type_rust_unit_maps_to_void() {
-        assert_eq!(TypeMapper::canonical_type("()", Language::Rust), Some("void"));
+        assert_eq!(
+            TypeMapper::canonical_type("()", Language::Rust),
+            Some("void")
+        );
     }
 
     #[test]
     fn type_mapper_canonical_type_unknown_returns_none() {
-        assert_eq!(TypeMapper::canonical_type("unknown_type", Language::C), None);
+        assert_eq!(
+            TypeMapper::canonical_type("unknown_type", Language::C),
+            None
+        );
         assert_eq!(TypeMapper::canonical_type("Vec<i32>", Language::Rust), None);
     }
 
     #[test]
     fn type_mapper_types_compatible_int_and_i32() {
         assert!(TypeMapper::types_compatible(
-            "int", Language::C, "i32", Language::Rust
+            "int",
+            Language::C,
+            "i32",
+            Language::Rust
         ));
     }
 
     #[test]
     fn type_mapper_types_compatible_double_and_f64() {
         assert!(TypeMapper::types_compatible(
-            "double", Language::C, "f64", Language::Rust
+            "double",
+            Language::C,
+            "f64",
+            Language::Rust
         ));
     }
 
     #[test]
     fn type_mapper_types_compatible_char_star_and_c_char_ptr() {
         assert!(TypeMapper::types_compatible(
-            "char*", Language::C, "*const c_char", Language::Rust
+            "char*",
+            Language::C,
+            "*const c_char",
+            Language::Rust
         ));
         assert!(TypeMapper::types_compatible(
-            "char *", Language::C, "CString", Language::Rust
+            "char *",
+            Language::C,
+            "CString",
+            Language::Rust
         ));
     }
 
     #[test]
     fn type_mapper_types_incompatible_int_and_double() {
         assert!(!TypeMapper::types_compatible(
-            "int", Language::C, "double", Language::C
+            "int",
+            Language::C,
+            "double",
+            Language::C
         ));
     }
 
     #[test]
     fn type_mapper_types_incompatible_i32_and_f64() {
         assert!(!TypeMapper::types_compatible(
-            "i32", Language::Rust, "f64", Language::Rust
+            "i32",
+            Language::Rust,
+            "f64",
+            Language::Rust
         ));
     }
 
@@ -1453,7 +1671,10 @@ mod tests {
     fn type_mapper_types_incompatible_when_one_unknown() {
         // Unknown type canonicalizes to None, which won't match a known type.
         assert!(!TypeMapper::types_compatible(
-            "unknown", Language::C, "i32", Language::Rust
+            "unknown",
+            Language::C,
+            "i32",
+            Language::Rust
         ));
     }
 
@@ -1528,8 +1749,7 @@ mod tests {
     #[test]
     fn match_by_signature_type_match_returns_high_confidence() {
         // Rust i32 vs C int: types match, confidence = 0.85.
-        let confidence =
-            FfiResolver::match_by_signature("fn foo(x: i32)", "void foo(int x)");
+        let confidence = FfiResolver::match_by_signature("fn foo(x: i32)", "void foo(int x)");
         assert!(confidence.is_some());
         let conf = confidence.unwrap();
         assert!(
@@ -1544,8 +1764,7 @@ mod tests {
     fn match_by_signature_type_mismatch_lowers_confidence_by_0_15() {
         // Rust i32 vs C double: same param count, different types.
         // confidence = 0.85 - (1.0 - 0.0) * 0.15 = 0.70 (reduced by 0.15).
-        let confidence =
-            FfiResolver::match_by_signature("fn foo(x: i32)", "void foo(double x)");
+        let confidence = FfiResolver::match_by_signature("fn foo(x: i32)", "void foo(double x)");
         assert!(confidence.is_some());
         let conf = confidence.unwrap();
         // The confidence should be exactly 0.15 lower than the full type-match
@@ -1560,8 +1779,7 @@ mod tests {
     #[test]
     fn match_by_signature_param_count_mismatch_returns_none() {
         // 1 Rust param vs 2 C params -> None.
-        let confidence =
-            FfiResolver::match_by_signature("fn foo(x: i32)", "void foo(int, int)");
+        let confidence = FfiResolver::match_by_signature("fn foo(x: i32)", "void foo(int, int)");
         assert!(confidence.is_none());
     }
 
@@ -1579,10 +1797,8 @@ mod tests {
         // 2 params: first matches (i32/int), second mismatches (f64/double vs... wait)
         // Rust: (i32, f64), C: (int, int) -> 1/2 match, ratio = 0.5
         // confidence = 0.85 - (1.0 - 0.5) * 0.15 = 0.85 - 0.075 = 0.775
-        let confidence = FfiResolver::match_by_signature(
-            "fn foo(a: i32, b: f64)",
-            "void foo(int a, int b)",
-        );
+        let confidence =
+            FfiResolver::match_by_signature("fn foo(a: i32, b: f64)", "void foo(int a, int b)");
         assert!(confidence.is_some());
         let conf = confidence.unwrap();
         assert!(
@@ -1595,10 +1811,8 @@ mod tests {
     #[test]
     fn match_by_signature_all_types_match_two_params() {
         // Rust (i32, f64) vs C (int, double): both match, confidence = 0.85.
-        let confidence = FfiResolver::match_by_signature(
-            "fn foo(a: i32, b: f64)",
-            "void foo(int a, double b)",
-        );
+        let confidence =
+            FfiResolver::match_by_signature("fn foo(a: i32, b: f64)", "void foo(int a, double b)");
         assert!(confidence.is_some());
         let conf = confidence.unwrap();
         assert!((conf - 0.85).abs() < 1e-6, "expected 0.85, got {}", conf);
@@ -1607,10 +1821,8 @@ mod tests {
     #[test]
     fn match_by_signature_string_type_match() {
         // Rust *const c_char vs C char*: both map to "string".
-        let confidence = FfiResolver::match_by_signature(
-            "fn foo(s: *const c_char)",
-            "void foo(char* s)",
-        );
+        let confidence =
+            FfiResolver::match_by_signature("fn foo(s: *const c_char)", "void foo(char* s)");
         assert!(confidence.is_some());
         let conf = confidence.unwrap();
         assert!((conf - 0.85).abs() < 1e-6, "expected 0.85, got {}", conf);
@@ -1624,9 +1836,15 @@ mod tests {
         // Confidence should be 0.70 (0.85 - 0.15), not 0.85.
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_function", "proj.c.c_function", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C)
-                .with_signature("void c_function(double x)"),
+            SymbolEntry::new(
+                "c_function",
+                "proj.c.c_function",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C)
+            .with_signature("void c_function(double x)"),
         );
 
         let resolver = FfiResolver::new(&table, "proj");
@@ -1652,9 +1870,15 @@ mod tests {
         // Rust i32 vs C int: types match, confidence = 0.85.
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_function", "proj.c.c_function", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C)
-                .with_signature("void c_function(int x)"),
+            SymbolEntry::new(
+                "c_function",
+                "proj.c.c_function",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C)
+            .with_signature("void c_function(int x)"),
         );
 
         let resolver = FfiResolver::new(&table, "proj");
@@ -1668,7 +1892,8 @@ mod tests {
         let result = resolver.resolve_extern(&extern_info, "main.rs");
         assert!(result.is_some());
         let (_, confidence, _) = result.unwrap();
-        assert!((confidence - 0.85).abs() < 1e-6,
+        assert!(
+            (confidence - 0.85).abs() < 1e-6,
             "expected 0.85 for type match, got {}",
             confidence
         );

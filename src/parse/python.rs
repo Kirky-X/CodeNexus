@@ -41,10 +41,12 @@ use tree_sitter::Node;
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
 use crate::resolve::{FqnGenerator, ScopeContext, ScopeResolverRegistry};
 
-use super::error::{ParseError, Result};
-use super::extractor::{AssignInfo, CallInfo, ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo};
-use super::parser_factory::ParserFactory;
 use super::dedupe_qn;
+use super::error::{ParseError, Result};
+use super::extractor::{
+    AssignInfo, CallInfo, ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo,
+};
+use super::parser_factory::ParserFactory;
 
 /// Python language tree-sitter extractor (Adapter pattern).
 pub struct PythonExtractor {
@@ -290,12 +292,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
 // Definition extractors
 // ---------------------------------------------------------------------------
 
-fn extract_function(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
     };
@@ -346,12 +343,7 @@ fn extract_function(
     result.push_node(model_node);
 }
 
-fn extract_class(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_class(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
     };
@@ -387,12 +379,8 @@ fn extract_class(
                     continue;
                 }
                 if let Some(parent_name) = base_class_name(base, source) {
-                    let parent_qn = make_qn(
-                        ctx.file_path,
-                        &parent_name,
-                        ctx.project,
-                        ctx.current_parent,
-                    );
+                    let parent_qn =
+                        make_qn(ctx.file_path, &parent_name, ctx.project, ctx.current_parent);
                     result.edges.push(Edge::new(
                         qn.clone(),
                         parent_qn,
@@ -482,12 +470,7 @@ fn extract_import_from(node: Node, source: &str, result: &mut ExtractResult) {
     });
 }
 
-fn extract_call(
-    node: Node,
-    source: &str,
-    ctx: &VisitContext<'_>,
-    result: &mut ExtractResult,
-) {
+fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(func_node) = node.child_by_field_name("function") else {
         return;
     };
@@ -589,11 +572,7 @@ fn function_signature(node: Node, source: &str) -> Option<String> {
         node_text(node, source).map(String::from)
     } else {
         // Extract just the `def name(params):` part from the first line.
-        let line_end = source
-            .lines()
-            .nth(start.row)
-            .map(|l| l.len())
-            .unwrap_or(0);
+        let line_end = source.lines().nth(start.row).map(|l| l.len()).unwrap_or(0);
         let start_byte = node.start_byte();
         let line_end_byte = start_byte + line_end;
         if line_end_byte <= source.len() {
@@ -669,10 +648,11 @@ fn assignment_target_name(node: Node, source: &str) -> Option<String> {
             // with invalid characters (brackets, quotes, commas) that
             // corrupt CSV imports.
             let text = node_text(node, source)?;
-            if text
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '_')
-                && text.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
+            if text.chars().all(|c| c.is_alphanumeric() || c == '_')
+                && text
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_alphabetic() || c == '_')
             {
                 Some(text.to_string())
             } else {
@@ -745,9 +725,16 @@ fn is_python_read_position(node: Node) -> bool {
         "attribute" => is_at_field(node, parent, "object"),
         // Assignment left, augmented-assignment left, for-loop left, def/class
         // name, parameters, import name — name-defining positions, not reads.
-        "augmented_assignment" | "for_statement" | "function_definition"
-        | "class_definition" | "parameters" | "lambda" | "import_statement"
-        | "import_from_statement" | "dotted_name" | "aliased_import"
+        "augmented_assignment"
+        | "for_statement"
+        | "function_definition"
+        | "class_definition"
+        | "parameters"
+        | "lambda"
+        | "import_statement"
+        | "import_from_statement"
+        | "dotted_name"
+        | "aliased_import"
         | "wildcard_import" => false,
         _ => false,
     }
@@ -825,7 +812,8 @@ result = add(1, 2)
 
     fn extract(source: &str) -> ExtractResult {
         let ext = PythonExtractor::new();
-        ext.extract(source, "test.py", "proj").expect("extraction should succeed")
+        ext.extract(source, "test.py", "proj")
+            .expect("extraction should succeed")
     }
 
     #[test]
@@ -872,7 +860,11 @@ result = add(1, 2)
     #[test]
     fn extracts_class() {
         let result = extract(PYTHON_SOURCE);
-        let classes: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Class).collect();
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
         assert_eq!(classes.len(), 1);
         assert_eq!(classes[0].name, "Point");
     }
@@ -891,7 +883,12 @@ class Child(Parent):
             .iter()
             .filter(|e| e.edge_type == EdgeType::Extends)
             .collect();
-        assert_eq!(extends.len(), 1, "should create 1 EXTENDS edge: {:?}", extends);
+        assert_eq!(
+            extends.len(),
+            1,
+            "should create 1 EXTENDS edge: {:?}",
+            extends
+        );
         // Source = Child FQN, Target = Parent FQN (best-effort, same file).
         assert!(
             extends[0].source.contains("Child"),
@@ -920,7 +917,12 @@ class Derived(Base1, Base2):
             .iter()
             .filter(|e| e.edge_type == EdgeType::Extends)
             .collect();
-        assert_eq!(extends.len(), 2, "should create 2 EXTENDS edges: {:?}", extends);
+        assert_eq!(
+            extends.len(),
+            2,
+            "should create 2 EXTENDS edges: {:?}",
+            extends
+        );
     }
 
     #[test]
@@ -937,23 +939,44 @@ class Foo(metaclass=Meta):
             .filter(|e| e.edge_type == EdgeType::Extends)
             .collect();
         // `metaclass=Meta` is a keyword_argument, not a base class.
-        assert_eq!(extends.len(), 0, "should skip keyword_argument: {:?}", extends);
+        assert_eq!(
+            extends.len(),
+            0,
+            "should skip keyword_argument: {:?}",
+            extends
+        );
     }
 
     #[test]
     fn extracts_methods() {
         let result = extract(PYTHON_SOURCE);
-        let methods: Vec<_> = result.nodes.iter().filter(|n| n.label == NodeLabel::Method).collect();
+        let methods: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Method)
+            .collect();
         let names: Vec<_> = methods.iter().map(|n| n.name.as_str()).collect();
-        assert!(names.contains(&"__init__"), "should extract __init__ method: {:?}", names);
-        assert!(names.contains(&"distance"), "should extract distance method: {:?}", names);
+        assert!(
+            names.contains(&"__init__"),
+            "should extract __init__ method: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"distance"),
+            "should extract distance method: {:?}",
+            names
+        );
         assert!(!methods[0].is_global, "methods should not be global");
     }
 
     #[test]
     fn extracts_call_to_add() {
         let result = extract(PYTHON_SOURCE);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             callees.contains(&"add"),
             "should extract call to add: {:?}",
@@ -992,12 +1015,23 @@ class Foo(metaclass=Meta):
     fn creates_defines_edges() {
         // B1 fix: CONTAINS emission removed; only DEFINES remains.
         let result = extract(PYTHON_SOURCE);
-        let defines_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Defines).count();
+        let defines_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Defines)
+            .count();
         let node_count = result.nodes.len();
         assert_eq!(defines_count, node_count);
         // B1 fix verification: no CONTAINS edges should be emitted
-        let contains_count = result.edges.iter().filter(|e| e.edge_type == EdgeType::Contains).count();
-        assert_eq!(contains_count, 0, "B1 fix: no CONTAINS edges should be emitted");
+        let contains_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Contains)
+            .count();
+        assert_eq!(
+            contains_count, 0,
+            "B1 fix: no CONTAINS edges should be emitted"
+        );
     }
 
     #[test]
@@ -1028,9 +1062,15 @@ class Foo(metaclass=Meta):
         assert_eq!(result.imports.len(), 1);
         assert_eq!(result.imports[0].source_file, "typing");
         assert_eq!(result.imports[0].imported_names.len(), 3);
-        assert!(result.imports[0].imported_names.contains(&"List".to_string()));
-        assert!(result.imports[0].imported_names.contains(&"Dict".to_string()));
-        assert!(result.imports[0].imported_names.contains(&"Optional".to_string()));
+        assert!(result.imports[0]
+            .imported_names
+            .contains(&"List".to_string()));
+        assert!(result.imports[0]
+            .imported_names
+            .contains(&"Dict".to_string()));
+        assert!(result.imports[0]
+            .imported_names
+            .contains(&"Optional".to_string()));
     }
 
     #[test]
@@ -1054,7 +1094,11 @@ class Foo(metaclass=Meta):
     fn handles_method_call() {
         let src = "class A:\n    def foo(self):\n        self.bar()\n";
         let result = extract(src);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(callees.contains(&"bar"), "should extract self.bar() call");
     }
 
@@ -1091,14 +1135,20 @@ class Foo(metaclass=Meta):
             .filter(|n| n.label == NodeLabel::Function)
             .collect();
         let names: Vec<_> = funcs.iter().map(|n| n.name.as_str()).collect();
-        assert!(names.contains(&"outer"), "should extract top-level outer function");
+        assert!(
+            names.contains(&"outer"),
+            "should extract top-level outer function"
+        );
         assert!(
             !names.contains(&"inner"),
             "nested inner function must NOT be promoted to a Function node (P2-5)"
         );
         // The call to inner() inside outer() must still be captured.
         let inner_call = result.calls.iter().find(|c| c.callee_name == "inner");
-        assert!(inner_call.is_some(), "call to inner() should still be recorded");
+        assert!(
+            inner_call.is_some(),
+            "call to inner() should still be recorded"
+        );
     }
 
     #[test]
@@ -1137,13 +1187,18 @@ class Foo(metaclass=Meta):
         // Spec: 顶层调用（无函数上下文）caller_qn 为 None。
         let src = "callee()\n";
         let ext = PythonExtractor::new();
-        let result = ext.extract(src, "main.py", "proj").expect("extraction should succeed");
+        let result = ext
+            .extract(src, "main.py", "proj")
+            .expect("extraction should succeed");
         let call = result
             .calls
             .iter()
             .find(|c| c.callee_name == "callee")
             .expect("should find top-level call to callee");
-        assert!(call.caller_qn.is_none(), "top-level call should have None caller_qn");
+        assert!(
+            call.caller_qn.is_none(),
+            "top-level call should have None caller_qn"
+        );
     }
 
     #[test]
@@ -1252,11 +1307,7 @@ class Foo(metaclass=Meta):
         let result = ext
             .extract(src, "/tmp/demo/main.py", "proj")
             .expect("extraction should succeed");
-        let y_writes: Vec<_> = result
-            .writes
-            .iter()
-            .filter(|w| w.var_name == "y")
-            .collect();
+        let y_writes: Vec<_> = result.writes.iter().filter(|w| w.var_name == "y").collect();
         assert!(
             y_writes.len() >= 2,
             "y should be written at least twice (assignment + augmented): {:?}",
@@ -1274,7 +1325,8 @@ class Foo(metaclass=Meta):
     #[test]
     fn for_loop_target_is_write() {
         // Spec: Python for_statement 循环变量写入提取 (BR-TRACE-006)。
-        let src = "def looper():\n    s = 0\n    for i in range(10):\n        s = s + i\n    return s\n";
+        let src =
+            "def looper():\n    s = 0\n    for i in range(10):\n        s = s + i\n    return s\n";
         let ext = PythonExtractor::new();
         let result = ext
             .extract(src, "/tmp/demo/main.py", "proj")
@@ -1308,7 +1360,11 @@ class Foo(metaclass=Meta):
         // parenthesized_expression arm.
         let src = "def get_fn():\n    pass\nresult = (get_fn)()\n";
         let result = extract(src);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             callees.contains(&"get_fn"),
             "should extract call to parenthesized get_fn: {:?}",
@@ -1381,7 +1437,9 @@ class Foo(metaclass=Meta):
         assert_eq!(result.imports.len(), 1);
         assert_eq!(result.imports[0].source_file, "numpy");
         assert!(
-            result.imports[0].imported_names.contains(&"arr".to_string()),
+            result.imports[0]
+                .imported_names
+                .contains(&"arr".to_string()),
             "aliased import should record the alias name: {:?}",
             result.imports[0].imported_names
         );
@@ -1401,6 +1459,9 @@ class Foo(metaclass=Meta):
             !sig.contains('\n'),
             "signature must be a single line, got: {sig:?}"
         );
-        assert!(sig.contains("add"), "signature should contain the function name");
+        assert!(
+            sig.contains("add"),
+            "signature should contain the function name"
+        );
     }
 }

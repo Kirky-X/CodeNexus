@@ -72,18 +72,19 @@ fn git_head_commit(root: &Path) -> String {
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
 #[service_api(
-    name = "codenexus",
+    name = "status",
     version = "0.3.2",
-    tool_name = "status",
     description = "List all indexed projects and check their staleness.",
-    cli = true,
+    cli = true
 )]
 async fn status() -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
     let storage = kit
         .require::<StorageKey>()
         .map_err(|e| wrap_error("Failed to resolve storage capability", e))?;
-    let projects = storage.list_projects().unwrap_or_default();
+    let projects = storage
+        .list_projects()
+        .map_err(|e| wrap_error("Failed to list projects", e))?;
     let output = StatusOutput {
         projects: projects
             .into_iter()
@@ -96,8 +97,8 @@ async fn status() -> Result<(), ApiError> {
             })
             .collect(),
     };
-    let json = serde_json::to_string(&output)
-        .map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let json =
+        serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }
