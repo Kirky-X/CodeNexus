@@ -157,22 +157,14 @@ fn query_output(r: QueryResult) -> QueryOutput {
 
 /// Wraps an error as an `ApiError::Internal` with a unique `error_id`.
 ///
-/// Uses a process-level `AtomicU64` counter to guarantee uniqueness without
-/// depending on the system clock (which may jump backwards via NTP or produce
-/// duplicate nanosecond timestamps).
-///
-/// Used by MCP tool handlers to convert subsystem errors (`KitError`,
-/// `QueryError`, etc.) into the sdforge error type expected by the
-/// `#[service_api]` macro.
+/// Delegates to [`crate::service::error::wrap_error`] — shared between
+/// CLI and MCP handlers.
 #[cfg(feature = "mcp")]
 fn mcp_error<E: std::error::Error + Send + Sync + 'static>(
     message: impl Into<String>,
     source: E,
 ) -> ApiError {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static ERROR_COUNTER: AtomicU64 = AtomicU64::new(0);
-    let error_id = format!("err-{:016x}", ERROR_COUNTER.fetch_add(1, Ordering::Relaxed));
-    ApiError::internal_with_source(message, error_id, source)
+    crate::service::error::wrap_error(message, source)
 }
 
 /// MCP tool: Execute a Cypher query against the CodeNexus knowledge graph.
