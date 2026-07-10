@@ -12,7 +12,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::cli::error::CliError;
+use crate::service::error::{CliError, to_api_error};
 
 #[cfg(feature = "lsp")]
 use crate::lsp::{LspError, LspProvider, RustAnalyzerClient};
@@ -179,19 +179,6 @@ impl HoverOutput {
     }
 }
 
-/// Maps `CliError` to `ApiError` at the service boundary.
-#[cfg(all(feature = "cli", feature = "lsp"))]
-fn to_api_error(e: CliError) -> ApiError {
-    match e {
-        CliError::InvalidInput(msg) => ApiError::InvalidInput {
-            message: msg,
-            field: None,
-            value: None,
-        },
-        other => ApiError::internal_error(format!("{other}"), "lsp_error"),
-    }
-}
-
 /// CLI wrapper for lsp-goto-def — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "lsp"))]
 #[service_api(
@@ -210,7 +197,7 @@ async fn lsp_goto_def(
     let file_path = resolve_file(&file, ws);
 
     let client = RustAnalyzerClient::new();
-    start_or_err(&client, ws).map_err(to_api_error)?;
+    start_or_err(&client, ws).map_err(|e| to_api_error(e, "lsp_error"))?;
 
     let result = client.definition(&file_path, line, col);
     let _ = client.shutdown();
@@ -218,7 +205,7 @@ async fn lsp_goto_def(
     let out = match result {
         Ok(Some(location)) => GotoDefOutput::from(location),
         Ok(None) => GotoDefOutput::none(),
-        Err(e) => return Err(to_api_error(lsp_error_to_cli(e))),
+        Err(e) => return Err(to_api_error(lsp_error_to_cli(e), "lsp_error")),
     };
     let json =
         serde_json::to_string(&out).map_err(|e| wrap_error("JSON serialization failed", e))?;
@@ -239,7 +226,7 @@ async fn lsp_hover(file: String, line: u32, col: u32, workspace: String) -> Resu
     let file_path = resolve_file(&file, ws);
 
     let client = RustAnalyzerClient::new();
-    start_or_err(&client, ws).map_err(to_api_error)?;
+    start_or_err(&client, ws).map_err(|e| to_api_error(e, "lsp_error"))?;
 
     let result = client.hover(&file_path, line, col);
     let _ = client.shutdown();
@@ -247,7 +234,7 @@ async fn lsp_hover(file: String, line: u32, col: u32, workspace: String) -> Resu
     let out = match result {
         Ok(Some(hover)) => HoverOutput::from(hover),
         Ok(None) => HoverOutput::none(),
-        Err(e) => return Err(to_api_error(lsp_error_to_cli(e))),
+        Err(e) => return Err(to_api_error(lsp_error_to_cli(e), "lsp_error")),
     };
     let json =
         serde_json::to_string(&out).map_err(|e| wrap_error("JSON serialization failed", e))?;

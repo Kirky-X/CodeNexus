@@ -6,7 +6,7 @@
 use serde::Serialize;
 
 use crate::analysis::architecture::{ArchitectureAnalyzer, ArchitectureOverview};
-use crate::cli::error::CliError;
+use crate::service::error::{CliError, to_api_error};
 use crate::kit::{Kit, StorageKey};
 use crate::service::error::kit_not_initialized;
 use crate::service::runtime::kit;
@@ -37,19 +37,6 @@ fn architecture_core(kit: &Kit, project: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Maps `CliError` to `ApiError` at the service boundary.
-#[cfg(all(feature = "cli", feature = "analysis"))]
-fn to_api_error(e: CliError) -> ApiError {
-    match e {
-        CliError::InvalidInput(msg) => ApiError::InvalidInput {
-            message: msg,
-            field: None,
-            value: None,
-        },
-        other => ApiError::internal_error(format!("{other}"), "architecture_error"),
-    }
-}
-
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "analysis"))]
 #[service_api(
@@ -60,7 +47,7 @@ fn to_api_error(e: CliError) -> ApiError {
 )]
 async fn architecture(project: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    architecture_core(kit, &project).map_err(to_api_error)?;
+    architecture_core(&kit, &project).map_err(|e| to_api_error(e, "architecture_error"))?;
     Ok(())
 }
 
@@ -70,11 +57,10 @@ mod tests {
     use crate::kit::{build_kit, KitBootstrapConfig, StorageKey};
     use tempfile::TempDir;
 
-    fn fresh_db_path() -> std::path::PathBuf {
+    fn fresh_db_path() -> (TempDir, std::path::PathBuf) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_architecture_testdb");
-        std::mem::forget(dir);
-        path
+        (dir, path)
     }
 
     fn build_kit_for_db(db: &std::path::Path) -> Kit {
@@ -84,7 +70,7 @@ mod tests {
 
     #[test]
     fn core_succeeds_on_empty_db() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let result = architecture_core(&kit, "demo");
         assert!(result.is_ok(), "core should succeed: {:?}", result.err());
@@ -92,7 +78,7 @@ mod tests {
 
     #[test]
     fn core_returns_languages() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageKey>().expect("require_storage");
         storage
@@ -104,7 +90,7 @@ mod tests {
 
     #[test]
     fn core_with_routes() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageKey>().expect("require_storage");
         storage

@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use tracing_subscriber::EnvFilter;
 
-use codenexus::cli::error::CliError;
+use codenexus::service::error::CliError;
 use codenexus::kit::{build_kit, KitBootstrapConfig};
 use codenexus::service::init_kit;
 
@@ -86,7 +86,12 @@ fn run_cli() {
         &DEFAULT_DEBOUNCE_MS.to_string(),
     )
     .parse()
-    .unwrap_or(DEFAULT_DEBOUNCE_MS);
+    .unwrap_or_else(|_| {
+        eprintln!(
+            "[warn] Invalid --debounce-ms value, using default ({DEFAULT_DEBOUNCE_MS}ms)"
+        );
+        DEFAULT_DEBOUNCE_MS
+    });
 
     // Build and init Kit. Non-fatal: setup/lsp commands don't need Kit.
     let config = KitBootstrapConfig::new(PathBuf::from(&db)).with_debounce_ms(debounce_ms);
@@ -103,9 +108,15 @@ fn run_cli() {
 
     let args = extract_args(sub_name, sub_matches);
 
-    let handler = sdforge::inventory::iter::<sdforge::cli::CliHandlerRegistration>()
+    let handler = match sdforge::inventory::iter::<sdforge::cli::CliHandlerRegistration>()
         .find(|h| h.name == sub_name)
-        .unwrap_or_else(|| panic!("No handler registered for command: {sub_name}"));
+    {
+        Some(h) => h,
+        None => {
+            eprintln!("[error] No handler registered for command: {sub_name}");
+            std::process::exit(1);
+        }
+    };
 
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     if let Err(api_error) = runtime.block_on((handler.handler)(args)) {

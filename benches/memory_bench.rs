@@ -40,15 +40,15 @@
 #[path = "common/mod.rs"]
 mod common;
 
+use std::path::Path;
 #[cfg(feature = "daemon")]
 use std::path::PathBuf;
-use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use codenexus::index::IndexFacade;
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 
 #[cfg(feature = "daemon")]
 use codenexus::daemon::{Daemon, DaemonEvent, EventObserver};
@@ -132,9 +132,7 @@ fn bench_first_index_10k_files_peak(c: &mut Criterion) {
                         .expect("first index");
                 });
                 let peak_mb = peak / 1024 / 1024;
-                eprintln!(
-                    "first_index_10k_files_peak: peak RSS = {peak} bytes ({peak_mb} MB)"
-                );
+                eprintln!("first_index_10k_files_peak: peak RSS = {peak} bytes ({peak_mb} MB)");
                 assert!(
                     peak <= ONE_GB,
                     "peak RSS {peak} bytes ({peak_mb} MB) exceeds 1 GB SLO"
@@ -267,18 +265,13 @@ fn bench_daemon_sustained_10_increments(c: &mut Criterion) {
                     let deadline = Instant::now() + Duration::from_secs(30);
                     while state.index_count.load(Ordering::SeqCst) < expected {
                         if Instant::now() > deadline {
-                            panic!(
-                                "daemon did not process increment {expected} within 30 s"
-                            );
+                            panic!("daemon did not process increment {expected} within 30 s");
                         }
                         std::thread::sleep(Duration::from_millis(100));
                     }
 
                     sys.refresh_process(pid);
-                    let rss = sys
-                        .process(pid)
-                        .map(|p| p.memory())
-                        .unwrap_or(0);
+                    let rss = sys.process(pid).map(|p| p.memory()).unwrap_or(0);
                     let rss_mb = rss / 1024 / 1024;
                     eprintln!(
                         "daemon_sustained increment {expected}: RSS = {rss} bytes ({rss_mb} MB)"
@@ -300,9 +293,7 @@ fn bench_daemon_sustained_10_increments(c: &mut Criterion) {
                 if let (Some(&first), Some(&last)) = (rss_samples.first(), rss_samples.last()) {
                     let growth = last.saturating_sub(first);
                     let growth_mb = growth / 1024 / 1024;
-                    eprintln!(
-                        "daemon_sustained: RSS growth = {growth} bytes ({growth_mb} MB)"
-                    );
+                    eprintln!("daemon_sustained: RSS growth = {growth} bytes ({growth_mb} MB)");
                     assert!(
                         growth <= FIFTY_MB,
                         "RSS growth {growth} bytes ({growth_mb} MB) exceeds 50 MB leak ceiling"

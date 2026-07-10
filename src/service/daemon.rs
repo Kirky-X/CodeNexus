@@ -7,7 +7,7 @@
 use std::path::Path;
 
 #[cfg(feature = "daemon")]
-use crate::cli::error::CliError;
+use crate::service::error::{CliError, to_api_error};
 #[cfg(feature = "daemon")]
 use crate::kit::{DaemonKey, Kit};
 
@@ -39,19 +39,6 @@ fn daemon_core(kit: &Kit, path: &str, name: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Maps `CliError` to `ApiError` at the service boundary.
-#[cfg(all(feature = "cli", feature = "daemon"))]
-fn to_api_error(e: CliError) -> ApiError {
-    match e {
-        CliError::InvalidInput(msg) => ApiError::InvalidInput {
-            message: msg,
-            field: None,
-            value: None,
-        },
-        other => ApiError::internal_error(format!("{other}"), "daemon_error"),
-    }
-}
-
 /// CLI wrapper — starts the blocking daemon event loop.
 #[cfg(all(feature = "cli", feature = "daemon"))]
 #[service_api(
@@ -62,7 +49,7 @@ fn to_api_error(e: CliError) -> ApiError {
 )]
 async fn daemon(path: String, name: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    daemon_core(kit, &path, &name).map_err(to_api_error)
+    daemon_core(&kit, &path, &name).map_err(|e| to_api_error(e, "daemon_error"))
 }
 
 #[cfg(all(test, feature = "daemon"))]
@@ -83,11 +70,10 @@ mod tests {
         fs::write(path, content).unwrap();
     }
 
-    fn fresh_db_path() -> std::path::PathBuf {
+    fn fresh_db_path() -> (TempDir, std::path::PathBuf) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("daemon_svc_testdb");
-        std::mem::forget(dir);
-        path
+        (dir, path)
     }
 
     fn build_kit_for_db(db: &str) -> Kit {
@@ -104,7 +90,7 @@ mod tests {
 
     #[test]
     fn daemon_core_returns_error_for_nonexistent_path() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let err = daemon_core(&kit, "/nonexistent/path/xyz", "demo")
             .expect_err("nonexistent path should error");
@@ -114,7 +100,7 @@ mod tests {
 
     #[test]
     fn daemon_core_error_message_contains_path() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let err = daemon_core(&kit, "/no/such/dir", "demo").expect_err("should error");
         let msg = err.to_string();
@@ -130,7 +116,7 @@ mod tests {
     fn daemon_core_starts_and_runs() {
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), "main.rs", "fn main() {}\n");
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 200);
         let watch_path = tmp.path().to_str().unwrap().to_string();
         let handle = thread::spawn(move || daemon_core(&kit, &watch_path, "demo"));
@@ -146,7 +132,7 @@ mod tests {
 
     #[test]
     fn daemon_core_accepts_custom_debounce() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 500);
         let err = daemon_core(&kit, "/nonexistent/path/xyz", "demo")
             .expect_err("should error on nonexistent path");
@@ -155,7 +141,7 @@ mod tests {
 
     #[test]
     fn daemon_core_accepts_default_debounce() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let err = daemon_core(&kit, "/nonexistent/path/xyz", "demo")
             .expect_err("should error on nonexistent path");
@@ -168,7 +154,7 @@ mod tests {
     fn daemon_core_triggers_incremental_index_on_code_file_change() {
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), "main.rs", "fn main() {}\n");
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 200);
         let watch_path = tmp.path().to_str().unwrap().to_string();
         let handle = thread::spawn(move || daemon_core(&kit, &watch_path, "demo"));
@@ -184,7 +170,7 @@ mod tests {
     fn daemon_core_ignores_non_code_file_changes() {
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), "main.rs", "fn main() {}\n");
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 200);
         let watch_path = tmp.path().to_str().unwrap().to_string();
         let handle = thread::spawn(move || daemon_core(&kit, &watch_path, "demo"));

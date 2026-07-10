@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use crate::kit::QueryKey;
 use crate::query::SearchResult;
-use crate::service::error::{kit_not_initialized, wrap_error};
+use crate::service::error::{CliError, to_api_error};
 use crate::service::runtime::kit;
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
@@ -37,17 +37,14 @@ fn search_result_to_json(r: &SearchResult) -> Value {
 
 /// Core search logic — shared by CLI and MCP wrappers.
 #[cfg(any(feature = "cli", feature = "mcp"))]
-async fn search_core(text: String, fulltext: bool, limit: u32) -> Result<SearchOutput, ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let q = kit
-        .require::<QueryKey>()
-        .map_err(|e| wrap_error("Failed to resolve query capability", e))?;
+async fn search_core(text: String, fulltext: bool, limit: u32) -> Result<SearchOutput, CliError> {
+    let kit = kit().ok_or_else(CliError::kit_not_initialized)?;
+    let q = kit.require::<QueryKey>()?;
     let results = if fulltext {
         q.fulltext_search(&text, None, limit as usize)
     } else {
         q.search(&text, None, limit as usize)
-    }
-    .map_err(|e| wrap_error("Search execution failed", e))?;
+    }?;
     let results: Vec<Value> = results.iter().map(search_result_to_json).collect();
     Ok(SearchOutput {
         count: results.len(),
@@ -64,9 +61,11 @@ async fn search_core(text: String, fulltext: bool, limit: u32) -> Result<SearchO
     cli = true
 )]
 async fn search(text: String, fulltext: bool, limit: u32) -> Result<(), ApiError> {
-    let result = search_core(text, fulltext, limit).await?;
-    let json =
-        serde_json::to_string(&result).map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let result = search_core(text, fulltext, limit)
+        .await
+        .map_err(|e| to_api_error(e, "search_error"))?;
+    let json = serde_json::to_string(&result)
+        .map_err(|e| to_api_error(CliError::from(e), "search_error"))?;
     println!("{json}");
     Ok(())
 }
@@ -80,5 +79,7 @@ async fn search(text: String, fulltext: bool, limit: u32) -> Result<(), ApiError
     description = "Search for symbols by name (structured) or content (BM25 full-text)."
 )]
 async fn search_mcp(text: String, fulltext: bool, limit: u32) -> Result<SearchOutput, ApiError> {
-    search_core(text, fulltext, limit).await
+    search_core(text, fulltext, limit)
+        .await
+        .map_err(|e| to_api_error(e, "search_error"))
 }

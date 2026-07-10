@@ -32,9 +32,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use codenexus::daemon::{Daemon, DaemonEvent, EventObserver, DEFAULT_DEBOUNCE_MS};
 use codenexus::index::IndexFacade;
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use tempfile::TempDir;
 
 use common::generate_large_repo;
@@ -279,8 +279,7 @@ fn bench_indexing_event_queue_throughput(c: &mut Criterion) {
                     std::thread::sleep(Duration::from_millis(50));
                 }
 
-                let processed_events =
-                    state.event_count.load(Ordering::SeqCst) - initial_events;
+                let processed_events = state.event_count.load(Ordering::SeqCst) - initial_events;
                 // design.md Decision 4: assert no events lost. notify may
                 // coalesce identical paths but should not drop distinct file
                 // modifications within a debounce window.

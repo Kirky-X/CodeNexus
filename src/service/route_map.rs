@@ -7,7 +7,7 @@ use serde::Serialize;
 
 #[cfg(feature = "api-review")]
 use crate::analysis::api_review::{ApiReviewer, RouteEntry};
-use crate::cli::error::CliError;
+use crate::service::error::{CliError, to_api_error};
 #[cfg(feature = "api-review")]
 use crate::kit::{Kit, StorageKey};
 #[cfg(all(feature = "cli", feature = "api-review"))]
@@ -43,19 +43,6 @@ fn route_map_core(kit: &Kit, project: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Maps `CliError` to `ApiError` at the service boundary.
-#[cfg(all(feature = "cli", feature = "api-review"))]
-fn to_api_error(e: CliError) -> ApiError {
-    match e {
-        CliError::InvalidInput(msg) => ApiError::InvalidInput {
-            message: msg,
-            field: None,
-            value: None,
-        },
-        other => ApiError::internal_error(format!("{other}"), "route_map_error"),
-    }
-}
-
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "api-review"))]
 #[service_api(
@@ -66,7 +53,7 @@ fn to_api_error(e: CliError) -> ApiError {
 )]
 async fn route_map(project: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    route_map_core(kit, &project).map_err(to_api_error)?;
+    route_map_core(&kit, &project).map_err(|e| to_api_error(e, "route_map_error"))?;
     Ok(())
 }
 
@@ -76,11 +63,10 @@ mod tests {
     use crate::kit::{build_kit, KitBootstrapConfig, StorageKey};
     use tempfile::TempDir;
 
-    fn fresh_db_path() -> std::path::PathBuf {
+    fn fresh_db_path() -> (TempDir, std::path::PathBuf) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_route_map_testdb");
-        std::mem::forget(dir);
-        path
+        (dir, path)
     }
 
     fn build_kit_for_db(db: &std::path::Path) -> Kit {
@@ -90,7 +76,7 @@ mod tests {
 
     #[test]
     fn core_succeeds_on_empty_db() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let result = route_map_core(&kit, "demo");
         assert!(result.is_ok(), "core should succeed: {:?}", result.err());
@@ -98,7 +84,7 @@ mod tests {
 
     #[test]
     fn core_returns_route() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageKey>().expect("require_storage");
         storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");

@@ -16,9 +16,9 @@
 
 use std::path::Path;
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use codenexus::index::IndexFacade;
 use codenexus::query::QueryFacade;
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tempfile::TempDir;
 
 /// Writes `count` Rust files into `dir`, each defining `func_{i}` which calls
@@ -26,9 +26,7 @@ use tempfile::TempDir;
 fn write_rust_files(dir: &Path, count: usize) {
     for i in 0..count {
         let path = dir.join(format!("file_{i}.rs"));
-        let content = format!(
-            "fn func_{i}() {{ helper_{i}(); }}\nfn helper_{i}() {{}}\n"
-        );
+        let content = format!("fn func_{i}() {{ helper_{i}(); }}\nfn helper_{i}() {{}}\n");
         std::fs::write(&path, content).unwrap();
     }
 }
@@ -81,9 +79,7 @@ fn bench_query(c: &mut Criterion) {
 
     group.bench_function("search_by_name_project", |b| {
         b.iter(|| {
-            let results = query
-                .search("func", Some(project_id.as_str()), 50)
-                .unwrap();
+            let results = query.search("func", Some(project_id.as_str()), 50).unwrap();
             black_box(results);
         });
     });

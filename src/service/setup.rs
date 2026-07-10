@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::cli::error::CliError;
+use crate::service::error::{CliError, to_api_error};
 #[cfg(feature = "cli")]
 use crate::service::error::wrap_error;
 
@@ -286,19 +286,6 @@ fn write_pretty(path: &Path, value: &serde_json::Value) -> Result<(), CliError> 
     Ok(())
 }
 
-/// Maps `CliError` to `ApiError` at the service boundary.
-#[cfg(feature = "cli")]
-fn to_api_error(e: CliError) -> ApiError {
-    match e {
-        CliError::InvalidInput(msg) => ApiError::InvalidInput {
-            message: msg,
-            field: None,
-            value: None,
-        },
-        other => ApiError::internal_error(format!("{other}"), "setup_error"),
-    }
-}
-
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
 #[service_api(
@@ -308,7 +295,7 @@ fn to_api_error(e: CliError) -> ApiError {
     cli = true
 )]
 async fn setup(force: bool) -> Result<(), ApiError> {
-    let output = run(force).map_err(to_api_error)?;
+    let output = run(force).map_err(|e| to_api_error(e, "setup_error"))?;
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
@@ -674,8 +661,12 @@ mod tests {
 
     // --- run() wrapper ---
 
+    /// Serializes tests that mutate the `HOME` environment variable.
+    static HOME_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn run_succeeds_when_home_has_fresh_agent() {
+        let _lock = HOME_TEST_MUTEX.lock().unwrap();
         let home = fake_home(&[Agent::ClaudeCode]);
         let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", home.path());
@@ -695,6 +686,7 @@ mod tests {
 
     #[test]
     fn run_returns_error_when_home_unset() {
+        let _lock = HOME_TEST_MUTEX.lock().unwrap();
         let original_home = std::env::var("HOME").ok();
         std::env::remove_var("HOME");
         let err = run(false).expect_err("HOME unset should error");

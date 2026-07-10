@@ -474,7 +474,7 @@ pub(crate) fn now_unix_seconds() -> i64 {
 // ---------------------------------------------------------------------------
 //
 // NOTE: The DB-backed wiring that actually runs `rust-analyzer` after an index
-// run lives in `src/cli/index_cmd.rs::enhance_with_lsp`. This
+// run lives in `src/service/index.rs::enhance_with_lsp`. This
 // pure function is the mock-injectable core: it takes a `&dyn LspProvider`
 // and a `&mut [Node]` slice so the graceful-degradation contract (R-lsp-004:
 // "LSP server 启动失败时，索引不中断" / "LSP 查询超时时，跳过该符号的语义

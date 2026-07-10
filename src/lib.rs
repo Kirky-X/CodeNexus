@@ -28,7 +28,6 @@ compile_error!(
      or a preset like `--features minimal`/`core`/`full`."
 );
 
-pub mod cli;
 #[cfg(feature = "daemon")]
 pub mod daemon;
 pub mod discover;

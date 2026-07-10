@@ -14,10 +14,9 @@ use std::process::Command;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::cli::error::CliError;
 use crate::kit::StorageKey;
 use crate::model::NodeLabel;
-use crate::service::error::{kit_not_initialized, wrap_error};
+use crate::service::error::{CliError, kit_not_initialized, to_api_error, wrap_error};
 use crate::service::runtime::kit;
 use crate::storage::schema::node_table_columns;
 
@@ -144,7 +143,17 @@ fn find_symbols_in_ranges(
     abs_path: &Path,
     ranges: &[(u32, u32)],
 ) -> Result<Vec<AffectedSymbolOutput>, CliError> {
-    let mut out: Vec<AffectedSymbolOutput> = Vec::new();
+    struct MatchingSymbol {
+        id: String,
+        name: String,
+        label: String,
+        qualified_name: String,
+        file_path: String,
+        start_line: u32,
+        end_line: u32,
+    }
+
+    let mut matching: Vec<MatchingSymbol> = Vec::new();
     let rel = rel_path.to_string();
     let abs = abs_path.to_string_lossy().to_string();
     for label in NodeLabel::all() {
@@ -157,8 +166,10 @@ fn find_symbols_in_ranges(
             continue;
         }
         let table = crate::storage::schema::escape_identifier(label.table_name());
+        let rel_esc = crate::storage::schema::escape_cypher_string(&rel);
+        let abs_esc = crate::storage::schema::escape_cypher_string(&abs);
         let cypher = format!(
-            "MATCH (n:{table}) WHERE n.filePath = '{rel}' OR n.filePath = '{abs}' \
+            "MATCH (n:{table}) WHERE n.filePath = '{rel_esc}' OR n.filePath = '{abs_esc}' \
              RETURN n.id AS id, n.name AS name, n.qualifiedName AS qualifiedName, \
              n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine;"
         );
@@ -197,20 +208,63 @@ fn find_symbols_in_ranges(
             if !ranges_overlap(start_line, end_line, ranges) {
                 continue;
             }
-            let incoming_edge_count = count_incoming_edges(storage, &id)?;
-            let risk_level = classify_risk(incoming_edge_count);
-            out.push(AffectedSymbolOutput {
+            matching.push(MatchingSymbol {
+                id,
                 name,
                 label: label.to_string(),
                 qualified_name,
                 file_path,
                 start_line,
                 end_line,
-                incoming_edge_count,
-                risk_level: risk_level.to_string(),
             });
         }
     }
+
+    if matching.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Batch query: count incoming edges for all matching symbols in one query
+    let ids_clause = matching
+        .iter()
+        .map(|m| {
+            format!(
+                "'{}'",
+                crate::storage::schema::escape_cypher_string(&m.id)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let cypher = format!(
+        "MATCH (r:CodeRelation) WHERE r.target IN [{ids_clause}] \
+         RETURN r.target AS id, count(r) AS cnt;"
+    );
+    let edge_rows = storage.query(&cypher)?;
+    let mut edge_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for row in &edge_rows {
+        let id = row.first().and_then(|v| v.as_str()).unwrap_or("");
+        let cnt = row.get(1).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        edge_counts.insert(id.to_string(), cnt);
+    }
+
+    let out = matching
+        .into_iter()
+        .map(|m| {
+            let incoming_edge_count = edge_counts.get(&m.id).copied().unwrap_or(0);
+            let risk_level = classify_risk(incoming_edge_count);
+            AffectedSymbolOutput {
+                name: m.name,
+                label: m.label,
+                qualified_name: m.qualified_name,
+                file_path: m.file_path,
+                start_line: m.start_line,
+                end_line: m.end_line,
+                incoming_edge_count,
+                risk_level: risk_level.to_string(),
+            }
+        })
+        .collect();
     Ok(out)
 }
 
@@ -223,22 +277,6 @@ fn ranges_overlap(start: u32, end: u32, ranges: &[(u32, u32)]) -> bool {
         let re = rs.saturating_add(*rl).saturating_sub(1);
         start <= re && *rs <= end
     })
-}
-
-/// Counts edges in `CodeRelation` where `target = id`.
-fn count_incoming_edges(
-    storage: &dyn crate::storage::capability::Storage,
-    id: &str,
-) -> Result<usize, CliError> {
-    let cypher = format!("MATCH (r:CodeRelation) WHERE r.target = '{id}' RETURN count(r) AS cnt;");
-    let rows = storage.query(&cypher)?;
-    let cnt = rows
-        .first()
-        .and_then(|r| r.first())
-        .and_then(|v| v.as_i64())
-        .map(|i| usize::try_from(i).unwrap_or(0))
-        .unwrap_or(0);
-    Ok(cnt)
 }
 
 /// Classifies risk by incoming edge count (blast radius).
@@ -278,19 +316,6 @@ pub struct AffectedSymbolOutput {
     pub risk_level: String,
 }
 
-/// Maps `CliError` to `ApiError` at the service boundary.
-#[cfg(feature = "cli")]
-fn to_api_error(e: CliError) -> ApiError {
-    match e {
-        CliError::InvalidInput(msg) => ApiError::InvalidInput {
-            message: msg,
-            field: None,
-            value: None,
-        },
-        other => ApiError::internal_error(format!("{other}"), "detect_changes_error"),
-    }
-}
-
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
 #[service_api(
@@ -315,7 +340,7 @@ async fn detect_changes(path: String, mode: String) -> Result<(), ApiError> {
         value: Some(Value::String(mode.clone())),
     })?;
 
-    let diff_output = run_git_diff(repo_root, diff_mode).map_err(to_api_error)?;
+    let diff_output = run_git_diff(repo_root, diff_mode).map_err(|e| to_api_error(e, "detect_changes_error"))?;
     let hunks = parse_unified_diff(&diff_output);
     let files_changed = hunks.len();
 
@@ -326,7 +351,7 @@ async fn detect_changes(path: String, mode: String) -> Result<(), ApiError> {
     for (rel_path, ranges) in &hunks {
         let abs_path = repo_root.join(rel_path);
         for sym in
-            find_symbols_in_ranges(&*storage, rel_path, &abs_path, ranges).map_err(to_api_error)?
+            find_symbols_in_ranges(&*storage, rel_path, &abs_path, ranges).map_err(|e| to_api_error(e, "detect_changes_error"))?
         {
             affected.push(sym);
         }
@@ -362,11 +387,10 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    fn fresh_db_path() -> PathBuf {
+    fn fresh_db_path() -> (TempDir, PathBuf) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_detect_testdb");
-        std::mem::forget(dir);
-        path
+        (dir, path)
     }
 
     fn build_kit_for_db(db: &str) -> Kit {
@@ -634,7 +658,7 @@ diff --git a/added.rs b/added.rs
 
     #[test]
     fn core_path_not_a_directory_returns_error() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let err = detect_changes_core(&kit, "/nonexistent/path/xyz", "unstaged")
             .expect_err("nonexistent path should error");
@@ -644,7 +668,7 @@ diff --git a/added.rs b/added.rs
     #[test]
     fn core_invalid_mode_returns_error() {
         let tmp = TempDir::new().unwrap();
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let err = detect_changes_core(&kit, tmp.path().to_str().unwrap(), "bogus")
             .expect_err("invalid mode should error");
@@ -654,7 +678,7 @@ diff --git a/added.rs b/added.rs
     #[test]
     fn core_not_a_git_repo_returns_error() {
         let tmp = TempDir::new().unwrap();
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let result = detect_changes_core(&kit, tmp.path().to_str().unwrap(), "unstaged");
         let err = match result {
@@ -675,7 +699,7 @@ diff --git a/added.rs b/added.rs
             eprintln!("skipping test: git init failed");
             return;
         }
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let result = detect_changes_core(&kit, tmp.path().to_str().unwrap(), "unstaged");
         if result.is_ok() {
@@ -714,7 +738,7 @@ diff --git a/added.rs b/added.rs
         crate::model::Node::builder(
             crate::model::NodeLabel::Function,
             "sym",
-            &format!("demo.{id}"),
+            format!("demo.{id}"),
         )
         .id(id)
         .project("demo")
@@ -727,7 +751,7 @@ diff --git a/added.rs b/added.rs
 
     #[test]
     fn find_symbols_in_ranges_returns_overlapping_symbol_low_risk() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let storage = kit.require::<StorageKey>().expect("require_storage");
 
@@ -753,7 +777,7 @@ diff --git a/added.rs b/added.rs
 
     #[test]
     fn find_symbols_in_ranges_returns_medium_risk_with_1_to_3_incoming() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let storage = kit.require::<StorageKey>().expect("require_storage");
 
@@ -786,7 +810,7 @@ diff --git a/added.rs b/added.rs
 
     #[test]
     fn find_symbols_in_ranges_returns_high_risk_with_4_plus_incoming() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let storage = kit.require::<StorageKey>().expect("require_storage");
 
@@ -824,7 +848,7 @@ diff --git a/added.rs b/added.rs
 
     #[test]
     fn find_symbols_in_ranges_skips_non_overlapping_symbol() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let storage = kit.require::<StorageKey>().expect("require_storage");
 
@@ -850,7 +874,7 @@ diff --git a/added.rs b/added.rs
 
     #[test]
     fn find_symbols_in_ranges_empty_ranges_returns_empty() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let storage = kit.require::<StorageKey>().expect("require_storage");
         storage
@@ -868,33 +892,6 @@ diff --git a/added.rs b/added.rs
         )
         .expect("find_symbols_in_ranges");
         assert!(affected.is_empty(), "empty ranges → no symbols");
-    }
-
-    #[test]
-    fn count_incoming_edges_returns_zero_for_no_edges() {
-        let db = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageKey>().expect("require_storage");
-        let cnt = count_incoming_edges(&*storage, "no_such_id").expect("count_incoming_edges");
-        assert_eq!(cnt, 0, "no edges → 0");
-    }
-
-    #[test]
-    fn count_incoming_edges_counts_targeting_edges() {
-        let db = fresh_db_path();
-        let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageKey>().expect("require_storage");
-        let edges = vec![
-            crate::model::Edge::builder("a", "target", crate::model::EdgeType::Calls, "demo")
-                .build(),
-            crate::model::Edge::builder("b", "target", crate::model::EdgeType::Calls, "demo")
-                .build(),
-            crate::model::Edge::builder("target", "c", crate::model::EdgeType::Calls, "demo")
-                .build(),
-        ];
-        storage.save_edges(&edges).expect("save_edges");
-        let cnt = count_incoming_edges(&*storage, "target").expect("count_incoming_edges");
-        assert_eq!(cnt, 2, "2 edges target 'target'");
     }
 
     // --- run_git_diff error paths ---

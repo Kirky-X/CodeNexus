@@ -29,10 +29,8 @@ use std::path::Path;
 
 use std::time::Duration;
 
-use criterion::{
-    BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main,
-};
 use codenexus::index::IndexFacade;
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 
 use common::generate_large_repo;
 

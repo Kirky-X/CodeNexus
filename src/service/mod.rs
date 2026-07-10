@@ -8,7 +8,7 @@
 //! - A CLI wrapper (`#[service_api(cli = true)]`) that calls core + prints to stdout
 //! - An MCP wrapper (`#[service_api(mcp = true)]`) that calls core + returns the value
 //!
-//! Kit injection uses the global [`runtime::kit()`] accessor (OnceLock pattern)
+//! Kit injection uses the global [`runtime::kit()`] accessor (Mutex-protected)
 //! because sdforge's `#[service_api]` macro generates standalone functions
 //! that cannot accept injected state.
 

@@ -7,9 +7,8 @@ use serde::Serialize;
 
 #[cfg(feature = "cross-service")]
 use crate::analysis::cross_service::{CrossServiceLink, CrossServiceLinker};
-use crate::cli::error::CliError;
 use crate::kit::StorageKey;
-use crate::service::error::{kit_not_initialized, wrap_error};
+use crate::service::error::{kit_not_initialized, wrap_error, to_api_error};
 use crate::service::runtime::kit;
 
 #[cfg(feature = "cli")]
@@ -23,19 +22,6 @@ use sdforge::service_api;
 pub struct CrossServiceOutput {
     pub project: String,
     pub links: Vec<CrossServiceLink>,
-}
-
-/// Maps `CliError` to `ApiError` at the service boundary.
-#[cfg(all(feature = "cli", feature = "cross-service"))]
-fn to_api_error(e: CliError) -> ApiError {
-    match e {
-        CliError::InvalidInput(msg) => ApiError::InvalidInput {
-            message: msg,
-            field: None,
-            value: None,
-        },
-        other => ApiError::internal_error(format!("{other}"), "cross_service_error"),
-    }
 }
 
 /// CLI wrapper — prints result to stdout as JSON.
@@ -53,7 +39,7 @@ async fn cross_service(project: String) -> Result<(), ApiError> {
         .map_err(|e| wrap_error("Failed to resolve storage capability", e))?;
 
     let linker = CrossServiceLinker::new(&*storage, &project);
-    let links = linker.link().map_err(|e| to_api_error(e.into()))?;
+    let links = linker.link().map_err(|e| to_api_error(e.into(), "cross_service_error"))?;
     let output = CrossServiceOutput { project, links };
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
@@ -65,14 +51,14 @@ async fn cross_service(project: String) -> Result<(), ApiError> {
 mod tests {
     use super::*;
     use crate::kit::{build_kit, Kit, KitBootstrapConfig};
+    use crate::service::error::CliError;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    fn fresh_db_path() -> PathBuf {
+    fn fresh_db_path() -> (TempDir, PathBuf) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_cross_service_testdb");
-        std::mem::forget(dir);
-        path
+        (dir, path)
     }
 
     fn build_kit_for_db(db: &std::path::Path) -> Kit {
@@ -95,7 +81,7 @@ mod tests {
 
     #[test]
     fn cross_service_core_succeeds_on_empty_db() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let result = cross_service_core(&kit, "demo");
         assert!(result.is_ok(), "run should succeed: {:?}", result.err());
@@ -103,7 +89,7 @@ mod tests {
 
     #[test]
     fn cross_service_core_returns_links() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageKey>().expect("require_storage");
         storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");

@@ -3,10 +3,8 @@
 
 //! Context command: show a 360-degree view of a symbol.
 
-use serde_json::Value;
-
 use crate::kit::TraceKey;
-use crate::service::error::{kit_not_initialized, wrap_error};
+use crate::service::error::{CliError, to_api_error};
 use crate::service::runtime::kit;
 use crate::trace::context::{
     collect_incoming, collect_outgoing, collect_processes, resolve_start_id,
@@ -20,24 +18,14 @@ use sdforge::service_api;
 
 /// Core context logic — shared by CLI and MCP wrappers.
 #[cfg(any(feature = "cli", feature = "mcp"))]
-async fn context_core(symbol: String, depth: u32) -> Result<ContextOutput, ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let trace_engine = kit
-        .require::<TraceKey>()
-        .map_err(|e| wrap_error("Failed to resolve trace capability", e))?;
-    let graph = trace_engine
-        .load_graph(&symbol, depth as usize)
-        .map_err(|e| wrap_error("Context graph load failed", e))?;
-    let start_id = resolve_start_id(&graph, &symbol).ok_or_else(|| ApiError::InvalidInput {
-        message: format!("symbol not found: {symbol}"),
-        field: Some("symbol".to_string()),
-        value: Some(Value::String(symbol.clone())),
-    })?;
+async fn context_core(symbol: String, depth: u32) -> Result<ContextOutput, CliError> {
+    let kit = kit().ok_or_else(CliError::kit_not_initialized)?;
+    let trace_engine = kit.require::<TraceKey>()?;
+    let graph = trace_engine.load_graph(&symbol, depth as usize)?;
+    let start_id = resolve_start_id(&graph, &symbol)
+        .ok_or_else(|| CliError::InvalidInput(format!("symbol not found: {symbol}")))?;
     let symbol_node = graph.get_node(&start_id).ok_or_else(|| {
-        ApiError::internal_error(
-            format!("symbol node resolved but not in graph: {symbol}"),
-            "context_node_missing",
-        )
+        CliError::Internal(format!("symbol node resolved but not in graph: {symbol}"))
     })?;
     let incoming = collect_incoming(&graph, &start_id);
     let outgoing = collect_outgoing(&graph, &start_id);
@@ -60,9 +48,11 @@ async fn context_core(symbol: String, depth: u32) -> Result<ContextOutput, ApiEr
     cli = true
 )]
 async fn context(symbol: String, depth: u32) -> Result<(), ApiError> {
-    let result = context_core(symbol, depth).await?;
-    let json =
-        serde_json::to_string(&result).map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let result = context_core(symbol, depth)
+        .await
+        .map_err(|e| to_api_error(e, "context_error"))?;
+    let json = serde_json::to_string(&result)
+        .map_err(|e| to_api_error(CliError::from(e), "context_error"))?;
     println!("{json}");
     Ok(())
 }
@@ -76,5 +66,7 @@ async fn context(symbol: String, depth: u32) -> Result<(), ApiError> {
     description = "Show a 360-degree view of a symbol (callers, callees, processes)."
 )]
 async fn context_mcp(symbol: String, depth: u32) -> Result<ContextOutput, ApiError> {
-    context_core(symbol, depth).await
+    context_core(symbol, depth)
+        .await
+        .map_err(|e| to_api_error(e, "context_error"))
 }

@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::index::IndexResult;
 use crate::kit::{IndexerKey, Kit, StorageConfigKey};
-use crate::service::error::{kit_not_initialized, wrap_error};
+use crate::service::error::{CliError, kit_not_initialized, to_api_error, wrap_error};
 use crate::service::runtime::kit;
 use crate::storage::{QualityChecker, Repository};
 
@@ -160,29 +160,20 @@ pub(crate) fn index_core(
     force: bool,
     lsp: bool,
     ram_first: bool,
-) -> Result<IndexOutput, ApiError> {
+) -> Result<IndexOutput, CliError> {
     let path_ref = Path::new(path);
-    let indexer = kit
-        .require::<IndexerKey>()
-        .map_err(|e| wrap_error("Failed to resolve indexer capability", e))?;
+    let indexer = kit.require::<IndexerKey>()?;
     let result = if ram_first {
-        indexer
-            .index_ram_first(path_ref, name, force)
-            .map_err(|e| wrap_error("Index (RAM-first) failed", e))?
+        indexer.index_ram_first(path_ref, name, force)?
     } else {
-        indexer
-            .index(path_ref, name, force)
-            .map_err(|e| wrap_error("Index failed", e))?
+        indexer.index(path_ref, name, force)?
     };
 
     // Open a FRESH Repository for DQ checks — the Kit's Storage connection
     // was opened at boot (before indexing) and holds a stale MVCC snapshot.
-    let fresh_repo = Repository::open(db_path)
-        .map_err(|e| wrap_error("Failed to open fresh repository for DQ checks", e))?;
+    let fresh_repo = Repository::open(db_path)?;
     let checker = QualityChecker::new(&fresh_repo);
-    let dq_report = checker
-        .run_all()
-        .map_err(|e| wrap_error("Data quality check failed", e))?;
+    let dq_report = checker.run_all()?;
     if !dq_report.is_clean() {
         eprintln!("Data quality violations found:");
         for violation in &dq_report.violations {
@@ -247,9 +238,10 @@ async fn index(
     let storage_config = storage_config.load();
     let db_path = storage_config.db_path.clone();
 
-    let output = index_core(kit, &db_path, &path, &name, force, lsp, ram_first)?;
-    let json =
-        serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let output = index_core(&kit, &db_path, &path, &name, force, lsp, ram_first)
+        .map_err(|e| to_api_error(e, "index_error"))?;
+    let json = serde_json::to_string(&output)
+        .map_err(|e| to_api_error(CliError::from(e), "index_error"))?;
     println!("{json}");
     Ok(())
 }

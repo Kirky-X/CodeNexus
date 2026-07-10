@@ -17,12 +17,12 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::cli::error::CliError;
+use crate::service::error::{CliError, to_api_error};
 use crate::kit::{Kit, StorageKey, TraceKey};
 use crate::model::{Graph, Node, NodeId};
 use crate::service::error::{kit_not_initialized, wrap_error};
 use crate::service::runtime::kit;
-use crate::storage::schema::escape_cypher_string;
+use crate::storage::schema::{escape_cypher_string, escape_identifier};
 use crate::trace::TraceError;
 
 #[cfg(feature = "cli")]
@@ -177,7 +177,7 @@ fn file_to_rel_string(file: &Path, root: &Path) -> String {
 /// Applies the graph edit via Cypher `SET`.
 fn apply_graph_edit(kit: &Kit, edit: &GraphEdit) -> Result<(), CliError> {
     let storage = kit.require::<StorageKey>()?;
-    let table = edit.label.as_str();
+    let table = escape_identifier(edit.label.as_str());
     let cypher = format!(
         "MATCH (n:{table}) WHERE n.id = '{id}' SET n.name = '{new_name}', n.qualifiedName = '{new_qn}';",
         id = escape_cypher_string(&edit.node_id),
@@ -270,23 +270,6 @@ pub struct TextEdit {
     pub new_text: String,
 }
 
-/// Maps `CliError` to `ApiError` at the service boundary.
-#[cfg(feature = "cli")]
-fn to_api_error(e: CliError) -> ApiError {
-    match e {
-        CliError::InvalidInput(msg) => ApiError::InvalidInput {
-            message: msg,
-            field: None,
-            value: None,
-        },
-        CliError::Trace(TraceError::SymbolNotFound(s)) => ApiError::NotFound {
-            resource: "symbol".to_string(),
-            resource_id: Some(s),
-        },
-        other => ApiError::internal_error(format!("{other}"), "rename_error"),
-    }
-}
-
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
 #[service_api(
@@ -358,14 +341,14 @@ async fn rename(from: String, to: String, path: String, apply: bool) -> Result<(
         Some(root) => {
             let candidate_files = collect_candidate_files(&graph, &start_id, Path::new(root));
             scan_text_edits(Path::new(root), &old_name, &to, &candidate_files)
-                .map_err(to_api_error)?
+                .map_err(|e| to_api_error(e, "rename_error"))?
         }
         None => Vec::new(),
     };
 
     if apply {
-        apply_graph_edit(kit, &graph_edit).map_err(to_api_error)?;
-        apply_text_edits(&text_edits).map_err(to_api_error)?;
+        apply_graph_edit(&kit, &graph_edit).map_err(|e| to_api_error(e, "rename_error"))?;
+        apply_text_edits(&text_edits).map_err(|e| to_api_error(e, "rename_error"))?;
     }
 
     let output = RenameOutput {
@@ -389,11 +372,10 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    fn fresh_db_path() -> PathBuf {
+    fn fresh_db_path() -> (TempDir, PathBuf) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_rename_testdb");
-        std::mem::forget(dir);
-        path
+        (dir, path)
     }
 
     fn build_kit_for_db(db: &str) -> Kit {
@@ -836,7 +818,7 @@ mod tests {
 
     #[test]
     fn core_invalid_new_name_returns_error() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let err =
             rename_core(&kit, "foo", "1bad", None, false).expect_err("invalid name should error");
@@ -845,7 +827,7 @@ mod tests {
 
     #[test]
     fn core_apply_without_path_returns_error() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let err = rename_core(&kit, "foo", "bar", None, true)
             .expect_err("apply without path should error");
@@ -854,7 +836,7 @@ mod tests {
 
     #[test]
     fn core_missing_symbol_returns_trace_error() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let err = rename_core(&kit, "nonexistent", "bar", None, false)
             .expect_err("missing symbol should error");
@@ -865,7 +847,7 @@ mod tests {
 
     #[test]
     fn core_dry_run_succeeds_with_symbol() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let storage = kit.require::<StorageKey>().unwrap();
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();
@@ -879,7 +861,7 @@ mod tests {
 
     #[test]
     fn core_apply_updates_graph_name() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
         let storage = kit.require::<StorageKey>().unwrap();
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();

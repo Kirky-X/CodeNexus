@@ -6,7 +6,7 @@
 use serde::Serialize;
 
 use crate::analysis::dead_code::{DeadCodeDetector, DeadCodeEntry};
-use crate::cli::error::CliError;
+use crate::service::error::{CliError, to_api_error};
 use crate::kit::{Kit, StorageKey};
 use crate::service::error::kit_not_initialized;
 use crate::service::runtime::kit;
@@ -49,19 +49,6 @@ fn dead_code_core(kit: &Kit, project: &str, entry: &str) -> Result<(), CliError>
     Ok(())
 }
 
-/// Maps `CliError` to `ApiError` at the service boundary.
-#[cfg(all(feature = "cli", feature = "analysis"))]
-fn to_api_error(e: CliError) -> ApiError {
-    match e {
-        CliError::InvalidInput(msg) => ApiError::InvalidInput {
-            message: msg,
-            field: None,
-            value: None,
-        },
-        other => ApiError::internal_error(format!("{other}"), "dead_code_error"),
-    }
-}
-
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "analysis"))]
 #[service_api(
@@ -72,7 +59,7 @@ fn to_api_error(e: CliError) -> ApiError {
 )]
 async fn dead_code(project: String, entry: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    dead_code_core(kit, &project, &entry).map_err(to_api_error)?;
+    dead_code_core(&kit, &project, &entry).map_err(|e| to_api_error(e, "dead_code_error"))?;
     Ok(())
 }
 
@@ -82,11 +69,10 @@ mod tests {
     use crate::kit::{build_kit, KitBootstrapConfig, StorageKey};
     use tempfile::TempDir;
 
-    fn fresh_db_path() -> std::path::PathBuf {
+    fn fresh_db_path() -> (TempDir, std::path::PathBuf) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_dead_code_testdb");
-        std::mem::forget(dir);
-        path
+        (dir, path)
     }
 
     fn build_kit_for_db(db: &std::path::Path) -> Kit {
@@ -96,7 +82,7 @@ mod tests {
 
     #[test]
     fn core_succeeds_on_empty_db() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let result = dead_code_core(&kit, "demo", "");
         assert!(result.is_ok(), "core should succeed: {:?}", result.err());
@@ -104,7 +90,7 @@ mod tests {
 
     #[test]
     fn core_returns_dead_function() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageKey>().expect("require_storage");
         storage.execute("CREATE (:Function {id: 'f_foo', project: 'demo', name: 'foo', qualifiedName: 'demo.foo', filePath: '/src/lib.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create foo");
@@ -114,7 +100,7 @@ mod tests {
 
     #[test]
     fn core_with_custom_entry_patterns() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageKey>().expect("require_storage");
         storage.execute("CREATE (:Function {id: 'f_main', project: 'demo', name: 'main', qualifiedName: 'demo.main', filePath: '/src/main.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create main");

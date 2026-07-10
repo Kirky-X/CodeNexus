@@ -12,9 +12,9 @@
 //! trace from `func_0` at various depths and trace types. `TraceFacade`
 //! borrows the graph immutably, so no database is involved.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use codenexus::model::{Edge, EdgeType, Graph, Node, NodeLabel};
 use codenexus::trace::{TraceFacade, TraceType};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 /// Builds an in-memory graph with `size` functions in a linear call chain:
 /// `func_0` calls `func_1` calls ... `func_{size-1}`.

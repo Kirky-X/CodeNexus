@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::kit::TraceKey;
-use crate::service::error::{kit_not_initialized, wrap_error};
+use crate::service::error::{CliError, to_api_error};
 use crate::service::runtime::kit;
 use crate::trace::{TraceEdge, TraceNode, TraceResult, TraceType};
 
@@ -73,19 +73,15 @@ async fn trace_core(
     symbol: String,
     trace_type: String,
     depth: u32,
-) -> Result<TraceOutput, ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let tt = TraceType::from_cli_str(&trace_type).ok_or_else(|| ApiError::InvalidInput {
-        message: format!("invalid trace_type: {trace_type} (expected calls|dataflow|all)"),
-        field: Some("trace_type".to_string()),
-        value: Some(Value::String(trace_type)),
+) -> Result<TraceOutput, CliError> {
+    let kit = kit().ok_or_else(CliError::kit_not_initialized)?;
+    let tt = TraceType::from_cli_str(&trace_type).ok_or_else(|| {
+        CliError::InvalidInput(format!(
+            "invalid trace_type: {trace_type} (expected calls|dataflow|all)"
+        ))
     })?;
-    let trace_engine = kit
-        .require::<TraceKey>()
-        .map_err(|e| wrap_error("Failed to resolve trace capability", e))?;
-    let result = trace_engine
-        .trace(&symbol, tt, depth as usize)
-        .map_err(|e| wrap_error("Trace execution failed", e))?;
+    let trace_engine = kit.require::<TraceKey>()?;
+    let result = trace_engine.trace(&symbol, tt, depth as usize)?;
     Ok(trace_output(result))
 }
 
@@ -98,9 +94,11 @@ async fn trace_core(
     cli = true
 )]
 async fn trace(symbol: String, trace_type: String, depth: u32) -> Result<(), ApiError> {
-    let result = trace_core(symbol, trace_type, depth).await?;
-    let json =
-        serde_json::to_string(&result).map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let result = trace_core(symbol, trace_type, depth)
+        .await
+        .map_err(|e| to_api_error(e, "trace_error"))?;
+    let json = serde_json::to_string(&result)
+        .map_err(|e| to_api_error(CliError::from(e), "trace_error"))?;
     println!("{json}");
     Ok(())
 }
@@ -118,5 +116,7 @@ async fn trace_mcp(
     trace_type: String,
     depth: u32,
 ) -> Result<TraceOutput, ApiError> {
-    trace_core(symbol, trace_type, depth).await
+    trace_core(symbol, trace_type, depth)
+        .await
+        .map_err(|e| to_api_error(e, "trace_error"))
 }

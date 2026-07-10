@@ -717,20 +717,17 @@ fn ffi_trace_returns_cross_language_path() {
 /// The manual `From<StorageError> for IndexError` impl maps `Corrupt` to
 /// `IndexError::DatabaseCorrupt`, whose `exit_code()` returns 4.
 ///
-/// # 架构冲突说明（Rule 7 — 暴露冲突，不要折中）
+/// # 退出码路径说明
 ///
 /// spec 写明 "executes the index command against that database" 并期望进程
-/// 退出码 4。然而 `build_kit` 在 `index_cmd::run` 之前被调用（负责装配 Kit），
-/// 遇到损坏数据库时 `build_kit` 先失败并返回 `KitError::BuildFailed`。
-/// `CliError::Kit(_) => 3`（见 src/cli/error.rs:109），因此 CLI 退出码路径
-/// 在 Kit bootstrap 阶段检测到的损坏数据库**无法**到达退出码 4。
+/// 退出码 4。`build_kit` 在命令处理之前被调用（负责装配 Kit），遇到损坏
+/// 数据库时 `build_kit` 先失败并返回 `KitError::BuildFailed`。
+/// `CliError::Kit(_)` 分支通过 `kit_exit_code`（见 src/service/error.rs）
+/// downcast source chain，对 `StorageError::Corrupt` / `IndexError::DatabaseCorrupt`
+/// 返回退出码 4。
 ///
-/// 本测试因此验证**错误链**（`build_kit` → `KitError::BuildFailed` →
-/// `StorageError::Corrupt` → `IndexError::DatabaseCorrupt` → `exit_code 4`），
-/// 而非 CLI 退出码。要让 CLI 路径直接返回退出码 4，需修改 `CliError::Kit`
-/// 分支：downcast `source` 并对 `StorageError::Corrupt` 重新映射为
-/// `CliError::Index(IndexError::DatabaseCorrupt(_))`。该修改超出本次 change
-/// 范围（Rule 3 外科手术式修改），已在 design.md 中作为开放问题记录。
+/// 本测试验证**错误链**（`build_kit` → `KitError::BuildFailed` →
+/// `StorageError::Corrupt` → `IndexError::DatabaseCorrupt` → `exit_code 4`）。
 #[test]
 fn corrupt_db_returns_exit_code_4() {
     use codenexus::index::IndexError;

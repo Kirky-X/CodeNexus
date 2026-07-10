@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::kit::TraceKey;
-use crate::service::error::{kit_not_initialized, wrap_error};
+use crate::service::error::{CliError, to_api_error};
 use crate::service::runtime::kit;
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
@@ -50,14 +50,10 @@ fn impact_output(symbol: String, depth: u32, graph: crate::model::Graph) -> Impa
 
 /// Core impact logic — shared by CLI and MCP wrappers.
 #[cfg(any(feature = "cli", feature = "mcp"))]
-async fn impact_core(symbol: String, depth: u32) -> Result<ImpactOutput, ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let trace_engine = kit
-        .require::<TraceKey>()
-        .map_err(|e| wrap_error("Failed to resolve trace capability", e))?;
-    let graph = trace_engine
-        .load_graph(&symbol, depth as usize)
-        .map_err(|e| wrap_error("Impact graph load failed", e))?;
+async fn impact_core(symbol: String, depth: u32) -> Result<ImpactOutput, CliError> {
+    let kit = kit().ok_or_else(CliError::kit_not_initialized)?;
+    let trace_engine = kit.require::<TraceKey>()?;
+    let graph = trace_engine.load_graph(&symbol, depth as usize)?;
     Ok(impact_output(symbol, depth, graph))
 }
 
@@ -70,9 +66,11 @@ async fn impact_core(symbol: String, depth: u32) -> Result<ImpactOutput, ApiErro
     cli = true
 )]
 async fn impact(symbol: String, depth: u32) -> Result<(), ApiError> {
-    let result = impact_core(symbol, depth).await?;
-    let json =
-        serde_json::to_string(&result).map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let result = impact_core(symbol, depth)
+        .await
+        .map_err(|e| to_api_error(e, "impact_error"))?;
+    let json = serde_json::to_string(&result)
+        .map_err(|e| to_api_error(CliError::from(e), "impact_error"))?;
     println!("{json}");
     Ok(())
 }
@@ -86,5 +84,7 @@ async fn impact(symbol: String, depth: u32) -> Result<(), ApiError> {
     description = "Analyze the blast radius (upstream callers) of changing a symbol."
 )]
 async fn impact_mcp(symbol: String, depth: u32) -> Result<ImpactOutput, ApiError> {
-    impact_core(symbol, depth).await
+    impact_core(symbol, depth)
+        .await
+        .map_err(|e| to_api_error(e, "impact_error"))
 }

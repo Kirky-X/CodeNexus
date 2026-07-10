@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::kit::QueryKey;
 use crate::query::{validate_cypher_subset, QueryResult};
-use crate::service::error::{kit_not_initialized, wrap_error};
+use crate::service::error::{CliError, to_api_error};
 use crate::service::runtime::kit;
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
@@ -37,15 +37,11 @@ fn query_output(r: QueryResult) -> QueryOutput {
 
 /// Core query logic — shared by CLI and MCP wrappers.
 #[cfg(any(feature = "cli", feature = "mcp"))]
-async fn query_core(cypher: String) -> Result<QueryOutput, ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let q = kit
-        .require::<QueryKey>()
-        .map_err(|e| wrap_error("Failed to resolve query capability", e))?;
-    validate_cypher_subset(&cypher).map_err(|e| wrap_error("Cypher validation failed", e))?;
-    let result = q
-        .cypher(&cypher)
-        .map_err(|e| wrap_error("Query execution failed", e))?;
+async fn query_core(cypher: String) -> Result<QueryOutput, CliError> {
+    let kit = kit().ok_or_else(CliError::kit_not_initialized)?;
+    let q = kit.require::<QueryKey>()?;
+    validate_cypher_subset(&cypher)?;
+    let result = q.cypher(&cypher)?;
     Ok(query_output(result))
 }
 
@@ -58,9 +54,11 @@ async fn query_core(cypher: String) -> Result<QueryOutput, ApiError> {
     cli = true
 )]
 async fn query(cypher: String) -> Result<(), ApiError> {
-    let result = query_core(cypher).await?;
-    let json =
-        serde_json::to_string(&result).map_err(|e| wrap_error("JSON serialization failed", e))?;
+    let result = query_core(cypher)
+        .await
+        .map_err(|e| to_api_error(e, "query_error"))?;
+    let json = serde_json::to_string(&result)
+        .map_err(|e| to_api_error(CliError::from(e), "query_error"))?;
     println!("{json}");
     Ok(())
 }
@@ -74,5 +72,7 @@ async fn query(cypher: String) -> Result<(), ApiError> {
     description = "Execute a Cypher query against the CodeNexus knowledge graph."
 )]
 async fn query_mcp(cypher: String) -> Result<QueryOutput, ApiError> {
-    query_core(cypher).await
+    query_core(cypher)
+        .await
+        .map_err(|e| to_api_error(e, "query_error"))
 }

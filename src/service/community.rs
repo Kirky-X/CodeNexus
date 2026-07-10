@@ -8,9 +8,8 @@ use serde_json::Value;
 
 #[cfg(feature = "community")]
 use crate::analysis::community::{Community, CommunityDetector};
-use crate::cli::error::CliError;
 use crate::kit::StorageKey;
-use crate::service::error::{kit_not_initialized, wrap_error};
+use crate::service::error::{kit_not_initialized, wrap_error, to_api_error};
 use crate::service::runtime::kit;
 
 #[cfg(feature = "cli")]
@@ -25,19 +24,6 @@ pub struct CommunityOutput {
     pub project: String,
     pub resolution: f64,
     pub communities: Vec<Community>,
-}
-
-/// Maps `CliError` to `ApiError` at the service boundary.
-#[cfg(all(feature = "cli", feature = "community"))]
-fn to_api_error(e: CliError) -> ApiError {
-    match e {
-        CliError::InvalidInput(msg) => ApiError::InvalidInput {
-            message: msg,
-            field: None,
-            value: None,
-        },
-        other => ApiError::internal_error(format!("{other}"), "community_error"),
-    }
 }
 
 /// CLI wrapper — prints result to stdout as JSON.
@@ -67,7 +53,7 @@ async fn community(project: String, resolution: String) -> Result<(), ApiError> 
     }
     let communities = detector
         .detect_communities()
-        .map_err(|e| to_api_error(e.into()))?;
+        .map_err(|e| to_api_error(e.into(), "community_error"))?;
     let output = CommunityOutput {
         project,
         resolution: detector.resolution(),
@@ -83,14 +69,14 @@ async fn community(project: String, resolution: String) -> Result<(), ApiError> 
 mod tests {
     use super::*;
     use crate::kit::{build_kit, Kit, KitBootstrapConfig};
+    use crate::service::error::CliError;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    fn fresh_db_path() -> PathBuf {
+    fn fresh_db_path() -> (TempDir, PathBuf) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_community_testdb");
-        std::mem::forget(dir);
-        path
+        (dir, path)
     }
 
     fn build_kit_for_db(db: &std::path::Path) -> Kit {
@@ -117,7 +103,7 @@ mod tests {
 
     #[test]
     fn community_core_succeeds_on_empty_db() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let result = community_core(&kit, "demo", None);
         assert!(result.is_ok(), "run should succeed: {:?}", result.err());
@@ -125,7 +111,7 @@ mod tests {
 
     #[test]
     fn community_core_returns_communities() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageKey>().expect("require_storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
@@ -139,7 +125,7 @@ mod tests {
 
     #[test]
     fn community_core_with_resolution() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageKey>().expect("require_storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");

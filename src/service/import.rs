@@ -15,7 +15,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::kit::StorageConfigKey;
-use crate::service::error::{kit_not_initialized, wrap_error};
+use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 use crate::service::export::{ArtifactManifest, ARTIFACT_FORMAT_VERSION, ARTIFACT_MAGIC, ZSTD_BIN};
 use crate::service::runtime::kit;
 
@@ -197,8 +197,8 @@ async fn import(input: String, reindex: bool, path: String, name: String) -> Res
             });
         }
         let _output =
-            crate::service::index::index_core(kit, &db_path, &path, &name, false, false, false)
-                .map_err(|e| wrap_error("Reindex failed", e))?;
+            crate::service::index::index_core(&kit, &db_path, &path, &name, false, false, false)
+                .map_err(|e| to_api_error(e, "index_error"))?;
         reindexed = true;
     }
 

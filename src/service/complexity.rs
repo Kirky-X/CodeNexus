@@ -11,7 +11,7 @@ use crate::analysis::complexity::{
     ComplexityAnalyzer, ComplexityEntry, ComplexityThresholds, Severity, SpaceComplexity,
     TimeComplexity,
 };
-use crate::cli::error::CliError;
+use crate::service::error::{CliError, to_api_error};
 #[cfg(feature = "complexity")]
 use crate::kit::{Kit, StorageKey};
 #[cfg(all(feature = "cli", feature = "complexity"))]
@@ -256,19 +256,6 @@ fn complexity_core(
     Ok(())
 }
 
-/// Maps `CliError` to `ApiError` at the service boundary.
-#[cfg(all(feature = "cli", feature = "complexity"))]
-fn to_api_error(e: CliError) -> ApiError {
-    match e {
-        CliError::InvalidInput(msg) => ApiError::InvalidInput {
-            message: msg,
-            field: None,
-            value: None,
-        },
-        other => ApiError::internal_error(format!("{other}"), "complexity_error"),
-    }
-}
-
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "complexity"))]
 #[allow(clippy::too_many_arguments)]
@@ -308,7 +295,7 @@ async fn complexity(
 ) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
     complexity_core(
-        kit,
+        &kit,
         &project,
         red_only,
         sort_by_severity,
@@ -336,7 +323,7 @@ async fn complexity(
         &space_complexity_yellow,
         &space_complexity_red,
     )
-    .map_err(to_api_error)?;
+    .map_err(|e| to_api_error(e, "complexity_error"))?;
     Ok(())
 }
 
@@ -347,11 +334,10 @@ mod tests {
     use crate::storage::schema::escape_cypher_string;
     use tempfile::TempDir;
 
-    fn fresh_db_path() -> std::path::PathBuf {
+    fn fresh_db_path() -> (TempDir, std::path::PathBuf) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("svc_complexity_testdb");
-        std::mem::forget(dir);
-        path
+        (dir, path)
     }
 
     fn build_kit_for_db(db: &std::path::Path) -> Kit {
@@ -389,7 +375,7 @@ mod tests {
 
     #[test]
     fn core_succeeds_on_empty_db() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let result = complexity_core(
             &kit, "demo", false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
@@ -401,7 +387,7 @@ mod tests {
     #[test]
     #[cfg(feature = "lang-rust")]
     fn core_returns_correct_summary() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         create_function_with_content(
             &kit,
@@ -473,7 +459,7 @@ mod tests {
     #[test]
     #[cfg(feature = "lang-rust")]
     fn core_red_only_filters_correctly() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         create_function_with_content(
             &kit,
@@ -560,7 +546,7 @@ mod tests {
     #[test]
     #[cfg(feature = "lang-rust")]
     fn core_uses_custom_thresholds() {
-        let db = fresh_db_path();
+        let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let src = "fn f() { if a {} if b {} if c {} if d {} if e {} \
                    if f {} if g {} if h {} if i {} }";
