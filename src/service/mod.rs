@@ -14,6 +14,7 @@
 
 pub mod clean;
 pub mod context;
+pub mod detect_changes;
 pub mod error;
 pub mod export;
 pub mod impact;
@@ -21,6 +22,7 @@ pub mod import;
 pub mod index;
 pub mod list;
 pub mod query;
+pub mod rename;
 pub mod runtime;
 pub mod search;
 pub mod status;
