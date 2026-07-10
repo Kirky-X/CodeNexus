@@ -52,6 +52,7 @@ pub mod model;
 pub mod parse;
 pub mod query;
 pub mod resolve;
+pub mod service;
 pub mod storage;
 pub mod trace;
 

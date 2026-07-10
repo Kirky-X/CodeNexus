@@ -22,11 +22,12 @@
 //! simplest way to make the Kit available to these functions without wrapping
 //! every handler in a closure or struct.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use codenexus::cli::args::McpArgs;
 use codenexus::cli::error::{CliError, Result as CliResult};
 use codenexus::kit::Kit;
+use codenexus::service::runtime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -54,37 +55,28 @@ use sdforge::service_api;
 #[cfg(feature = "mcp")]
 use serde_json::json;
 
-/// Global Kit instance injected into MCP tool handlers.
-///
-/// Set once by [`init_kit()`], accessed by tool handlers via [`kit()`].
-static KIT: OnceLock<Arc<Kit>> = OnceLock::new();
-
 /// Returns the Kit instance if initialized, or `None` if [`run`] hasn't been
 /// called.
 ///
-/// Tool handlers use this to access the query/trace/storage capabilities:
-///
-/// ```no_run
-/// let kit = codenexus::mcp::kit().expect("Kit not initialized");
-/// let query = kit.require::<codenexus::kit::QueryKey>()?;
-/// ```
+/// Delegates to [`crate::service::runtime::kit()`] — the global OnceLock is
+/// shared between CLI and MCP handlers.
 #[must_use]
 pub fn kit() -> Option<&'static Arc<Kit>> {
-    KIT.get()
+    runtime::kit()
 }
 
 /// Stores the Kit in the global `OnceLock` so tool handlers can access it.
 ///
-/// This is separated from [`serve()`] so it can be tested independently
-/// (the serve loop blocks on stdin, which is not testable in unit tests).
+/// Delegates to [`crate::service::runtime::init_kit()`] — the global OnceLock
+/// is shared between CLI and MCP handlers.
 ///
 /// # Errors
 ///
 /// Returns [`CliError::InvalidInput`] if the Kit has already been initialized
 /// (the `OnceLock` is set-once).
 pub fn init_kit(kit: Kit) -> CliResult<()> {
-    KIT.set(Arc::new(kit)).map_err(|_| {
-        CliError::InvalidInput("MCP server already initialized".to_string())
+    runtime::init_kit(kit).map_err(|_| {
+        CliError::InvalidInput("Kit already initialized".to_string())
     })
 }
 
