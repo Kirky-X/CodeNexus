@@ -32,9 +32,11 @@ use serde_json::Value;
 
 // MCP-feature-gated imports — only needed when building sdforge MCP tools.
 #[cfg(feature = "mcp")]
-use codenexus::cli::context_cmd::{
-    collect_incoming, collect_outgoing, collect_processes, resolve_start_id, ContextOutput,
+use codenexus::trace::context::{
+    collect_incoming, collect_outgoing, collect_processes, resolve_start_id,
 };
+#[cfg(feature = "mcp")]
+use codenexus::trace::types::{ContextOutput, SymbolNodeOutput};
 #[cfg(feature = "mcp")]
 use codenexus::kit::QueryKey;
 #[cfg(feature = "mcp")]
@@ -462,7 +464,7 @@ async fn search(text: String, fulltext: bool, limit: u32) -> Result<SearchOutput
 /// the symbol to a node, then partitions the edges into incoming (callers),
 /// outgoing (callees), and processes (structural participation).
 ///
-/// Reuses `context_cmd`'s `collect_incoming`/`collect_outgoing`/`collect_processes`
+/// Reuses `trace::context`'s `collect_incoming`/`collect_outgoing`/`collect_processes`
 /// to avoid duplicating the partitioning logic (Rule 8 — don't create a second
 /// version of existing code).
 #[cfg(feature = "mcp")]
@@ -500,7 +502,7 @@ async fn context(symbol: String, depth: u32) -> Result<ContextOutput, ApiError> 
     let processes = collect_processes(&graph, &start_id);
     Ok(ContextOutput {
         symbol,
-        node: codenexus::cli::context_cmd::SymbolNodeOutput::from(symbol_node),
+        node: SymbolNodeOutput::from(symbol_node),
         incoming,
         outgoing,
         processes,
