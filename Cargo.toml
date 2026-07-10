@@ -1,6 +1,6 @@
 [package]
 name = "codenexus"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 # MSRV 1.85 (Rust 2024 edition, released 2025-02-20). Unlocks future major
 # upgrades of clap 4.6 / reqwest 0.13 / uuid 1.23 (all MSRV 1.85) without
