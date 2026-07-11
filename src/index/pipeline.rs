@@ -36,6 +36,9 @@ use crate::model::{new_file_id, Language, Node, NodeLabel};
 use crate::parse::parallel::RamFirstSources;
 use crate::storage::{Repository, StorageError};
 
+#[cfg(feature = "cache")]
+use crate::cache::CacheStore;
+
 use super::phases::{
     ConfidencePhase, LoadOutput, LoadPhase, ParsePhase, ResolvePhase, ScanInput, ScanPhase,
     ScopeResolutionPhase,
@@ -150,6 +153,8 @@ impl IndexResult {
 /// The facade is the single entry point used by the CLI `index` command.
 pub struct IndexFacade {
     db_path: PathBuf,
+    #[cfg(feature = "cache")]
+    cache: Option<Arc<dyn CacheStore>>,
 }
 
 impl IndexFacade {
@@ -159,7 +164,20 @@ impl IndexFacade {
     pub fn new(db_path: &Path) -> Result<Self> {
         Ok(Self {
             db_path: db_path.to_path_buf(),
+            #[cfg(feature = "cache")]
+            cache: None,
         })
+    }
+
+    /// Attaches a [`CacheStore`] for post-write query-cache invalidation.
+    ///
+    /// After each indexing run completes, `cache.invalidate_all()` is called
+    /// to ensure stale Cypher query results are not served.
+    #[cfg(feature = "cache")]
+    #[must_use]
+    pub fn with_cache(mut self, cache: Arc<dyn CacheStore>) -> Self {
+        self.cache = Some(cache);
+        self
     }
 
     /// Runs the full index pipeline (no incremental diffing).
@@ -173,7 +191,12 @@ impl IndexFacade {
             Repository::open(&self.db_path).map_err(IndexError::from)
         })?;
         let pipeline = Pipeline::new(repository);
-        pipeline.run(path, project_name, force)
+        let result = pipeline.run(path, project_name, force)?;
+        #[cfg(feature = "cache")]
+        if let Some(ref cache) = self.cache {
+            cache.invalidate_all();
+        }
+        Ok(result)
     }
 
     /// Runs the incremental index pipeline (only changed files are parsed).
@@ -250,6 +273,10 @@ impl IndexFacade {
         // `run_ram_first` takes ownership of `compressed`; it is dropped when
         // `run_ram_first` returns (after the single COPY FROM dump in LoadPhase).
         let result = pipeline.run_ram_first(path, project_name, force, compressed)?;
+        #[cfg(feature = "cache")]
+        if let Some(ref cache) = self.cache {
+            cache.invalidate_all();
+        }
         Ok(result)
     }
 }

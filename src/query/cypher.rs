@@ -13,22 +13,54 @@ use super::error::{QueryError, Result};
 use super::QueryResult;
 use crate::storage::StorageConnection;
 
+#[cfg(feature = "cache")]
+use std::sync::Arc;
+
+#[cfg(feature = "cache")]
+use crate::cache::CacheStore;
+
+#[cfg(feature = "cache")]
+use crate::index::hash::compute_content_hash;
+
 /// Executes raw Cypher queries against a [`StorageConnection`].
 ///
 /// Borrows the connection for its lifetime; obtain one via
 /// [`CypherExecutor::new`].
 pub struct CypherExecutor<'a> {
     conn: &'a StorageConnection,
+    #[cfg(feature = "cache")]
+    cache: Option<Arc<dyn CacheStore>>,
 }
 
 impl<'a> CypherExecutor<'a> {
     /// Creates a new [`CypherExecutor`] borrowing `conn`.
     #[must_use]
     pub fn new(conn: &'a StorageConnection) -> Self {
-        Self { conn }
+        Self {
+            conn,
+            #[cfg(feature = "cache")]
+            cache: None,
+        }
+    }
+
+    /// Creates a new [`CypherExecutor`] with query-result caching enabled.
+    ///
+    /// Read queries (`MATCH`/`RETURN`/`WITH`) are cached by their SHA-256 key;
+    /// write queries bypass the cache and execute directly.
+    #[cfg(feature = "cache")]
+    #[must_use]
+    pub fn new_with_cache(conn: &'a StorageConnection, cache: Arc<dyn CacheStore>) -> Self {
+        Self {
+            conn,
+            cache: Some(cache),
+        }
     }
 
     /// Executes a Cypher query and returns the columns, rows, and duration.
+    ///
+    /// When a [`CacheStore`] is attached (via
+    /// [`new_with_cache`](Self::new_with_cache)), read queries are served from
+    /// cache on hit; misses execute the query and store the result.
     ///
     /// # Errors
     ///
@@ -40,6 +72,30 @@ impl<'a> CypherExecutor<'a> {
                 "cypher query must not be empty".to_string(),
             ));
         }
+
+        #[cfg(feature = "cache")]
+        if let Some(ref cache) = self.cache {
+            if Self::is_read_query(cypher) {
+                let key = format!("cypher:{}", compute_content_hash(cypher.as_bytes()));
+                if let Some(bytes) = cache.get(&key) {
+                    if let Ok(result) = serde_json::from_slice::<QueryResult>(&bytes) {
+                        return Ok(result);
+                    }
+                }
+                // Cache miss: execute, store, return.
+                let result = self.execute_internal(cypher)?;
+                if let Ok(bytes) = serde_json::to_vec(&result) {
+                    cache.set(&key, bytes);
+                }
+                return Ok(result);
+            }
+        }
+
+        self.execute_internal(cypher)
+    }
+
+    /// Executes the query against the storage connection (uncached path).
+    fn execute_internal(&self, cypher: &str) -> Result<QueryResult> {
         let start = Instant::now();
         let (columns, rows) = self.conn.query_with_columns(cypher)?;
         let duration_ms = start.elapsed().as_millis().min(u64::MAX as u128) as u64;
@@ -49,6 +105,13 @@ impl<'a> CypherExecutor<'a> {
             rows,
             duration_ms,
         })
+    }
+
+    /// Returns `true` if `cypher` is a read query (`MATCH`/`RETURN`/`WITH`).
+    #[cfg(feature = "cache")]
+    fn is_read_query(cypher: &str) -> bool {
+        let upper = cypher.trim_start().to_uppercase();
+        upper.starts_with("MATCH") || upper.starts_with("RETURN") || upper.starts_with("WITH")
     }
 }
 
@@ -228,5 +291,237 @@ mod tests {
         assert_eq!(result.rows[0][0], serde_json::json!("main"));
         assert_eq!(result.rows[0][1], serde_json::json!("demo.main"));
         assert_eq!(result.rows[0][2], serde_json::json!(1));
+    }
+}
+
+#[cfg(feature = "cache")]
+mod cached_tests {
+    use super::*;
+    use crate::cache::CacheStore;
+    use crate::index::hash::compute_content_hash;
+    use crate::model::{Language, Node, NodeLabel};
+    use crate::storage::Repository;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Mock `CacheStore` for testing — counts get/set/invalidate calls and
+    /// stores entries in an in-memory `HashMap`.
+    struct CountingCache {
+        gets: AtomicUsize,
+        sets: AtomicUsize,
+        invalidates: AtomicUsize,
+        inner: Mutex<HashMap<String, Vec<u8>>>,
+    }
+
+    impl CountingCache {
+        fn new() -> Self {
+            Self {
+                gets: AtomicUsize::new(0),
+                sets: AtomicUsize::new(0),
+                invalidates: AtomicUsize::new(0),
+                inner: Mutex::new(HashMap::new()),
+            }
+        }
+
+        fn gets(&self) -> usize {
+            self.gets.load(Ordering::SeqCst)
+        }
+
+        fn sets(&self) -> usize {
+            self.sets.load(Ordering::SeqCst)
+        }
+
+        #[allow(dead_code)]
+        fn invalidates(&self) -> usize {
+            self.invalidates.load(Ordering::SeqCst)
+        }
+
+        /// Returns a snapshot of all cached entries (without counting a get).
+        fn snapshot(&self) -> HashMap<String, Vec<u8>> {
+            self.inner.lock().expect("lock").clone()
+        }
+    }
+
+    impl CacheStore for CountingCache {
+        fn get(&self, key: &str) -> Option<Vec<u8>> {
+            self.gets.fetch_add(1, Ordering::SeqCst);
+            self.inner.lock().expect("lock").get(key).cloned()
+        }
+
+        fn set(&self, key: &str, val: Vec<u8>) {
+            self.sets.fetch_add(1, Ordering::SeqCst);
+            self.inner
+                .lock()
+                .expect("lock")
+                .insert(key.to_string(), val);
+        }
+
+        fn invalidate_all(&self) {
+            self.invalidates.fetch_add(1, Ordering::SeqCst);
+            self.inner.lock().expect("lock").clear();
+        }
+    }
+
+    /// Builds a fresh in-memory repository with the schema initialized.
+    fn fresh_repo() -> Repository {
+        Repository::in_memory().expect("in_memory repository")
+    }
+
+    /// Builds a sample Function node.
+    fn sample_function(id: &str, project: &str, name: &str, qn: &str) -> Node {
+        Node::builder(NodeLabel::Function, name, qn)
+            .id(id)
+            .project(project)
+            .file_path("/src/main.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .signature("fn main()")
+            .build()
+    }
+
+    #[test]
+    fn cached_read_query_miss_then_hit() {
+        let repo = fresh_repo();
+        repo.save_nodes(
+            &[sample_function("f1", "demo", "alpha", "demo.alpha")],
+            NodeLabel::Function,
+        )
+        .expect("save_nodes");
+
+        let cache = Arc::new(CountingCache::new());
+        let executor = CypherExecutor::new_with_cache(repo.connection(), cache.clone());
+        let cypher = "MATCH (f:Function) RETURN f.name AS name;";
+
+        // First call: cache miss → execute + store.
+        let r1 = executor.execute(cypher).expect("first execute");
+        assert_eq!(cache.gets(), 1, "first call: cache miss → get");
+        assert_eq!(cache.sets(), 1, "first call: store result → set");
+
+        // Second call: cache hit → return cached, no new store.
+        let r2 = executor.execute(cypher).expect("second execute");
+        assert_eq!(cache.gets(), 2, "second call: cache hit → get");
+        assert_eq!(cache.sets(), 1, "second call: no store on hit");
+
+        // Cached result must match the first execution.
+        assert_eq!(r1.columns, r2.columns);
+        assert_eq!(r1.rows, r2.rows);
+    }
+
+    #[test]
+    fn cached_read_query_skips_storage_on_hit() {
+        let repo = fresh_repo();
+        repo.save_nodes(
+            &[sample_function("f1", "demo", "alpha", "demo.alpha")],
+            NodeLabel::Function,
+        )
+        .expect("save_nodes");
+
+        let cache = Arc::new(CountingCache::new());
+        let executor = CypherExecutor::new_with_cache(repo.connection(), cache.clone());
+        let cypher = "MATCH (f:Function) RETURN f.name AS name;";
+
+        executor.execute(cypher).expect("first (miss)");
+        assert_eq!(cache.sets(), 1, "first call should store");
+
+        executor.execute(cypher).expect("second (hit)");
+        // sets stays at 1 → second call did NOT go through execute_internal.
+        assert_eq!(
+            cache.sets(),
+            1,
+            "hit must not re-execute or re-store"
+        );
+    }
+
+    #[test]
+    fn cached_write_query_not_cached() {
+        let repo = fresh_repo();
+        let cache = Arc::new(CountingCache::new());
+        let executor = CypherExecutor::new_with_cache(repo.connection(), cache.clone());
+
+        // CREATE is a write query — must not touch the cache.
+        executor
+            .execute("CREATE (:Project {id: 'p1', name: 'demo', rootPath: '/', language: 'rust', fileCount: 0, indexedAt: 0});")
+            .expect("create");
+
+        assert_eq!(cache.gets(), 0, "write query must not query cache");
+        assert_eq!(cache.sets(), 0, "write query must not store in cache");
+    }
+
+    #[test]
+    fn cached_query_different_cypher_different_key() {
+        let repo = fresh_repo();
+        repo.save_nodes(
+            &[sample_function("f1", "demo", "alpha", "demo.alpha")],
+            NodeLabel::Function,
+        )
+        .expect("save_nodes");
+
+        let cache = Arc::new(CountingCache::new());
+        let executor = CypherExecutor::new_with_cache(repo.connection(), cache.clone());
+
+        let q1 = "MATCH (f:Function) RETURN f.name AS name;";
+        let q2 = "MATCH (f:Function) RETURN f.qualifiedName AS qn;";
+
+        executor.execute(q1).expect("q1");
+        executor.execute(q2).expect("q2");
+
+        // Two distinct queries → two cache entries (two gets + two sets).
+        assert_eq!(cache.gets(), 2, "two distinct queries → two gets");
+        assert_eq!(cache.sets(), 2, "two distinct queries → two sets");
+    }
+
+    #[test]
+    fn cached_query_with_none_cache_works_normally() {
+        // CypherExecutor::new (no cache) behaves exactly as before.
+        let repo = fresh_repo();
+        repo.save_nodes(
+            &[sample_function("f1", "demo", "alpha", "demo.alpha")],
+            NodeLabel::Function,
+        )
+        .expect("save_nodes");
+
+        let executor = CypherExecutor::new(repo.connection());
+        let result = executor
+            .execute("MATCH (f:Function) RETURN f.name AS name;")
+            .expect("execute");
+        assert_eq!(result.columns, vec!["name"]);
+        assert_eq!(result.rows.len(), 1);
+    }
+
+    #[test]
+    fn cached_query_stores_correct_result() {
+        let repo = fresh_repo();
+        repo.save_nodes(
+            &[sample_function("f1", "demo", "alpha", "demo.alpha")],
+            NodeLabel::Function,
+        )
+        .expect("save_nodes");
+
+        let cache = Arc::new(CountingCache::new());
+        let executor = CypherExecutor::new_with_cache(repo.connection(), cache.clone());
+        let cypher = "MATCH (f:Function) RETURN f.name AS name;";
+        let result = executor.execute(cypher).expect("execute");
+
+        // Verify the cached entry deserializes to the same result.
+        let snap = cache.snapshot();
+        assert_eq!(snap.len(), 1, "exactly one entry should be cached");
+        let (key, bytes) = snap.iter().next().expect("one entry");
+        assert!(
+            key.starts_with("cypher:"),
+            "key should have 'cypher:' prefix, got: {key}"
+        );
+        // Key suffix must be the SHA-256 of the cypher string.
+        let expected_hash = compute_content_hash(cypher.as_bytes());
+        assert!(
+            key.ends_with(&expected_hash),
+            "key suffix should be content hash"
+        );
+        let cached: QueryResult =
+            serde_json::from_slice(bytes).expect("deserialize cached result");
+        assert_eq!(cached.columns, result.columns);
+        assert_eq!(cached.rows, result.rows);
     }
 }

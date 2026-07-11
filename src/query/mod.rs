@@ -57,7 +57,7 @@ pub struct SearchResult {
 ///
 /// Mirrors PRD §4.4.2: column names, row values (as JSON), and wall-clock
 /// duration in milliseconds.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct QueryResult {
     /// Column names returned by the query.
     pub columns: Vec<String>,
