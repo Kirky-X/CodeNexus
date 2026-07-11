@@ -311,3 +311,17 @@ inherits = "release"
 # ============================================================================
 [lints.rust]
 unexpected_cfgs = "allow"
+
+# ============================================================================
+# LOCAL DEVELOPMENT ONLY — UNCOMMENT FOR LOCAL REGRESSION TESTING
+# ============================================================================
+# When testing local changes to trait-kit/sdforge, uncomment the
+# [patch.crates-io] section below and adjust the paths to point to your
+# local checkout. This redirects the crates.io dependencies to local path
+# dependencies so changes in those projects are picked up immediately.
+#
+# MUST be commented out before publishing to crates.io (Rule: no local
+# path dependencies in released artifacts).
+# [patch.crates-io]
+# trait-kit = { path = "../trait-kit" }
+# sdforge = { path = "../sdforge" }
