@@ -5,8 +5,7 @@
 //! Phase 2).
 //!
 //! This module re-exports the trait-kit 0.2.4 `AsyncKit` API (see design.md D5)
-//! and declares the `*Key` / `*ConfigKey` marker types that historically
-//! identified each subsystem's capability and config in the Kit registry.
+//! and the 9 subsystem module types used for capability lookup.
 //!
 //! ## AsyncKit vs. Kit
 //!
@@ -17,12 +16,8 @@
 //! by `Arc<RwLock<...>>` and implements `Send + Sync`. Only `build()` is
 //! async; `require::<M>()` and `config::<C>()` are synchronous methods.
 //!
-//! ## Capability vs. Config keys (legacy markers)
-//!
-//! The `*Key` and `*ConfigKey` structs are retained as pure type identifiers
-//! for backwards-compatibility documentation. Capability lookup is now via
-//! the module type (e.g., `kit.require::<StorageModule>()`). These marker
-//! structs implement no trait and are not used at runtime.
+//! Capability and config lookup uses the module type directly (e.g.,
+//! `kit.require::<StorageModule>()` and `kit.set_config::<StorageConfig>()`).
 
 // `trait-kit` is a hard dependency (Task 2.16 removed the in-tree shim once
 // all modules migrated to `build_kit`). No feature gating needed.
@@ -60,107 +55,6 @@ pub use crate::trace::TraceModule;
 pub use crate::daemon::DaemonModule;
 #[cfg(feature = "embed")]
 pub use crate::embed::EmbedModule;
-
-// ---------------------------------------------------------------------------
-// Capability key markers (pure type identifiers — no trait impl)
-// ---------------------------------------------------------------------------
-//
-// Retained as documentation anchors. Capability lookup now uses the module
-// type directly (e.g., `kit.require::<StorageModule>()`). These structs
-// implement no trait and are not used at runtime.
-
-/// Capability key marker for the Storage subsystem.
-///
-/// Use [`StorageModule`](crate::storage::StorageModule) for capability lookup.
-#[allow(dead_code)]
-pub struct StorageKey;
-
-/// Capability key marker for the Parser subsystem.
-///
-/// Use [`ParserFactoryModule`](crate::parse::ParserFactoryModule) for
-/// capability lookup.
-#[allow(dead_code)]
-pub struct ParserKey;
-
-/// Capability key marker for the Extractor registry.
-///
-/// Use [`ExtractorRegistryModule`](crate::parse::ExtractorRegistryModule) for
-/// capability lookup.
-#[allow(dead_code)]
-pub struct ExtractorKey;
-
-/// Capability key marker for the Indexer subsystem.
-///
-/// Use [`IndexerModule`](crate::index::IndexerModule) for capability lookup.
-#[allow(dead_code)]
-pub struct IndexerKey;
-
-/// Capability key marker for the Resolver subsystem.
-///
-/// Use [`ResolverModule`](crate::resolve::ResolverModule) for capability
-/// lookup.
-#[allow(dead_code)]
-pub struct ResolverKey;
-
-/// Capability key marker for the Query subsystem.
-///
-/// Use [`QueryModule`](crate::query::QueryModule) for capability lookup.
-#[allow(dead_code)]
-pub struct QueryKey;
-
-/// Capability key marker for the Trace subsystem.
-///
-/// Use [`TraceModule`](crate::trace::TraceModule) for capability lookup.
-#[allow(dead_code)]
-pub struct TraceKey;
-
-/// Capability key marker for the Daemon subsystem (feature-gated).
-///
-/// Use [`DaemonModule`](crate::daemon::DaemonModule) for capability lookup.
-#[cfg(feature = "daemon")]
-#[allow(dead_code)]
-pub struct DaemonKey;
-
-/// Capability key marker for the Embed subsystem (feature-gated).
-///
-/// Use [`EmbedModule`](crate::embed::EmbedModule) for capability lookup.
-#[cfg(feature = "embed")]
-#[allow(dead_code)]
-pub struct EmbedKey;
-
-// ---------------------------------------------------------------------------
-// Config key markers (pure type identifiers — no trait impl)
-// ---------------------------------------------------------------------------
-//
-// Config values are now stored/retrieved via `AsyncKit::set_config::<C>()` /
-// `AsyncKit::config::<C>()`, keyed by `TypeId`. These marker structs are
-// retained for documentation and are not used at runtime.
-
-/// Config key marker for the Storage subsystem (`StorageConfig`).
-#[allow(dead_code)]
-pub struct StorageConfigKey;
-
-/// Config key marker for the Indexer subsystem (`IndexConfig`).
-#[allow(dead_code)]
-pub struct IndexConfigKey;
-
-/// Config key marker for the Query subsystem (`QueryConfig`).
-#[allow(dead_code)]
-pub struct QueryConfigKey;
-
-/// Config key marker for the Trace subsystem (`TraceConfig`).
-#[allow(dead_code)]
-pub struct TraceConfigKey;
-
-/// Config key marker for the Daemon subsystem (`DaemonConfig`).
-#[cfg(feature = "daemon")]
-#[allow(dead_code)]
-pub struct DaemonConfigKey;
-
-/// Config key marker for the Embed subsystem (`EmbeddingConfig`).
-#[cfg(feature = "embed")]
-#[allow(dead_code)]
-pub struct EmbedConfigKey;
 
 // ---------------------------------------------------------------------------
 // Tests

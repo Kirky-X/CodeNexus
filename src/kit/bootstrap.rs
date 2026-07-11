@@ -135,7 +135,7 @@ impl KitBootstrapConfig {
 // so provide a fallback constant for the default construction path. This
 // keeps `KitBootstrapConfig::new` usable in `--no-default-features` builds.
 #[cfg(not(feature = "daemon"))]
-const DEFAULT_DEBOUNCE_MS: u64 = 2000;
+pub const DEFAULT_DEBOUNCE_MS: u64 = 2000;
 
 // When the `embed` feature is off, `EmbeddingConfig` is not in scope, so
 // `KitBootstrapConfig::new` cannot call `EmbeddingConfig::from_env()`. The
@@ -187,41 +187,34 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
     kit.set_config(StorageConfig {
         db_path: config.db_path.clone(),
     });
-    kit.register::<StorageModule>()
-        .map_err(|e| tag(e, "storage"))?;
+    kit.register::<StorageModule>()?;
 
     // 2. Parser — stateless ParserFactory (Task 2.5).
-    kit.register::<ParserFactoryModule>()
-        .map_err(|e| tag(e, "parser"))?;
+    kit.register::<ParserFactoryModule>()?;
 
     // 3. Extractor — stateless dispatcher (Task 2.6).
-    kit.register::<ExtractorRegistryModule>()
-        .map_err(|e| tag(e, "extractor"))?;
+    kit.register::<ExtractorRegistryModule>()?;
 
     // 4. Indexer — IndexFacade with db_path (Task 2.7).
     kit.set_config(IndexConfig {
         db_path: config.db_path.clone(),
     });
-    kit.register::<IndexerModule>()
-        .map_err(|e| tag(e, "indexer"))?;
+    kit.register::<IndexerModule>()?;
 
     // 5. Resolver — stateless free functions (Task 2.8).
-    kit.register::<ResolverModule>()
-        .map_err(|e| tag(e, "resolver"))?;
+    kit.register::<ResolverModule>()?;
 
     // 6. Query — QueryFacade with db_path (Task 2.9).
     kit.set_config(QueryConfig {
         db_path: config.db_path.clone(),
     });
-    kit.register::<QueryModule>()
-        .map_err(|e| tag(e, "query"))?;
+    kit.register::<QueryModule>()?;
 
     // 7. Trace — loads fresh subgraph per trace call (Task 2.10).
     kit.set_config(TraceConfig {
         db_path: config.db_path.clone(),
     });
-    kit.register::<TraceModule>()
-        .map_err(|e| tag(e, "trace"))?;
+    kit.register::<TraceModule>()?;
 
     // 8. Daemon (feature-gated) — owns db_path + debounce_ms (Task 2.11).
     #[cfg(feature = "daemon")]
@@ -230,30 +223,17 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
             db_path: config.db_path.clone(),
             debounce_ms: config.debounce_ms,
         });
-        kit.register::<DaemonModule>()
-            .map_err(|e| tag(e, "daemon"))?;
+        kit.register::<DaemonModule>()?;
     }
 
     // 9. Embed (feature-gated) — owns EmbeddingConfig (Task 2.12).
     #[cfg(feature = "embed")]
     {
         kit.set_config(config.embedding_config.clone());
-        kit.register::<EmbedModule>()
-            .map_err(|e| tag(e, "embed"))?;
+        kit.register::<EmbedModule>()?;
     }
 
     kit.build().await
-}
-
-/// Tags a [`KitError`] with the module name that failed, preserving the
-/// original error chain via [`KitError::BuildFailed`]'s `source` field.
-///
-/// `KitError::BuildFailed` already carries `module: M::NAME` from the
-/// builder, so this is mostly a no-op passthrough — kept as a single
-/// chokepoint in case future bootstrap logic wants to enrich errors
-/// uniformly.
-fn tag(e: KitError, _module: &'static str) -> KitError {
-    e
 }
 
 // ---------------------------------------------------------------------------

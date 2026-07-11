@@ -21,8 +21,13 @@ use codenexus::service::init_kit;
 /// Default database path when `--db` is not specified.
 const DEFAULT_DB_PATH: &str = "./codenexus.lbug";
 
-/// Default debounce interval (ms) for the file-watcher daemon.
-const DEFAULT_DEBOUNCE_MS: u64 = 2000;
+// `DEFAULT_DEBOUNCE_MS` is sourced from the daemon module when the `daemon`
+// feature is enabled, or from the kit bootstrap fallback otherwise — avoiding
+// a third hardcoded copy of the 2000ms default (BR-DAEMON-001).
+#[cfg(feature = "daemon")]
+use codenexus::daemon::DEFAULT_DEBOUNCE_MS;
+#[cfg(not(feature = "daemon"))]
+use codenexus::kit::bootstrap::DEFAULT_DEBOUNCE_MS;
 
 /// Initialize the global `tracing` subscriber.
 ///
