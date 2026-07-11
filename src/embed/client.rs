@@ -26,9 +26,15 @@
 
 use std::sync::Mutex;
 
+#[cfg(feature = "cache")]
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use super::{EmbedError, EmbeddingConfig, Result, EMBEDDING_DIM, EMBED_MODEL_PATH_ENV};
+
+#[cfg(feature = "cache")]
+use crate::cache::CacheStore;
 
 /// Trait for embedding text into dense vectors.
 ///
@@ -525,6 +531,99 @@ impl std::fmt::Debug for MockEmbedClient {
     }
 }
 
+// ---------------------------------------------------------------------------
+// CachedEmbedClient (T021)
+// ---------------------------------------------------------------------------
+
+/// Serializes a `Vec<f32>` to little-endian bytes for cache storage.
+///
+/// Each `f32` is written as 4 little-endian bytes. The inverse is
+/// [`deserialize_vec`].
+#[cfg(feature = "cache")]
+fn serialize_vec(vec: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(vec.len() * 4);
+    for &v in vec {
+        bytes.extend_from_slice(&v.to_le_bytes());
+    }
+    bytes
+}
+
+/// Deserializes little-endian bytes back to `Vec<f32>`.
+///
+/// Inverse of [`serialize_vec`]. Bytes not divisible by 4 are silently
+/// truncated by [`chunks_exact`].
+///
+/// [`chunks_exact`]: slice::chunks_exact
+#[cfg(feature = "cache")]
+fn deserialize_vec(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+/// Embedding client wrapper that caches vectors by text content hash (T021).
+///
+/// Wraps an inner [`EmbedClient`] and a [`CacheStore`](crate::cache::CacheStore).
+/// On `embed`, each input text is looked up in the cache by
+/// `format!("embed:{content_hash}")` where `content_hash` is the SHA-256 of
+/// the text (via [`compute_content_hash`](crate::index::hash::compute_content_hash)).
+/// Hits are returned from the cache; misses are batched and delegated to the
+/// inner client, then written back to the cache.
+///
+/// Existing API is unchanged: [`EmbedClient`], [`OpenAIEmbedClient`],
+/// [`LocalEmbedClient`], and [`MockEmbedClient`] are not modified.
+#[cfg(feature = "cache")]
+pub struct CachedEmbedClient {
+    inner: Box<dyn EmbedClient>,
+    cache: Arc<dyn CacheStore>,
+}
+
+#[cfg(feature = "cache")]
+impl CachedEmbedClient {
+    /// Creates a new cached embedding client wrapping `inner` with `cache`.
+    #[must_use]
+    pub fn new(inner: Box<dyn EmbedClient>, cache: Arc<dyn CacheStore>) -> Self {
+        Self { inner, cache }
+    }
+}
+
+#[cfg(feature = "cache")]
+impl EmbedClient for CachedEmbedClient {
+    fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        let mut results: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+        let mut miss_indices: Vec<usize> = Vec::with_capacity(texts.len());
+        let mut miss_texts: Vec<&str> = Vec::with_capacity(texts.len());
+
+        // 1. Probe cache per text. Misses are collected for batch delegation.
+        for (i, text) in texts.iter().enumerate() {
+            let hash = crate::index::hash::compute_content_hash(text.as_bytes());
+            let key = format!("embed:{hash}");
+            if let Some(bytes) = self.cache.get(&key) {
+                results.push(deserialize_vec(&bytes));
+            } else {
+                results.push(Vec::new());
+                miss_indices.push(i);
+                miss_texts.push(*text);
+            }
+        }
+
+        // 2. Batch-call inner client for misses, then write results to cache.
+        if !miss_texts.is_empty() {
+            let embeddings = self.inner.embed(&miss_texts)?;
+            for (idx, emb) in miss_indices.iter().zip(embeddings.into_iter()) {
+                let text = texts[*idx];
+                let hash = crate::index::hash::compute_content_hash(text.as_bytes());
+                let key = format!("embed:{hash}");
+                self.cache.set(&key, serialize_vec(&emb));
+                results[*idx] = emb;
+            }
+        }
+
+        Ok(results)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -802,5 +901,242 @@ mod tests {
     fn embed_client_trait_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<Box<dyn EmbedClient>>();
+    }
+
+    // --- CachedEmbedClient (T021) ---
+
+    #[cfg(feature = "cache")]
+    mod cached_tests {
+        use super::*;
+        use crate::cache::CacheStore;
+        use std::collections::HashMap;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        /// Wraps [`MockEmbedClient`], counting `embed()` calls and recording
+        /// the texts passed to each call. Inspection handles are shared via
+        /// [`Arc`] so the test can read them after the client is boxed.
+        struct CountingEmbedClient {
+            calls: Arc<AtomicUsize>,
+            recorded: Arc<Mutex<Vec<Vec<String>>>>,
+            inner: MockEmbedClient,
+        }
+
+        impl CountingEmbedClient {
+            fn new() -> Self {
+                Self {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                    recorded: Arc::new(Mutex::new(Vec::new())),
+                    inner: MockEmbedClient::new(),
+                }
+            }
+        }
+
+        impl EmbedClient for CountingEmbedClient {
+            fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                self.recorded
+                    .lock()
+                    .expect("lock")
+                    .push(texts.iter().map(|s| s.to_string()).collect());
+                self.inner.embed(texts)
+            }
+        }
+
+        /// HashMap-backed [`CacheStore`] for testing.
+        struct MockCache {
+            store: Mutex<HashMap<String, Vec<u8>>>,
+        }
+
+        impl MockCache {
+            fn new() -> Self {
+                Self {
+                    store: Mutex::new(HashMap::new()),
+                }
+            }
+
+            fn snapshot(&self) -> HashMap<String, Vec<u8>> {
+                self.store.lock().expect("lock").clone()
+            }
+
+            fn len(&self) -> usize {
+                self.store.lock().expect("lock").len()
+            }
+        }
+
+        impl CacheStore for MockCache {
+            fn get(&self, key: &str) -> Option<Vec<u8>> {
+                self.store.lock().expect("lock").get(key).cloned()
+            }
+
+            fn set(&self, key: &str, val: Vec<u8>) {
+                self.store
+                    .lock()
+                    .expect("lock")
+                    .insert(key.to_string(), val);
+            }
+
+            fn invalidate_all(&self) {
+                self.store.lock().expect("lock").clear();
+            }
+        }
+
+        #[test]
+        fn cached_embed_miss_then_hit_skips_inner_call() {
+            let inner = CountingEmbedClient::new();
+            let calls = Arc::clone(&inner.calls);
+            let cached =
+                CachedEmbedClient::new(Box::new(inner), Arc::new(MockCache::new()));
+
+            let r1 = cached.embed(&["hello"]).expect("first embed");
+            let r2 = cached.embed(&["hello"]).expect("second embed (cache hit)");
+
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                1,
+                "inner should be called once; second call must hit cache"
+            );
+            assert_eq!(r1, r2, "both calls should return identical vectors");
+        }
+
+        #[test]
+        fn cached_embed_batch_partial_cache_hit() {
+            let inner = CountingEmbedClient::new();
+            let calls = Arc::clone(&inner.calls);
+            let recorded = Arc::clone(&inner.recorded);
+            let cache = Arc::new(MockCache::new());
+            let cached = CachedEmbedClient::new(Box::new(inner), cache.clone());
+
+            // Prime the cache: embed "cached_text" once.
+            let primed = cached
+                .embed(&["cached_text"])
+                .expect("prime")
+                .into_iter()
+                .next()
+                .expect("one vector");
+            let prime_calls = calls.load(Ordering::SeqCst);
+
+            // Batch call: "cached_text" is cached, "fresh_text" is a miss.
+            let results = cached
+                .embed(&["cached_text", "fresh_text"])
+                .expect("batch embed");
+
+            assert_eq!(results.len(), 2, "should return one vector per input");
+            assert_eq!(
+                results[0], primed,
+                "cached_text result should match the primed vector"
+            );
+            let batch_calls = calls.load(Ordering::SeqCst) - prime_calls;
+            assert_eq!(
+                batch_calls, 1,
+                "inner should be called once for the miss only"
+            );
+            let last = recorded
+                .lock()
+                .expect("lock")
+                .last()
+                .cloned()
+                .unwrap_or_default();
+            assert_eq!(
+                last,
+                vec!["fresh_text".to_string()],
+                "inner should only receive uncached texts"
+            );
+        }
+
+        #[test]
+        fn cached_embed_same_text_same_key() {
+            let inner = CountingEmbedClient::new();
+            let cache = Arc::new(MockCache::new());
+            let cached = CachedEmbedClient::new(Box::new(inner), cache.clone());
+
+            cached.embed(&["hello"]).expect("first");
+            cached.embed(&["hello"]).expect("second");
+
+            let snap = cache.snapshot();
+            assert_eq!(
+                snap.len(),
+                1,
+                "same text should produce same key → exactly one entry"
+            );
+            let key = snap.keys().next().expect("one entry");
+            assert!(
+                key.starts_with("embed:"),
+                "key should start with 'embed:': {key}"
+            );
+        }
+
+        #[test]
+        fn cached_embed_different_texts_different_keys() {
+            let inner = CountingEmbedClient::new();
+            let cache = Arc::new(MockCache::new());
+            let cached = CachedEmbedClient::new(Box::new(inner), cache.clone());
+
+            cached.embed(&["hello", "world"]).expect("embed");
+
+            let snap = cache.snapshot();
+            assert_eq!(
+                snap.len(),
+                2,
+                "different texts should produce different keys → two entries"
+            );
+            for key in snap.keys() {
+                assert!(
+                    key.starts_with("embed:"),
+                    "key should start with 'embed:': {key}"
+                );
+            }
+        }
+
+        #[test]
+        fn cached_embed_empty_input_returns_empty() {
+            let inner = CountingEmbedClient::new();
+            let calls = Arc::clone(&inner.calls);
+            let cache = Arc::new(MockCache::new());
+            let cached = CachedEmbedClient::new(Box::new(inner), cache.clone());
+
+            let results = cached.embed(&[]).expect("empty embed");
+            assert!(results.is_empty(), "empty input should return empty");
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "inner should not be called for empty input"
+            );
+            assert_eq!(cache.len(), 0, "cache should remain empty");
+        }
+
+        #[test]
+        fn cached_embed_stores_correct_vector() {
+            let inner = CountingEmbedClient::new();
+            let calls = Arc::clone(&inner.calls);
+            let cache = Arc::new(MockCache::new());
+            let cached = CachedEmbedClient::new(Box::new(inner), cache.clone());
+
+            let r1 = cached.embed(&["hello"]).expect("first embed");
+            let v1 = r1.into_iter().next().expect("one vector");
+
+            // Cache should have exactly one entry with an embed: prefix.
+            let snap = cache.snapshot();
+            assert_eq!(snap.len(), 1, "exactly one entry should be cached");
+            let (key, _val) = snap.iter().next().expect("one entry");
+            assert!(
+                key.starts_with("embed:"),
+                "key should start with 'embed:': {key}"
+            );
+
+            // Second call returns from cache — proves serialize/deserialize
+            // round-trip preserves the vector exactly.
+            let r2 = cached.embed(&["hello"]).expect("second embed (cache hit)");
+            let v2 = r2.into_iter().next().expect("one vector");
+            assert_eq!(
+                v1, v2,
+                "cache hit should return the same vector (round-trip correctness)"
+            );
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                1,
+                "inner should be called once; second call was a cache hit"
+            );
+        }
     }
 }
