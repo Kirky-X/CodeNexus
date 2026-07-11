@@ -48,4 +48,4 @@ pub use daemon::{Daemon, DEFAULT_DEBOUNCE_MS};
 pub use error::DaemonError;
 pub use event::{DaemonEvent, EventObserver};
 pub use index_observer::IndexObserver;
-pub use module::{DaemonConfig, DaemonModule, DaemonModuleBuilder};
+pub use module::{DaemonConfig, DaemonModule};

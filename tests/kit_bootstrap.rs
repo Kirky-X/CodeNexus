@@ -9,8 +9,8 @@
 //!
 //! - 7 core keys (`Storage`/`Parser`/`Extractor`/`Indexer`/`Resolver`/
 //!   `Query`/`Trace`) MUST resolve under default features.
-//! - `DaemonKey` MUST resolve when the `daemon` feature is on.
-//! - `EmbedKey` MUST resolve when the `embed` feature is on.
+//! - `DaemonModule` MUST resolve when the `daemon` feature is on.
+//! - `EmbedModule` MUST resolve when the `embed` feature is on.
 //!
 //! When a feature is off, the corresponding key type is `cfg`-gated out of
 //! the public API, so absence is enforced at compile time (the
@@ -20,12 +20,12 @@
 use std::path::PathBuf;
 
 #[cfg(feature = "daemon")]
-use codenexus::kit::DaemonKey;
+use codenexus::kit::DaemonModule;
 #[cfg(feature = "embed")]
-use codenexus::kit::EmbedKey;
+use codenexus::kit::EmbedModule;
 use codenexus::kit::{
-    build_kit, ExtractorKey, IndexerKey, KitBootstrapConfig, ParserKey, QueryKey, ResolverKey,
-    StorageKey, TraceKey,
+    build_kit, ExtractorRegistryModule, IndexerModule, KitBootstrapConfig, ParserFactoryModule, QueryModule, ResolverModule,
+    StorageModule, TraceModule,
 };
 
 /// In-memory database path — keeps tests hermetic (no on-disk cleanup).
@@ -33,44 +33,44 @@ fn memory_db_path() -> PathBuf {
     PathBuf::from(":memory:")
 }
 
-#[test]
-fn all_core_capabilities_resolvable_through_kit() {
+#[tokio::test]
+async fn all_core_capabilities_resolvable_through_kit() {
     let config = KitBootstrapConfig::new(memory_db_path());
-    let kit = build_kit(&config).expect("build_kit");
+    let kit = build_kit(&config).await.expect("build_kit");
 
     // 7 core capability keys MUST all resolve under default features.
-    kit.require::<StorageKey>().expect("require_storage");
-    kit.require::<ParserKey>().expect("require_parser");
-    kit.require::<ExtractorKey>().expect("require_extractor");
-    kit.require::<IndexerKey>().expect("require_indexer");
-    kit.require::<ResolverKey>().expect("require_resolver");
-    kit.require::<QueryKey>().expect("require_query");
-    kit.require::<TraceKey>().expect("require_trace");
+    kit.require::<StorageModule>().expect("require_storage");
+    kit.require::<ParserFactoryModule>().expect("require_parser");
+    kit.require::<ExtractorRegistryModule>().expect("require_extractor");
+    kit.require::<IndexerModule>().expect("require_indexer");
+    kit.require::<ResolverModule>().expect("require_resolver");
+    kit.require::<QueryModule>().expect("require_query");
+    kit.require::<TraceModule>().expect("require_trace");
 }
 
 #[cfg(feature = "daemon")]
-#[test]
-fn daemon_capability_resolvable_when_feature_on() {
+#[tokio::test]
+async fn daemon_capability_resolvable_when_feature_on() {
     let config = KitBootstrapConfig::new(memory_db_path());
-    let kit = build_kit(&config).expect("build_kit");
-    kit.require::<DaemonKey>().expect("require_daemon");
+    let kit = build_kit(&config).await.expect("build_kit");
+    kit.require::<DaemonModule>().expect("require_daemon");
 }
 
 #[cfg(feature = "embed")]
-#[test]
-fn embed_capability_resolvable_when_feature_on() {
+#[tokio::test]
+async fn embed_capability_resolvable_when_feature_on() {
     let config = KitBootstrapConfig::new(memory_db_path());
-    let kit = build_kit(&config).expect("build_kit");
-    kit.require::<EmbedKey>().expect("require_embed");
+    let kit = build_kit(&config).await.expect("build_kit");
+    kit.require::<EmbedModule>().expect("require_embed");
 }
 
-#[test]
-fn storage_capability_is_functional() {
+#[tokio::test]
+async fn storage_capability_is_functional() {
     // Smoke-test that the resolved Storage capability is a usable facade,
     // not just a type-erased stub. A fresh in-memory Kit has zero projects.
     let config = KitBootstrapConfig::new(memory_db_path());
-    let kit = build_kit(&config).expect("build_kit");
-    let storage = kit.require::<StorageKey>().expect("require_storage");
+    let kit = build_kit(&config).await.expect("build_kit");
+    let storage = kit.require::<StorageModule>().expect("require_storage");
     let projects = storage.list_projects().expect("list_projects");
     assert!(
         projects.is_empty(),

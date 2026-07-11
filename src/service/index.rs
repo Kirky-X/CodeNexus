@@ -8,10 +8,10 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::index::IndexResult;
-use crate::kit::{IndexerKey, Kit, StorageConfigKey};
-use crate::service::error::{CliError, kit_not_initialized, to_api_error, wrap_error};
+use crate::kit::{AsyncKit, AsyncReady, IndexerModule};
+use crate::service::error::{CliError, kit_not_initialized, to_api_error, wrap_error, wrap_kit_error};
 use crate::service::runtime::kit;
-use crate::storage::{QualityChecker, Repository};
+use crate::storage::{QualityChecker, Repository, StorageConfig};
 
 #[cfg(feature = "cli")]
 use sdforge::prelude::ApiError;
@@ -153,7 +153,7 @@ fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Resul
 #[cfg(feature = "cli")]
 #[allow(clippy::result_large_err)]
 pub(crate) fn index_core(
-    kit: &Kit,
+    kit: &AsyncKit<AsyncReady>,
     db_path: &Path,
     path: &str,
     name: &str,
@@ -162,7 +162,7 @@ pub(crate) fn index_core(
     ram_first: bool,
 ) -> Result<IndexOutput, CliError> {
     let path_ref = Path::new(path);
-    let indexer = kit.require::<IndexerKey>()?;
+    let indexer = kit.require::<IndexerModule>()?;
     let result = if ram_first {
         indexer.index_ram_first(path_ref, name, force)?
     } else {
@@ -233,9 +233,8 @@ async fn index(
 
     let kit = kit().ok_or_else(kit_not_initialized)?;
     let storage_config = kit
-        .config::<StorageConfigKey>()
-        .map_err(|e| wrap_error("Failed to resolve storage config", e))?;
-    let storage_config = storage_config.load();
+        .config::<StorageConfig>()
+        .map_err(|e| wrap_kit_error("Failed to resolve storage config", e))?;
     let db_path = storage_config.db_path.clone();
 
     let output = index_core(&kit, &db_path, &path, &name, force, lsp, ram_first)

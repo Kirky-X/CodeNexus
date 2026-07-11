@@ -8,8 +8,8 @@ use serde_json::Value;
 
 #[cfg(feature = "community")]
 use crate::analysis::community::{Community, CommunityDetector};
-use crate::kit::StorageKey;
-use crate::service::error::{kit_not_initialized, wrap_error, to_api_error};
+use crate::kit::StorageModule;
+use crate::service::error::{kit_not_initialized, wrap_error, wrap_kit_error, to_api_error};
 use crate::service::runtime::kit;
 
 #[cfg(feature = "cli")]
@@ -37,8 +37,8 @@ pub struct CommunityOutput {
 async fn community(project: String, resolution: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
     let storage = kit
-        .require::<StorageKey>()
-        .map_err(|e| wrap_error("Failed to resolve storage capability", e))?;
+        .require::<StorageModule>()
+        .map_err(|e| wrap_kit_error("Failed to resolve storage capability", e))?;
 
     let mut detector = CommunityDetector::new(&*storage, &project);
     if !resolution.is_empty() {
@@ -68,7 +68,7 @@ async fn community(project: String, resolution: String) -> Result<(), ApiError> 
 #[cfg(all(test, feature = "community"))]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, Kit, KitBootstrapConfig};
+    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig};
     use crate::service::error::CliError;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -84,8 +84,8 @@ mod tests {
         build_kit(&config).expect("build_kit")
     }
 
-    fn community_core(kit: &Kit, project: &str, resolution: Option<f64>) -> Result<(), CliError> {
-        let storage = kit.require::<StorageKey>()?;
+    fn community_core(kit: &AsyncKit<AsyncReady>, project: &str, resolution: Option<f64>) -> Result<(), CliError> {
+        let storage = kit.require::<StorageModule>()?;
         let mut detector = CommunityDetector::new(&*storage, project);
         if let Some(res) = resolution {
             detector = detector.with_resolution(res);
@@ -113,7 +113,7 @@ mod tests {
     fn community_core_returns_communities() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
         storage.execute("CREATE (:Function {id: 'f_c', project: 'demo', name: 'c', qualifiedName: 'demo.c', filePath: '/src/c.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create c");
@@ -127,7 +127,7 @@ mod tests {
     fn community_core_with_resolution() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create edge");

@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::kit::TraceKey;
+use crate::kit::TraceModule;
 use crate::service::error::{CliError, to_api_error};
 use crate::service::runtime::kit;
 use crate::trace::{TraceEdge, TraceNode, TraceResult, TraceType};
@@ -80,7 +80,7 @@ async fn trace_core(
             "invalid trace_type: {trace_type} (expected calls|dataflow|all)"
         ))
     })?;
-    let trace_engine = kit.require::<TraceKey>()?;
+    let trace_engine = kit.require::<TraceModule>()?;
     let result = trace_engine.trace(&symbol, tt, depth as usize)?;
     Ok(trace_output(result))
 }

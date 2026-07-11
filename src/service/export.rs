@@ -14,9 +14,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::kit::StorageConfigKey;
-use crate::service::error::{kit_not_initialized, wrap_error};
+use crate::service::error::{kit_not_initialized, wrap_error, wrap_kit_error};
 use crate::service::runtime::kit;
+use crate::storage::StorageConfig;
 
 #[cfg(feature = "cli")]
 use sdforge::prelude::ApiError;
@@ -115,9 +115,8 @@ fn zstd_compress(input: &[u8]) -> Result<Vec<u8>, ApiError> {
 async fn export(output: String, project: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
     let storage_config = kit
-        .config::<StorageConfigKey>()
-        .map_err(|e| wrap_error("Failed to resolve storage config", e))?;
-    let storage_config = storage_config.load();
+        .config::<StorageConfig>()
+        .map_err(|e| wrap_kit_error("Failed to resolve storage config", e))?;
     let db_path = storage_config.db_path.clone();
 
     let db_path_str = db_path.to_string_lossy().into_owned();

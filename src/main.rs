@@ -93,9 +93,13 @@ fn run_cli() {
         DEFAULT_DEBOUNCE_MS
     });
 
+    // Create the tokio runtime early — build_kit is async (AsyncKit migration)
+    // and the same runtime is reused for handler execution below.
+    let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+
     // Build and init Kit. Non-fatal: setup/lsp commands don't need Kit.
     let config = KitBootstrapConfig::new(PathBuf::from(&db)).with_debounce_ms(debounce_ms);
-    match build_kit(&config) {
+    match runtime.block_on(build_kit(&config)) {
         Ok(kit) => {
             if let Err(e) = init_kit(kit) {
                 eprintln!("[warn] Kit already initialized: {e}");
@@ -118,7 +122,6 @@ fn run_cli() {
         }
     };
 
-    let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     if let Err(api_error) = runtime.block_on((handler.handler)(args)) {
         let cli_error = CliError::from(api_error);
         eprintln!("Error: {cli_error}");
@@ -166,7 +169,11 @@ fn run_mcp_server() {
         .map(|chunk| chunk[1].clone())
         .unwrap_or_else(|| DEFAULT_DB_PATH.to_string());
 
-    let kit = match build_kit(&KitBootstrapConfig::new(PathBuf::from(db))) {
+    // Create the tokio runtime early — build_kit is async (AsyncKit migration)
+    // and the same runtime is reused for MCP serve below.
+    let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+
+    let kit = match runtime.block_on(build_kit(&KitBootstrapConfig::new(PathBuf::from(db)))) {
         Ok(kit) => kit,
         Err(e) => {
             eprintln!("[error] Failed to build Kit: {e}");
@@ -178,7 +185,6 @@ fn run_mcp_server() {
         std::process::exit(1);
     }
 
-    let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     runtime.block_on(async {
         use rmcp::ServiceExt;
         let server = sdforge::mcp::build();

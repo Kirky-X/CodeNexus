@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 //! trait-kit module for the Trace subsystem (T6/unified-architecture
-//! Phase 2, Task 2.10).
+//! Phase 2, Task 2.10; v0.3.3 AsyncKit migration).
 //!
-//! Implements [`Module`] / [`ModuleBuilder`] / [`WithConfig`] for
-//! [`TraceModule`], wiring the existing [`TraceFacade`] (Facade pattern) into
-//! the unified Kit registry as `Arc<dyn TraceEngine>` under
-//! [`TraceKey`](crate::kit::TraceKey).
+//! Implements [`ModuleMeta`] + [`AsyncAutoBuilder`] for [`TraceModule`],
+//! wiring the existing [`TraceFacade`] (Facade pattern) into the unified Kit
+//! registry as `Arc<dyn TraceEngine>` under
+//! [`TraceModule`](crate::kit::TraceModule).
 //!
 //! # Graph ownership
 //!
@@ -22,25 +22,25 @@
 //!
 //! # Dependency note
 //!
-//! Conceptually the Trace engine depends on `StorageKey` + `ResolverKey`
-//! (it reads the graph that the Indexer/Resolver wrote). The concrete
-//! [`TraceCapability`] is self-contained, however: it opens its own
-//! [`Repository`](crate::storage::Repository) from the supplied `db_path`
-//! and loads the subgraph itself. Therefore `Requirements = NoRequirements`
+//! Conceptually the Trace engine depends on `StorageModule` +
+//! `ResolverModule` (it reads the graph that the Indexer/Resolver wrote).
+//! The concrete [`TraceCapability`] is self-contained, however: it opens its
+//! own [`Repository`](crate::storage::Repository) from the supplied
+//! `db_path` and loads the subgraph itself. Therefore `dependencies = &[]`
 //! at the type level; the bootstrap (Task 2.13) enforces build ordering
 //! (Storage → ... → Resolver → Trace). This mirrors the
 //! [`QueryModule`](crate::query::module::QueryModule) design (Task 2.9) —
 //! see `design.md` D1 for the rationale.
 //!
-//! [`Module`]: crate::kit::Module
-//! [`ModuleBuilder`]: crate::kit::ModuleBuilder
-//! [`WithConfig`]: crate::kit::WithConfig
 //! [`load_graph_for_symbol`]: super::graph_loader::load_graph_for_symbol
 
+use std::any::TypeId;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::kit::{Module, ModuleBuilder, NoRequirements, WithConfig};
+use crate::kit::{AsyncAutoBuilder, AsyncKit, ModuleMeta};
 use crate::storage::StorageError;
 
 use super::capability::TraceEngine;
@@ -55,10 +55,10 @@ use super::TraceResult;
 
 /// Configuration for [`TraceModule`] (Task 2.10).
 ///
-/// Stored in Kit under [`TraceConfigKey`](crate::kit::TraceConfigKey) and
-/// injected into [`TraceModuleBuilder`] via [`WithConfig`]. The Trace engine
-/// needs only the database path — the capability loads a fresh subgraph per
-/// `trace` call via [`load_graph_for_symbol`].
+/// Stored in Kit via `AsyncKit::set_config` and read in
+/// [`AsyncAutoBuilder::build`]. The Trace engine needs only the database
+/// path — the capability loads a fresh subgraph per `trace` call via
+/// [`load_graph_for_symbol`].
 #[derive(Debug, Clone)]
 pub struct TraceConfig {
     /// Filesystem path to the LadybugDB database directory.
@@ -78,79 +78,59 @@ impl TraceConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Module + Builder
+// Module (ModuleMeta + AsyncAutoBuilder)
 // ---------------------------------------------------------------------------
 
 /// trait-kit module tag for the Trace subsystem (Task 2.10).
 ///
 /// Zero-sized marker — construction logic lives in
-/// [`TraceModuleBuilder::build`]. Register in Kit via:
+/// [`TraceModule::build_cap`] (called from the [`AsyncAutoBuilder`] impl).
+/// Register the capability in Kit via:
 ///
 /// ```ignore
-/// use codenexus::kit::{IntoKitModuleBuilder, Kit, TraceKey};
-/// use codenexus::trace::{TraceConfig, TraceModuleBuilder};
+/// use codenexus::kit::{AsyncKit, TraceModule};
+/// use codenexus::trace::TraceConfig;
 ///
-/// let kit = Kit::new();
-/// let trace = TraceModuleBuilder::new()
-///     .config(TraceConfig::in_memory())
-///     .kit(&kit)
-///     .provide::<TraceKey>()?;
+/// let mut kit = AsyncKit::new();
+/// kit.set_config(TraceConfig::in_memory());
+/// kit.register::<TraceModule>()?;
+/// let kit = kit.build().await?;
+/// let trace = kit.require::<TraceModule>()?;
 /// ```
 pub struct TraceModule;
 
-/// Builder for [`TraceModule`] (Task 2.10).
-///
-/// Construct with [`TraceModuleBuilder::new`], inject config with
-/// [`WithConfig::config`], then attach to a [`Kit`](crate::kit::Kit) via
-/// [`IntoKitModuleBuilder::kit`](crate::kit::IntoKitModuleBuilder::kit) and
-/// call [`provide`](crate::kit::KitModuleBuilder::provide).
-pub struct TraceModuleBuilder {
-    config: Option<TraceConfig>,
-}
-
-impl TraceModuleBuilder {
-    /// Creates a builder with no config set. Call `.config(...)` before
-    /// building.
-    #[must_use]
-    pub fn new() -> Self {
-        Self { config: None }
+impl ModuleMeta for TraceModule {
+    const NAME: &'static str = "trace";
+    fn dependencies() -> &'static [(&'static str, TypeId)] {
+        &[]
     }
 }
 
-impl Default for TraceModuleBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Module for TraceModule {
-    type Config = TraceConfig;
-    type Requirements = NoRequirements;
+impl AsyncAutoBuilder for TraceModule {
     type Capability = Arc<dyn TraceEngine>;
     type Error = TraceError;
-    type Builder = TraceModuleBuilder;
-    const NAME: &'static str = "trace";
-}
 
-impl ModuleBuilder<TraceModule> for TraceModuleBuilder {
-    fn build(self) -> Result<Arc<dyn TraceEngine>, TraceError> {
-        let config = self.config.ok_or_else(|| {
-            TraceError::Storage(StorageError::InvalidData(
-                "TraceModuleBuilder requires config — call .config(TraceConfig { db_path }) before build"
-                    .to_string(),
-            ))
-        })?;
-        Ok(Arc::new(TraceCapability {
-            db_path: config.db_path,
-        }))
+    fn build<'a>(
+        kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move {
+            let config = kit
+                .config::<TraceConfig>()
+                .map_err(|e| TraceError::Storage(StorageError::InvalidData(e.to_string())))?;
+            Self::build_cap(&config)
+        })
     }
 }
 
-impl WithConfig<TraceModule> for TraceModuleBuilder {
-    fn config(self, config: TraceConfig) -> Self {
-        Self {
-            config: Some(config),
-        }
+impl TraceModule {
+    /// Constructs a TraceCapability from the given config.
+    ///
+    /// Shared between [`AsyncAutoBuilder::build`] and tests so that
+    /// capability-level tests can run without an async runtime.
+    pub(crate) fn build_cap(config: &TraceConfig) -> Result<Arc<dyn TraceEngine>, TraceError> {
+        Ok(Arc::new(TraceCapability {
+            db_path: config.db_path.clone(),
+        }))
     }
 }
 
@@ -212,7 +192,7 @@ impl TraceEngine for TraceCapability {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::TraceKey;
+    use crate::kit::{AsyncKit, TraceModule};
     use crate::storage::StorageConnection;
     use tempfile::TempDir;
 
@@ -238,25 +218,11 @@ mod tests {
     fn build_trace_seeded() -> (Arc<dyn TraceEngine>, std::path::PathBuf) {
         let db = fresh_db_path();
         seed_call_graph(&db);
-        let cap = TraceModuleBuilder::new()
-            .config(TraceConfig {
-                db_path: db.clone(),
-            })
-            .build()
-            .expect("TraceModuleBuilder::build");
+        let cap = TraceModule::build_cap(&TraceConfig {
+            db_path: db.clone(),
+        })
+        .expect("TraceModule::build_cap");
         (cap, db)
-    }
-
-    #[test]
-    fn builder_requires_config() {
-        let result = TraceModuleBuilder::new().build();
-        assert!(result.is_err());
-        let err = result.err().unwrap();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("config"),
-            "missing-config error should mention config: {msg}"
-        );
     }
 
     #[test]
@@ -304,12 +270,10 @@ mod tests {
 
     #[test]
     fn capability_trace_missing_db_returns_storage_error() {
-        let cap = TraceModuleBuilder::new()
-            .config(TraceConfig {
-                db_path: std::path::PathBuf::from("/nonexistent/db.lbug"),
-            })
-            .build()
-            .expect("build");
+        let cap = TraceModule::build_cap(&TraceConfig {
+            db_path: std::path::PathBuf::from("/nonexistent/db.lbug"),
+        })
+        .expect("build_cap");
         let result = cap.trace("a", TraceType::Calls, 3);
         assert!(
             matches!(result, Err(TraceError::Storage(_))),
@@ -317,41 +281,29 @@ mod tests {
         );
     }
 
-    /// Verify the full Kit registration flow works end-to-end.
-    #[test]
-    fn kit_registration_flow() {
-        use crate::kit::{IntoKitModuleBuilder, Kit};
-
+    /// Verify the full AsyncKit registration flow works end-to-end.
+    #[tokio::test]
+    async fn kit_registration_flow() {
         let db = fresh_db_path();
         seed_call_graph(&db);
 
-        let kit = Kit::new();
-        let trace = TraceModuleBuilder::new()
-            .config(TraceConfig {
-                db_path: db.clone(),
-            })
-            .kit(&kit)
-            .provide::<TraceKey>()
-            .expect("provide::<TraceKey>");
+        let mut kit = AsyncKit::new();
+        kit.set_config(TraceConfig {
+            db_path: db.clone(),
+        });
+        kit.register::<TraceModule>()
+            .expect("register::<TraceModule>");
+        let kit = kit.build().await.expect("build");
 
-        assert!(kit.contains::<TraceKey>());
+        assert!(kit.contains::<TraceModule>(), "TraceModule missing");
 
-        let required = kit.require::<TraceKey>().expect("require::<TraceKey>");
-        assert!(Arc::ptr_eq(&trace, &required));
+        let required = kit
+            .require::<TraceModule>()
+            .expect("require::<TraceModule>");
 
         // The registered capability should be callable.
         let result = required.trace("a", TraceType::Calls, 3).expect("trace");
         assert_eq!(result.symbol, "a");
-    }
-
-    #[test]
-    fn builder_default_equals_new() {
-        // Default impl must produce the same state as new() (no config).
-        let default_builder = TraceModuleBuilder::default();
-        assert!(
-            default_builder.build().is_err(),
-            "default builder should require config"
-        );
     }
 
     #[test]

@@ -9,7 +9,7 @@ use std::path::Path;
 #[cfg(feature = "daemon")]
 use crate::service::error::{CliError, to_api_error};
 #[cfg(feature = "daemon")]
-use crate::kit::{DaemonKey, Kit};
+use crate::kit::{DaemonModule, AsyncKit, AsyncReady};
 
 #[cfg(all(feature = "cli", feature = "daemon"))]
 use crate::service::error::kit_not_initialized;
@@ -26,7 +26,7 @@ use sdforge::service_api;
 ///
 /// Separated from the `#[service_api]` function for testability.
 #[cfg(feature = "daemon")]
-fn daemon_core(kit: &Kit, path: &str, name: &str) -> Result<(), CliError> {
+fn daemon_core(kit: &AsyncKit<AsyncReady>, path: &str, name: &str) -> Result<(), CliError> {
     let watch_path = Path::new(path);
     if !watch_path.exists() {
         return Err(CliError::InvalidInput(format!(
@@ -34,7 +34,7 @@ fn daemon_core(kit: &Kit, path: &str, name: &str) -> Result<(), CliError> {
             watch_path.display()
         )));
     }
-    let daemon = kit.require::<DaemonKey>()?;
+    let daemon = kit.require::<DaemonModule>()?;
     daemon.start(watch_path, name)?;
     Ok(())
 }

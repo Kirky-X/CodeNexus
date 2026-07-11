@@ -1178,7 +1178,7 @@ pub fn detect_language(file_path: &str) -> Option<Language> {
 mod tests {
     use super::*;
 
-    use crate::kit::{build_kit, Kit, KitBootstrapConfig, StorageKey};
+    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
     use crate::parse::parser_factory::ParserFactory;
     use tempfile::TempDir;
 
@@ -1966,13 +1966,13 @@ fn parallel(a: i32) {
     }
 
     /// Returns the `dyn Storage` capability from `kit`.
-    fn storage(kit: &Kit) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
-        kit.require::<StorageKey>().expect("require_storage")
+    fn storage(kit: &AsyncKit<AsyncReady>) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
+        kit.require::<StorageModule>().expect("require_storage")
     }
 
     /// Creates a Function node with the given `content` via direct Cypher.
     fn create_function_with_content(
-        kit: &Kit,
+        kit: &AsyncKit<AsyncReady>,
         id: &str,
         project: &str,
         name: &str,

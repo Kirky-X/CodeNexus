@@ -5,8 +5,8 @@
 
 use serde::Serialize;
 
-use crate::kit::StorageKey;
-use crate::service::error::{kit_not_initialized, wrap_error};
+use crate::kit::StorageModule;
+use crate::service::error::{kit_not_initialized, wrap_error, wrap_kit_error};
 use crate::service::runtime::kit;
 use crate::storage::ProjectRecord;
 
@@ -52,8 +52,8 @@ impl From<ProjectRecord> for ProjectOutput {
 async fn list() -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
     let storage = kit
-        .require::<StorageKey>()
-        .map_err(|e| wrap_error("Failed to resolve storage capability", e))?;
+        .require::<StorageModule>()
+        .map_err(|e| wrap_kit_error("Failed to resolve storage capability", e))?;
     let projects = storage
         .list_projects()
         .map_err(|e| wrap_error("Failed to list projects", e))?;

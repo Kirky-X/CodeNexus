@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 //! trait-kit module for the Embed subsystem (T6/unified-architecture
-//! Phase 2, Task 2.12; H10/D7 local ONNX support).
+//! Phase 2, Task 2.12; H10/D7 local ONNX support; v0.3.3 AsyncKit migration).
 //!
-//! Implements [`Module`] / [`ModuleBuilder`] / [`WithConfig`] for
-//! [`EmbedModule`], wiring the existing [`EmbedClient`] trait (Strategy
-//! pattern) into the unified Kit registry as `Arc<dyn EmbedClient>` under
-//! [`EmbedKey`](crate::kit::EmbedKey).
+//! Implements [`ModuleMeta`] + [`AsyncAutoBuilder`] for [`EmbedModule`],
+//! wiring the existing [`EmbedClient`] trait (Strategy pattern) into the
+//! unified Kit registry as `Arc<dyn EmbedClient>` under
+//! [`EmbedModule`](crate::kit::EmbedModule).
 //!
 //! # Capability lifecycle (H10/D7)
 //!
@@ -40,30 +40,30 @@
 //!
 //! # Dependency note
 //!
-//! Conceptually the Embed subsystem depends on `StorageKey` (it writes
+//! Conceptually the Embed subsystem depends on `StorageModule` (it writes
 //! vectors to the `Embedding` table via [`EmbeddingStorage`]). The concrete
 //! [`EmbedCapability`] is self-contained, however: it only owns the
 //! embedding-service config and does not touch the database directly
 //! (storage operations are orchestrated by `search_cmd` via
-//! `QueryFacade::connection()`). Therefore `Requirements = NoRequirements`
-//! at the type level; the bootstrap (Task 2.13) enforces build ordering
+//! `QueryFacade::connection()`). Therefore `dependencies = &[]` at the type
+//! level; the bootstrap (Task 2.13) enforces build ordering
 //! (Storage → ... → Embed). This mirrors the
 //! [`QueryModule`](crate::query::module::QueryModule),
 //! [`TraceModule`](crate::trace::module::TraceModule), and
 //! [`DaemonModule`](crate::daemon::module::DaemonModule) design — see
 //! `design.md` D1 for the rationale.
 //!
-//! [`Module`]: crate::kit::Module
-//! [`ModuleBuilder`]: crate::kit::ModuleBuilder
-//! [`WithConfig`]: crate::kit::WithConfig
 //! [`EmbeddingStorage`]: super::EmbeddingStorage
 //! [`OpenAIEmbedClient`]: super::OpenAIEmbedClient
 //! [`LocalEmbedClient`]: super::LocalEmbedClient
 //! [`EmbeddingConfig`]: super::EmbeddingConfig
 
+use std::any::TypeId;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use crate::kit::{Module, ModuleBuilder, NoRequirements, WithConfig};
+use crate::kit::{AsyncAutoBuilder, AsyncKit, ModuleMeta};
 
 use super::client::{EmbedClient, LocalEmbedClient, OpenAIEmbedClient};
 use super::{EmbedError, EmbeddingConfig, Result};
@@ -81,79 +81,60 @@ use super::{EmbedError, EmbeddingConfig, Result};
 pub type EmbedConfig = EmbeddingConfig;
 
 // ---------------------------------------------------------------------------
-// Module + Builder
+// Module (ModuleMeta + AsyncAutoBuilder)
 // ---------------------------------------------------------------------------
 
 /// trait-kit module tag for the Embed subsystem (Task 2.12).
 ///
 /// Zero-sized marker — construction logic lives in
-/// [`EmbedModuleBuilder::build`]. Register in Kit via:
+/// [`EmbedModule::build_cap`] (called from the [`AsyncAutoBuilder`] impl).
+/// Register the capability in Kit via:
 ///
 /// ```ignore
-/// use codenexus::kit::{EmbedKey, IntoKitModuleBuilder, Kit};
-/// use codenexus::embed::{EmbedModuleBuilder, EmbeddingConfig};
+/// use codenexus::kit::{AsyncKit, EmbedModule};
+/// use codenexus::embed::EmbeddingConfig;
 ///
-/// let kit = Kit::new();
-/// let embed = EmbedModuleBuilder::new()
-///     .config(EmbeddingConfig::from_env())
-///     .kit(&kit)
-///     .provide::<EmbedKey>()?;
+/// let mut kit = AsyncKit::new();
+/// kit.set_config(EmbeddingConfig::from_env());
+/// kit.register::<EmbedModule>()?;
+/// let kit = kit.build().await?;
+/// let embed = kit.require::<EmbedModule>()?;
 /// ```
 pub struct EmbedModule;
 
-/// Builder for [`EmbedModule`] (Task 2.12).
-///
-/// Construct with [`EmbedModuleBuilder::new`], inject config with
-/// [`WithConfig::config`], then attach to a [`Kit`](crate::kit::Kit) via
-/// [`IntoKitModuleBuilder::kit`](crate::kit::IntoKitModuleBuilder::kit) and
-/// call [`provide`](crate::kit::KitModuleBuilder::provide).
-pub struct EmbedModuleBuilder {
-    config: Option<EmbeddingConfig>,
-}
-
-impl EmbedModuleBuilder {
-    /// Creates a builder with no config set. Call `.config(...)` before
-    /// building.
-    #[must_use]
-    pub fn new() -> Self {
-        Self { config: None }
+impl ModuleMeta for EmbedModule {
+    const NAME: &'static str = "embed";
+    fn dependencies() -> &'static [(&'static str, TypeId)] {
+        &[]
     }
 }
 
-impl Default for EmbedModuleBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Module for EmbedModule {
-    type Config = EmbeddingConfig;
-    type Requirements = NoRequirements;
+impl AsyncAutoBuilder for EmbedModule {
     type Capability = Arc<dyn EmbedClient>;
     type Error = EmbedError;
-    type Builder = EmbedModuleBuilder;
-    const NAME: &'static str = "embed";
-}
 
-impl ModuleBuilder<EmbedModule> for EmbedModuleBuilder {
-    fn build(self) -> Result<Arc<dyn EmbedClient>> {
-        let config = self.config.ok_or_else(|| {
-            EmbedError::Unavailable(
-                "EmbedModuleBuilder requires config — call .config(EmbeddingConfig::from_env()) before build".to_string(),
-            )
-        })?;
-        Ok(Arc::new(EmbedCapability {
-            config,
-            local_client: Mutex::new(None),
-        }))
+    fn build<'a>(
+        kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move {
+            let config = kit
+                .config::<EmbeddingConfig>()
+                .map_err(|e| EmbedError::Unavailable(e.to_string()))?;
+            Self::build_cap(&config)
+        })
     }
 }
 
-impl WithConfig<EmbedModule> for EmbedModuleBuilder {
-    fn config(self, config: EmbeddingConfig) -> Self {
-        Self {
-            config: Some(config),
-        }
+impl EmbedModule {
+    /// Constructs an EmbedCapability from the given config.
+    ///
+    /// Shared between [`AsyncAutoBuilder::build`] and tests so that
+    /// capability-level tests can run without an async runtime.
+    pub(crate) fn build_cap(config: &EmbeddingConfig) -> Result<Arc<dyn EmbedClient>> {
+        Ok(Arc::new(EmbedCapability {
+            config: config.clone(),
+            local_client: Mutex::new(None),
+        }))
     }
 }
 
@@ -221,26 +202,12 @@ impl EmbedClient for EmbedCapability {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::EmbedKey;
-
-    #[test]
-    fn builder_requires_config() {
-        let result = EmbedModuleBuilder::new().build();
-        assert!(result.is_err());
-        let err = result.err().unwrap();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("config"),
-            "missing-config error should mention config: {msg}"
-        );
-    }
+    use crate::kit::{AsyncKit, EmbedModule};
 
     #[test]
     fn build_returns_send_sync_capability() {
-        let cap = EmbedModuleBuilder::new()
-            .config(EmbeddingConfig::default())
-            .build()
-            .expect("EmbedModuleBuilder::build");
+        let cap = EmbedModule::build_cap(&EmbeddingConfig::default())
+            .expect("EmbedModule::build_cap");
         // If this compiles, EmbedCapability is Send + Sync (the dyn
         // EmbedClient bound requires it). The Arc<dyn EmbedClient> is also
         // Send + Sync.
@@ -259,10 +226,8 @@ mod tests {
         std::env::remove_var(crate::embed::EMBED_ENDPOINT_ENV);
         std::env::remove_var(crate::embed::EMBED_MODEL_PATH_ENV);
 
-        let cap = EmbedModuleBuilder::new()
-            .config(EmbeddingConfig::default()) // local mode, default model path
-            .build()
-            .expect("EmbedModuleBuilder::build");
+        let cap = EmbedModule::build_cap(&EmbeddingConfig::default())
+            .expect("EmbedModule::build_cap");
 
         let result = cap.embed(&["hello"]);
         assert!(result.is_err(), "should error without model file");
@@ -281,13 +246,11 @@ mod tests {
         std::env::remove_var(crate::embed::API_KEY_ENV);
         std::env::remove_var(crate::embed::OPENAI_API_KEY_ENV);
 
-        let cap = EmbedModuleBuilder::new()
-            .config(EmbeddingConfig {
-                endpoint: Some("https://api.openai.com/v1".to_string()),
-                ..EmbeddingConfig::default()
-            })
-            .build()
-            .expect("EmbedModuleBuilder::build");
+        let cap = EmbedModule::build_cap(&EmbeddingConfig {
+            endpoint: Some("https://api.openai.com/v1".to_string()),
+            ..EmbeddingConfig::default()
+        })
+        .expect("EmbedModule::build_cap");
         let result = cap.embed(&["hello"]);
         assert!(
             matches!(result, Err(EmbedError::MissingApiKey)),
@@ -295,22 +258,20 @@ mod tests {
         );
     }
 
-    /// Verify the full Kit registration flow works end-to-end.
-    #[test]
-    fn kit_registration_flow() {
-        use crate::kit::{IntoKitModuleBuilder, Kit};
+    /// Verify the full AsyncKit registration flow works end-to-end.
+    #[tokio::test]
+    async fn kit_registration_flow() {
+        let mut kit = AsyncKit::new();
+        kit.set_config(EmbeddingConfig::default());
+        kit.register::<EmbedModule>()
+            .expect("register::<EmbedModule>");
+        let kit = kit.build().await.expect("build");
 
-        let kit = Kit::new();
-        let embed = EmbedModuleBuilder::new()
-            .config(EmbeddingConfig::default())
-            .kit(&kit)
-            .provide::<EmbedKey>()
-            .expect("provide::<EmbedKey>");
+        assert!(kit.contains::<EmbedModule>(), "EmbedModule missing");
 
-        assert!(kit.contains::<EmbedKey>());
-
-        let required = kit.require::<EmbedKey>().expect("require::<EmbedKey>");
-        assert!(Arc::ptr_eq(&embed, &required));
+        let _required = kit
+            .require::<EmbedModule>()
+            .expect("require::<EmbedModule>");
     }
 
     /// `EmbedConfig` is a re-export of `EmbeddingConfig` (type alias).

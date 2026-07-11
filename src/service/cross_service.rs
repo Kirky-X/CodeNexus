@@ -7,8 +7,8 @@ use serde::Serialize;
 
 #[cfg(feature = "cross-service")]
 use crate::analysis::cross_service::{CrossServiceLink, CrossServiceLinker};
-use crate::kit::StorageKey;
-use crate::service::error::{kit_not_initialized, wrap_error, to_api_error};
+use crate::kit::StorageModule;
+use crate::service::error::{kit_not_initialized, wrap_error, wrap_kit_error, to_api_error};
 use crate::service::runtime::kit;
 
 #[cfg(feature = "cli")]
@@ -35,8 +35,8 @@ pub struct CrossServiceOutput {
 async fn cross_service(project: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
     let storage = kit
-        .require::<StorageKey>()
-        .map_err(|e| wrap_error("Failed to resolve storage capability", e))?;
+        .require::<StorageModule>()
+        .map_err(|e| wrap_kit_error("Failed to resolve storage capability", e))?;
 
     let linker = CrossServiceLinker::new(&*storage, &project);
     let links = linker.link().map_err(|e| to_api_error(e.into(), "cross_service_error"))?;
@@ -50,7 +50,7 @@ async fn cross_service(project: String) -> Result<(), ApiError> {
 #[cfg(all(test, feature = "cross-service"))]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, Kit, KitBootstrapConfig};
+    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig};
     use crate::service::error::CliError;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -66,8 +66,8 @@ mod tests {
         build_kit(&config).expect("build_kit")
     }
 
-    fn cross_service_core(kit: &Kit, project: &str) -> Result<(), CliError> {
-        let storage = kit.require::<StorageKey>()?;
+    fn cross_service_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CliError> {
+        let storage = kit.require::<StorageModule>()?;
         let linker = CrossServiceLinker::new(&*storage, project);
         let links = linker.link()?;
         let output = CrossServiceOutput {
@@ -91,7 +91,7 @@ mod tests {
     fn cross_service_core_returns_links() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
         storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/caller.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fetch(\"/api/users\");', parentQn: ''});").expect("create function");
         let result = cross_service_core(&kit, "demo");

@@ -588,7 +588,7 @@ impl<'a> ApiReviewer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, Kit, KitBootstrapConfig, StorageKey};
+    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
     use tempfile::TempDir;
 
     /// Returns a fresh on-disk database path inside a temp dir.
@@ -606,12 +606,12 @@ mod tests {
     }
 
     /// Returns the `dyn Storage` capability from `kit`.
-    fn storage(kit: &Kit) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
-        kit.require::<StorageKey>().expect("require_storage")
+    fn storage(kit: &AsyncKit<AsyncReady>) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
+        kit.require::<StorageModule>().expect("require_storage")
     }
 
     /// Creates a Route node.
-    fn create_route(kit: &Kit, id: &str, project: &str, path: &str, method: &str) {
+    fn create_route(kit: &AsyncKit<AsyncReady>, id: &str, project: &str, path: &str, method: &str) {
         let storage = storage(kit);
         let cypher = format!(
             "CREATE (:Route {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
@@ -628,7 +628,7 @@ mod tests {
 
     /// Creates an Endpoint node with an expected schema.
     fn create_endpoint(
-        kit: &Kit,
+        kit: &AsyncKit<AsyncReady>,
         id: &str,
         project: &str,
         path: &str,
@@ -652,7 +652,7 @@ mod tests {
     }
 
     /// Creates a Handler node.
-    fn create_handler(kit: &Kit, id: &str, project: &str, name: &str) {
+    fn create_handler(kit: &AsyncKit<AsyncReady>, id: &str, project: &str, name: &str) {
         let storage = storage(kit);
         let cypher = format!(
             "CREATE (:Handler {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
@@ -667,7 +667,7 @@ mod tests {
     }
 
     /// Creates a Middleware node.
-    fn create_middleware(kit: &Kit, id: &str, project: &str, name: &str) {
+    fn create_middleware(kit: &AsyncKit<AsyncReady>, id: &str, project: &str, name: &str) {
         let storage = storage(kit);
         let cypher = format!(
             "CREATE (:Middleware {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
@@ -682,7 +682,7 @@ mod tests {
     }
 
     /// Creates a Tool node.
-    fn create_tool(kit: &Kit, id: &str, project: &str, name: &str) {
+    fn create_tool(kit: &AsyncKit<AsyncReady>, id: &str, project: &str, name: &str) {
         let storage = storage(kit);
         let cypher = format!(
             "CREATE (:Tool {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
@@ -696,7 +696,7 @@ mod tests {
     }
 
     /// Creates a Function node.
-    fn create_function(kit: &Kit, id: &str, project: &str, name: &str, file: &str, line: u32) {
+    fn create_function(kit: &AsyncKit<AsyncReady>, id: &str, project: &str, name: &str, file: &str, line: u32) {
         let storage = storage(kit);
         let end_line = line + 10;
         let cypher = format!(
@@ -716,7 +716,7 @@ mod tests {
 
     /// Creates a CodeRelation edge.
     fn create_edge(
-        kit: &Kit,
+        kit: &AsyncKit<AsyncReady>,
         id: &str,
         source: &str,
         target: &str,
@@ -738,7 +738,7 @@ mod tests {
 
     /// Creates a CodeRelation edge with a reason (used for actual schema).
     fn create_edge_with_reason(
-        kit: &Kit,
+        kit: &AsyncKit<AsyncReady>,
         id: &str,
         source: &str,
         target: &str,

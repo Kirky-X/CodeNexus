@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::kit::QueryKey;
+use crate::kit::QueryModule;
 use crate::query::{validate_cypher_subset, QueryResult};
 use crate::service::error::{CliError, to_api_error};
 use crate::service::runtime::kit;
@@ -39,7 +39,7 @@ fn query_output(r: QueryResult) -> QueryOutput {
 #[cfg(any(feature = "cli", feature = "mcp"))]
 async fn query_core(cypher: String) -> Result<QueryOutput, CliError> {
     let kit = kit().ok_or_else(CliError::kit_not_initialized)?;
-    let q = kit.require::<QueryKey>()?;
+    let q = kit.require::<QueryModule>()?;
     validate_cypher_subset(&cypher)?;
     let result = q.cypher(&cypher)?;
     Ok(query_output(result))

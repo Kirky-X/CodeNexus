@@ -6,8 +6,8 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::kit::StorageKey;
-use crate::service::error::{kit_not_initialized, wrap_error};
+use crate::kit::StorageModule;
+use crate::service::error::{kit_not_initialized, wrap_error, wrap_kit_error};
 use crate::service::runtime::kit;
 
 #[cfg(feature = "cli")]
@@ -34,8 +34,8 @@ pub struct CleanOutput {
 async fn clean(project: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
     let storage = kit
-        .require::<StorageKey>()
-        .map_err(|e| wrap_error("Failed to resolve storage capability", e))?;
+        .require::<StorageModule>()
+        .map_err(|e| wrap_kit_error("Failed to resolve storage capability", e))?;
 
     // Find the project by name first, then by id.
     let projects = storage

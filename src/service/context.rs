@@ -3,7 +3,7 @@
 
 //! Context command: show a 360-degree view of a symbol.
 
-use crate::kit::TraceKey;
+use crate::kit::TraceModule;
 use crate::service::error::{CliError, to_api_error};
 use crate::service::runtime::kit;
 use crate::trace::context::{
@@ -20,7 +20,7 @@ use sdforge::service_api;
 #[cfg(any(feature = "cli", feature = "mcp"))]
 async fn context_core(symbol: String, depth: u32) -> Result<ContextOutput, CliError> {
     let kit = kit().ok_or_else(CliError::kit_not_initialized)?;
-    let trace_engine = kit.require::<TraceKey>()?;
+    let trace_engine = kit.require::<TraceModule>()?;
     let graph = trace_engine.load_graph(&symbol, depth as usize)?;
     let start_id = resolve_start_id(&graph, &symbol)
         .ok_or_else(|| CliError::InvalidInput(format!("symbol not found: {symbol}")))?;

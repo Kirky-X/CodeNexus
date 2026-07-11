@@ -617,7 +617,7 @@ fn build_community_list(graph: &UnGraph<String, f64>, communities: &[usize]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, Kit, KitBootstrapConfig, StorageKey};
+    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
     use petgraph::graph::UnGraph;
     use tempfile::TempDir;
 
@@ -635,11 +635,11 @@ mod tests {
         build_kit(&config).expect("build_kit")
     }
 
-    fn storage(kit: &Kit) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
-        kit.require::<StorageKey>().expect("require_storage")
+    fn storage(kit: &AsyncKit<AsyncReady>) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
+        kit.require::<StorageModule>().expect("require_storage")
     }
 
-    fn create_function(kit: &Kit, id: &str, project: &str, name: &str, qn: &str) {
+    fn create_function(kit: &AsyncKit<AsyncReady>, id: &str, project: &str, name: &str, qn: &str) {
         let s = storage(kit);
         let cypher = format!(
             "CREATE (:Function {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
@@ -653,7 +653,7 @@ mod tests {
         s.execute(&cypher).expect("create function");
     }
 
-    fn create_calls_edge(kit: &Kit, id: &str, source: &str, target: &str, project: &str) {
+    fn create_calls_edge(kit: &AsyncKit<AsyncReady>, id: &str, source: &str, target: &str, project: &str) {
         let s = storage(kit);
         let cypher = format!(
             "CREATE (:CodeRelation {{id: '{}', source: '{}', target: '{}', type: 'CALLS', \

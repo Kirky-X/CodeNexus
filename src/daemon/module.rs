@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 //! trait-kit module for the Daemon subsystem (T6/unified-architecture
-//! Phase 2, Task 2.11).
+//! Phase 2, Task 2.11; v0.3.3 AsyncKit migration).
 //!
-//! Implements [`Module`] / [`ModuleBuilder`] / [`WithConfig`] for
-//! [`DaemonModule`], wiring the existing [`Daemon`] + [`IndexObserver`]
-//! (Observer pattern) into the unified Kit registry as
-//! `Arc<dyn DaemonRunner>` under [`DaemonKey`](crate::kit::DaemonKey).
+//! Implements [`ModuleMeta`] + [`AsyncAutoBuilder`] for [`DaemonModule`],
+//! wiring the existing [`Daemon`] + [`IndexObserver`] (Observer pattern)
+//! into the unified Kit registry as `Arc<dyn DaemonRunner>` under
+//! [`DaemonModule`](crate::kit::DaemonModule).
 //!
 //! # Capability lifecycle
 //!
@@ -31,19 +31,16 @@
 //!
 //! # Dependency note
 //!
-//! Conceptually the Daemon depends on `StorageKey` + `IndexerKey` (it
+//! Conceptually the Daemon depends on `StorageModule` + `IndexerModule` (it
 //! triggers incremental indexing via [`IndexFacade`]). The concrete
 //! [`DaemonCapability`] is self-contained, however: it constructs its own
 //! [`IndexFacade`] from the supplied `db_path`. Therefore
-//! `Requirements = NoRequirements` at the type level; the bootstrap
-//! (Task 2.13) enforces build ordering (Storage → ... → Indexer → Daemon).
-//! This mirrors the [`QueryModule`](crate::query::module::QueryModule) and
+//! `dependencies = &[]` at the type level; the bootstrap (Task 2.13)
+//! enforces build ordering (Storage → ... → Indexer → Daemon). This mirrors
+//! the [`QueryModule`](crate::query::module::QueryModule) and
 //! [`TraceModule`](crate::trace::module::TraceModule) design — see
 //! `design.md` D1 for the rationale.
 //!
-//! [`Module`]: crate::kit::Module
-//! [`ModuleBuilder`]: crate::kit::ModuleBuilder
-//! [`WithConfig`]: crate::kit::WithConfig
 //! [`QueryCapability`]: crate::query::module::QueryCapability
 //! [`TraceCapability`]: crate::trace::module::TraceCapability
 //! [`Daemon`]: super::Daemon
@@ -51,10 +48,13 @@
 //! [`IndexFacade`]: crate::index::IndexFacade
 //! [`DaemonRunner::start`]: super::capability::DaemonRunner::start
 
+use std::any::TypeId;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::kit::{Module, ModuleBuilder, NoRequirements, WithConfig};
+use crate::kit::{AsyncAutoBuilder, AsyncKit, ModuleMeta};
 
 use super::capability::DaemonRunner;
 use super::{Daemon, DaemonError, IndexObserver, DEFAULT_DEBOUNCE_MS};
@@ -66,10 +66,10 @@ use crate::index::IndexFacade;
 
 /// Configuration for [`DaemonModule`] (Task 2.11).
 ///
-/// Stored in Kit under [`DaemonConfigKey`](crate::kit::DaemonConfigKey) and
-/// injected into [`DaemonModuleBuilder`] via [`WithConfig`]. The Daemon
-/// needs the database path (for [`IndexFacade`]) and the debounce window
-/// in milliseconds (BR-DAEMON-001/004).
+/// Stored in Kit via `AsyncKit::set_config` and read in
+/// [`AsyncAutoBuilder::build`]. The Daemon needs the database path (for
+/// [`IndexFacade`]) and the debounce window in milliseconds
+/// (BR-DAEMON-001/004).
 #[derive(Debug, Clone)]
 pub struct DaemonConfig {
     /// Filesystem path to the LadybugDB database directory.
@@ -92,80 +92,66 @@ impl DaemonConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Module + Builder
+// Module (ModuleMeta + AsyncAutoBuilder)
 // ---------------------------------------------------------------------------
 
 /// trait-kit module tag for the Daemon subsystem (Task 2.11).
 ///
 /// Zero-sized marker — construction logic lives in
-/// [`DaemonModuleBuilder::build`]. Register in Kit via:
+/// [`DaemonModule::build_cap`] (called from the [`AsyncAutoBuilder`] impl).
+/// Register the capability in Kit via:
 ///
 /// ```ignore
-/// use codenexus::kit::{DaemonKey, IntoKitModuleBuilder, Kit};
-/// use codenexus::daemon::{DaemonConfig, DaemonModuleBuilder};
+/// use codenexus::kit::{AsyncKit, DaemonModule};
+/// use codenexus::daemon::DaemonConfig;
+/// use std::path::PathBuf;
 ///
-/// let kit = Kit::new();
-/// let daemon = DaemonModuleBuilder::new()
-///     .config(DaemonConfig::new(db_path.into()))
-///     .kit(&kit)
-///     .provide::<DaemonKey>()?;
+/// let mut kit = AsyncKit::new();
+/// kit.set_config(DaemonConfig::new(PathBuf::from(":memory:")));
+/// kit.register::<DaemonModule>()?;
+/// let kit = kit.build().await?;
+/// let daemon = kit.require::<DaemonModule>()?;
 /// ```
 pub struct DaemonModule;
 
-/// Builder for [`DaemonModule`] (Task 2.11).
-///
-/// Construct with [`DaemonModuleBuilder::new`], inject config with
-/// [`WithConfig::config`], then attach to a [`Kit`](crate::kit::Kit) via
-/// [`IntoKitModuleBuilder::kit`](crate::kit::IntoKitModuleBuilder::kit) and
-/// call [`provide`](crate::kit::KitModuleBuilder::provide).
-pub struct DaemonModuleBuilder {
-    config: Option<DaemonConfig>,
-}
-
-impl DaemonModuleBuilder {
-    /// Creates a builder with no config set. Call `.config(...)` before
-    /// building.
-    #[must_use]
-    pub fn new() -> Self {
-        Self { config: None }
+impl ModuleMeta for DaemonModule {
+    const NAME: &'static str = "daemon";
+    fn dependencies() -> &'static [(&'static str, TypeId)] {
+        &[]
     }
 }
 
-impl Default for DaemonModuleBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Module for DaemonModule {
-    type Config = DaemonConfig;
-    type Requirements = NoRequirements;
+impl AsyncAutoBuilder for DaemonModule {
     type Capability = Arc<dyn DaemonRunner>;
     type Error = DaemonError;
-    type Builder = DaemonModuleBuilder;
-    const NAME: &'static str = "daemon";
-}
 
-impl ModuleBuilder<DaemonModule> for DaemonModuleBuilder {
-    fn build(self) -> Result<Arc<dyn DaemonRunner>, DaemonError> {
-        let config = self.config.ok_or_else(|| {
-            DaemonError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "DaemonModuleBuilder requires config — call .config(DaemonConfig { db_path, debounce_ms }) before build",
-            ))
-        })?;
-        Ok(Arc::new(DaemonCapability {
-            db_path: config.db_path,
-            debounce_ms: config.debounce_ms,
-        }))
+    fn build<'a>(
+        kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move {
+            let config = kit
+                .config::<DaemonConfig>()
+                .map_err(|e| {
+                    DaemonError::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        e.to_string(),
+                    ))
+                })?;
+            Self::build_cap(&config)
+        })
     }
 }
 
-impl WithConfig<DaemonModule> for DaemonModuleBuilder {
-    fn config(self, config: DaemonConfig) -> Self {
-        Self {
-            config: Some(config),
-        }
+impl DaemonModule {
+    /// Constructs a DaemonCapability from the given config.
+    ///
+    /// Shared between [`AsyncAutoBuilder::build`] and tests so that
+    /// capability-level tests can run without an async runtime.
+    pub(crate) fn build_cap(config: &DaemonConfig) -> Result<Arc<dyn DaemonRunner>, DaemonError> {
+        Ok(Arc::new(DaemonCapability {
+            db_path: config.db_path.clone(),
+            debounce_ms: config.debounce_ms,
+        }))
     }
 }
 
@@ -223,26 +209,12 @@ impl DaemonRunner for DaemonCapability {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::DaemonKey;
-
-    #[test]
-    fn builder_requires_config() {
-        let result = DaemonModuleBuilder::new().build();
-        assert!(result.is_err());
-        let err = result.err().unwrap();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("config"),
-            "missing-config error should mention config: {msg}"
-        );
-    }
+    use crate::kit::{AsyncKit, DaemonModule};
 
     #[test]
     fn build_returns_send_sync_capability() {
-        let cap = DaemonModuleBuilder::new()
-            .config(DaemonConfig::new(PathBuf::from(":memory:")))
-            .build()
-            .expect("DaemonModuleBuilder::build");
+        let cap = DaemonModule::build_cap(&DaemonConfig::new(PathBuf::from(":memory:")))
+            .expect("DaemonModule::build_cap");
         // If this compiles, DaemonCapability is Send + Sync (the dyn
         // DaemonRunner bound requires it). The Arc<dyn DaemonRunner> is also
         // Send + Sync.
@@ -258,10 +230,8 @@ mod tests {
     /// coverage lives in the `kit_bootstrap` integration test (Task 1.7).
     #[test]
     fn capability_start_nonexistent_watch_path_returns_error() {
-        let cap = DaemonModuleBuilder::new()
-            .config(DaemonConfig::new(PathBuf::from(":memory:")))
-            .build()
-            .expect("DaemonModuleBuilder::build");
+        let cap = DaemonModule::build_cap(&DaemonConfig::new(PathBuf::from(":memory:")))
+            .expect("DaemonModule::build_cap");
         let result = cap.start(Path::new("/nonexistent/path/xyz/abc"), "demo");
         assert!(
             result.is_err(),
@@ -275,22 +245,20 @@ mod tests {
         );
     }
 
-    /// Verify the full Kit registration flow works end-to-end.
-    #[test]
-    fn kit_registration_flow() {
-        use crate::kit::{IntoKitModuleBuilder, Kit};
+    /// Verify the full AsyncKit registration flow works end-to-end.
+    #[tokio::test]
+    async fn kit_registration_flow() {
+        let mut kit = AsyncKit::new();
+        kit.set_config(DaemonConfig::new(PathBuf::from(":memory:")));
+        kit.register::<DaemonModule>()
+            .expect("register::<DaemonModule>");
+        let kit = kit.build().await.expect("build");
 
-        let kit = Kit::new();
-        let daemon = DaemonModuleBuilder::new()
-            .config(DaemonConfig::new(PathBuf::from(":memory:")))
-            .kit(&kit)
-            .provide::<DaemonKey>()
-            .expect("provide::<DaemonKey>");
+        assert!(kit.contains::<DaemonModule>(), "DaemonModule missing");
 
-        assert!(kit.contains::<DaemonKey>());
-
-        let required = kit.require::<DaemonKey>().expect("require::<DaemonKey>");
-        assert!(Arc::ptr_eq(&daemon, &required));
+        let _required = kit
+            .require::<DaemonModule>()
+            .expect("require::<DaemonModule>");
     }
 
     /// `DaemonConfig::new` seeds the default debounce window.
@@ -299,16 +267,5 @@ mod tests {
         let cfg = DaemonConfig::new(PathBuf::from("/tmp/db.lbug"));
         assert_eq!(cfg.db_path, PathBuf::from("/tmp/db.lbug"));
         assert_eq!(cfg.debounce_ms, DEFAULT_DEBOUNCE_MS);
-    }
-
-    /// `DaemonModuleBuilder::default()` is equivalent to `new()` — both
-    /// produce a builder with no config set, so `build()` must fail.
-    #[test]
-    fn builder_default_is_equivalent_to_new() {
-        let result = DaemonModuleBuilder::default().build();
-        assert!(
-            result.is_err(),
-            "default builder has no config, should fail"
-        );
     }
 }

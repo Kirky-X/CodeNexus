@@ -18,9 +18,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::service::error::{CliError, to_api_error};
-use crate::kit::{Kit, StorageKey, TraceKey};
+use crate::kit::{AsyncKit, AsyncReady, StorageModule, TraceModule};
 use crate::model::{Graph, Node, NodeId};
-use crate::service::error::{kit_not_initialized, wrap_error};
+use crate::service::error::{kit_not_initialized, wrap_error, wrap_kit_error};
 use crate::service::runtime::kit;
 use crate::storage::schema::{escape_cypher_string, escape_identifier};
 use crate::trace::TraceError;
@@ -175,8 +175,8 @@ fn file_to_rel_string(file: &Path, root: &Path) -> String {
 }
 
 /// Applies the graph edit via Cypher `SET`.
-fn apply_graph_edit(kit: &Kit, edit: &GraphEdit) -> Result<(), CliError> {
-    let storage = kit.require::<StorageKey>()?;
+fn apply_graph_edit(kit: &AsyncKit<AsyncReady>, edit: &GraphEdit) -> Result<(), CliError> {
+    let storage = kit.require::<StorageModule>()?;
     let table = escape_identifier(edit.label.as_str());
     let cypher = format!(
         "MATCH (n:{table}) WHERE n.id = '{id}' SET n.name = '{new_name}', n.qualifiedName = '{new_qn}';",
@@ -304,8 +304,8 @@ async fn rename(from: String, to: String, path: String, apply: bool) -> Result<(
     }
 
     let trace = kit
-        .require::<TraceKey>()
-        .map_err(|e| wrap_error("Failed to resolve trace capability", e))?;
+        .require::<TraceModule>()
+        .map_err(|e| wrap_kit_error("Failed to resolve trace capability", e))?;
     let graph = trace.load_graph(&from, 2).map_err(|e| match e {
         TraceError::SymbolNotFound(s) => ApiError::NotFound {
             resource: "symbol".to_string(),
@@ -367,7 +367,7 @@ async fn rename(from: String, to: String, path: String, apply: bool) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig, StorageKey};
+    use crate::kit::{build_kit, KitBootstrapConfig, StorageModule};
     use crate::model::{Edge, EdgeType, Node, NodeLabel};
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -387,7 +387,7 @@ mod tests {
     /// (no RenameArgs) so tests can exercise error paths without the
     /// `#[service_api]` macro wrapper.
     fn rename_core(
-        kit: &Kit,
+        kit: &AsyncKit<AsyncReady>,
         from: &str,
         to: &str,
         path: Option<&str>,
@@ -404,7 +404,7 @@ mod tests {
             ));
         }
 
-        let trace = kit.require::<TraceKey>()?;
+        let trace = kit.require::<TraceModule>()?;
         let graph = trace.load_graph(from, 2)?;
         let start_id = resolve_start_id(&graph, from)
             .ok_or_else(|| TraceError::SymbolNotFound(from.to_string()))?;
@@ -849,7 +849,7 @@ mod tests {
     fn core_dry_run_succeeds_with_symbol() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageKey>().unwrap();
+        let storage = kit.require::<StorageModule>().unwrap();
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();
         let result = rename_core(&kit, "a", "b", None, false);
         assert!(
@@ -863,7 +863,7 @@ mod tests {
     fn core_apply_updates_graph_name() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageKey>().unwrap();
+        let storage = kit.require::<StorageModule>().unwrap();
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();
         let tmp = TempDir::new().unwrap();
         let result = rename_core(&kit, "a", "b", Some(tmp.path().to_str().unwrap()), true);

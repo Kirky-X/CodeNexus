@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::analysis::api_review::{ApiReviewer, ShapeViolation};
 use crate::service::error::{CliError, to_api_error};
 #[cfg(feature = "api-review")]
-use crate::kit::{Kit, StorageKey};
+use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cli", feature = "api-review"))]
 use crate::service::error::kit_not_initialized;
 #[cfg(all(feature = "cli", feature = "api-review"))]
@@ -30,8 +30,8 @@ pub struct ShapeCheckOutput {
 
 /// Core logic — resolves storage, runs shape_check, prints JSON.
 #[cfg(feature = "api-review")]
-fn shape_check_core(kit: &Kit, project: &str) -> Result<(), CliError> {
-    let storage = kit.require::<StorageKey>()?;
+fn shape_check_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CliError> {
+    let storage = kit.require::<StorageModule>()?;
     let reviewer = ApiReviewer::new(&*storage);
     let violations: Vec<ShapeViolation> = reviewer.shape_check(project)?;
     let output = ShapeCheckOutput {
@@ -60,7 +60,7 @@ async fn shape_check(project: String) -> Result<(), ApiError> {
 #[cfg(all(test, feature = "cli", feature = "api-review"))]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig, StorageKey};
+    use crate::kit::{build_kit, KitBootstrapConfig, StorageModule};
     use tempfile::TempDir;
 
     fn fresh_db_path() -> (TempDir, std::path::PathBuf) {
@@ -86,7 +86,7 @@ mod tests {
     fn core_with_endpoint() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
         storage.execute("CREATE (:Endpoint {id: 'e1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', expectedSchema: '{\"name\":\"string\"}', parentQn: ''});").expect("create endpoint");
         let result = shape_check_core(&kit, "demo");
         assert!(result.is_ok(), "core should succeed: {:?}", result.err());

@@ -14,10 +14,10 @@ use std::process::{Command, Stdio};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::kit::StorageConfigKey;
-use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
+use crate::service::error::{kit_not_initialized, to_api_error, wrap_error, wrap_kit_error};
 use crate::service::export::{ArtifactManifest, ARTIFACT_FORMAT_VERSION, ARTIFACT_MAGIC, ZSTD_BIN};
 use crate::service::runtime::kit;
+use crate::storage::StorageConfig;
 
 #[cfg(feature = "cli")]
 use sdforge::prelude::ApiError;
@@ -93,9 +93,8 @@ fn zstd_decompress(input: &[u8]) -> Result<Vec<u8>, ApiError> {
 async fn import(input: String, reindex: bool, path: String, name: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
     let storage_config = kit
-        .config::<StorageConfigKey>()
-        .map_err(|e| wrap_error("Failed to resolve storage config", e))?;
-    let storage_config = storage_config.load();
+        .config::<StorageConfig>()
+        .map_err(|e| wrap_kit_error("Failed to resolve storage config", e))?;
     let db_path = storage_config.db_path.clone();
     let db_path_str = db_path.to_string_lossy().into_owned();
 

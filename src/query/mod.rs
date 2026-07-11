@@ -29,7 +29,7 @@ pub use cypher_subset::validate_cypher_subset;
 pub use error::{QueryError, Result};
 pub use facade::QueryFacade;
 pub use fulltext::FullTextSearcher;
-pub use module::{QueryConfig, QueryModule, QueryModuleBuilder};
+pub use module::{QueryConfig, QueryModule};
 pub use structured::StructuredSearcher;
 pub use tokenizer::{codenexus_tokenize, codenexus_tokenize_join};
 

@@ -48,7 +48,7 @@ pub use error::{ResolveError, Result};
 pub use fqn::FqnGenerator;
 pub use imports::ImportResolver;
 pub use includes_graph::{resolve_include, IncludesGraph};
-pub use module::{ResolverModule, ResolverModuleBuilder};
+pub use module::ResolverModule;
 pub use mro::{mro_for, MroResolver, MroStrategy};
 pub use scope::{Scope, ScopeChain, ScopeContext, ScopeResolver, ScopeResolverRegistry};
 pub use symbol_table::{FileSymbolTable, ProjectSymbolTable, SymbolEntry};

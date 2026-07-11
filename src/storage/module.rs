@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 //! trait-kit module for the Storage subsystem (T6/unified-architecture
-//! Phase 2, Task 2.4).
+//! Phase 2, Task 2.4; v0.3.3 AsyncKit migration).
 //!
-//! Implements [`Module`] / [`ModuleBuilder`] / [`WithConfig`] for
-//! [`StorageModule`], wiring the existing [`Repository`] (which owns a
-//! [`StorageConnection`]) into the unified Kit registry as
-//! `Arc<dyn Storage>` under [`StorageKey`](crate::kit::StorageKey).
+//! Implements [`ModuleMeta`] + [`AsyncAutoBuilder`] for [`StorageModule`],
+//! wiring the existing [`Repository`] (which owns a [`StorageConnection`])
+//! into the unified Kit registry as `Arc<dyn Storage>` under
+//! [`StorageModule`](crate::kit::StorageModule).
 //!
 //! # Interior mutability
 //!
@@ -17,16 +17,14 @@
 //! concrete impl ([`StorageCapability`]) wraps the repository in a
 //! [`Mutex`] — every operation locks, delegates, and unlocks. This is the
 //! design documented in [`capability.rs`](super::capability).
-//!
-//! [`Module`]: crate::kit::Module
-//! [`ModuleBuilder`]: crate::kit::ModuleBuilder
-//! [`WithConfig`]: crate::kit::WithConfig
 
+use std::any::TypeId;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use crate::kit::{Module, ModuleBuilder, NoRequirements, WithConfig};
-use crate::model::{Edge, Node, NodeLabel};
+use crate::kit::{AsyncAutoBuilder, AsyncKit, ModuleMeta};
 
 use super::capability::Storage;
 use super::connection::SchemaInitReport;
@@ -39,8 +37,8 @@ use super::repository::{FunctionRecord, ProjectRecord, Repository};
 
 /// Configuration for [`StorageModule`] (Task 2.4).
 ///
-/// Stored in Kit under [`StorageConfigKey`](crate::kit::StorageConfigKey)
-/// and injected into [`StorageModuleBuilder`] via [`WithConfig`].
+/// Stored in Kit via `AsyncKit::set_config` and read in
+/// [`AsyncAutoBuilder::build`].
 #[derive(Debug, Clone)]
 pub struct StorageConfig {
     /// Filesystem path to the LadybugDB database directory.
@@ -60,81 +58,60 @@ impl StorageConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Module + Builder
+// Module (ModuleMeta + AsyncAutoBuilder)
 // ---------------------------------------------------------------------------
 
 /// trait-kit module tag for the Storage subsystem (Task 2.4).
 ///
-/// This is a zero-sized marker type — the actual construction logic lives in
-/// [`StorageModuleBuilder::build`]. Register the capability in Kit via:
+/// Zero-sized marker — construction logic lives in
+/// [`StorageModule::build_cap`] (called from the [`AsyncAutoBuilder`]
+/// impl). Register the capability in Kit via:
 ///
 /// ```ignore
-/// use codenexus::kit::{IntoKitModuleBuilder, Kit, StorageKey};
-/// use codenexus::storage::{StorageConfig, StorageModuleBuilder};
+/// use codenexus::kit::{AsyncKit, StorageModule};
+/// use codenexus::storage::StorageConfig;
 ///
-/// let kit = Kit::new();
-/// let storage = StorageModuleBuilder::new()
-///     .config(StorageConfig::in_memory())
-///     .kit(&kit)
-///     .provide::<StorageKey>()?;
+/// let mut kit = AsyncKit::new();
+/// kit.set_config(StorageConfig { db_path: ":memory:".into() });
+/// kit.register::<StorageModule>()?;
+/// let kit = kit.build().await?;
+/// let storage = kit.require::<StorageModule>()?;
 /// ```
 pub struct StorageModule;
 
-/// Builder for [`StorageModule`] (Task 2.4).
-///
-/// Construct with [`StorageModuleBuilder::new`], inject config with
-/// [`WithConfig::config`], then attach to a [`Kit`](crate::kit::Kit) via
-/// [`IntoKitModuleBuilder::kit`](crate::kit::IntoKitModuleBuilder::kit) and
-/// call [`provide`](crate::kit::KitModuleBuilder::provide).
-pub struct StorageModuleBuilder {
-    config: Option<StorageConfig>,
-}
-
-impl StorageModuleBuilder {
-    /// Creates a builder with no config set. Call `.config(...)` before
-    /// building.
-    #[must_use]
-    pub fn new() -> Self {
-        Self { config: None }
+impl ModuleMeta for StorageModule {
+    const NAME: &'static str = "storage";
+    fn dependencies() -> &'static [(&'static str, TypeId)] {
+        &[]
     }
 }
 
-impl Default for StorageModuleBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Module for StorageModule {
-    type Config = StorageConfig;
-    type Requirements = NoRequirements;
+impl AsyncAutoBuilder for StorageModule {
     type Capability = Arc<dyn Storage>;
     type Error = StorageError;
-    type Builder = StorageModuleBuilder;
-    const NAME: &'static str = "storage";
+
+    fn build<'a>(
+        kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move {
+            let config = kit
+                .config::<StorageConfig>()
+                .map_err(|e| StorageError::InvalidData(e.to_string()))?;
+            Self::build_cap(&config)
+        })
+    }
 }
 
-impl ModuleBuilder<StorageModule> for StorageModuleBuilder {
-    fn build(self) -> Result<Arc<dyn Storage>, StorageError> {
-        let config = self.config.ok_or_else(|| {
-            StorageError::InvalidData(
-                "StorageModuleBuilder requires config — call .config(StorageConfig { db_path }) before build".to_string(),
-            )
-        })?;
-        // Repository::open creates the StorageConnection AND initializes the
-        // schema, so the capability is ready for use immediately.
+impl StorageModule {
+    /// Constructs a StorageCapability from the given config.
+    ///
+    /// Shared between [`AsyncAutoBuilder::build`] and tests so that
+    /// capability-level tests can run without an async runtime.
+    pub(crate) fn build_cap(config: &StorageConfig) -> Result<Arc<dyn Storage>, StorageError> {
         let repo = Repository::open(&config.db_path)?;
         Ok(Arc::new(StorageCapability {
             inner: Mutex::new(repo),
         }))
-    }
-}
-
-impl WithConfig<StorageModule> for StorageModuleBuilder {
-    fn config(self, config: StorageConfig) -> Self {
-        Self {
-            config: Some(config),
-        }
     }
 }
 
@@ -176,21 +153,25 @@ impl Storage for StorageCapability {
             .query(cypher)
     }
 
-    fn save_project(&self, node: &Node) -> Result<(), StorageError> {
+    fn save_project(&self, node: &crate::model::Node) -> Result<(), StorageError> {
         self.inner
             .lock()
             .expect("storage lock poisoned")
             .save_project(node)
     }
 
-    fn save_nodes(&self, nodes: &[Node], label: NodeLabel) -> Result<(), StorageError> {
+    fn save_nodes(
+        &self,
+        nodes: &[crate::model::Node],
+        label: crate::model::NodeLabel,
+    ) -> Result<(), StorageError> {
         self.inner
             .lock()
             .expect("storage lock poisoned")
             .save_nodes(nodes, label)
     }
 
-    fn save_edges(&self, edges: &[Edge]) -> Result<(), StorageError> {
+    fn save_edges(&self, edges: &[crate::model::Edge]) -> Result<(), StorageError> {
         self.inner
             .lock()
             .expect("storage lock poisoned")
@@ -258,30 +239,17 @@ impl Storage for StorageCapability {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::StorageKey;
-    use crate::model::{EdgeType, Language, NodeLabel};
+    use crate::kit::{AsyncKit, StorageModule};
+    use crate::model::{Edge, EdgeType, Language, Node, NodeLabel};
 
     /// Builds a StorageModule capability in-memory and returns it.
     fn build_storage() -> Arc<dyn Storage> {
-        StorageModuleBuilder::new()
-            .config(StorageConfig::in_memory())
-            .build()
-            .expect("StorageModuleBuilder::build")
-    }
-
-    #[test]
-    fn builder_requires_config() {
-        let result = StorageModuleBuilder::new().build();
-        assert!(result.is_err());
-        let err = result.err().unwrap();
-        assert!(err.to_string().contains("config"), "got: {err}");
+        StorageModule::build_cap(&StorageConfig::in_memory()).expect("StorageModule::build_cap")
     }
 
     #[test]
     fn build_returns_send_sync_capability() {
         let cap = build_storage();
-        // If this compiles, StorageCapability is Send + Sync (the dyn Storage
-        // bound requires it). The Arc<dyn Storage> is also Send + Sync.
         fn _assert_send_sync<T: Send + Sync>(_: &T) {}
         _assert_send_sync(&cap);
     }
@@ -444,33 +412,20 @@ mod tests {
         assert_eq!(rows[0][0], serde_json::json!("x"));
     }
 
-    /// Verify the full Kit registration flow works end-to-end.
-    #[test]
-    fn kit_registration_flow() {
-        use crate::kit::{IntoKitModuleBuilder, Kit};
+    /// Verify the full AsyncKit registration flow works end-to-end.
+    #[tokio::test]
+    async fn kit_registration_flow() {
+        let mut kit = AsyncKit::new();
+        kit.set_config(StorageConfig::in_memory());
+        kit.register::<StorageModule>()
+            .expect("register::<StorageModule>");
+        let kit = kit.build().await.expect("build");
 
-        let kit = Kit::new();
-        let storage = StorageModuleBuilder::new()
-            .config(StorageConfig::in_memory())
-            .kit(&kit)
-            .provide::<StorageKey>()
-            .expect("provide::<StorageKey>");
+        assert!(kit.contains::<StorageModule>(), "StorageModule missing");
 
-        // The capability is now registered in Kit.
-        assert!(kit.contains::<StorageKey>());
-
-        // require::<StorageKey>() returns the same capability.
-        let required = kit.require::<StorageKey>().expect("require::<StorageKey>");
-        assert!(Arc::ptr_eq(&storage, &required));
-    }
-
-    #[test]
-    fn builder_default_equals_new() {
-        // Default impl must produce the same state as new() (no config).
-        let default_builder = StorageModuleBuilder::default();
-        assert!(
-            default_builder.build().is_err(),
-            "default builder should require config"
-        );
+        let required = kit
+            .require::<StorageModule>()
+            .expect("require::<StorageModule>");
+        required.init_schema().expect("init_schema");
     }
 }

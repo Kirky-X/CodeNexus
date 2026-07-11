@@ -237,7 +237,7 @@ fn glob_helper(p: &[char], t: &[char]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, Kit, KitBootstrapConfig, StorageKey};
+    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
     use tempfile::TempDir;
 
     /// Returns a fresh on-disk database path inside a temp dir.
@@ -255,13 +255,13 @@ mod tests {
     }
 
     /// Returns the `dyn Storage` capability from `kit`.
-    fn storage(kit: &Kit) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
-        kit.require::<StorageKey>().expect("require_storage")
+    fn storage(kit: &AsyncKit<AsyncReady>) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
+        kit.require::<StorageModule>().expect("require_storage")
     }
 
     /// Creates a Function node via direct Cypher.
     fn create_function(
-        kit: &Kit,
+        kit: &AsyncKit<AsyncReady>,
         id: &str,
         project: &str,
         name: &str,
@@ -288,7 +288,7 @@ mod tests {
 
     /// Creates a Method node via direct Cypher.
     fn create_method(
-        kit: &Kit,
+        kit: &AsyncKit<AsyncReady>,
         id: &str,
         project: &str,
         name: &str,
@@ -315,7 +315,7 @@ mod tests {
 
     /// Creates a CALLS edge from `caller_id` to `callee_id`.
     fn create_calls_edge(
-        kit: &Kit,
+        kit: &AsyncKit<AsyncReady>,
         edge_id: &str,
         caller_id: &str,
         callee_id: &str,
@@ -334,7 +334,7 @@ mod tests {
     }
 
     /// Creates a File node (for language resolution).
-    fn create_file(kit: &Kit, id: &str, project: &str, file_path: &str, language: &str) {
+    fn create_file(kit: &AsyncKit<AsyncReady>, id: &str, project: &str, file_path: &str, language: &str) {
         let storage = storage(kit);
         let cypher = format!(
             "CREATE (:File {{id: '{}', project: '{}', name: '{}', filePath: '{}', \

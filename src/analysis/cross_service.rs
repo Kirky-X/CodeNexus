@@ -426,7 +426,7 @@ fn extract_string_literals(content: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, Kit, KitBootstrapConfig, StorageKey};
+    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
     use tempfile::TempDir;
 
     // --- Test helpers (mirror community.rs pattern) ---
@@ -443,11 +443,11 @@ mod tests {
         build_kit(&config).expect("build_kit")
     }
 
-    fn storage(kit: &Kit) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
-        kit.require::<StorageKey>().expect("require_storage")
+    fn storage(kit: &AsyncKit<AsyncReady>) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
+        kit.require::<StorageModule>().expect("require_storage")
     }
 
-    fn create_route(kit: &Kit, id: &str, project: &str, path: &str) {
+    fn create_route(kit: &AsyncKit<AsyncReady>, id: &str, project: &str, path: &str) {
         let s = storage(kit);
         let cypher = format!(
             "CREATE (:Route {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
@@ -462,7 +462,7 @@ mod tests {
     }
 
     fn create_function_with_content(
-        kit: &Kit,
+        kit: &AsyncKit<AsyncReady>,
         id: &str,
         project: &str,
         name: &str,
@@ -489,7 +489,7 @@ mod tests {
         s.execute(&cypher).expect("create function");
     }
 
-    fn count_cross_service_edges(kit: &Kit, project: &str) -> usize {
+    fn count_cross_service_edges(kit: &AsyncKit<AsyncReady>, project: &str) -> usize {
         let s = storage(kit);
         let cypher = format!(
             "MATCH (e:CodeRelation) WHERE e.type = 'CROSS_SERVICE_CALLS' AND e.project = '{}' \

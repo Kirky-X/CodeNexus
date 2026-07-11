@@ -2,29 +2,19 @@
 // SPDX-License-Identifier: MIT
 
 //! trait-kit module for the Resolver subsystem (T6/unified-architecture
-//! Phase 2, Task 2.8).
+//! Phase 2, Task 2.8; v0.3.3 AsyncKit migration).
 //!
-//! Implements [`Module`] / [`ModuleBuilder`] for [`ResolverModule`], wiring
-//! the existing free functions [`build_symbol_table`](super::build_symbol_table)
+//! Implements [`ModuleMeta`] + [`AsyncAutoBuilder`] for [`ResolverModule`],
+//! wiring the existing free functions [`build_symbol_table`](super::build_symbol_table)
 //! and [`resolve_all`](super::resolve_all) into the unified Kit registry as
-//! `Arc<dyn Resolver>` under [`ResolverKey`](crate::kit::ResolverKey).
-//!
-//! # Design note
-//!
-//! Unlike Storage/Indexer, the Resolver has no facade struct — it exposes two
-//! stateless free functions. [`ResolverCapability`] is therefore zero-sized
-//! and delegates directly. Conceptually the Resolver depends on `StorageKey`
-//! (its inputs ultimately come from a parsed + stored codebase), but the
-//! concrete impl takes its inputs as parameters, so
-//! `Requirements = NoRequirements` at the type level; the bootstrap
-//! (Task 2.13) enforces build ordering.
-//!
-//! [`Module`]: crate::kit::Module
-//! [`ModuleBuilder`]: crate::kit::ModuleBuilder
+//! `Arc<dyn Resolver>` under [`ResolverModule`](crate::kit::ResolverModule).
 
+use std::any::TypeId;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::kit::{Module, ModuleBuilder, NoConfig, NoRequirements};
+use crate::kit::{AsyncAutoBuilder, AsyncKit, ModuleMeta};
 
 use super::capability::Resolver;
 use super::error::ResolveError;
@@ -34,56 +24,47 @@ use crate::ir::ExtractResult;
 use crate::model::{Edge, Graph};
 
 // ---------------------------------------------------------------------------
-// Module + Builder
+// Module (ModuleMeta + AsyncAutoBuilder)
 // ---------------------------------------------------------------------------
 
 /// trait-kit module tag for the Resolver subsystem (Task 2.8).
 ///
 /// Zero-sized marker — construction logic lives in
-/// [`ResolverModuleBuilder::build`]. Register in Kit via:
+/// [`ResolverModule::build_cap`]. Register in Kit via:
 ///
 /// ```ignore
-/// use codenexus::kit::{IntoKitModuleBuilder, Kit, ResolverKey};
-/// use codenexus::resolve::ResolverModuleBuilder;
+/// use codenexus::kit::{AsyncKit, ResolverModule};
 ///
-/// let kit = Kit::new();
-/// let resolver = ResolverModuleBuilder::new()
-///     .kit(&kit)
-///     .provide::<ResolverKey>()?;
+/// let mut kit = AsyncKit::new();
+/// kit.register::<ResolverModule>()?;
+/// let kit = kit.build().await?;
+/// let resolver = kit.require::<ResolverModule>()?;
 /// ```
 pub struct ResolverModule;
 
-/// Builder for [`ResolverModule`] (Task 2.8).
-///
-/// No configuration is required — the resolver delegates to stateless free
-/// functions.
-pub struct ResolverModuleBuilder;
-
-impl ResolverModuleBuilder {
-    /// Creates a new builder.
-    #[must_use]
-    pub fn new() -> Self {
-        Self
+impl ModuleMeta for ResolverModule {
+    const NAME: &'static str = "resolver";
+    fn dependencies() -> &'static [(&'static str, TypeId)] {
+        &[]
     }
 }
 
-impl Default for ResolverModuleBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Module for ResolverModule {
-    type Config = NoConfig;
-    type Requirements = NoRequirements;
+impl AsyncAutoBuilder for ResolverModule {
     type Capability = Arc<dyn Resolver>;
     type Error = ResolveError;
-    type Builder = ResolverModuleBuilder;
-    const NAME: &'static str = "resolver";
+
+    fn build<'a>(
+        _kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move { Self::build_cap() })
+    }
 }
 
-impl ModuleBuilder<ResolverModule> for ResolverModuleBuilder {
-    fn build(self) -> Result<Arc<dyn Resolver>, ResolveError> {
+impl ResolverModule {
+    /// Constructs a ResolverCapability.
+    ///
+    /// Shared between [`AsyncAutoBuilder::build`] and tests.
+    pub(crate) fn build_cap() -> Result<Arc<dyn Resolver>, ResolveError> {
         Ok(Arc::new(ResolverCapability))
     }
 }
@@ -125,7 +106,7 @@ impl Resolver for ResolverCapability {
 mod tests {
     use super::*;
     use crate::ir::CallInfo;
-    use crate::kit::ResolverKey;
+    use crate::kit::{AsyncKit, ResolverModule};
     use crate::model::{Language, Node, NodeLabel};
     use crate::resolve::FqnGenerator;
 
@@ -168,15 +149,13 @@ mod tests {
                 graph.add_node(g);
             }
         }
-        let _ = bar_qn; // bar_qn asserted in the call-edge test below
+        let _ = bar_qn;
         (results, table, graph)
     }
 
     #[test]
     fn build_returns_capability() {
-        let cap = ResolverModuleBuilder::new().build().expect("build");
-        // Exercise the real trait method with empty input — an empty results
-        // slice yields an empty symbol table.
+        let cap = ResolverModule::build_cap().expect("build_cap");
         let table = cap.build_symbol_table(&[], "proj");
         assert_eq!(table.symbol_count(), 0, "empty results → empty table");
         assert_eq!(table.file_count(), 0);
@@ -185,7 +164,7 @@ mod tests {
     #[test]
     fn capability_build_symbol_table_returns_table() {
         let (results, _table, _graph) = fixture_call_foo_to_bar();
-        let cap = ResolverModuleBuilder::new().build().expect("build");
+        let cap = ResolverModule::build_cap().expect("build_cap");
         let table = cap.build_symbol_table(&results, "proj");
         assert_eq!(table.symbol_count(), 2, "foo + bar");
         assert_eq!(table.file_count(), 1);
@@ -196,7 +175,7 @@ mod tests {
     #[test]
     fn capability_resolve_all_produces_calls_edge() {
         let (results, table, mut graph) = fixture_call_foo_to_bar();
-        let cap = ResolverModuleBuilder::new().build().expect("build");
+        let cap = ResolverModule::build_cap().expect("build_cap");
         let includes_graph = IncludesGraph::new();
         let edges = cap.resolve_all(&results, &table, "proj", &mut graph, &includes_graph);
 
@@ -214,28 +193,20 @@ mod tests {
         );
     }
 
-    /// Verify the full Kit registration flow works end-to-end.
-    #[test]
-    fn kit_registration_flow() {
-        use crate::kit::{IntoKitModuleBuilder, Kit};
+    /// Verify the full AsyncKit registration flow works end-to-end.
+    #[tokio::test]
+    async fn kit_registration_flow() {
+        let mut kit = AsyncKit::new();
+        kit.register::<ResolverModule>()
+            .expect("register::<ResolverModule>");
+        let kit = kit.build().await.expect("build");
 
-        let kit = Kit::new();
-        let resolver = ResolverModuleBuilder::new()
-            .kit(&kit)
-            .provide::<ResolverKey>()
-            .expect("provide::<ResolverKey>");
-
-        assert!(kit.contains::<ResolverKey>());
+        assert!(kit.contains::<ResolverModule>());
 
         let required = kit
-            .require::<ResolverKey>()
-            .expect("require::<ResolverKey>");
-        assert!(Arc::ptr_eq(&resolver, &required));
-    }
-
-    #[test]
-    fn builder_default_equals_new() {
-        let default_builder = ResolverModuleBuilder::default();
-        let _ = default_builder.build().expect("build should succeed");
+            .require::<ResolverModule>()
+            .expect("require::<ResolverModule>");
+        let table = required.build_symbol_table(&[], "proj");
+        assert_eq!(table.symbol_count(), 0);
     }
 }

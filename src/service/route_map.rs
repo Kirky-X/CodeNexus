@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::analysis::api_review::{ApiReviewer, RouteEntry};
 use crate::service::error::{CliError, to_api_error};
 #[cfg(feature = "api-review")]
-use crate::kit::{Kit, StorageKey};
+use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cli", feature = "api-review"))]
 use crate::service::error::kit_not_initialized;
 #[cfg(all(feature = "cli", feature = "api-review"))]
@@ -30,8 +30,8 @@ pub struct RouteMapOutput {
 
 /// Core logic — resolves storage, runs route_map, prints JSON.
 #[cfg(feature = "api-review")]
-fn route_map_core(kit: &Kit, project: &str) -> Result<(), CliError> {
-    let storage = kit.require::<StorageKey>()?;
+fn route_map_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CliError> {
+    let storage = kit.require::<StorageModule>()?;
     let reviewer = ApiReviewer::new(&*storage);
     let route_map: Vec<RouteEntry> = reviewer.route_map(project)?;
     let output = RouteMapOutput {
@@ -60,7 +60,7 @@ async fn route_map(project: String) -> Result<(), ApiError> {
 #[cfg(all(test, feature = "cli", feature = "api-review"))]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig, StorageKey};
+    use crate::kit::{build_kit, KitBootstrapConfig, StorageModule};
     use tempfile::TempDir;
 
     fn fresh_db_path() -> (TempDir, std::path::PathBuf) {
@@ -86,7 +86,7 @@ mod tests {
     fn core_returns_route() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
         storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
         storage.execute("CREATE (:Handler {id: 'h1', project: 'demo', name: 'list_users', qualifiedName: 'list_users', filePath: '', startLine: 0, endLine: 0, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create handler");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'h1', target: 'r1', type: 'HANDLES', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create edge");

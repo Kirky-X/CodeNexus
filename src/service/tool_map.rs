@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::analysis::api_review::{ApiReviewer, ToolEntry};
 use crate::service::error::{CliError, to_api_error};
 #[cfg(feature = "api-review")]
-use crate::kit::{Kit, StorageKey};
+use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cli", feature = "api-review"))]
 use crate::service::error::kit_not_initialized;
 #[cfg(all(feature = "cli", feature = "api-review"))]
@@ -30,8 +30,8 @@ pub struct ToolMapOutput {
 
 /// Core logic — resolves storage, runs tool_map, prints JSON.
 #[cfg(feature = "api-review")]
-fn tool_map_core(kit: &Kit, project: &str) -> Result<(), CliError> {
-    let storage = kit.require::<StorageKey>()?;
+fn tool_map_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CliError> {
+    let storage = kit.require::<StorageModule>()?;
     let reviewer = ApiReviewer::new(&*storage);
     let tool_map: Vec<ToolEntry> = reviewer.tool_map(project)?;
     let output = ToolMapOutput {
@@ -60,7 +60,7 @@ async fn tool_map(project: String) -> Result<(), ApiError> {
 #[cfg(all(test, feature = "cli", feature = "api-review"))]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig, StorageKey};
+    use crate::kit::{build_kit, KitBootstrapConfig, StorageModule};
     use tempfile::TempDir;
 
     fn fresh_db_path() -> (TempDir, std::path::PathBuf) {
@@ -86,7 +86,7 @@ mod tests {
     fn core_with_tool() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
         storage.execute("CREATE (:Tool {id: 't1', project: 'demo', name: 'query', qualifiedName: 'query', filePath: '', toolType: 'mcp', parentQn: ''});").expect("create tool");
         storage.execute("CREATE (:Handler {id: 'h1', project: 'demo', name: 'query_handler', qualifiedName: 'query_handler', filePath: '', startLine: 0, endLine: 0, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create handler");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'h1', target: 't1', type: 'HANDLES', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create edge");

@@ -19,7 +19,7 @@ pub mod schema;
 pub use connection::{SchemaInitReport, StorageConnection};
 pub use error::{Result, StorageError};
 pub use loader::CsvLoader;
-pub use module::{StorageConfig, StorageModule, StorageModuleBuilder};
+pub use module::{StorageConfig, StorageModule};
 pub use quality::{QualityChecker, QualityReport, QualityViolation};
 pub use repository::{FunctionRecord, ProjectRecord, Repository};
 pub use schema::{

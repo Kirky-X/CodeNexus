@@ -14,9 +14,9 @@ use std::process::Command;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::kit::StorageKey;
+use crate::kit::StorageModule;
 use crate::model::NodeLabel;
-use crate::service::error::{CliError, kit_not_initialized, to_api_error, wrap_error};
+use crate::service::error::{CliError, kit_not_initialized, to_api_error, wrap_error, wrap_kit_error};
 use crate::service::runtime::kit;
 use crate::storage::schema::node_table_columns;
 
@@ -345,8 +345,8 @@ async fn detect_changes(path: String, mode: String) -> Result<(), ApiError> {
     let files_changed = hunks.len();
 
     let storage = kit
-        .require::<StorageKey>()
-        .map_err(|e| wrap_error("Failed to resolve storage capability", e))?;
+        .require::<StorageModule>()
+        .map_err(|e| wrap_kit_error("Failed to resolve storage capability", e))?;
     let mut affected: Vec<AffectedSymbolOutput> = Vec::new();
     for (rel_path, ranges) in &hunks {
         let abs_path = repo_root.join(rel_path);
@@ -383,7 +383,7 @@ async fn detect_changes(path: String, mode: String) -> Result<(), ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, Kit, KitBootstrapConfig, StorageKey};
+    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -401,7 +401,7 @@ mod tests {
     /// Core logic mirroring the service function, taking explicit params
     /// (no DetectChangesArgs) so tests can exercise error paths without the
     /// `#[service_api]` macro wrapper.
-    fn detect_changes_core(kit: &Kit, path: &str, mode: &str) -> Result<(), CliError> {
+    fn detect_changes_core(kit: &AsyncKit<AsyncReady>, path: &str, mode: &str) -> Result<(), CliError> {
         let repo_root = Path::new(path);
         if !repo_root.is_dir() {
             return Err(CliError::InvalidInput(format!(
@@ -418,7 +418,7 @@ mod tests {
         let hunks = parse_unified_diff(&diff_output);
         let files_changed = hunks.len();
 
-        let storage = kit.require::<StorageKey>()?;
+        let storage = kit.require::<StorageModule>()?;
         let mut affected: Vec<AffectedSymbolOutput> = Vec::new();
         for (rel_path, ranges) in &hunks {
             let abs_path = repo_root.join(rel_path);
@@ -753,7 +753,7 @@ diff --git a/added.rs b/added.rs
     fn find_symbols_in_ranges_returns_overlapping_symbol_low_risk() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
 
         storage
             .save_nodes(
@@ -779,7 +779,7 @@ diff --git a/added.rs b/added.rs
     fn find_symbols_in_ranges_returns_medium_risk_with_1_to_3_incoming() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
 
         storage
             .save_nodes(
@@ -812,7 +812,7 @@ diff --git a/added.rs b/added.rs
     fn find_symbols_in_ranges_returns_high_risk_with_4_plus_incoming() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
 
         storage
             .save_nodes(
@@ -850,7 +850,7 @@ diff --git a/added.rs b/added.rs
     fn find_symbols_in_ranges_skips_non_overlapping_symbol() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
 
         storage
             .save_nodes(
@@ -876,7 +876,7 @@ diff --git a/added.rs b/added.rs
     fn find_symbols_in_ranges_empty_ranges_returns_empty() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
         storage
             .save_nodes(
                 &[sample_function("f_e", "/repo/src/e.rs", 1, 5)],

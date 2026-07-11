@@ -9,7 +9,7 @@ use std::io::BufRead;
 use serde::{Deserialize, Serialize};
 
 use crate::service::error::{CliError, to_api_error};
-use crate::kit::{Kit, StorageKey};
+use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(feature = "cli")]
 use crate::service::error::kit_not_initialized;
 #[cfg(feature = "cli")]
@@ -49,7 +49,7 @@ struct HookPayload {
 }
 
 /// Builds the hook decision from the raw stdin payload.
-fn build_decision(kit: &Kit, raw: &str) -> HookDecision {
+fn build_decision(kit: &AsyncKit<AsyncReady>, raw: &str) -> HookDecision {
     let payload: HookPayload = match serde_json::from_str(raw) {
         Ok(p) => p,
         Err(_) => {
@@ -85,8 +85,8 @@ fn build_decision(kit: &Kit, raw: &str) -> HookDecision {
 }
 
 /// Queries the database for a rename summary.
-fn summarize_rename(kit: &Kit) -> std::result::Result<HookSummary, CliError> {
-    let storage = kit.require::<StorageKey>()?;
+fn summarize_rename(kit: &AsyncKit<AsyncReady>) -> std::result::Result<HookSummary, CliError> {
+    let storage = kit.require::<StorageModule>()?;
     let rows = storage.query("MATCH (n:Function) RETURN count(n) AS total")?;
     let total = rows
         .first()
@@ -127,7 +127,7 @@ fn summarize_rename(kit: &Kit) -> std::result::Result<HookSummary, CliError> {
 
 /// Reads stdin, builds the hook decision, and prints JSON.
 #[cfg(any(feature = "cli", test))]
-fn run(kit: &Kit) -> Result<(), CliError> {
+fn run(kit: &AsyncKit<AsyncReady>) -> Result<(), CliError> {
     let stdin = std::io::stdin();
     let mut input = String::new();
     stdin.lock().read_line(&mut input)?;
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn build_decision_post_tool_use_rename_emits_summary() {
         let (_dir, kit) = fresh_kit();
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
         let node =
             crate::model::Node::builder(crate::model::NodeLabel::Function, "parse", "demo.parse")
                 .id("f1")
@@ -311,7 +311,7 @@ mod tests {
     #[test]
     fn summarize_rename_classifies_low_medium_high_risk() {
         let (_dir, kit) = fresh_kit();
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
 
         storage
             .save_nodes(
@@ -356,7 +356,7 @@ mod tests {
     #[test]
     fn build_decision_post_tool_use_rename_classifies_risk() {
         let (_dir, kit) = fresh_kit();
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
 
         storage
             .save_nodes(&[fn_node("f_risky")], crate::model::NodeLabel::Function)

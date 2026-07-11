@@ -31,6 +31,6 @@ pub mod pipeline_dag;
 pub use error::{IndexError, Result};
 pub use hash::{compute_content_hash, compute_file_hash};
 pub use incremental::{diff_files, FileDiff};
-pub use module::{IndexConfig, IndexerModule, IndexerModuleBuilder};
+pub use module::{IndexConfig, IndexerModule};
 pub use pipeline::{IndexFacade, IndexResult, Pipeline};
 pub use pipeline_dag::{Phase, PhaseError, Pipeline as DagPipeline, PipelineCtx};

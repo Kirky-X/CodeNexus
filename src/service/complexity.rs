@@ -13,7 +13,7 @@ use crate::analysis::complexity::{
 };
 use crate::service::error::{CliError, to_api_error};
 #[cfg(feature = "complexity")]
-use crate::kit::{Kit, StorageKey};
+use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cli", feature = "complexity"))]
 use crate::service::error::kit_not_initialized;
 #[cfg(all(feature = "cli", feature = "complexity"))]
@@ -180,7 +180,7 @@ fn compute_summary(entries: &[ComplexityEntry]) -> ComplexitySummary {
 #[cfg(feature = "complexity")]
 #[allow(clippy::too_many_arguments)]
 fn complexity_core(
-    kit: &Kit,
+    kit: &AsyncKit<AsyncReady>,
     project: &str,
     red_only: bool,
     sort_by_severity: bool,
@@ -208,7 +208,7 @@ fn complexity_core(
     space_complexity_yellow: &str,
     space_complexity_red: &str,
 ) -> Result<(), CliError> {
-    let storage = kit.require::<StorageKey>()?;
+    let storage = kit.require::<StorageModule>()?;
     let thresholds = build_thresholds(
         cyclomatic_green,
         cyclomatic_yellow,
@@ -330,7 +330,7 @@ async fn complexity(
 #[cfg(all(test, feature = "cli", feature = "complexity"))]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig, StorageKey};
+    use crate::kit::{build_kit, KitBootstrapConfig, StorageModule};
     use crate::storage::schema::escape_cypher_string;
     use tempfile::TempDir;
 
@@ -346,7 +346,7 @@ mod tests {
     }
 
     fn create_function_with_content(
-        kit: &Kit,
+        kit: &AsyncKit<AsyncReady>,
         id: &str,
         project: &str,
         name: &str,
@@ -356,7 +356,7 @@ mod tests {
         end_line: u32,
         content: &str,
     ) {
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
         let cypher = format!(
             "CREATE (:Function {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
              filePath: '{}', startLine: {}, endLine: {}, signature: '', returnType: '', \
@@ -413,7 +413,7 @@ mod tests {
             red_src,
         );
 
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
         let analyzer = ComplexityAnalyzer::new(&*storage);
         let entries = analyzer.analyze("demo").expect("analyze");
         let summary = compute_summary(&entries);
@@ -485,7 +485,7 @@ mod tests {
             red_src,
         );
 
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
         let analyzer = ComplexityAnalyzer::new(&*storage);
         let entries = analyzer.analyze("demo").expect("analyze");
         let summary = compute_summary(&entries);
@@ -568,7 +568,7 @@ mod tests {
         );
         assert!(result.is_ok(), "core should succeed: {:?}", result.err());
 
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
         let thresholds = build_thresholds(
             2, 5, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "", "", "", "", "",
         )

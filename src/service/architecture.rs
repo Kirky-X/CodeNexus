@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::analysis::architecture::{ArchitectureAnalyzer, ArchitectureOverview};
 use crate::service::error::{CliError, to_api_error};
-use crate::kit::{Kit, StorageKey};
+use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 use crate::service::error::kit_not_initialized;
 use crate::service::runtime::kit;
 
@@ -24,8 +24,8 @@ pub struct ArchitectureOutput {
 }
 
 /// Core logic — resolves storage, runs overview, prints JSON.
-fn architecture_core(kit: &Kit, project: &str) -> Result<(), CliError> {
-    let storage = kit.require::<StorageKey>()?;
+fn architecture_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CliError> {
+    let storage = kit.require::<StorageModule>()?;
     let analyzer = ArchitectureAnalyzer::new(&*storage);
     let overview: ArchitectureOverview = analyzer.overview(project)?;
     let output = ArchitectureOutput {
@@ -54,7 +54,7 @@ async fn architecture(project: String) -> Result<(), ApiError> {
 #[cfg(all(test, feature = "cli", feature = "analysis"))]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig, StorageKey};
+    use crate::kit::{build_kit, KitBootstrapConfig, StorageModule};
     use tempfile::TempDir;
 
     fn fresh_db_path() -> (TempDir, std::path::PathBuf) {
@@ -80,7 +80,7 @@ mod tests {
     fn core_returns_languages() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
         storage
             .execute("CREATE (:File {id: 'f1', project: 'demo', name: 'main.rs', filePath: '/src/main.rs', language: 'rust', hash: '', lineCount: 0});")
             .expect("create file");
@@ -92,7 +92,7 @@ mod tests {
     fn core_with_routes() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
         storage
             .execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});")
             .expect("create route");

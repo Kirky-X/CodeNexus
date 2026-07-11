@@ -171,21 +171,45 @@ fn boot_epoch() -> u64 {
     })
 }
 
-/// Wraps an error as an `ApiError::Internal` with a unique `error_id`.
+/// Returns a unique `error_id` string including the process boot timestamp
+/// so it remains unique across restarts.
+#[cfg(any(feature = "cli", feature = "mcp"))]
+fn next_error_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static ERROR_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let epoch = boot_epoch();
+    let seq = ERROR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("err-{epoch:012x}-{seq:04x}")
+}
+
+/// Wraps an error as an `ApiError::Internal` with a unique `error_id` and
+/// preserves the source chain via `ApiError::internal_with_source`.
 ///
-/// The `error_id` includes the process boot timestamp to remain unique
-/// across restarts.
+/// The caller must ensure `E: Send + Sync` — required by sdforge's
+/// `ApiError::internal_with_source`. For `KitError` (which is `Send` but
+/// not `Sync` due to trait-kit 0.2.4's `Box<dyn StdError + Send + 'static>`),
+/// use [`wrap_kit_error`] instead.
 #[cfg(any(feature = "cli", feature = "mcp"))]
 pub fn wrap_error<E: std::error::Error + Send + Sync + 'static>(
     message: impl Into<String>,
     source: E,
 ) -> ApiError {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static ERROR_COUNTER: AtomicU64 = AtomicU64::new(0);
-    let epoch = boot_epoch();
-    let seq = ERROR_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let error_id = format!("err-{epoch:012x}-{seq:04x}");
-    ApiError::internal_with_source(message, error_id, source)
+    ApiError::internal_with_source(message, next_error_id(), source)
+}
+
+/// Wraps a [`KitError`] as an `ApiError::Internal` with a unique `error_id`.
+///
+/// This is needed because trait-kit 0.2.4's `KitError` uses
+/// `Box<dyn StdError + Send + 'static>` (no `Sync` bound), making it
+/// `Send + !Sync`. `ApiError::internal_with_source` requires `Send + Sync`,
+/// so we convert the `KitError` to a string and use `ApiError::internal_error`
+/// (which has no `Sync` requirement). The error message is preserved but
+/// the source chain is not.
+#[cfg(any(feature = "cli", feature = "mcp"))]
+pub fn wrap_kit_error(message: impl Into<String>, source: KitError) -> ApiError {
+    let message = message.into();
+    let full_msg = format!("{message}: {source}");
+    ApiError::internal_error(full_msg, next_error_id())
 }
 
 /// Returns an `ApiError::Internal` for "Kit not initialized".
@@ -198,8 +222,16 @@ pub fn kit_not_initialized() -> ApiError {
 ///
 /// - `InvalidInput` → `ApiError::InvalidInput`
 /// - `NotFound` / `Trace(SymbolNotFound)` → `ApiError::NotFound`
-/// - All other variants → `ApiError::Internal` with `tag` as error_id,
-///   preserving the original `CliError` as the error source
+/// - All other variants → `ApiError::Internal` with `tag` as error_id and
+///   the error's string representation in the message.
+///
+/// # Why not `internal_with_source`
+///
+/// `CliError::Kit(#[from] KitError)` makes `CliError: !Sync` (trait-kit 0.2.4's
+/// `KitError` uses `Box<dyn StdError + Send + 'static>` without `Sync`).
+/// `ApiError::internal_with_source` requires `Send + Sync`, so we cannot pass
+/// `CliError` as a source. We convert to a string-based `ApiError::internal_error`
+/// instead, preserving the message but losing the source chain.
 #[cfg(any(feature = "cli", feature = "mcp"))]
 pub fn to_api_error(e: CliError, tag: &str) -> ApiError {
     match e {
@@ -218,7 +250,7 @@ pub fn to_api_error(e: CliError, tag: &str) -> ApiError {
         },
         other => {
             let message = format!("{other}");
-            ApiError::internal_with_source(message, tag.to_string(), other)
+            ApiError::internal_error(message, tag)
         }
     }
 }
@@ -346,20 +378,26 @@ mod tests {
     }
 
     #[test]
-    fn to_api_error_other_preserves_source() {
+    fn to_api_error_other_preserves_message() {
+        // trait-kit 0.2.4's KitError is Send + !Sync, so CliError (which
+        // contains KitError via #[from]) is also !Sync. ApiError::internal_with_source
+        // requires Send + Sync, so to_api_error uses internal_error (string-based)
+        // for the catch-all. The source chain is not preserved, but the message is.
         let err = CliError::Internal("boom".to_string());
         let api_err = to_api_error(err, "svc");
-        let source = std::error::Error::source(&api_err);
+        let msg = format!("{api_err}");
         assert!(
-            source.is_some(),
-            "source chain should be preserved for debugging"
+            msg.contains("boom"),
+            "message should be preserved, got: {msg}"
         );
     }
 
     #[test]
-    fn error_is_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<CliError>();
+    fn error_is_send() {
+        // CliError is Send but not Sync because trait-kit 0.2.4's KitError
+        // uses Box<dyn StdError + Send + 'static> (no Sync bound).
+        fn assert_send<T: Send>() {}
+        assert_send::<CliError>();
     }
 
     #[test]

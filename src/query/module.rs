@@ -2,40 +2,20 @@
 // SPDX-License-Identifier: MIT
 
 //! trait-kit module for the Query subsystem (T6/unified-architecture
-//! Phase 2, Task 2.9).
+//! Phase 2, Task 2.9; v0.3.3 AsyncKit migration).
 //!
-//! Implements [`Module`] / [`ModuleBuilder`] / [`WithConfig`] for
-//! [`QueryModule`], wiring the existing [`QueryFacade`] (Facade pattern) into
-//! the unified Kit registry as `Arc<dyn QueryEngine>` under
-//! [`QueryKey`](crate::kit::QueryKey).
-//!
-//! # Interior mutability
-//!
-//! [`QueryFacade`] owns a [`StorageConnection`](crate::storage::StorageConnection)
-//! which is intentionally `!Clone` and whose underlying [`lbug::Database`] is
-//! not guaranteed to be `Sync`. To satisfy the `Send + Sync` bound on
-//! [`dyn QueryEngine`], the concrete impl ([`QueryCapability`]) wraps the
-//! facade in a [`Mutex`] — every operation locks, delegates, and unlocks. This
-//! mirrors the [`StorageCapability`](crate::storage::module::StorageCapability)
-//! design (Task 2.4).
-//!
-//! # Dependency note
-//!
-//! Conceptually the Query engine depends on `StorageKey` (it reads the graph
-//! that the Indexer/Storage wrote). The concrete [`QueryFacade`] is
-//! self-contained, however: it opens its own [`StorageConnection`] from the
-//! supplied `db_path` and initializes the schema itself. Therefore
-//! `Requirements = NoRequirements` at the type level; the bootstrap
-//! (Task 2.13) enforces build ordering (Storage → ... → Query).
-//!
-//! [`Module`]: crate::kit::Module
-//! [`ModuleBuilder`]: crate::kit::ModuleBuilder
-//! [`WithConfig`]: crate::kit::WithConfig
+//! Implements [`ModuleMeta`] + [`AsyncAutoBuilder`] for [`QueryModule`],
+//! wiring the existing [`QueryFacade`] (Facade pattern) into the unified
+//! Kit registry as `Arc<dyn QueryEngine>` under
+//! [`QueryModule`](crate::kit::QueryModule).
 
+use std::any::TypeId;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use crate::kit::{Module, ModuleBuilder, NoRequirements, WithConfig};
+use crate::kit::{AsyncAutoBuilder, AsyncKit, ModuleMeta};
 use crate::model::NodeLabel;
 use crate::storage::StorageError;
 
@@ -50,11 +30,8 @@ use super::{QueryResult, SearchResult};
 
 /// Configuration for [`QueryModule`] (Task 2.9).
 ///
-/// Stored in Kit under [`QueryConfigKey`](crate::kit::QueryConfigKey) and
-/// injected into [`QueryModuleBuilder`] via [`WithConfig`]. The Query engine
-/// needs only the database path — the facade opens its own
-/// [`StorageConnection`](crate::storage::StorageConnection) and initializes
-/// the schema itself.
+/// Stored in Kit via `AsyncKit::set_config` and read in
+/// [`AsyncAutoBuilder::build`].
 #[derive(Debug, Clone)]
 pub struct QueryConfig {
     /// Filesystem path to the LadybugDB database directory.
@@ -74,82 +51,58 @@ impl QueryConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Module + Builder
+// Module (ModuleMeta + AsyncAutoBuilder)
 // ---------------------------------------------------------------------------
 
 /// trait-kit module tag for the Query subsystem (Task 2.9).
 ///
 /// Zero-sized marker — construction logic lives in
-/// [`QueryModuleBuilder::build`]. Register in Kit via:
+/// [`QueryModule::build_cap`]. Register in Kit via:
 ///
 /// ```ignore
-/// use codenexus::kit::{IntoKitModuleBuilder, Kit, QueryKey};
-/// use codenexus::query::{QueryConfig, QueryModuleBuilder};
+/// use codenexus::kit::{AsyncKit, QueryModule};
+/// use codenexus::query::QueryConfig;
 ///
-/// let kit = Kit::new();
-/// let query = QueryModuleBuilder::new()
-///     .config(QueryConfig::in_memory())
-///     .kit(&kit)
-///     .provide::<QueryKey>()?;
+/// let mut kit = AsyncKit::new();
+/// kit.set_config(QueryConfig::in_memory());
+/// kit.register::<QueryModule>()?;
+/// let kit = kit.build().await?;
+/// let query = kit.require::<QueryModule>()?;
 /// ```
 pub struct QueryModule;
 
-/// Builder for [`QueryModule`] (Task 2.9).
-///
-/// Construct with [`QueryModuleBuilder::new`], inject config with
-/// [`WithConfig::config`], then attach to a [`Kit`](crate::kit::Kit) via
-/// [`IntoKitModuleBuilder::kit`](crate::kit::IntoKitModuleBuilder::kit) and
-/// call [`provide`](crate::kit::KitModuleBuilder::provide).
-pub struct QueryModuleBuilder {
-    config: Option<QueryConfig>,
-}
-
-impl QueryModuleBuilder {
-    /// Creates a builder with no config set. Call `.config(...)` before
-    /// building.
-    #[must_use]
-    pub fn new() -> Self {
-        Self { config: None }
+impl ModuleMeta for QueryModule {
+    const NAME: &'static str = "query";
+    fn dependencies() -> &'static [(&'static str, TypeId)] {
+        &[]
     }
 }
 
-impl Default for QueryModuleBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Module for QueryModule {
-    type Config = QueryConfig;
-    type Requirements = NoRequirements;
+impl AsyncAutoBuilder for QueryModule {
     type Capability = Arc<dyn QueryEngine>;
     type Error = QueryError;
-    type Builder = QueryModuleBuilder;
-    const NAME: &'static str = "query";
+
+    fn build<'a>(
+        kit: &'a AsyncKit,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+        Box::pin(async move {
+            let config = kit
+                .config::<QueryConfig>()
+                .map_err(|e| QueryError::Storage(StorageError::InvalidData(e.to_string())))?;
+            Self::build_cap(&config)
+        })
+    }
 }
 
-impl ModuleBuilder<QueryModule> for QueryModuleBuilder {
-    fn build(self) -> Result<Arc<dyn QueryEngine>, QueryError> {
-        let config = self.config.ok_or_else(|| {
-            QueryError::Storage(StorageError::InvalidData(
-                "QueryModuleBuilder requires config — call .config(QueryConfig { db_path }) before build"
-                    .to_string(),
-            ))
-        })?;
-        // QueryFacade::new opens the StorageConnection AND initializes the
-        // schema, so the capability is ready for use immediately.
+impl QueryModule {
+    /// Constructs a QueryCapability from the given config.
+    ///
+    /// Shared between [`AsyncAutoBuilder::build`] and tests.
+    pub(crate) fn build_cap(config: &QueryConfig) -> Result<Arc<dyn QueryEngine>, QueryError> {
         let facade = QueryFacade::new(&config.db_path)?;
         Ok(Arc::new(QueryCapability {
             inner: Mutex::new(facade),
         }))
-    }
-}
-
-impl WithConfig<QueryModule> for QueryModuleBuilder {
-    fn config(self, config: QueryConfig) -> Self {
-        Self {
-            config: Some(config),
-        }
     }
 }
 
@@ -159,11 +112,6 @@ impl WithConfig<QueryModule> for QueryModuleBuilder {
 
 /// Concrete implementation of [`dyn QueryEngine`] wrapping a [`QueryFacade`]
 /// behind a [`Mutex`].
-///
-/// The mutex provides the interior mutability needed to satisfy `Send + Sync`
-/// regardless of `lbug::Database`'s thread-safety (see
-/// [`StorageCapability`](crate::storage::module::StorageCapability) for the
-/// same pattern).
 struct QueryCapability {
     inner: Mutex<QueryFacade>,
 }
@@ -224,16 +172,6 @@ impl QueryEngine for QueryCapability {
     }
 
     /// Hybrid BM25 + semantic search (Task 2.14 / AC-SEARCH-002).
-    ///
-    /// Locks the inner [`QueryFacade`], borrows its [`StorageConnection`] via
-    /// [`QueryFacade::connection`], and constructs a [`HybridStrategy`] with
-    /// the supplied `embed_client`. The strategy internally falls back to
-    /// BM25-only on Windows or when the `Embedding` table is missing, so this
-    /// method never fails due to vector unavailability — only on genuine
-    /// storage errors.
-    ///
-    /// [`HybridStrategy`]: crate::embed::HybridStrategy
-    /// [`StorageConnection`]: crate::storage::StorageConnection
     #[cfg(feature = "embed")]
     fn semantic_search(
         &self,
@@ -261,18 +199,15 @@ impl QueryEngine for QueryCapability {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::QueryKey;
+    use crate::kit::{AsyncKit, QueryModule};
 
     /// Builds a QueryModule capability backed by an in-memory database.
     fn build_query() -> Arc<dyn QueryEngine> {
-        QueryModuleBuilder::new()
-            .config(QueryConfig::in_memory())
-            .build()
-            .expect("QueryModuleBuilder::build")
+        QueryModule::build_cap(&QueryConfig::in_memory()).expect("QueryModule::build_cap")
     }
 
     /// Seeds the capability's database with one project and two functions via
-    /// direct Cypher CREATE (avoids depending on the Repository's CSV loader).
+    /// direct Cypher CREATE.
     fn seed_fixture(cap: &Arc<dyn QueryEngine>) {
         cap.cypher(
             "CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/', language: 'rust', fileCount: 2, indexedAt: 0});",
@@ -309,21 +244,8 @@ mod tests {
     }
 
     #[test]
-    fn builder_requires_config() {
-        let result = QueryModuleBuilder::new().build();
-        assert!(result.is_err());
-        let err = result.err().unwrap();
-        assert!(
-            err.to_string().contains("config"),
-            "missing-config error should mention config: {err}"
-        );
-    }
-
-    #[test]
     fn build_returns_send_sync_capability() {
         let cap = build_query();
-        // If this compiles, QueryCapability is Send + Sync (the dyn QueryEngine
-        // bound requires it). The Arc<dyn QueryEngine> is also Send + Sync.
         fn _assert_send_sync<T: Send + Sync>(_: &T) {}
         _assert_send_sync(&cap);
     }
@@ -399,31 +321,21 @@ mod tests {
             .all(|r| r.name.to_ascii_lowercase().contains("parse")));
     }
 
-    /// Verify the full Kit registration flow works end-to-end.
-    #[test]
-    fn kit_registration_flow() {
-        use crate::kit::{IntoKitModuleBuilder, Kit};
+    /// Verify the full AsyncKit registration flow works end-to-end.
+    #[tokio::test]
+    async fn kit_registration_flow() {
+        let mut kit = AsyncKit::new();
+        kit.set_config(QueryConfig::in_memory());
+        kit.register::<QueryModule>()
+            .expect("register::<QueryModule>");
+        let kit = kit.build().await.expect("build");
 
-        let kit = Kit::new();
-        let query = QueryModuleBuilder::new()
-            .config(QueryConfig::in_memory())
-            .kit(&kit)
-            .provide::<QueryKey>()
-            .expect("provide::<QueryKey>");
+        assert!(kit.contains::<QueryModule>());
 
-        assert!(kit.contains::<QueryKey>());
-
-        let required = kit.require::<QueryKey>().expect("require::<QueryKey>");
-        assert!(Arc::ptr_eq(&query, &required));
-    }
-
-    #[test]
-    fn builder_default_equals_new() {
-        // Default impl must produce the same state as new() (no config).
-        let default_builder = QueryModuleBuilder::default();
-        assert!(
-            default_builder.build().is_err(),
-            "default builder should require config"
-        );
+        let required = kit.require::<QueryModule>().expect("require::<QueryModule>");
+        let result = required
+            .cypher("MATCH (f:Function) RETURN f.name AS name;")
+            .expect("cypher");
+        assert_eq!(result.rows.len(), 0, "empty db → 0 functions");
     }
 }

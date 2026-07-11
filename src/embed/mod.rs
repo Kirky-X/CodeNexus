@@ -47,7 +47,7 @@ pub mod search;
 pub mod storage;
 
 pub use client::{EmbedClient, LocalEmbedClient, MockEmbedClient, OpenAIEmbedClient};
-pub use module::{EmbedConfig, EmbedModule, EmbedModuleBuilder};
+pub use module::{EmbedConfig, EmbedModule};
 pub use search::{
     Bm25Strategy, HybridStrategy, SearchStrategy, SearchStrategyType, SemanticStrategy,
 };

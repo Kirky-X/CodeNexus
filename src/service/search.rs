@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::kit::QueryKey;
+use crate::kit::QueryModule;
 use crate::query::SearchResult;
 use crate::service::error::{CliError, to_api_error};
 use crate::service::runtime::kit;
@@ -39,7 +39,7 @@ fn search_result_to_json(r: &SearchResult) -> Value {
 #[cfg(any(feature = "cli", feature = "mcp"))]
 async fn search_core(text: String, fulltext: bool, limit: u32) -> Result<SearchOutput, CliError> {
     let kit = kit().ok_or_else(CliError::kit_not_initialized)?;
-    let q = kit.require::<QueryKey>()?;
+    let q = kit.require::<QueryModule>()?;
     let results = if fulltext {
         q.fulltext_search(&text, None, limit as usize)
     } else {

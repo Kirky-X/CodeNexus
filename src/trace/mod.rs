@@ -22,7 +22,7 @@ pub use data_flow::DataFlowTracer;
 pub use error::{Result, TraceError};
 pub use facade::{TraceFacade, TraceType};
 pub use impact::ImpactAnalyzer;
-pub use module::{TraceConfig, TraceModule, TraceModuleBuilder};
+pub use module::{TraceConfig, TraceModule};
 pub use types::{
     ContextOutput, RelatedNodeOutput, SymbolNodeOutput, TraceEdge, TraceNode, TracePath,
     TraceResult,

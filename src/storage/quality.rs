@@ -338,7 +338,6 @@ fn escape_cypher(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::{ModuleBuilder, WithConfig};
     use crate::model::{EdgeType, Language};
     use std::sync::Arc;
 
@@ -346,10 +345,8 @@ mod tests {
     /// initialized. Mirrors the trait-kit bootstrap path so `QualityChecker`
     /// tests exercise the same `&dyn Storage` interface as `index_cmd::run`.
     fn fresh_storage() -> Arc<dyn Storage> {
-        crate::storage::StorageModuleBuilder::new()
-            .config(crate::storage::StorageConfig::in_memory())
-            .build()
-            .expect("StorageModuleBuilder::build")
+        crate::storage::StorageModule::build_cap(&crate::storage::StorageConfig::in_memory())
+            .expect("StorageModule::build_cap")
     }
 
     /// Builds a sample Project node.

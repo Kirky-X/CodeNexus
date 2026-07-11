@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::analysis::dead_code::{DeadCodeDetector, DeadCodeEntry};
 use crate::service::error::{CliError, to_api_error};
-use crate::kit::{Kit, StorageKey};
+use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 use crate::service::error::kit_not_initialized;
 use crate::service::runtime::kit;
 
@@ -27,8 +27,8 @@ pub struct DeadCodeOutput {
 ///
 /// `entry` is a comma-separated list of extra entry-point patterns;
 /// empty string means no extra patterns (defaults to `main`, `Main`, `__main__`).
-fn dead_code_core(kit: &Kit, project: &str, entry: &str) -> Result<(), CliError> {
-    let storage = kit.require::<StorageKey>()?;
+fn dead_code_core(kit: &AsyncKit<AsyncReady>, project: &str, entry: &str) -> Result<(), CliError> {
+    let storage = kit.require::<StorageModule>()?;
     let detector = DeadCodeDetector::new(&*storage);
     let mut entry_patterns: Vec<&str> = vec!["main", "Main", "__main__"];
     let extras: Vec<String> = if entry.is_empty() {
@@ -66,7 +66,7 @@ async fn dead_code(project: String, entry: String) -> Result<(), ApiError> {
 #[cfg(all(test, feature = "cli", feature = "analysis"))]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig, StorageKey};
+    use crate::kit::{build_kit, KitBootstrapConfig, StorageModule};
     use tempfile::TempDir;
 
     fn fresh_db_path() -> (TempDir, std::path::PathBuf) {
@@ -92,7 +92,7 @@ mod tests {
     fn core_returns_dead_function() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
         storage.execute("CREATE (:Function {id: 'f_foo', project: 'demo', name: 'foo', qualifiedName: 'demo.foo', filePath: '/src/lib.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create foo");
         let result = dead_code_core(&kit, "demo", "");
         assert!(result.is_ok(), "core should succeed: {:?}", result.err());
@@ -102,7 +102,7 @@ mod tests {
     fn core_with_custom_entry_patterns() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let storage = kit.require::<StorageKey>().expect("require_storage");
+        let storage = kit.require::<StorageModule>().expect("require_storage");
         storage.execute("CREATE (:Function {id: 'f_main', project: 'demo', name: 'main', qualifiedName: 'demo.main', filePath: '/src/main.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create main");
         let result = dead_code_core(&kit, "demo", "custom_entry,other_entry");
         assert!(result.is_ok(), "core should succeed: {:?}", result.err());

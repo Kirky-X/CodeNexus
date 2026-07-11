@@ -677,23 +677,25 @@ fn ffi_edge_exists_after_multilang_index() {
 ///
 /// Indexes `build_multilang_repo`, loads the trace graph around `c_bridge`,
 /// and asserts the graph contains at least one FfiCalls edge.
-#[test]
-fn ffi_trace_returns_cross_language_path() {
-    use codenexus::kit::{build_kit, IndexerKey, KitBootstrapConfig, TraceKey};
+#[tokio::test]
+async fn ffi_trace_returns_cross_language_path() {
+    use codenexus::kit::{build_kit, IndexerModule, KitBootstrapConfig, TraceModule};
     use codenexus::model::EdgeType;
 
     let tmp = TempDir::new().unwrap();
     build_multilang_repo(tmp.path());
     let db = fresh_db_path();
 
-    let kit = build_kit(&KitBootstrapConfig::new(db.clone())).expect("build_kit");
-    let indexer = kit.require::<IndexerKey>().expect("require_indexer");
+    let kit = build_kit(&KitBootstrapConfig::new(db.clone()))
+        .await
+        .expect("build_kit");
+    let indexer = kit.require::<IndexerModule>().expect("require_indexer");
     indexer
         .index(tmp.path(), "multilang", false)
         .expect("index");
 
     // Load the trace graph around "c_bridge" and verify FfiCalls edge exists.
-    let trace = kit.require::<TraceKey>().expect("require_trace");
+    let trace = kit.require::<TraceModule>().expect("require_trace");
     let graph = trace.load_graph("c_bridge", 3).expect("load_graph");
 
     assert!(
@@ -728,8 +730,8 @@ fn ffi_trace_returns_cross_language_path() {
 ///
 /// 本测试验证**错误链**（`build_kit` → `KitError::BuildFailed` →
 /// `StorageError::Corrupt` → `IndexError::DatabaseCorrupt` → `exit_code 4`）。
-#[test]
-fn corrupt_db_returns_exit_code_4() {
+#[tokio::test]
+async fn corrupt_db_returns_exit_code_4() {
     use codenexus::index::IndexError;
     use codenexus::kit::{build_kit, KitBootstrapConfig, KitError};
     use codenexus::storage::StorageError;
@@ -742,7 +744,7 @@ fn corrupt_db_returns_exit_code_4() {
     std::mem::forget(dir);
 
     let config = KitBootstrapConfig::new(lbug_file);
-    let result = build_kit(&config);
+    let result = build_kit(&config).await;
 
     let kit_err = result.expect_err("build_kit 应在损坏数据库上失败");
     // 导航错误链：KitError::BuildFailed { source } → source。
@@ -751,7 +753,7 @@ fn corrupt_db_returns_exit_code_4() {
         other => panic!("期望 KitError::BuildFailed，实际 {other:?}"),
     };
 
-    // Downcast source 到 StorageError。bootstrap 的 StorageModuleBuilder 调用
+    // Downcast source 到 StorageError。bootstrap 的 StorageModule 调用
     // StorageConnection::open，将损坏模式错误包装为 StorageError::Corrupt。
     let storage_err = build_failed_source
         .downcast_ref::<StorageError>()

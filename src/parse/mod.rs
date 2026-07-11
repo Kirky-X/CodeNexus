@@ -71,10 +71,7 @@ pub use go::GoExtractor;
 pub use helpers::dedupe_qn;
 #[cfg(feature = "lang-java")]
 pub use java::JavaExtractor;
-pub use module::{
-    ExtractorRegistryModule, ExtractorRegistryModuleBuilder, ParserFactoryModule,
-    ParserFactoryModuleBuilder,
-};
+pub use module::{ExtractorRegistryModule, ParserFactoryModule};
 pub use parallel::{
     parallel_parse, parallel_parse_ram_first, parse_single, ParallelParseResult, RamFirstSources,
 };

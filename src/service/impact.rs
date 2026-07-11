@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::kit::TraceKey;
+use crate::kit::TraceModule;
 use crate::service::error::{CliError, to_api_error};
 use crate::service::runtime::kit;
 
@@ -52,7 +52,7 @@ fn impact_output(symbol: String, depth: u32, graph: crate::model::Graph) -> Impa
 #[cfg(any(feature = "cli", feature = "mcp"))]
 async fn impact_core(symbol: String, depth: u32) -> Result<ImpactOutput, CliError> {
     let kit = kit().ok_or_else(CliError::kit_not_initialized)?;
-    let trace_engine = kit.require::<TraceKey>()?;
+    let trace_engine = kit.require::<TraceModule>()?;
     let graph = trace_engine.load_graph(&symbol, depth as usize)?;
     Ok(impact_output(symbol, depth, graph))
 }
