@@ -460,9 +460,12 @@ mod tests {
     }
 
     /// Builds a Kit backed by an on-disk database at `db`.
-    fn build_kit_for_db(db: &std::path::Path) -> Kit {
+    fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
         let config = KitBootstrapConfig::new(db.to_path_buf());
-        build_kit(&config).expect("build_kit")
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&config))
+            .expect("build_kit")
     }
 
     /// Returns the `dyn Storage` capability from `kit`.

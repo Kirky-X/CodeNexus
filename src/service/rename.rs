@@ -367,7 +367,7 @@ async fn rename(from: String, to: String, path: String, apply: bool) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig, StorageModule};
+    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
     use crate::model::{Edge, EdgeType, Node, NodeLabel};
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -378,9 +378,12 @@ mod tests {
         (dir, path)
     }
 
-    fn build_kit_for_db(db: &str) -> Kit {
+    fn build_kit_for_db(db: &str) -> AsyncKit<AsyncReady> {
         let config = KitBootstrapConfig::new(PathBuf::from(db));
-        build_kit(&config).expect("build_kit")
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&config))
+            .expect("build_kit")
     }
 
     /// Core logic mirroring the service function, taking explicit params

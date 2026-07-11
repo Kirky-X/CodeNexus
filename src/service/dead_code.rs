@@ -66,7 +66,7 @@ async fn dead_code(project: String, entry: String) -> Result<(), ApiError> {
 #[cfg(all(test, feature = "cli", feature = "analysis"))]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig, StorageModule};
+    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
     use tempfile::TempDir;
 
     fn fresh_db_path() -> (TempDir, std::path::PathBuf) {
@@ -75,9 +75,12 @@ mod tests {
         (dir, path)
     }
 
-    fn build_kit_for_db(db: &std::path::Path) -> Kit {
+    fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
         let config = KitBootstrapConfig::new(db.to_path_buf());
-        build_kit(&config).expect("build_kit")
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&config))
+            .expect("build_kit")
     }
 
     #[test]

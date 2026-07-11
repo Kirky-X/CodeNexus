@@ -294,7 +294,7 @@ mod tests {
     #[test]
     fn exit_code_kit_build_failed_with_storage_corrupt_is_4() {
         let kit_err = KitError::BuildFailed {
-            module: "storage",
+            context: "storage",
             source: Box::new(StorageError::Corrupt("invalid LadybugDB header".to_string())),
         };
         let err: CliError = kit_err.into();
@@ -385,11 +385,19 @@ mod tests {
         // for the catch-all. The source chain is not preserved, but the message is.
         let err = CliError::Internal("boom".to_string());
         let api_err = to_api_error(err, "svc");
-        let msg = format!("{api_err}");
-        assert!(
-            msg.contains("boom"),
-            "message should be preserved, got: {msg}"
-        );
+        // ApiError::Internal's Display returns the fixed string
+        // "Internal server error" (per sdforge 0.3.4), so we pattern-match
+        // on the variant to verify the message field is preserved.
+        match api_err {
+            ApiError::Internal { message, error_id, .. } => {
+                assert_eq!(error_id, "svc");
+                assert!(
+                    message.contains("boom"),
+                    "message should be preserved, got: {message}"
+                );
+            }
+            other => panic!("expected Internal, got {other:?}"),
+        }
     }
 
     #[test]

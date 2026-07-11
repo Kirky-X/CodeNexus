@@ -330,7 +330,7 @@ async fn complexity(
 #[cfg(all(test, feature = "cli", feature = "complexity"))]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig, StorageModule};
+    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
     use crate::storage::schema::escape_cypher_string;
     use tempfile::TempDir;
 
@@ -340,9 +340,12 @@ mod tests {
         (dir, path)
     }
 
-    fn build_kit_for_db(db: &std::path::Path) -> Kit {
+    fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
         let config = KitBootstrapConfig::new(db.to_path_buf());
-        build_kit(&config).expect("build_kit")
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&config))
+            .expect("build_kit")
     }
 
     fn create_function_with_content(

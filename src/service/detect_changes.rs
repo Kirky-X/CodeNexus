@@ -393,9 +393,12 @@ mod tests {
         (dir, path)
     }
 
-    fn build_kit_for_db(db: &str) -> Kit {
+    fn build_kit_for_db(db: &str) -> AsyncKit<AsyncReady> {
         let config = KitBootstrapConfig::new(PathBuf::from(db));
-        build_kit(&config).expect("build_kit")
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&config))
+            .expect("build_kit")
     }
 
     /// Core logic mirroring the service function, taking explicit params

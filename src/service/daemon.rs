@@ -55,7 +55,7 @@ async fn daemon(path: String, name: String) -> Result<(), ApiError> {
 #[cfg(all(test, feature = "daemon"))]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig};
+    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig};
     use std::fs;
     use std::path::PathBuf;
     use std::thread;
@@ -76,14 +76,20 @@ mod tests {
         (dir, path)
     }
 
-    fn build_kit_for_db(db: &str) -> Kit {
+    fn build_kit_for_db(db: &str) -> AsyncKit<AsyncReady> {
         let config = KitBootstrapConfig::new(PathBuf::from(db));
-        build_kit(&config).expect("build_kit")
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&config))
+            .expect("build_kit")
     }
 
-    fn build_kit_for_db_with_debounce(db: &str, debounce_ms: u64) -> Kit {
+    fn build_kit_for_db_with_debounce(db: &str, debounce_ms: u64) -> AsyncKit<AsyncReady> {
         let config = KitBootstrapConfig::new(PathBuf::from(db)).with_debounce_ms(debounce_ms);
-        build_kit(&config).expect("build_kit")
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&config))
+            .expect("build_kit")
     }
 
     // --- path validation ---

@@ -153,12 +153,15 @@ async fn hook() -> Result<(), ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig};
+    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig};
 
-    fn fresh_kit() -> (tempfile::TempDir, Kit) {
+    fn fresh_kit() -> (tempfile::TempDir, AsyncKit<AsyncReady>) {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("hook_test.lbug");
-        let kit = build_kit(&KitBootstrapConfig::new(path)).expect("build_kit");
+        let kit = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&KitBootstrapConfig::new(path)))
+            .expect("build_kit");
         (dir, kit)
     }
 
