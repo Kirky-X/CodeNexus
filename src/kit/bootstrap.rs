@@ -48,6 +48,8 @@ use crate::kit::{
 use crate::kit::DaemonModule;
 #[cfg(feature = "embed")]
 use crate::kit::EmbedModule;
+#[cfg(feature = "cache")]
+use crate::kit::CacheModule;
 
 // Configs are still imported from their owning modules.
 use crate::index::IndexConfig;
@@ -60,6 +62,9 @@ use crate::daemon::{DaemonConfig, DEFAULT_DEBOUNCE_MS};
 
 #[cfg(feature = "embed")]
 use crate::embed::EmbeddingConfig;
+
+#[cfg(feature = "cache")]
+use crate::cache::CacheConfig;
 
 // ---------------------------------------------------------------------------
 // Bootstrap config
@@ -233,6 +238,16 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
         kit.register::<EmbedModule>()?;
     }
 
+    // 10. Cache (feature-gated) — moka memory cache for content-addressed
+    // caching (T017, v0.3.3). Leaf module — no upstream dependencies.
+    // Registered last so all subsystems that might query the cache are
+    // already present.
+    #[cfg(feature = "cache")]
+    {
+        kit.set_config(CacheConfig::default());
+        kit.register::<CacheModule>()?;
+    }
+
     kit.build().await
 }
 
@@ -282,6 +297,11 @@ pub trait KitExt {
     /// Resolves the Embed capability (`Arc<dyn EmbedClient>`).
     #[cfg(feature = "embed")]
     fn require_embed(&self) -> Result<Arc<dyn crate::embed::client::EmbedClient>, KitError>;
+
+    /// Resolves the Cache capability (`Arc<dyn CacheStore>`).
+    /// Only available when the `cache` feature is enabled.
+    #[cfg(feature = "cache")]
+    fn require_cache(&self) -> Result<Arc<dyn crate::cache::CacheStore>, KitError>;
 }
 
 impl KitExt for AsyncKit<AsyncReady> {
@@ -325,6 +345,11 @@ impl KitExt for AsyncKit<AsyncReady> {
     #[cfg(feature = "embed")]
     fn require_embed(&self) -> Result<Arc<dyn crate::embed::client::EmbedClient>, KitError> {
         self.require::<EmbedModule>()
+    }
+
+    #[cfg(feature = "cache")]
+    fn require_cache(&self) -> Result<Arc<dyn crate::cache::CacheStore>, KitError> {
+        self.require::<CacheModule>()
     }
 }
 

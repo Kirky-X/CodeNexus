@@ -28,6 +28,8 @@ compile_error!(
      or a preset like `--features minimal`/`core`/`full`."
 );
 
+#[cfg(feature = "cache")]
+pub mod cache;
 #[cfg(feature = "daemon")]
 pub mod daemon;
 pub mod discover;

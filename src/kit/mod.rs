@@ -55,6 +55,8 @@ pub use crate::trace::TraceModule;
 pub use crate::daemon::DaemonModule;
 #[cfg(feature = "embed")]
 pub use crate::embed::EmbedModule;
+#[cfg(feature = "cache")]
+pub use crate::cache::CacheModule;
 
 // ---------------------------------------------------------------------------
 // Tests
