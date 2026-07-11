@@ -104,7 +104,7 @@ cli = ["dep:sdforge", "dep:tokio", "sdforge/cli"]
 # Phase 2). Exact-pinned to 0.1.0 per design.md §2.4. Hard dependency since
 # Task 2.16 — the in-tree shim was removed once all modules migrated to
 # `build_kit`.
-trait-kit = "=0.1.0"
+trait-kit = { version = "0.2.4", default-features = false, features = ["async"] }
 
 # Graph database (ADR-002)
 lbug = "0.17.1"

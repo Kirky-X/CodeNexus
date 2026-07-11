@@ -64,15 +64,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
-name = "arc-swap"
-version = "1.9.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
-dependencies = [
- "rustversion",
-]
-
-[[package]]
 name = "arrayvec"
 version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3332,11 +3323,10 @@ dependencies = [
 
 [[package]]
 name = "trait-kit"
-version = "0.1.0"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fbcd87854e622cc86b8934d8ef60c8e517000c5bf08ac1a475bba424bbb40ea"
+checksum = "85f45a98e72d128b1a619752a53d6d60fdc448d1567571688f477303e730953e"
 dependencies = [
- "arc-swap",
  "thiserror",
 ]
 
