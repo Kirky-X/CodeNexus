@@ -75,7 +75,14 @@ pub fn compute_file_hash_cached(
 }
 
 /// Builds the cache key for a file hash entry:
-/// `hash:file:{path}:{mtime_nanos}`.
+/// `hash:file:{path_hash}:{mtime_nanos}`.
+///
+/// The `path_hash` is the SHA-256 of the path's string representation. This
+/// prevents cache-key injection via `:` characters in file paths (Windows
+/// drive letters like `C:\...`, NTFS alternate data streams, or POSIX paths
+/// containing `:`), which would otherwise create ambiguity with the `:`
+/// separator in the key format and could lead to cache collisions or
+/// incorrect cache hits (CWE-20, CWE-346).
 ///
 /// Returns `None` if either `metadata` or `modified` fails — the caller
 /// should fall back to uncached computation in that case.
@@ -87,7 +94,8 @@ fn build_cache_key(path: &Path) -> Option<String> {
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_nanos();
-    Some(format!("hash:file:{}:{}", path.display(), nanos))
+    let path_hash = compute_content_hash(path.to_string_lossy().as_bytes());
+    Some(format!("hash:file:{path_hash}:{nanos}"))
 }
 
 /// Computes the SHA-256 hash of `content`, returning the digest as a
