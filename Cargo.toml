@@ -108,10 +108,10 @@ cache = ["dep:oxcache"]
 # Phase 2). Exact-pinned to 0.1.0 per design.md §2.4. Hard dependency since
 # Task 2.16 — the in-tree shim was removed once all modules migrated to
 # `build_kit`.
-trait-kit = { version = "0.2.4", default-features = false, features = ["async"] }
+trait-kit = { version = "0.2", default-features = false, features = ["async"] }
 
 # Graph database (ADR-002)
-lbug = "0.17.1"
+lbug = "0.17"
 
 # tree-sitter parsing (ADR-003). `tree-sitter` itself stays required (it is the
 # foundation for every grammar crate); the per-language grammar crates are
@@ -222,7 +222,7 @@ crossbeam-channel = { version = "0.5", optional = true }
 # transport) — declared directly so `src/service/` wrappers can use
 # `ServiceExt` and `transport::stdio()`. `tokio` provides the async
 # runtime needed by rmcp. All three gated by the `mcp` feature.
-sdforge = { version = "0.3.4", default-features = false, optional = true }
+sdforge = { version = "0.3", default-features = false, optional = true }
 rmcp = { version = "2.1", features = ["transport-io"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"], optional = true }
 
