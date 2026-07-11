@@ -60,7 +60,10 @@ impl<'a> CypherExecutor<'a> {
     ///
     /// When a [`CacheStore`] is attached (via
     /// [`new_with_cache`](Self::new_with_cache)), read queries are served from
-    /// cache on hit; misses execute the query and store the result.
+    /// cache on hit; misses execute the query and store the result. Write
+    /// queries (`CREATE`/`MERGE`/`DELETE`/`SET`/etc.) bypass the cache and
+    /// invalidate all cached entries before executing, ensuring subsequent
+    /// read queries return fresh data.
     ///
     /// # Errors
     ///
@@ -78,17 +81,24 @@ impl<'a> CypherExecutor<'a> {
             if Self::is_read_query(cypher) {
                 let key = format!("cypher:{}", compute_content_hash(cypher.as_bytes()));
                 if let Some(bytes) = cache.get(&key) {
+                    // Cache hit: parse UTF-8 result. Fall through on parse
+                    // failure (corrupt entry) to recompute and overwrite.
                     if let Ok(result) = serde_json::from_slice::<QueryResult>(&bytes) {
                         return Ok(result);
                     }
                 }
                 // Cache miss: execute, store, return.
                 let result = self.execute_internal(cypher)?;
+                // Serialization failure is non-fatal — skip caching and
+                // return the result. The next call will recompute.
                 if let Ok(bytes) = serde_json::to_vec(&result) {
                     cache.set(&key, bytes);
                 }
                 return Ok(result);
             }
+            // Write query: invalidate cache before executing to ensure
+            // subsequent read queries don't return stale results.
+            cache.invalidate_all();
         }
 
         self.execute_internal(cypher)
@@ -108,10 +118,41 @@ impl<'a> CypherExecutor<'a> {
     }
 
     /// Returns `true` if `cypher` is a read query (`MATCH`/`RETURN`/`WITH`).
+    ///
+    /// A query is considered read-only when:
+    /// 1. It begins with a read clause keyword (`MATCH`/`RETURN`/`WITH`), and
+    /// 2. It does not contain any write keyword (`CREATE`/`DELETE`/`MERGE`/
+    ///    `SET`/`REMOVE`/`DROP`/`FOREACH`/`CALL`) as a standalone word.
+    ///
+    /// The write-keyword scan is conservative: a query like
+    /// `MATCH (n) WHERE n.name = 'DELETE' RETURN n` is treated as a write
+    /// query (cache bypassed, performance loss) rather than risk caching a
+    /// write operation's result. This trades a small performance hit for
+    /// correctness — never cache a write.
     #[cfg(feature = "cache")]
     fn is_read_query(cypher: &str) -> bool {
         let upper = cypher.trim_start().to_uppercase();
-        upper.starts_with("MATCH") || upper.starts_with("RETURN") || upper.starts_with("WITH")
+        let starts_with_read = upper.starts_with("MATCH")
+            || upper.starts_with("RETURN")
+            || upper.starts_with("WITH");
+        if !starts_with_read {
+            return false;
+        }
+        // Reject queries containing write keywords as whole words.
+        // Pad with spaces so leading/trailing keywords are also bounded.
+        let padded = format!(" {} ", upper);
+        const WRITE_KEYWORDS: &[&str] = &[
+            " CREATE ",
+            " DELETE ",
+            " DETACH ",
+            " MERGE ",
+            " SET ",
+            " REMOVE ",
+            " DROP ",
+            " FOREACH ",
+            " CALL ",
+        ];
+        !WRITE_KEYWORDS.iter().any(|kw| padded.contains(kw))
     }
 }
 

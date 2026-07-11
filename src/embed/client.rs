@@ -550,12 +550,19 @@ fn serialize_vec(vec: &[f32]) -> Vec<u8> {
 
 /// Deserializes little-endian bytes back to `Vec<f32>`.
 ///
-/// Inverse of [`serialize_vec`]. Bytes not divisible by 4 are silently
-/// truncated by [`chunks_exact`].
+/// Inverse of [`serialize_vec`]. Returns an empty `Vec` when the byte
+/// length is not a multiple of 4 — this signals corrupt cache data so the
+/// caller can treat it as a cache miss and recompute.
+///
+/// Note: [`chunks_exact`] silently drops a trailing partial chunk; the
+/// explicit length check here makes that behavior visible and recoverable.
 ///
 /// [`chunks_exact`]: slice::chunks_exact
 #[cfg(feature = "cache")]
 fn deserialize_vec(bytes: &[u8]) -> Vec<f32> {
+    if bytes.len() % 4 != 0 {
+        return Vec::new();
+    }
     bytes
         .chunks_exact(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
@@ -600,7 +607,17 @@ impl EmbedClient for CachedEmbedClient {
             let hash = crate::index::hash::compute_content_hash(text.as_bytes());
             let key = format!("embed:{hash}");
             if let Some(bytes) = self.cache.get(&key) {
-                results.push(deserialize_vec(&bytes));
+                let vec = deserialize_vec(&bytes);
+                if vec.len() == EMBEDDING_DIM {
+                    results.push(vec);
+                } else {
+                    // Corrupt cache entry (wrong byte length or dim
+                    // mismatch): treat as miss and overwrite with a fresh
+                    // computation on the next phase.
+                    results.push(Vec::new());
+                    miss_indices.push(i);
+                    miss_texts.push(*text);
+                }
             } else {
                 results.push(Vec::new());
                 miss_indices.push(i);
