@@ -16,6 +16,9 @@ use tree_sitter::Parser;
 
 use crate::model::Language;
 
+#[cfg(feature = "cache")]
+use crate::cache::CacheStore;
+
 use super::error::Result;
 use super::parser_factory::ParserFactory;
 
@@ -77,6 +80,46 @@ impl ParserPool {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.parsers.borrow().is_empty()
+    }
+
+    /// Parses source code and returns the AST as an S-expression string,
+    /// with optional caching.
+    ///
+    /// When `cache` is `Some`, checks the cache first using the key
+    /// `ast:{lang}:{hash}` (where `hash` is the first 16 hex chars of
+    /// SHA-256(source)). On a hit, returns the cached S-expression directly,
+    /// skipping tree-sitter. On a miss, parses via tree-sitter, serializes
+    /// the root node to S-expression, stores it in cache, and returns it.
+    #[cfg(feature = "cache")]
+    pub fn parse_source_cached(
+        &self,
+        source: &str,
+        lang: Language,
+        cache: Option<&dyn CacheStore>,
+    ) -> Result<String> {
+        let full_hash = crate::index::hash::compute_content_hash(source.as_bytes());
+        let key = format!("ast:{lang}:{}", &full_hash[..16]);
+
+        if let Some(c) = cache {
+            if let Some(bytes) = c.get(&key) {
+                if let Ok(s) = String::from_utf8(bytes) {
+                    return Ok(s);
+                }
+            }
+        }
+
+        let mut parser = self.get_parser(lang)?;
+        let tree = parser.parse(source, None).ok_or_else(|| {
+            super::error::ParseError::ParseFailed {
+                file_path: "<inline source>".to_string(),
+            }
+        })?;
+        let sexp = tree.root_node().to_sexp();
+
+        if let Some(c) = cache {
+            c.set(&key, sexp.as_bytes().to_vec());
+        }
+        Ok(sexp)
     }
 }
 
@@ -342,5 +385,162 @@ mod tests {
             assert!(tree.is_some());
         }
         assert_eq!(pool.len(), 1, "parser should be reused, not recreated");
+    }
+
+    #[cfg(feature = "cache")]
+    mod cached_tests {
+        use super::*;
+        use crate::cache::CacheStore;
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+
+        /// HashMap-backed `CacheStore` for testing. `Mutex` provides the
+        /// interior mutability required by `set(&self, ...)` while satisfying
+        /// `Send + Sync`.
+        struct MockCache {
+            inner: Mutex<HashMap<String, Vec<u8>>>,
+        }
+
+        impl MockCache {
+            fn new() -> Self {
+                Self {
+                    inner: Mutex::new(HashMap::new()),
+                }
+            }
+
+            fn keys(&self) -> Vec<String> {
+                self.inner.lock().unwrap().keys().cloned().collect()
+            }
+
+            fn len(&self) -> usize {
+                self.inner.lock().unwrap().len()
+            }
+
+            fn insert(&self, key: &str, val: Vec<u8>) {
+                self.inner.lock().unwrap().insert(key.to_string(), val);
+            }
+        }
+
+        impl CacheStore for MockCache {
+            fn get(&self, key: &str) -> Option<Vec<u8>> {
+                self.inner.lock().unwrap().get(key).cloned()
+            }
+
+            fn set(&self, key: &str, val: Vec<u8>) {
+                self.inner.lock().unwrap().insert(key.to_string(), val);
+            }
+
+            fn invalidate_all(&self) {
+                self.inner.lock().unwrap().clear();
+            }
+        }
+
+        #[test]
+        fn cached_parse_miss_then_hit_returns_same_sexp() {
+            let pool = ParserPool::new();
+            let cache = MockCache::new();
+            let source = "fn main() {}";
+
+            // First call: cache miss → parse + store.
+            let sexp1 = pool
+                .parse_source_cached(source, Language::Rust, Some(&cache))
+                .expect("first parse should succeed");
+            assert!(!sexp1.is_empty(), "sexp should be non-empty");
+            assert_eq!(cache.len(), 1, "cache should have one entry after miss");
+
+            // Second call: cache hit → return cached value without re-parsing.
+            let sexp2 = pool
+                .parse_source_cached(source, Language::Rust, Some(&cache))
+                .expect("second parse should succeed");
+            assert_eq!(sexp1, sexp2, "cache hit should return identical sexp");
+            assert_eq!(cache.len(), 1, "cache should still have one entry");
+        }
+
+        #[test]
+        fn cached_parse_with_none_cache_works() {
+            let pool = ParserPool::new();
+            // No cache → behaves like a normal parse, returns valid sexp.
+            let sexp = pool
+                .parse_source_cached("fn main() {}", Language::Rust, None)
+                .expect("parse without cache should succeed");
+            assert!(!sexp.is_empty(), "sexp should be non-empty");
+            assert!(
+                sexp.starts_with('('),
+                "sexp should start with '(': {sexp}"
+            );
+        }
+
+        #[test]
+        fn cached_parse_different_content_different_key() {
+            let pool = ParserPool::new();
+            let cache = MockCache::new();
+
+            pool.parse_source_cached("fn a() {}", Language::Rust, Some(&cache))
+                .expect("parse a should succeed");
+            pool.parse_source_cached("fn b() {}", Language::Rust, Some(&cache))
+                .expect("parse b should succeed");
+
+            let keys = cache.keys();
+            assert_eq!(
+                keys.len(),
+                2,
+                "two distinct sources should produce two cache keys"
+            );
+            assert_ne!(keys[0], keys[1], "keys should differ");
+            assert!(
+                keys.iter().all(|k| k.starts_with("ast:rust:")),
+                "all keys should follow ast:rust:<hash> format"
+            );
+        }
+
+        #[test]
+        fn cached_parse_same_content_skips_treesitter() {
+            let pool = ParserPool::new();
+            let cache = MockCache::new();
+            let source = "fn main() {}";
+
+            // Pre-populate cache with a sentinel value for the key that
+            // `parse_source_cached` would compute. If tree-sitter were
+            // invoked, it would return the real sexp (starting with '(');
+            // a cache hit returns the sentinel verbatim, proving the
+            // parser was skipped.
+            let full_hash = crate::index::hash::compute_content_hash(source.as_bytes());
+            let key = format!("ast:rust:{}", &full_hash[..16]);
+            let sentinel = b"SENTINEL_NOT_A_SEXP".to_vec();
+            cache.insert(&key, sentinel.clone());
+
+            let sexp = pool
+                .parse_source_cached(source, Language::Rust, Some(&cache))
+                .expect("cached parse should succeed");
+
+            assert_eq!(
+                sexp.as_bytes(),
+                sentinel,
+                "cache hit should return sentinel, proving tree-sitter was skipped"
+            );
+            assert_eq!(
+                cache.len(),
+                1,
+                "cache should not gain a new entry on hit"
+            );
+        }
+
+        #[test]
+        fn cached_parse_returns_valid_sexp() {
+            let pool = ParserPool::new();
+            let cache = MockCache::new();
+
+            let sexp = pool
+                .parse_source_cached("fn main() {}", Language::Rust, Some(&cache))
+                .expect("parse should succeed");
+
+            assert!(!sexp.is_empty(), "sexp should be non-empty");
+            assert!(
+                sexp.starts_with('('),
+                "valid tree-sitter sexp starts with '(': {sexp}"
+            );
+            // Verify the cached value matches the returned sexp.
+            assert_eq!(cache.len(), 1, "result should be cached on miss");
+        }
     }
 }
