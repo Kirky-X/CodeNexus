@@ -115,7 +115,7 @@ impl AsyncAutoBuilder for EmbedModule {
 
     fn build<'a>(
         kit: &'a AsyncKit,
-    ) -> Pin<Box<dyn Future<Output = Result<Self::Capability, Self::Error>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<Self::Capability, Self::Error>> + Send + 'a>> {
         Box::pin(async move {
             let config = kit
                 .config::<EmbeddingConfig>()
