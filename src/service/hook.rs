@@ -8,7 +8,7 @@ use std::io::BufRead;
 
 use serde::{Deserialize, Serialize};
 
-use crate::service::error::{CliError, to_api_error};
+use crate::service::error::{CodeNexusError, to_api_error};
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(feature = "cli")]
 use crate::service::error::kit_not_initialized;
@@ -85,7 +85,7 @@ fn build_decision(kit: &AsyncKit<AsyncReady>, raw: &str) -> HookDecision {
 }
 
 /// Queries the database for a rename summary.
-fn summarize_rename(kit: &AsyncKit<AsyncReady>) -> std::result::Result<HookSummary, CliError> {
+fn summarize_rename(kit: &AsyncKit<AsyncReady>) -> std::result::Result<HookSummary, CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
     let rows = storage.query("MATCH (n:Function) RETURN count(n) AS total")?;
     let total = rows
@@ -127,7 +127,7 @@ fn summarize_rename(kit: &AsyncKit<AsyncReady>) -> std::result::Result<HookSumma
 
 /// Reads stdin, builds the hook decision, and prints JSON.
 #[cfg(any(feature = "cli", test))]
-fn run(kit: &AsyncKit<AsyncReady>) -> Result<(), CliError> {
+fn run(kit: &AsyncKit<AsyncReady>) -> Result<(), CodeNexusError> {
     let stdin = std::io::stdin();
     let mut input = String::new();
     stdin.lock().read_line(&mut input)?;

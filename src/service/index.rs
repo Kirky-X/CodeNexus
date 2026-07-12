@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::index::IndexResult;
 use crate::kit::{AsyncKit, AsyncReady, IndexerModule};
-use crate::service::error::{CliError, kit_not_initialized, to_api_error, wrap_error, wrap_kit_error};
+use crate::service::error::{CodeNexusError, kit_not_initialized, to_api_error, wrap_error, wrap_kit_error};
 use crate::service::runtime::kit;
 use crate::storage::{QualityChecker, Repository, StorageConfig};
 
@@ -148,8 +148,7 @@ fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Resul
 /// Core index pipeline: indexer + DQ checks + CHECKPOINT + optional LSP.
 ///
 /// Separated from the `#[service_api]` function for reuse by `import.rs`
-/// reindex logic. Returns the [`IndexOutput`] without printing it — the
-/// caller decides whether to serialize to stdout.
+/// reindex logic.
 #[cfg(feature = "cli")]
 #[allow(clippy::result_large_err)]
 pub(crate) fn index_core(
@@ -160,7 +159,7 @@ pub(crate) fn index_core(
     force: bool,
     lsp: bool,
     ram_first: bool,
-) -> Result<IndexOutput, CliError> {
+) -> Result<IndexOutput, CodeNexusError> {
     let path_ref = Path::new(path);
     let indexer = kit.require::<IndexerModule>()?;
     let result = if ram_first {
@@ -204,11 +203,9 @@ pub(crate) fn index_core(
 
 /// CLI wrapper — prints result to stdout as JSON.
 //
-// The Kit is stored in a static `OnceLock` (see `runtime::kit`), so it will
-// never be dropped during the process lifetime. This is functionally
-// equivalent to the `std::mem::forget(kit)` call in `main.rs` — the stale
-// Storage/Query/Trace connections opened at boot never get a chance to
-// checkpoint over the indexer's writes.
+// The Kit is stored in a static `OnceLock` (see `runtime::kit`), so it is
+// never dropped — the stale boot-time connections never checkpoint over the
+// indexer's writes (same effect as `std::mem::forget(kit)` in `main.rs`).
 #[cfg(feature = "cli")]
 #[service_api(
     name = "index",
@@ -240,7 +237,7 @@ async fn index(
     let output = index_core(&kit, &db_path, &path, &name, force, lsp, ram_first)
         .map_err(|e| to_api_error(e, "index_error"))?;
     let json = serde_json::to_string(&output)
-        .map_err(|e| to_api_error(CliError::from(e), "index_error"))?;
+        .map_err(|e| to_api_error(CodeNexusError::from(e), "index_error"))?;
     println!("{json}");
     Ok(())
 }

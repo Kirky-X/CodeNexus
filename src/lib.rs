@@ -44,6 +44,8 @@ pub mod service;
 pub mod storage;
 pub mod trace;
 
+pub use service::error::CodeNexusError;
+
 #[cfg(feature = "analysis")]
 pub mod analysis;
 

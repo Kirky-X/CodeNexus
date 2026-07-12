@@ -7,7 +7,7 @@ use serde::Serialize;
 
 #[cfg(feature = "api-review")]
 use crate::analysis::api_review::{ApiReviewer, RouteEntry};
-use crate::service::error::{CliError, to_api_error};
+use crate::service::error::{CodeNexusError, to_api_error};
 #[cfg(feature = "api-review")]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cli", feature = "api-review"))]
@@ -30,7 +30,7 @@ pub struct RouteMapOutput {
 
 /// Core logic — resolves storage, runs route_map, prints JSON.
 #[cfg(feature = "api-review")]
-fn route_map_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CliError> {
+fn route_map_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
     let reviewer = ApiReviewer::new(&*storage);
     let route_map: Vec<RouteEntry> = reviewer.route_map(project)?;

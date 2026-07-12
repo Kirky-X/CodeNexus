@@ -11,7 +11,7 @@ use crate::analysis::complexity::{
     ComplexityAnalyzer, ComplexityEntry, ComplexityThresholds, Severity, SpaceComplexity,
     TimeComplexity,
 };
-use crate::service::error::{CliError, to_api_error};
+use crate::service::error::{CodeNexusError, to_api_error};
 #[cfg(feature = "complexity")]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cli", feature = "complexity"))]
@@ -73,7 +73,7 @@ fn build_thresholds(
     time_complexity_red: &str,
     space_complexity_yellow: &str,
     space_complexity_red: &str,
-) -> Result<ComplexityThresholds, CliError> {
+) -> Result<ComplexityThresholds, CodeNexusError> {
     let mut t = ComplexityThresholds::default();
     if cyclomatic_green > 0 {
         t.cyclomatic.0 = cyclomatic_green;
@@ -131,23 +131,23 @@ fn build_thresholds(
     }
     if !time_complexity_green.is_empty() {
         t.time_complexity.0 =
-            TimeComplexity::from_str(time_complexity_green).map_err(CliError::InvalidInput)?;
+            TimeComplexity::from_str(time_complexity_green).map_err(CodeNexusError::InvalidInput)?;
     }
     if !time_complexity_yellow.is_empty() {
         t.time_complexity.1 =
-            TimeComplexity::from_str(time_complexity_yellow).map_err(CliError::InvalidInput)?;
+            TimeComplexity::from_str(time_complexity_yellow).map_err(CodeNexusError::InvalidInput)?;
     }
     if !time_complexity_red.is_empty() {
         t.time_complexity.2 =
-            TimeComplexity::from_str(time_complexity_red).map_err(CliError::InvalidInput)?;
+            TimeComplexity::from_str(time_complexity_red).map_err(CodeNexusError::InvalidInput)?;
     }
     if !space_complexity_yellow.is_empty() {
         t.space_complexity.0 =
-            SpaceComplexity::from_str(space_complexity_yellow).map_err(CliError::InvalidInput)?;
+            SpaceComplexity::from_str(space_complexity_yellow).map_err(CodeNexusError::InvalidInput)?;
     }
     if !space_complexity_red.is_empty() {
         t.space_complexity.1 =
-            SpaceComplexity::from_str(space_complexity_red).map_err(CliError::InvalidInput)?;
+            SpaceComplexity::from_str(space_complexity_red).map_err(CodeNexusError::InvalidInput)?;
     }
     Ok(t)
 }
@@ -207,7 +207,7 @@ fn complexity_core(
     time_complexity_red: &str,
     space_complexity_yellow: &str,
     space_complexity_red: &str,
-) -> Result<(), CliError> {
+) -> Result<(), CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
     let thresholds = build_thresholds(
         cyclomatic_green,

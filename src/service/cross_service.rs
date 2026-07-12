@@ -51,7 +51,7 @@ async fn cross_service(project: String) -> Result<(), ApiError> {
 mod tests {
     use super::*;
     use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig};
-    use crate::service::error::CliError;
+    use crate::service::error::CodeNexusError;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -69,7 +69,7 @@ mod tests {
             .expect("build_kit")
     }
 
-    fn cross_service_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CliError> {
+    fn cross_service_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CodeNexusError> {
         let storage = kit.require::<StorageModule>()?;
         let linker = CrossServiceLinker::new(&*storage, project);
         let links = linker.link()?;

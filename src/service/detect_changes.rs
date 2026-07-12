@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use crate::kit::StorageModule;
 use crate::model::NodeLabel;
-use crate::service::error::{CliError, kit_not_initialized, to_api_error, wrap_error, wrap_kit_error};
+use crate::service::error::{CodeNexusError, kit_not_initialized, to_api_error, wrap_error, wrap_kit_error};
 use crate::service::runtime::kit;
 use crate::storage::schema::node_table_columns;
 
@@ -53,7 +53,7 @@ impl DiffMode {
 }
 
 /// Runs `git -C {root} diff ...` and returns the raw stdout as a string.
-fn run_git_diff(root: &Path, mode: DiffMode) -> Result<String, CliError> {
+fn run_git_diff(root: &Path, mode: DiffMode) -> Result<String, CodeNexusError> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -61,16 +61,16 @@ fn run_git_diff(root: &Path, mode: DiffMode) -> Result<String, CliError> {
         .output()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                CliError::InvalidInput(format!(
+                CodeNexusError::InvalidInput(format!(
                     "git binary not found on PATH — detect-changes requires git. Error: {e}"
                 ))
             } else {
-                CliError::Io(e)
+                CodeNexusError::Io(e)
             }
         })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(CliError::InvalidInput(format!(
+        return Err(CodeNexusError::InvalidInput(format!(
             "git diff failed (status {}): {}",
             output.status,
             stderr.trim()
@@ -142,7 +142,7 @@ fn find_symbols_in_ranges(
     rel_path: &str,
     abs_path: &Path,
     ranges: &[(u32, u32)],
-) -> Result<Vec<AffectedSymbolOutput>, CliError> {
+) -> Result<Vec<AffectedSymbolOutput>, CodeNexusError> {
     struct MatchingSymbol {
         id: String,
         name: String,
@@ -404,15 +404,15 @@ mod tests {
     /// Core logic mirroring the service function, taking explicit params
     /// (no DetectChangesArgs) so tests can exercise error paths without the
     /// `#[service_api]` macro wrapper.
-    fn detect_changes_core(kit: &AsyncKit<AsyncReady>, path: &str, mode: &str) -> Result<(), CliError> {
+    fn detect_changes_core(kit: &AsyncKit<AsyncReady>, path: &str, mode: &str) -> Result<(), CodeNexusError> {
         let repo_root = Path::new(path);
         if !repo_root.is_dir() {
-            return Err(CliError::InvalidInput(format!(
+            return Err(CodeNexusError::InvalidInput(format!(
                 "path is not a directory: {path}"
             )));
         }
         let diff_mode = DiffMode::from_cli_str(mode).ok_or_else(|| {
-            CliError::InvalidInput(format!(
+            CodeNexusError::InvalidInput(format!(
                 "unknown diff mode '{mode}' (expected unstaged/staged/head)"
             ))
         })?;
@@ -904,8 +904,8 @@ diff --git a/added.rs b/added.rs
         let tmp = TempDir::new().unwrap();
         let result = run_git_diff(tmp.path(), DiffMode::Unstaged);
         match result {
-            Err(CliError::InvalidInput(_)) => {}
-            Err(CliError::Io(_)) => {}
+            Err(CodeNexusError::InvalidInput(_)) => {}
+            Err(CodeNexusError::Io(_)) => {}
             Ok(s) if s.is_empty() => {}
             other => panic!("expected error or empty, got {other:?}"),
         }

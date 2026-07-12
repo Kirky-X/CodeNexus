@@ -2,11 +2,6 @@
 name = "codenexus"
 version = "0.3.2"
 edition = "2021"
-# MSRV 1.85 (Rust 2024 edition, released 2025-02-20). Unlocks future major
-# upgrades of clap 4.6 / reqwest 0.13 / uuid 1.23 (all MSRV 1.85) without
-# forcing them now. Previously 1.81 was the floor, but 1.85 is the natural
-# baseline for Rust 2024 edition projects and is widely available in current
-# distro toolchains (rustc 1.85+ shipped in Debian 13, Ubuntu 25.04, Fedora 42).
 rust-version = "1.85"
 description = "A queryable code knowledge graph tool built on LadybugDB and tree-sitter"
 authors = ["Kirky.X"]
@@ -26,31 +21,15 @@ path = "src/lib.rs"
 name = "codenexus"
 path = "src/main.rs"
 
-# Verification harness for cross-validating CodeNexus parsing against gitnexus
-# (openspec/changes/cross-validate-parsing-with-gitnexus). Lives under
-# tools/verification/ and reuses the codenexus lib for LadybugDB access.
 [[bin]]
 name = "codenexus-verify"
 path = "tools/verification/src/main.rs"
 
-# ============================================================================
-# FEATURES
-# ============================================================================
-# Tiered language presets: `minimal` < `core` < `full`. Each `lang-*` feature
-# pulls in its tree-sitter grammar crate. Use `--no-default-features --features
-# minimal` (or core / a la carte `lang-*` combos) to build a leaner binary
-# (T8/unified-architecture Phase 1). `default = ["full"]` preserves the
-# historical all-languages + daemon behavior.
 [features]
 default = ["full"]
-# Tiered presets — `trait-kit` is a hard dependency (unified Kit registry,
-# T6/unified-architecture Phase 2), so every build wires modules through the
-# real crate. The in-tree `src/kit/shim.rs` fallback was removed in Task 2.16
-# once all modules migrated to `build_kit`.
 minimal = ["lang-rust"]
 core = ["lang-c", "lang-rust", "lang-python"]
 full = ["core", "lang-fortran", "lang-typescript", "lang-go", "lang-java", "lang-cpp", "daemon", "analysis", "complexity", "api-review", "community", "cross-service", "lsp", "cli", "mcp", "cache"]
-# Per-language features (each pulls its tree-sitter grammar)
 lang-c = ["dep:tree-sitter-c"]
 lang-rust = ["dep:tree-sitter-rust"]
 lang-fortran = ["dep:tree-sitter-fortran"]
@@ -59,63 +38,21 @@ lang-typescript = ["dep:tree-sitter-typescript"]
 lang-go = ["dep:tree-sitter-go"]
 lang-java = ["dep:tree-sitter-java"]
 lang-cpp = ["dep:tree-sitter-cpp"]
-# Function features
-# H10/D7: `embed` bundles `ort` (ONNX Runtime) + `tokenizers` for local
-# offline inference via arctic-embed-xs, alongside the existing remote HTTP
-# path (reqwest). `EmbeddingConfig.endpoint: Option<String>` — `None` → local
-# ort inference, `Some` → OpenAI-compatible HTTP API.
 embed = ["dep:reqwest", "dep:ort", "dep:tokenizers", "dep:ndarray"]
 daemon = ["dep:notify", "dep:notify-debouncer-full"]
-# Analysis features (T005/T006): dead-code detection + architecture overview.
-# Pure Cypher aggregation over the existing graph — no new dependencies.
 analysis = []
-# API review toolkit (T008): route-map / shape-check / api-impact / tool-map.
-# Pure Cypher queries over the existing graph — no new dependencies.
 api-review = ["analysis"]
-# Community detection (T009): Louvain modularity optimization on the CALLS
-# graph. Depends on `analysis` for the `&dyn Storage` capability pattern and
-# `petgraph` for the in-memory weighted undirected graph.
 community = ["analysis", "dep:petgraph"]
-# Cross-service link detection (T010): matches HTTP route patterns against
-# caller string literals and persists `CROSS_SERVICE_CALLS` edges. Pure
-# Cypher + deterministic string matching — no new dependencies.
 cross-service = ["analysis"]
-# AST complexity analysis (T001-T004, v0.2.1): cyclomatic/cognitive/nesting/
-# function-length metrics with severity classification. Pure computation — no
-# new dependencies.
 complexity = ["analysis"]
-# LSP semantic type resolution (T007, v0.2.0): subprocess integration with
-# external LSP servers (rust-analyzer for Rust) to provide IDE-grade
-# definition/hover/type-definition queries. v0.2.0 ships the Rust framework;
-# other languages are deferred to v0.3.0+.
 lsp = ["dep:lsp-types", "dep:lsp-server", "dep:crossbeam-channel"]
-# MCP server (v0.3.2): sdforge provides `#[service_api]` macro for
-# declarative tool definition + `mcp::build()` for server construction.
-# `rmcp` is the official Rust MCP SDK (used by sdforge for transport) —
-# declared directly so `src/service/` wrappers can use `ServiceExt` and
-# `transport::stdio()`. `tokio` provides the async runtime needed by rmcp.
 mcp = ["dep:sdforge", "dep:rmcp", "dep:tokio", "sdforge/mcp"]
-# CLI (v0.3.2): sdforge `#[service_api(cli=true)]` + CliBuilder for unified
-# CLI/MCP command dispatch. `tokio` provides the async runtime.
 cli = ["dep:sdforge", "dep:tokio", "sdforge/cli"]
-# Multi-level cache (oxcache moka backend). Feature-gated to keep minimal
-# builds lean. `minimal` oxcache feature pulls in only the L1 moka memory
-# cache (no Redis dependency).
 cache = ["dep:oxcache"]
 
 [dependencies]
-# Unified module interface & Kit capability registry (T6/unified-architecture
-# Phase 2). Exact-pinned to 0.1.0 per design.md §2.4. Hard dependency since
-# Task 2.16 — the in-tree shim was removed once all modules migrated to
-# `build_kit`.
 trait-kit = { version = "0.2", default-features = false, features = ["async"] }
-
-# Graph database (ADR-002)
 lbug = "0.17"
-
-# tree-sitter parsing (ADR-003). `tree-sitter` itself stays required (it is the
-# foundation for every grammar crate); the per-language grammar crates are
-# optional and gated by the `lang-*` features above.
 tree-sitter = "0.26"
 tree-sitter-c = { version = "0.24", optional = true }
 tree-sitter-rust = { version = "0.24", optional = true }
@@ -125,131 +62,47 @@ tree-sitter-typescript = { version = "0.23", optional = true }
 tree-sitter-go = { version = "0.23", optional = true }
 tree-sitter-java = { version = "0.23", optional = true }
 tree-sitter-cpp = { version = "0.23", optional = true }
-
-# Parallel parsing (ADR-010)
 rayon = "1"
-
-# File discovery (ADR-012)
 ignore = "0.4"
-
-# File watching (ADR-013) — feature-gated behind `daemon` (T8).
-# NOTE: notify-debouncer-full 0.8 is only available as a release candidate that
-# requires notify 7. We pin 0.7, the latest stable release compatible with
-# notify 6 (the version required by ADR-013).
 notify = { version = "6", optional = true }
 notify-debouncer-full = { version = "0.7", optional = true }
-
-# CLI
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context", "suggestions"] }
-
-# Hashing (ADR-009)
 sha2 = "0.10"
-
-# HTTP for embed feature (ADR-004) — feature-gated behind `embed`.
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"], optional = true }
-
-# Local ONNX inference for embed feature (H10/D7) — feature-gated behind `embed`.
-# `ort` provides ONNX Runtime bindings; `download-binaries` (default) fetches
-# prebuilt ONNX Runtime shared libraries at build time. `tokenizers` provides
-# HuggingFace BERT tokenization. `ndarray` is required to construct input
-# tensors and extract output tensors.
 ort = { version = "2.0.0-rc.12", optional = true }
 tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"], optional = true }
 ndarray = { version = "0.17", optional = true }
-
-# Error handling
 thiserror = "2"
 anyhow = "1"
-
-# PEG parser for Cypher subset validation (H12)
 pest = "2.7"
 pest_derive = "2.7"
-
-# Logging
 tracing = "0.1"
-# tracing-subscriber 0.3 (was 0.1, EOL ~2020). API surface used here —
-# `FmtSubscriber::builder()`, `with_env_filter`, `with_target`, `with_writer`,
-# `finish`, `init`, `EnvFilter::from_default_env`, `fmt::MakeWriter` — is
-# stable across 0.1 → 0.3. 0.3 is the long-term maintained line and is what
-# `tracing` 0.1 itself recommends in its README. `default-features = false`
-# keeps the binary lean (only `env-filter` + `fmt` pulled in).
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
-
-# Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-# CSV generation (ADR-014)
 csv = "1"
-
-# Temporary files for CSV bulk-loading (ADR-014)
 tempfile = "3"
-
-# LZ4 compression for RAM-first indexing (H15/D9). Pure-Rust implementation
-# (no native deps) used to compress source file bytes in memory before
-# parsing, bounding peak memory for the `--ram-first` path.
 lz4_flex = "0.11"
-
-# NOTE: H7 export/import uses the system `zstd` CLI binary via
-# `std::process::Command` rather than the `zstd` Rust crate, because lbug
-# statically links its own copy of zstd and the `zstd` crate's `zstd_sys`
-# brings duplicate `ZSTD_*` symbols that fail at link time (mold duplicate
-# symbol errors). Shelling out keeps the artifact format identical to
-# `zstd`-compressed bytes (design.md D6) while avoiding the symbol conflict.
-
-# UUIDv7 for IDs
 uuid = { version = "1", features = ["v7"] }
-
-# Graph data structure for community detection (T009): Louvain runs on a
-# `petgraph::graph::UnGraph<String, f64>`. Default features disabled to keep
-# the binary lean (we only need the core graph + stable graph APIs).
 petgraph = { version = "0.6", default-features = false, optional = true }
-
-# LSP semantic type resolution (T007, v0.2.0): `lsp-types` provides the LSP
-# protocol type definitions (SymbolKind, Location, Hover, etc.); `lsp-server`
-# provides the JSON-RPC connection over stdio for managing the rust-analyzer
-# subprocess. `crossbeam-channel` is required to construct an
-# `lsp_server::Connection` around the subprocess's stdin/stdout (lsp-server's
-# built-in `stdio()` reads *this* process's stdio, which is wrong for client
-# mode). All optional, gated by the `lsp` feature.
 lsp-types = { version = "0.95", optional = true }
 lsp-server = { version = "0.7", optional = true }
 crossbeam-channel = { version = "0.5", optional = true }
-
-# MCP server via sdforge (v0.3.2): sdforge provides `#[service_api]`
-# macro for declarative tool definition + `mcp::build()` for server
-# construction. `rmcp` is the official Rust MCP SDK (used by sdforge for
-# transport) — declared directly so `src/service/` wrappers can use
-# `ServiceExt` and `transport::stdio()`. `tokio` provides the async
-# runtime needed by rmcp. All three gated by the `mcp` feature.
 sdforge = { version = "0.3", default-features = false, optional = true }
 rmcp = { version = "2.1", features = ["transport-io"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"], optional = true }
-
-# Multi-level cache (v0.3.3, T016): oxcache provides L1 moka memory cache
-# via the `minimal` feature (no Redis dependency). Feature-gated behind
-# `cache` to keep minimal builds lean. The `default-features = false`
-# disables oxcache's default `full` feature set (Rule 6: no default
-# features). `minimal` = memory + tracing + metrics + serialization + chrono.
 oxcache = { version = "0.3", default-features = false, features = ["minimal"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 time = { version = "0.3", features = ["macros"] }
 rust_decimal = "1.37"
-# Cross-platform RSS sampling for memory benchmarks (design.md Decision 2).
 sysinfo = "0.30"
-# Async test runtime for AsyncKit-related tests (trait-kit 0.2.4 migration).
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [build-dependencies]
-# Used by build.rs to locate OpenSSL via pkg-config (required by lbug's C++
-# httplib::SSLClient extension).
 pkg-config = "0.3"
 
-# ============================================================================
-# BENCHMARKS
-# ============================================================================
 [[bench]]
 name = "index_bench"
 harness = false
@@ -275,10 +128,6 @@ name = "daemon_bench"
 harness = false
 required-features = ["daemon"]
 
-# ============================================================================
-# COMPILER OPTIMIZATIONS (T8: reduce binary size)
-# ============================================================================
-# Release profile: maximum performance + smallest binary.
 [profile.release]
 opt-level = 3
 lto = "fat"
@@ -287,41 +136,26 @@ panic = "abort"
 strip = true
 overflow-checks = false
 
-# Optimize all dependencies equally in release.
 [profile.release.package."*"]
 opt-level = 3
 
-# Dev profile: fast compilation for development iteration.
 [profile.dev]
 opt-level = 0
 debug = true
 incremental = true
 
-# Test profile.
 [profile.test]
 opt-level = 0
 debug = true
 
-# Benchmark profile: use release optimizations.
 [profile.bench]
 inherits = "release"
 
-# ============================================================================
-# LINTS
-# ============================================================================
 [lints.rust]
 unexpected_cfgs = "allow"
 
-# ============================================================================
-# LOCAL DEVELOPMENT ONLY — UNCOMMENT FOR LOCAL REGRESSION TESTING
-# ============================================================================
-# When testing local changes to trait-kit/sdforge, uncomment the
-# [patch.crates-io] section below and adjust the paths to point to your
-# local checkout. This redirects the crates.io dependencies to local path
-# dependencies so changes in those projects are picked up immediately.
-#
-# MUST be commented out before publishing to crates.io (Rule: no local
-# path dependencies in released artifacts).
+# Local development: uncomment to use path deps for trait-kit/sdforge.
+# MUST be commented out before publishing to crates.io.
 # [patch.crates-io]
 # trait-kit = { path = "../trait-kit" }
 # sdforge = { path = "../sdforge" }

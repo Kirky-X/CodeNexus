@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::service::error::{CliError, to_api_error};
+use crate::service::error::{CodeNexusError, to_api_error};
 #[cfg(feature = "cli")]
 use crate::service::error::wrap_error;
 
@@ -114,7 +114,7 @@ pub fn run_with_home(
     force: bool,
     stdin: &mut dyn BufRead,
     stdout: &mut dyn Write,
-) -> Result<SetupOutput, CliError> {
+) -> Result<SetupOutput, CodeNexusError> {
     let agents = Agent::detect_all(home);
     if agents.is_empty() {
         writeln!(
@@ -130,7 +130,7 @@ pub fn run_with_home(
             stdout,
             "Install one of the supported agents and re-run `codenexus setup`."
         )?;
-        return Err(CliError::InvalidInput(
+        return Err(CodeNexusError::InvalidInput(
             "no supported agents detected".into(),
         ));
     }
@@ -191,10 +191,10 @@ pub fn run_with_home(
 
 /// Reads HOME, detects agents, writes MCP config. Testable entry point.
 #[cfg(any(feature = "cli", test))]
-fn run(force: bool) -> Result<SetupOutput, CliError> {
+fn run(force: bool) -> Result<SetupOutput, CodeNexusError> {
     let home = std::env::var("HOME")
         .map(PathBuf::from)
-        .map_err(|_| CliError::InvalidInput("HOME environment variable is not set".into()))?;
+        .map_err(|_| CodeNexusError::InvalidInput("HOME environment variable is not set".into()))?;
     run_with_home(
         &home,
         force,
@@ -209,7 +209,7 @@ fn write_agent_config(
     force: bool,
     stdin: &mut dyn BufRead,
     stdout: &mut dyn Write,
-) -> Result<WriteOutcome, CliError> {
+) -> Result<WriteOutcome, CodeNexusError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -226,7 +226,7 @@ fn write_agent_config(
 
     let raw = std::fs::read_to_string(path)?;
     let mut root: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
-        CliError::InvalidInput(format!(
+        CodeNexusError::InvalidInput(format!(
             "failed to parse existing config at {path}: {e}",
             path = path.display()
         ))
@@ -235,7 +235,7 @@ fn write_agent_config(
     let servers = root
         .as_object_mut()
         .ok_or_else(|| {
-            CliError::InvalidInput(format!(
+            CodeNexusError::InvalidInput(format!(
                 "config at {path} is not a JSON object",
                 path = path.display()
             ))
@@ -244,7 +244,7 @@ fn write_agent_config(
         .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
         .as_object_mut()
         .ok_or_else(|| {
-            CliError::InvalidInput(format!(
+            CodeNexusError::InvalidInput(format!(
                 "config at {path} has a non-object `mcpServers`",
                 path = path.display()
             ))
@@ -280,7 +280,7 @@ fn write_agent_config(
     }
 }
 
-fn write_pretty(path: &Path, value: &serde_json::Value) -> Result<(), CliError> {
+fn write_pretty(path: &Path, value: &serde_json::Value) -> Result<(), CodeNexusError> {
     let json = serde_json::to_string_pretty(value)?;
     std::fs::write(path, json + "\n")?;
     Ok(())
@@ -513,7 +513,7 @@ mod tests {
         let mut stdout = Vec::new();
         let err = run_with_home(home.path(), false, &mut stdin, &mut stdout)
             .expect_err("no agents should error");
-        assert!(matches!(err, CliError::InvalidInput(_)));
+        assert!(matches!(err, CodeNexusError::InvalidInput(_)));
         assert!(!stdout.is_empty(), "should print guidance");
     }
 
@@ -605,7 +605,7 @@ mod tests {
         let mut stdout = Vec::new();
         let err = write_agent_config(&path, &entry, false, &mut stdin, &mut stdout)
             .expect_err("invalid JSON should error");
-        assert!(matches!(err, CliError::InvalidInput(_)));
+        assert!(matches!(err, CodeNexusError::InvalidInput(_)));
     }
 
     #[test]
@@ -618,7 +618,7 @@ mod tests {
         let mut stdout = Vec::new();
         let err = write_agent_config(&path, &entry, false, &mut stdin, &mut stdout)
             .expect_err("non-object root should error");
-        assert!(matches!(err, CliError::InvalidInput(_)));
+        assert!(matches!(err, CodeNexusError::InvalidInput(_)));
     }
 
     #[test]
@@ -631,7 +631,7 @@ mod tests {
         let mut stdout = Vec::new();
         let err = write_agent_config(&path, &entry, false, &mut stdin, &mut stdout)
             .expect_err("non-object mcpServers should error");
-        assert!(matches!(err, CliError::InvalidInput(_)));
+        assert!(matches!(err, CodeNexusError::InvalidInput(_)));
     }
 
     // --- codenexus_mcp_entry ---
@@ -694,6 +694,6 @@ mod tests {
             Some(h) => std::env::set_var("HOME", h),
             None => std::env::remove_var("HOME"),
         }
-        assert!(matches!(err, CliError::InvalidInput(_)));
+        assert!(matches!(err, CodeNexusError::InvalidInput(_)));
     }
 }

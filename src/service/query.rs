@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::kit::QueryModule;
 use crate::query::{validate_cypher_subset, QueryResult};
-use crate::service::error::{CliError, to_api_error};
+use crate::service::error::{CodeNexusError, to_api_error};
 use crate::service::runtime::kit;
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
@@ -16,9 +16,7 @@ use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
 use sdforge::service_api;
 
-/// JSON-serializable query result.
-///
-/// Mirrors [`QueryResult`] but with `Serialize`/`Deserialize` for transport.
+/// Mirrors [`QueryResult`] with `Serialize`/`Deserialize` for JSON transport.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct QueryOutput {
     pub columns: Vec<String>,
@@ -37,8 +35,8 @@ fn query_output(r: QueryResult) -> QueryOutput {
 
 /// Core query logic — shared by CLI and MCP wrappers.
 #[cfg(any(feature = "cli", feature = "mcp"))]
-async fn query_core(cypher: String) -> Result<QueryOutput, CliError> {
-    let kit = kit().ok_or_else(CliError::kit_not_initialized)?;
+async fn query_core(cypher: String) -> Result<QueryOutput, CodeNexusError> {
+    let kit = kit().ok_or_else(CodeNexusError::kit_not_initialized)?;
     let q = kit.require::<QueryModule>()?;
     validate_cypher_subset(&cypher)?;
     let result = q.cypher(&cypher)?;
@@ -58,7 +56,7 @@ async fn query(cypher: String) -> Result<(), ApiError> {
         .await
         .map_err(|e| to_api_error(e, "query_error"))?;
     let json = serde_json::to_string(&result)
-        .map_err(|e| to_api_error(CliError::from(e), "query_error"))?;
+        .map_err(|e| to_api_error(CodeNexusError::from(e), "query_error"))?;
     println!("{json}");
     Ok(())
 }

@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::service::error::{CliError, to_api_error};
+use crate::service::error::{CodeNexusError, to_api_error};
 use crate::kit::{AsyncKit, AsyncReady, StorageModule, TraceModule};
 use crate::model::{Graph, Node, NodeId};
 use crate::service::error::{kit_not_initialized, wrap_error, wrap_kit_error};
@@ -114,7 +114,7 @@ fn scan_text_edits(
     old_name: &str,
     new_name: &str,
     files: &[PathBuf],
-) -> Result<Vec<TextEdit>, CliError> {
+) -> Result<Vec<TextEdit>, CodeNexusError> {
     let mut edits: Vec<TextEdit> = Vec::new();
     for file in files {
         let content = match std::fs::read_to_string(file) {
@@ -175,7 +175,7 @@ fn file_to_rel_string(file: &Path, root: &Path) -> String {
 }
 
 /// Applies the graph edit via Cypher `SET`.
-fn apply_graph_edit(kit: &AsyncKit<AsyncReady>, edit: &GraphEdit) -> Result<(), CliError> {
+fn apply_graph_edit(kit: &AsyncKit<AsyncReady>, edit: &GraphEdit) -> Result<(), CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
     let table = escape_identifier(edit.label.as_str());
     let cypher = format!(
@@ -189,7 +189,7 @@ fn apply_graph_edit(kit: &AsyncKit<AsyncReady>, edit: &GraphEdit) -> Result<(), 
 }
 
 /// Applies text edits by writing the replaced content to each file.
-fn apply_text_edits(edits: &[TextEdit]) -> Result<(), CliError> {
+fn apply_text_edits(edits: &[TextEdit]) -> Result<(), CodeNexusError> {
     let mut by_file: std::collections::HashMap<String, Vec<&TextEdit>> =
         std::collections::HashMap::new();
     for e in edits {
@@ -395,14 +395,14 @@ mod tests {
         to: &str,
         path: Option<&str>,
         apply: bool,
-    ) -> Result<(), CliError> {
+    ) -> Result<(), CodeNexusError> {
         if !is_valid_identifier(to) {
-            return Err(CliError::InvalidInput(format!(
+            return Err(CodeNexusError::InvalidInput(format!(
                 "new name '{to}' is not a valid identifier (allowed: [A-Za-z_][A-Za-z0-9_]*)"
             )));
         }
         if apply && path.is_none() {
-            return Err(CliError::InvalidInput(
+            return Err(CodeNexusError::InvalidInput(
                 "--apply requires --path (text edits need a codebase root to scan)".into(),
             ));
         }

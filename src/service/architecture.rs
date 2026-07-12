@@ -6,7 +6,7 @@
 use serde::Serialize;
 
 use crate::analysis::architecture::{ArchitectureAnalyzer, ArchitectureOverview};
-use crate::service::error::{CliError, to_api_error};
+use crate::service::error::{CodeNexusError, to_api_error};
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 use crate::service::error::kit_not_initialized;
 use crate::service::runtime::kit;
@@ -24,7 +24,7 @@ pub struct ArchitectureOutput {
 }
 
 /// Core logic — resolves storage, runs overview, prints JSON.
-fn architecture_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CliError> {
+fn architecture_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
     let analyzer = ArchitectureAnalyzer::new(&*storage);
     let overview: ArchitectureOverview = analyzer.overview(project)?;

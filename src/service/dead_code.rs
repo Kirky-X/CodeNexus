@@ -6,7 +6,7 @@
 use serde::Serialize;
 
 use crate::analysis::dead_code::{DeadCodeDetector, DeadCodeEntry};
-use crate::service::error::{CliError, to_api_error};
+use crate::service::error::{CodeNexusError, to_api_error};
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 use crate::service::error::kit_not_initialized;
 use crate::service::runtime::kit;
@@ -27,7 +27,7 @@ pub struct DeadCodeOutput {
 ///
 /// `entry` is a comma-separated list of extra entry-point patterns;
 /// empty string means no extra patterns (defaults to `main`, `Main`, `__main__`).
-fn dead_code_core(kit: &AsyncKit<AsyncReady>, project: &str, entry: &str) -> Result<(), CliError> {
+fn dead_code_core(kit: &AsyncKit<AsyncReady>, project: &str, entry: &str) -> Result<(), CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
     let detector = DeadCodeDetector::new(&*storage);
     let mut entry_patterns: Vec<&str> = vec!["main", "Main", "__main__"];

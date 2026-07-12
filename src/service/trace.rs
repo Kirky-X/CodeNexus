@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::kit::TraceModule;
-use crate::service::error::{CliError, to_api_error};
+use crate::service::error::{CodeNexusError, to_api_error};
 use crate::service::runtime::kit;
 use crate::trace::{TraceEdge, TraceNode, TraceResult, TraceType};
 
@@ -73,10 +73,10 @@ async fn trace_core(
     symbol: String,
     trace_type: String,
     depth: u32,
-) -> Result<TraceOutput, CliError> {
-    let kit = kit().ok_or_else(CliError::kit_not_initialized)?;
+) -> Result<TraceOutput, CodeNexusError> {
+    let kit = kit().ok_or_else(CodeNexusError::kit_not_initialized)?;
     let tt = TraceType::from_cli_str(&trace_type).ok_or_else(|| {
-        CliError::InvalidInput(format!(
+        CodeNexusError::InvalidInput(format!(
             "invalid trace_type: {trace_type} (expected calls|dataflow|all)"
         ))
     })?;
@@ -98,7 +98,7 @@ async fn trace(symbol: String, trace_type: String, depth: u32) -> Result<(), Api
         .await
         .map_err(|e| to_api_error(e, "trace_error"))?;
     let json = serde_json::to_string(&result)
-        .map_err(|e| to_api_error(CliError::from(e), "trace_error"))?;
+        .map_err(|e| to_api_error(CodeNexusError::from(e), "trace_error"))?;
     println!("{json}");
     Ok(())
 }

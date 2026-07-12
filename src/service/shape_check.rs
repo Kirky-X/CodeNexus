@@ -7,7 +7,7 @@ use serde::Serialize;
 
 #[cfg(feature = "api-review")]
 use crate::analysis::api_review::{ApiReviewer, ShapeViolation};
-use crate::service::error::{CliError, to_api_error};
+use crate::service::error::{CodeNexusError, to_api_error};
 #[cfg(feature = "api-review")]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cli", feature = "api-review"))]
@@ -30,7 +30,7 @@ pub struct ShapeCheckOutput {
 
 /// Core logic — resolves storage, runs shape_check, prints JSON.
 #[cfg(feature = "api-review")]
-fn shape_check_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CliError> {
+fn shape_check_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
     let reviewer = ApiReviewer::new(&*storage);
     let violations: Vec<ShapeViolation> = reviewer.shape_check(project)?;

@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use tracing_subscriber::EnvFilter;
 
-use codenexus::service::error::CliError;
+use codenexus::service::error::CodeNexusError;
 use codenexus::kit::{build_kit, KitBootstrapConfig};
 use codenexus::service::init_kit;
 
@@ -128,7 +128,7 @@ fn run_cli() {
     };
 
     if let Err(api_error) = runtime.block_on((handler.handler)(args)) {
-        let cli_error = CliError::from(api_error);
+        let cli_error = CodeNexusError::from(api_error);
         eprintln!("Error: {cli_error}");
         std::process::exit(cli_error.exit_code());
     }

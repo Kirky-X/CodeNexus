@@ -7,7 +7,7 @@ use serde::Serialize;
 
 #[cfg(feature = "api-review")]
 use crate::analysis::api_review::{ApiReviewer, ImpactEntry};
-use crate::service::error::{CliError, to_api_error};
+use crate::service::error::{CodeNexusError, to_api_error};
 #[cfg(feature = "api-review")]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cli", feature = "api-review"))]
@@ -31,7 +31,7 @@ pub struct ApiImpactOutput {
 
 /// Core logic — resolves storage, runs api_impact, prints JSON.
 #[cfg(feature = "api-review")]
-fn api_impact_core(kit: &AsyncKit<AsyncReady>, project: &str, endpoint: &str) -> Result<(), CliError> {
+fn api_impact_core(kit: &AsyncKit<AsyncReady>, project: &str, endpoint: &str) -> Result<(), CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
     let reviewer = ApiReviewer::new(&*storage);
     let impact: Vec<ImpactEntry> = reviewer.api_impact(project, endpoint)?;

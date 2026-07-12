@@ -69,7 +69,7 @@ async fn community(project: String, resolution: String) -> Result<(), ApiError> 
 mod tests {
     use super::*;
     use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig};
-    use crate::service::error::CliError;
+    use crate::service::error::CodeNexusError;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -87,7 +87,7 @@ mod tests {
             .expect("build_kit")
     }
 
-    fn community_core(kit: &AsyncKit<AsyncReady>, project: &str, resolution: Option<f64>) -> Result<(), CliError> {
+    fn community_core(kit: &AsyncKit<AsyncReady>, project: &str, resolution: Option<f64>) -> Result<(), CodeNexusError> {
         let storage = kit.require::<StorageModule>()?;
         let mut detector = CommunityDetector::new(&*storage, project);
         if let Some(res) = resolution {

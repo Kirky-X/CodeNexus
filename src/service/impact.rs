@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::kit::TraceModule;
-use crate::service::error::{CliError, to_api_error};
+use crate::service::error::{CodeNexusError, to_api_error};
 use crate::service::runtime::kit;
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
@@ -50,8 +50,8 @@ fn impact_output(symbol: String, depth: u32, graph: crate::model::Graph) -> Impa
 
 /// Core impact logic — shared by CLI and MCP wrappers.
 #[cfg(any(feature = "cli", feature = "mcp"))]
-async fn impact_core(symbol: String, depth: u32) -> Result<ImpactOutput, CliError> {
-    let kit = kit().ok_or_else(CliError::kit_not_initialized)?;
+async fn impact_core(symbol: String, depth: u32) -> Result<ImpactOutput, CodeNexusError> {
+    let kit = kit().ok_or_else(CodeNexusError::kit_not_initialized)?;
     let trace_engine = kit.require::<TraceModule>()?;
     let graph = trace_engine.load_graph(&symbol, depth as usize)?;
     Ok(impact_output(symbol, depth, graph))
@@ -70,7 +70,7 @@ async fn impact(symbol: String, depth: u32) -> Result<(), ApiError> {
         .await
         .map_err(|e| to_api_error(e, "impact_error"))?;
     let json = serde_json::to_string(&result)
-        .map_err(|e| to_api_error(CliError::from(e), "impact_error"))?;
+        .map_err(|e| to_api_error(CodeNexusError::from(e), "impact_error"))?;
     println!("{json}");
     Ok(())
 }

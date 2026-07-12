@@ -12,7 +12,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::service::error::{CliError, to_api_error};
+use crate::service::error::{CodeNexusError, to_api_error};
 
 #[cfg(feature = "lsp")]
 use crate::lsp::{LspError, LspProvider, RustAnalyzerClient};
@@ -39,21 +39,21 @@ fn resolve_file(file: &str, workspace: &Path) -> std::path::PathBuf {
     }
 }
 
-/// Maps an `LspError` to a `CliError::InvalidInput`.
+/// Maps an `LspError` to a `CodeNexusError::InvalidInput`.
 #[cfg(feature = "lsp")]
-fn lsp_error_to_cli(e: LspError) -> CliError {
-    CliError::InvalidInput(e.to_string())
+fn lsp_error_to_cli(e: LspError) -> CodeNexusError {
+    CodeNexusError::InvalidInput(e.to_string())
 }
 
-/// Starts the LSP client and maps `ServerStart` failure to a `CliError`.
+/// Starts the LSP client and maps `ServerStart` failure to a `CodeNexusError`.
 #[cfg(feature = "lsp")]
-fn start_or_err(client: &RustAnalyzerClient, workspace: &Path) -> Result<(), CliError> {
+fn start_or_err(client: &RustAnalyzerClient, workspace: &Path) -> Result<(), CodeNexusError> {
     client.start(workspace).map_err(lsp_error_to_cli)
 }
 
 /// Prints a serializable value as JSON to stdout.
 #[cfg(all(feature = "lsp", test))]
-fn print_json<T: Serialize>(value: &T) -> Result<(), CliError> {
+fn print_json<T: Serialize>(value: &T) -> Result<(), CodeNexusError> {
     let json = serde_json::to_string(value)?;
     println!("{json}");
     Ok(())
@@ -402,7 +402,7 @@ mod tests {
     fn lsp_error_server_start_maps_to_invalid_input() {
         let err = LspError::ServerStart("binary not found".to_string());
         let cli_err = lsp_error_to_cli(err);
-        assert!(matches!(cli_err, CliError::InvalidInput(_)));
+        assert!(matches!(cli_err, CodeNexusError::InvalidInput(_)));
         assert_eq!(cli_err.exit_code(), 2);
     }
 
@@ -410,19 +410,19 @@ mod tests {
     fn lsp_error_timeout_maps_to_invalid_input() {
         let err = LspError::Timeout(5000);
         let cli_err = lsp_error_to_cli(err);
-        assert!(matches!(cli_err, CliError::InvalidInput(_)));
+        assert!(matches!(cli_err, CodeNexusError::InvalidInput(_)));
     }
 
     #[test]
     fn lsp_error_communication_maps_to_invalid_input() {
         let err = LspError::Communication("disconnected".to_string());
         let cli_err = lsp_error_to_cli(err);
-        assert!(matches!(cli_err, CliError::InvalidInput(_)));
+        assert!(matches!(cli_err, CodeNexusError::InvalidInput(_)));
     }
 
-    // --- core functions (mirror service logic, return CliError) ---
+    // --- core functions (mirror service logic, return CodeNexusError) ---
 
-    fn goto_def_core(file: &str, line: u32, col: u32, workspace: &str) -> Result<(), CliError> {
+    fn goto_def_core(file: &str, line: u32, col: u32, workspace: &str) -> Result<(), CodeNexusError> {
         let ws = Path::new(workspace);
         let file_path = resolve_file(file, ws);
 
@@ -439,7 +439,7 @@ mod tests {
         }
     }
 
-    fn hover_core(file: &str, line: u32, col: u32, workspace: &str) -> Result<(), CliError> {
+    fn hover_core(file: &str, line: u32, col: u32, workspace: &str) -> Result<(), CodeNexusError> {
         let ws = Path::new(workspace);
         let file_path = resolve_file(file, ws);
 

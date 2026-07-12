@@ -335,7 +335,7 @@ mod tests {
     }
 }
 
-#[cfg(feature = "cache")]
+#[cfg(all(test, feature = "cache"))]
 mod cached_tests {
     use super::*;
     use crate::cache::CacheStore;

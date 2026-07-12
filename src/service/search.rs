@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use crate::kit::QueryModule;
 use crate::query::SearchResult;
-use crate::service::error::{CliError, to_api_error};
+use crate::service::error::{CodeNexusError, to_api_error};
 use crate::service::runtime::kit;
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
@@ -37,8 +37,8 @@ fn search_result_to_json(r: &SearchResult) -> Value {
 
 /// Core search logic — shared by CLI and MCP wrappers.
 #[cfg(any(feature = "cli", feature = "mcp"))]
-async fn search_core(text: String, fulltext: bool, limit: u32) -> Result<SearchOutput, CliError> {
-    let kit = kit().ok_or_else(CliError::kit_not_initialized)?;
+async fn search_core(text: String, fulltext: bool, limit: u32) -> Result<SearchOutput, CodeNexusError> {
+    let kit = kit().ok_or_else(CodeNexusError::kit_not_initialized)?;
     let q = kit.require::<QueryModule>()?;
     let results = if fulltext {
         q.fulltext_search(&text, None, limit as usize)
@@ -65,7 +65,7 @@ async fn search(text: String, fulltext: bool, limit: u32) -> Result<(), ApiError
         .await
         .map_err(|e| to_api_error(e, "search_error"))?;
     let json = serde_json::to_string(&result)
-        .map_err(|e| to_api_error(CliError::from(e), "search_error"))?;
+        .map_err(|e| to_api_error(CodeNexusError::from(e), "search_error"))?;
     println!("{json}");
     Ok(())
 }

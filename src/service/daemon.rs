@@ -7,7 +7,7 @@
 use std::path::Path;
 
 #[cfg(feature = "daemon")]
-use crate::service::error::{CliError, to_api_error};
+use crate::service::error::{CodeNexusError, to_api_error};
 #[cfg(feature = "daemon")]
 use crate::kit::{DaemonModule, AsyncKit, AsyncReady};
 
@@ -26,10 +26,10 @@ use sdforge::service_api;
 ///
 /// Separated from the `#[service_api]` function for testability.
 #[cfg(feature = "daemon")]
-fn daemon_core(kit: &AsyncKit<AsyncReady>, path: &str, name: &str) -> Result<(), CliError> {
+fn daemon_core(kit: &AsyncKit<AsyncReady>, path: &str, name: &str) -> Result<(), CodeNexusError> {
     let watch_path = Path::new(path);
     if !watch_path.exists() {
-        return Err(CliError::InvalidInput(format!(
+        return Err(CodeNexusError::InvalidInput(format!(
             "watch path does not exist: {}",
             watch_path.display()
         )));
@@ -100,7 +100,7 @@ mod tests {
         let kit = build_kit_for_db(db.to_str().unwrap());
         let err = daemon_core(&kit, "/nonexistent/path/xyz", "demo")
             .expect_err("nonexistent path should error");
-        assert!(matches!(err, CliError::InvalidInput(_)));
+        assert!(matches!(err, CodeNexusError::InvalidInput(_)));
         assert_eq!(err.exit_code(), 2, "input error → exit 2");
     }
 
@@ -142,7 +142,7 @@ mod tests {
         let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 500);
         let err = daemon_core(&kit, "/nonexistent/path/xyz", "demo")
             .expect_err("should error on nonexistent path");
-        assert!(matches!(err, CliError::InvalidInput(_)));
+        assert!(matches!(err, CodeNexusError::InvalidInput(_)));
     }
 
     #[test]
@@ -151,7 +151,7 @@ mod tests {
         let kit = build_kit_for_db(db.to_str().unwrap());
         let err = daemon_core(&kit, "/nonexistent/path/xyz", "demo")
             .expect_err("should error on nonexistent path");
-        assert!(matches!(err, CliError::InvalidInput(_)));
+        assert!(matches!(err, CodeNexusError::InvalidInput(_)));
     }
 
     // --- end-to-end: file watching + incremental indexing ---

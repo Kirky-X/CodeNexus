@@ -724,7 +724,7 @@ async fn ffi_trace_returns_cross_language_path() {
 /// spec 写明 "executes the index command against that database" 并期望进程
 /// 退出码 4。`build_kit` 在命令处理之前被调用（负责装配 Kit），遇到损坏
 /// 数据库时 `build_kit` 先失败并返回 `KitError::BuildFailed`。
-/// `CliError::Kit(_)` 分支通过 `kit_exit_code`（见 src/service/error.rs）
+/// `CodeNexusError::Kit(_)` 分支通过 `kit_exit_code`（见 src/service/error.rs）
 /// downcast source chain，对 `StorageError::Corrupt` / `IndexError::DatabaseCorrupt`
 /// 返回退出码 4。
 ///

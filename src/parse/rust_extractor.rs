@@ -95,14 +95,13 @@ impl Extractor for RustExtractor {
 // Tree-walking helpers
 // ---------------------------------------------------------------------------
 
-/// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
 /// 封装 ADR-005 的 current_parent 和 current_func 语义。
 struct VisitContext<'a> {
     file_path: &'a str,
     project: &'a str,
     current_func: Option<&'a str>,
     current_parent: Option<&'a str>,
-    /// Scope resolver registry (design.md D3).
+    /// design.md D3.
     resolver: &'a ScopeResolverRegistry,
 }
 
@@ -133,8 +132,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "struct_item" => {
             extract_named_item(node, NodeLabel::Struct, source, ctx, result);
-            // Feature gap (closed): extract struct fields as Property nodes
-            // with HasProperty edges, matching gitnexus's modeling.
+            // Match gitnexus: struct fields become Property nodes with HasProperty edges.
             extract_struct_fields(node, source, ctx, result);
         }
         "enum_item" => {
@@ -243,10 +241,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             visit_children(node, source, ctx, result);
         }
         "mod_item" => {
-            // `mod name { ... }` 块：把模块名纳入 current_parent，使不同模块下
-            // 的同名 impl 生成不同 FQN（修复 P0-1 rust-nested-tail-collision）。
-            // P2-1: 同时创建 Module 节点（`mod foo;` 和 `mod foo {}` 都创建），
-            // 之前只更新 current_parent 导致 Module 节点完全丢失（0 vs gitnexus 24）。
+            // 模块名纳入 current_parent 以区分同名 impl（P0-1），并创建 Module 节点（P2-1）。
             extract_named_item(node, NodeLabel::Module, source, ctx, result);
             // Use ScopeResolver to get the module name (design.md D3).
             let scope_ctx = ScopeContext {
@@ -357,10 +352,8 @@ fn extract_impl(
     let Some(name) = node_text(type_node, source).map(String::from) else {
         return;
     };
-    // Strip generic parameters (e.g. `ParserGuard<'_>` → `ParserGuard`) so
-    // the type FQN matches the Struct/Enum node ID (which has no generics).
-    // Without this, delete_file_nodes_batch cannot match IMPLEMENTS edges
-    // for deletion during --force reindex → duplicate primary key (ADR-014).
+    // Strip generics (e.g. `ParserGuard<'_>` → `ParserGuard`) so the FQN
+    // matches the Struct/Enum node ID (ADR-014: avoids duplicate primary key).
     let name = strip_generics(&name).to_string();
     let trait_name = node
         .child_by_field_name("trait")
@@ -401,9 +394,7 @@ fn extract_impl(
         );
         return;
     }
-    // Impl blocks need disambiguation from struct/enum with the same name
-    // (ADR-003). Use the literal "impl" marker combined with the module
-    // parent context.
+    // Disambiguate from struct/enum with the same name (ADR-003).
     let disambiguator = match module_parent {
         Some(m) => format!("{m}_impl"),
         None => "impl".to_string(),
@@ -429,9 +420,8 @@ fn extract_impl(
 /// extracted. Tuple struct fields (`tuple_field`) and unit structs (no body)
 /// are skipped because they have no field names.
 ///
-/// Field FQNs are disambiguated by the struct name (combined with the module
-/// parent, same convention as impl methods, ADR-003): e.g. for field `x` of
-/// `struct Point` in `mod foo`, the FQN is `proj.test.x#foo_Point`.
+/// Field FQNs are disambiguated by the struct name combined with the module
+/// parent (same convention as impl methods, ADR-003).
 fn extract_struct_fields(
     node: Node,
     source: &str,
@@ -517,13 +507,9 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
     let Some(callee) = callee_name(func_node, source) else {
         return;
     };
-    // C2 fix: filter stdlib method calls (field_expression with stdlib
-    // method name) to match gitnexus behavior, which only captures
-    // function-level calls (free functions + Type::static_method()).
-    // System functions are not recorded as CALLS edges; only user-code
-    // function calls are tracked. See tools/verification/results/triage.md §C2.
-    // Also handles generic_function wrapping a field_expression
-    // (e.g. `.collect::<Vec<_>>()`).
+    // C2 fix: filter stdlib method calls to match gitnexus (only user-code
+    // function calls are tracked). See triage.md §C2. Also handles
+    // generic_function wrapping a field_expression (e.g. `.collect::<Vec<_>>()`).
     if is_field_expression_call(func_node) && is_stdlib_method(&callee) {
         return;
     }
