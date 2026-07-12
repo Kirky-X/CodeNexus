@@ -27,6 +27,7 @@ use sdforge::prelude::ApiError;
 use sdforge::service_api;
 
 /// JSON-serializable impact analysis result.
+#[cfg(any(feature = "cli", feature = "mcp", test))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ImpactOutput {
     pub symbol: String,

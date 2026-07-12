@@ -628,7 +628,7 @@ impl EmbedClient for CachedEmbedClient {
         // 2. Batch-call inner client for misses, then write results to cache.
         if !miss_texts.is_empty() {
             let embeddings = self.inner.embed(&miss_texts)?;
-            for (idx, emb) in miss_indices.iter().zip(embeddings.into_iter()) {
+            for (idx, emb) in miss_indices.iter().zip(embeddings) {
                 let text = texts[*idx];
                 let hash = crate::index::hash::compute_content_hash(text.as_bytes());
                 let key = format!("embed:{hash}");

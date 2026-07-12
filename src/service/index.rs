@@ -170,6 +170,9 @@ fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Resul
 /// reindex logic.
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 #[allow(clippy::result_large_err)]
+// `lsp` parameter is only consumed under `feature = "lsp"`; suppress the
+// unused-variable warning for builds without the lsp feature.
+#[cfg_attr(not(feature = "lsp"), allow(unused_variables))]
 pub(crate) fn index_core(
     kit: &AsyncKit<AsyncReady>,
     db_path: &Path,

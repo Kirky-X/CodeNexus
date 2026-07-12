@@ -378,6 +378,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "lang-c")]
     fn convert_event_modify_code_file() {
         let event = make_event(
             EventKind::Modify(notify_debouncer_full::notify::event::ModifyKind::Any),
@@ -388,6 +389,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "lang-python")]
     fn convert_event_remove_code_file() {
         let event = make_event(
             EventKind::Remove(notify_debouncer_full::notify::event::RemoveKind::File),
@@ -474,6 +476,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "lang-c")]
     fn process_events_notifies_observers_with_code_files() {
         let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
         let (observer, call_count, events) = CountingObserver::new();
@@ -817,6 +820,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "lang-c")]
     fn log_005_daemon_event_emitted_for_code_files() {
         let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
         let (observer, _call_count, _events) = CountingObserver::new();
@@ -884,6 +888,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "lang-python")]
     fn log_005_daemon_event_emitted_for_remove() {
         let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
         let (observer, _call_count, _events) = CountingObserver::new();

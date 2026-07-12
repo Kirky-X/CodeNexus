@@ -804,6 +804,7 @@ mod tests {
             qualified_name: Some("a".into()),
             score: 1.0,
             match_reason: "test".to_string(),
+            degree: 0,
         }];
         let fused = rrf_fuse(list_a, vec![], 10);
         assert_eq!(fused.len(), 1);
@@ -820,6 +821,7 @@ mod tests {
             qualified_name: Some("demo.parse".into()),
             score: 1.0,
             match_reason: "test".to_string(),
+            degree: 0,
         }];
         let list_b = vec![SearchResult {
             name: "parse".into(),
@@ -829,6 +831,7 @@ mod tests {
             qualified_name: Some("demo.parse".into()),
             score: 0.9,
             match_reason: "test".to_string(),
+            degree: 0,
         }];
         let fused = rrf_fuse(list_a, list_b, 10);
         assert_eq!(fused.len(), 1, "should deduplicate by qualified_name");
@@ -844,6 +847,7 @@ mod tests {
             qualified_name: None,
             score: 1.0,
             match_reason: "test".to_string(),
+            degree: 0,
         }];
         let list_b = vec![SearchResult {
             name: "parse".into(),
@@ -853,6 +857,7 @@ mod tests {
             qualified_name: None,
             score: 0.9,
             match_reason: "test".to_string(),
+            degree: 0,
         }];
         let fused = rrf_fuse(list_a, list_b, 10);
         assert_eq!(fused.len(), 1, "should deduplicate by name when no QN");
@@ -896,6 +901,7 @@ mod tests {
             qualified_name: Some("a".into()),
             score: 0.99,
             match_reason: "test".to_string(),
+            degree: 0,
         }];
         let fused = rrf_fuse(list_a, vec![], 10);
         // RRF score for rank 1 in one list: 1/(60+1) ≈ 0.0164
