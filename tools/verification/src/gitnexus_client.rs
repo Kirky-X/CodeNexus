@@ -407,4 +407,80 @@ mod tests {
         let back: GitnexusStats = serde_json::from_str(&json).unwrap();
         assert_eq!(back, stats);
     }
+
+    // --- CypherJson parsing ---
+
+    #[test]
+    fn cypher_json_parses_markdown_response() {
+        let json = r#"{"markdown":"| col1 | col2 |\n| --- | --- |\n| v1 | v2 |","row_count":1}"#;
+        let parsed: CypherJson = serde_json::from_str(json).unwrap();
+        assert!(parsed.markdown.is_some());
+        assert_eq!(parsed.row_count, Some(1));
+        assert!(parsed.error.is_none());
+    }
+
+    #[test]
+    fn cypher_json_parses_error_response() {
+        let json = r#"{"error":"Binder exception: Table Foo does not exist"}"#;
+        let parsed: CypherJson = serde_json::from_str(json).unwrap();
+        assert!(parsed.markdown.is_none());
+        assert_eq!(
+            parsed.error.as_deref(),
+            Some("Binder exception: Table Foo does not exist")
+        );
+    }
+
+    #[test]
+    fn cypher_json_parses_empty_object() {
+        let json = r#"{}"#;
+        let parsed: CypherJson = serde_json::from_str(json).unwrap();
+        assert!(parsed.markdown.is_none());
+        assert!(parsed.error.is_none());
+    }
+
+    // --- split_row ---
+
+    #[test]
+    fn split_row_trims_cells() {
+        let cells = split_row("|  hello  |  world  |");
+        assert_eq!(cells, vec!["hello".to_string(), "world".to_string()]);
+    }
+
+    #[test]
+    fn split_row_single_cell() {
+        let cells = split_row("| only |");
+        assert_eq!(cells, vec!["only".to_string()]);
+    }
+
+    // --- write_reference + load_reference roundtrip ---
+
+    #[test]
+    fn write_and_load_reference_roundtrip() {
+        let stats = GitnexusStats {
+            name: "_test_roundtrip".to_string(),
+            node_counts_by_label: {
+                let mut m = BTreeMap::new();
+                m.insert("Function".to_string(), 42);
+                m.insert("File".to_string(), 10);
+                m
+            },
+            edge_counts_by_type: {
+                let mut m = BTreeMap::new();
+                m.insert("CALLS".to_string(), 100);
+                m
+            },
+            file_count: 10,
+        };
+        let path = write_reference("_test_roundtrip", &stats).expect("write_reference");
+        assert!(path.exists(), "reference file should be created");
+        let loaded = load_reference("_test_roundtrip").expect("load_reference");
+        assert_eq!(loaded, stats);
+        std::fs::remove_file(&path).expect("cleanup test file");
+    }
+
+    #[test]
+    fn load_reference_returns_err_for_nonexistent() {
+        let result = load_reference("_nonexistent_repo_xyz");
+        assert!(result.is_err(), "loading nonexistent reference should error");
+    }
 }

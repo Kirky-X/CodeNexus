@@ -412,4 +412,37 @@ mod tests {
         ]);
         assert!(cli.gitnexus_binary.is_none());
     }
+
+    // --- read_severity_counts ---
+
+    #[test]
+    fn read_severity_counts_parses_report() {
+        let report = "| Category | Count |\n| --- | --- |\n| Critical discrepancies | 2 |\n| Major discrepancies | 5 |\n| Minor discrepancies | 10 |";
+        let dir = tempfile::TempDir::new().unwrap();
+        let report_path = dir.path().join("test.report.md");
+        std::fs::write(&report_path, report).unwrap();
+        let counts = read_severity_counts(&report_path);
+        assert_eq!(counts.critical, 2);
+        assert_eq!(counts.major, 5);
+        assert_eq!(counts.minor, 10);
+    }
+
+    #[test]
+    fn read_severity_counts_returns_zeros_for_missing_file() {
+        let counts = read_severity_counts(std::path::Path::new("/nonexistent/report.md"));
+        assert_eq!(counts.critical, 0);
+        assert_eq!(counts.major, 0);
+        assert_eq!(counts.minor, 0);
+    }
+
+    #[test]
+    fn read_severity_counts_returns_zeros_for_empty_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let report_path = dir.path().join("empty.report.md");
+        std::fs::write(&report_path, "").unwrap();
+        let counts = read_severity_counts(&report_path);
+        assert_eq!(counts.critical, 0);
+        assert_eq!(counts.major, 0);
+        assert_eq!(counts.minor, 0);
+    }
 }
