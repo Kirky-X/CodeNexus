@@ -92,6 +92,7 @@ sdforge = { version = "0.3", default-features = false, optional = true }
 rmcp = { version = "2.1", features = ["transport-io"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"], optional = true }
 oxcache = { version = "0.3", default-features = false, features = ["minimal"], optional = true }
+regex = "1"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

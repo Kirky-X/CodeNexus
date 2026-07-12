@@ -171,13 +171,63 @@ impl<'a> SearchEngine<'a> {
 
     /// Regex search over Function/Method/Class name and qualifiedName.
     ///
+    /// Compiles `pattern` as a Rust `regex::Regex` and matches it against
+    /// every `Function`, `Method`, and `Class` node in `project`. Both `name`
+    /// and `qualifiedName` are tested (case-sensitive, `is_match` semantics).
+    ///
     /// # Errors
     ///
     /// Returns [`QueryError::InvalidQuery`] if `pattern` is not a valid regex.
     fn search_regex(&self, project: &str, pattern: &str) -> Result<Vec<SearchResult>> {
-        // T020 placeholder — implementation in next task.
-        let _ = (project, pattern);
-        Ok(Vec::new())
+        let re = regex::Regex::new(pattern)
+            .map_err(|e| QueryError::InvalidQuery(format!("invalid regex: {e}")))?;
+        let project_esc = escape_cypher_string(project);
+        let labels = [
+            NodeLabel::Function,
+            NodeLabel::Method,
+            NodeLabel::Class,
+        ];
+        let mut results = Vec::new();
+        for &label in &labels {
+            let table = escape_identifier(label.table_name());
+            let cypher = format!(
+                "MATCH (n:{table}) WHERE n.project = '{project_esc}' \
+                 RETURN n.name AS name, n.qualifiedName AS qn, n.filePath AS filePath, \
+                 n.startLine AS line;"
+            );
+            let rows = match self.storage.query(&cypher) {
+                Ok(rows) => rows,
+                Err(_) => continue,
+            };
+            for row in rows {
+                let Some(name) = row.first().and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let qn = row.get(1).and_then(|v| v.as_str()).map(String::from);
+                let file_path = row.get(2).and_then(|v| v.as_str()).map(String::from);
+                let start_line = row
+                    .get(3)
+                    .and_then(|v| v.as_i64())
+                    .and_then(|i| u32::try_from(i).ok());
+                let matched_on = if re.is_match(name) {
+                    "name"
+                } else if qn.as_deref().is_some_and(|q| re.is_match(q)) {
+                    "qualifiedName"
+                } else {
+                    continue;
+                };
+                results.push(SearchResult {
+                    name: name.to_string(),
+                    label: label.to_string(),
+                    file_path,
+                    start_line,
+                    qualified_name: qn,
+                    score: 1.0,
+                    match_reason: format!("regex match on {matched_on}"),
+                });
+            }
+        }
+        Ok(results)
     }
 
     /// Fuzzy search using Levenshtein distance.
@@ -1133,16 +1183,155 @@ mod tests {
     }
 
     #[test]
-    fn search_engine_regex_mode_returns_empty_placeholder() {
-        // T019 only verifies dispatch; T020 adds the real implementation.
+    fn search_engine_regex_matches_pattern_on_name() {
         let storage = build_storage();
+        let funcs = [
+            Node::builder(NodeLabel::Function, "get_user_by_id", "demo.get_user_by_id")
+                .id("f1")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(1)
+                .end_line(10)
+                .language(Language::Rust)
+                .build(),
+            Node::builder(NodeLabel::Function, "get_first_user", "demo.get_first_user")
+                .id("f2")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(20)
+                .end_line(30)
+                .language(Language::Rust)
+                .build(),
+            Node::builder(NodeLabel::Function, "delete_user", "demo.delete_user")
+                .id("f3")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(40)
+                .end_line(50)
+                .language(Language::Rust)
+                .build(),
+        ];
+        storage.save_nodes(&funcs, NodeLabel::Function).expect("save_nodes");
+
         let engine = SearchEngine::new(storage.as_ref());
+        // Pattern `get_.*_user` matches "get_first_user" but not "get_user_by_id"
+        // (no "_user" substring after "get_"). Use `get_.*` to match both.
         let params = SearchParams {
-            query: "get_.*".to_string(),
+            query: r"get_.*_user".to_string(),
             mode: SearchMode::Regex,
             ..SearchParams::default()
         };
-        let results = engine.search("demo", &params).expect("regex dispatch");
+        let results = engine.search("demo", &params).expect("regex search");
+        let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.contains(&"get_first_user"), "should match get_first_user, got {names:?}");
+        assert!(!names.contains(&"delete_user"));
+        assert!(results.iter().all(|r| r.match_reason.starts_with("regex match")));
+
+        // Broader pattern matches both get_* functions.
+        let params2 = SearchParams {
+            query: r"get_.*".to_string(),
+            mode: SearchMode::Regex,
+            ..SearchParams::default()
+        };
+        let results2 = engine.search("demo", &params2).expect("regex search");
+        let names2: Vec<&str> = results2.iter().map(|r| r.name.as_str()).collect();
+        assert!(names2.contains(&"get_user_by_id"));
+        assert!(names2.contains(&"get_first_user"));
+        assert!(!names2.contains(&"delete_user"));
+    }
+
+    #[test]
+    fn search_engine_regex_matches_suffix_pattern() {
+        let storage = build_storage();
+        let classes = [
+            Node::builder(NodeLabel::Class, "RequestHandler", "demo.RequestHandler")
+                .id("c1")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(1)
+                .end_line(50)
+                .language(Language::Rust)
+                .build(),
+            Node::builder(NodeLabel::Class, "BaseController", "demo.BaseController")
+                .id("c2")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(60)
+                .end_line(100)
+                .language(Language::Rust)
+                .build(),
+        ];
+        storage.save_nodes(&classes, NodeLabel::Class).expect("save_nodes");
+
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: r"Handler$".to_string(),
+            mode: SearchMode::Regex,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("regex search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "RequestHandler");
+    }
+
+    #[test]
+    fn search_engine_regex_matches_on_qualified_name() {
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "do_work", "demo.handler.process")
+                .id("f1")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(1)
+                .end_line(10)
+                .language(Language::Rust)
+                .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: r"^demo\.handler".to_string(),
+            mode: SearchMode::Regex,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("regex search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "do_work");
+        assert!(results[0].match_reason.contains("qualifiedName"));
+    }
+
+    #[test]
+    fn search_engine_regex_rejects_invalid_pattern() {
+        let storage = build_storage();
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: r"[invalid".to_string(),
+            mode: SearchMode::Regex,
+            ..SearchParams::default()
+        };
+        let err = engine.search("demo", &params).expect_err("invalid regex should error");
+        assert!(err.is_invalid_query());
+    }
+
+    #[test]
+    fn search_engine_regex_returns_empty_when_no_match() {
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "main", "demo.main")
+                .id("f1")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(1)
+                .end_line(10)
+                .language(Language::Rust)
+                .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: r"nonexistent_\d+".to_string(),
+            mode: SearchMode::Regex,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("regex search");
         assert!(results.is_empty());
     }
 
