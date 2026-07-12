@@ -243,6 +243,7 @@ mod tests {
             qualified_name: Some("demo.foo".into()),
             score: 0.8,
             match_reason: "exact".into(),
+            degree: 0,
         };
         let v = search_result_to_json(&r);
         assert_eq!(v["name"], "foo");
@@ -264,6 +265,7 @@ mod tests {
             qualified_name: None,
             score: 0.0,
             match_reason: String::new(),
+            degree: 0,
         };
         let v = search_result_to_json(&r);
         assert_eq!(v["name"], "bar");

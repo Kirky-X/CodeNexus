@@ -783,19 +783,42 @@ fn extract_graphql_operations(content: &str) -> Vec<String> {
     ops
 }
 
-/// Extracts message queue patterns from `content`. Detects Kafka
-/// (`producer.send`, `consumer.subscribe`) and RabbitMQ
-/// (`channel.publish`, `channel.consume`) call patterns. Returns
-/// `(callee, direction)` pairs where direction is `"EMITS"` or `"LISTENS_ON"`.
-fn extract_mq_patterns(content: &str) -> Vec<(String, &'static str)> {
+/// Message queue call patterns as `(pattern, direction)` pairs, where
+/// direction is `"EMITS"` (producer/publish) or `"LISTENS_ON"`
+/// (consumer/subscribe).
+const MQ_KEYWORDS: &[(&str, &str)] = &[
+    ("producer.send", "EMITS"),
+    ("consumer.subscribe", "LISTENS_ON"),
+    ("channel.publish", "EMITS"),
+    ("channel.consume", "LISTENS_ON"),
+];
+
+/// Event bus call patterns as `(pattern, direction)` pairs, where direction
+/// is `"EMITS"` (`io.emit`/`emitter.emit`) or `"LISTENS_ON"`
+/// (`socket.on`/`emitter.on`).
+const EVENT_BUS_KEYWORDS: &[(&str, &str)] = &[
+    ("io.emit", "EMITS"),
+    ("socket.on", "LISTENS_ON"),
+    ("emitter.emit", "EMITS"),
+    ("emitter.on", "LISTENS_ON"),
+];
+
+/// Extracts call patterns from `content` by scanning for `keywords` pairs.
+///
+/// For each `(pattern, direction)` entry, locates `pattern(` occurrences and
+/// extracts the first argument as the callee. Quote trimming depends on
+/// `protocol`: event bus patterns trim both single and double quotes (JS event
+/// names commonly use either), while message queue patterns trim only double
+/// quotes. Returns `(callee, direction)` pairs where direction is `"EMITS"`
+/// or `"LISTENS_ON"`.
+fn extract_patterns_by_keywords(
+    content: &str,
+    keywords: &'static [(&'static str, &'static str)],
+    protocol: ServiceProtocol,
+) -> Vec<(String, &'static str)> {
+    let trim_single_quote = matches!(protocol, ServiceProtocol::EventBus);
     let mut results = Vec::new();
-    let patterns: &[(&str, &str)] = &[
-        ("producer.send", "EMITS"),
-        ("consumer.subscribe", "LISTENS_ON"),
-        ("channel.publish", "EMITS"),
-        ("channel.consume", "LISTENS_ON"),
-    ];
-    for (pattern, direction) in patterns {
+    for (pattern, direction) in keywords {
         let mut cursor = 0;
         while let Some(idx) = content[cursor..].find(*pattern) {
             let after_pattern = &content[cursor + idx + pattern.len()..];
@@ -804,7 +827,11 @@ fn extract_mq_patterns(content: &str) -> Vec<(String, &'static str)> {
                 let end = rest
                     .find([',', ')'])
                     .unwrap_or(rest.len());
-                let arg = rest[..end].trim().trim_matches('"');
+                let arg = if trim_single_quote {
+                    rest[..end].trim().trim_matches(|c| c == '"' || c == '\'')
+                } else {
+                    rest[..end].trim().trim_matches('"')
+                };
                 if !arg.is_empty() {
                     results.push((arg.to_string(), *direction));
                 }
@@ -815,38 +842,20 @@ fn extract_mq_patterns(content: &str) -> Vec<(String, &'static str)> {
     results
 }
 
+/// Extracts message queue patterns from `content`. Detects Kafka
+/// (`producer.send`, `consumer.subscribe`) and RabbitMQ
+/// (`channel.publish`, `channel.consume`) call patterns. Returns
+/// `(callee, direction)` pairs where direction is `"EMITS"` or `"LISTENS_ON"`.
+fn extract_mq_patterns(content: &str) -> Vec<(String, &'static str)> {
+    extract_patterns_by_keywords(content, MQ_KEYWORDS, ServiceProtocol::MessageQueue)
+}
+
 /// Extracts event bus patterns from `content`. Detects Socket.IO
 /// (`io.emit`, `socket.on`) and EventEmitter (`emitter.emit`,
 /// `emitter.on`) call patterns. Returns `(callee, direction)` pairs
 /// where direction is `"EMITS"` or `"LISTENS_ON"`.
 fn extract_event_bus_patterns(content: &str) -> Vec<(String, &'static str)> {
-    let mut results = Vec::new();
-    let patterns: &[(&str, &str)] = &[
-        ("io.emit", "EMITS"),
-        ("socket.on", "LISTENS_ON"),
-        ("emitter.emit", "EMITS"),
-        ("emitter.on", "LISTENS_ON"),
-    ];
-    for (pattern, direction) in patterns {
-        let mut cursor = 0;
-        while let Some(idx) = content[cursor..].find(*pattern) {
-            let after_pattern = &content[cursor + idx + pattern.len()..];
-            let trimmed = after_pattern.trim_start();
-            if let Some(rest) = trimmed.strip_prefix('(') {
-                let end = rest
-                    .find([',', ')'])
-                    .unwrap_or(rest.len());
-                let arg = rest[..end]
-                    .trim()
-                    .trim_matches(|c| c == '"' || c == '\'');
-                if !arg.is_empty() {
-                    results.push((arg.to_string(), *direction));
-                }
-            }
-            cursor += idx + pattern.len();
-        }
-    }
-    results
+    extract_patterns_by_keywords(content, EVENT_BUS_KEYWORDS, ServiceProtocol::EventBus)
 }
 
 /// Returns a sort key for [`Confidence`] so that `sort_by_key` produces

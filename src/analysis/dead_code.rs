@@ -282,19 +282,30 @@ impl<'a> DeadCodeDetector<'a> {
         &self,
         project: &str,
     ) -> StorageResult<std::collections::HashSet<String>> {
+        if self.config.edge_types.is_empty() {
+            return Ok(std::collections::HashSet::new());
+        }
         let escaped = escape_cypher_string(project);
+        // EdgeType::as_db_type returns static UPPERCASE DDL strings from a
+        // controlled enum, so they are safe to embed in Cypher without extra
+        // escaping. Collapsing the former per-type loop into a single `IN`
+        // query reduces 9 round-trips (default config) to 1.
+        let in_list = self
+            .config
+            .edge_types
+            .iter()
+            .map(|t| format!("'{}'", t.as_db_type()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.type IN [{in_list}] AND e.project = '{escaped}' \
+             RETURN e.target AS target;"
+        );
         let mut set = std::collections::HashSet::new();
-        for edge_type in &self.config.edge_types {
-            let type_str = edge_type.as_db_type();
-            let cypher = format!(
-                "MATCH (e:CodeRelation) WHERE e.type = '{type_str}' AND e.project = '{escaped}' \
-                 RETURN e.target AS target;"
-            );
-            let rows = self.storage.query(&cypher)?;
-            for row in rows {
-                if let Some(target) = row.first().and_then(|v| v.as_str()) {
-                    set.insert(target.to_string());
-                }
+        let rows = self.storage.query(&cypher)?;
+        for row in rows {
+            if let Some(target) = row.first().and_then(|v| v.as_str()) {
+                set.insert(target.to_string());
             }
         }
         Ok(set)
@@ -336,9 +347,16 @@ impl<'a> DeadCodeDetector<'a> {
         Ok((calls_targets, non_calls_targets))
     }
 
-    /// Returns `true` if there is at least one incoming edge of `edge_type`
-    /// targeting `func_id` in the graph (no project filter — func_id is unique).
-    #[allow(dead_code)]
+    /// Checks whether `func_id` has any incoming edge of `edge_type`.
+    ///
+    /// No project filter is applied — `func_id` is globally unique.
+    ///
+    /// Unlike [`load_referenced_ids`](Self::load_referenced_ids), which builds a
+    /// project-wide set of referenced targets aggregated across every configured
+    /// edge type, this method answers a single-func, single-edge-type question.
+    /// Currently exercised by unit tests in `mod tests`; reserved for future
+    /// single-edge-type diagnostics (e.g. "is this function tested?" via
+    /// `EdgeType::Tests`) when `load_referenced_ids` is overkill.
     fn has_incoming_edge(&self, func_id: &str, edge_type: EdgeType) -> StorageResult<bool> {
         let escaped_id = escape_cypher_string(func_id);
         let type_str = edge_type.as_db_type();
@@ -1139,6 +1157,70 @@ mod tests {
                 .has_incoming_edge("f_b", EdgeType::Calls)
                 .expect("has_incoming_edge"),
             "f_b has no CALLS edge"
+        );
+    }
+
+    #[test]
+    fn load_referenced_ids_collects_targets_across_multiple_edge_types() {
+        // Verifies the single IN-clause query captures targets across all
+        // configured edge types (CALLS, USAGE, TESTS) in one pass.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(
+            &kit,
+            "f_tgt_calls",
+            "demo",
+            "tgt_calls",
+            "demo.tgt_calls",
+            "/src/lib.rs",
+            1,
+        );
+        create_function(
+            &kit,
+            "f_tgt_usage",
+            "demo",
+            "tgt_usage",
+            "demo.tgt_usage",
+            "/src/lib.rs",
+            5,
+        );
+        create_function(
+            &kit,
+            "f_tgt_tests",
+            "demo",
+            "tgt_tests",
+            "demo.tgt_tests",
+            "/src/lib.rs",
+            10,
+        );
+        create_function(&kit, "f_src_a", "demo", "src_a", "demo.src_a", "/src/lib.rs", 20);
+        create_function(&kit, "f_src_b", "demo", "src_b", "demo.src_b", "/src/lib.rs", 25);
+        create_function(&kit, "f_src_c", "demo", "src_c", "demo.src_c", "/src/lib.rs", 30);
+        create_edge(&kit, "e1", "f_src_a", "f_tgt_calls", "demo", "CALLS");
+        create_edge(&kit, "e2", "f_src_b", "f_tgt_usage", "demo", "USAGE");
+        create_edge(&kit, "e3", "f_src_c", "f_tgt_tests", "demo", "TESTS");
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let referenced = detector
+            .load_referenced_ids("demo")
+            .expect("load_referenced_ids");
+        assert!(
+            referenced.contains("f_tgt_calls"),
+            "CALLS target should be referenced"
+        );
+        assert!(
+            referenced.contains("f_tgt_usage"),
+            "USAGE target should be referenced"
+        );
+        assert!(
+            referenced.contains("f_tgt_tests"),
+            "TESTS target should be referenced"
+        );
+        assert_eq!(
+            referenced.len(),
+            3,
+            "exactly 3 targets should be referenced"
         );
     }
 

@@ -98,6 +98,25 @@ pub struct ImpactAnalyzer<'a> {
     config: ImpactConfig,
 }
 
+// ===== Risk scoring constants (assess_risk) =====
+
+/// Affected-count thresholds → weight factor, evaluated in order; first
+/// threshold exceeded wins. Indices map to levels: 0→Critical, 1→High,
+/// 2→Medium; the default (no match) → Low.
+const RISK_COUNT_THRESHOLDS: &[(usize, f64)] = &[
+    (50, 1.0), // >50 → Critical weight
+    (20, 0.8), // >20 → High weight
+    (5, 0.5),  // >5  → Medium weight
+];
+/// Count factor when affected count is ≤ the lowest threshold (Low level).
+const RISK_COUNT_LOW_FACTOR: f64 = 0.08;
+/// Score-formula weight for the count factor.
+const RISK_WEIGHT_COUNT: f64 = 0.6;
+/// Score-formula weight for the depth factor.
+const RISK_WEIGHT_DEPTH: f64 = 0.2;
+/// Score-formula weight for the edge factor.
+const RISK_WEIGHT_EDGE: f64 = 0.2;
+
 impl<'a> ImpactAnalyzer<'a> {
     /// Creates a new `ImpactAnalyzer` bound to the given graph.
     #[must_use]
@@ -264,16 +283,21 @@ impl<'a> ImpactAnalyzer<'a> {
         let count = affected.len();
         let max_depth = affected.iter().map(|n| n.depth).max().unwrap_or(0);
 
-        // Factor 1: affected count → count_factor and count_level.
-        let (count_factor, count_level) = if count > 50 {
-            (1.0, RiskLevel::Critical)
-        } else if count > 20 {
-            (0.8, RiskLevel::High)
-        } else if count > 5 {
-            (0.5, RiskLevel::Medium)
-        } else {
-            (0.08, RiskLevel::Low)
-        };
+        // Factor 1: affected count → count_factor and count_level (table lookup).
+        // Threshold index maps to level: 0→Critical, 1→High, 2→Medium; default→Low.
+        let (count_factor, count_level) = RISK_COUNT_THRESHOLDS
+            .iter()
+            .position(|&(threshold, _)| count > threshold)
+            .map(|idx| {
+                let level = match idx {
+                    0 => RiskLevel::Critical,
+                    1 => RiskLevel::High,
+                    2 => RiskLevel::Medium,
+                    _ => unreachable!("RISK_COUNT_THRESHOLDS has exactly 3 entries"),
+                };
+                (RISK_COUNT_THRESHOLDS[idx].1, level)
+            })
+            .unwrap_or((RISK_COUNT_LOW_FACTOR, RiskLevel::Low));
 
         // Factor 2: depth factor (depth > 5 adds weight, depth < 3 reduces).
         let depth_factor = if max_depth > 5 {
@@ -290,7 +314,10 @@ impl<'a> ImpactAnalyzer<'a> {
             .map(|n| edge_type_weight(n.edge_type))
             .fold(0.0_f64, f64::max);
 
-        let score = (count_factor * 0.6 + depth_factor * 0.2 + edge_factor * 0.2).clamp(0.0, 1.0);
+        let score = (count_factor * RISK_WEIGHT_COUNT
+            + depth_factor * RISK_WEIGHT_DEPTH
+            + edge_factor * RISK_WEIGHT_EDGE)
+            .clamp(0.0, 1.0);
 
         // Score-based level.
         let score_level = if score >= 0.8 {
@@ -346,15 +373,23 @@ fn risk_level_rank(level: RiskLevel) -> u8 {
     }
 }
 
-/// Returns the risk weight for an edge type.
+/// Default weight table for edge types (lookup by EdgeType).
+const DEFAULT_EDGE_TYPE_WEIGHTS: &[(EdgeType, f64)] = &[
+    (EdgeType::Calls, 1.0),
+    (EdgeType::Implements, 0.8),
+    (EdgeType::UsesType, 0.6),
+    (EdgeType::HttpCalls, 0.4),
+];
+/// Fallback weight for edge types not listed in [`DEFAULT_EDGE_TYPE_WEIGHTS`].
+const DEFAULT_EDGE_WEIGHT: f64 = 0.3;
+
+/// Returns the risk weight for an edge type via table lookup.
 fn edge_type_weight(edge: EdgeType) -> f64 {
-    match edge {
-        EdgeType::Calls => 1.0,
-        EdgeType::Implements => 0.8,
-        EdgeType::UsesType => 0.6,
-        EdgeType::HttpCalls => 0.4,
-        _ => 0.3,
-    }
+    DEFAULT_EDGE_TYPE_WEIGHTS
+        .iter()
+        .find(|(e, _)| *e == edge)
+        .map(|(_, w)| *w)
+        .unwrap_or(DEFAULT_EDGE_WEIGHT)
 }
 
 #[cfg(test)]
@@ -1092,5 +1127,52 @@ mod tests {
         let analyzer = ImpactAnalyzer::new(&g);
         let result = analyzer.analyze_impact(&"target".to_string());
         assert_eq!(result.risk_assessment.level, RiskLevel::Low);
+    }
+
+    // ===== Constant guard tests (prevent accidental modification) =====
+
+    #[test]
+    fn edge_type_weight_constants_match_expected_values() {
+        // Guard: DEFAULT_EDGE_TYPE_WEIGHTS must keep canonical weights.
+        assert_eq!(DEFAULT_EDGE_TYPE_WEIGHTS.len(), 4);
+        assert_eq!(DEFAULT_EDGE_TYPE_WEIGHTS[0], (EdgeType::Calls, 1.0));
+        assert_eq!(DEFAULT_EDGE_TYPE_WEIGHTS[1], (EdgeType::Implements, 0.8));
+        assert_eq!(DEFAULT_EDGE_TYPE_WEIGHTS[2], (EdgeType::UsesType, 0.6));
+        assert_eq!(DEFAULT_EDGE_TYPE_WEIGHTS[3], (EdgeType::HttpCalls, 0.4));
+        assert_eq!(DEFAULT_EDGE_WEIGHT, 0.3);
+    }
+
+    #[test]
+    fn edge_type_weight_returns_table_value_for_listed_edges() {
+        assert_eq!(edge_type_weight(EdgeType::Calls), 1.0);
+        assert_eq!(edge_type_weight(EdgeType::Implements), 0.8);
+        assert_eq!(edge_type_weight(EdgeType::UsesType), 0.6);
+        assert_eq!(edge_type_weight(EdgeType::HttpCalls), 0.4);
+    }
+
+    #[test]
+    fn edge_type_weight_returns_default_for_unlisted_edges() {
+        // Reads/Writes/DataFlows/Tests/FfiCalls are not in the table → fallback.
+        assert_eq!(edge_type_weight(EdgeType::Reads), DEFAULT_EDGE_WEIGHT);
+        assert_eq!(edge_type_weight(EdgeType::Writes), DEFAULT_EDGE_WEIGHT);
+        assert_eq!(edge_type_weight(EdgeType::DataFlows), DEFAULT_EDGE_WEIGHT);
+        assert_eq!(edge_type_weight(EdgeType::Tests), DEFAULT_EDGE_WEIGHT);
+        assert_eq!(edge_type_weight(EdgeType::FfiCalls), DEFAULT_EDGE_WEIGHT);
+    }
+
+    #[test]
+    fn risk_scoring_constants_match_expected_values() {
+        // Guard: risk thresholds and formula weights must not drift.
+        assert_eq!(RISK_COUNT_THRESHOLDS.len(), 3);
+        assert_eq!(RISK_COUNT_THRESHOLDS[0], (50, 1.0));
+        assert_eq!(RISK_COUNT_THRESHOLDS[1], (20, 0.8));
+        assert_eq!(RISK_COUNT_THRESHOLDS[2], (5, 0.5));
+        assert_eq!(RISK_COUNT_LOW_FACTOR, 0.08);
+        assert_eq!(RISK_WEIGHT_COUNT, 0.6);
+        assert_eq!(RISK_WEIGHT_DEPTH, 0.2);
+        assert_eq!(RISK_WEIGHT_EDGE, 0.2);
+        // Formula weights must sum to 1.0 (score is a convex combination).
+        let total = RISK_WEIGHT_COUNT + RISK_WEIGHT_DEPTH + RISK_WEIGHT_EDGE;
+        assert!((total - 1.0).abs() < f64::EPSILON);
     }
 }

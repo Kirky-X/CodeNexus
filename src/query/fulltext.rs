@@ -276,6 +276,7 @@ fn rows_to_search_results(
                 qualified_name,
                 score,
                 match_reason: reason.to_string(),
+                degree: 0,
             })
         })
         .collect()

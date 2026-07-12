@@ -18,6 +18,7 @@ use crate::storage::capability::Storage;
 use crate::storage::schema::{escape_cypher_string, escape_identifier};
 use crate::storage::StorageConnection;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
 /// Maximum value accepted for [`SearchParams::limit`].
 pub const MAX_LIMIT: usize = 500;
@@ -118,8 +119,18 @@ impl<'a> SearchEngine<'a> {
             SearchMode::GraphEnhanced => self.search_graph_enhanced(project, params)?,
             SearchMode::MultiSignal => {
                 let mut hits = self.search_graph_enhanced(project, params)?;
+                // A-04: batch-load TESTS targets + qn→node_id map once, then
+                // score each candidate via in-memory HashSet/HashMap lookups.
+                // Old path fired 17 storage queries per candidate (16 label
+                // lookups + 1 TESTS edge count); new path fires 17 total.
+                let tested_ids = self.load_tested_node_ids(project).unwrap_or_default();
+                let qns: Vec<&str> = hits
+                    .iter()
+                    .filter_map(|h| h.qualified_name.as_deref())
+                    .collect();
+                let qn_to_id = self.load_qn_to_node_id_map(project, &qns);
                 for hit in &mut hits {
-                    hit.score = self.score_multi_signal(hit, params, project);
+                    hit.score = self.score_multi_signal(hit, params, &tested_ids, &qn_to_id);
                     hit.match_reason = "multi-signal".to_string();
                 }
                 hits
@@ -224,6 +235,7 @@ impl<'a> SearchEngine<'a> {
                     qualified_name: qn,
                     score: 1.0,
                     match_reason: format!("regex match on {matched_on}"),
+                    degree: 0,
                 });
             }
         }
@@ -293,6 +305,7 @@ impl<'a> SearchEngine<'a> {
                     qualified_name: qn,
                     score,
                     match_reason: format!("fuzzy d={dist}"),
+                    degree: 0,
                 });
             }
         }
@@ -373,6 +386,7 @@ impl<'a> SearchEngine<'a> {
                     qualified_name: qn,
                     score,
                     match_reason: format!("{reason} (degree={degree})"),
+                    degree,
                 });
             }
         }
@@ -408,17 +422,28 @@ impl<'a> SearchEngine<'a> {
     /// - `degree_centrality * 0.3` (min(degree/100, 1.0))
     /// - `module_proximity * 0.2` (file_pattern match=1.0, else=0.5)
     /// - `test_coverage * 0.1` (has incoming TESTS edges=1.0, else=0.0)
+    ///
+    /// `tested_ids` and `qn_to_id` are batch-loaded once per MultiSignal
+    /// search by [`SearchEngine::search`]; this method performs only
+    /// in-memory lookups (A-04 batch refactor).
     fn score_multi_signal(
         &self,
         candidate: &SearchResult,
         params: &SearchParams,
-        project: &str,
+        tested_ids: &HashSet<String>,
+        qn_to_id: &HashMap<String, String>,
     ) -> f64 {
         let name_relevance = compute_name_relevance(&candidate.name, &params.query);
-        let degree = parse_degree_from_reason(&candidate.match_reason);
+        let degree = candidate.degree;
         let degree_centrality = (degree as f64 / 100.0).min(1.0);
         let module_proximity = compute_module_proximity(&candidate.file_path, &params.file_pattern);
-        let test_coverage = self.compute_test_coverage(project, &candidate.qualified_name);
+        let test_coverage = candidate
+            .qualified_name
+            .as_ref()
+            .and_then(|qn| qn_to_id.get(qn))
+            .map_or(0.0, |id| {
+                if tested_ids.contains(id) { 1.0 } else { 0.0 }
+            });
 
         name_relevance * 0.4
             + degree_centrality * 0.3
@@ -426,44 +451,67 @@ impl<'a> SearchEngine<'a> {
             + test_coverage * 0.1
     }
 
-    /// Returns 1.0 if the symbol with `qualified_name` has incoming TESTS
-    /// edges in `project`, 0.0 otherwise.
-    fn compute_test_coverage(&self, project: &str, qualified_name: &Option<String>) -> f64 {
-        let Some(qn) = qualified_name else {
-            return 0.0;
-        };
+    /// Batch-loads the set of node ids that are targets of `TESTS` edges in
+    /// `project`. Single Cypher query regardless of candidate count (A-04).
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying [`QueryError`] if the storage query fails
+    /// catastrophically; transient per-row parse failures are silently
+    /// skipped (consistent with the rest of the search pipeline).
+    fn load_tested_node_ids(&self, project: &str) -> Result<HashSet<String>> {
         let project_esc = escape_cypher_string(project);
-        let qn_esc = escape_cypher_string(qn);
-        // Look up the node id across all symbol labels.
+        let cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.type = 'TESTS' AND e.project = '{project_esc}' \
+             RETURN e.target AS target;"
+        );
+        let mut set = HashSet::new();
+        match self.storage.query(&cypher) {
+            Ok(rows) => {
+                for row in rows {
+                    if let Some(target) = row.first().and_then(|v| v.as_str()) {
+                        set.insert(target.to_string());
+                    }
+                }
+            }
+            Err(e) => return Err(e.into()),
+        }
+        Ok(set)
+    }
+
+    /// Batch-resolves `qualifiedName → node_id` for the supplied `qns` in
+    /// `project`. Fans out across [`SYMBOL_LABELS`] once per label (16
+    /// queries) regardless of candidate count, replacing the old per-
+    /// candidate lookup (A-04).
+    fn load_qn_to_node_id_map(&self, project: &str, qns: &[&str]) -> HashMap<String, String> {
+        if qns.is_empty() {
+            return HashMap::new();
+        }
+        let project_esc = escape_cypher_string(project);
+        let qn_list = qns
+            .iter()
+            .map(|q| format!("'{}'", escape_cypher_string(q)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut map = HashMap::new();
         for &label in SYMBOL_LABELS {
             let table = escape_identifier(label.table_name());
             let cypher = format!(
-                "MATCH (n:{table}) WHERE n.qualifiedName = '{qn_esc}' AND n.project = '{project_esc}' \
-                 RETURN n.id AS id;"
+                "MATCH (n:{table}) WHERE n.qualifiedName IN [{qn_list}] \
+                 AND n.project = '{project_esc}' \
+                 RETURN n.qualifiedName AS qn, n.id AS id;"
             );
             if let Ok(rows) = self.storage.query(&cypher) {
-                if let Some(id) = rows.first().and_then(|r| r.first()).and_then(|v| v.as_str()) {
-                    // Check for incoming TESTS edges.
-                    let edge_cypher = format!(
-                        "MATCH (e:CodeRelation) WHERE e.type = 'TESTS' AND e.project = '{project_esc}' \
-                         AND e.target = '{}' RETURN count(e) AS cnt;",
-                        escape_cypher_string(id),
-                    );
-                    if let Ok(edge_rows) = self.storage.query(&edge_cypher) {
-                        let count = edge_rows
-                            .first()
-                            .and_then(|r| r.first())
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(0);
-                        if count > 0 {
-                            return 1.0;
-                        }
+                for row in rows {
+                    let qn = row.first().and_then(|v| v.as_str());
+                    let id = row.get(1).and_then(|v| v.as_str());
+                    if let (Some(qn), Some(id)) = (qn, id) {
+                        map.insert(qn.to_string(), id.to_string());
                     }
-                    break;
                 }
             }
         }
-        0.0
+        map
     }
 }
 
@@ -645,6 +693,7 @@ fn rows_to_search_results(
                 qualified_name,
                 score,
                 match_reason: reason.to_string(),
+                degree: 0,
             })
         })
         .collect()
@@ -656,11 +705,6 @@ fn rows_to_search_results(
 /// - Prefix match → 0.8
 /// - Substring match → 0.5
 /// - No query (e.g. `search_by_type`) → 1.0 (neutral)
-#[allow(dead_code)]
-fn relevance_score(name: &str, query: &str) -> f64 {
-    relevance_score_with_reason(name, query).0
-}
-
 /// Computes both the score and a human-readable match reason.
 fn relevance_score_with_reason(name: &str, query: &str) -> (f64, &'static str) {
     if query.is_empty() {
@@ -736,18 +780,6 @@ fn compute_name_relevance(name: &str, query: &str) -> f64 {
     } else {
         0.0
     }
-}
-
-/// Parses the degree value from a match_reason string formatted as
-/// `"... (degree=N)"`. Returns 0 if no degree marker is found.
-fn parse_degree_from_reason(reason: &str) -> u32 {
-    let marker = "degree=";
-    let Some(pos) = reason.find(marker) else {
-        return 0;
-    };
-    let after = &reason[pos + marker.len()..];
-    let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse::<u32>().unwrap_or(0)
 }
 
 /// Computes module proximity for multi-signal scoring (R-search-004).
@@ -1275,23 +1307,23 @@ mod tests {
 
     #[test]
     fn relevance_score_exact_match_is_highest() {
-        assert_eq!(relevance_score("parse", "parse"), 1.0);
-        assert_eq!(relevance_score("PARSE", "parse"), 1.0);
+        assert_eq!(relevance_score_with_reason("parse", "parse").0, 1.0);
+        assert_eq!(relevance_score_with_reason("PARSE", "parse").0, 1.0);
     }
 
     #[test]
     fn relevance_score_prefix_match_is_high() {
-        assert_eq!(relevance_score("parse_file", "parse"), 0.8);
+        assert_eq!(relevance_score_with_reason("parse_file", "parse").0, 0.8);
     }
 
     #[test]
     fn relevance_score_substring_match_is_low() {
-        assert_eq!(relevance_score("my_parse_func", "parse"), 0.5);
+        assert_eq!(relevance_score_with_reason("my_parse_func", "parse").0, 0.5);
     }
 
     #[test]
     fn relevance_score_empty_query_is_neutral() {
-        assert_eq!(relevance_score("anything", ""), 1.0);
+        assert_eq!(relevance_score_with_reason("anything", "").0, 1.0);
     }
 
     // --- error continuation coverage ---
@@ -2030,6 +2062,136 @@ mod tests {
         }
     }
 
+    // ===== A-04 batch: load_tested_node_ids + load_qn_to_node_id_map =====
+
+    #[test]
+    fn load_tested_node_ids_returns_all_targets_for_project() {
+        let storage = build_storage();
+        let targets = ["h1", "h2", "h3"];
+        let edges: Vec<Edge> = targets
+            .iter()
+            .map(|t| Edge::new("test_fn", *t, EdgeType::Tests, "demo"))
+            .collect();
+        storage.save_edges(&edges).expect("save_edges");
+
+        let engine = SearchEngine::new(storage.as_ref());
+        let set = engine.load_tested_node_ids("demo").expect("load_tested_node_ids");
+        assert_eq!(set.len(), 3, "expected 3 tested targets, got {set:?}");
+        for t in &targets {
+            assert!(set.contains(*t), "expected {t} in tested set");
+        }
+    }
+
+    #[test]
+    fn load_tested_node_ids_filters_by_project() {
+        let storage = build_storage();
+        let edges = [
+            Edge::new("t1", "h1", EdgeType::Tests, "demo"),
+            Edge::new("t2", "h2", EdgeType::Tests, "other"),
+        ];
+        storage.save_edges(&edges).expect("save_edges");
+
+        let engine = SearchEngine::new(storage.as_ref());
+        let set = engine.load_tested_node_ids("demo").expect("load_tested_node_ids");
+        assert_eq!(set.len(), 1);
+        assert!(set.contains("h1"));
+        assert!(!set.contains("h2"));
+    }
+
+    #[test]
+    fn load_tested_node_ids_returns_empty_when_no_tests_edges() {
+        let storage = build_storage();
+        let edges = [
+            Edge::new("c1", "h1", EdgeType::Calls, "demo"),
+            Edge::new("u1", "h2", EdgeType::Usage, "demo"),
+        ];
+        storage.save_edges(&edges).expect("save_edges");
+
+        let engine = SearchEngine::new(storage.as_ref());
+        let set = engine.load_tested_node_ids("demo").expect("load_tested_node_ids");
+        assert!(set.is_empty(), "expected empty set when no TESTS edges, got {set:?}");
+    }
+
+    #[test]
+    fn load_qn_to_node_id_map_returns_mapping_for_known_qns() {
+        let storage = build_storage();
+        let f1 = sample_function("id_f1", "demo", "foo", "demo.foo", "/a.rs", 1);
+        let f2 = sample_function("id_f2", "demo", "bar", "demo.bar", "/a.rs", 10);
+        storage.save_nodes(&[f1, f2], NodeLabel::Function).expect("save_nodes");
+
+        let engine = SearchEngine::new(storage.as_ref());
+        let map = engine.load_qn_to_node_id_map("demo", &["demo.foo", "demo.bar", "demo.missing"]);
+        assert_eq!(map.get("demo.foo").map(String::as_str), Some("id_f1"));
+        assert_eq!(map.get("demo.bar").map(String::as_str), Some("id_f2"));
+        assert!(!map.contains_key("demo.missing"));
+    }
+
+    #[test]
+    fn load_qn_to_node_id_map_returns_empty_for_empty_input() {
+        let storage = build_storage();
+        let engine = SearchEngine::new(storage.as_ref());
+        let map = engine.load_qn_to_node_id_map("demo", &[]);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn load_qn_to_node_id_map_filters_by_project() {
+        let storage = build_storage();
+        let f1 = sample_function("id_f1", "demo", "foo", "demo.foo", "/a.rs", 1);
+        let f2 = sample_function("id_f2", "other", "foo", "other.foo", "/a.rs", 1);
+        storage.save_nodes(&[f1, f2], NodeLabel::Function).expect("save_nodes");
+
+        let engine = SearchEngine::new(storage.as_ref());
+        let map = engine.load_qn_to_node_id_map("demo", &["demo.foo", "other.foo"]);
+        assert!(map.contains_key("demo.foo"));
+        assert!(!map.contains_key("other.foo"), "other project should be filtered");
+    }
+
+    #[test]
+    fn multi_signal_score_unaffected_by_storage_after_batch_load() {
+        // Sanity: even when additional unrelated TESTS edges exist for other projects,
+        // the score for this project's candidate is correctly computed.
+        let storage = build_storage();
+        let handler = Node::builder(NodeLabel::Function, "handler", "demo.handler")
+            .id("h1")
+            .project("demo")
+            .file_path("/src/handlers.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[handler], NodeLabel::Function).expect("save_nodes");
+
+        let calls_edges: Vec<Edge> = (0..100)
+            .map(|i| Edge::new(&format!("caller_{i}"), "h1", EdgeType::Calls, "demo"))
+            .collect();
+        storage.save_edges(&calls_edges).expect("save calls edges");
+
+        // TESTS edge for h1 (demo) + noise TESTS edge for other project
+        let tests_edges = [
+            Edge::new("test_fn", "h1", EdgeType::Tests, "demo"),
+            Edge::new("test_other", "h_other", EdgeType::Tests, "other"),
+        ];
+        storage.save_edges(&tests_edges).expect("save tests edges");
+
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "handler".to_string(),
+            mode: SearchMode::MultiSignal,
+            file_pattern: Some("/src/handlers.rs".to_string()),
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("multi-signal search");
+        assert_eq!(results.len(), 1);
+        // name_relevance(1.0)*0.4 + degree_centrality(1.0)*0.3
+        // + module_proximity(1.0)*0.2 + test_coverage(1.0)*0.1 = 1.0
+        assert!(
+            (results[0].score - 1.0).abs() < 1e-9,
+            "expected score 1.0, got {}",
+            results[0].score
+        );
+    }
+
     #[test]
     fn compute_name_relevance_returns_expected_values() {
         assert_eq!(compute_name_relevance("handler", "handler"), 1.0);
@@ -2040,14 +2202,6 @@ mod tests {
         assert_eq!(compute_name_relevance("anything", ""), 1.0);
     }
 
-    #[test]
-    fn parse_degree_from_reason_extracts_degree_value() {
-        assert_eq!(parse_degree_from_reason("exact name match (degree=5)"), 5);
-        assert_eq!(parse_degree_from_reason("prefix match (degree=0)"), 0);
-        assert_eq!(parse_degree_from_reason("degree=100"), 100);
-        assert_eq!(parse_degree_from_reason("no degree info"), 0);
-        assert_eq!(parse_degree_from_reason("multi-signal"), 0);
-    }
 
     #[test]
     fn compute_module_proximity_returns_expected_values() {

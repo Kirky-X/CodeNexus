@@ -110,7 +110,10 @@ fn build_path_filter(path_filter: &str) -> Option<PathFilter> {
 /// one is returned (sufficient for cross-service edge discovery — the
 /// trace itself already resolved the symbol unambiguously).
 #[cfg(any(feature = "cli", feature = "mcp", test))]
-fn find_start_node_id(graph: &crate::model::Graph, symbol: &str) -> Option<String> {
+pub(crate) fn find_start_node_id(
+    graph: &crate::model::Graph,
+    symbol: &str,
+) -> Option<crate::model::NodeId> {
     graph
         .nodes
         .values()

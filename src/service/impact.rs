@@ -13,6 +13,8 @@ use crate::model::EdgeType;
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::service::error::CodeNexusError;
 #[cfg(any(feature = "cli", feature = "mcp", test))]
+use crate::service::trace::find_start_node_id;
+#[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::trace::{ImpactAnalyzer, ImpactConfig, ImpactNode, RiskAssessment};
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::error::{kit_not_initialized, to_api_error};
@@ -104,20 +106,6 @@ fn build_impact_config(edge_types: &str, max_depth: u32, include_tests: bool) ->
         edge_types: final_edge_types,
         include_tests,
     }
-}
-
-/// Finds the start node ID in the graph by matching `symbol` against
-/// `qualified_name` (preferred) or `name`.
-#[cfg(any(feature = "cli", feature = "mcp", test))]
-fn find_start_node_id(
-    graph: &crate::model::Graph,
-    symbol: &str,
-) -> Option<crate::model::NodeId> {
-    graph
-        .nodes
-        .values()
-        .find(|n| n.qualified_name == symbol || n.name == symbol)
-        .map(|n| n.id.clone())
 }
 
 /// Runs impact analysis against an injected Kit (testable core).

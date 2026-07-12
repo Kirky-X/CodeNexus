@@ -55,6 +55,9 @@ pub struct SearchResult {
     /// Human-readable reason explaining why this result matched (e.g.
     /// `"exact name match"`, `"regex match"`, `"fuzzy d=1"`).
     pub match_reason: String,
+    /// In-degree (incoming CALLS count) for graph-enhanced scoring; 0 for
+    /// non-graph search modes.
+    pub degree: u32,
 }
 
 /// The outcome of a Cypher query execution.
@@ -85,6 +88,7 @@ mod tests {
             qualified_name: Some("demo.parse".to_string()),
             score: 1.0,
             match_reason: "exact".to_string(),
+            degree: 0,
         };
         assert_eq!(r.name, "parse");
         assert_eq!(r.label, "Function");
@@ -105,6 +109,7 @@ mod tests {
             qualified_name: None,
             score: 0.5,
             match_reason: String::new(),
+            degree: 0,
         };
         assert_eq!(r, r.clone());
     }
@@ -119,6 +124,7 @@ mod tests {
             qualified_name: None,
             score: 1.0,
             match_reason: "regex".to_string(),
+            degree: 0,
         };
         let s = format!("{r:?}");
         assert!(s.contains("parse"));

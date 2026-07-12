@@ -22,6 +22,7 @@
 //! `UNION` — so we issue separate queries per node label and aggregate in
 //! Rust.
 
+use crate::analysis::cross_service::{CrossServiceDetector, ServiceProtocol};
 use crate::storage::capability::Storage;
 use crate::storage::error::Result as StorageResult;
 use crate::storage::schema::escape_cypher_string;
@@ -166,7 +167,7 @@ pub struct LayerInfo {
     pub members: Vec<String>,
 }
 
-/// A cross-service dependency (reserved for future use).
+/// A cross-service dependency detected between two code symbols.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CrossServiceDep {
     /// Source module name.
@@ -204,6 +205,7 @@ impl<'a> ArchitectureAnalyzer<'a> {
         let module_boundaries = self.detect_module_boundaries(project)?;
         let dependency_directions = self.analyze_dependency_directions(project)?;
         let layers = self.detect_layers(project)?;
+        let cross_service_deps = self.load_cross_service_deps(project)?;
         Ok(ArchitectureOverview {
             languages,
             packages,
@@ -213,7 +215,7 @@ impl<'a> ArchitectureAnalyzer<'a> {
             module_boundaries,
             dependency_directions,
             layers,
-            cross_service_deps: Vec::new(),
+            cross_service_deps,
         })
     }
 
@@ -858,6 +860,43 @@ impl<'a> ArchitectureAnalyzer<'a> {
         }
         Ok(result)
     }
+
+    /// Loads cross-service dependencies by running the multi-protocol
+    /// [`CrossServiceDetector`] and converting each match into a
+    /// [`CrossServiceDep`]. The caller id becomes `from_module`, the
+    /// callee becomes `to_module`, and the protocol is stringified via
+    /// [`protocol_to_string`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::storage::error::StorageError`] if any underlying
+    /// Cypher query fails.
+    fn load_cross_service_deps(&self, project: &str) -> StorageResult<Vec<CrossServiceDep>> {
+        let detector = CrossServiceDetector::new(self.storage);
+        let matches = detector.detect_all(project)?;
+        let deps = matches
+            .into_iter()
+            .map(|m| CrossServiceDep {
+                from_module: m.caller,
+                to_module: m.callee,
+                protocol: protocol_to_string(&m.protocol),
+            })
+            .collect();
+        Ok(deps)
+    }
+}
+
+/// Maps a [`ServiceProtocol`] to its canonical string label for
+/// [`CrossServiceDep::protocol`]. Deterministic mapping (Rule 5) — no
+/// `Display` impl dependency.
+fn protocol_to_string(protocol: &ServiceProtocol) -> String {
+    match protocol {
+        ServiceProtocol::HttpRest => "HTTP".to_string(),
+        ServiceProtocol::Grpc => "gRPC".to_string(),
+        ServiceProtocol::GraphQL => "GraphQL".to_string(),
+        ServiceProtocol::MessageQueue => "MessageQueue".to_string(),
+        ServiceProtocol::EventBus => "EventBus".to_string(),
+    }
 }
 
 /// Extracts the package prefix from a qualified name.
@@ -993,6 +1032,36 @@ mod tests {
             end_line,
         );
         storage.execute(&cypher).expect("create function");
+    }
+
+    /// Creates a Function node with source `content` (for cross-service
+    /// detection tests that need string literals in the function body).
+    fn create_function_with_content(
+        kit: &AsyncKit<AsyncReady>,
+        id: &str,
+        project: &str,
+        name: &str,
+        qn: &str,
+        file: &str,
+        line: u32,
+        content: &str,
+    ) {
+        let storage = storage(kit);
+        let end_line = line + 10;
+        let cypher = format!(
+            "CREATE (:Function {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
+             filePath: '{}', startLine: {}, endLine: {}, signature: '', returnType: '', \
+             isExported: false, docstring: '', content: '{}', parentQn: ''}});",
+            escape_cypher_string(id),
+            escape_cypher_string(project),
+            escape_cypher_string(name),
+            escape_cypher_string(qn),
+            escape_cypher_string(file),
+            line,
+            end_line,
+            escape_cypher_string(content),
+        );
+        storage.execute(&cypher).expect("create function with content");
     }
 
     /// Creates a Method node.
@@ -1581,6 +1650,52 @@ mod tests {
         assert!(
             json.contains("\"cross_service_deps\""),
             "json should contain cross_service_deps: {json}"
+        );
+    }
+
+    #[test]
+    fn overview_cross_service_deps_populated_when_matches_exist() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r1", "demo", "/api/users", "GET");
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            10,
+            r#"fetch("/api/users");"#,
+        );
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert!(
+            !result.cross_service_deps.is_empty(),
+            "cross_service_deps should be populated when matches exist: {:?}",
+            result.cross_service_deps
+        );
+        let dep = &result.cross_service_deps[0];
+        assert_eq!(dep.from_module, "f1", "from_module should be caller id");
+        assert_eq!(dep.to_module, "r1", "to_module should be callee (route id)");
+        assert_eq!(dep.protocol, "HTTP", "protocol should be HTTP for REST match");
+    }
+
+    #[test]
+    fn overview_cross_service_deps_empty_for_no_matches() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f1", "demo", "foo", "demo.foo", "/src/a.rs", 1);
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert!(
+            result.cross_service_deps.is_empty(),
+            "cross_service_deps should be empty when no routes/callers match: {:?}",
+            result.cross_service_deps
         );
     }
 

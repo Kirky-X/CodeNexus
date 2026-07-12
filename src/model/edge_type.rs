@@ -251,6 +251,38 @@ impl FromStr for EdgeType {
     }
 }
 
+/// Parses a comma-separated list of EdgeType DDL names (case-insensitive).
+///
+/// Returns the parsed list, or `default_types` if `s` is empty, equals
+/// `"all"` (case-insensitive), or contains no valid EdgeType names.
+///
+/// Each segment is trimmed of surrounding whitespace before parsing, so
+/// `" CALLS , USAGE "` is equivalent to `"CALLS,USAGE"`. Invalid segments
+/// are silently skipped.
+#[must_use]
+pub fn parse_edge_type_list(s: &str, default_types: &[EdgeType]) -> Vec<EdgeType> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("all") {
+        return default_types.to_vec();
+    }
+    let parsed: Vec<EdgeType> = trimmed
+        .split(',')
+        .filter_map(|part| {
+            let t = part.trim();
+            if t.is_empty() {
+                None
+            } else {
+                t.to_ascii_uppercase().parse::<EdgeType>().ok()
+            }
+        })
+        .collect();
+    if parsed.is_empty() {
+        default_types.to_vec()
+    } else {
+        parsed
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,5 +505,77 @@ mod tests {
             );
             assert!(min <= max, "{edge}: min {min} > max {max}");
         }
+    }
+
+    // ===== parse_edge_type_list unit tests =====
+
+    #[test]
+    fn parse_edge_type_list_parses_lowercase_names() {
+        let defaults = [EdgeType::Calls, EdgeType::Usage];
+        let result = parse_edge_type_list("calls,usage", &defaults);
+        assert_eq!(result, vec![EdgeType::Calls, EdgeType::Usage]);
+    }
+
+    #[test]
+    fn parse_edge_type_list_parses_uppercase_names() {
+        let defaults = [EdgeType::Calls];
+        let result = parse_edge_type_list("CALLS,USAGE", &defaults);
+        assert_eq!(result, vec![EdgeType::Calls, EdgeType::Usage]);
+    }
+
+    #[test]
+    fn parse_edge_type_list_empty_returns_defaults() {
+        let defaults = [EdgeType::Calls, EdgeType::Usage, EdgeType::Tests];
+        let result = parse_edge_type_list("", &defaults);
+        assert_eq!(result, defaults.to_vec());
+    }
+
+    #[test]
+    fn parse_edge_type_list_all_returns_defaults() {
+        let defaults = [EdgeType::Calls, EdgeType::Usage];
+        let result = parse_edge_type_list("all", &defaults);
+        assert_eq!(result, defaults.to_vec());
+    }
+
+    #[test]
+    fn parse_edge_type_list_all_is_case_insensitive() {
+        let defaults = [EdgeType::Calls];
+        let result = parse_edge_type_list("ALL", &defaults);
+        assert_eq!(result, defaults.to_vec());
+    }
+
+    #[test]
+    fn parse_edge_type_list_skips_invalid_segments() {
+        let defaults = [EdgeType::Calls];
+        let result = parse_edge_type_list("CALLS,INVALID,TESTS", &defaults);
+        assert_eq!(result, vec![EdgeType::Calls, EdgeType::Tests]);
+    }
+
+    #[test]
+    fn parse_edge_type_list_all_invalid_returns_defaults() {
+        let defaults = [EdgeType::Calls, EdgeType::Usage];
+        let result = parse_edge_type_list("INVALID1,INVALID2", &defaults);
+        assert_eq!(result, defaults.to_vec());
+    }
+
+    #[test]
+    fn parse_edge_type_list_trims_whitespace() {
+        let defaults = [EdgeType::Calls];
+        let result = parse_edge_type_list("  CALLS ,  USAGE  ", &defaults);
+        assert_eq!(result, vec![EdgeType::Calls, EdgeType::Usage]);
+    }
+
+    #[test]
+    fn parse_edge_type_list_single_type() {
+        let defaults = [EdgeType::Calls];
+        let result = parse_edge_type_list("HTTP_CALLS", &defaults);
+        assert_eq!(result, vec![EdgeType::HttpCalls]);
+    }
+
+    #[test]
+    fn parse_edge_type_list_whitespace_only_returns_defaults() {
+        let defaults = [EdgeType::Calls, EdgeType::Usage];
+        let result = parse_edge_type_list("   ", &defaults);
+        assert_eq!(result, defaults.to_vec());
     }
 }

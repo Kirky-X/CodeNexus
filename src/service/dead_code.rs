@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::analysis::dead_code::{DeadCodeConfig, DeadCodeDetector, DeadCodeEntry};
 #[cfg(feature = "analysis")]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
-#[cfg(feature = "analysis")]
+#[cfg(all(test, feature = "cli", feature = "analysis"))]
 use crate::model::EdgeType;
 #[cfg(all(feature = "cli", feature = "analysis"))]
 use crate::service::error::kit_not_initialized;
@@ -45,26 +45,8 @@ fn build_dead_code_config(
     edge_types: &str,
 ) -> DeadCodeConfig {
     let default = DeadCodeConfig::default();
-    let final_edge_types = if edge_types.is_empty() {
-        default.edge_types.clone()
-    } else {
-        let parsed: Vec<EdgeType> = edge_types
-            .split(',')
-            .filter_map(|s| {
-                let trimmed = s.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    trimmed.parse::<EdgeType>().ok()
-                }
-            })
-            .collect();
-        if parsed.is_empty() {
-            default.edge_types.clone()
-        } else {
-            parsed
-        }
-    };
+    let final_edge_types =
+        crate::model::edge_type::parse_edge_type_list(edge_types, &default.edge_types);
     DeadCodeConfig {
         check_exported,
         check_ffi,

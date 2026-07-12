@@ -628,6 +628,7 @@ fn lookup_node_metadata(conn: &StorageConnection, hit: &EmbeddingHit) -> Option<
                     qualified_name,
                     score: hit.score as f64,
                     match_reason: "semantic search match".to_string(),
+                    degree: 0,
                 });
             }
         }
@@ -713,6 +714,7 @@ mod tests {
                 qualified_name: Some("a".into()),
                 score: 1.0,
                 match_reason: "test".to_string(),
+                degree: 0,
             },
             SearchResult {
                 name: "b".into(),
@@ -722,6 +724,7 @@ mod tests {
                 qualified_name: Some("b".into()),
                 score: 0.8,
                 match_reason: "test".to_string(),
+                degree: 0,
             },
         ];
         let list_b = vec![
@@ -733,6 +736,7 @@ mod tests {
                 qualified_name: Some("b".into()),
                 score: 1.0,
                 match_reason: "test".to_string(),
+                degree: 0,
             },
             SearchResult {
                 name: "c".into(),
@@ -742,6 +746,7 @@ mod tests {
                 qualified_name: Some("c".into()),
                 score: 0.9,
                 match_reason: "test".to_string(),
+                degree: 0,
             },
         ];
         let fused = rrf_fuse(list_a, list_b, 10);
@@ -764,6 +769,7 @@ mod tests {
                 qualified_name: Some(format!("a{i}")),
                 score: 1.0,
                 match_reason: "test".to_string(),
+                degree: 0,
             })
             .collect();
         let list_b: Vec<_> = (0..5)
@@ -775,6 +781,7 @@ mod tests {
                 qualified_name: Some(format!("b{i}")),
                 score: 1.0,
                 match_reason: "test".to_string(),
+                degree: 0,
             })
             .collect();
         let fused = rrf_fuse(list_a, list_b, 3);
@@ -864,6 +871,7 @@ mod tests {
                     qualified_name: Some(n.to_string()),
                     score: 1.0,
                     match_reason: "test".to_string(),
+                degree: 0,
                 })
                 .collect()
         };
