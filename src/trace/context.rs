@@ -5,6 +5,15 @@
 
 use super::types::RelatedNodeOutput;
 use crate::model::{EdgeType, Graph, NodeId};
+use crate::storage::capability::Storage;
+use crate::storage::error::Result as StorageResult;
+use crate::storage::schema::escape_cypher_string;
+use serde::{Deserialize, Serialize};
+
+/// Maximum byte length for the `source` field (10 KB per spec constraint).
+const SOURCE_MAX_BYTES: usize = 10 * 1024;
+/// Suffix appended when `source` is truncated.
+const SOURCE_TRUNCATED_MARKER: &str = "[truncated]";
 
 pub fn resolve_start_id(graph: &Graph, symbol: &str) -> Option<NodeId> {
     let by_name: Vec<&crate::model::Node> =
@@ -111,6 +120,189 @@ pub fn collect_processes(graph: &Graph, start_id: &NodeId) -> Vec<RelatedNodeOut
             .then_with(|| a.name.cmp(&b.name))
     });
     out
+}
+
+// ===== Multi-dimensional context types (T014-T018) =====
+
+/// A symbol's definition (name, signature, source, location).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SymbolDefinition {
+    pub name: String,
+    pub qualified_name: String,
+    pub signature: String,
+    pub docstring: String,
+    pub source: String,
+    pub file_path: String,
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+/// A single function parameter.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ParamInfo {
+    pub name: String,
+    pub type_name: String,
+}
+
+/// Type-level context for a symbol (parameters, return type, generics, traits).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TypeContext {
+    pub parameters: Vec<ParamInfo>,
+    pub return_type: String,
+    pub generics: Vec<String>,
+    pub implements: Vec<String>,
+}
+
+/// Module-level context for the file containing a symbol.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModuleContext {
+    pub file_path: String,
+    pub module_path: String,
+    pub package: String,
+    pub imports: Vec<String>,
+    pub exports: Vec<String>,
+}
+
+/// Info about a test function that tests a target symbol.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TestInfo {
+    pub test_name: String,
+    pub file_path: String,
+    pub line: u32,
+}
+
+/// Data-flow summary (Out of Scope — empty placeholder).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DataFlowSummary {}
+
+/// Info about a caller (incoming edge to the symbol).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CallerInfo {
+    pub name: String,
+    pub qualified_name: String,
+    pub edge_type: String,
+}
+
+/// Info about a callee (outgoing edge from the symbol).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CalleeInfo {
+    pub name: String,
+    pub qualified_name: String,
+    pub edge_type: String,
+}
+
+/// Full 360-degree context for a symbol.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SymbolContext {
+    pub symbol: SymbolDefinition,
+    pub callers: Vec<CallerInfo>,
+    pub callees: Vec<CalleeInfo>,
+    pub type_context: TypeContext,
+    pub module_context: ModuleContext,
+    pub test_context: Vec<TestInfo>,
+    pub data_flow: DataFlowSummary,
+}
+
+/// Collects multi-dimensional context for a symbol from the graph store.
+///
+/// Backed by a `&'a dyn Storage` capability, matching the convention used by
+/// [`crate::analysis::dead_code::DeadCodeDetector`] and
+/// [`crate::analysis::cross_service::CrossServiceLinker`].
+pub struct ContextCollector<'a> {
+    storage: &'a dyn Storage,
+}
+
+impl<'a> ContextCollector<'a> {
+    /// Creates a new collector backed by the given storage capability.
+    #[must_use]
+    pub fn new(storage: &'a dyn Storage) -> Self {
+        Self { storage }
+    }
+
+    /// Collects the full [`SymbolContext`] for `qualified_name` in `project`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError`] if any underlying Cypher query fails or the
+    /// symbol is not found.
+    pub fn collect(
+        &self,
+        project: &str,
+        qualified_name: &str,
+    ) -> StorageResult<SymbolContext> {
+        let symbol = self.collect_symbol_definition(qualified_name)?;
+        let callers = self.collect_callers(project, &symbol)?;
+        let callees = self.collect_callees(project, &symbol)?;
+        let type_context = self.collect_type_context(&symbol)?;
+        let module_context = self.collect_module_context(&symbol.file_path)?;
+        let test_context = self.collect_test_context(qualified_name)?;
+        let data_flow = self.collect_data_flow(&symbol)?;
+        Ok(SymbolContext {
+            symbol,
+            callers,
+            callees,
+            type_context,
+            module_context,
+            test_context,
+            data_flow,
+        })
+    }
+
+    fn collect_symbol_definition(
+        &self,
+        _qualified_name: &str,
+    ) -> StorageResult<SymbolDefinition> {
+        Err(crate::storage::error::StorageError::NotFound(
+            "collect_symbol_definition not yet implemented".to_string(),
+        ))
+    }
+
+    fn collect_type_context(
+        &self,
+        _symbol: &SymbolDefinition,
+    ) -> StorageResult<TypeContext> {
+        Err(crate::storage::error::StorageError::NotFound(
+            "collect_type_context not yet implemented".to_string(),
+        ))
+    }
+
+    fn collect_module_context(&self, _file_path: &str) -> StorageResult<ModuleContext> {
+        Err(crate::storage::error::StorageError::NotFound(
+            "collect_module_context not yet implemented".to_string(),
+        ))
+    }
+
+    fn collect_test_context(
+        &self,
+        _qualified_name: &str,
+    ) -> StorageResult<Vec<TestInfo>> {
+        Err(crate::storage::error::StorageError::NotFound(
+            "collect_test_context not yet implemented".to_string(),
+        ))
+    }
+
+    fn collect_data_flow(
+        &self,
+        _symbol: &SymbolDefinition,
+    ) -> StorageResult<DataFlowSummary> {
+        Ok(DataFlowSummary {})
+    }
+
+    fn collect_callers(
+        &self,
+        _project: &str,
+        _symbol: &SymbolDefinition,
+    ) -> StorageResult<Vec<CallerInfo>> {
+        Ok(Vec::new())
+    }
+
+    fn collect_callees(
+        &self,
+        _project: &str,
+        _symbol: &SymbolDefinition,
+    ) -> StorageResult<Vec<CalleeInfo>> {
+        Ok(Vec::new())
+    }
 }
 
 #[cfg(test)]
@@ -374,5 +566,173 @@ mod tests {
         assert_eq!(processes[1].name, "a_process");
         assert_eq!(processes[2].edge_type, "STEP_IN_PROCESS");
         assert_eq!(processes[2].name, "z_process");
+    }
+
+    // ===== T014: Serialization tests for multi-dimensional context types =====
+
+    #[test]
+    fn symbol_definition_roundtrip() {
+        let sym = SymbolDefinition {
+            name: "foo".to_string(),
+            qualified_name: "demo.foo".to_string(),
+            signature: "fn foo() -> bool".to_string(),
+            docstring: "Does foo.".to_string(),
+            source: "fn foo() -> bool { true }".to_string(),
+            file_path: "/src/foo.rs".to_string(),
+            start_line: 1,
+            end_line: 3,
+        };
+        let json = serde_json::to_string(&sym).expect("serialize");
+        let back: SymbolDefinition = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(sym, back);
+        assert!(json.contains("qualified_name"));
+        assert!(json.contains("fn foo() -> bool"));
+    }
+
+    #[test]
+    fn param_info_roundtrip() {
+        let p = ParamInfo {
+            name: "a".to_string(),
+            type_name: "i32".to_string(),
+        };
+        let json = serde_json::to_string(&p).expect("serialize");
+        let back: ParamInfo = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(p, back);
+    }
+
+    #[test]
+    fn type_context_roundtrip() {
+        let tc = TypeContext {
+            parameters: vec![
+                ParamInfo {
+                    name: "a".to_string(),
+                    type_name: "i32".to_string(),
+                },
+                ParamInfo {
+                    name: "b".to_string(),
+                    type_name: "String".to_string(),
+                },
+            ],
+            return_type: "bool".to_string(),
+            generics: vec!["T".to_string()],
+            implements: vec!["Display".to_string()],
+        };
+        let json = serde_json::to_string(&tc).expect("serialize");
+        let back: TypeContext = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(tc, back);
+        assert_eq!(back.parameters.len(), 2);
+    }
+
+    #[test]
+    fn module_context_roundtrip() {
+        let mc = ModuleContext {
+            file_path: "/src/auth/login.rs".to_string(),
+            module_path: "src.auth.login".to_string(),
+            package: "demo".to_string(),
+            imports: vec!["std::io".to_string()],
+            exports: vec!["login".to_string()],
+        };
+        let json = serde_json::to_string(&mc).expect("serialize");
+        let back: ModuleContext = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(mc, back);
+    }
+
+    #[test]
+    fn test_info_roundtrip() {
+        let ti = TestInfo {
+            test_name: "test_foo".to_string(),
+            file_path: "/tests/foo_test.rs".to_string(),
+            line: 5,
+        };
+        let json = serde_json::to_string(&ti).expect("serialize");
+        let back: TestInfo = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(ti, back);
+    }
+
+    #[test]
+    fn data_flow_summary_roundtrip() {
+        let df = DataFlowSummary {};
+        let json = serde_json::to_string(&df).expect("serialize");
+        let back: DataFlowSummary = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(df, back);
+    }
+
+    #[test]
+    fn caller_info_roundtrip() {
+        let c = CallerInfo {
+            name: "caller".to_string(),
+            qualified_name: "demo.caller".to_string(),
+            edge_type: "CALLS".to_string(),
+        };
+        let json = serde_json::to_string(&c).expect("serialize");
+        let back: CallerInfo = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(c, back);
+    }
+
+    #[test]
+    fn callee_info_roundtrip() {
+        let c = CalleeInfo {
+            name: "callee".to_string(),
+            qualified_name: "demo.callee".to_string(),
+            edge_type: "CALLS".to_string(),
+        };
+        let json = serde_json::to_string(&c).expect("serialize");
+        let back: CalleeInfo = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(c, back);
+    }
+
+    #[test]
+    fn symbol_context_roundtrip() {
+        let sc = SymbolContext {
+            symbol: SymbolDefinition {
+                name: "foo".to_string(),
+                qualified_name: "demo.foo".to_string(),
+                signature: "fn foo()".to_string(),
+                docstring: "".to_string(),
+                source: "fn foo() {}".to_string(),
+                file_path: "/src/foo.rs".to_string(),
+                start_line: 1,
+                end_line: 2,
+            },
+            callers: vec![CallerInfo {
+                name: "bar".to_string(),
+                qualified_name: "demo.bar".to_string(),
+                edge_type: "CALLS".to_string(),
+            }],
+            callees: vec![CalleeInfo {
+                name: "baz".to_string(),
+                qualified_name: "demo.baz".to_string(),
+                edge_type: "CALLS".to_string(),
+            }],
+            type_context: TypeContext {
+                parameters: vec![],
+                return_type: "".to_string(),
+                generics: vec![],
+                implements: vec![],
+            },
+            module_context: ModuleContext {
+                file_path: "/src/foo.rs".to_string(),
+                module_path: "src.foo".to_string(),
+                package: "demo".to_string(),
+                imports: vec![],
+                exports: vec![],
+            },
+            test_context: vec![TestInfo {
+                test_name: "test_foo".to_string(),
+                file_path: "/tests/foo_test.rs".to_string(),
+                line: 1,
+            }],
+            data_flow: DataFlowSummary {},
+        };
+        let json = serde_json::to_string(&sc).expect("serialize");
+        let back: SymbolContext = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(sc, back);
+        assert!(json.contains("symbol"));
+        assert!(json.contains("callers"));
+        assert!(json.contains("callees"));
+        assert!(json.contains("type_context"));
+        assert!(json.contains("module_context"));
+        assert!(json.contains("test_context"));
+        assert!(json.contains("data_flow"));
     }
 }
