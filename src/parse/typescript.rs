@@ -2047,4 +2047,74 @@ function setupSecond() {
         let tree = parse_ts("const x = 1;");
         assert!(!is_const_declaration(tree.root_node()));
     }
+
+    // --- Coverage: import variants (namespace / default) ---
+
+    #[test]
+    fn namespace_import_extracts_alias_name() {
+        let src = "import * as fs from 'fs';";
+        let result = extract(src);
+        assert_eq!(result.imports.len(), 1, "should extract 1 namespace import");
+        assert_eq!(result.imports[0].source_file, "fs");
+        assert!(
+            result.imports[0].imported_names.contains(&"fs".to_string()),
+            "imported names should contain fs: {:?}",
+            result.imports[0].imported_names
+        );
+    }
+
+    #[test]
+    fn default_import_extracts_name() {
+        let src = "import express from 'express';";
+        let result = extract(src);
+        assert_eq!(result.imports.len(), 1, "should extract 1 default import");
+        assert_eq!(result.imports[0].source_file, "express");
+        assert!(
+            result.imports[0].imported_names.contains(&"express".to_string()),
+            "imported names should contain express: {:?}",
+            result.imports[0].imported_names
+        );
+    }
+
+    // --- Coverage: export default anonymous function ---
+
+    #[test]
+    fn export_default_anonymous_function_produces_default_node() {
+        let src = "export default function() { return 42; }";
+        let result = extract(src);
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert!(
+            funcs.iter().any(|f| f.name == "default"),
+            "should have a Function node named 'default': {:?}",
+            funcs.iter().map(|f| &f.name).collect::<Vec<_>>()
+        );
+    }
+
+    // --- Coverage: assignment_expression / update_expression writes ---
+
+    #[test]
+    fn assignment_expression_inside_function_produces_write() {
+        let src = "function foo() { x = 5; }";
+        let result = extract(src);
+        assert!(
+            result.writes.iter().any(|w| w.var_name == "x"),
+            "should have a WriteInfo for x: {:?}",
+            result.writes
+        );
+    }
+
+    #[test]
+    fn update_expression_inside_function_produces_write() {
+        let src = "function foo() { x++; }";
+        let result = extract(src);
+        assert!(
+            result.writes.iter().any(|w| w.var_name == "x"),
+            "should have a WriteInfo for x from update expression: {:?}",
+            result.writes
+        );
+    }
 }

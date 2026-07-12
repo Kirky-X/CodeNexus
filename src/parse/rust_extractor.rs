@@ -2759,4 +2759,174 @@ impl From<std::io::Error> for SecureNotifyError {
         let result = extract(src);
         let _ = result;
     }
+
+    // --- is_field_expression_call: field_expression / generic_function / other ---
+
+    #[test]
+    fn is_field_expression_call_with_field_expression_returns_true() {
+        // `obj.method()` — the func_node is a field_expression
+        let tree = parse_source("fn main() { obj.method(); }");
+        let root = tree.root_node();
+        fn find_call<'a>(node: tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
+            if node.kind() == "call_expression" {
+                return node.child_by_field_name("function");
+            }
+            for i in 0..node.named_child_count() as u32 {
+                if let Some(child) = node.named_child(i) {
+                    if let Some(found) = find_call(child) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+        if let Some(func) = find_call(root) {
+            assert!(is_field_expression_call(func), "field_expression should return true");
+        }
+    }
+
+    #[test]
+    fn is_field_expression_call_with_generic_function_wrapping_field() {
+        // `obj.method::<T>()` — generic_function wrapping a field_expression
+        let tree = parse_source("fn main() { obj.method::<i32>(); }");
+        let root = tree.root_node();
+        fn find_call<'a>(node: tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
+            if node.kind() == "call_expression" {
+                return node.child_by_field_name("function");
+            }
+            for i in 0..node.named_child_count() as u32 {
+                if let Some(child) = node.named_child(i) {
+                    if let Some(found) = find_call(child) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+        if let Some(func) = find_call(root) {
+            assert!(
+                is_field_expression_call(func),
+                "generic_function wrapping field_expression should return true"
+            );
+        }
+    }
+
+    #[test]
+    fn is_field_expression_call_with_identifier_returns_false() {
+        // `foo()` — the func_node is an identifier, not a field_expression
+        let tree = parse_source("fn main() { foo(); }");
+        let root = tree.root_node();
+        fn find_call<'a>(node: tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
+            if node.kind() == "call_expression" {
+                return node.child_by_field_name("function");
+            }
+            for i in 0..node.named_child_count() as u32 {
+                if let Some(child) = node.named_child(i) {
+                    if let Some(found) = find_call(child) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+        if let Some(func) = find_call(root) {
+            assert!(
+                !is_field_expression_call(func),
+                "identifier should return false"
+            );
+        }
+    }
+
+    // --- is_read_position: various parent types ---
+
+    fn find_first_identifier<'a>(node: tree_sitter::Node<'a>, source: &str, target: &str) -> Option<tree_sitter::Node<'a>> {
+        if node.kind() == "identifier" {
+            if let Some(text) = node_text(node, source) {
+                if text == target {
+                    return Some(node);
+                }
+            }
+        }
+        for i in 0..node.named_child_count() as u32 {
+            if let Some(child) = node.named_child(i) {
+                if let Some(found) = find_first_identifier(child, source, target) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn is_read_position_in_binary_expression_returns_true() {
+        let src = "fn main() { let x = a + b; }";
+        let tree = parse_source(src);
+        let node = find_first_identifier(tree.root_node(), src, "a")
+            .expect("should find identifier 'a'");
+        assert!(is_read_position(node), "identifier in binary_expression should be a read");
+    }
+
+    #[test]
+    fn is_read_position_in_return_expression_returns_true() {
+        let src = "fn main() { return x; }";
+        let tree = parse_source(src);
+        let node = find_first_identifier(tree.root_node(), src, "x")
+            .expect("should find identifier 'x'");
+        assert!(is_read_position(node), "identifier in return_expression should be a read");
+    }
+
+    #[test]
+    fn is_read_position_in_arguments_returns_true() {
+        let src = "fn foo(a: i32) {} fn main() { foo(y); }";
+        let tree = parse_source(src);
+        let node = find_first_identifier(tree.root_node(), src, "y")
+            .expect("should find identifier 'y'");
+        assert!(is_read_position(node), "identifier in arguments should be a read");
+    }
+
+    #[test]
+    fn is_read_position_in_let_pattern_returns_false() {
+        let src = "fn main() { let x = 1; }";
+        let tree = parse_source(src);
+        let node = find_first_identifier(tree.root_node(), src, "x")
+            .expect("should find identifier 'x'");
+        assert!(
+            !is_read_position(node),
+            "identifier in let pattern should NOT be a read"
+        );
+    }
+
+    #[test]
+    fn is_read_position_in_call_function_returns_false() {
+        let src = "fn main() { foo(); }";
+        let tree = parse_source(src);
+        let node = find_first_identifier(tree.root_node(), src, "foo")
+            .expect("should find identifier 'foo'");
+        assert!(
+            !is_read_position(node),
+            "callee identifier should NOT be a read"
+        );
+    }
+
+    #[test]
+    fn is_read_position_in_field_expression_value_returns_true() {
+        let src = "fn main() { let x = obj.field; }";
+        let tree = parse_source(src);
+        let node = find_first_identifier(tree.root_node(), src, "obj")
+            .expect("should find identifier 'obj'");
+        assert!(is_read_position(node), "obj in obj.field should be a read");
+    }
+
+    // --- extract_extern_block with empty extern (names.is_empty early return) ---
+
+    #[test]
+    fn empty_extern_block_produces_no_extern_info() {
+        let src = r#"extern "C" {}"#;
+        let result = extract(src);
+        assert!(
+            result.externs.is_empty(),
+            "empty extern block should produce no ExternInfo: {:?}",
+            result.externs
+        );
+    }
 }
