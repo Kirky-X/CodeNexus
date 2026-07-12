@@ -354,6 +354,22 @@ mod tests {
             .build()
     }
 
+    fn make_trait(id: &str, name: &str) -> Node {
+        Node::builder(NodeLabel::Trait, name, format!("proj.{name}"))
+            .id(id)
+            .project("proj")
+            .file_path(format!("src/{name}.rs"))
+            .build()
+    }
+
+    fn make_struct(id: &str, name: &str) -> Node {
+        Node::builder(NodeLabel::Struct, name, format!("proj.{name}"))
+            .id(id)
+            .project("proj")
+            .file_path(format!("src/{name}.rs"))
+            .build()
+    }
+
     #[test]
     fn analyze_returns_callers() {
         // Reverse traversal: who calls A -> returns callers.
@@ -663,5 +679,175 @@ mod tests {
         let analyzer = ImpactAnalyzer::new(&g);
         assert_eq!(analyzer.config.max_depth, 5);
         assert!(!analyzer.config.include_tests);
+    }
+
+    // ===== T025: Multi-edge-type upstream tracing tests =====
+
+    #[test]
+    fn trace_upstream_calls_edge_type() {
+        // A calls B → changing B affects A, edge_type=Calls.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"b".to_string());
+        assert_eq!(result.symbol, "b");
+        assert_eq!(result.affected.len(), 1);
+        assert_eq!(result.affected[0].name, "a");
+        assert_eq!(result.affected[0].edge_type, EdgeType::Calls);
+        assert_eq!(result.affected[0].depth, 1);
+    }
+
+    #[test]
+    fn trace_upstream_implements_edge_type() {
+        // A implements Trait T → changing T affects A, edge_type=Implements.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_trait("t", "t"));
+        g.add_edge(Edge::new("a", "t", EdgeType::Implements, "proj"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"t".to_string());
+        assert_eq!(result.affected.len(), 1);
+        assert_eq!(result.affected[0].name, "a");
+        assert_eq!(result.affected[0].edge_type, EdgeType::Implements);
+    }
+
+    #[test]
+    fn trace_upstream_ffi_calls_edge_type() {
+        // A ffi-calls B → changing B affects A, edge_type=FfiCalls.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "b", EdgeType::FfiCalls, "proj"));
+        let config = ImpactConfig {
+            max_depth: 5,
+            edge_types: vec![EdgeType::FfiCalls],
+            include_tests: false,
+        };
+        let analyzer = ImpactAnalyzer::with_config(&g, config);
+        let result = analyzer.analyze_impact(&"b".to_string());
+        assert_eq!(result.affected.len(), 1);
+        assert_eq!(result.affected[0].name, "a");
+        assert_eq!(result.affected[0].edge_type, EdgeType::FfiCalls);
+    }
+
+    #[test]
+    fn trace_upstream_http_calls_edge_type() {
+        // A http-calls R → changing R affects A, edge_type=HttpCalls.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("r", "r"));
+        g.add_edge(Edge::new("a", "r", EdgeType::HttpCalls, "proj"));
+        let config = ImpactConfig {
+            max_depth: 5,
+            edge_types: vec![EdgeType::HttpCalls],
+            include_tests: false,
+        };
+        let analyzer = ImpactAnalyzer::with_config(&g, config);
+        let result = analyzer.analyze_impact(&"r".to_string());
+        assert_eq!(result.affected.len(), 1);
+        assert_eq!(result.affected[0].name, "a");
+        assert_eq!(result.affected[0].edge_type, EdgeType::HttpCalls);
+    }
+
+    #[test]
+    fn trace_upstream_filters_unconfigured_edge_types() {
+        // Default config has Calls+Implements+UsesType.
+        // A reads B (Reads edge) → should NOT appear in results.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_var("b", "b"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Reads, "proj"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"b".to_string());
+        assert!(result.affected.is_empty());
+    }
+
+    #[test]
+    fn trace_upstream_multi_edge_type_mixed() {
+        // A calls B, C implements B, D uses-type B → all affected with correct edge types.
+        let mut g = Graph::new();
+        g.add_node(make_func("b", "b"));
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("c", "c"));
+        g.add_node(make_func("d", "d"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c", "b", EdgeType::Implements, "proj"));
+        g.add_edge(Edge::new("d", "b", EdgeType::UsesType, "proj"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"b".to_string());
+        assert_eq!(result.affected.len(), 3);
+        let by_name: std::collections::HashMap<&str, &ImpactNode> = result
+            .affected
+            .iter()
+            .map(|n| (n.name.as_str(), n))
+            .collect();
+        assert_eq!(by_name["a"].edge_type, EdgeType::Calls);
+        assert_eq!(by_name["c"].edge_type, EdgeType::Implements);
+        assert_eq!(by_name["d"].edge_type, EdgeType::UsesType);
+    }
+
+    #[test]
+    fn trace_upstream_records_impact_path() {
+        // A → B → C (A calls B, B calls C). Changing C affects B (depth 1) and A (depth 2).
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_node(make_func("c", "c"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("b", "c", EdgeType::Calls, "proj"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"c".to_string());
+        assert_eq!(result.affected.len(), 2);
+        let b_node = result.affected.iter().find(|n| n.name == "b").unwrap();
+        assert_eq!(b_node.depth, 1);
+        assert_eq!(b_node.impact_path, vec!["c", "b"]);
+        let a_node = result.affected.iter().find(|n| n.name == "a").unwrap();
+        assert_eq!(a_node.depth, 2);
+        assert_eq!(a_node.impact_path, vec!["c", "b", "a"]);
+    }
+
+    #[test]
+    fn trace_upstream_no_upstream_returns_empty() {
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"a".to_string());
+        assert!(result.affected.is_empty());
+    }
+
+    #[test]
+    fn trace_upstream_missing_symbol_returns_empty() {
+        let g = Graph::new();
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"missing".to_string());
+        assert!(result.affected.is_empty());
+        assert_eq!(result.symbol, "");
+    }
+
+    #[test]
+    fn trace_upstream_respects_max_depth() {
+        // A → B → C → D (chain of Calls). max_depth=2 from D returns C and B only.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_node(make_func("c", "c"));
+        g.add_node(make_func("d", "d"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("b", "c", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c", "d", EdgeType::Calls, "proj"));
+        let config = ImpactConfig {
+            max_depth: 2,
+            edge_types: vec![EdgeType::Calls],
+            include_tests: false,
+        };
+        let analyzer = ImpactAnalyzer::with_config(&g, config);
+        let result = analyzer.analyze_impact(&"d".to_string());
+        let names: Vec<&str> = result.affected.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"c"));
+        assert!(names.contains(&"b"));
+        assert!(!names.contains(&"a"));
+        assert_eq!(result.affected.len(), 2);
     }
 }
