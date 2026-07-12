@@ -2543,6 +2543,11 @@ fn parallel(a: i32) {
         assert_eq!(halstead_body_kind(Language::Rust), Some("block"));
         assert_eq!(halstead_body_kind(Language::Python), Some("block"));
         assert_eq!(halstead_body_kind(Language::C), Some("compound_statement"));
+    }
+
+    #[cfg(feature = "lang-typescript")]
+    #[test]
+    fn halstead_body_kind_typescript() {
         assert_eq!(halstead_body_kind(Language::TypeScript), Some("statement_block"));
     }
 
@@ -2551,6 +2556,11 @@ fn parallel(a: i32) {
         assert_eq!(while_kind(Language::Rust), "while_expression");
         assert_eq!(while_kind(Language::Python), "while_statement");
         assert_eq!(while_kind(Language::C), "while_statement");
+    }
+
+    #[cfg(feature = "lang-typescript")]
+    #[test]
+    fn while_kind_typescript() {
         assert_eq!(while_kind(Language::TypeScript), "while_statement");
     }
 
