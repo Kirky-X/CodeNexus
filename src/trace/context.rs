@@ -1395,4 +1395,105 @@ mod tests {
             .expect("should not error");
         assert!(tests.is_empty());
     }
+
+    // ===== Edge-case coverage for pure helper functions =====
+
+    #[test]
+    fn truncate_source_multibyte_at_boundary_adjusts_to_char_boundary() {
+        // Build a string where SOURCE_MAX_BYTES falls in the middle of a
+        // multi-byte UTF-8 character, forcing the char-boundary search loop
+        // to decrement `end` (line 26).
+        let prefix = "x".repeat(SOURCE_MAX_BYTES - 1);
+        let src = format!("{prefix}α"); // α is 2 bytes in UTF-8
+        let result = truncate_source(&src);
+        assert!(result.ends_with(SOURCE_TRUNCATED_MARKER));
+        // The result must be valid UTF-8 (char boundary respected).
+        assert!(std::str::from_utf8(result.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn parse_parameters_without_types_returns_empty_type_names() {
+        // `(a, b)` — no colons, so each param has an empty type_name.
+        // Covers the `else` branch (lines 64-66).
+        let params = parse_parameters("(a, b)");
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "a");
+        assert_eq!(params[0].type_name, "");
+        assert_eq!(params[1].name, "b");
+        assert_eq!(params[1].type_name, "");
+    }
+
+    #[test]
+    fn parse_parameters_skips_empty_param_between_commas() {
+        // `(a, , b)` — the middle entry is empty after trimming, so it's
+        // skipped via `return None` (line 56).
+        let params = parse_parameters("(a, , b)");
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "a");
+        assert_eq!(params[1].name, "b");
+    }
+
+    #[test]
+    fn parse_parameters_reversed_parens_returns_empty() {
+        // `)foo(` — the `)` comes before `(`, so `start >= end` (line 45).
+        let params = parse_parameters(")foo(");
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn collect_processes_ignores_edge_not_involving_start() {
+        // An edge between two nodes neither of which is `start_id` should
+        // hit the `None` arm (line 176) and be skipped.
+        let mut graph = Graph::new();
+        graph.add_node(make_node("a", "a", "demo.a", NodeLabel::Function, "/a.rs", 1));
+        graph.add_node(make_node("b", "b", "demo.b", NodeLabel::Function, "/b.rs", 1));
+        graph.add_node(
+            Node::builder(NodeLabel::Process, "checkout", "demo.checkout")
+                .id("p1")
+                .build(),
+        );
+        // Edge between "b" and "p1" — does NOT involve "a".
+        graph.add_edge(Edge::new("b", "p1", EdgeType::StepInProcess, "demo"));
+        let processes = collect_processes(&graph, &"a".to_string());
+        assert!(processes.is_empty(), "edge not involving start should be skipped");
+    }
+
+    // ===== ContextCollector::collect full integration =====
+
+    #[test]
+    fn collect_returns_full_context_for_function() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'foo', qualifiedName: 'demo.foo', filePath: '/src/foo.rs', startLine: 1, endLine: 10, signature: '(x: i32)', returnType: 'i32', isExported: true, docstring: '', content: 'fn foo() {}', parentQn: ''});").expect("create function");
+        s.execute("CREATE (:File {id: 'file1', project: 'demo', name: 'foo.rs', filePath: '/src/foo.rs', language: 'Rust', hash: '', lineCount: 10});").expect("create file");
+
+        let collector = ContextCollector::new(&*s);
+        let ctx = collector
+            .collect("demo", "demo.foo")
+            .expect("collect should succeed");
+        assert_eq!(ctx.symbol.name, "foo");
+        assert_eq!(ctx.symbol.qualified_name, "demo.foo");
+        assert_eq!(ctx.symbol.file_path, "/src/foo.rs");
+        // Stub methods return empty collections.
+        assert!(ctx.callers.is_empty());
+        assert!(ctx.callees.is_empty());
+        assert_eq!(ctx.data_flow, DataFlowSummary {});
+        // Type context is populated from the Function node.
+        assert_eq!(ctx.type_context.return_type, "i32");
+        // Module context is populated from the File node.
+        assert_eq!(ctx.module_context.file_path, "/src/foo.rs");
+    }
+
+    #[test]
+    fn collect_returns_error_when_symbol_not_found() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        let collector = ContextCollector::new(&*s);
+        assert!(
+            collector.collect("demo", "missing.symbol").is_err(),
+            "should error when symbol is not found"
+        );
+    }
 }
