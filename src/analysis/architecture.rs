@@ -687,8 +687,176 @@ impl<'a> ArchitectureAnalyzer<'a> {
     /// Returns [`crate::storage::error::StorageError`] if any Cypher query
     /// fails.
     fn detect_layers(&self, project: &str) -> StorageResult<Vec<LayerInfo>> {
-        let _ = project;
-        Ok(Vec::new())
+        let escaped = escape_cypher_string(project);
+
+        // (a) Load Function + Method nodes → id → qualifiedName.
+        let mut func_id_to_qn: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for table in &["Function", "Method"] {
+            let cypher = format!(
+                "MATCH (n:{table}) WHERE n.project = '{escaped}' \
+                 RETURN n.id AS id, n.qualifiedName AS qualified_name;"
+            );
+            let rows = self.storage.query(&cypher)?;
+            for row in rows {
+                if row.len() < 2 {
+                    continue;
+                }
+                let id = row[0].as_str().unwrap_or_default().to_string();
+                let qn = row[1].as_str().unwrap_or_default().to_string();
+                func_id_to_qn.insert(id, qn);
+            }
+        }
+
+        // (b) Load type nodes (Class/Struct/Enum/Trait/Interface) → id → qualifiedName.
+        let mut type_id_to_qn: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for table in &["Class", "Struct", "Enum", "Trait", "Interface"] {
+            let cypher = format!(
+                "MATCH (n:{table}) WHERE n.project = '{escaped}' \
+                 RETURN n.id AS id, n.qualifiedName AS qualified_name;"
+            );
+            let rows = self.storage.query(&cypher)?;
+            for row in rows {
+                if row.len() < 2 {
+                    continue;
+                }
+                let id = row[0].as_str().unwrap_or_default().to_string();
+                let qn = row[1].as_str().unwrap_or_default().to_string();
+                type_id_to_qn.insert(id, qn);
+            }
+        }
+
+        // (c) Load HANDLES_ROUTE edges → controller_ids (source ids).
+        let handles_cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.type = 'HANDLES_ROUTE' AND e.project = '{escaped}' \
+             RETURN e.source AS source;"
+        );
+        let handles_rows = self.storage.query(&handles_cypher)?;
+        let mut controller_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for row in handles_rows {
+            if let Some(source) = row.first().and_then(|v| v.as_str()) {
+                controller_ids.insert(source.to_string());
+            }
+        }
+
+        // (d) Load CALLS edges → calls_from (source → targets) + all_calls_ids.
+        let calls_cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.type = 'CALLS' AND e.project = '{escaped}' \
+             RETURN e.source AS source, e.target AS target;"
+        );
+        let calls_rows = self.storage.query(&calls_cypher)?;
+        let mut calls_from: std::collections::HashMap<String, std::collections::HashSet<String>> =
+            std::collections::HashMap::new();
+        let mut all_calls_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for row in calls_rows {
+            if row.len() < 2 {
+                continue;
+            }
+            let source = row[0].as_str().unwrap_or_default().to_string();
+            let target = row[1].as_str().unwrap_or_default().to_string();
+            calls_from
+                .entry(source.clone())
+                .or_default()
+                .insert(target.clone());
+            all_calls_ids.insert(source);
+            all_calls_ids.insert(target);
+        }
+
+        // (e) Load FETCHES edges → repository_ids (source ids).
+        let fetches_cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.type = 'FETCHES' AND e.project = '{escaped}' \
+             RETURN e.source AS source;"
+        );
+        let fetches_rows = self.storage.query(&fetches_cypher)?;
+        let mut repository_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for row in fetches_rows {
+            if let Some(source) = row.first().and_then(|v| v.as_str()) {
+                repository_ids.insert(source.to_string());
+            }
+        }
+
+        // (f) Load HAS_PROPERTY edges → model_candidate_ids (source ids).
+        let has_prop_cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.type = 'HAS_PROPERTY' AND e.project = '{escaped}' \
+             RETURN e.source AS source;"
+        );
+        let has_prop_rows = self.storage.query(&has_prop_cypher)?;
+        let mut model_candidate_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for row in has_prop_rows {
+            if let Some(source) = row.first().and_then(|v| v.as_str()) {
+                model_candidate_ids.insert(source.to_string());
+            }
+        }
+
+        // (g) Compute functions called by controllers (Service candidates).
+        let mut called_by_controllers: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for controller_id in &controller_ids {
+            if let Some(targets) = calls_from.get(controller_id) {
+                for target in targets {
+                    called_by_controllers.insert(target.clone());
+                }
+            }
+        }
+
+        // (h) Classify functions: Controller > Service > Repository.
+        let mut controllers: Vec<String> = Vec::new();
+        let mut services: Vec<String> = Vec::new();
+        let mut repositories: Vec<String> = Vec::new();
+        let mut models: Vec<String> = Vec::new();
+        for (id, qn) in &func_id_to_qn {
+            if controller_ids.contains(id) {
+                controllers.push(qn.clone());
+            } else if called_by_controllers.contains(id) {
+                services.push(qn.clone());
+            } else if repository_ids.contains(id) {
+                repositories.push(qn.clone());
+            }
+        }
+
+        // (i) Classify type nodes: Model = HAS_PROPERTY source + no CALLS edges.
+        for (id, qn) in &type_id_to_qn {
+            if model_candidate_ids.contains(id) && !all_calls_ids.contains(id) {
+                models.push(qn.clone());
+            }
+        }
+
+        // (j) Sort members and build result (only non-empty layers).
+        controllers.sort();
+        services.sort();
+        repositories.sort();
+        models.sort();
+        let mut result = Vec::new();
+        if !controllers.is_empty() {
+            result.push(LayerInfo {
+                layer: "Controller".to_string(),
+                members: controllers,
+            });
+        }
+        if !services.is_empty() {
+            result.push(LayerInfo {
+                layer: "Service".to_string(),
+                members: services,
+            });
+        }
+        if !repositories.is_empty() {
+            result.push(LayerInfo {
+                layer: "Repository".to_string(),
+                members: repositories,
+            });
+        }
+        if !models.is_empty() {
+            result.push(LayerInfo {
+                layer: "Model".to_string(),
+                members: models,
+            });
+        }
+        Ok(result)
     }
 }
 
@@ -1542,5 +1710,39 @@ mod tests {
                 dd.to_module
             );
         }
+    }
+
+    // --- T031: layer detection tests ---
+
+    #[test]
+    fn detect_layers_controller_handling_route() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Function that handles a route → Controller layer.
+        create_function(
+            &kit,
+            "ctrl1",
+            "demo",
+            "list_users",
+            "demo.list_users",
+            "/src/api/handler.rs",
+            1,
+        );
+        create_route(&kit, "r1", "demo", "/api/users", "GET");
+        create_edge(&kit, "e1", "ctrl1", "r1", "HANDLES_ROUTE", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        let controller = result
+            .layers
+            .iter()
+            .find(|l| l.layer == "Controller")
+            .expect("Controller layer should exist");
+        assert!(
+            controller.members.contains(&"demo.list_users".to_string()),
+            "Controller members should contain demo.list_users, got: {:?}",
+            controller.members
+        );
     }
 }
