@@ -6,7 +6,7 @@
 use serde::Serialize;
 
 #[cfg(feature = "analysis")]
-use crate::analysis::dead_code::{DeadCodeDetector, DeadCodeEntry};
+use crate::analysis::dead_code::{Confidence, DeadCodeDetector, DeadCodeEntry};
 #[cfg(feature = "analysis")]
 use crate::service::error::CodeNexusError;
 #[cfg(all(feature = "cli", feature = "analysis"))]
@@ -131,6 +131,7 @@ mod tests {
                 start_line: 1,
                 language: "rust".into(),
                 reason: "zero incoming CALLS edges".into(),
+                confidence: Confidence::High,
             }],
         };
         let json = serde_json::to_string(&out).unwrap();

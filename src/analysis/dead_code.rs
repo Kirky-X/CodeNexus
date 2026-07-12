@@ -16,10 +16,11 @@
 //! 4. The `language` field is resolved per-node by joining on the `File`
 //!    table's `filePath` (polyglot projects are handled correctly).
 
+use crate::model::EdgeType;
 use crate::storage::capability::Storage;
 use crate::storage::error::Result as StorageResult;
 use crate::storage::schema::escape_cypher_string;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Default glob patterns for functions that are NOT considered dead even with
 /// zero incoming CALLS edges (test functions are always invoked by the test
@@ -28,6 +29,65 @@ const DEFAULT_TEST_PATTERNS: &[&str] = &["test_*", "*_test", "*_spec"];
 
 /// Reason string recorded on every [`DeadCodeEntry`].
 const REASON_ZERO_INCOMING_CALLS: &str = "zero incoming CALLS edges";
+
+/// Configuration for dead-code detection.
+///
+/// Controls which edge types are consulted, whether exported/FFI functions are
+/// excluded, and the default entry-point / test-function patterns.
+#[derive(Debug, Clone)]
+pub struct DeadCodeConfig {
+    /// Glob patterns for function names that are always considered live
+    /// (e.g. `"main"`, `"WinMain"`).
+    pub entry_patterns: Vec<String>,
+    /// Glob patterns for test-function names (e.g. `"test_*"`).
+    pub test_patterns: Vec<String>,
+    /// When `true`, `isExported=true` nodes are excluded from dead code.
+    pub check_exported: bool,
+    /// Reserved for future trait-object / dynamic-dispatch detection.
+    pub check_dynamic_dispatch: bool,
+    /// Reserved for future reflection / serde detection.
+    pub check_reflection: bool,
+    /// When `true`, signatures containing `extern "C"` / `#[no_mangle]` are
+    /// treated as FFI entry points and excluded.
+    pub check_ffi: bool,
+    /// Edge types whose incoming edges mark a function as "used".
+    pub edge_types: Vec<EdgeType>,
+}
+
+impl Default for DeadCodeConfig {
+    fn default() -> Self {
+        Self {
+            entry_patterns: vec!["main".to_string()],
+            test_patterns: DEFAULT_TEST_PATTERNS.iter().map(|s| (*s).to_string()).collect(),
+            check_exported: true,
+            check_dynamic_dispatch: false,
+            check_reflection: false,
+            check_ffi: true,
+            edge_types: vec![
+                EdgeType::Calls,
+                EdgeType::FfiCalls,
+                EdgeType::Implements,
+                EdgeType::HandlesRoute,
+                EdgeType::Usage,
+                EdgeType::Tests,
+                EdgeType::UsesType,
+                EdgeType::HttpCalls,
+                EdgeType::AsyncCalls,
+            ],
+        }
+    }
+}
+
+/// Confidence level for a dead-code finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Confidence {
+    /// All edge types have zero incoming edges.
+    High,
+    /// Non-CALLS edges exist but no CALLS incoming edge.
+    Medium,
+    /// Some edge types have incoming edges but coverage is incomplete.
+    Low,
+}
 
 /// A single dead-code finding.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -42,20 +102,30 @@ pub struct DeadCodeEntry {
     pub start_line: u32,
     /// Source language (resolved from the `File` node).
     pub language: String,
-    /// Always `REASON_ZERO_INCOMING_CALLS`.
+    /// Why this node is considered dead (e.g. `zero incoming CALLS edges`).
     pub reason: String,
+    /// Confidence level of the finding.
+    pub confidence: Confidence,
 }
 
 /// Detects dead code (zero-indegree CALLS functions) for a project.
 pub struct DeadCodeDetector<'a> {
     storage: &'a dyn Storage,
+    config: DeadCodeConfig,
 }
 
 impl<'a> DeadCodeDetector<'a> {
-    /// Creates a new detector backed by the given storage capability.
+    /// Creates a new detector backed by the given storage capability, using
+    /// the default [`DeadCodeConfig`].
     #[must_use]
     pub fn new(storage: &'a dyn Storage) -> Self {
-        Self { storage }
+        Self::with_config(storage, DeadCodeConfig::default())
+    }
+
+    /// Creates a new detector with the supplied [`DeadCodeConfig`].
+    #[must_use]
+    pub fn with_config(storage: &'a dyn Storage, config: DeadCodeConfig) -> Self {
+        Self { storage, config }
     }
 
     /// Returns the dead-code entries for `project`.
@@ -105,6 +175,7 @@ impl<'a> DeadCodeDetector<'a> {
                 start_line: func.start_line,
                 language,
                 reason: REASON_ZERO_INCOMING_CALLS.to_string(),
+                confidence: Confidence::High,
             });
         }
         // Stable order by qualified name for deterministic output.
@@ -595,5 +666,103 @@ mod tests {
         let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"a"), "a is in demo project");
         assert!(!names.contains(&"b"), "b is in other project");
+    }
+
+    // --- T002: DeadCodeConfig / Confidence tests ---
+
+    #[test]
+    fn dead_code_config_default_values() {
+        let cfg = DeadCodeConfig::default();
+        // Entry patterns default to ["main"] (T006 expands this).
+        assert_eq!(cfg.entry_patterns, vec!["main".to_string()]);
+        // Test patterns mirror DEFAULT_TEST_PATTERNS.
+        assert_eq!(cfg.test_patterns.len(), 3);
+        assert!(cfg.test_patterns.contains(&"test_*".to_string()));
+        assert!(cfg.test_patterns.contains(&"*_test".to_string()));
+        assert!(cfg.test_patterns.contains(&"*_spec".to_string()));
+        // Exported / FFI checks are on by default.
+        assert!(cfg.check_exported, "check_exported should default to true");
+        assert!(cfg.check_ffi, "check_ffi should default to true");
+        // Dynamic-dispatch / reflection checks are off (reserved).
+        assert!(!cfg.check_dynamic_dispatch);
+        assert!(!cfg.check_reflection);
+        // Edge types must include all variants used for "used" detection
+        // per R-dead_code-001.
+        assert!(cfg.edge_types.contains(&EdgeType::Calls));
+        assert!(cfg.edge_types.contains(&EdgeType::FfiCalls));
+        assert!(cfg.edge_types.contains(&EdgeType::Implements));
+        assert!(cfg.edge_types.contains(&EdgeType::HandlesRoute));
+        assert!(cfg.edge_types.contains(&EdgeType::Usage));
+        assert!(cfg.edge_types.contains(&EdgeType::Tests));
+        assert!(cfg.edge_types.contains(&EdgeType::UsesType));
+        assert!(cfg.edge_types.contains(&EdgeType::HttpCalls));
+        assert!(cfg.edge_types.contains(&EdgeType::AsyncCalls));
+    }
+
+    #[test]
+    fn confidence_serializes_high_medium_low() {
+        // Variant name is the JSON representation (serde default).
+        assert_eq!(
+            serde_json::to_string(&Confidence::High).unwrap(),
+            "\"High\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Confidence::Medium).unwrap(),
+            "\"Medium\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Confidence::Low).unwrap(),
+            "\"Low\""
+        );
+        // Roundtrip every variant.
+        for c in [Confidence::High, Confidence::Medium, Confidence::Low] {
+            let json = serde_json::to_string(&c).unwrap();
+            let parsed: Confidence = serde_json::from_str(&json).unwrap();
+            assert_eq!(c, parsed, "roundtrip failed for {json}");
+        }
+    }
+
+    #[test]
+    fn confidence_rejects_invalid_variant() {
+        assert!(serde_json::from_str::<Confidence>("\"Critical\"").is_err());
+        assert!(serde_json::from_str::<Confidence>("\"high\"").is_err());
+    }
+
+    #[test]
+    fn detect_sets_confidence_high_for_zero_incoming() {
+        // Until T007 refines scoring, zero-incoming entries are High.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f_foo", "demo", "foo", "demo.foo", "/src/lib.rs", 1);
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let entry = result
+            .iter()
+            .find(|e| e.name == "foo")
+            .expect("foo should be dead");
+        assert_eq!(entry.confidence, Confidence::High);
+    }
+
+    #[test]
+    fn with_config_accepts_custom_config() {
+        // with_config must not panic and must produce a working detector.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f_a", "demo", "a", "demo.a", "/src/a.rs", 1);
+        let storage = storage(&kit);
+        let cfg = DeadCodeConfig {
+            entry_patterns: vec![],
+            test_patterns: vec![],
+            check_exported: false,
+            check_dynamic_dispatch: false,
+            check_reflection: false,
+            check_ffi: false,
+            edge_types: vec![EdgeType::Calls],
+        };
+        let detector = DeadCodeDetector::with_config(&*storage, cfg);
+        let result = detector.detect("demo", &[]).expect("detect");
+        assert_eq!(result.len(), 1, "a should be dead with empty patterns");
     }
 }
