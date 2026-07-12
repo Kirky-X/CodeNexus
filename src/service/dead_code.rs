@@ -8,13 +8,13 @@ use serde::Serialize;
 #[cfg(feature = "analysis")]
 use crate::analysis::dead_code::{Confidence, DeadCodeDetector, DeadCodeEntry};
 #[cfg(feature = "analysis")]
-use crate::service::error::CodeNexusError;
-#[cfg(all(feature = "cli", feature = "analysis"))]
-use crate::service::error::to_api_error;
-#[cfg(feature = "analysis")]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cli", feature = "analysis"))]
 use crate::service::error::kit_not_initialized;
+#[cfg(all(feature = "cli", feature = "analysis"))]
+use crate::service::error::to_api_error;
+#[cfg(feature = "analysis")]
+use crate::service::error::CodeNexusError;
 #[cfg(all(feature = "cli", feature = "analysis"))]
 use crate::service::runtime::kit;
 
@@ -36,7 +36,11 @@ pub struct DeadCodeOutput {
 /// `entry` is a comma-separated list of extra entry-point patterns;
 /// empty string means no extra patterns (defaults to `main`, `Main`, `__main__`).
 #[cfg(feature = "analysis")]
-fn dead_code_core(kit: &AsyncKit<AsyncReady>, project: &str, entry: &str) -> Result<(), CodeNexusError> {
+fn dead_code_core(
+    kit: &AsyncKit<AsyncReady>,
+    project: &str,
+    entry: &str,
+) -> Result<(), CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
     let detector = DeadCodeDetector::new(&*storage);
     let mut entry_patterns: Vec<&str> = vec!["main", "Main", "__main__"];

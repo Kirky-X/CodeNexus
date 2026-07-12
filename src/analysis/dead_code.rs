@@ -58,7 +58,10 @@ impl Default for DeadCodeConfig {
     fn default() -> Self {
         Self {
             entry_patterns: vec!["main".to_string()],
-            test_patterns: DEFAULT_TEST_PATTERNS.iter().map(|s| (*s).to_string()).collect(),
+            test_patterns: DEFAULT_TEST_PATTERNS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
             check_exported: true,
             check_dynamic_dispatch: false,
             check_reflection: false,
@@ -146,8 +149,8 @@ impl<'a> DeadCodeDetector<'a> {
         // (a) Load all Function/Method nodes for the project.
         let functions = self.load_functions(project)?;
 
-        // (b) Load the set of callee ids (targets of CALLS edges).
-        let callees = self.load_callees(project)?;
+        // (b) Load the set of referenced ids (targets of any configured edge type).
+        let referenced_ids = self.load_referenced_ids(project)?;
 
         // (c) Build a filePath -> language map from the File table.
         let file_languages = self.load_file_languages(project)?;
@@ -155,7 +158,7 @@ impl<'a> DeadCodeDetector<'a> {
         // (d) Filter: zero-indegree + not an entry point + not a test function.
         let mut entries = Vec::new();
         for func in &functions {
-            if callees.contains(&func.id) {
+            if referenced_ids.contains(&func.id) {
                 continue;
             }
             if matches_any_pattern(&func.name, entry_patterns) {
@@ -228,21 +231,44 @@ impl<'a> DeadCodeDetector<'a> {
         Ok(out)
     }
 
-    /// Loads the set of callee node ids (targets of CALLS edges) for `project`.
-    fn load_callees(&self, project: &str) -> StorageResult<std::collections::HashSet<String>> {
+    /// Loads the set of node ids that are targets of any edge type listed in
+    /// [`DeadCodeConfig::edge_types`] for `project`.
+    ///
+    /// A function is "used" if it appears as the `target` of at least one
+    /// CodeRelation edge whose type is in the configured set (CALLS, USAGE,
+    /// HANDLES_ROUTE, TESTS, etc.).
+    fn load_referenced_ids(
+        &self,
+        project: &str,
+    ) -> StorageResult<std::collections::HashSet<String>> {
         let escaped = escape_cypher_string(project);
-        let cypher = format!(
-            "MATCH (e:CodeRelation) WHERE e.type = 'CALLS' AND e.project = '{escaped}' \
-             RETURN e.target AS target;"
-        );
-        let rows = self.storage.query(&cypher)?;
-        let mut set = std::collections::HashSet::with_capacity(rows.len());
-        for row in rows {
-            if let Some(target) = row.first().and_then(|v| v.as_str()) {
-                set.insert(target.to_string());
+        let mut set = std::collections::HashSet::new();
+        for edge_type in &self.config.edge_types {
+            let type_str = edge_type.as_db_type();
+            let cypher = format!(
+                "MATCH (e:CodeRelation) WHERE e.type = '{type_str}' AND e.project = '{escaped}' \
+                 RETURN e.target AS target;"
+            );
+            let rows = self.storage.query(&cypher)?;
+            for row in rows {
+                if let Some(target) = row.first().and_then(|v| v.as_str()) {
+                    set.insert(target.to_string());
+                }
             }
         }
         Ok(set)
+    }
+
+    /// Returns `true` if there is at least one incoming edge of `edge_type`
+    /// targeting `func_id` in the graph (no project filter — func_id is unique).
+    fn has_incoming_edge(&self, func_id: &str, edge_type: EdgeType) -> StorageResult<bool> {
+        let escaped_id = escape_cypher_string(func_id);
+        let type_str = edge_type.as_db_type();
+        let cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.type = '{type_str}' AND e.target = '{escaped_id}' \
+             RETURN e.id AS id LIMIT 1;"
+        );
+        Ok(!self.storage.query(&cypher)?.is_empty())
     }
 
     /// Builds a `filePath -> language` map from the `File` table for `project`.
@@ -329,7 +355,9 @@ mod tests {
     }
 
     /// Returns the `dyn Storage` capability from `kit`.
-    fn storage(kit: &AsyncKit<AsyncReady>) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
+    fn storage(
+        kit: &AsyncKit<AsyncReady>,
+    ) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
         kit.require::<StorageModule>().expect("require_storage")
     }
 
@@ -395,20 +423,40 @@ mod tests {
         callee_id: &str,
         project: &str,
     ) {
+        create_edge(kit, edge_id, caller_id, callee_id, project, "CALLS");
+    }
+
+    /// Creates a CodeRelation edge of `edge_type` (DDL string, e.g. `"USAGE"`)
+    /// from `source_id` to `target_id`.
+    fn create_edge(
+        kit: &AsyncKit<AsyncReady>,
+        edge_id: &str,
+        source_id: &str,
+        target_id: &str,
+        project: &str,
+        edge_type: &str,
+    ) {
         let storage = storage(kit);
         let cypher = format!(
-            "CREATE (:CodeRelation {{id: '{}', source: '{}', target: '{}', type: 'CALLS', \
+            "CREATE (:CodeRelation {{id: '{}', source: '{}', target: '{}', type: '{}', \
              confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: '{}'}});",
             escape_cypher_string(edge_id),
-            escape_cypher_string(caller_id),
-            escape_cypher_string(callee_id),
+            escape_cypher_string(source_id),
+            escape_cypher_string(target_id),
+            escape_cypher_string(edge_type),
             escape_cypher_string(project),
         );
-        storage.execute(&cypher).expect("create calls edge");
+        storage.execute(&cypher).expect("create edge");
     }
 
     /// Creates a File node (for language resolution).
-    fn create_file(kit: &AsyncKit<AsyncReady>, id: &str, project: &str, file_path: &str, language: &str) {
+    fn create_file(
+        kit: &AsyncKit<AsyncReady>,
+        id: &str,
+        project: &str,
+        file_path: &str,
+        language: &str,
+    ) {
         let storage = storage(kit);
         let cypher = format!(
             "CREATE (:File {{id: '{}', project: '{}', name: '{}', filePath: '{}', \
@@ -710,10 +758,7 @@ mod tests {
             serde_json::to_string(&Confidence::Medium).unwrap(),
             "\"Medium\""
         );
-        assert_eq!(
-            serde_json::to_string(&Confidence::Low).unwrap(),
-            "\"Low\""
-        );
+        assert_eq!(serde_json::to_string(&Confidence::Low).unwrap(), "\"Low\"");
         // Roundtrip every variant.
         for c in [Confidence::High, Confidence::Medium, Confidence::Low] {
             let json = serde_json::to_string(&c).unwrap();
@@ -764,5 +809,172 @@ mod tests {
         let detector = DeadCodeDetector::with_config(&*storage, cfg);
         let result = detector.detect("demo", &[]).expect("detect");
         assert_eq!(result.len(), 1, "a should be dead with empty patterns");
+    }
+
+    // --- T003: multi-edge-type reference detection tests ---
+
+    #[test]
+    fn detect_usage_edge_prevents_dead_code() {
+        // R-dead_code-001: a USAGE edge marks the target as used.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f_foo", "demo", "foo", "demo.foo", "/src/lib.rs", 1);
+        create_function(&kit, "f_bar", "demo", "bar", "demo.bar", "/src/lib.rs", 5);
+        // bar uses foo → foo is not dead.
+        create_edge(&kit, "e1", "f_bar", "f_foo", "demo", "USAGE");
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(!names.contains(&"foo"), "foo has USAGE incoming edge");
+        assert!(names.contains(&"bar"), "bar has no incoming edges");
+    }
+
+    #[test]
+    fn detect_handles_route_edge_prevents_dead_code() {
+        // R-dead_code-001: a HANDLES_ROUTE edge marks the target as used.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(
+            &kit,
+            "f_handler",
+            "demo",
+            "handler",
+            "demo.handler",
+            "/src/lib.rs",
+            1,
+        );
+        create_function(&kit, "f_reg", "demo", "reg", "demo.reg", "/src/lib.rs", 5);
+        // reg -> handler (HANDLES_ROUTE) → handler is not dead.
+        create_edge(&kit, "e1", "f_reg", "f_handler", "demo", "HANDLES_ROUTE");
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            !names.contains(&"handler"),
+            "handler has HANDLES_ROUTE incoming edge"
+        );
+        assert!(names.contains(&"reg"), "reg has no incoming edges");
+    }
+
+    #[test]
+    fn detect_tests_edge_prevents_dead_code() {
+        // R-dead_code-001: a TESTS edge marks the target as used.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(
+            &kit,
+            "f_target",
+            "demo",
+            "target",
+            "demo.target",
+            "/src/lib.rs",
+            1,
+        );
+        create_function(
+            &kit,
+            "f_ttest",
+            "demo",
+            "ttest",
+            "demo.ttest",
+            "/src/lib.rs",
+            5,
+        );
+        // ttest tests target → target is not dead.
+        create_edge(&kit, "e1", "f_ttest", "f_target", "demo", "TESTS");
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(!names.contains(&"target"), "target has TESTS incoming edge");
+        assert!(names.contains(&"ttest"), "ttest has no incoming edges");
+    }
+
+    #[test]
+    fn detect_all_edge_types_exhaustive_no_incoming_is_dead() {
+        // R-dead_code-001: a function with no incoming edges of ANY type is dead.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(
+            &kit,
+            "f_lone",
+            "demo",
+            "lone",
+            "demo.lone",
+            "/src/lib.rs",
+            1,
+        );
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"lone"),
+            "lone has zero incoming edges → dead"
+        );
+    }
+
+    #[test]
+    fn has_incoming_edge_returns_true_for_existing_edge() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f_a", "demo", "a", "demo.a", "/src/lib.rs", 1);
+        create_function(&kit, "f_b", "demo", "b", "demo.b", "/src/lib.rs", 5);
+        create_edge(&kit, "e1", "f_a", "f_b", "demo", "USAGE");
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        assert!(
+            detector
+                .has_incoming_edge("f_b", EdgeType::Usage)
+                .expect("has_incoming_edge"),
+            "f_b should have USAGE incoming edge"
+        );
+    }
+
+    #[test]
+    fn has_incoming_edge_returns_false_for_missing_edge() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f_a", "demo", "a", "demo.a", "/src/lib.rs", 1);
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        assert!(
+            !detector
+                .has_incoming_edge("f_a", EdgeType::Calls)
+                .expect("has_incoming_edge"),
+            "f_a has no CALLS incoming edge"
+        );
+    }
+
+    #[test]
+    fn has_incoming_edge_distinguishes_edge_types() {
+        // A function with a USAGE edge but no CALLS edge: USAGE=true, CALLS=false.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f_a", "demo", "a", "demo.a", "/src/lib.rs", 1);
+        create_function(&kit, "f_b", "demo", "b", "demo.b", "/src/lib.rs", 5);
+        create_edge(&kit, "e1", "f_a", "f_b", "demo", "USAGE");
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        assert!(
+            detector
+                .has_incoming_edge("f_b", EdgeType::Usage)
+                .expect("has_incoming_edge"),
+            "f_b has USAGE edge"
+        );
+        assert!(
+            !detector
+                .has_incoming_edge("f_b", EdgeType::Calls)
+                .expect("has_incoming_edge"),
+            "f_b has no CALLS edge"
+        );
     }
 }
