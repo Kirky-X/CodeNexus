@@ -84,8 +84,10 @@ codenexus search <TEXT> [OPTIONS]
 - `--uid <UID>` — Narrow by node UID — direct lookup (H14)
 - `--file <PATH>` — Narrow by file path (H14)
 - `--kind <LABEL>` — Narrow by node label, e.g. `"Function"` (H14)
+- `--mode <MODE>` — Search mode: `exact` (default, case-insensitive substring), `regex` (Rust regex over name/qualifiedName), `fuzzy` (Levenshtein, `--max-distance` controls threshold), `graph` (name + degree/label filter), or `multi` (multi-signal scoring: name + degree + module + tests)
+- `--fulltext` — Use BM25 full-text search over `content`/`docstring` instead of structured name search
 
-**Output (JSON):** Array of `{name, label, file_path, start_line, qualified_name, score}`
+**Output (JSON):** Array of `{name, label, file_path, start_line, qualified_name, score, match_reason, degree}`
 
 ### Tracing & impact
 
@@ -99,12 +101,14 @@ codenexus trace <SYMBOL> [OPTIONS]
 - `--type <TYPE>` — Trace type: `calls`, `dataflow`, or `all` (default: `all`)
 - `--depth <N>` — Maximum traversal depth (default: 3)
 - `--db <DB_PATH>` — Database path (default: `./codenexus.lbug`)
-- `--min-confidence <0.0-1.0>` — Drop edges with lower confidence. `0.85` keeps only SameFile + ImportScoped edges (design.md D4).
 - `--uid <UID>` — Disambiguate by node UID (H14)
 - `--file <PATH>` — Disambiguate by file path (H14)
 - `--kind <LABEL>` — Disambiguate by node label (H14)
+- `--path-filter <GLOB>` — Filter trace paths to only include nodes whose `filePath` matches the glob (e.g. `"/src/api/**"`). Empty string means no filter.
+- `--detect-cycles` — When `true`, the trace result includes a `cycles` array listing detected call-graph cycles (DFS white/gray/black coloring). Each cycle is a list of node names forming the cycle path.
+- `--cross-service` — When `true`, the trace traverses `HTTP_CALLS` edges and reverse `HANDLES_ROUTE` edges, enabling cross-service call chain tracing (Route → handler Function).
 
-**Output (JSON):** `paths[].nodes`, `paths[].edges`, `paths[].depth`
+**Output (JSON):** `paths[].nodes`, `paths[].edges`, `paths[].depth`, `cycles[]` (when `--detect-cycles`)
 
 #### impact — Analyze impact radius
 
@@ -117,10 +121,12 @@ codenexus impact <SYMBOL> [OPTIONS]
 **Options:**
 - `--depth <N>` — Maximum reverse-traversal depth (default: 3)
 - `--db <DB_PATH>` — Database path (default: `./codenexus.lbug`)
-- `--min-confidence <0.0-1.0>` — Drop edges with lower confidence
 - `--uid <UID>` / `--file <PATH>` / `--kind <LABEL>` — Disambiguation (H14)
+- `--edge-types <LIST>` — Comma-separated UPPERCASE DDL edge types to traverse (e.g. `"CALLS,IMPLEMENTS,USES_TYPE"`). Empty string means use defaults (`CALLS` + `IMPLEMENTS` + `USES_TYPE`). Enables multi-dimensional impact analysis with risk assessment when non-empty.
+- `--max-depth <N>` — Max BFS depth for enhanced analysis (default: 5, clamped to 10). When non-zero, enables risk assessment.
+- `--include-tests` — When `true`, `TESTS` edges are included in the reverse BFS. Default: `false` (test callers are excluded).
 
-**Output (JSON):** List of affected symbols with their paths.
+**Output (JSON):** `symbol`, `depth`, `node_count`, `edge_count`, `nodes[]`, `edges[]`, `risk_assessment` (when enhanced), `affected[]` (when enhanced, each `ImpactNode` has `id`, `name`, `qualified_name`, `edge_type`, `depth`, `path`).
 
 #### context — Show a 360° view of a symbol (H8)
 
@@ -133,6 +139,54 @@ codenexus context <SYMBOL> [OPTIONS]
 **Options:**
 - `--db <DB_PATH>` — Database path (default: `./codenexus.lbug`)
 - `--depth <N>` — BFS expansion depth for the surrounding subgraph (default: 2)
+- `--project <NAME>` — Project name (required for `--enhanced`)
+- `--enhanced` — When `true`, returns the multi-dimensional `SymbolContext` (symbol definition + type context + module context + test context). When `false` (default), returns the legacy caller/callee/processes view.
+
+### Analysis
+
+#### dead_code — Detect unreferenced functions
+
+Identifies `Function`/`Method` nodes with zero incoming edges (across 9 configured edge types) that are not entry points (`main`/`Main`/`__main__`/`wmain`/`WinMain`/`DLLMain`) or test functions (`test_*`/`*_test`/`*_spec`). Each finding includes a confidence level: `High` (zero incoming of any type), `Medium` (non-CALLS edges only), `Low` (CALLS exists but excluded by config).
+
+```bash
+codenexus dead_code <PROJECT> [OPTIONS]
+```
+
+**Options:**
+- `--entry <PATTERNS>` — Comma-separated glob patterns for entry-point function names (default: `main,Main,__main__,wmain,WinMain,DLLMain`)
+- `--check-exported <BOOL>` — When `true` (default), `isExported=true` nodes are excluded
+- `--check-ffi <BOOL>` — When `true` (default), signatures with `extern "C"` or `#[no_mangle]` are excluded as FFI entry points
+- `--edge-types <LIST>` — Comma-separated UPPERCASE edge types whose incoming edges mark a function as "used" (default: `CALLS,FFI_CALLS,IMPLEMENTS,HANDLES_ROUTE,USAGE,TESTS,USES_TYPE,HTTP_CALLS,ASYNC_CALLS`)
+- `--db <DB_PATH>` — Database path (default: `./codenexus.lbug`)
+
+**Output (JSON):** `project`, `dead_code[]` (each entry: `name`, `qualified_name`, `file_path`, `start_line`, `language`, `reason`, `confidence`)
+
+#### cross_service — Detect cross-service call links
+
+Matches HTTP route definitions (`Route` nodes) against caller-side string literals in `Function` bodies. Supports multi-protocol detection: HTTP REST, gRPC, GraphQL, message queue (Kafka/RabbitMQ), and event bus (Socket.IO/EventEmitter).
+
+```bash
+codenexus cross_service <PROJECT> [OPTIONS]
+```
+
+**Options:**
+- `--protocol <PROTO>` — Filter by protocol: `http_rest` (default), `grpc`, `graphql`, `message_queue`, `event_bus`, or empty string for all protocols
+- `--db <DB_PATH>` — Database path (default: `./codenexus.lbug`)
+
+**Output (JSON):** `project`, `links[]` (HTTP REST matches), `matches[]` (multi-protocol matches with `protocol`, `match_type`, `confidence`)
+
+#### architecture — Show architecture overview
+
+Returns a high-level architecture overview including module boundaries (directory groups with cohesion scores), dependency directions (circular dependency detection), layers (Controller/Service/Repository/Model classification), and cross-service dependencies.
+
+```bash
+codenexus architecture <PROJECT> [OPTIONS]
+```
+
+**Options:**
+- `--db <DB_PATH>` — Database path (default: `./codenexus.lbug`)
+
+**Output (JSON):** `project`, `overview` (containing `layers[]`, `module_boundaries[]`, `dependency_directions[]`, `cross_service_deps[]`, `entry_points[]`)
 
 ### Project management
 

@@ -112,19 +112,25 @@ codenexus query "MATCH (f:Function) RETURN f.name LIMIT 10"
 # 3. 追踪调用链（支持歧义消解收窄）
 codenexus trace main --type calls --depth 5
 codenexus trace main --uid "proj.fn.main.1" --depth 5
+# 3b. 增强追踪：路径过滤 + 环检测 + 跨服务
+codenexus trace main --path-filter "/src/api/**" --detect-cycles --cross-service
 
-# 4. 分析变更影响（按置信度过滤）
+# 4. 分析变更影响（多维 + 风险评估）
 codenexus impact parse_function --depth 3
-codenexus impact parse_function --depth 3 --min-confidence 0.7
+codenexus impact parse_function --edge-types "CALLS,IMPLEMENTS,USES_TYPE" --max-depth 5 --include-tests
 
-# 5. 搜索符号
+# 5. 搜索符号（5 种模式 + BM25 全文）
 codenexus search "parse" --limit 20
+codenexus search "get.*user" --mode regex
+codenexus search "getuser" --mode fuzzy --max-distance 2
+codenexus search "authentication logic" --fulltext
 
-# 6. 360° 符号上下文
+# 6. 360° 符号上下文（基础 + 多维增强）
 codenexus context main
+codenexus context main --project myproject --enhanced
 
 # 7. 检测 git diff 影响的符号
-codenexus detect-changes /path/to/project
+codenexus detect_changes /path/to/project
 
 # 8. 重命名符号（图编辑 + 文本搜索，支持 --dry-run）
 codenexus rename old_name new_name --dry-run
@@ -149,6 +155,18 @@ codenexus list
 
 # 14. 删除项目
 codenexus clean myproject
+
+# 15. 死代码检测（多边类型 + FFI/导出检测 + 置信度）
+codenexus dead_code myproject
+codenexus dead_code myproject --check-exported true --check-ffi true
+codenexus dead_code myproject --edge-types "CALLS,FFI_CALLS,IMPLEMENTS,USAGE,TESTS"
+
+# 16. 跨服务调用链检测（HTTP REST / gRPC / GraphQL / 消息队列 / 事件总线）
+codenexus cross_service myproject
+codenexus cross_service myproject --protocol grpc
+
+# 17. 架构概览（模块边界 + 依赖方向 + 分层 + 跨服务依赖）
+codenexus architecture myproject
 ```
 
 ## CLI 命令
@@ -157,11 +175,11 @@ codenexus clean myproject
 |------|------|
 | `index` | 索引代码仓库到知识图谱（`--ram-first` 启用 LZ4 内存模式） |
 | `query` | 执行 Cypher 查询 |
-| `trace` | 追踪符号的调用/数据流路径（`--uid`/`--file`/`--kind` 收窄） |
-| `impact` | 分析符号变更的影响半径（`--min-confidence` 过滤） |
-| `search` | 按名称或内容搜索符号（`--uid`/`--file`/`--kind` 收窄） |
-| `context` | 360° 符号视图：入度调用/导入、出度调用、所属流程 |
-| `detect-changes` | git diff → 受影响符号 + risk_level |
+| `trace` | 追踪符号的调用/数据流路径（`--uid`/`--file`/`--kind` 收窄；`--path-filter`/`--detect-cycles`/`--cross-service` 增强追踪） |
+| `impact` | 分析符号变更的影响半径（`--edge-types`/`--max-depth`/`--include-tests` 多维分析 + `risk_assessment`） |
+| `search` | 按名称或内容搜索符号（`--mode` exact/regex/fuzzy/graph/multi；`--fulltext` BM25 全文） |
+| `context` | 360° 符号视图：入度调用/导入、出度调用、所属流程（`--project`/`--enhanced` 多维 SymbolContext） |
+| `detect_changes` | git diff → 受影响符号 + risk_level |
 | `rename` | 高置信度图编辑 + 文本搜索编辑（`--dry-run`） |
 | `export` | 导出 LadybugDB 转储 → zstd `codenexus.graph.zst` 制品 |
 | `import` | 导入制品 → LadybugDB（可选 `--reindex` 增量补齐本地差异） |
@@ -172,15 +190,15 @@ codenexus clean myproject
 | `status` | 查看索引状态 |
 | `list` | 列出所有已索引项目 |
 | `clean` | 删除项目及其索引 |
-| `dead-code` | 死代码检测（未被调用的函数，`analysis` feature） |
-| `architecture` | 架构概览（模块依赖图，`analysis` feature） |
+| `dead_code` | 死代码检测（9 边类型 + FFI/导出检测 + High/Medium/Low 置信度，`analysis` feature） |
+| `architecture` | 架构概览（模块边界 + 依赖方向 + 分层 + 跨服务依赖，`analysis` feature） |
 | `complexity` | AST 复杂度分析（8 项指标 + 可配置阈值，`complexity` feature） |
 | `api-route-map` | HTTP 路由映射（API 端点清单，`api-review` feature） |
 | `api-shape-check` | API 形状检查（请求/响应结构验证，`api-review` feature） |
 | `api-impact` | API 变更影响分析（`api-review` feature） |
 | `api-tool-map` | 工具映射（MCP 工具清单，`api-review` feature） |
 | `community` | 社区检测（Louvain 模块度优化，`community` feature） |
-| `cross-service` | 跨服务调用链检测（HTTP 路由模式匹配，`cross-service` feature） |
+| `cross_service` | 跨服务调用链检测（HTTP REST/gRPC/GraphQL/消息队列/事件总线，`cross-service` feature） |
 | `lsp-goto-def` | LSP 定义跳转（rust-analyzer 集成，`lsp` feature） |
 | `lsp-hover` | LSP 悬停信息（rust-analyzer 集成，`lsp` feature） |
 
