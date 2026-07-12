@@ -2223,4 +2223,143 @@ mod tests {
             "first match should be HTTP"
         );
     }
+
+    // ====================================================================
+    // Empty-content caller skipping in detect_* methods
+    // ====================================================================
+
+    #[test]
+    fn detect_http_skips_empty_content_caller() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r1", "demo", "/api/users");
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            "",
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_http("demo").expect("detect_http");
+        assert!(matches.is_empty(), "empty-content caller should be skipped");
+    }
+
+    #[test]
+    fn detect_grpc_skips_empty_content_caller() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            "",
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_grpc("demo").expect("detect_grpc");
+        assert!(matches.is_empty(), "empty-content caller should be skipped");
+    }
+
+    #[test]
+    fn detect_graphql_skips_empty_content_caller() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            "",
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_graphql("demo").expect("detect_graphql");
+        assert!(matches.is_empty(), "empty-content caller should be skipped");
+    }
+
+    #[test]
+    fn detect_message_queue_skips_empty_content_caller() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            "",
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector
+            .detect_message_queue("demo")
+            .expect("detect_message_queue");
+        assert!(matches.is_empty(), "empty-content caller should be skipped");
+    }
+
+    #[test]
+    fn detect_event_bus_skips_empty_content_caller() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            "",
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector
+            .detect_event_bus("demo")
+            .expect("detect_event_bus");
+        assert!(matches.is_empty(), "empty-content caller should be skipped");
+    }
+
+    // ====================================================================
+    // confidence_rank: Medium tier coverage
+    // ====================================================================
+
+    #[test]
+    fn detect_all_includes_medium_confidence_match() {
+        // A Parameterized HTTP match produces Medium confidence, which
+        // exercises the `Confidence::Medium => 1` arm in confidence_rank.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r1", "demo", "/api/users/:id");
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"fetch("/api/users/123");"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_all("demo").expect("detect_all");
+        assert!(
+            matches.iter().any(|m| m.confidence == Confidence::Medium),
+            "should include at least one Medium confidence match"
+        );
+    }
 }
