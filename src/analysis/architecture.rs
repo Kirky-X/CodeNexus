@@ -495,8 +495,101 @@ impl<'a> ArchitectureAnalyzer<'a> {
     /// Returns [`crate::storage::error::StorageError`] if any Cypher query
     /// fails.
     fn detect_module_boundaries(&self, project: &str) -> StorageResult<Vec<ModuleBoundary>> {
-        let _ = project;
-        Ok(Vec::new())
+        let escaped = escape_cypher_string(project);
+
+        // (a) Load Function + Method nodes → id → filePath, and group files by module.
+        let mut id_to_path: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let mut module_files: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for table in &["Function", "Method"] {
+            let cypher = format!(
+                "MATCH (n:{table}) WHERE n.project = '{escaped}' \
+                 RETURN n.id AS id, n.filePath AS file_path;"
+            );
+            let rows = self.storage.query(&cypher)?;
+            for row in rows {
+                if row.len() < 2 {
+                    continue;
+                }
+                let id = row[0].as_str().unwrap_or_default().to_string();
+                let file_path = row[1].as_str().unwrap_or_default().to_string();
+                id_to_path.insert(id, file_path.clone());
+                let module_name = module_name_from_path(&file_path);
+                module_files
+                    .entry(module_name)
+                    .or_default()
+                    .push(file_path);
+            }
+        }
+        // Deduplicate file paths within each module.
+        for files in module_files.values_mut() {
+            files.sort();
+            files.dedup();
+        }
+
+        // (b) Load all CALLS edges → source, target.
+        let calls_cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.type = 'CALLS' AND e.project = '{escaped}' \
+             RETURN e.source AS source, e.target AS target;"
+        );
+        let calls_rows = self.storage.query(&calls_cypher)?;
+
+        // (c) Count internal / incoming / outgoing per module.
+        let mut internal: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+        let mut incoming: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+        let mut outgoing: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+        for row in calls_rows {
+            if row.len() < 2 {
+                continue;
+            }
+            let source_id = row[0].as_str().unwrap_or_default().to_string();
+            let target_id = row[1].as_str().unwrap_or_default().to_string();
+            let source_path = match id_to_path.get(&source_id) {
+                Some(p) => p,
+                None => continue,
+            };
+            let target_path = match id_to_path.get(&target_id) {
+                Some(p) => p,
+                None => continue,
+            };
+            let source_module = module_name_from_path(source_path);
+            let target_module = module_name_from_path(target_path);
+            if source_module == target_module {
+                *internal.entry(source_module).or_insert(0) += 1;
+            } else {
+                *outgoing.entry(source_module).or_insert(0) += 1;
+                *incoming.entry(target_module).or_insert(0) += 1;
+            }
+        }
+
+        // (d) Build result: cohesion = internal / (internal + incoming + outgoing).
+        let mut result: Vec<ModuleBoundary> = module_files
+            .into_iter()
+            .map(|(module_name, members)| {
+                let internal_count = *internal.get(&module_name).unwrap_or(&0);
+                let incoming_count = *incoming.get(&module_name).unwrap_or(&0);
+                let outgoing_count = *outgoing.get(&module_name).unwrap_or(&0);
+                let total = internal_count + incoming_count + outgoing_count;
+                let cohesion = if total == 0 {
+                    1.0
+                } else {
+                    f64::from(internal_count) / f64::from(total)
+                };
+                ModuleBoundary {
+                    module_name,
+                    members,
+                    incoming_deps: incoming_count,
+                    outgoing_deps: outgoing_count,
+                    cohesion,
+                }
+            })
+            .collect();
+        result.sort_by(|a, b| a.module_name.cmp(&b.module_name));
+        Ok(result)
     }
 
     /// Analyzes dependency directions between modules and detects circular
@@ -546,6 +639,16 @@ fn package_prefix(qualified_name: &str) -> Option<&str> {
     // Take first 2 components.
     let end = components[0].len() + 1 + components[1].len();
     Some(&qualified_name[..end])
+}
+
+/// Extracts the module name (parent directory) from a file path.
+///
+/// `/src/a/foo.rs` → `/src/a`; `foo.rs` → ``.
+fn module_name_from_path(file_path: &str) -> String {
+    std::path::Path::new(file_path)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1204,6 +1307,75 @@ mod tests {
         assert!(
             json.contains("\"cross_service_deps\""),
             "json should contain cross_service_deps: {json}"
+        );
+    }
+
+    // --- T029: module boundary detection tests ---
+
+    #[test]
+    fn detect_module_boundaries_cohesion_5_internal_2_external() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Module A: /src/a/
+        create_function(&kit, "a1", "demo", "a1", "demo.a1", "/src/a/a1.rs", 1);
+        create_function(&kit, "a2", "demo", "a2", "demo.a2", "/src/a/a2.rs", 1);
+        create_function(&kit, "a3", "demo", "a3", "demo.a3", "/src/a/a3.rs", 1);
+        // Module B: /src/b/
+        create_function(&kit, "b1", "demo", "b1", "demo.b1", "/src/b/b1.rs", 1);
+        create_function(&kit, "b2", "demo", "b2", "demo.b2", "/src/b/b2.rs", 1);
+
+        // 5 internal CALLS edges within module A.
+        create_edge(&kit, "e1", "a1", "a2", "CALLS", "demo");
+        create_edge(&kit, "e2", "a2", "a3", "CALLS", "demo");
+        create_edge(&kit, "e3", "a1", "a3", "CALLS", "demo");
+        create_edge(&kit, "e4", "a3", "a1", "CALLS", "demo");
+        create_edge(&kit, "e5", "a2", "a1", "CALLS", "demo");
+        // 2 external CALLS edges between A and B.
+        create_edge(&kit, "e6", "a1", "b1", "CALLS", "demo");
+        create_edge(&kit, "e7", "b2", "a1", "CALLS", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        let module_a = result
+            .module_boundaries
+            .iter()
+            .find(|m| m.module_name.ends_with("src/a"))
+            .expect("module A should exist");
+        assert_eq!(module_a.incoming_deps, 1, "incoming_deps for A");
+        assert_eq!(module_a.outgoing_deps, 1, "outgoing_deps for A");
+        let expected = 5.0 / 7.0;
+        assert!(
+            (module_a.cohesion - expected).abs() < 0.001,
+            "cohesion should be ~{expected:.3}, got {}",
+            module_a.cohesion
+        );
+    }
+
+    #[test]
+    fn detect_module_boundaries_no_external_deps_cohesion_1() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "a1", "demo", "a1", "demo.a1", "/src/a/a1.rs", 1);
+        create_function(&kit, "a2", "demo", "a2", "demo.a2", "/src/a/a2.rs", 1);
+        // Only internal edges.
+        create_edge(&kit, "e1", "a1", "a2", "CALLS", "demo");
+        create_edge(&kit, "e2", "a2", "a1", "CALLS", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        let module_a = result
+            .module_boundaries
+            .iter()
+            .find(|m| m.module_name.ends_with("src/a"))
+            .expect("module A should exist");
+        assert_eq!(module_a.incoming_deps, 0, "no incoming deps");
+        assert_eq!(module_a.outgoing_deps, 0, "no outgoing deps");
+        assert!(
+            (module_a.cohesion - 1.0).abs() < 0.001,
+            "cohesion should be 1.0, got {}",
+            module_a.cohesion
         );
     }
 }
