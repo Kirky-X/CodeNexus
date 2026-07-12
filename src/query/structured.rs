@@ -232,6 +232,10 @@ impl<'a> SearchEngine<'a> {
 
     /// Fuzzy search using Levenshtein distance.
     ///
+    /// Compares `query` (case-insensitive) against every symbol name in
+    /// `project`. Results with `distance <= max_distance` are returned.
+    /// `max_distance = 0` is equivalent to exact case-insensitive match.
+    ///
     /// # Errors
     ///
     /// Returns [`QueryError::InvalidQuery`] if `query` is empty or
@@ -242,9 +246,57 @@ impl<'a> SearchEngine<'a> {
         query: &str,
         max_distance: usize,
     ) -> Result<Vec<SearchResult>> {
-        // T021 placeholder — implementation in next task.
-        let _ = (project, query, max_distance);
-        Ok(Vec::new())
+        if query.trim().is_empty() {
+            return Err(QueryError::InvalidQuery("fuzzy query must not be empty".to_string()));
+        }
+        if max_distance > MAX_FUZZY_DISTANCE {
+            return Err(QueryError::InvalidQuery(format!(
+                "max_distance {max_distance} exceeds limit {MAX_FUZZY_DISTANCE}"
+            )));
+        }
+        let query_lower = query.to_ascii_lowercase();
+        let project_esc = escape_cypher_string(project);
+        let mut results = Vec::new();
+        for &label in SYMBOL_LABELS {
+            let table = escape_identifier(label.table_name());
+            let cypher = format!(
+                "MATCH (n:{table}) WHERE n.project = '{project_esc}' \
+                 RETURN n.name AS name, n.qualifiedName AS qn, n.filePath AS filePath, \
+                 n.startLine AS line;"
+            );
+            let rows = match self.storage.query(&cypher) {
+                Ok(rows) => rows,
+                Err(_) => continue,
+            };
+            for row in rows {
+                let Some(name) = row.first().and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let name_lower = name.to_ascii_lowercase();
+                let dist = levenshtein(&query_lower, &name_lower);
+                if dist > max_distance {
+                    continue;
+                }
+                let qn = row.get(1).and_then(|v| v.as_str()).map(String::from);
+                let file_path = row.get(2).and_then(|v| v.as_str()).map(String::from);
+                let start_line = row
+                    .get(3)
+                    .and_then(|v| v.as_i64())
+                    .and_then(|i| u32::try_from(i).ok());
+                let max_len = query_lower.len().max(name_lower.len()).max(1);
+                let score = 1.0 - (dist as f64 / max_len as f64);
+                results.push(SearchResult {
+                    name: name.to_string(),
+                    label: label.to_string(),
+                    file_path,
+                    start_line,
+                    qualified_name: qn,
+                    score,
+                    match_reason: format!("fuzzy d={dist}"),
+                });
+            }
+        }
+        Ok(results)
     }
 
     /// Graph-enhanced search: name match + degree filter + label filter.
@@ -477,6 +529,41 @@ fn relevance_score_with_reason(name: &str, query: &str) -> (f64, &'static str) {
     } else {
         (0.5, "substring match")
     }
+}
+
+/// Computes the standard Levenshtein edit distance between `a` and `b`.
+///
+/// Uses O(`min(a.len, b.len)`) space (single-row DP with the previous
+/// diagonal value tracked separately).
+pub fn levenshtein(a: &str, b: &str) -> usize {
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+    if a_bytes.is_empty() {
+        return b_bytes.len();
+    }
+    if b_bytes.is_empty() {
+        return a_bytes.len();
+    }
+    // Ensure `b` is the shorter string to minimise row width.
+    let (a_bytes, b_bytes) = if a_bytes.len() < b_bytes.len() {
+        (b_bytes, a_bytes)
+    } else {
+        (a_bytes, b_bytes)
+    };
+    let b_len = b_bytes.len();
+    let mut prev_row: Vec<usize> = (0..=b_len).collect();
+    let mut curr_row = vec![0usize; b_len + 1];
+    for (i, &a_ch) in a_bytes.iter().enumerate() {
+        curr_row[0] = i + 1;
+        for (j, &b_ch) in b_bytes.iter().enumerate() {
+            let cost = usize::from(a_ch != b_ch);
+            curr_row[j + 1] = (prev_row[j + 1] + 1)
+                .min(curr_row[j] + 1)
+                .min(prev_row[j] + cost);
+        }
+        std::mem::swap(&mut prev_row, &mut curr_row);
+    }
+    prev_row[b_len]
 }
 
 /// Sorts results by descending score then ascending name, and truncates to `limit`.
@@ -1336,16 +1423,142 @@ mod tests {
     }
 
     #[test]
-    fn search_engine_fuzzy_mode_returns_empty_placeholder() {
+    fn search_engine_fuzzy_matches_within_distance() {
+        let storage = build_storage();
+        let funcs = [
+            Node::builder(NodeLabel::Function, "get_user", "demo.get_user")
+                .id("f1")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(1)
+                .end_line(10)
+                .language(Language::Rust)
+                .build(),
+            Node::builder(NodeLabel::Function, "getUser", "demo.getUser")
+                .id("f2")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(20)
+                .end_line(30)
+                .language(Language::Rust)
+                .build(),
+            Node::builder(NodeLabel::Function, "completely_unrelated", "demo.completely_unrelated")
+                .id("f3")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(40)
+                .end_line(50)
+                .language(Language::Rust)
+                .build(),
+        ];
+        storage.save_nodes(&funcs, NodeLabel::Function).expect("save_nodes");
+
+        let engine = SearchEngine::new(storage.as_ref());
+        // "getuser" vs "get_user" → distance 1 (insert "_")
+        // "getuser" vs "getUser"  → distance 0 (case-insensitive equal)
+        let results = engine
+            .search_fuzzy("demo", "getuser", 2)
+            .expect("fuzzy search");
+        let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.contains(&"get_user"), "should match get_user, got {names:?}");
+        assert!(names.contains(&"getUser"), "should match getUser, got {names:?}");
+        assert!(!names.contains(&"completely_unrelated"));
+        assert!(results.iter().all(|r| r.match_reason.starts_with("fuzzy")));
+    }
+
+    #[test]
+    fn search_engine_fuzzy_max_distance_zero_is_exact() {
+        let storage = build_storage();
+        let funcs = [
+            Node::builder(NodeLabel::Function, "fetch", "demo.fetch")
+                .id("f1")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(1)
+                .end_line(10)
+                .language(Language::Rust)
+                .build(),
+            Node::builder(NodeLabel::Function, "fetcher", "demo.fetcher")
+                .id("f2")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(20)
+                .end_line(30)
+                .language(Language::Rust)
+                .build(),
+        ];
+        storage.save_nodes(&funcs, NodeLabel::Function).expect("save_nodes");
+
+        let engine = SearchEngine::new(storage.as_ref());
+        // max_distance=0 → exact case-insensitive match only
+        let results = engine
+            .search_fuzzy("demo", "FETCH", 0)
+            .expect("fuzzy search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "fetch");
+        assert_eq!(results[0].match_reason, "fuzzy d=0");
+    }
+
+    #[test]
+    fn search_engine_fuzzy_excludes_beyond_max_distance() {
+        let storage = build_storage();
+        // "fethc" vs "fetch" → standard Levenshtein distance = 2
+        let func = Node::builder(NodeLabel::Function, "fetch", "demo.fetch")
+                .id("f1")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(1)
+                .end_line(10)
+                .language(Language::Rust)
+                .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+
+        let engine = SearchEngine::new(storage.as_ref());
+        // distance = 2, so max_distance=1 should NOT match
+        let results = engine
+            .search_fuzzy("demo", "fethc", 1)
+            .expect("fuzzy search");
+        assert!(results.is_empty(), "distance 2 should not match max_distance 1");
+
+        // max_distance=2 should match
+        let results = engine
+            .search_fuzzy("demo", "fethc", 2)
+            .expect("fuzzy search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "fetch");
+        assert_eq!(results[0].match_reason, "fuzzy d=2");
+    }
+
+    #[test]
+    fn search_engine_fuzzy_rejects_empty_query() {
         let storage = build_storage();
         let engine = SearchEngine::new(storage.as_ref());
-        let params = SearchParams {
-            query: "getuser".to_string(),
-            mode: SearchMode::Fuzzy,
-            ..SearchParams::default()
-        };
-        let results = engine.search("demo", &params).expect("fuzzy dispatch");
-        assert!(results.is_empty());
+        let err = engine
+            .search_fuzzy("demo", "", 2)
+            .expect_err("empty query should error");
+        assert!(err.is_invalid_query());
+    }
+
+    #[test]
+    fn search_engine_fuzzy_rejects_excessive_distance() {
+        let storage = build_storage();
+        let engine = SearchEngine::new(storage.as_ref());
+        let err = engine
+            .search_fuzzy("demo", "test", MAX_FUZZY_DISTANCE + 1)
+            .expect_err("excessive distance should error");
+        assert!(err.is_invalid_query());
+    }
+
+    #[test]
+    fn levenshtein_computes_known_distances() {
+        assert_eq!(levenshtein("", ""), 0);
+        assert_eq!(levenshtein("abc", ""), 3);
+        assert_eq!(levenshtein("", "abc"), 3);
+        assert_eq!(levenshtein("abc", "abc"), 0);
+        assert_eq!(levenshtein("kitten", "sitting"), 3);
+        assert_eq!(levenshtein("getuser", "get_user"), 1);
+        assert_eq!(levenshtein("getuser", "getuser"), 0);
+        assert_eq!(levenshtein("fethc", "fetch"), 2);
     }
 
     #[test]
