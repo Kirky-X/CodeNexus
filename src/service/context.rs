@@ -18,7 +18,7 @@ use crate::trace::types::{ContextOutput, SymbolNodeOutput};
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::prelude::ApiError;
-#[cfg(feature = "cli")]
+#[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::service_api;
 
 /// Runs context against an injected Kit (testable core).

@@ -18,7 +18,7 @@ use crate::trace::{TraceEdge, TraceNode, TraceResult, TraceType};
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::prelude::ApiError;
-#[cfg(feature = "cli")]
+#[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::service_api;
 
 /// JSON-serializable trace result.

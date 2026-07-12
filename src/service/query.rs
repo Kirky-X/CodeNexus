@@ -18,7 +18,7 @@ use crate::service::runtime::kit;
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::prelude::ApiError;
-#[cfg(feature = "cli")]
+#[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::service_api;
 
 /// Mirrors [`QueryResult`] with `Serialize`/`Deserialize` for JSON transport.
