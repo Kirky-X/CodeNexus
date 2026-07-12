@@ -161,10 +161,13 @@ impl<'a> DeadCodeDetector<'a> {
         // (b) Load the set of referenced ids (targets of any configured edge type).
         let referenced_ids = self.load_referenced_ids(project)?;
 
-        // (c) Build a filePath -> language map from the File table.
+        // (c) Load all edge targets split by CALLS vs non-CALLS for confidence.
+        let (calls_targets, non_calls_targets) = self.load_edge_targets_by_category(project)?;
+
+        // (d) Build a filePath -> language map from the File table.
         let file_languages = self.load_file_languages(project)?;
 
-        // (d) Filter: zero-indegree + not an entry point + not a test function.
+        // (e) Filter: zero-indegree + not an entry point + not a test function.
         let config_entry_patterns: Vec<&str> = self
             .config
             .entry_patterns
@@ -202,6 +205,13 @@ impl<'a> DeadCodeDetector<'a> {
                 .get(&func.file_path)
                 .cloned()
                 .unwrap_or_default();
+            let confidence = if calls_targets.contains(&func.id) {
+                Confidence::Low
+            } else if non_calls_targets.contains(&func.id) {
+                Confidence::Medium
+            } else {
+                Confidence::High
+            };
             entries.push(DeadCodeEntry {
                 name: func.name.clone(),
                 qualified_name: func.qualified_name.clone(),
@@ -209,7 +219,7 @@ impl<'a> DeadCodeDetector<'a> {
                 start_line: func.start_line,
                 language,
                 reason: REASON_ZERO_INCOMING_CALLS.to_string(),
-                confidence: Confidence::High,
+                confidence,
             });
         }
         // Stable order by qualified name for deterministic output.
@@ -288,6 +298,42 @@ impl<'a> DeadCodeDetector<'a> {
             }
         }
         Ok(set)
+    }
+
+    /// Loads all CodeRelation targets for `project`, split into two sets:
+    /// - `calls_targets`: ids that are targets of `CALLS` edges.
+    /// - `non_calls_targets`: ids that are targets of any non-`CALLS` edge.
+    ///
+    /// Used for confidence scoring: a dead function with only non-CALLS
+    /// incoming edges gets `Medium` confidence; one with CALLS gets `Low`.
+    fn load_edge_targets_by_category(
+        &self,
+        project: &str,
+    ) -> StorageResult<(
+        std::collections::HashSet<String>,
+        std::collections::HashSet<String>,
+    )> {
+        let escaped = escape_cypher_string(project);
+        let cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.project = '{escaped}' \
+             RETURN e.target AS target, e.type AS type;"
+        );
+        let rows = self.storage.query(&cypher)?;
+        let mut calls_targets = std::collections::HashSet::new();
+        let mut non_calls_targets = std::collections::HashSet::new();
+        for row in rows {
+            if row.len() < 2 {
+                continue;
+            }
+            let target = row[0].as_str().unwrap_or_default().to_string();
+            let edge_type = row[1].as_str().unwrap_or_default();
+            if edge_type == "CALLS" {
+                calls_targets.insert(target);
+            } else {
+                non_calls_targets.insert(target);
+            }
+        }
+        Ok((calls_targets, non_calls_targets))
     }
 
     /// Returns `true` if there is at least one incoming edge of `edge_type`
@@ -1448,5 +1494,107 @@ mod tests {
             "custom_entry excluded by parameter"
         );
         assert!(names.contains(&"dead_fn"), "dead_fn is dead");
+    }
+
+    // --- T007: confidence scoring tests ---
+
+    #[test]
+    fn detect_confidence_high_for_zero_incoming_edges() {
+        // R-dead_code-005: no incoming edges of ANY type → High.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f_foo", "demo", "foo", "demo.foo", "/src/lib.rs", 1);
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let entry = result
+            .iter()
+            .find(|e| e.name == "foo")
+            .expect("foo should be dead");
+        assert_eq!(
+            entry.confidence,
+            Confidence::High,
+            "zero incoming edges → High"
+        );
+    }
+
+    #[test]
+    fn detect_confidence_medium_for_non_calls_edge_only() {
+        // R-dead_code-005: has USAGE but no CALLS → Medium.
+        // Config with edge_types=[Calls] only: USAGE doesn't count as "used".
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f_foo", "demo", "foo", "demo.foo", "/src/lib.rs", 1);
+        create_function(&kit, "f_bar", "demo", "bar", "demo.bar", "/src/lib.rs", 5);
+        // bar uses foo → foo has a USAGE incoming edge.
+        create_edge(&kit, "e1", "f_bar", "f_foo", "demo", "USAGE");
+
+        let storage = storage(&kit);
+        let cfg = DeadCodeConfig {
+            edge_types: vec![EdgeType::Calls],
+            ..DeadCodeConfig::default()
+        };
+        let detector = DeadCodeDetector::with_config(&*storage, cfg);
+        let result = detector.detect("demo", &[]).expect("detect");
+        // foo is dead because USAGE is not in config.edge_types.
+        let foo_entry = result
+            .iter()
+            .find(|e| e.name == "foo")
+            .expect("foo should be dead (USAGE not in config.edge_types)");
+        assert_eq!(
+            foo_entry.confidence,
+            Confidence::Medium,
+            "USAGE but no CALLS → Medium"
+        );
+    }
+
+    #[test]
+    fn detect_confidence_low_for_calls_edge_with_empty_config() {
+        // R-dead_code-005: has CALLS but config doesn't check CALLS → Low.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f_foo", "demo", "foo", "demo.foo", "/src/lib.rs", 1);
+        create_function(&kit, "f_bar", "demo", "bar", "demo.bar", "/src/lib.rs", 5);
+        // bar calls foo → foo has a CALLS incoming edge.
+        create_calls_edge(&kit, "e1", "f_bar", "f_foo", "demo");
+
+        let storage = storage(&kit);
+        let cfg = DeadCodeConfig {
+            edge_types: vec![], // empty: nothing counts as "used"
+            ..DeadCodeConfig::default()
+        };
+        let detector = DeadCodeDetector::with_config(&*storage, cfg);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let foo_entry = result
+            .iter()
+            .find(|e| e.name == "foo")
+            .expect("foo should be dead (empty edge_types)");
+        assert_eq!(
+            foo_entry.confidence,
+            Confidence::Low,
+            "has CALLS incoming edge → Low"
+        );
+    }
+
+    #[test]
+    fn detect_confidence_serializes_in_dead_code_entry() {
+        // Confidence field must appear in serialized JSON.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f_foo", "demo", "foo", "demo.foo", "/src/lib.rs", 1);
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let entry = result
+            .iter()
+            .find(|e| e.name == "foo")
+            .expect("foo should be dead");
+        let json = serde_json::to_string(entry).expect("serialize");
+        assert!(
+            json.contains("\"confidence\":\"High\""),
+            "JSON should contain confidence field: {json}"
+        );
     }
 }
