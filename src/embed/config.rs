@@ -199,6 +199,7 @@ mod tests {
 
     #[test]
     fn config_from_env_reads_key() {
+        let _lock = crate::embed::ENV_TEST_LOCK.lock().unwrap();
         // Set a key and verify it's picked up.
         std::env::set_var(API_KEY_ENV, "test-key-123");
         std::env::remove_var(EMBED_ENDPOINT_ENV);
@@ -211,6 +212,7 @@ mod tests {
 
     #[test]
     fn config_from_env_falls_back_to_openai_var() {
+        let _lock = crate::embed::ENV_TEST_LOCK.lock().unwrap();
         std::env::remove_var(API_KEY_ENV);
         std::env::set_var(OPENAI_API_KEY_ENV, "openai-fallback");
         std::env::remove_var(EMBED_ENDPOINT_ENV);
@@ -221,6 +223,7 @@ mod tests {
 
     #[test]
     fn config_from_env_no_key_returns_none() {
+        let _lock = crate::embed::ENV_TEST_LOCK.lock().unwrap();
         std::env::remove_var(API_KEY_ENV);
         std::env::remove_var(OPENAI_API_KEY_ENV);
         std::env::remove_var(EMBED_ENDPOINT_ENV);
@@ -231,6 +234,7 @@ mod tests {
 
     #[test]
     fn config_from_env_reads_endpoint_for_remote_mode() {
+        let _lock = crate::embed::ENV_TEST_LOCK.lock().unwrap();
         std::env::set_var(EMBED_ENDPOINT_ENV, "https://custom.example.com/v1");
         std::env::remove_var(API_KEY_ENV);
         std::env::remove_var(OPENAI_API_KEY_ENV);
@@ -248,6 +252,7 @@ mod tests {
 
     #[test]
     fn config_from_env_reads_model_path() {
+        let _lock = crate::embed::ENV_TEST_LOCK.lock().unwrap();
         std::env::set_var(EMBED_MODEL_PATH_ENV, "/custom/from/env/model.onnx");
         std::env::remove_var(EMBED_ENDPOINT_ENV);
         let cfg = EmbeddingConfig::from_env();
@@ -260,6 +265,7 @@ mod tests {
 
     #[test]
     fn config_from_env_defaults_to_local_when_endpoint_unset() {
+        let _lock = crate::embed::ENV_TEST_LOCK.lock().unwrap();
         std::env::remove_var(EMBED_ENDPOINT_ENV);
         let cfg = EmbeddingConfig::from_env();
         assert!(

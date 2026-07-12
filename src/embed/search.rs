@@ -37,15 +37,15 @@ const RRF_K: u32 = 60;
 
 /// Weight for the base (BM25 + semantic RRF) score in multi-signal fusion
 /// (R-search-002). Explicit constant per Rule 5 (deterministic logic).
-const BASE_WEIGHT: f32 = 0.5;
+const BASE_WEIGHT: f64 = 0.5;
 
 /// Weight for the centrality signal (CALLS in-degree) in multi-signal fusion
 /// (R-search-002).
-const CENTRALITY_WEIGHT: f32 = 0.3;
+const CENTRALITY_WEIGHT: f64 = 0.3;
 
 /// Weight for the file heat signal (IMPORTS count) in multi-signal fusion
 /// (R-search-002).
-const FILE_HEAT_WEIGHT: f32 = 0.2;
+const FILE_HEAT_WEIGHT: f64 = 0.2;
 
 /// The search strategy to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -368,13 +368,13 @@ fn apply_multi_signal_scoring(
         return results;
     }
 
-    let centrality_scores: HashMap<String, f32> = if enable_centrality {
+    let centrality_scores: HashMap<String, f64> = if enable_centrality {
         compute_centrality_scores(conn, &results, project)
     } else {
         HashMap::new()
     };
 
-    let file_heat_scores: HashMap<String, f32> = if enable_file_heat {
+    let file_heat_scores: HashMap<String, f64> = if enable_file_heat {
         compute_file_heat_scores(conn, &results, project)
     } else {
         HashMap::new()
@@ -407,7 +407,7 @@ fn compute_centrality_scores(
     conn: &StorageConnection,
     results: &[SearchResult],
     project: &str,
-) -> HashMap<String, f32> {
+) -> HashMap<String, f64> {
     let project_esc = project.replace('\'', "\\'");
 
     // Load all CALLS edges, aggregate in-degree per target node id.
@@ -437,7 +437,7 @@ fn compute_centrality_scores(
             .and_then(|id| in_degrees.get(&id).copied())
             .unwrap_or(0);
         let centrality = if max_in_degree > 0 {
-            in_degree as f32 / max_in_degree as f32
+            in_degree as f64 / max_in_degree as f64
         } else {
             0.0
         };
@@ -454,7 +454,7 @@ fn compute_file_heat_scores(
     conn: &StorageConnection,
     results: &[SearchResult],
     project: &str,
-) -> HashMap<String, f32> {
+) -> HashMap<String, f64> {
     let project_esc = project.replace('\'', "\\'");
 
     // Load all File nodes: id → filePath, filePath → id.
@@ -501,7 +501,7 @@ fn compute_file_heat_scores(
             .and_then(|id| import_counts.get(id).copied())
             .unwrap_or(0);
         let heat_score = if max_imports > 0 {
-            heat as f32 / max_imports as f32
+            heat as f64 / max_imports as f64
         } else {
             0.0
         };
@@ -552,7 +552,7 @@ pub fn rrf_fuse(
 /// Fuses multiple ranked lists using RRF.
 #[must_use]
 pub fn rrf_fuse_multi(lists: Vec<Vec<SearchResult>>, limit: usize) -> Vec<SearchResult> {
-    let mut scores: HashMap<String, (f32, SearchResult)> = HashMap::new();
+    let mut scores: HashMap<String, (f64, SearchResult)> = HashMap::new();
 
     for list in &lists {
         for (rank, result) in list.iter().enumerate() {
@@ -560,14 +560,14 @@ pub fn rrf_fuse_multi(lists: Vec<Vec<SearchResult>>, limit: usize) -> Vec<Search
                 .qualified_name
                 .clone()
                 .unwrap_or_else(|| result.name.clone());
-            let rrf_score = 1.0 / (RRF_K as f32 + (rank + 1) as f32);
+            let rrf_score = 1.0 / (RRF_K as f64 + (rank + 1) as f64);
             let entry = scores.entry(key).or_insert_with(|| (0.0, result.clone()));
             entry.0 += rrf_score;
             // Keep the first occurrence's metadata; update score.
         }
     }
 
-    let mut fused: Vec<(f32, SearchResult)> = scores
+    let mut fused: Vec<(f64, SearchResult)> = scores
         .into_iter()
         .map(|(_, (score, mut result))| {
             result.score = score;
@@ -626,7 +626,8 @@ fn lookup_node_metadata(conn: &StorageConnection, hit: &EmbeddingHit) -> Option<
                     file_path,
                     start_line,
                     qualified_name,
-                    score: hit.score,
+                    score: hit.score as f64,
+                    match_reason: "semantic search match".to_string(),
                 });
             }
         }
@@ -711,6 +712,7 @@ mod tests {
                 start_line: None,
                 qualified_name: Some("a".into()),
                 score: 1.0,
+                match_reason: "test".to_string(),
             },
             SearchResult {
                 name: "b".into(),
@@ -719,6 +721,7 @@ mod tests {
                 start_line: None,
                 qualified_name: Some("b".into()),
                 score: 0.8,
+                match_reason: "test".to_string(),
             },
         ];
         let list_b = vec![
@@ -729,6 +732,7 @@ mod tests {
                 start_line: None,
                 qualified_name: Some("b".into()),
                 score: 1.0,
+                match_reason: "test".to_string(),
             },
             SearchResult {
                 name: "c".into(),
@@ -737,6 +741,7 @@ mod tests {
                 start_line: None,
                 qualified_name: Some("c".into()),
                 score: 0.9,
+                match_reason: "test".to_string(),
             },
         ];
         let fused = rrf_fuse(list_a, list_b, 10);
@@ -758,6 +763,7 @@ mod tests {
                 start_line: None,
                 qualified_name: Some(format!("a{i}")),
                 score: 1.0,
+                match_reason: "test".to_string(),
             })
             .collect();
         let list_b: Vec<_> = (0..5)
@@ -768,6 +774,7 @@ mod tests {
                 start_line: None,
                 qualified_name: Some(format!("b{i}")),
                 score: 1.0,
+                match_reason: "test".to_string(),
             })
             .collect();
         let fused = rrf_fuse(list_a, list_b, 3);
@@ -789,6 +796,7 @@ mod tests {
             start_line: None,
             qualified_name: Some("a".into()),
             score: 1.0,
+            match_reason: "test".to_string(),
         }];
         let fused = rrf_fuse(list_a, vec![], 10);
         assert_eq!(fused.len(), 1);
@@ -804,6 +812,7 @@ mod tests {
             start_line: None,
             qualified_name: Some("demo.parse".into()),
             score: 1.0,
+            match_reason: "test".to_string(),
         }];
         let list_b = vec![SearchResult {
             name: "parse".into(),
@@ -812,6 +821,7 @@ mod tests {
             start_line: None,
             qualified_name: Some("demo.parse".into()),
             score: 0.9,
+            match_reason: "test".to_string(),
         }];
         let fused = rrf_fuse(list_a, list_b, 10);
         assert_eq!(fused.len(), 1, "should deduplicate by qualified_name");
@@ -826,6 +836,7 @@ mod tests {
             start_line: None,
             qualified_name: None,
             score: 1.0,
+            match_reason: "test".to_string(),
         }];
         let list_b = vec![SearchResult {
             name: "parse".into(),
@@ -834,6 +845,7 @@ mod tests {
             start_line: None,
             qualified_name: None,
             score: 0.9,
+            match_reason: "test".to_string(),
         }];
         let fused = rrf_fuse(list_a, list_b, 10);
         assert_eq!(fused.len(), 1, "should deduplicate by name when no QN");
@@ -851,6 +863,7 @@ mod tests {
                     start_line: None,
                     qualified_name: Some(n.to_string()),
                     score: 1.0,
+                    match_reason: "test".to_string(),
                 })
                 .collect()
         };
@@ -874,6 +887,7 @@ mod tests {
             start_line: None,
             qualified_name: Some("a".into()),
             score: 0.99,
+            match_reason: "test".to_string(),
         }];
         let fused = rrf_fuse(list_a, vec![], 10);
         // RRF score for rank 1 in one list: 1/(60+1) ≈ 0.0164

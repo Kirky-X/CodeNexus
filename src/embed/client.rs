@@ -733,6 +733,7 @@ mod tests {
 
     #[test]
     fn openai_client_new_with_endpoint_but_no_key_returns_missing_key() {
+        let _lock = crate::embed::ENV_TEST_LOCK.lock().unwrap();
         // Remote mode (endpoint=Some) but no API key → MissingApiKey.
         std::env::remove_var("CODENEXUS_EMBED_API_KEY");
         std::env::remove_var("OPENAI_API_KEY");
@@ -759,6 +760,7 @@ mod tests {
 
     #[test]
     fn openai_client_from_env_without_endpoint_errors() {
+        let _lock = crate::embed::ENV_TEST_LOCK.lock().unwrap();
         // H10/D7: without CODENEXUS_EMBED_ENDPOINT, from_env returns local-mode
         // config, which OpenAIEmbedClient rejects.
         std::env::remove_var("CODENEXUS_EMBED_ENDPOINT");
@@ -774,6 +776,7 @@ mod tests {
 
     #[test]
     fn openai_client_from_env_with_endpoint_and_key_succeeds() {
+        let _lock = crate::embed::ENV_TEST_LOCK.lock().unwrap();
         std::env::set_var("CODENEXUS_EMBED_ENDPOINT", "https://api.openai.com/v1");
         std::env::set_var("CODENEXUS_EMBED_API_KEY", "env-key");
         let client = OpenAIEmbedClient::from_env().expect("should succeed");

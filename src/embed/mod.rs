@@ -63,6 +63,11 @@ pub use storage::{EmbeddingRecord, EmbeddingStorage};
 /// Expected embedding dimension (DDD §5.9: `FLOAT[384]`).
 pub const EMBEDDING_DIM: usize = 384;
 
+/// Test-only lock to serialize environment-variable manipulation across
+/// `client::tests` and `config::tests` (prevents `std::env::set_var` races).
+#[cfg(test)]
+pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
