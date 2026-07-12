@@ -319,7 +319,9 @@ impl<'a> CrossServiceDetector<'a> {
         Self { storage }
     }
 
-    /// Runs all protocol detectors and merges results.
+    /// Runs all protocol detectors and merges results, sorted by confidence
+    /// descending (High first, Low last). Stable sort preserves detection
+    /// order within the same confidence tier.
     ///
     /// # Errors
     ///
@@ -331,6 +333,7 @@ impl<'a> CrossServiceDetector<'a> {
         matches.extend(self.detect_graphql(project)?);
         matches.extend(self.detect_message_queue(project)?);
         matches.extend(self.detect_event_bus(project)?);
+        matches.sort_by_key(|m| confidence_rank(m.confidence));
         Ok(matches)
     }
 
@@ -355,11 +358,7 @@ impl<'a> CrossServiceDetector<'a> {
             for literal in &literals {
                 for route in &routes {
                     if let Some(match_type) = match_route(&route.path, literal) {
-                        let confidence = match match_type {
-                            MatchType::Exact => Confidence::High,
-                            MatchType::Parameterized => Confidence::Medium,
-                            MatchType::Wildcard | MatchType::Pattern => Confidence::Low,
-                        };
+                        let confidence = self.score_confidence(&match_type, &ServiceProtocol::HttpRest);
                         matches.push(CrossServiceMatch {
                             caller: caller.id.clone(),
                             callee: route.id.clone(),
@@ -394,7 +393,7 @@ impl<'a> CrossServiceDetector<'a> {
                     callee: url.clone(),
                     protocol: ServiceProtocol::Grpc,
                     match_type: MatchType::Pattern,
-                    confidence: Confidence::Low,
+                    confidence: self.score_confidence(&MatchType::Pattern, &ServiceProtocol::Grpc),
                     reason: format!("gRPC URL: {url}"),
                 });
             }
@@ -404,7 +403,7 @@ impl<'a> CrossServiceDetector<'a> {
                     callee: method.clone(),
                     protocol: ServiceProtocol::Grpc,
                     match_type: MatchType::Pattern,
-                    confidence: Confidence::Low,
+                    confidence: self.score_confidence(&MatchType::Pattern, &ServiceProtocol::Grpc),
                     reason: format!("gRPC client call: {method}"),
                 });
             }
@@ -431,7 +430,7 @@ impl<'a> CrossServiceDetector<'a> {
                     callee: op.clone(),
                     protocol: ServiceProtocol::GraphQL,
                     match_type: MatchType::Pattern,
-                    confidence: Confidence::Low,
+                    confidence: self.score_confidence(&MatchType::Pattern, &ServiceProtocol::GraphQL),
                     reason: format!("GraphQL {op}"),
                 });
             }
@@ -460,7 +459,7 @@ impl<'a> CrossServiceDetector<'a> {
                     callee: callee.clone(),
                     protocol: ServiceProtocol::MessageQueue,
                     match_type: MatchType::Pattern,
-                    confidence: Confidence::Low,
+                    confidence: self.score_confidence(&MatchType::Pattern, &ServiceProtocol::MessageQueue),
                     reason: format!("MessageQueue {direction}: {callee}"),
                 });
             }
@@ -489,12 +488,30 @@ impl<'a> CrossServiceDetector<'a> {
                     callee: callee.clone(),
                     protocol: ServiceProtocol::EventBus,
                     match_type: MatchType::Pattern,
-                    confidence: Confidence::Low,
+                    confidence: self.score_confidence(&MatchType::Pattern, &ServiceProtocol::EventBus),
                     reason: format!("EventBus {direction}: {callee}"),
                 });
             }
         }
         Ok(matches)
+    }
+
+    /// Maps a `(match_type, protocol)` pair to a [`Confidence`] level.
+    ///
+    /// Scoring matrix (per R-cross_service-005):
+    /// - **High**: `Exact` match on `HttpRest` or `Grpc`.
+    /// - **Medium**: `Parameterized` match on any protocol, or `Exact`
+    ///   match on a non-HTTP/gRPC protocol.
+    /// - **Low**: `Pattern` or `Wildcard` match on any protocol.
+    fn score_confidence(&self, match_type: &MatchType, protocol: &ServiceProtocol) -> Confidence {
+        match (match_type, protocol) {
+            (MatchType::Exact, ServiceProtocol::HttpRest | ServiceProtocol::Grpc) => {
+                Confidence::High
+            }
+            (MatchType::Exact, _) => Confidence::Medium,
+            (MatchType::Parameterized, _) => Confidence::Medium,
+            (MatchType::Pattern, _) | (MatchType::Wildcard, _) => Confidence::Low,
+        }
     }
 
     fn load_routes(&self, project: &str) -> StorageResult<Vec<RouteRow>> {
@@ -830,6 +847,16 @@ fn extract_event_bus_patterns(content: &str) -> Vec<(String, &'static str)> {
         }
     }
     results
+}
+
+/// Returns a sort key for [`Confidence`] so that `sort_by_key` produces
+/// descending confidence order (High=0 first, Medium=1, Low=2 last).
+fn confidence_rank(c: Confidence) -> u8 {
+    match c {
+        Confidence::High => 0,
+        Confidence::Medium => 1,
+        Confidence::Low => 2,
+    }
 }
 
 #[cfg(test)]
@@ -2045,5 +2072,155 @@ mod tests {
         let detector = CrossServiceDetector::new(&*s);
         let matches = detector.detect_event_bus("demo").expect("detect_event_bus");
         assert!(matches.is_empty(), "plain function should not match EventBus");
+    }
+
+    // ====================================================================
+    // T013: Confidence scoring (R-cross_service-005)
+    // ====================================================================
+
+    fn make_detector() -> CrossServiceDetector<'static> {
+        // score_confidence is a pure function of (match_type, protocol) —
+        // it never touches storage, so an empty DB is fine. We leak the
+        // kit and Arc to obtain a 'static reference (test-only, process
+        // exits shortly after).
+        let db = fresh_db_path();
+        let kit = Box::leak(Box::new(build_kit_for_db(&db)));
+        let s = storage(kit);
+        let leaked = Box::leak(Box::new(s));
+        CrossServiceDetector::new(&**leaked)
+    }
+
+    #[test]
+    fn score_confidence_exact_http_returns_high() {
+        let det = make_detector();
+        assert_eq!(
+            det.score_confidence(&MatchType::Exact, &ServiceProtocol::HttpRest),
+            Confidence::High,
+        );
+    }
+
+    #[test]
+    fn score_confidence_exact_grpc_returns_high() {
+        let det = make_detector();
+        assert_eq!(
+            det.score_confidence(&MatchType::Exact, &ServiceProtocol::Grpc),
+            Confidence::High,
+        );
+    }
+
+    #[test]
+    fn score_confidence_parameterized_grpc_returns_medium() {
+        let det = make_detector();
+        assert_eq!(
+            det.score_confidence(&MatchType::Parameterized, &ServiceProtocol::Grpc),
+            Confidence::Medium,
+        );
+    }
+
+    #[test]
+    fn score_confidence_wildcard_event_bus_returns_low() {
+        let det = make_detector();
+        assert_eq!(
+            det.score_confidence(&MatchType::Wildcard, &ServiceProtocol::EventBus),
+            Confidence::Low,
+        );
+    }
+
+    #[test]
+    fn score_confidence_exact_graphql_returns_medium() {
+        // Exact match on a non-HTTP/gRPC protocol falls to Medium
+        // (not High, since only HttpRest/Grpc qualify for High).
+        let det = make_detector();
+        assert_eq!(
+            det.score_confidence(&MatchType::Exact, &ServiceProtocol::GraphQL),
+            Confidence::Medium,
+        );
+    }
+
+    #[test]
+    fn score_confidence_pattern_any_protocol_returns_low() {
+        let det = make_detector();
+        for proto in [
+            ServiceProtocol::HttpRest,
+            ServiceProtocol::Grpc,
+            ServiceProtocol::GraphQL,
+            ServiceProtocol::MessageQueue,
+            ServiceProtocol::EventBus,
+        ] {
+            assert_eq!(
+                det.score_confidence(&MatchType::Pattern, &proto),
+                Confidence::Low,
+                "Pattern + {proto:?} should be Low",
+            );
+        }
+    }
+
+    // ====================================================================
+    // T013: detect_all sorts by confidence descending (R-cross_service-006)
+    // ====================================================================
+
+    #[test]
+    fn detect_all_sorts_by_confidence_descending() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r1", "demo", "/api/users");
+        // HTTP Exact match → High confidence.
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"fetch("/api/users");"#,
+        );
+        // gRPC Pattern match → Low confidence.
+        create_function_with_content(
+            &kit,
+            "f2",
+            "demo",
+            "grpc_caller",
+            "demo.grpc_caller",
+            "/src/grpc.rs",
+            1,
+            r#"let url = "grpc://localhost:50051";"#,
+        );
+        // GraphQL Pattern match → Low confidence.
+        create_function_with_content(
+            &kit,
+            "f3",
+            "demo",
+            "gql_caller",
+            "demo.gql_caller",
+            "/src/gql.rs",
+            1,
+            r#"let q = "query { user { id } }";"#,
+        );
+
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_all("demo").expect("detect_all");
+        assert!(matches.len() >= 3, "should detect 3+ matches");
+        // Verify descending confidence order.
+        for window in matches.windows(2) {
+            assert!(
+                confidence_rank(window[0].confidence) <= confidence_rank(window[1].confidence),
+                "matches must be sorted by confidence descending; got {:?} before {:?}",
+                window[0].confidence,
+                window[1].confidence
+            );
+        }
+        // First match should be High (HTTP Exact).
+        assert_eq!(
+            matches[0].confidence,
+            Confidence::High,
+            "first match should be High confidence"
+        );
+        assert_eq!(
+            matches[0].protocol,
+            ServiceProtocol::HttpRest,
+            "first match should be HTTP"
+        );
     }
 }
