@@ -330,6 +330,7 @@ async fn complexity(
 #[cfg(all(test, feature = "cli", feature = "complexity"))]
 mod tests {
     use super::*;
+    use crate::analysis::complexity::HalsteadMetrics;
     use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
     use crate::storage::schema::escape_cypher_string;
     use tempfile::TempDir;
@@ -593,5 +594,145 @@ mod tests {
             Severity::Critical,
             "default thresholds should not make this function Critical"
         );
+    }
+
+    // --- build_thresholds: remaining error paths ---
+
+    #[test]
+    fn build_thresholds_rejects_invalid_time_complexity_yellow() {
+        let result = build_thresholds(
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "", "bogus", "", "", "",
+        );
+        assert!(result.is_err(), "invalid time_complexity_yellow should error");
+    }
+
+    #[test]
+    fn build_thresholds_rejects_invalid_time_complexity_red() {
+        let result = build_thresholds(
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "", "", "bogus", "", "",
+        );
+        assert!(result.is_err(), "invalid time_complexity_red should error");
+    }
+
+    #[test]
+    fn build_thresholds_rejects_invalid_space_complexity_yellow() {
+        let result = build_thresholds(
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "", "", "", "bogus", "",
+        );
+        assert!(
+            result.is_err(),
+            "invalid space_complexity_yellow should error"
+        );
+    }
+
+    #[test]
+    fn build_thresholds_rejects_invalid_space_complexity_red() {
+        let result = build_thresholds(
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "", "", "", "", "bogus",
+        );
+        assert!(result.is_err(), "invalid space_complexity_red should error");
+    }
+
+    #[test]
+    fn build_thresholds_accepts_valid_space_complexity_strings() {
+        let t = build_thresholds(
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "", "", "", "O(1)", "O(n^2)",
+        )
+        .expect("build_thresholds");
+        assert_eq!(t.space_complexity, (SpaceComplexity::O1, SpaceComplexity::ON2));
+    }
+
+    // --- compute_summary: all four severities ---
+
+    fn entry_with_severity(severity: Severity) -> ComplexityEntry {
+        ComplexityEntry {
+            name: "f".to_string(),
+            qualified_name: "demo.f".to_string(),
+            file_path: "/x.rs".to_string(),
+            start_line: 1,
+            end_line: 1,
+            language: "rust".to_string(),
+            cyclomatic: 1,
+            cognitive: 0,
+            nesting_depth: 0,
+            function_length: 1,
+            overall_severity: severity,
+            halstead: HalsteadMetrics::default(),
+            maintainability_index: 100.0,
+            time_complexity: TimeComplexity::O1,
+            space_complexity: SpaceComplexity::O1,
+        }
+    }
+
+    #[test]
+    fn compute_summary_counts_all_four_severities() {
+        let entries = vec![
+            entry_with_severity(Severity::Green),
+            entry_with_severity(Severity::Yellow),
+            entry_with_severity(Severity::Red),
+            entry_with_severity(Severity::Critical),
+            entry_with_severity(Severity::Green),
+        ];
+        let s = compute_summary(&entries);
+        assert_eq!(s.total, 5);
+        assert_eq!(s.green, 2);
+        assert_eq!(s.yellow, 1);
+        assert_eq!(s.red, 1);
+        assert_eq!(s.critical, 1);
+    }
+
+    #[test]
+    fn compute_summary_empty_returns_zeros() {
+        let s = compute_summary(&[]);
+        assert_eq!(s, ComplexitySummary { total: 0, green: 0, yellow: 0, red: 0, critical: 0 });
+    }
+
+    // --- complexity_core: red_only and sort_by_severity branches on empty db ---
+
+    #[test]
+    fn core_red_only_on_empty_db_succeeds() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let result = complexity_core(
+            &kit, "demo", true, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
+            "", "", "", "",
+        );
+        assert!(result.is_ok(), "red_only on empty db should succeed: {:?}", result.err());
+    }
+
+    #[test]
+    fn core_sort_by_severity_on_empty_db_succeeds() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let result = complexity_core(
+            &kit, "demo", false, true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
+            "", "", "", "",
+        );
+        assert!(result.is_ok(), "sort_by_severity on empty db should succeed: {:?}", result.err());
+    }
+
+    #[test]
+    fn core_red_only_and_sort_on_empty_db_succeeds() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let result = complexity_core(
+            &kit, "demo", true, true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
+            "", "", "", "",
+        );
+        assert!(result.is_ok(), "red_only+sort on empty db should succeed: {:?}", result.err());
+    }
+
+    #[test]
+    fn build_thresholds_partial_overrides_keep_defaults_for_unset() {
+        let t = build_thresholds(
+            5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "O(n)", "", "", "", "",
+        )
+        .expect("build_thresholds");
+        assert_eq!(t.cyclomatic.0, 5, "cyclomatic green should be overridden to 5");
+        let defaults = ComplexityThresholds::default();
+        assert_eq!(t.cyclomatic.1, defaults.cyclomatic.1, "cyclomatic yellow stays default");
+        assert_eq!(t.cyclomatic.2, defaults.cyclomatic.2, "cyclomatic red stays default");
+        assert_eq!(t.time_complexity.0, TimeComplexity::ON, "time green overridden");
+        assert_eq!(t.time_complexity.1, defaults.time_complexity.1, "time yellow stays default");
     }
 }
