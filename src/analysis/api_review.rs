@@ -1107,12 +1107,10 @@ mod tests {
         let kit = build_kit_for_db(&db);
         // Endpoint with name "users_api" and path "/api/users".
         let storage = storage(&kit);
-        let cypher = format!(
-            "CREATE (:Endpoint {{id: 'e1', project: 'demo', name: 'users_api', qualifiedName: 'users_api', \
+        let cypher = "CREATE (:Endpoint {id: 'e1', project: 'demo', name: 'users_api', qualifiedName: 'users_api', \
              filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', \
-             expectedSchema: '', parentQn: ''}});"
-        );
-        storage.execute(&cypher).expect("create endpoint");
+             expectedSchema: '', parentQn: ''});";
+        storage.execute(cypher).expect("create endpoint");
         create_handler(&kit, "h1", "demo", "list_users");
         create_edge(&kit, "he1", "h1", "e1", "HANDLES", "demo");
         create_function(&kit, "f1", "demo", "caller", "/src/a.rs", 5);

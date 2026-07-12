@@ -705,6 +705,7 @@ fn rows_to_search_results(
 /// - Prefix match → 0.8
 /// - Substring match → 0.5
 /// - No query (e.g. `search_by_type`) → 1.0 (neutral)
+///
 /// Computes both the score and a human-readable match reason.
 fn relevance_score_with_reason(name: &str, query: &str) -> (f64, &'static str) {
     if query.is_empty() {
@@ -1439,8 +1440,7 @@ mod tests {
 
     #[test]
     fn search_params_clamps_limit_to_max_500() {
-        let mut p = SearchParams::default();
-        p.limit = 1000;
+        let mut p = SearchParams { limit: 1000, ..Default::default() };
         assert_eq!(p.clamped_limit(), MAX_LIMIT);
         p.limit = 10;
         assert_eq!(p.clamped_limit(), 10);
@@ -1818,8 +1818,8 @@ mod tests {
         // Create caller functions to generate CALLS edges.
         let callers: Vec<Node> = (0..7)
             .map(|i| {
-                Node::builder(NodeLabel::Function, &format!("caller_{i}"), &format!("demo.caller_{i}"))
-                    .id(&format!("c{i}"))
+                Node::builder(NodeLabel::Function, format!("caller_{i}"), format!("demo.caller_{i}"))
+                    .id(format!("c{i}"))
                     .project("demo")
                     .file_path("/b.rs")
                     .start_line(i + 1)
@@ -1832,10 +1832,10 @@ mod tests {
 
         // 5 callers → h1, 2 callers → h2.
         let edges_to_h1: Vec<Edge> = (0..5)
-            .map(|i| Edge::new(&format!("c{i}"), "h1", EdgeType::Calls, "demo"))
+            .map(|i| Edge::new(format!("c{i}"), "h1", EdgeType::Calls, "demo"))
             .collect();
         let edges_to_h2: Vec<Edge> = (5..7)
-            .map(|i| Edge::new(&format!("c{i}"), "h2", EdgeType::Calls, "demo"))
+            .map(|i| Edge::new(format!("c{i}"), "h2", EdgeType::Calls, "demo"))
             .collect();
         let mut all_edges = edges_to_h1;
         all_edges.extend(edges_to_h2);
@@ -1971,7 +1971,7 @@ mod tests {
 
         // 100 CALLS edges → degree_centrality = min(100/100, 1.0) = 1.0
         let calls_edges: Vec<Edge> = (0..100)
-            .map(|i| Edge::new(&format!("caller_{i}"), "h1", EdgeType::Calls, "demo"))
+            .map(|i| Edge::new(format!("caller_{i}"), "h1", EdgeType::Calls, "demo"))
             .collect();
         storage.save_edges(&calls_edges).expect("save calls edges");
 
@@ -2163,7 +2163,7 @@ mod tests {
         storage.save_nodes(&[handler], NodeLabel::Function).expect("save_nodes");
 
         let calls_edges: Vec<Edge> = (0..100)
-            .map(|i| Edge::new(&format!("caller_{i}"), "h1", EdgeType::Calls, "demo"))
+            .map(|i| Edge::new(format!("caller_{i}"), "h1", EdgeType::Calls, "demo"))
             .collect();
         storage.save_edges(&calls_edges).expect("save calls edges");
 

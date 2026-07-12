@@ -703,6 +703,7 @@ mod tests {
 
     #[cfg(feature = "cli")]
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn setup_succeeds_when_home_has_fresh_agent() {
         let _lock = HOME_TEST_MUTEX.lock().unwrap();
         let home = fake_home(&[Agent::ClaudeCode]);
@@ -720,6 +721,7 @@ mod tests {
 
     #[cfg(feature = "cli")]
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn setup_returns_error_when_home_unset() {
         let _lock = HOME_TEST_MUTEX.lock().unwrap();
         let original_home = std::env::var("HOME").ok();

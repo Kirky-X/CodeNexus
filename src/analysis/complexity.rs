@@ -1244,8 +1244,7 @@ mod tests {
     #[test]
     fn severity_uses_custom_thresholds() {
         // Custom thresholds: cyclomatic (green=5, yellow=10, red=12).
-        let mut custom = ComplexityThresholds::default();
-        custom.cyclomatic = (5, 10, 12);
+        let custom = ComplexityThresholds { cyclomatic: (5, 10, 12), ..Default::default() };
         // value 15 > red(12) → Critical.
         assert_eq!(Severity::from_cyclomatic(15, &custom), Severity::Critical);
         // value 5 <= green(5) → Green.
@@ -1568,7 +1567,7 @@ fn complex(x: i32) {
         let mi = calc_maintainability_index(1, 0.0, 1);
         assert!(!mi.is_nan(), "MI must not be NaN for zero volume, got {mi}");
         assert!(mi.is_finite(), "MI should be finite, got {mi}");
-        assert!(mi >= 0.0 && mi <= 100.0, "MI out of range: {mi}");
+        assert!((0.0..=100.0).contains(&mi), "MI out of range: {mi}");
     }
 
     #[test]
@@ -1577,7 +1576,7 @@ fn complex(x: i32) {
         let mi = calc_maintainability_index(1, 10.0, 0);
         assert!(!mi.is_nan(), "MI must not be NaN for zero LOC, got {mi}");
         assert!(mi.is_finite(), "MI should be finite, got {mi}");
-        assert!(mi >= 0.0 && mi <= 100.0, "MI out of range: {mi}");
+        assert!((0.0..=100.0).contains(&mi), "MI out of range: {mi}");
     }
 
     // --- TimeComplexity tests ---
@@ -1983,6 +1982,7 @@ fn parallel(a: i32) {
     }
 
     /// Creates a Function node with the given `content` via direct Cypher.
+    #[allow(clippy::too_many_arguments)]
     fn create_function_with_content(
         kit: &AsyncKit<AsyncReady>,
         id: &str,
@@ -2047,8 +2047,7 @@ fn parallel(a: i32) {
         );
 
         let storage = storage(&kit);
-        let mut custom = ComplexityThresholds::default();
-        custom.cyclomatic = (2, 5, 8);
+        let custom = ComplexityThresholds { cyclomatic: (2, 5, 8), ..Default::default() };
         let analyzer = ComplexityAnalyzer::new_with_thresholds(&*storage, custom);
         let result = analyzer.analyze("demo").expect("analyze");
         assert_eq!(result.len(), 1);

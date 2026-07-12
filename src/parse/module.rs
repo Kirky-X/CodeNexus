@@ -143,7 +143,6 @@ impl ExtractorRegistry for ExtractorRegistryCapability {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::kit::{AsyncKit, ExtractorRegistryModule, ParserFactoryModule};
 
     #[test]

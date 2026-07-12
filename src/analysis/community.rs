@@ -895,7 +895,7 @@ mod tests {
         // The largest community should contain Mr. Hi (node 0) and the
         // second-largest should contain the Officer (node 33).
         let mut sorted = list.clone();
-        sorted.sort_by(|a, b| b.size.cmp(&a.size));
+        sorted.sort_by_key(|b| std::cmp::Reverse(b.size));
         assert!(!sorted.is_empty(), "at least one community expected");
     }
 

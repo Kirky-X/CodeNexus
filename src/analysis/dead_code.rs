@@ -357,6 +357,7 @@ impl<'a> DeadCodeDetector<'a> {
     /// Currently exercised by unit tests in `mod tests`; reserved for future
     /// single-edge-type diagnostics (e.g. "is this function tested?" via
     /// `EdgeType::Tests`) when `load_referenced_ids` is overkill.
+    #[allow(dead_code, reason = "exercised by unit tests; reserved for future diagnostics")]
     fn has_incoming_edge(&self, func_id: &str, edge_type: EdgeType) -> StorageResult<bool> {
         let escaped_id = escape_cypher_string(func_id);
         let type_str = edge_type.as_db_type();
@@ -528,6 +529,7 @@ mod tests {
     }
 
     /// Creates a Function node with `isExported = true` and optional `signature`.
+    #[allow(clippy::too_many_arguments)]
     fn create_function_with_flags(
         kit: &AsyncKit<AsyncReady>,
         id: &str,

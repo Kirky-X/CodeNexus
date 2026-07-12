@@ -772,8 +772,7 @@ mod tests {
 
     #[test]
     fn trace_config_clamped_depth_respects_limit() {
-        let mut config = super::TraceConfig::default();
-        config.max_depth = 50;
+        let mut config = super::TraceConfig { max_depth: 50, ..Default::default() };
         assert_eq!(config.clamped_depth(), 10);
         config.max_depth = 3;
         assert_eq!(config.clamped_depth(), 3);

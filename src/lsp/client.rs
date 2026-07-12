@@ -119,7 +119,7 @@ mod tests {
         GotoDefinitionResponse, HoverParams, Position,
         TextDocumentIdentifier, TextDocumentPositionParams, Url, WorkDoneProgressParams,
     };
-    use lsp_types::request::{GotoDefinition, GotoTypeDefinition, HoverRequest, Initialize};
+    use lsp_types::request::{HoverRequest, Initialize};
 
     #[test]
     fn start_nonexistent_server_returns_error() {
@@ -370,7 +370,7 @@ mod tests {
     #[test]
     #[ignore = "requires rust-analyzer on PATH; run with --ignored"]
     fn integration_start_shutdown() {
-        if !std::process::Command::new("rust-analyzer").arg("--version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok() { return; }
+        if std::process::Command::new("rust-analyzer").arg("--version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_err() { return; }
         let ws = tempfile::TempDir::new().unwrap();
         std::fs::write(ws.path().join("Cargo.toml"), "[package]\nname = \"d\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
         std::fs::create_dir_all(ws.path().join("src")).unwrap();
@@ -383,7 +383,7 @@ mod tests {
     #[test]
     #[ignore = "requires rust-analyzer on PATH; run with --ignored"]
     fn integration_hover() {
-        if !std::process::Command::new("rust-analyzer").arg("--version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok() { return; }
+        if std::process::Command::new("rust-analyzer").arg("--version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_err() { return; }
         let ws = tempfile::TempDir::new().unwrap();
         std::fs::write(ws.path().join("Cargo.toml"), "[package]\nname = \"d\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
         std::fs::create_dir_all(ws.path().join("src")).unwrap();

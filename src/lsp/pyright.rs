@@ -113,13 +113,12 @@ mod tests {
     use super::*;
     use crate::lsp::session;
     use std::path::PathBuf;
-    use std::time::Duration;
-    use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
+    use lsp_server::{Connection, Message, RequestId, Response};
     use lsp_types::{
         GotoDefinitionResponse, HoverParams, Position,
         TextDocumentIdentifier, TextDocumentPositionParams, Url, WorkDoneProgressParams,
     };
-    use lsp_types::request::{GotoDefinition, GotoTypeDefinition, HoverRequest, Initialize};
+    use lsp_types::request::HoverRequest;
 
     #[test]
     fn start_nonexistent_server_returns_error() {
@@ -212,7 +211,7 @@ mod tests {
     #[test]
     #[ignore = "requires pyright-langserver on PATH; run with --ignored"]
     fn integration_start_shutdown() {
-        if !std::process::Command::new("pyright-langserver").arg("--version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok() { return; }
+        if std::process::Command::new("pyright-langserver").arg("--version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_err() { return; }
         let ws = tempfile::TempDir::new().unwrap();
         std::fs::write(ws.path().join("test.py"), "x = 1").unwrap();
         let c = PyrightClient::new();

@@ -909,6 +909,7 @@ mod tests {
         s.execute(&cypher).expect("create route");
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create_function_with_content(
         kit: &AsyncKit<AsyncReady>,
         id: &str,
@@ -1458,8 +1459,8 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let s = storage(&kit);
         // Create a minimal Route node with only id, project, and path.
-        let cypher = format!("CREATE (:Route {{id: 'r1', project: 'demo', path: '/api/users'}});");
-        s.execute(&cypher).expect("create minimal route");
+        let cypher = "CREATE (:Route {id: 'r1', project: 'demo', path: '/api/users'});";
+        s.execute(cypher).expect("create minimal route");
         create_function_with_content(
             &kit,
             "f1",
@@ -1490,11 +1491,9 @@ mod tests {
         create_route(&kit, "r1", "demo", "/api/users");
         // Create a minimal Function node with only the fields load_callers
         // reads. Other required columns are omitted (NULL in DB).
-        let cypher = format!(
-            "CREATE (:Function {{id: 'f1', project: 'demo', filePath: '/src/caller.rs', \
-             startLine: 5, content: 'fetch(\"/api/users\")'}});"
-        );
-        s.execute(&cypher).expect("create minimal function");
+        let cypher = "CREATE (:Function {id: 'f1', project: 'demo', filePath: '/src/caller.rs', \
+             startLine: 5, content: 'fetch(\"/api/users\")'});";
+        s.execute(cypher).expect("create minimal function");
 
         let linker = CrossServiceLinker::new(&*s, "demo");
         let links = linker.link().expect("link");

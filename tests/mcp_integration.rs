@@ -57,10 +57,8 @@ impl McpClient {
                         // bare JSON strings to stdout during init, which would
                         // parse as Value::String and pollute the channel.
                         if let Ok(parsed) = serde_json::from_str::<Value>(&line) {
-                            if parsed.is_object() {
-                                if tx.send(parsed).is_err() {
-                                    break; // receiver dropped — test is done
-                                }
+                            if parsed.is_object() && tx.send(parsed).is_err() {
+                                break; // receiver dropped — test is done
                             }
                         }
                     }

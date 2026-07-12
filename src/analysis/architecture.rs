@@ -1036,6 +1036,7 @@ mod tests {
 
     /// Creates a Function node with source `content` (for cross-service
     /// detection tests that need string literals in the function body).
+    #[allow(clippy::too_many_arguments)]
     fn create_function_with_content(
         kit: &AsyncKit<AsyncReady>,
         id: &str,
