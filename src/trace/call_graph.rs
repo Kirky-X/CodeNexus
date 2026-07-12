@@ -8,11 +8,11 @@
 //! (AC-TRACE-004). Each traversal produces a list of [`TracePath`]s recording
 //! the nodes and edges visited along the way.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use crate::model::{EdgeType, Graph, NodeId};
 
-use super::{TraceEdge, TraceNode, TracePath};
+use super::{TraceCycle, TraceEdge, TraceNode, TracePath};
 
 /// BFS tracer over `Calls` / `FfiCalls` edges (PRD §4.2, AC-TRACE-001/003/004).
 ///
@@ -123,6 +123,223 @@ impl<'a> CallGraphTracer<'a> {
 
         results
     }
+
+    /// Detects cycles in the call graph using DFS white/gray/black coloring
+    /// (R-trace-002).
+    ///
+    /// Traverses `Calls` and `FfiCalls` edges. When a gray node (currently on
+    /// the DFS stack) is encountered via a back edge, a [`TraceCycle`] is
+    /// extracted from the current stack. Self-loops (`A→A`) are detected as
+    /// cycles with `nodes = [A, A]`.
+    ///
+    /// Node iteration order is sorted by id for deterministic output.
+    #[must_use]
+    pub fn detect_cycles(&self) -> Vec<TraceCycle> {
+        let mut colors: HashMap<NodeId, DfsColor> = HashMap::new();
+        let mut stack: Vec<NodeId> = Vec::new();
+        let mut stack_edges: Vec<EdgeType> = Vec::new();
+        let mut cycles: Vec<TraceCycle> = Vec::new();
+
+        let mut node_ids: Vec<&NodeId> = self.graph.nodes.keys().collect();
+        node_ids.sort();
+
+        for node_id in node_ids {
+            if !colors.contains_key(node_id) {
+                self.dfs_cycles(node_id, &mut colors, &mut stack, &mut stack_edges, &mut cycles);
+            }
+        }
+
+        cycles
+    }
+
+    /// DFS helper for [`detect_cycles`].
+    fn dfs_cycles(
+        &self,
+        node_id: &NodeId,
+        colors: &mut HashMap<NodeId, DfsColor>,
+        stack: &mut Vec<NodeId>,
+        stack_edges: &mut Vec<EdgeType>,
+        cycles: &mut Vec<TraceCycle>,
+    ) {
+        colors.insert(node_id.clone(), DfsColor::Gray);
+        stack.push(node_id.clone());
+
+        let mut edges: Vec<&crate::model::Edge> = self
+            .graph
+            .edges_from(node_id)
+            .into_iter()
+            .filter(|e| matches!(e.edge_type, EdgeType::Calls | EdgeType::FfiCalls))
+            .collect();
+        edges.sort_by(|a, b| a.target.cmp(&b.target));
+
+        for edge in edges {
+            match colors.get(&edge.target).copied() {
+                None => {
+                    stack_edges.push(edge.edge_type);
+                    self.dfs_cycles(&edge.target, colors, stack, stack_edges, cycles);
+                    stack_edges.pop();
+                }
+                Some(DfsColor::Gray) => {
+                    let cycle = Self::extract_cycle(
+                        &edge.target,
+                        edge.edge_type,
+                        stack,
+                        stack_edges,
+                        self.graph,
+                    );
+                    cycles.push(cycle);
+                }
+                Some(DfsColor::Black) => {}
+            }
+        }
+
+        stack.pop();
+        colors.insert(node_id.clone(), DfsColor::Black);
+    }
+
+    /// Extracts a [`TraceCycle`] from the current DFS stack when a back edge to
+    /// a gray node is found.
+    fn extract_cycle(
+        target: &NodeId,
+        closing_edge: EdgeType,
+        stack: &[NodeId],
+        stack_edges: &[EdgeType],
+        graph: &Graph,
+    ) -> TraceCycle {
+        let idx = stack
+            .iter()
+            .position(|n| n == target)
+            .expect("gray target must be on the DFS stack");
+
+        let mut nodes: Vec<String> = stack[idx..]
+            .iter()
+            .filter_map(|id| graph.get_node(id).map(|n| n.name.clone()))
+            .collect();
+        if let Some(target_node) = graph.get_node(target) {
+            nodes.push(target_node.name.clone());
+        }
+
+        let mut edge_types: Vec<EdgeType> = stack_edges[idx..].to_vec();
+        edge_types.push(closing_edge);
+
+        TraceCycle { nodes, edge_types }
+    }
+
+    /// Performs a BFS traversal from `start_id` that includes `HttpCalls` and
+    /// reverse `HandlesRoute` edges for cross-service tracing (R-trace-003).
+    ///
+    /// In addition to `Calls` and `FfiCalls`, this method follows:
+    /// - `HttpCalls` edges (forward: Function → Route)
+    /// - `HandlesRoute` edges (reverse: Route → handler Function)
+    ///
+    /// This allows tracing a call chain that crosses service boundaries via
+    /// HTTP. Cycles are handled by tracking visited nodes per-path.
+    ///
+    /// Returns an empty vector if `start_id` is not in the graph.
+    pub fn trace_cross_service(&self, start_id: &NodeId, depth: usize) -> Vec<TracePath> {
+        let Some(start_node) = self.graph.get_node(start_id) else {
+            return Vec::new();
+        };
+        let mut queue: VecDeque<WorkPath> = VecDeque::new();
+        queue.push_back(WorkPath {
+            visited_ids: vec![start_id.clone()],
+            path: TracePath {
+                nodes: vec![TraceNode::from(start_node)],
+                edges: Vec::new(),
+                depth: 0,
+            },
+        });
+
+        let mut results = Vec::new();
+
+        while let Some(work) = queue.pop_front() {
+            let has_edges = !work.path.edges.is_empty();
+            let can_extend = work.path.depth < depth;
+
+            if !can_extend {
+                if has_edges {
+                    results.push(work.path);
+                }
+                continue;
+            }
+
+            let current_id = work
+                .visited_ids
+                .last()
+                .expect("work path always has at least one visited id")
+                .clone();
+
+            // Forward edges: Calls, FfiCalls, HttpCalls
+            for edge in self.graph.edges_from(&current_id) {
+                if !matches!(
+                    edge.edge_type,
+                    EdgeType::Calls | EdgeType::FfiCalls | EdgeType::HttpCalls
+                ) {
+                    continue;
+                }
+                let Some(target_node) = self.graph.get_node(&edge.target) else {
+                    continue;
+                };
+                if work.visited_ids.contains(&edge.target) {
+                    continue;
+                }
+                let mut new_visited = work.visited_ids.clone();
+                new_visited.push(edge.target.clone());
+                let mut new_path = work.path.clone();
+                new_path.nodes.push(TraceNode::from(target_node));
+                new_path.edges.push(TraceEdge {
+                    edge_type: edge.edge_type.to_string(),
+                    reason: edge.reason.clone(),
+                    confidence: edge.confidence,
+                });
+                new_path.depth = work.path.depth + 1;
+                queue.push_back(WorkPath {
+                    visited_ids: new_visited,
+                    path: new_path,
+                });
+            }
+
+            // Reverse HandlesRoute edges: Route → handler Function
+            for edge in self.graph.edges_to(&current_id) {
+                if edge.edge_type != EdgeType::HandlesRoute {
+                    continue;
+                }
+                let Some(handler_node) = self.graph.get_node(&edge.source) else {
+                    continue;
+                };
+                if work.visited_ids.contains(&edge.source) {
+                    continue;
+                }
+                let mut new_visited = work.visited_ids.clone();
+                new_visited.push(edge.source.clone());
+                let mut new_path = work.path.clone();
+                new_path.nodes.push(TraceNode::from(handler_node));
+                new_path.edges.push(TraceEdge {
+                    edge_type: edge.edge_type.to_string(),
+                    reason: edge.reason.clone(),
+                    confidence: edge.confidence,
+                });
+                new_path.depth = work.path.depth + 1;
+                queue.push_back(WorkPath {
+                    visited_ids: new_visited,
+                    path: new_path,
+                });
+            }
+
+            if has_edges {
+                results.push(work.path);
+            }
+        }
+
+        results
+    }
+}
+
+/// DFS color state for cycle detection (white = absent from map).
+#[derive(Clone, Copy, PartialEq)]
+enum DfsColor {
+    Gray,
+    Black,
 }
 
 #[cfg(test)]
@@ -423,5 +640,268 @@ mod tests {
         let paths = tracer.trace(&"a".to_string(), 100);
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0].depth, 1);
+    }
+
+    // --- T034: detect_cycles (R-trace-002) ---
+
+    #[test]
+    fn detect_cycles_abc_cycle_returns_trace_cycle() {
+        // A→B→C→A -> TraceCycle nodes=[A,B,C,A]
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_node(make_func("c", "c"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("b", "c", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c", "a", EdgeType::Calls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let cycles = tracer.detect_cycles();
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0].nodes, vec!["a", "b", "c", "a"]);
+        assert_eq!(
+            cycles[0].edge_types,
+            vec![EdgeType::Calls, EdgeType::Calls, EdgeType::Calls]
+        );
+    }
+
+    #[test]
+    fn detect_cycles_no_cycle_returns_empty() {
+        // A→B→C→D (no cycle) -> cycles empty
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_node(make_func("c", "c"));
+        g.add_node(make_func("d", "d"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("b", "c", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c", "d", EdgeType::Calls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let cycles = tracer.detect_cycles();
+        assert!(cycles.is_empty());
+    }
+
+    #[test]
+    fn detect_cycles_self_loop_returns_aa_cycle() {
+        // Self-loop A→A -> TraceCycle nodes=[A,A]
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_edge(Edge::new("a", "a", EdgeType::Calls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let cycles = tracer.detect_cycles();
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0].nodes, vec!["a", "a"]);
+        assert_eq!(cycles[0].edge_types, vec![EdgeType::Calls]);
+    }
+
+    #[test]
+    fn detect_cycles_multiple_cycles_returns_all() {
+        // Two separate cycles: A→B→A and C→D→C
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_node(make_func("c", "c"));
+        g.add_node(make_func("d", "d"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("b", "a", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c", "d", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("d", "c", EdgeType::Calls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let cycles = tracer.detect_cycles();
+        assert_eq!(cycles.len(), 2);
+        let node_sets: Vec<Vec<String>> = cycles.iter().map(|c| c.nodes.clone()).collect();
+        assert!(node_sets.contains(&vec!["a".to_string(), "b".to_string(), "a".to_string()]));
+        assert!(node_sets.contains(&vec!["c".to_string(), "d".to_string(), "c".to_string()]));
+    }
+
+    #[test]
+    fn detect_cycles_empty_graph_returns_empty() {
+        let g = Graph::new();
+        let tracer = CallGraphTracer::new(&g);
+        assert!(tracer.detect_cycles().is_empty());
+    }
+
+    #[test]
+    fn detect_cycles_ffi_calls_edge_detected() {
+        // A→B via FfiCalls, B→A via Calls -> cycle with mixed edge types
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "b", EdgeType::FfiCalls, "proj"));
+        g.add_edge(Edge::new("b", "a", EdgeType::Calls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let cycles = tracer.detect_cycles();
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0].nodes, vec!["a", "b", "a"]);
+        assert_eq!(
+            cycles[0].edge_types,
+            vec![EdgeType::FfiCalls, EdgeType::Calls]
+        );
+    }
+
+    #[test]
+    fn detect_cycles_nested_cycle_detected() {
+        // A→B→C→B (cycle B→C→B, A is a stem)
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_node(make_func("c", "c"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("b", "c", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c", "b", EdgeType::Calls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let cycles = tracer.detect_cycles();
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0].nodes, vec!["b", "c", "b"]);
+        assert_eq!(
+            cycles[0].edge_types,
+            vec![EdgeType::Calls, EdgeType::Calls]
+        );
+    }
+
+    #[test]
+    fn detect_cycles_skips_non_call_edges() {
+        // A→B via Reads (not a call edge) -> no cycle even if B→A exists
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Reads, "proj"));
+        g.add_edge(Edge::new("b", "a", EdgeType::Reads, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        assert!(tracer.detect_cycles().is_empty());
+    }
+
+    // --- T035: trace_cross_service (R-trace-003) ---
+
+    fn make_route(id: &str, name: &str) -> Node {
+        Node::builder(NodeLabel::Route, name, format!("proj.{name}"))
+            .id(id)
+            .project("proj")
+            .file_path(format!("routes/{name}.rs"))
+            .start_line(1)
+            .build()
+    }
+
+    #[test]
+    fn trace_cross_service_follows_http_calls_to_handler() {
+        // A --HttpCalls--> R, B --HandlesRoute--> R
+        // Trace from A should reach B via R.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_route("r", "/api/r"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "r", EdgeType::HttpCalls, "proj"));
+        g.add_edge(Edge::new("b", "r", EdgeType::HandlesRoute, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 5);
+        // Should find A->R (HttpCalls) and A->R->B (HttpCalls + HandlesRoute)
+        let cross_path = paths
+            .iter()
+            .find(|p| p.depth == 2 && p.nodes.len() == 3)
+            .expect("should have A->R->B path");
+        assert_eq!(cross_path.nodes[0].name, "a");
+        assert_eq!(cross_path.nodes[1].name, "/api/r");
+        assert_eq!(cross_path.nodes[2].name, "b");
+        assert_eq!(cross_path.edges[0].edge_type, "HTTP_CALLS");
+        assert_eq!(cross_path.edges[1].edge_type, "HANDLES_ROUTE");
+    }
+
+    #[test]
+    fn trace_cross_service_includes_http_calls_edge_type() {
+        // TracePath.edges must contain HttpCalls edge type
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_route("r", "/api/r"));
+        g.add_edge(Edge::new("a", "r", EdgeType::HttpCalls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 5);
+        let http_path = paths
+            .iter()
+            .find(|p| p.depth == 1)
+            .expect("should have A->R path");
+        assert_eq!(http_path.edges[0].edge_type, "HTTP_CALLS");
+    }
+
+    #[test]
+    fn trace_cross_service_still_follows_calls_edges() {
+        // Cross-service trace should still follow regular Calls edges
+        let g = graph_a_calls_b();
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 3);
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].edges[0].edge_type, "CALLS");
+    }
+
+    #[test]
+    fn trace_cross_service_respects_depth_limit() {
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_route("r", "/api/r"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "r", EdgeType::HttpCalls, "proj"));
+        g.add_edge(Edge::new("b", "r", EdgeType::HandlesRoute, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        // depth 1: only A->R, no A->R->B
+        let paths = tracer.trace_cross_service(&"a".to_string(), 1);
+        for p in &paths {
+            assert!(p.depth <= 1);
+        }
+        assert!(paths.iter().any(|p| p.depth == 1));
+        assert!(!paths.iter().any(|p| p.depth == 2));
+    }
+
+    #[test]
+    fn trace_regular_does_not_follow_http_calls() {
+        // Regular trace() should NOT follow HttpCalls edges
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_route("r", "/api/r"));
+        g.add_edge(Edge::new("a", "r", EdgeType::HttpCalls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace(&"a".to_string(), 5);
+        assert!(
+            paths.is_empty(),
+            "regular trace should not follow HttpCalls edges"
+        );
+    }
+
+    #[test]
+    fn trace_cross_service_missing_start_returns_empty() {
+        let g = Graph::new();
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"missing".to_string(), 5);
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn trace_cross_service_zero_depth_returns_empty() {
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_route("r", "/api/r"));
+        g.add_edge(Edge::new("a", "r", EdgeType::HttpCalls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 0);
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn trace_cross_service_cycle_terminates() {
+        // A --HttpCalls--> R, B --HandlesRoute--> R, B --HttpCalls--> R2,
+        // A --HandlesRoute--> R2: potential cycle A->R->B->R2->A
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_route("r1", "/api/r1"));
+        g.add_node(make_func("b", "b"));
+        g.add_node(make_route("r2", "/api/r2"));
+        g.add_edge(Edge::new("a", "r1", EdgeType::HttpCalls, "proj"));
+        g.add_edge(Edge::new("b", "r1", EdgeType::HandlesRoute, "proj"));
+        g.add_edge(Edge::new("b", "r2", EdgeType::HttpCalls, "proj"));
+        g.add_edge(Edge::new("a", "r2", EdgeType::HandlesRoute, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 10);
+        // Must terminate; all paths within depth.
+        for p in &paths {
+            assert!(p.depth <= 10);
+        }
+        assert!(!paths.is_empty());
     }
 }
