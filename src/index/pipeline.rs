@@ -1743,4 +1743,107 @@ mod tests {
         // acceptable per the graceful-degradation contract.
         let _ = abs_file;
     }
+
+    // --- Coverage tests ---
+
+    #[cfg(feature = "cache")]
+    #[test]
+    fn with_cache_sets_cache_and_invalidates_on_index() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        struct CountingCache {
+            invalidates: AtomicU32,
+        }
+        impl CacheStore for CountingCache {
+            fn get(&self, _key: &str) -> Option<Vec<u8>> { None }
+            fn set(&self, _key: &str, _val: Vec<u8>) {}
+            fn invalidate_all(&self) {
+                self.invalidates.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "main.rs", "fn main() {}\n");
+        let db_path = fresh_db_path();
+        let cache = Arc::new(CountingCache { invalidates: AtomicU32::new(0) });
+        let facade = IndexFacade::new(&db_path)
+            .expect("facade")
+            .with_cache(cache.clone());
+        let result = facade.index(tmp.path(), "demo", false);
+        assert!(result.is_ok(), "index should succeed: {:?}", result);
+        assert!(
+            cache.invalidates.load(Ordering::SeqCst) >= 1,
+            "invalidate_all should be called after index"
+        );
+    }
+
+    #[test]
+    fn index_ram_first_indexes_rust_file() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "main.rs", "fn main() { helper(); }\n");
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        let result = facade.index_ram_first(tmp.path(), "demo", false);
+        assert!(result.is_ok(), "index_ram_first should succeed: {:?}", result);
+        let result = result.unwrap();
+        assert!(result.files_indexed > 0, "should index files: {result:?}");
+    }
+
+    #[test]
+    fn index_ram_first_returns_error_for_nonexistent_path() {
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        let result = facade.index_ram_first(Path::new("/nonexistent/path/xyz"), "demo", false);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            IndexError::PathNotFound(msg) => assert!(msg.contains("nonexistent")),
+            other => panic!("expected PathNotFound, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn with_retry_retries_on_capital_lock_then_succeeds() {
+        let calls = AtomicU32::new(0);
+        let result: Result<u32> = with_retry(3, || {
+            let n = calls.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                Err(IndexError::Storage(StorageError::Query("Lock timeout".to_string())))
+            } else {
+                Ok(7)
+            }
+        });
+        assert_eq!(result.unwrap(), 7);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[cfg(feature = "cache")]
+    #[test]
+    fn index_ram_first_invalidates_cache_on_success() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        struct CountingCache {
+            invalidates: AtomicU32,
+        }
+        impl CacheStore for CountingCache {
+            fn get(&self, _key: &str) -> Option<Vec<u8>> { None }
+            fn set(&self, _key: &str, _val: Vec<u8>) {}
+            fn invalidate_all(&self) {
+                self.invalidates.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "main.rs", "fn main() {}\n");
+        let db_path = fresh_db_path();
+        let cache = Arc::new(CountingCache { invalidates: AtomicU32::new(0) });
+        let facade = IndexFacade::new(&db_path)
+            .expect("facade")
+            .with_cache(cache.clone());
+        let result = facade.index_ram_first(tmp.path(), "demo", false);
+        assert!(result.is_ok(), "index_ram_first should succeed: {:?}", result);
+        assert!(
+            cache.invalidates.load(Ordering::SeqCst) >= 1,
+            "invalidate_all should be called after ram_first index"
+        );
+    }
 }
