@@ -850,4 +850,75 @@ mod tests {
         assert!(!names.contains(&"a"));
         assert_eq!(result.affected.len(), 2);
     }
+
+    // ===== T026: Type dependency impact tracing tests =====
+
+    #[test]
+    fn trace_type_dependency_finds_users() {
+        // Type X is used by Function A and Function B → changing X affects both.
+        let mut g = Graph::new();
+        g.add_node(make_struct("x", "x"));
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "x", EdgeType::UsesType, "proj"));
+        g.add_edge(Edge::new("b", "x", EdgeType::UsesType, "proj"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"x".to_string());
+        assert_eq!(result.symbol, "x");
+        assert_eq!(result.affected.len(), 2);
+        let names: Vec<&str> = result.affected.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"a"));
+        assert!(names.contains(&"b"));
+        for node in &result.affected {
+            assert_eq!(node.edge_type, EdgeType::UsesType);
+        }
+    }
+
+    #[test]
+    fn trace_type_dependency_no_users_returns_empty() {
+        // Type with no USES_TYPE edges → affected is empty.
+        let mut g = Graph::new();
+        g.add_node(make_struct("x", "x"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"x".to_string());
+        assert!(result.affected.is_empty());
+    }
+
+    #[test]
+    fn trace_type_dependency_with_qualified_name_and_file_path() {
+        // Function A uses Type X → ImpactNode has correct qualified_name and file_path.
+        let mut g = Graph::new();
+        g.add_node(make_struct("x", "x"));
+        g.add_node(make_func("a", "a"));
+        g.add_edge(Edge::new("a", "x", EdgeType::UsesType, "proj"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"x".to_string());
+        assert_eq!(result.affected.len(), 1);
+        let node = &result.affected[0];
+        assert_eq!(node.name, "a");
+        assert_eq!(node.qualified_name, "proj.a");
+        assert_eq!(node.file_path, "src/a.rs");
+        assert_eq!(node.edge_type, EdgeType::UsesType);
+        assert_eq!(node.depth, 1);
+    }
+
+    #[test]
+    fn trace_type_dependency_transitive() {
+        // Function A uses Type X, Function B calls A → changing X affects A (depth 1) and B (depth 2).
+        let mut g = Graph::new();
+        g.add_node(make_struct("x", "x"));
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "x", EdgeType::UsesType, "proj"));
+        g.add_edge(Edge::new("b", "a", EdgeType::Calls, "proj"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"x".to_string());
+        assert_eq!(result.affected.len(), 2);
+        let a_node = result.affected.iter().find(|n| n.name == "a").unwrap();
+        assert_eq!(a_node.edge_type, EdgeType::UsesType);
+        assert_eq!(a_node.depth, 1);
+        let b_node = result.affected.iter().find(|n| n.name == "b").unwrap();
+        assert_eq!(b_node.edge_type, EdgeType::Calls);
+        assert_eq!(b_node.depth, 2);
+    }
 }
