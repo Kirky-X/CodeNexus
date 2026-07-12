@@ -300,14 +300,107 @@ impl<'a> SearchEngine<'a> {
     }
 
     /// Graph-enhanced search: name match + degree filter + label filter.
+    ///
+    /// Combines case-insensitive name CONTAINS with optional:
+    /// - `label_filter`: restrict to specific node labels
+    /// - `degree_filter`: `(min, max)` inclusive range on incoming CALLS count
+    ///
+    /// Score is the name relevance (exact=1.0, prefix=0.8, substring=0.5).
     fn search_graph_enhanced(
         &self,
         project: &str,
         params: &SearchParams,
     ) -> Result<Vec<SearchResult>> {
-        // T022 placeholder — implementation in next task.
-        let _ = (project, params);
-        Ok(Vec::new())
+        if params.query.trim().is_empty() {
+            return Err(QueryError::InvalidQuery("query must not be empty".to_string()));
+        }
+        let project_esc = escape_cypher_string(project);
+        let query = &params.query;
+
+        // Determine which labels to search.
+        let labels: Vec<NodeLabel> = match &params.label_filter {
+            Some(names) => names
+                .iter()
+                .filter_map(|n| parse_node_label(n))
+                .collect(),
+            None => SYMBOL_LABELS.to_vec(),
+        };
+        if labels.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build CALLS indegree map: target_id → count.
+        let degree_map = self.load_calls_indegree(project)?;
+
+        let mut results = Vec::new();
+        for &label in &labels {
+            let table = escape_identifier(label.table_name());
+            let cypher = format!(
+                "MATCH (n:{table}) WHERE toLower(n.name) CONTAINS toLower('{escaped_q}') \
+                 AND n.project = '{project_esc}' \
+                 RETURN n.id AS id, n.name AS name, n.qualifiedName AS qn, \
+                 n.filePath AS filePath, n.startLine AS line;",
+                escaped_q = escape_cypher_string(query),
+            );
+            let rows = match self.storage.query(&cypher) {
+                Ok(rows) => rows,
+                Err(_) => continue,
+            };
+            for row in rows {
+                let Some(name) = row.get(1).and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let node_id = row.first().and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let degree = degree_map.get(&node_id).copied().unwrap_or(0) as u32;
+                // Apply degree filter.
+                if let Some((min, max)) = params.degree_filter {
+                    if degree < min || degree > max {
+                        continue;
+                    }
+                }
+                let qn = row.get(2).and_then(|v| v.as_str()).map(String::from);
+                let file_path = row.get(3).and_then(|v| v.as_str()).map(String::from);
+                let start_line = row
+                    .get(4)
+                    .and_then(|v| v.as_i64())
+                    .and_then(|i| u32::try_from(i).ok());
+                let (score, reason) = relevance_score_with_reason(name, query);
+                results.push(SearchResult {
+                    name: name.to_string(),
+                    label: label.to_string(),
+                    file_path,
+                    start_line,
+                    qualified_name: qn,
+                    score,
+                    match_reason: format!("{reason} (degree={degree})"),
+                });
+            }
+        }
+        Ok(results)
+    }
+
+    /// Loads a map of `target_id → incoming CALLS count` for `project`.
+    fn load_calls_indegree(
+        &self,
+        project: &str,
+    ) -> Result<std::collections::HashMap<String, u32>> {
+        let project_esc = escape_cypher_string(project);
+        let cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.type = 'CALLS' AND e.project = '{project_esc}' \
+             RETURN e.target AS target;"
+        );
+        let mut map = std::collections::HashMap::new();
+        match self.storage.query(&cypher) {
+            Ok(rows) => {
+                for row in rows {
+                    if let Some(target) = row.first().and_then(|v| v.as_str()) {
+                        *map.entry(target.to_string()).or_insert(0) += 1;
+                    }
+                }
+            }
+            Err(_) => return Ok(map),
+        }
+        Ok(map)
     }
 
     /// Multi-signal score in `[0.0, 1.0]`:
@@ -566,6 +659,12 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
     prev_row[b_len]
 }
 
+/// Parses a node label name (e.g. `"Function"`, `"function"`) into a
+/// [`NodeLabel`]. Returns `None` for unknown labels.
+fn parse_node_label(name: &str) -> Option<NodeLabel> {
+    name.parse::<NodeLabel>().ok()
+}
+
 /// Sorts results by descending score then ascending name, and truncates to `limit`.
 fn sort_and_truncate(results: &mut Vec<SearchResult>, limit: usize) {
     results.sort_by(|a, b| {
@@ -582,7 +681,7 @@ fn sort_and_truncate(results: &mut Vec<SearchResult>, limit: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Language, Node, NodeLabel};
+    use crate::model::{Edge, EdgeType, Language, Node, NodeLabel};
     use crate::storage::Repository;
 
     fn fresh_repo() -> Repository {
@@ -1562,16 +1661,166 @@ mod tests {
     }
 
     #[test]
-    fn search_engine_graph_enhanced_returns_empty_placeholder() {
+    fn search_engine_graph_enhanced_filters_by_degree() {
         let storage = build_storage();
+        // Create two handler functions: one with 5 incoming CALLS, one with 2.
+        let handlers = [
+            Node::builder(NodeLabel::Function, "request_handler", "demo.request_handler")
+                .id("h1")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(1)
+                .end_line(10)
+                .language(Language::Rust)
+                .build(),
+            Node::builder(NodeLabel::Function, "response_handler", "demo.response_handler")
+                .id("h2")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(20)
+                .end_line(30)
+                .language(Language::Rust)
+                .build(),
+        ];
+        storage.save_nodes(&handlers, NodeLabel::Function).expect("save_nodes");
+
+        // Create caller functions to generate CALLS edges.
+        let callers: Vec<Node> = (0..7)
+            .map(|i| {
+                Node::builder(NodeLabel::Function, &format!("caller_{i}"), &format!("demo.caller_{i}"))
+                    .id(&format!("c{i}"))
+                    .project("demo")
+                    .file_path("/b.rs")
+                    .start_line(i + 1)
+                    .end_line(i + 5)
+                    .language(Language::Rust)
+                    .build()
+            })
+            .collect();
+        storage.save_nodes(&callers, NodeLabel::Function).expect("save callers");
+
+        // 5 callers → h1, 2 callers → h2.
+        let edges_to_h1: Vec<Edge> = (0..5)
+            .map(|i| Edge::new(&format!("c{i}"), "h1", EdgeType::Calls, "demo"))
+            .collect();
+        let edges_to_h2: Vec<Edge> = (5..7)
+            .map(|i| Edge::new(&format!("c{i}"), "h2", EdgeType::Calls, "demo"))
+            .collect();
+        let mut all_edges = edges_to_h1;
+        all_edges.extend(edges_to_h2);
+        storage.save_edges(&all_edges).expect("save edges");
+
+        let engine = SearchEngine::new(storage.as_ref());
+        // degree_filter=(5,100) should only return h1 (degree=5).
+        let params = SearchParams {
+            query: "handler".to_string(),
+            mode: SearchMode::GraphEnhanced,
+            degree_filter: Some((5, 100)),
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("graph search");
+        assert_eq!(results.len(), 1, "only h1 should have degree >= 5");
+        assert_eq!(results[0].name, "request_handler");
+        assert!(results[0].match_reason.contains("degree=5"));
+
+        // degree_filter=(0,3) should only return h2 (degree=2).
+        let params2 = SearchParams {
+            query: "handler".to_string(),
+            mode: SearchMode::GraphEnhanced,
+            degree_filter: Some((0, 3)),
+            ..SearchParams::default()
+        };
+        let results2 = engine.search("demo", &params2).expect("graph search");
+        assert_eq!(results2.len(), 1, "only h2 should have degree <= 3");
+        assert_eq!(results2[0].name, "response_handler");
+        assert!(results2[0].match_reason.contains("degree=2"));
+    }
+
+    #[test]
+    fn search_engine_graph_enhanced_filters_by_label() {
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "data_handler", "demo.data_handler")
+                .id("f1")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(1)
+                .end_line(10)
+                .language(Language::Rust)
+                .build();
+        let class = Node::builder(NodeLabel::Class, "EventHandler", "demo.EventHandler")
+                .id("c1")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(20)
+                .end_line(50)
+                .language(Language::Rust)
+                .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save func");
+        storage.save_nodes(&[class], NodeLabel::Class).expect("save class");
+
+        let engine = SearchEngine::new(storage.as_ref());
+        // label_filter=["Function"] → only Function nodes.
+        let params = SearchParams {
+            query: "handler".to_string(),
+            mode: SearchMode::GraphEnhanced,
+            label_filter: Some(vec!["Function".to_string()]),
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("graph search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "data_handler");
+        assert_eq!(results[0].label, "Function");
+
+        // No label filter → both Function and Class match.
+        let params2 = SearchParams {
+            query: "handler".to_string(),
+            mode: SearchMode::GraphEnhanced,
+            ..SearchParams::default()
+        };
+        let results2 = engine.search("demo", &params2).expect("graph search");
+        assert_eq!(results2.len(), 2);
+        let labels: Vec<&str> = results2.iter().map(|r| r.label.as_str()).collect();
+        assert!(labels.contains(&"Function"));
+        assert!(labels.contains(&"Class"));
+    }
+
+    #[test]
+    fn search_engine_graph_enhanced_includes_score() {
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "handler", "demo.handler")
+                .id("f1")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(1)
+                .end_line(10)
+                .language(Language::Rust)
+                .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
             query: "handler".to_string(),
             mode: SearchMode::GraphEnhanced,
             ..SearchParams::default()
         };
-        let results = engine.search("demo", &params).expect("graph dispatch");
-        assert!(results.is_empty());
+        let results = engine.search("demo", &params).expect("graph search");
+        assert_eq!(results.len(), 1);
+        // Exact name match → score 1.0.
+        assert!((results[0].score - 1.0).abs() < 1e-9);
+        assert!(results[0].match_reason.contains("degree=0"));
+    }
+
+    #[test]
+    fn search_engine_graph_enhanced_rejects_empty_query() {
+        let storage = build_storage();
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: String::new(),
+            mode: SearchMode::GraphEnhanced,
+            ..SearchParams::default()
+        };
+        let err = engine.search("demo", &params).expect_err("empty query should error");
+        assert!(err.is_invalid_query());
     }
 
     #[test]
