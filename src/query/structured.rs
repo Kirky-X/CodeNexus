@@ -351,7 +351,7 @@ impl<'a> SearchEngine<'a> {
                     continue;
                 };
                 let node_id = row.first().and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let degree = degree_map.get(&node_id).copied().unwrap_or(0) as u32;
+                let degree = degree_map.get(&node_id).copied().unwrap_or(0);
                 // Apply degree filter.
                 if let Some((min, max)) = params.degree_filter {
                     if degree < min || degree > max {
@@ -656,6 +656,7 @@ fn rows_to_search_results(
 /// - Prefix match → 0.8
 /// - Substring match → 0.5
 /// - No query (e.g. `search_by_type`) → 1.0 (neutral)
+#[allow(dead_code)]
 fn relevance_score(name: &str, query: &str) -> f64 {
     relevance_score_with_reason(name, query).0
 }

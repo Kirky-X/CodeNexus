@@ -338,6 +338,7 @@ impl<'a> DeadCodeDetector<'a> {
 
     /// Returns `true` if there is at least one incoming edge of `edge_type`
     /// targeting `func_id` in the graph (no project filter — func_id is unique).
+    #[allow(dead_code)]
     fn has_incoming_edge(&self, func_id: &str, edge_type: EdgeType) -> StorageResult<bool> {
         let escaped_id = escape_cypher_string(func_id);
         let type_str = edge_type.as_db_type();

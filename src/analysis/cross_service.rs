@@ -802,7 +802,7 @@ fn extract_mq_patterns(content: &str) -> Vec<(String, &'static str)> {
             let trimmed = after_pattern.trim_start();
             if let Some(rest) = trimmed.strip_prefix('(') {
                 let end = rest
-                    .find(|c: char| c == ',' || c == ')')
+                    .find([',', ')'])
                     .unwrap_or(rest.len());
                 let arg = rest[..end].trim().trim_matches('"');
                 if !arg.is_empty() {
@@ -834,7 +834,7 @@ fn extract_event_bus_patterns(content: &str) -> Vec<(String, &'static str)> {
             let trimmed = after_pattern.trim_start();
             if let Some(rest) = trimmed.strip_prefix('(') {
                 let end = rest
-                    .find(|c: char| c == ',' || c == ')')
+                    .find([',', ')'])
                     .unwrap_or(rest.len());
                 let arg = rest[..end]
                     .trim()

@@ -291,6 +291,7 @@ fn rows_to_search_results(
 ///   `parse`)
 /// - `0.5` — name contains query as a plain substring
 /// - `0.3` — no match (defensive; callers pre-filter via `CONTAINS`)
+#[allow(dead_code)]
 fn relevance_score(name: &str, query: &str) -> f64 {
     relevance_score_with_reason(name, query).0
 }

@@ -345,7 +345,7 @@ impl<'a> ContextCollector<'a> {
             let rows = self.storage.query(&cypher)?;
             if let Some(row) = rows.into_iter().next() {
                 return Ok(SymbolDefinition {
-                    name: row.get(0).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    name: row.first().and_then(|v| v.as_str()).unwrap_or_default().to_string(),
                     qualified_name: row.get(1).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
                     signature: row.get(2).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
                     docstring: row.get(3).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
@@ -381,7 +381,7 @@ impl<'a> ContextCollector<'a> {
             let rows = self.storage.query(&cypher)?;
             if let Some(row) = rows.into_iter().next() {
                 node_id = row
-                    .get(0)
+                    .first()
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string();
@@ -414,7 +414,7 @@ impl<'a> ContextCollector<'a> {
         let rows = self.storage.query(&cypher)?;
         let (file_id, package) = match rows.into_iter().next() {
             Some(row) => (
-                row.get(0)
+                row.first()
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string(),
@@ -458,7 +458,7 @@ impl<'a> ContextCollector<'a> {
             let rows = self.storage.query(&cypher)?;
             if let Some(row) = rows.into_iter().next() {
                 symbol_id = row
-                    .get(0)
+                    .first()
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string();
@@ -601,7 +601,7 @@ impl<'a> ContextCollector<'a> {
             if let Some(row) = self.storage.query(&cypher)?.into_iter().next() {
                 return Ok(Some(TestInfo {
                     test_name: row
-                        .get(0)
+                        .first()
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
                         .to_string(),
