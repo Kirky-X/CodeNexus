@@ -746,4 +746,77 @@ mod tests {
         assert!((graph.edges[0].confidence - 1.0).abs() < f32::EPSILON);
         assert_eq!(graph.edges[0].confidence_tier, ConfidenceTier::Global);
     }
+
+    // --- Coverage gap tests: import-match-but-lookup-fails, graph node without file_path ---
+
+    #[test]
+    fn resolve_type_import_match_but_lookup_fails() {
+        // Import references "MissingType" which is not in the symbol table.
+        // is_imported=true but lookup("MissingType") returns empty → falls
+        // through to project-level lookup, which also returns empty → None.
+        let (results, table) = build_results_and_table(vec![]);
+        let imports = vec![ImportInfo {
+            source_file: "missing".to_string(),
+            imported_names: vec!["MissingType".to_string()],
+            line: 1,
+        }];
+        let resolver = TypeResolver::new(&table);
+        assert!(
+            resolver.resolve_type("a.py", "MissingType", &imports).is_none(),
+            "imported but undefined type should not resolve"
+        );
+        let _ = &results;
+    }
+
+    #[test]
+    fn resolve_types_skips_graph_node_without_file_path() {
+        // Graph node C has no file_path → path-mapping loop skips it (line 171
+        // None branch). Resolution should still work for other nodes (B) that
+        // DO have file_path.
+        let class_a = make_class("A", "a.py", Language::Python);
+        let class_b = make_class("B", "b.py", Language::Python);
+        let class_c = make_class("C", "c.py", Language::Python);
+
+        let results = vec![
+            {
+                let mut r = ExtractResult::new("a.py", Language::Python);
+                r.push_node(class_a);
+                r
+            },
+            {
+                let mut r = ExtractResult::new("b.py", Language::Python);
+                r.push_node(class_b);
+                r.imports.push(ImportInfo {
+                    source_file: "a".to_string(),
+                    imported_names: vec!["A".to_string()],
+                    line: 1,
+                });
+                r
+            },
+            {
+                let mut r = ExtractResult::new("c.py", Language::Python);
+                r.push_node(class_c);
+                r
+            },
+        ];
+        let table = build_symbol_table(&results, "proj");
+
+        let mut graph = Graph::new();
+        graph.add_node(make_class("A", "a.py", Language::Python));
+        graph.add_node(make_class("B", "b.py", Language::Python));
+        // C has no file_path in the graph — triggers line 171 None branch.
+        let c_no_fp = Node::builder(NodeLabel::Class, "C", "proj.c.py.C")
+            .language(Language::Python)
+            .project("proj")
+            .build();
+        graph.add_node(c_no_fp);
+        // Dangling edge: B extends proj.b.py.A (wrong file in FQN).
+        add_extends(&mut graph, "proj.b.py.B", "proj.b.py.A");
+
+        let resolver = TypeResolver::new(&table);
+        let fixed = resolver.resolve_types(&results, &mut graph);
+        // B's edge should still be resolved despite C having no file_path.
+        assert_eq!(fixed.len(), 1, "B's edge should be resolved");
+        assert_eq!(graph.edges[0].target, "proj.a.py.A");
+    }
 }

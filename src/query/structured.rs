@@ -2222,4 +2222,160 @@ mod tests {
             0.5
         );
     }
+
+    // --- Coverage: SearchEngine per-table error-path continues ---
+
+    #[test]
+    fn search_engine_exact_continues_on_query_error() {
+        // Cover `Err(_) => continue` (line 174) in search_exact: when a
+        // per-table MATCH query fails (table dropped), the loop skips it and
+        // continues to the next table.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "parse_file", "demo.parse_file")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage.execute("DROP TABLE Class;").expect("drop table");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "parse".to_string(),
+            mode: SearchMode::Exact,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("exact search");
+        assert!(results.iter().any(|r| r.name == "parse_file"));
+    }
+
+    #[test]
+    fn search_engine_regex_continues_on_query_error() {
+        // Cover `Err(_) => continue` (line 211) in search_regex: Class is one
+        // of the three labels searched; dropping it triggers the error arm.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "get_user", "demo.get_user")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage.execute("DROP TABLE Class;").expect("drop table");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: r"get_.*".to_string(),
+            mode: SearchMode::Regex,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("regex search");
+        assert!(results.iter().any(|r| r.name == "get_user"));
+    }
+
+    #[test]
+    fn search_engine_fuzzy_continues_on_query_error() {
+        // Cover `Err(_) => continue` (line 281) in search_fuzzy.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "parse", "demo.parse")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage.execute("DROP TABLE Class;").expect("drop table");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "parse".to_string(),
+            mode: SearchMode::Fuzzy,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("fuzzy search");
+        assert!(results.iter().any(|r| r.name == "parse"));
+    }
+
+    #[test]
+    fn search_engine_graph_enhanced_continues_on_query_error() {
+        // Cover `Err(_) => continue` (line 360) in search_graph_enhanced.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "parse", "demo.parse")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage.execute("DROP TABLE Class;").expect("drop table");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "parse".to_string(),
+            mode: SearchMode::GraphEnhanced,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("graph search");
+        assert!(results.iter().any(|r| r.name == "parse"));
+    }
+
+    #[test]
+    fn search_engine_graph_enhanced_returns_empty_when_label_filter_all_invalid() {
+        // Cover `return Ok(Vec::new())` (line 342) when labels.is_empty():
+        // all entries in label_filter fail to parse as NodeLabel.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "parse", "demo.parse")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "parse".to_string(),
+            mode: SearchMode::GraphEnhanced,
+            label_filter: Some(vec!["NotARealLabel".to_string()]),
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("graph search");
+        assert!(results.is_empty(), "expected empty when no valid labels");
+    }
+
+    #[test]
+    fn load_calls_indegree_returns_empty_map_on_query_error() {
+        // Cover `Err(_) => return Ok(map)` (line 415) in load_calls_indegree:
+        // when the CodeRelation table is dropped, the CALLS query errors and
+        // an empty map is returned (not propagated as an error).
+        let storage = build_storage();
+        storage.execute("DROP TABLE CodeRelation;").expect("drop table");
+        let engine = SearchEngine::new(storage.as_ref());
+        let map = engine
+            .load_calls_indegree("demo")
+            .expect("load_calls_indegree should return Ok(empty) on query error");
+        assert!(map.is_empty(), "expected empty degree map, got {map:?}");
+    }
+
+    #[test]
+    fn load_tested_node_ids_returns_err_on_query_error() {
+        // Cover `Err(e) => return Err(e.into())` (line 477) in
+        // load_tested_node_ids: when the CodeRelation table is dropped, the
+        // TESTS query errors and the function returns Err (unlike
+        // load_calls_indegree which swallows the error).
+        let storage = build_storage();
+        storage.execute("DROP TABLE CodeRelation;").expect("drop table");
+        let engine = SearchEngine::new(storage.as_ref());
+        let result = engine.load_tested_node_ids("demo");
+        assert!(
+            result.is_err(),
+            "expected error when CodeRelation table is dropped, got {result:?}"
+        );
+    }
 }

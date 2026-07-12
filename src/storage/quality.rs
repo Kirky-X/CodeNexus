@@ -1170,4 +1170,102 @@ mod tests {
             "three isolated projects should have no DQ-005 violations: {violations:?}"
         );
     }
+
+    // --- Query error path tests: dropped table triggers Err(_) => continue ---
+
+    #[test]
+    fn test_dq002_skips_table_on_query_error() {
+        // Drop the Variable table so its MATCH query errors (line 122 continue).
+        // The check should still detect duplicate FQNs in the Function table.
+        let storage = fresh_storage();
+        storage
+            .save_nodes(
+                &[
+                    sample_function("f1", "demo", "main", "demo.main"),
+                    sample_function("f2", "demo", "other", "demo.main"),
+                ],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+        storage
+            .execute("DROP TABLE Variable;")
+            .expect("drop table");
+
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_fqn_uniqueness()
+            .expect("check_fqn_uniqueness");
+        assert_eq!(violations.len(), 1, "should still detect DQ-002 in Function table");
+        assert_eq!(violations[0].rule, "DQ-002");
+    }
+
+    #[test]
+    fn test_dq004_skips_table_on_query_error() {
+        // Drop the Variable table so its node-id query errors (line 183 continue).
+        // The check should still detect orphan edges using ids from other tables.
+        let storage = fresh_storage();
+        storage
+            .save_nodes(
+                &[sample_function("f1", "demo", "main", "demo.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+        storage
+            .save_edges(&[crate::model::Edge::builder(
+                "f1",
+                "missing_target",
+                EdgeType::Calls,
+                "demo",
+            )
+            .build()])
+            .expect("save_edges");
+        storage
+            .execute("DROP TABLE Variable;")
+            .expect("drop table");
+
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_edge_integrity()
+            .expect("check_edge_integrity");
+        assert_eq!(violations.len(), 1, "should still detect DQ-004 orphan target");
+        assert_eq!(violations[0].rule, "DQ-004");
+        assert!(violations[0].message.contains("missing_target"));
+    }
+
+    #[test]
+    fn test_dq005_skips_table_on_query_error() {
+        // Drop the Variable table so both per-project count (line 253) and
+        // total count (line 269) queries error. The check should still work
+        // for the Function table.
+        let storage = fresh_storage();
+        storage
+            .save_project(&sample_project("alpha", "alpha"))
+            .expect("save_project");
+        storage
+            .save_nodes(
+                &[sample_function("a1", "alpha", "main", "alpha.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes alpha");
+        storage
+            .save_nodes(
+                &[sample_function("g1", "ghost", "main", "ghost.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes ghost");
+        storage
+            .execute("DROP TABLE Variable;")
+            .expect("drop table");
+
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_project_isolation()
+            .expect("check_project_isolation");
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.rule == "DQ-005" && v.message.contains("Function")),
+            "should still detect DQ-005 in Function table: {violations:?}"
+        );
+    }
 }

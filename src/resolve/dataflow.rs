@@ -1347,4 +1347,32 @@ mod tests {
             "READS should match exported const across files"
         );
     }
+
+    // --- Coverage gap tests: Static label in cross-file lookup ---
+
+    #[test]
+    fn resolve_var_identifier_finds_variable_via_static_lookup() {
+        // Static x defined in file B (not exported), used in file A →
+        // lookup_in_file fails, lookup_exported fails (not exported),
+        // cross-file fallback matches Static label (line 407).
+        let x_node = make_node("x", "b.rs", "proj", NodeLabel::Static);
+        let results = vec![
+            make_result("a.rs", vec![]),
+            make_result("b.rs", vec![x_node]),
+        ];
+        let table = build_symbol_table(&results, "proj");
+
+        let resolver = DataFlowResolver::new(&table, "proj");
+        let mut graph = Graph::new();
+        let edge = resolver
+            .resolve_var_assign("a.rs", "y", "x", &mut graph, Language::Rust)
+            .unwrap();
+
+        // x's qn should be from b.rs (found via Static fallback, not file lookup).
+        assert_eq!(
+            edge.source,
+            fqn("proj", "b.rs", "x", Language::Rust),
+            "should find Static via cross-file fallback"
+        );
+    }
 }

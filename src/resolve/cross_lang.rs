@@ -1963,4 +1963,14 @@ mod tests {
         let params = parse_params("def foo(x)", Language::Python);
         assert_eq!(params, vec!["x"]);
     }
+
+    // --- Coverage gap tests: extract_c_type all-whitespace param ---
+
+    #[test]
+    fn extract_c_type_all_whitespace_returns_empty() {
+        // All-whitespace param: trimmed is empty → end == 0 → return String::new().
+        assert_eq!(extract_c_type("   "), "");
+        assert_eq!(extract_c_type(""), "");
+        assert_eq!(extract_c_type("\t\n"), "");
+    }
 }

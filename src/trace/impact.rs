@@ -1295,4 +1295,115 @@ mod tests {
         // score = 0.5*0.6 + 0.6*0.2 + 1.0*0.2 = 0.3+0.12+0.2 = 0.62 → High
         assert_eq!(result.risk_assessment.level, RiskLevel::High);
     }
+
+    // --- Coverage gap tests: MAX_NODES_LIMIT break, visited skip, count_level=High, depth clamping ---
+
+    #[test]
+    fn trace_upstream_breaks_at_max_nodes_limit() {
+        // 1000 direct predecessors of target + 1 transitive caller of f0.
+        // After adding 1000 predecessors, results.len() >= MAX_NODES_LIMIT (1000),
+        // so the break at line 229 fires before the transitive caller can be found.
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        for i in 0..1000 {
+            let id = format!("f{i}");
+            g.add_node(make_func(&id, &id));
+            g.add_edge(Edge::new(&id, "target", EdgeType::Calls, "proj"));
+        }
+        g.add_node(make_func("transitive", "transitive"));
+        g.add_edge(Edge::new("transitive", "f0", EdgeType::Calls, "proj"));
+        let config = ImpactConfig {
+            max_depth: 5,
+            edge_types: vec![EdgeType::Calls],
+            include_tests: false,
+        };
+        let analyzer = ImpactAnalyzer::with_config(&g, config);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert_eq!(
+            result.affected.len(),
+            1000,
+            "break should fire after 1000 results, preventing the transitive caller"
+        );
+        assert!(
+            !result.affected.iter().any(|n| n.name == "transitive"),
+            "transitive caller should not be found due to MAX_NODES_LIMIT break"
+        );
+    }
+
+    #[test]
+    fn trace_upstream_skips_visited_predecessor_in_diamond() {
+        // Diamond via analyze_impact (trace_upstream): D → B → A, D → C → A.
+        // When processing C after B, D is already visited → skip (line 244).
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_node(make_func("c", "c"));
+        g.add_node(make_func("d", "d"));
+        g.add_edge(Edge::new("b", "a", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c", "a", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("d", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("d", "c", EdgeType::Calls, "proj"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"a".to_string());
+        let d_count = result.affected.iter().filter(|n| n.name == "d").count();
+        assert_eq!(d_count, 1, "D should appear only once (visited skip)");
+        assert_eq!(result.affected.len(), 3);
+    }
+
+    #[test]
+    fn risk_assessment_25_affected_returns_high_count_level() {
+        // 25 affected nodes → count > 20 → idx=1 → RiskLevel::High (line 294).
+        // count_factor=0.8, depth_factor=1/3*0.3≈0.1, edge_factor=1.0
+        // score = 0.8*0.6 + 0.1*0.2 + 1.0*0.2 = 0.48+0.02+0.2 = 0.7 → High
+        // Both count_level and score_level are High.
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        for i in 0..25 {
+            let id = format!("f{i}");
+            g.add_node(make_func(&id, &id));
+            g.add_edge(Edge::new(&id, "target", EdgeType::Calls, "proj"));
+        }
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert_eq!(result.affected.len(), 25);
+        assert_eq!(result.risk_assessment.level, RiskLevel::High);
+    }
+
+    #[test]
+    fn with_config_clamps_max_depth_to_limit() {
+        // max_depth=15 should be clamped to MAX_DEPTH_LIMIT (10) internally.
+        // Chain of 11: target ← c1 ← ... ← c11 (depths 1-11).
+        // With clamped max_depth=10, only c1..c10 (depths 1-10) are found;
+        // c11 at depth 11 is NOT reached because depth 10 >= 10 triggers continue.
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        for i in 1..=11 {
+            let id = format!("c{i}");
+            g.add_node(make_func(&id, &id));
+        }
+        for i in 1..=10 {
+            let from = format!("c{i}");
+            let to = if i == 1 { "target".to_string() } else { format!("c{}", i - 1) };
+            g.add_edge(Edge::new(&from, &to, EdgeType::Calls, "proj"));
+        }
+        g.add_edge(Edge::new("c11", "c10", EdgeType::Calls, "proj"));
+        let config = ImpactConfig {
+            max_depth: 15,
+            edge_types: vec![EdgeType::Calls],
+            include_tests: false,
+        };
+        let analyzer = ImpactAnalyzer::with_config(&g, config);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert_eq!(
+            result.affected.len(),
+            10,
+            "max_depth=15 should be clamped to 10, finding only 10 nodes"
+        );
+        let max_depth = result.affected.iter().map(|n| n.depth).max().unwrap_or(0);
+        assert_eq!(max_depth, 10);
+        assert!(
+            !result.affected.iter().any(|n| n.name == "c11"),
+            "c11 at depth 11 should not be found due to clamping"
+        );
+    }
 }
