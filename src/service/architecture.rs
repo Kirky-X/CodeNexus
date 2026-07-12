@@ -25,7 +25,7 @@ use sdforge::service_api;
 
 /// JSON-serializable architecture output.
 #[cfg(feature = "analysis")]
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ArchitectureOutput {
     pub project: String,
     pub overview: ArchitectureOverview,
@@ -128,6 +128,10 @@ mod tests {
                 entry_points: vec![],
                 routes: vec![],
                 hotspots: vec![],
+                module_boundaries: vec![],
+                dependency_directions: vec![],
+                layers: vec![],
+                cross_service_deps: vec![],
             },
         };
         let json = serde_json::to_string(&out).unwrap();

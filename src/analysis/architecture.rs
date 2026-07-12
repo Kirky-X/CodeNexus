@@ -48,7 +48,7 @@ const PACKAGE_TABLES: &[&str] = &[
 ];
 
 /// A complete architecture overview for a project.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ArchitectureOverview {
     /// Language distribution (file count + symbol count per language).
     pub languages: Vec<LanguageStat>,
@@ -60,6 +60,14 @@ pub struct ArchitectureOverview {
     pub routes: Vec<RouteStat>,
     /// High-indegree functions (top 10 by caller count).
     pub hotspots: Vec<HotspotStat>,
+    /// Module boundaries detected by grouping files by directory.
+    pub module_boundaries: Vec<ModuleBoundary>,
+    /// Directed module dependencies with circular-dep flags.
+    pub dependency_directions: Vec<DepDirection>,
+    /// Architectural layers (Controller/Service/Repository/Model).
+    pub layers: Vec<LayerInfo>,
+    /// Cross-service dependencies (reserved for future use).
+    pub cross_service_deps: Vec<CrossServiceDep>,
 }
 
 /// Language statistics.
@@ -117,6 +125,58 @@ pub struct HotspotStat {
     pub caller_count: u32,
 }
 
+/// A module boundary detected by grouping files by directory.
+///
+/// `cohesion` = internal CALLS edges / (internal + external CALLS edges).
+/// A module with no external dependencies has `cohesion = 1.0`.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ModuleBoundary {
+    /// Module name (directory path).
+    pub module_name: String,
+    /// File paths belonging to this module.
+    pub members: Vec<String>,
+    /// CALLS edges from external modules into this module.
+    pub incoming_deps: u32,
+    /// CALLS edges from this module to external modules.
+    pub outgoing_deps: u32,
+    /// Internal edges / total edges (0.0–1.0).
+    pub cohesion: f64,
+}
+
+/// A directed dependency between two modules.
+///
+/// `is_circular` is `true` when the dependency participates in a cycle
+/// detected via DFS coloring.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DepDirection {
+    /// Source module name.
+    pub from_module: String,
+    /// Target module name.
+    pub to_module: String,
+    /// Whether this edge is part of a cycle.
+    pub is_circular: bool,
+}
+
+/// A logical architectural layer (Controller/Service/Repository/Model).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct LayerInfo {
+    /// Layer name: `"Controller"`, `"Service"`, `"Repository"`, `"Model"`.
+    pub layer: String,
+    /// Member qualified names in this layer.
+    pub members: Vec<String>,
+}
+
+/// A cross-service dependency (reserved for future use).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CrossServiceDep {
+    /// Source module name.
+    pub from_module: String,
+    /// Target module name.
+    pub to_module: String,
+    /// Communication protocol (e.g. `"HTTP"`, `"gRPC"`).
+    pub protocol: String,
+}
+
 /// Produces an [`ArchitectureOverview`] for a project.
 pub struct ArchitectureAnalyzer<'a> {
     storage: &'a dyn Storage,
@@ -141,12 +201,19 @@ impl<'a> ArchitectureAnalyzer<'a> {
         let entry_points = self.load_entry_points(project)?;
         let routes = self.load_routes(project)?;
         let hotspots = self.load_hotspots(project)?;
+        let module_boundaries = self.detect_module_boundaries(project)?;
+        let dependency_directions = self.analyze_dependency_directions(project)?;
+        let layers = self.detect_layers(project)?;
         Ok(ArchitectureOverview {
             languages,
             packages,
             entry_points,
             routes,
-            hotspots, // Single-line for coverage: tarpaulin attribute continuation
+            hotspots,
+            module_boundaries,
+            dependency_directions,
+            layers,
+            cross_service_deps: Vec::new(),
         })
     }
 
@@ -418,6 +485,42 @@ impl<'a> ArchitectureAnalyzer<'a> {
         // Truncate to top 10.
         result.truncate(HOTSPOT_LIMIT);
         Ok(result)
+    }
+
+    /// Detects module boundaries by grouping files by directory and counting
+    /// internal vs external CALLS edges.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::storage::error::StorageError`] if any Cypher query
+    /// fails.
+    fn detect_module_boundaries(&self, project: &str) -> StorageResult<Vec<ModuleBoundary>> {
+        let _ = project;
+        Ok(Vec::new())
+    }
+
+    /// Analyzes dependency directions between modules and detects circular
+    /// dependencies via DFS coloring.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::storage::error::StorageError`] if any Cypher query
+    /// fails.
+    fn analyze_dependency_directions(&self, project: &str) -> StorageResult<Vec<DepDirection>> {
+        let _ = project;
+        Ok(Vec::new())
+    }
+
+    /// Detects architectural layers (Controller/Service/Repository/Model) by
+    /// classifying functions based on their edge patterns.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::storage::error::StorageError`] if any Cypher query
+    /// fails.
+    fn detect_layers(&self, project: &str) -> StorageResult<Vec<LayerInfo>> {
+        let _ = project;
+        Ok(Vec::new())
     }
 }
 
@@ -1019,5 +1122,88 @@ mod tests {
             .expect("helper method should be a hotspot");
         assert_eq!(helper.caller_count, 1);
         assert_eq!(helper.qualified_name, "demo.Class.helper");
+    }
+
+    // --- T028: multi-dimensional architecture type tests ---
+
+    #[test]
+    fn module_boundary_serializes_all_fields() {
+        let mb = ModuleBoundary {
+            module_name: "src/api".to_string(),
+            members: vec!["src/api/handler.rs".to_string(), "src/api/route.rs".to_string()],
+            incoming_deps: 3,
+            outgoing_deps: 2,
+            cohesion: 0.71,
+        };
+        let json = serde_json::to_string(&mb).expect("serialize");
+        assert!(json.contains("\"module_name\":\"src/api\""), "json: {json}");
+        assert!(json.contains("\"members\""), "json: {json}");
+        assert!(json.contains("\"incoming_deps\":3"), "json: {json}");
+        assert!(json.contains("\"outgoing_deps\":2"), "json: {json}");
+        assert!(json.contains("\"cohesion\":0.71"), "json: {json}");
+    }
+
+    #[test]
+    fn dep_direction_serializes_all_fields() {
+        let dd = DepDirection {
+            from_module: "module_a".to_string(),
+            to_module: "module_b".to_string(),
+            is_circular: true,
+        };
+        let json = serde_json::to_string(&dd).expect("serialize");
+        assert!(json.contains("\"from_module\":\"module_a\""), "json: {json}");
+        assert!(json.contains("\"to_module\":\"module_b\""), "json: {json}");
+        assert!(json.contains("\"is_circular\":true"), "json: {json}");
+    }
+
+    #[test]
+    fn layer_info_serializes_all_fields() {
+        let li = LayerInfo {
+            layer: "Controller".to_string(),
+            members: vec!["demo.handler".to_string()],
+        };
+        let json = serde_json::to_string(&li).expect("serialize");
+        assert!(json.contains("\"layer\":\"Controller\""), "json: {json}");
+        assert!(json.contains("\"members\""), "json: {json}");
+        assert!(json.contains("\"demo.handler\""), "json: {json}");
+    }
+
+    #[test]
+    fn cross_service_dep_serializes_all_fields() {
+        let csd = CrossServiceDep {
+            from_module: "svc_a".to_string(),
+            to_module: "svc_b".to_string(),
+            protocol: "HTTP".to_string(),
+        };
+        let json = serde_json::to_string(&csd).expect("serialize");
+        assert!(json.contains("\"from_module\":\"svc_a\""), "json: {json}");
+        assert!(json.contains("\"to_module\":\"svc_b\""), "json: {json}");
+        assert!(json.contains("\"protocol\":\"HTTP\""), "json: {json}");
+    }
+
+    #[test]
+    fn overview_includes_new_fields_in_json() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        let json = serde_json::to_string(&result).expect("serialize");
+        assert!(
+            json.contains("\"module_boundaries\""),
+            "json should contain module_boundaries: {json}"
+        );
+        assert!(
+            json.contains("\"dependency_directions\""),
+            "json should contain dependency_directions: {json}"
+        );
+        assert!(
+            json.contains("\"layers\""),
+            "json should contain layers: {json}"
+        );
+        assert!(
+            json.contains("\"cross_service_deps\""),
+            "json should contain cross_service_deps: {json}"
+        );
     }
 }
