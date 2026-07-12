@@ -54,20 +54,26 @@ impl From<IndexResult> for IndexOutput {
 
 /// LSP-driven `semantic_type` enhancement.
 ///
-/// Spawns `rust-analyzer`, queries each Rust symbol's hover info, and writes
-/// the extracted type signature back to the node's `semantic_type` property.
+/// Spawns language servers (rust-analyzer, pyright-langserver, …) based on
+/// file extensions found in the project, queries each symbol's hover info,
+/// and writes the extracted type signature back to `semantic_type`.
 /// Failures degrade gracefully to pure tree-sitter extraction.
 #[cfg(feature = "lsp")]
 #[allow(clippy::result_large_err)]
 fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Result<(), CodeNexusError> {
-    use crate::lsp::{LspError, LspProvider, RustAnalyzerClient};
+    use crate::lsp::{LspError, LspProvider, PyrightClient, RustAnalyzerClient};
     use crate::storage::schema::escape_cypher_string;
 
-    let client = RustAnalyzerClient::new();
+    // Build a map: file_ext → (dyn LspProvider, &str)
+    let rust_client = RustAnalyzerClient::new();
+    let py_client = PyrightClient::new();
+    let providers: [(&str, &dyn LspProvider); 2] = [("rs", &rust_client), ("py", &py_client)];
 
-    if let Err(LspError::ServerStart(msg)) = client.start(workspace) {
-        eprintln!("[warn] LSP server start failed, degrading to pure tree-sitter: {msg}");
-        return Ok(());
+    // Start each provider (best-effort; failures degrade to partial enhancement)
+    for (_ext, provider) in &providers {
+        if let Err(LspError::ServerStart(msg)) = provider.start(workspace) {
+            eprintln!("[warn] LSP server start failed (degrading): {msg}");
+        }
     }
 
     let proj = escape_cypher_string(project);
@@ -114,6 +120,10 @@ fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Resul
             workspace.join(file_path)
         };
 
+        // Select provider by file extension
+        let ext = abs_file.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let client: &dyn LspProvider = providers.iter().find(|(e, _)| *e == ext).map(|(_, p)| *p).unwrap_or_else(|| &rust_client);
+
         let line = u32::try_from(start_line).unwrap_or(0);
         match client.hover(&abs_file, line, 0) {
             Ok(Some(hover)) => {
@@ -148,7 +158,9 @@ fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Resul
 
     eprintln!("[info] LSP enhancement: {enhanced} symbol(s) enhanced, {skipped} skipped");
 
-    let _ = client.shutdown();
+    for (_ext, provider) in &providers {
+        let _ = provider.shutdown();
+    }
     Ok(())
 }
 

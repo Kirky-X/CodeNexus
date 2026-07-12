@@ -26,10 +26,13 @@
 
 pub mod client;
 pub mod extract;
+pub mod pyright;
+pub(crate) mod session;
 pub mod types;
 
 pub use client::RustAnalyzerClient;
 pub use extract::extract_hover_text;
+pub use pyright::PyrightClient;
 pub use types::map_lsp_symbol_kind;
 
 use std::path::Path;
