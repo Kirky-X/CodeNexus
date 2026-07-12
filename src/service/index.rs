@@ -335,4 +335,125 @@ mod tests {
         assert_eq!(output.files_indexed, usize::MAX);
         assert_eq!(output.duration_ms, u64::MAX);
     }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn index_core_indexes_rust_project() {
+        use crate::kit::{build_kit, KitBootstrapConfig};
+        use std::fs;
+        use tempfile::TempDir;
+
+        let src_dir = TempDir::new().unwrap();
+        let src_path = src_dir.path();
+        fs::write(
+            src_path.join("main.rs"),
+            "fn main() { println!(\"hello\"); }\n",
+        )
+        .unwrap();
+
+        let db_dir = TempDir::new().unwrap();
+        let db_path = db_dir.path().join("index_testdb");
+        let config = KitBootstrapConfig::new(db_path.clone());
+        let kit = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&config))
+            .expect("build_kit");
+
+        let output = index_core(
+            &kit,
+            &db_path,
+            src_path.to_str().unwrap(),
+            "test_project",
+            false,
+            false,
+            false,
+        )
+        .expect("index should succeed");
+
+        assert!(!output.project_id.is_empty());
+        assert!(output.files_indexed >= 1);
+        assert!(output.nodes_created > 0);
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn index_core_force_reindexes_unchanged_files() {
+        use crate::kit::{build_kit, KitBootstrapConfig};
+        use std::fs;
+        use tempfile::TempDir;
+
+        let src_dir = TempDir::new().unwrap();
+        let src_path = src_dir.path();
+        fs::write(
+            src_path.join("lib.rs"),
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+        )
+        .unwrap();
+
+        let db_dir = TempDir::new().unwrap();
+        let db_path = db_dir.path().join("index_force_testdb");
+        let config = KitBootstrapConfig::new(db_path.clone());
+        let kit = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&config))
+            .expect("build_kit");
+
+        // First index
+        let output1 = index_core(
+            &kit,
+            &db_path,
+            src_path.to_str().unwrap(),
+            "force_project",
+            false,
+            false,
+            false,
+        )
+        .expect("first index should succeed");
+        assert!(output1.files_indexed >= 1);
+
+        // Second index with force=true should reindex even though files are unchanged
+        let output2 = index_core(
+            &kit,
+            &db_path,
+            src_path.to_str().unwrap(),
+            "force_project",
+            true,
+            false,
+            false,
+        )
+        .expect("forced reindex should succeed");
+        assert!(output2.files_indexed >= 1);
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn index_core_handles_empty_directory() {
+        use crate::kit::{build_kit, KitBootstrapConfig};
+        use tempfile::TempDir;
+
+        let src_dir = TempDir::new().unwrap();
+        let src_path = src_dir.path();
+
+        let db_dir = TempDir::new().unwrap();
+        let db_path = db_dir.path().join("index_empty_testdb");
+        let config = KitBootstrapConfig::new(db_path.clone());
+        let kit = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&config))
+            .expect("build_kit");
+
+        let output = index_core(
+            &kit,
+            &db_path,
+            src_path.to_str().unwrap(),
+            "empty_project",
+            false,
+            false,
+            false,
+        )
+        .expect("index should succeed on empty dir");
+
+        assert_eq!(output.files_indexed, 0);
+        assert_eq!(output.nodes_created, 0);
+    }
 }
