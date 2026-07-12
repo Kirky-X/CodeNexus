@@ -8,12 +8,22 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::index::IndexResult;
-use crate::kit::{AsyncKit, AsyncReady, IndexerModule};
-use crate::service::error::{CodeNexusError, kit_not_initialized, to_api_error, wrap_error, wrap_kit_error};
-use crate::service::runtime::kit;
-use crate::storage::{QualityChecker, Repository, StorageConfig};
 
-#[cfg(feature = "cli")]
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+use crate::kit::{AsyncKit, AsyncReady, IndexerModule};
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+use crate::service::error::CodeNexusError;
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+use crate::storage::{QualityChecker, Repository};
+
+#[cfg(any(feature = "cli", feature = "mcp"))]
+use crate::service::error::{kit_not_initialized, to_api_error, wrap_kit_error};
+#[cfg(any(feature = "cli", feature = "mcp"))]
+use crate::service::runtime::kit;
+#[cfg(any(feature = "cli", feature = "mcp"))]
+use crate::storage::StorageConfig;
+
+#[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
 use sdforge::service_api;
@@ -49,7 +59,7 @@ impl From<IndexResult> for IndexOutput {
 /// Failures degrade gracefully to pure tree-sitter extraction.
 #[cfg(feature = "lsp")]
 #[allow(clippy::result_large_err)]
-fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Result<(), ApiError> {
+fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Result<(), CodeNexusError> {
     use crate::lsp::{LspError, LspProvider, RustAnalyzerClient};
     use crate::storage::schema::escape_cypher_string;
 
@@ -76,10 +86,7 @@ fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Resul
     let mut rows = Vec::new();
     for q in &queries {
         let r = repo.connection().query(q).map_err(|e| {
-            wrap_error(
-                "LSP query failed",
-                crate::storage::StorageError::Query(e.to_string()),
-            )
+            CodeNexusError::Storage(crate::storage::StorageError::Query(e.to_string()))
         })?;
         rows.extend(r);
     }
@@ -149,7 +156,7 @@ fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Resul
 ///
 /// Separated from the `#[service_api]` function for reuse by `import.rs`
 /// reindex logic.
-#[cfg(feature = "cli")]
+#[cfg(any(feature = "cli", feature = "mcp", test))]
 #[allow(clippy::result_large_err)]
 pub(crate) fn index_core(
     kit: &AsyncKit<AsyncReady>,
@@ -240,4 +247,80 @@ async fn index(
         .map_err(|e| to_api_error(CodeNexusError::from(e), "index_error"))?;
     println!("{json}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn index_output_from_index_result_maps_all_fields() {
+        let result = IndexResult {
+            project_id: "p1".into(),
+            files_indexed: 10,
+            files_skipped: 2,
+            nodes_created: 100,
+            edges_created: 50,
+            duration_ms: 5000,
+        };
+        let output = IndexOutput::from(result);
+        assert_eq!(output.project_id, "p1");
+        assert_eq!(output.files_indexed, 10);
+        assert_eq!(output.files_skipped, 2);
+        assert_eq!(output.nodes_created, 100);
+        assert_eq!(output.edges_created, 50);
+        assert_eq!(output.duration_ms, 5000);
+    }
+
+    #[test]
+    fn index_output_from_handles_zero_values() {
+        let result = IndexResult {
+            project_id: "".into(),
+            files_indexed: 0,
+            files_skipped: 0,
+            nodes_created: 0,
+            edges_created: 0,
+            duration_ms: 0,
+        };
+        let output = IndexOutput::from(result);
+        assert_eq!(output.project_id, "");
+        assert_eq!(output.files_indexed, 0);
+        assert_eq!(output.nodes_created, 0);
+        assert_eq!(output.edges_created, 0);
+        assert_eq!(output.duration_ms, 0);
+    }
+
+    #[test]
+    fn index_output_serializes_to_json() {
+        let output = IndexOutput {
+            project_id: "p1".into(),
+            files_indexed: 10,
+            files_skipped: 2,
+            nodes_created: 100,
+            edges_created: 50,
+            duration_ms: 5000,
+        };
+        let json = serde_json::to_string(&output).unwrap();
+        assert!(json.contains("\"project_id\":\"p1\""));
+        assert!(json.contains("\"files_indexed\":10"));
+        assert!(json.contains("\"files_skipped\":2"));
+        assert!(json.contains("\"nodes_created\":100"));
+        assert!(json.contains("\"edges_created\":50"));
+        assert!(json.contains("\"duration_ms\":5000"));
+    }
+
+    #[test]
+    fn index_output_from_preserves_large_values() {
+        let result = IndexResult {
+            project_id: "uuid-v7-12345".into(),
+            files_indexed: usize::MAX,
+            files_skipped: usize::MAX,
+            nodes_created: usize::MAX,
+            edges_created: usize::MAX,
+            duration_ms: u64::MAX,
+        };
+        let output = IndexOutput::from(result);
+        assert_eq!(output.files_indexed, usize::MAX);
+        assert_eq!(output.duration_ms, u64::MAX);
+    }
 }
