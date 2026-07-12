@@ -201,6 +201,7 @@ fn run_mcp_server() {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
     use tracing_subscriber::fmt::MakeWriter;
@@ -250,5 +251,76 @@ mod tests {
             captured.contains("codenexus_test_marker"),
             "expected captured output to contain the event message, got: {captured:?}"
         );
+    }
+
+    // --- init_logging ---
+
+    #[test]
+    fn init_logging_does_not_panic() {
+        init_logging();
+    }
+
+    // --- extract_global_arg ---
+
+    fn build_test_cmd() -> clap::Command {
+        clap::Command::new("codenexus")
+            .arg(
+                clap::Arg::new("db")
+                    .long("db")
+                    .global(true)
+                    .default_value(DEFAULT_DB_PATH),
+            )
+            .subcommand(clap::Command::new("index"))
+    }
+
+    #[test]
+    fn extract_global_arg_returns_top_value_when_present() {
+        let cmd = build_test_cmd();
+        let matches = cmd.get_matches_from(["codenexus", "--db", "/top/db", "index"]);
+        let sub = matches.subcommand_matches("index").unwrap();
+        let result = extract_global_arg(&matches, sub, "db", "fallback");
+        assert_eq!(result, "/top/db");
+    }
+
+    #[test]
+    fn extract_global_arg_returns_sub_value_when_top_absent() {
+        let cmd = clap::Command::new("codenexus")
+            .arg(
+                clap::Arg::new("db")
+                    .long("db")
+                    .global(true),
+            )
+            .subcommand(
+                clap::Command::new("index").arg(
+                    clap::Arg::new("db").long("db"),
+                ),
+            );
+        let matches = cmd.get_matches_from(["codenexus", "index", "--db", "/sub/db"]);
+        let sub = matches.subcommand_matches("index").unwrap();
+        let result = extract_global_arg(&matches, sub, "db", "fallback");
+        assert_eq!(result, "/sub/db");
+    }
+
+    #[test]
+    fn extract_global_arg_returns_fallback_when_neither_present() {
+        let cmd = clap::Command::new("codenexus")
+            .arg(clap::Arg::new("unused").long("unused").global(true))
+            .subcommand(clap::Command::new("index"));
+        let matches = cmd.get_matches_from(["codenexus", "index"]);
+        let sub = matches.subcommand_matches("index").unwrap();
+        let result = extract_global_arg(&matches, sub, "unused", "fallback_value");
+        assert_eq!(result, "fallback_value");
+    }
+
+    // --- extract_args ---
+
+    #[test]
+    fn extract_args_returns_empty_for_unregistered_command() {
+        let cmd = clap::Command::new("codenexus")
+            .subcommand(clap::Command::new("nonexistent_cmd"));
+        let matches = cmd.get_matches_from(["codenexus", "nonexistent_cmd"]);
+        let sub = matches.subcommand_matches("nonexistent_cmd").unwrap();
+        let args = extract_args("nonexistent_cmd", sub);
+        assert!(args.is_empty(), "unregistered command should return empty args");
     }
 }
