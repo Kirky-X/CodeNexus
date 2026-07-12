@@ -706,4 +706,68 @@ mod tests {
         assert!(parsed.paths.is_empty());
         assert!(parsed.cycles.is_empty(), "missing cycles should default to empty");
     }
+
+    // Covers collect_cross_service_paths early return when start node
+    // not found in graph (line 139).
+    #[test]
+    fn collect_cross_service_paths_returns_empty_for_nonexistent_start() {
+        use crate::model::Graph;
+        let graph = Graph::new();
+        let paths = collect_cross_service_paths(&graph, "nonexistent_id");
+        assert!(paths.is_empty(), "nonexistent start_id → empty paths");
+    }
+
+    // Covers collect_cross_service_paths skipping HttpCalls edges whose
+    // target node is missing from the graph (lines 146-147).
+    #[test]
+    fn collect_cross_service_paths_skips_missing_target_node() {
+        use crate::model::{Edge, EdgeType, Graph, Node, NodeLabel};
+        let mut graph = Graph::new();
+        let start_node = Node::builder(NodeLabel::Function, "caller", "demo.caller")
+            .id("f_a")
+            .file_path("/src/a.rs")
+            .build();
+        graph.add_node(start_node);
+        let edge = Edge::builder("f_a", "f_missing", EdgeType::HttpCalls, "demo")
+            .confidence(0.9)
+            .build();
+        graph.add_edge(edge);
+        let paths = collect_cross_service_paths(&graph, "f_a");
+        assert!(
+            paths.is_empty(),
+            "HttpCalls edge with missing target → skip"
+        );
+    }
+
+    // Covers collect_cross_service_paths creating a path for a valid
+    // HttpCalls edge (lines 149-157).
+    #[test]
+    fn collect_cross_service_paths_creates_path_for_valid_http_edge() {
+        use crate::model::{Edge, EdgeType, Graph, Node, NodeLabel};
+        let mut graph = Graph::new();
+        let caller = Node::builder(NodeLabel::Function, "caller", "demo.caller")
+            .id("f_a")
+            .file_path("/src/a.rs")
+            .build();
+        let handler = Node::builder(NodeLabel::Function, "handler", "demo.handler")
+            .id("f_b")
+            .file_path("/src/b.rs")
+            .build();
+        graph.add_node(caller);
+        graph.add_node(handler);
+        let edge = Edge::builder("f_a", "f_b", EdgeType::HttpCalls, "demo")
+            .confidence(0.9)
+            .reason("http request")
+            .build();
+        graph.add_edge(edge);
+        let paths = collect_cross_service_paths(&graph, "f_a");
+        assert_eq!(
+            paths.len(),
+            1,
+            "should create 1 path for valid HttpCalls edge"
+        );
+        assert_eq!(paths[0].depth, 1);
+        assert_eq!(paths[0].nodes.len(), 2);
+        assert_eq!(paths[0].edges.len(), 1);
+    }
 }

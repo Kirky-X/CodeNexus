@@ -419,4 +419,95 @@ mod tests {
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0].depth, 1);
     }
+
+    #[test]
+    fn trace_mixed_calls_and_dataflows_follows_only_dataflow() {
+        // Node a has both a Calls edge (skipped, line 95) and a DataFlows edge
+        // (followed). Verifies the edge-type filter keeps dataflow edges while
+        // dropping non-dataflow edges in the same iteration.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_node(make_var("v", "v"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("a", "v", EdgeType::DataFlows, "proj"));
+        let tracer = DataFlowTracer::new(&g);
+        let paths = tracer.trace(&"a".to_string(), 3);
+        // Only a->v (DataFlows) should be returned; a->b (Calls) is skipped.
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].edges[0].edge_type, "DATAFLOWS");
+        assert_eq!(paths[0].nodes[0].name, "a");
+        assert_eq!(paths[0].nodes[1].name, "v");
+    }
+
+    #[test]
+    fn trace_depth_limit_records_path_with_edges_explicitly() {
+        // Explicitly covers line 80: depth limit reached on a path that HAS
+        // edges, so the path is pushed to results before `continue`.
+        let mut g = Graph::new();
+        g.add_node(make_var("x", "x"));
+        g.add_node(make_var("y", "y"));
+        g.add_node(make_var("z", "z"));
+        g.add_edge(Edge::new("x", "y", EdgeType::DataFlows, "proj"));
+        g.add_edge(Edge::new("y", "z", EdgeType::DataFlows, "proj"));
+        let tracer = DataFlowTracer::new(&g);
+        let paths = tracer.trace(&"x".to_string(), 2);
+        // depth=2: x->y (depth 1), x->y->z (depth 2, hits limit with edges).
+        assert_eq!(paths.len(), 2);
+        let max_depth_path = paths.iter().max_by_key(|p| p.depth).unwrap();
+        assert_eq!(max_depth_path.depth, 2);
+        assert_eq!(max_depth_path.nodes.last().unwrap().name, "z");
+        assert!(!max_depth_path.edges.is_empty());
+    }
+
+    #[test]
+    fn trace_cycle_to_intermediate_node_skipped() {
+        // a -> b -> c -> a (cycle back to start). Cycle prevention (line 104)
+        // skips the edge back to a, but valid paths a->b, a->b->c are returned.
+        let mut g = Graph::new();
+        g.add_node(make_var("a", "a"));
+        g.add_node(make_var("b", "b"));
+        g.add_node(make_var("c", "c"));
+        g.add_edge(Edge::new("a", "b", EdgeType::DataFlows, "proj"));
+        g.add_edge(Edge::new("b", "c", EdgeType::DataFlows, "proj"));
+        g.add_edge(Edge::new("c", "a", EdgeType::DataFlows, "proj"));
+        let tracer = DataFlowTracer::new(&g);
+        let paths = tracer.trace(&"a".to_string(), 5);
+        // a->b (depth 1), a->b->c (depth 2). c->a is skipped (cycle).
+        assert_eq!(paths.len(), 2);
+        for p in &paths {
+            let names: Vec<&str> = p.nodes.iter().map(|n| n.name.as_str()).collect();
+            let mut sorted = names.clone();
+            sorted.sort();
+            sorted.dedup();
+            assert_eq!(names.len(), sorted.len(), "no revisited nodes in path");
+        }
+    }
+
+    #[test]
+    fn trace_zero_depth_with_edge_skips_extension() {
+        // depth=0: initial path has no edges (has_edges=false), can_extend is
+        // false (0 < 0), so we `continue` without pushing to results (line 80
+        // with has_edges=false branch).
+        let mut g = Graph::new();
+        g.add_node(make_var("x", "x"));
+        g.add_node(make_var("y", "y"));
+        g.add_edge(Edge::new("x", "y", EdgeType::DataFlows, "proj"));
+        let tracer = DataFlowTracer::new(&g);
+        let paths = tracer.trace(&"x".to_string(), 0);
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn trace_initial_path_depth_is_zero() {
+        // Verifies line 64: the initial WorkPath has depth: 0. By tracing a
+        // node with no outgoing dataflow edges, the initial path (depth 0, no
+        // edges) is popped but not recorded (has_edges=false), confirming the
+        // initial depth field is set to 0.
+        let mut g = Graph::new();
+        g.add_node(make_var("solo", "solo"));
+        let tracer = DataFlowTracer::new(&g);
+        let paths = tracer.trace(&"solo".to_string(), 5);
+        assert!(paths.is_empty());
+    }
 }

@@ -1757,4 +1757,165 @@ mod tests {
             .expect("should not error");
         assert!(name.is_empty());
     }
+
+    // --- Coverage gap tests: Method node branches, empty-id guards, not-found paths ---
+
+    #[test]
+    fn collect_type_context_with_method_node_hits_break() {
+        // A Method node exercises the Method Cypher branch in
+        // collect_type_context, hitting the `break` (line 393).
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Method {id: 'm1', project: 'demo', name: 'bar', qualifiedName: 'demo.bar', filePath: '/src/bar.rs', startLine: 1, endLine: 5, signature: '(x: i32)', returnType: 'i32', isExported: false, docstring: '', content: '', parameterCount: 1, parentQn: 'demo'});").expect("create method");
+
+        let collector = ContextCollector::new(&*s);
+        let symbol = collector
+            .collect_symbol_definition("demo.bar")
+            .expect("symbol");
+        let tc = collector.collect_type_context(&symbol).expect("type context");
+        assert_eq!(tc.return_type, "i32");
+        assert_eq!(tc.parameters.len(), 1);
+        assert_eq!(tc.parameters[0].name, "x");
+    }
+
+    #[test]
+    fn collect_test_context_with_method_symbol_hits_break() {
+        // A Method as the target symbol exercises the Method Cypher branch
+        // in collect_test_context, hitting the `break` (line 465).
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Method {id: 'm_target', project: 'demo', name: 'bar', qualifiedName: 'demo.bar', filePath: '/src/bar.rs', startLine: 1, endLine: 5, signature: 'fn bar()', returnType: 'void', isExported: true, docstring: '', content: '', parameterCount: 0, parentQn: 'demo'});").expect("create method target");
+        s.execute("CREATE (:Function {id: 'test_m', project: 'demo', name: 'test_bar', qualifiedName: 'demo.test_bar', filePath: '/tests/bar_test.rs', startLine: 3, endLine: 10, signature: 'fn test_bar()', returnType: 'void', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create test");
+        s.execute("CREATE (:CodeRelation {id: 'e_tm', source: 'test_m', target: 'm_target', type: 'TESTS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 3, project: 'demo'});").expect("create tests edge");
+
+        let collector = ContextCollector::new(&*s);
+        let tests = collector
+            .collect_test_context("demo.bar")
+            .expect("test context");
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].test_name, "test_bar");
+        assert_eq!(tests[0].line, 3);
+    }
+
+    #[test]
+    fn collect_callers_returns_empty_when_symbol_id_unresolvable() {
+        // Construct a SymbolDefinition whose qualified_name doesn't exist in
+        // storage. resolve_symbol_id returns empty string, hitting the
+        // early-return `Ok(Vec::new())` (line 503).
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        let symbol = SymbolDefinition {
+            name: "ghost".to_string(),
+            qualified_name: "demo.ghost".to_string(),
+            signature: String::new(),
+            docstring: String::new(),
+            source: String::new(),
+            file_path: String::new(),
+            start_line: 0,
+            end_line: 0,
+        };
+        let collector = ContextCollector::new(&*s);
+        let callers = collector
+            .collect_callers("demo", &symbol)
+            .expect("should not error");
+        assert!(callers.is_empty());
+    }
+
+    #[test]
+    fn collect_callees_returns_empty_when_symbol_id_unresolvable() {
+        // Same as above but for collect_callees (line 533).
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        let symbol = SymbolDefinition {
+            name: "ghost".to_string(),
+            qualified_name: "demo.ghost".to_string(),
+            signature: String::new(),
+            docstring: String::new(),
+            source: String::new(),
+            file_path: String::new(),
+            start_line: 0,
+            end_line: 0,
+        };
+        let collector = ContextCollector::new(&*s);
+        let callees = collector
+            .collect_callees("demo", &symbol)
+            .expect("should not error");
+        assert!(callees.is_empty());
+    }
+
+    #[test]
+    fn resolve_symbol_id_returns_empty_when_not_found() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        let collector = ContextCollector::new(&*s);
+        let id = collector
+            .resolve_symbol_id("nonexistent.symbol")
+            .expect("should not error");
+        assert!(id.is_empty(), "unresolvable symbol should return empty id");
+    }
+
+    #[test]
+    fn resolve_call_endpoint_returns_none_for_empty_id() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        let collector = ContextCollector::new(&*s);
+        let result = collector
+            .resolve_call_endpoint("")
+            .expect("should not error");
+        assert!(result.is_none(), "empty node_id should return None");
+    }
+
+    #[test]
+    fn resolve_call_endpoint_returns_none_when_not_found() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        let collector = ContextCollector::new(&*s);
+        let result = collector
+            .resolve_call_endpoint("nonexistent_id")
+            .expect("should not error");
+        assert!(result.is_none(), "unresolvable id should return None");
+    }
+
+    #[test]
+    fn query_implements_returns_empty_for_empty_node_id() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        let collector = ContextCollector::new(&*s);
+        let implements = collector
+            .query_implements("")
+            .expect("should not error");
+        assert!(implements.is_empty(), "empty node_id should return empty vec");
+    }
+
+    #[test]
+    fn query_edge_target_names_returns_empty_for_empty_source_id() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        let collector = ContextCollector::new(&*s);
+        let names = collector
+            .query_edge_target_names("", "IMPORTS")
+            .expect("should not error");
+        assert!(names.is_empty(), "empty source_id should return empty vec");
+    }
+
+    #[test]
+    fn query_test_info_returns_none_when_not_found() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        let collector = ContextCollector::new(&*s);
+        let info = collector
+            .query_test_info("nonexistent_test_id")
+            .expect("should not error");
+        assert!(info.is_none(), "unresolvable test id should return None");
+    }
 }

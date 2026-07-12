@@ -904,4 +904,128 @@ mod tests {
         }
         assert!(!paths.is_empty());
     }
+
+    // --- Coverage gap tests: detect_cycles Black node & cross-service edge filtering ---
+
+    #[test]
+    fn detect_cycles_diamond_graph_encounters_black_node() {
+        // Diamond: A→B, A→C, B→D, C→D. No cycle, but when DFS processes D
+        // via C after D was already finished (Black) via B, the
+        // Some(DfsColor::Black) arm is exercised (line 192).
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_node(make_func("c", "c"));
+        g.add_node(make_func("d", "d"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("a", "c", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("b", "d", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c", "d", EdgeType::Calls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let cycles = tracer.detect_cycles();
+        assert!(cycles.is_empty(), "diamond has no cycle");
+    }
+
+    #[test]
+    fn trace_cross_service_skips_non_forward_dataflow_edge() {
+        // A has a DataFlows edge to V — not Calls/FfiCalls/HttpCalls — so
+        // the forward-edge loop must skip it (lines 276-278).
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("v", "v"));
+        g.add_edge(Edge::new("a", "v", EdgeType::DataFlows, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 5);
+        assert!(paths.is_empty(), "DataFlows edge should be skipped");
+    }
+
+    #[test]
+    fn trace_cross_service_skips_forward_edge_to_missing_target() {
+        // A --HttpCalls--> "missing" (target node not in graph).
+        // The forward loop must skip the dangling edge (line 281).
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_edge(Edge::new("a", "missing", EdgeType::HttpCalls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 5);
+        assert!(paths.is_empty(), "edge to missing target should be skipped");
+    }
+
+    #[test]
+    fn trace_cross_service_skips_forward_cycle_to_visited_node() {
+        // A --HttpCalls--> R, R --HttpCalls--> A (would cycle back).
+        // After visiting R from A, the edge R→A must be skipped because A is
+        // already on the visited path (line 284).
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("r", "r"));
+        g.add_edge(Edge::new("a", "r", EdgeType::HttpCalls, "proj"));
+        g.add_edge(Edge::new("r", "a", EdgeType::HttpCalls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 5);
+        // Should return A→R (depth 1) but not A→R→A (cycle prevented).
+        for p in &paths {
+            let mut names: Vec<&str> = p.nodes.iter().map(|n| n.name.as_str()).collect();
+            let len_before = names.len();
+            names.sort();
+            names.dedup();
+            assert_eq!(names.len(), len_before, "path revisits a node: {:?}", p.nodes);
+        }
+        assert!(paths.iter().any(|p| p.depth == 1));
+    }
+
+    #[test]
+    fn trace_cross_service_skips_non_handles_route_reverse_edge() {
+        // B --Calls--> A (reverse edge from A's perspective). When tracing
+        // reverse edges from A, this Calls edge is NOT HandlesRoute, so it
+        // must be skipped (line 305).
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("b", "a", EdgeType::Calls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 5);
+        // Reverse traversal only follows HandlesRoute, not Calls. So B should
+        // NOT be reached via the reverse loop (only forward Calls would find
+        // it, but A has no outgoing Calls).
+        assert!(
+            paths.is_empty(),
+            "non-HandlesRoute reverse edge should be skipped"
+        );
+    }
+
+    #[test]
+    fn trace_cross_service_skips_reverse_edge_to_missing_handler() {
+        // A is the target of a HandlesRoute edge from "missing_handler"
+        // (source node not in graph). The reverse loop must skip it (line 308).
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_edge(Edge::new("missing_handler", "a", EdgeType::HandlesRoute, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 5);
+        assert!(paths.is_empty(), "reverse edge to missing handler should be skipped");
+    }
+
+    #[test]
+    fn trace_cross_service_skips_reverse_cycle_to_visited_node() {
+        // A --HttpCalls--> R, A --HandlesRoute--> R.
+        // Forward: A→R (HttpCalls). Reverse from R: A--HandlesRoute-->R means
+        // reverse loop from R sees source A, but A is already visited (line 311).
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_route("r", "/api/r"));
+        g.add_edge(Edge::new("a", "r", EdgeType::HttpCalls, "proj"));
+        g.add_edge(Edge::new("a", "r", EdgeType::HandlesRoute, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 5);
+        // A→R should exist; A should not be revisited via reverse HandlesRoute.
+        for p in &paths {
+            let mut names: Vec<&str> = p.nodes.iter().map(|n| n.name.as_str()).collect();
+            let len_before = names.len();
+            names.sort();
+            names.dedup();
+            assert_eq!(names.len(), len_before, "path revisits a node: {:?}", p.nodes);
+        }
+        assert!(paths.iter().any(|p| p.depth == 1));
+    }
 }

@@ -799,4 +799,375 @@ mod tests {
         assert_eq!(escape_cypher("path\\to"), "path\\\\to");
         assert_eq!(escape_cypher(""), "");
     }
+
+    // --- Additional coverage tests ---
+
+    #[test]
+    fn test_dq002_multiple_duplicate_groups_generate_multiple_violations() {
+        // Exercises the DQ-002 violation construction (lines 150, 153-155)
+        // with multiple duplicate groups across different FQNs.
+        let storage = fresh_storage();
+        storage
+            .save_nodes(
+                &[
+                    sample_function("f1", "demo", "main", "demo.main"),
+                    sample_function("f2", "demo", "alt", "demo.main"),
+                    sample_function("f3", "demo", "helper", "demo.helper"),
+                    sample_function("f4", "demo", "extra", "demo.helper"),
+                ],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_fqn_uniqueness()
+            .expect("check_fqn_uniqueness");
+        assert_eq!(
+            violations.len(),
+            2,
+            "expected two DQ-002 violations for two duplicate groups, got {violations:?}"
+        );
+        for v in &violations {
+            assert_eq!(v.rule, "DQ-002");
+            assert!(v.project.as_deref() == Some("demo"));
+            assert!(
+                v.message.contains("demo.main") || v.message.contains("demo.helper"),
+                "message should mention a duplicate FQN: {}",
+                v.message
+            );
+            assert!(
+                v.message.contains("2 nodes"),
+                "message should report 2 duplicate nodes: {}",
+                v.message
+            );
+        }
+    }
+
+    #[test]
+    fn test_dq002_file_nodes_handled_without_error() {
+        // File nodes lack qualifiedName column; verify check_fqn_uniqueness
+        // handles them gracefully (either via query failure → continue, or
+        // empty results from NULL qualifiedName).
+        let storage = fresh_storage();
+        storage
+            .save_nodes(
+                &[
+                    sample_file("file1", "demo", "/a.rs", "hash1"),
+                    sample_file("file2", "demo", "/b.rs", "hash2"),
+                ],
+                NodeLabel::File,
+            )
+            .expect("save_nodes");
+
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_fqn_uniqueness()
+            .expect("check_fqn_uniqueness");
+        assert!(
+            violations.is_empty(),
+            "File nodes without qualifiedName should not produce DQ-002 violations: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn test_dq004_only_source_orphan_produces_single_violation() {
+        // Exercises the DQ-004 source orphan branch (line 209) independently
+        // from the target orphan branch. Only the source is missing.
+        let storage = fresh_storage();
+        storage
+            .save_nodes(
+                &[sample_function("f2", "demo", "helper", "demo.helper")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+        // Edge from missing_src to existing f2.
+        storage
+            .save_edges(&[crate::model::Edge::builder(
+                "missing_src",
+                "f2",
+                EdgeType::Calls,
+                "demo",
+            )
+            .build()])
+            .expect("save_edges");
+
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_edge_integrity()
+            .expect("check_edge_integrity");
+        assert_eq!(
+            violations.len(),
+            1,
+            "expected one DQ-004 violation for orphan source, got {violations:?}"
+        );
+        assert_eq!(violations[0].rule, "DQ-004");
+        assert!(
+            violations[0].message.contains("missing_src")
+                && violations[0].message.contains("source"),
+            "violation should mention orphan source: {}",
+            violations[0].message
+        );
+    }
+
+    #[test]
+    fn test_dq004_only_target_orphan_produces_single_violation() {
+        // Exercises the DQ-004 target orphan branch (line 216) independently.
+        // Only the target is missing.
+        let storage = fresh_storage();
+        storage
+            .save_nodes(
+                &[sample_function("f1", "demo", "main", "demo.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+        // Edge from existing f1 to missing_target.
+        storage
+            .save_edges(&[crate::model::Edge::builder(
+                "f1",
+                "missing_target",
+                EdgeType::Calls,
+                "demo",
+            )
+            .build()])
+            .expect("save_edges");
+
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_edge_integrity()
+            .expect("check_edge_integrity");
+        assert_eq!(
+            violations.len(),
+            1,
+            "expected one DQ-004 violation for orphan target, got {violations:?}"
+        );
+        assert_eq!(violations[0].rule, "DQ-004");
+        assert!(
+            violations[0].message.contains("missing_target")
+                && violations[0].message.contains("target"),
+            "violation should mention orphan target: {}",
+            violations[0].message
+        );
+    }
+
+    #[test]
+    fn test_dq005_violation_in_file_table() {
+        // Exercises the DQ-005 violation construction (lines 279, 282, 284-285)
+        // for a table other than Function. A File node with an unknown project
+        // triggers an isolation violation in the File table.
+        let storage = fresh_storage();
+        storage
+            .save_project(&sample_project("alpha", "alpha"))
+            .expect("save_project");
+        // File in known project "alpha".
+        storage
+            .save_nodes(
+                &[sample_file("file1", "alpha", "/a.rs", "hash1")],
+                NodeLabel::File,
+            )
+            .expect("save_nodes alpha file");
+        // File in unknown project "ghost".
+        storage
+            .save_nodes(
+                &[sample_file("file2", "ghost", "/b.rs", "hash2")],
+                NodeLabel::File,
+            )
+            .expect("save_nodes ghost file");
+
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_project_isolation()
+            .expect("check_project_isolation");
+        let file_violations: Vec<_> = violations
+            .iter()
+            .filter(|v| v.message.contains("File"))
+            .collect();
+        assert_eq!(
+            file_violations.len(),
+            1,
+            "expected one DQ-005 violation for File table, got {violations:?}"
+        );
+        assert_eq!(file_violations[0].rule, "DQ-005");
+        assert!(
+            file_violations[0]
+                .message
+                .contains("total 2"),
+            "total should be 2: {}",
+            file_violations[0].message
+        );
+        assert!(
+            file_violations[0]
+                .message
+                .contains("per-project sum 1"),
+            "per-project sum should be 1: {}",
+            file_violations[0].message
+        );
+    }
+
+    #[test]
+    fn test_dq006_multiple_empty_hash_files() {
+        // Exercises the DQ-006 violation construction (line 317) with multiple
+        // files having empty hashes.
+        let storage = fresh_storage();
+        storage
+            .save_nodes(
+                &[
+                    sample_file("f1", "demo", "/a.rs", ""),
+                    sample_file("f2", "demo", "/b.rs", ""),
+                    sample_file("f3", "demo", "/c.rs", "sha256:valid"),
+                ],
+                NodeLabel::File,
+            )
+            .expect("save_nodes");
+
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_hash_integrity()
+            .expect("check_hash_integrity");
+        assert_eq!(
+            violations.len(),
+            2,
+            "expected two DQ-006 violations, got {violations:?}"
+        );
+        for v in &violations {
+            assert_eq!(v.rule, "DQ-006");
+            assert_eq!(v.project.as_deref(), Some("demo"));
+            assert!(
+                v.message.contains("empty hash"),
+                "message should mention empty hash: {}",
+                v.message
+            );
+        }
+        let ids: Vec<&str> = violations
+            .iter()
+            .map(|v| {
+                v.message
+                    .split('\'')
+                    .nth(1)
+                    .unwrap_or("")
+            })
+            .collect();
+        assert!(ids.contains(&"f1"), "should report f1: {ids:?}");
+        assert!(ids.contains(&"f2"), "should report f2: {ids:?}");
+    }
+
+    #[test]
+    fn test_run_all_with_all_four_violation_types() {
+        // Exercises run_all aggregating violations from all four DQ rules,
+        // ensuring each check's violation path is exercised end-to-end.
+        let storage = fresh_storage();
+        storage
+            .save_project(&sample_project("alpha", "alpha"))
+            .expect("save_project");
+
+        // DQ-002: duplicate FQN.
+        storage
+            .save_nodes(
+                &[
+                    sample_function("f1", "alpha", "main", "alpha.main"),
+                    sample_function("f2", "alpha", "alt", "alpha.main"),
+                ],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes dup fqn");
+
+        // DQ-004: orphan edge (both endpoints missing).
+        storage
+            .save_edges(&[crate::model::Edge::builder(
+                "ghost_src",
+                "ghost_tgt",
+                EdgeType::Calls,
+                "alpha",
+            )
+            .build()])
+            .expect("save_edges orphan");
+
+        // DQ-005: node in unknown project.
+        storage
+            .save_nodes(
+                &[sample_function("g1", "ghost", "main", "ghost.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes ghost");
+
+        // DQ-006: file with empty hash.
+        storage
+            .save_nodes(
+                &[sample_file("file1", "alpha", "/a.rs", "")],
+                NodeLabel::File,
+            )
+            .expect("save_nodes empty hash file");
+
+        let checker = QualityChecker::new(&*storage);
+        let report = checker.run_all().expect("run_all");
+        assert!(!report.is_clean());
+        assert!(
+            report.count_for_rule("DQ-002") >= 1,
+            "should have DQ-002 violations: {:?}",
+            report.violations
+        );
+        assert!(
+            report.count_for_rule("DQ-004") >= 1,
+            "should have DQ-004 violations: {:?}",
+            report.violations
+        );
+        assert!(
+            report.count_for_rule("DQ-005") >= 1,
+            "should have DQ-005 violations: {:?}",
+            report.violations
+        );
+        assert!(
+            report.count_for_rule("DQ-006") >= 1,
+            "should have DQ-006 violations: {:?}",
+            report.violations
+        );
+    }
+
+    #[test]
+    fn test_dq005_multiple_projects_isolated_correctly() {
+        // Exercises the per-project count summation (line 261) and total
+        // comparison (line 277) with multiple known projects. Verifies no
+        // false positive when isolation is maintained.
+        let storage = fresh_storage();
+        storage
+            .save_project(&sample_project("alpha", "alpha"))
+            .expect("save_project alpha");
+        storage
+            .save_project(&sample_project("beta", "beta"))
+            .expect("save_project beta");
+        storage
+            .save_project(&sample_project("gamma", "gamma"))
+            .expect("save_project gamma");
+
+        storage
+            .save_nodes(
+                &[sample_function("a1", "alpha", "main", "alpha.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes alpha");
+        storage
+            .save_nodes(
+                &[
+                    sample_function("b1", "beta", "main", "beta.main"),
+                    sample_function("b2", "beta", "helper", "beta.helper"),
+                ],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes beta");
+        storage
+            .save_nodes(
+                &[sample_function("g1", "gamma", "main", "gamma.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes gamma");
+
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_project_isolation()
+            .expect("check_project_isolation");
+        assert!(
+            violations.is_empty(),
+            "three isolated projects should have no DQ-005 violations: {violations:?}"
+        );
+    }
 }

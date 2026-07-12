@@ -2609,4 +2609,90 @@ fn parallel(a: i32) {
         let result = calc_cognitive(&tree, Language::Rust);
         assert!(result >= 3, "should count && and || short-circuits: {result}");
     }
+
+    // --- Additional coverage tests (targeting uncovered lines) ---
+
+    #[cfg(feature = "lang-cpp")]
+    #[test]
+    fn halstead_body_kind_returns_cpp_value() {
+        // Line 506: Language::Cpp => Some("compound_statement")
+        assert_eq!(
+            halstead_body_kind(Language::Cpp),
+            Some("compound_statement")
+        );
+    }
+
+    #[cfg(feature = "lang-java")]
+    #[test]
+    fn halstead_body_kind_returns_java_value() {
+        // Line 508: Language::Java => Some("block")
+        assert_eq!(halstead_body_kind(Language::Java), Some("block"));
+    }
+
+    #[cfg(feature = "lang-go")]
+    #[test]
+    fn halstead_body_kind_returns_go_value() {
+        // Line 510: Language::Go => Some("block")
+        assert_eq!(halstead_body_kind(Language::Go), Some("block"));
+    }
+
+    #[cfg(feature = "lang-fortran")]
+    #[test]
+    fn halstead_body_kind_returns_none_for_fortran() {
+        // Line 513: _ => None (Fortran is not in the match arms)
+        assert_eq!(halstead_body_kind(Language::Fortran), None);
+    }
+
+    #[test]
+    fn analyze_skips_function_with_empty_content() {
+        // Lines 1098-1099: `if content.is_empty() { eprintln!(...); continue; }`
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f_empty",
+            "demo",
+            "empty_fn",
+            "demo.empty_fn",
+            "/src/lib.rs",
+            1,
+            1,
+            "",
+        );
+
+        let storage = storage(&kit);
+        let analyzer = ComplexityAnalyzer::new(&*storage);
+        let result = analyzer.analyze("demo").expect("analyze");
+        assert!(
+            result.is_empty(),
+            "function with empty content should be skipped"
+        );
+    }
+
+    #[test]
+    fn analyze_skips_function_with_unknown_language() {
+        // Lines 1106-1107, 1109: `None => { eprintln!(...); continue; }`
+        // when detect_language returns None for an unrecognized file extension.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f_unknown",
+            "demo",
+            "unknown_fn",
+            "demo.unknown_fn",
+            "/src/lib.xyzunknown",
+            1,
+            1,
+            "fn unknown_fn() {}",
+        );
+
+        let storage = storage(&kit);
+        let analyzer = ComplexityAnalyzer::new(&*storage);
+        let result = analyzer.analyze("demo").expect("analyze");
+        assert!(
+            result.is_empty(),
+            "function with unknown language should be skipped"
+        );
+    }
 }

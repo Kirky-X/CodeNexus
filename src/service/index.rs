@@ -459,4 +459,95 @@ mod tests {
         assert_eq!(output.files_indexed, 0);
         assert_eq!(output.nodes_created, 0);
     }
+
+    // Covers line 188: ram_first=true branch in index_core.
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn index_core_with_ram_first_indexes_rust_project() {
+        use crate::kit::{build_kit, KitBootstrapConfig};
+        use std::fs;
+        use tempfile::TempDir;
+
+        let src_dir = TempDir::new().unwrap();
+        let src_path = src_dir.path();
+        fs::write(
+            src_path.join("lib.rs"),
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+        )
+        .unwrap();
+
+        let db_dir = TempDir::new().unwrap();
+        let db_path = db_dir.path().join("index_ram_first_testdb");
+        let config = KitBootstrapConfig::new(db_path.clone());
+        let kit = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&config))
+            .expect("build_kit");
+
+        let output = index_core(
+            &kit,
+            &db_path,
+            src_path.to_str().unwrap(),
+            "ram_first_project",
+            false,
+            false,
+            true,
+        )
+        .expect("ram_first index should succeed");
+
+        assert!(!output.project_id.is_empty());
+        assert!(output.files_indexed >= 1);
+        assert!(output.nodes_created > 0);
+    }
+
+    // Covers line 188: ram_first=true with force=true reindex path.
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn index_core_with_ram_first_and_force_reindexes() {
+        use crate::kit::{build_kit, KitBootstrapConfig};
+        use std::fs;
+        use tempfile::TempDir;
+
+        let src_dir = TempDir::new().unwrap();
+        let src_path = src_dir.path();
+        fs::write(
+            src_path.join("main.rs"),
+            "fn main() { println!(\"hello\"); }\n",
+        )
+        .unwrap();
+
+        let db_dir = TempDir::new().unwrap();
+        let db_path = db_dir.path().join("index_ram_force_testdb");
+        let config = KitBootstrapConfig::new(db_path.clone());
+        let kit = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&config))
+            .expect("build_kit");
+
+        // First index with ram_first=true.
+        let output1 = index_core(
+            &kit,
+            &db_path,
+            src_path.to_str().unwrap(),
+            "ram_force_project",
+            false,
+            false,
+            true,
+        )
+        .expect("first ram_first index should succeed");
+        assert!(output1.files_indexed >= 1);
+
+        // Second index with ram_first=true and force=true.
+        let output2 = index_core(
+            &kit,
+            &db_path,
+            src_path.to_str().unwrap(),
+            "ram_force_project",
+            true,
+            false,
+            true,
+        )
+        .expect("forced ram_first reindex should succeed");
+        assert!(output2.files_indexed >= 1);
+    }
 }

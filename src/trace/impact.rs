@@ -1175,4 +1175,124 @@ mod tests {
         let total = RISK_WEIGHT_COUNT + RISK_WEIGHT_DEPTH + RISK_WEIGHT_EDGE;
         assert!((total - 1.0).abs() < f64::EPSILON);
     }
+
+    // --- Coverage gap tests: Tests edge filtering, missing predecessor, risk scoring branches ---
+
+    #[test]
+    fn trace_upstream_skips_tests_edge_when_include_tests_false() {
+        // A tests B (Tests edge). Default config has include_tests=false and
+        // edge_types=[Calls, Implements, UsesType]. Tests is not in the filter,
+        // but even if it were, include_tests=false would skip it (line 237).
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Tests, "proj"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"b".to_string());
+        assert!(result.affected.is_empty(), "Tests edge should be skipped");
+    }
+
+    #[test]
+    fn trace_upstream_skips_tests_edge_when_include_tests_true_but_filter_excludes() {
+        // Even with include_tests=true, if Tests is not in edge_types filter,
+        // the edge is skipped via the edge_filter check (line 234).
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Tests, "proj"));
+        let config = ImpactConfig {
+            max_depth: 5,
+            edge_types: vec![EdgeType::Calls],
+            include_tests: true,
+        };
+        let analyzer = ImpactAnalyzer::with_config(&g, config);
+        let result = analyzer.analyze_impact(&"b".to_string());
+        assert!(result.affected.is_empty(), "Tests edge not in filter should be skipped");
+    }
+
+    #[test]
+    fn trace_upstream_includes_tests_edge_when_configured() {
+        // With include_tests=true AND Tests in edge_types, the Tests edge IS
+        // followed. This covers the negative branch of the include_tests check
+        // (line 236 condition is false, so continue at 237 is NOT hit).
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Tests, "proj"));
+        let config = ImpactConfig {
+            max_depth: 5,
+            edge_types: vec![EdgeType::Tests],
+            include_tests: true,
+        };
+        let analyzer = ImpactAnalyzer::with_config(&g, config);
+        let result = analyzer.analyze_impact(&"b".to_string());
+        assert_eq!(result.affected.len(), 1);
+        assert_eq!(result.affected[0].name, "a");
+        assert_eq!(result.affected[0].edge_type, EdgeType::Tests);
+    }
+
+    #[test]
+    fn trace_upstream_skips_edge_to_missing_predecessor() {
+        // Edge from "missing_src" to "target", but "missing_src" node is not
+        // in the graph. The predecessor lookup returns None → continue (line 241).
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        g.add_edge(Edge::new("missing_src", "target", EdgeType::Calls, "proj"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert!(result.affected.is_empty(), "missing predecessor should be skipped");
+    }
+
+    #[test]
+    fn risk_assessment_six_affected_returns_medium_count_level() {
+        // 6 affected nodes → count > 5 → idx=2 → RiskLevel::Medium (line 296).
+        // With depth 1 and all Calls edges:
+        //   count_factor=0.5, depth_factor=1/3*0.3≈0.1, edge_factor=1.0
+        //   score = 0.3 + 0.02 + 0.2 = 0.52 → score_level=Medium (line 328).
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        for i in 0..6 {
+            let id = format!("f{i}");
+            g.add_node(make_func(&id, &id));
+            g.add_edge(Edge::new(&id, "target", EdgeType::Calls, "proj"));
+        }
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert_eq!(result.affected.len(), 6);
+        assert_eq!(result.risk_assessment.level, RiskLevel::Medium);
+    }
+
+    #[test]
+    fn risk_assessment_deep_chain_exceeds_depth_five() {
+        // Chain of 6 Calls: target ← c1 ← c2 ← c3 ← c4 ← c5 ← c6.
+        // max_depth in config = 8 (clamped to 8 ≤ 10). All 6 predecessors
+        // are found at depths 1-6. max_depth in results = 6 > 5, exercising
+        // the depth_factor branch (0.5 + (6-5)*0.1 = 0.6) at line 304.
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        for i in 1..=6 {
+            let id = format!("c{i}");
+            g.add_node(make_func(&id, &id));
+        }
+        g.add_edge(Edge::new("c1", "target", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c2", "c1", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c3", "c2", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c4", "c3", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c5", "c4", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c6", "c5", EdgeType::Calls, "proj"));
+        let config = ImpactConfig {
+            max_depth: 8,
+            edge_types: vec![EdgeType::Calls],
+            include_tests: false,
+        };
+        let analyzer = ImpactAnalyzer::with_config(&g, config);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert_eq!(result.affected.len(), 6);
+        let max_depth = result.affected.iter().map(|n| n.depth).max().unwrap_or(0);
+        assert_eq!(max_depth, 6);
+        // depth_factor = 0.5 + (6-5)*0.1 = 0.6
+        // count_factor = 0.08 (≤5 is false, 6>5 → 0.5). Wait, 6 > 5 → Medium → 0.5
+        // score = 0.5*0.6 + 0.6*0.2 + 1.0*0.2 = 0.3+0.12+0.2 = 0.62 → High
+        assert_eq!(result.risk_assessment.level, RiskLevel::High);
+    }
 }

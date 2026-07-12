@@ -347,4 +347,34 @@ mod tests {
             Err(e) => panic!("unexpected run_export error: {e}"),
         }
     }
+
+    // Covers run_export with empty project name → manifest.project = None
+    // (lines 131-135 None branch).
+    #[test]
+    fn run_export_with_empty_project_uses_none_in_manifest() {
+        let (dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let artifact = dir.path().join("empty_project.cnxp");
+
+        match run_export(&kit, artifact.to_str().unwrap(), "") {
+            Ok(output) => {
+                assert!(artifact.exists());
+                let bytes = std::fs::read(&artifact).unwrap();
+                let manifest_len = u32::from_le_bytes([
+                    bytes[4], bytes[5], bytes[6], bytes[7],
+                ]) as usize;
+                let manifest: ArtifactManifest =
+                    serde_json::from_slice(&bytes[8..8 + manifest_len]).unwrap();
+                assert!(
+                    manifest.project.is_none(),
+                    "empty project → None in manifest"
+                );
+                assert_eq!(output.artifact, artifact.to_str().unwrap());
+            }
+            Err(CodeNexusError::InvalidInput(msg)) if msg.contains("zstd binary not found") => {
+                // zstd not installed — skip.
+            }
+            Err(e) => panic!("unexpected run_export error: {e}"),
+        }
+    }
 }

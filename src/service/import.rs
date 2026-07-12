@@ -441,4 +441,82 @@ mod tests {
             Ok(_) => panic!("should not succeed with empty compressed data"),
         }
     }
+
+    // Round-trip test: export a DB to an artifact, then import it back.
+    // Covers zstd_decompress success path (lines 62-76) and run_import
+    // file-write success path (lines 139-168).
+    #[test]
+    fn run_import_round_trips_with_export_artifact() {
+        let (src_dir, src_db) = fresh_db_path();
+        let src_kit = build_kit_for_db(&src_db);
+        let artifact = src_dir.path().join("roundtrip.cnxp");
+
+        let export_output = match crate::service::export::run_export(
+            &src_kit,
+            artifact.to_str().unwrap(),
+            "demo",
+        ) {
+            Ok(o) => o,
+            Err(CodeNexusError::InvalidInput(msg)) if msg.contains("zstd binary not found") => {
+                return; // zstd not installed — skip.
+            }
+            Err(e) => panic!("unexpected run_export error: {e}"),
+        };
+
+        let (_dst_dir, dst_db) = fresh_db_path();
+        let dst_kit = build_kit_for_db(&dst_db);
+        let import_output = run_import(
+            &dst_kit,
+            artifact.to_str().unwrap(),
+            false,
+            "",
+            "",
+        )
+        .expect("import should succeed for valid artifact");
+
+        assert_eq!(import_output.artifact, artifact.to_str().unwrap());
+        assert!(import_output.db_size > 0, "db_size should be > 0");
+        assert!(!import_output.reindexed);
+        assert_eq!(import_output.manifest.format_version, ARTIFACT_FORMAT_VERSION);
+        assert_eq!(import_output.manifest.project.as_deref(), Some("demo"));
+        assert_eq!(import_output.manifest.original_size, export_output.original_size);
+    }
+
+    // Covers run_import reindex success path (lines 146-160).
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn run_import_with_reindex_succeeds() {
+        let (src_dir, src_db) = fresh_db_path();
+        let src_kit = build_kit_for_db(&src_db);
+        let artifact = src_dir.path().join("reindex.cnxp");
+
+        match crate::service::export::run_export(&src_kit, artifact.to_str().unwrap(), "demo") {
+            Ok(_) => {}
+            Err(CodeNexusError::InvalidInput(msg)) if msg.contains("zstd binary not found") => {
+                return;
+            }
+            Err(e) => panic!("unexpected run_export error: {e}"),
+        }
+
+        let reindex_src = TempDir::new().unwrap();
+        std::fs::write(
+            reindex_src.path().join("lib.rs"),
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+        )
+        .unwrap();
+
+        let (_dst_dir, dst_db) = fresh_db_path();
+        let dst_kit = build_kit_for_db(&dst_db);
+        let import_output = run_import(
+            &dst_kit,
+            artifact.to_str().unwrap(),
+            true,
+            reindex_src.path().to_str().unwrap(),
+            "reindexed_project",
+        )
+        .expect("import with reindex should succeed");
+
+        assert!(import_output.reindexed, "reindex=true → reindexed should be true");
+        assert!(import_output.db_size > 0);
+    }
 }

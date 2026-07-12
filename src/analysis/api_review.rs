@@ -1206,4 +1206,80 @@ mod tests {
         assert_eq!(result.len(), 1, "should only see demo's tools");
         assert_eq!(result[0].tool_name, "query");
     }
+
+    // --- Additional coverage tests (targeting uncovered lines) ---
+
+    #[test]
+    fn shape_check_skips_calls_to_other_endpoints() {
+        // Line 204: `if callee_id != ep_id { continue; }` — when CALLS edges
+        // point to a different endpoint than the one being checked, the inner
+        // loop should skip them without producing violations.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_endpoint(
+            &kit,
+            "e1",
+            "demo",
+            "/api/users",
+            "GET",
+            r#"{"name":"string"}"#,
+        );
+        create_endpoint(
+            &kit,
+            "e2",
+            "demo",
+            "/api/products",
+            "GET",
+            r#"{"name":"string"}"#,
+        );
+        create_function(&kit, "f1", "demo", "caller", "/src/app.rs", 10);
+        // CALLS edge to e2 (not e1) — should be skipped when checking e1.
+        create_edge_with_reason(
+            &kit,
+            "cr1",
+            "f1",
+            "e2",
+            "CALLS",
+            "demo",
+            r#"{"name":"number"}"#,
+        );
+
+        let storage = storage(&kit);
+        let reviewer = ApiReviewer::new(&*storage);
+        let result = reviewer.shape_check("demo").expect("shape_check");
+        // e1 has expectedSchema but no matching CALLS edge → no violation.
+        // e2 has a mismatch and the CALLS edge target matches e2 → 1 violation.
+        assert_eq!(
+            result.len(),
+            1,
+            "only e2 should have a violation (CALLS target matches)"
+        );
+        assert_eq!(result[0].endpoint, "/api/products");
+    }
+
+    #[test]
+    fn api_impact_skips_non_caller_functions() {
+        // Line 572: `if !caller_ids.contains(&id) { continue; }` — when
+        // load_caller_info iterates over functions that are NOT in the
+        // caller_ids list, they should be skipped.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_endpoint(&kit, "e1", "demo", "/api/users", "GET", "");
+        create_handler(&kit, "h1", "demo", "list_users");
+        create_edge(&kit, "he1", "h1", "e1", "HANDLES", "demo");
+        // f1 calls the handler (is a caller).
+        create_function(&kit, "f1", "demo", "caller_a", "/src/a.rs", 10);
+        create_edge(&kit, "ce1", "f1", "h1", "CALLS", "demo");
+        // f2 does NOT call the handler — should be skipped by load_caller_info.
+        create_function(&kit, "f2", "demo", "non_caller", "/src/b.rs", 20);
+
+        let storage = storage(&kit);
+        let reviewer = ApiReviewer::new(&*storage);
+        let result = reviewer
+            .api_impact("demo", "/api/users")
+            .expect("api_impact");
+        // Only f1 should be in the result; f2 should be skipped.
+        assert_eq!(result.len(), 1, "only the caller should be in impact");
+        assert_eq!(result[0].affected_caller, "caller_a");
+    }
 }

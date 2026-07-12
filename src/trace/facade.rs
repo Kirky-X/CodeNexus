@@ -1103,4 +1103,124 @@ mod tests {
         assert_eq!(result[0].nodes.len(), 1);
         assert_eq!(result[0].nodes[0].name, "no_file");
     }
+
+    #[test]
+    fn trace_engine_storage_returns_storage_ref() {
+        // Covers lines 86-87: TraceEngine::storage() method.
+        let storage = build_storage();
+        let engine = TraceEngine::new(storage.as_ref());
+        let returned = engine.storage();
+        // Verify the returned reference is usable by calling a Storage method.
+        // execute returns a result; an empty query on a fresh DB should succeed.
+        let query_result = returned.execute("RETURN 1 AS v;");
+        assert!(query_result.is_ok(), "storage ref should be usable");
+    }
+
+    #[test]
+    fn trace_engine_apply_path_filter_delegates_to_standalone() {
+        // Covers lines 93, 98: TraceEngine::apply_path_filter() method
+        // delegates to the standalone apply_path_filter function.
+        let storage = build_storage();
+        let engine = TraceEngine::new(storage.as_ref());
+        let paths = vec![make_3node_path()];
+        let filter = PathFilter {
+            include_files: Some(vec!["/src/a.rs".to_string()]),
+            ..Default::default()
+        };
+        let result = engine.apply_path_filter(paths, &filter);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].nodes.len(), 1);
+        assert_eq!(result[0].nodes[0].name, "a");
+    }
+
+    #[test]
+    fn apply_path_filter_question_mark_glob_matches_single_char() {
+        // Covers line 117: the '?' glob pattern branch in glob_to_regex.
+        // '?' matches exactly one character.
+        let paths = vec![TracePath {
+            nodes: vec![
+                make_node_with_path("a", "/src/a.rs"),
+                make_node_with_path("b", "/src/ab.rs"),
+                make_node_with_path("c", "/src/abc.rs"),
+            ],
+            edges: vec![
+                TraceEdge {
+                    edge_type: "CALLS".to_string(),
+                    reason: None,
+                    confidence: 1.0,
+                },
+                TraceEdge {
+                    edge_type: "CALLS".to_string(),
+                    reason: None,
+                    confidence: 1.0,
+                },
+            ],
+            depth: 2,
+        }];
+        // /src/a?.rs matches /src/ab.rs (one char after 'a') but not /src/a.rs
+        // (zero chars) or /src/abc.rs (two chars).
+        let filter = PathFilter {
+            include_files: Some(vec!["/src/a?.rs".to_string()]),
+            ..Default::default()
+        };
+        let result = apply_path_filter(paths, &filter);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].nodes.len(), 1);
+        assert_eq!(result[0].nodes[0].name, "b");
+    }
+
+    #[test]
+    fn apply_path_filter_include_modules_drops_node_without_file_path() {
+        // Covers line 170: include_modules filter returns false when node has
+        // no file_path.
+        let paths = vec![TracePath {
+            nodes: vec![
+                TraceNode {
+                    name: "no_file".to_string(),
+                    label: "Function".to_string(),
+                    file_path: None,
+                    start_line: None,
+                },
+                make_node_with_path("a", "/src/module_a/foo.rs"),
+            ],
+            edges: vec![TraceEdge {
+                edge_type: "CALLS".to_string(),
+                reason: None,
+                confidence: 1.0,
+            }],
+            depth: 1,
+        }];
+        let filter = PathFilter {
+            include_modules: Some(vec!["module_a".to_string()]),
+            ..Default::default()
+        };
+        let result = apply_path_filter(paths, &filter);
+        assert_eq!(result.len(), 1);
+        // "no_file" dropped (no file_path for module check), "a" kept.
+        assert_eq!(result[0].nodes.len(), 1);
+        assert_eq!(result[0].nodes[0].name, "a");
+    }
+
+    #[test]
+    fn facade_trace_by_id_invalid_depth_returns_error() {
+        // Covers line 319: trace_by_id's depth=0 guard. Unlike trace() which
+        // checks depth before calling trace_by_id, trace_by_id has its own
+        // independent depth validation.
+        let g = graph_a_calls_b_and_dataflow();
+        let facade = TraceFacade::new(&g);
+        let result = facade.trace_by_id(&"a".to_string(), "a", TraceType::Calls, 0);
+        assert!(matches!(result, Err(TraceError::InvalidDepth(0))));
+    }
+
+    #[test]
+    fn facade_trace_by_id_resolves_without_symbol_lookup() {
+        // Verify trace_by_id works directly with a node id, bypassing
+        // resolve_symbol. Also exercises the TraceType::Calls dispatch arm.
+        let g = graph_a_calls_b_and_dataflow();
+        let facade = TraceFacade::new(&g);
+        let result = facade.trace_by_id(&"a".to_string(), "label_a", TraceType::Calls, 3).unwrap();
+        assert_eq!(result.symbol, "label_a");
+        assert_eq!(result.paths.len(), 1);
+        assert_eq!(path_node_names(&result.paths[0]), vec!["a", "b"]);
+    }
 }

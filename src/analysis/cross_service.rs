@@ -2370,4 +2370,18 @@ mod tests {
             "should include at least one Medium confidence match"
         );
     }
+
+    // --- Additional coverage tests (targeting uncovered lines) ---
+
+    #[test]
+    fn confidence_rank_returns_correct_values() {
+        // Line 866: `Confidence::Medium => 1` — direct test for all 3 arms
+        // of confidence_rank (High=0, Medium=1, Low=2).
+        assert_eq!(confidence_rank(Confidence::High), 0);
+        assert_eq!(confidence_rank(Confidence::Medium), 1);
+        assert_eq!(confidence_rank(Confidence::Low), 2);
+        // Verify ordering: High < Medium < Low (descending confidence sort).
+        assert!(confidence_rank(Confidence::High) < confidence_rank(Confidence::Medium));
+        assert!(confidence_rank(Confidence::Medium) < confidence_rank(Confidence::Low));
+    }
 }

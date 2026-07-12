@@ -1861,4 +1861,339 @@ mod tests {
             controller.members
         );
     }
+
+    // --- protocol_to_string unit tests (lines 895-898) ---
+
+    #[test]
+    fn protocol_to_string_http_rest_returns_http() {
+        assert_eq!(protocol_to_string(&ServiceProtocol::HttpRest), "HTTP");
+    }
+
+    #[test]
+    fn protocol_to_string_grpc_returns_grpc() {
+        assert_eq!(protocol_to_string(&ServiceProtocol::Grpc), "gRPC");
+    }
+
+    #[test]
+    fn protocol_to_string_graphql_returns_graphql() {
+        assert_eq!(protocol_to_string(&ServiceProtocol::GraphQL), "GraphQL");
+    }
+
+    #[test]
+    fn protocol_to_string_message_queue_returns_message_queue() {
+        assert_eq!(
+            protocol_to_string(&ServiceProtocol::MessageQueue),
+            "MessageQueue"
+        );
+    }
+
+    #[test]
+    fn protocol_to_string_event_bus_returns_event_bus() {
+        assert_eq!(protocol_to_string(&ServiceProtocol::EventBus), "EventBus");
+    }
+
+    // --- can_reach unit tests (line 945: start == target early return) ---
+
+    #[test]
+    fn can_reach_returns_true_when_start_equals_target() {
+        let mut adj: std::collections::HashMap<String, std::collections::HashSet<String>> =
+            std::collections::HashMap::new();
+        let mut neighbors = std::collections::HashSet::new();
+        neighbors.insert("b".to_string());
+        adj.insert("a".to_string(), neighbors);
+        assert!(
+            can_reach(&adj, "a", "a"),
+            "start == target should return true immediately"
+        );
+    }
+
+    #[test]
+    fn can_reach_returns_true_for_direct_neighbor() {
+        let mut adj: std::collections::HashMap<String, std::collections::HashSet<String>> =
+            std::collections::HashMap::new();
+        let mut neighbors = std::collections::HashSet::new();
+        neighbors.insert("b".to_string());
+        adj.insert("a".to_string(), neighbors);
+        assert!(can_reach(&adj, "a", "b"), "a→b direct edge");
+    }
+
+    #[test]
+    fn can_reach_returns_true_for_transitive_path() {
+        let mut adj: std::collections::HashMap<String, std::collections::HashSet<String>> =
+            std::collections::HashMap::new();
+        let mut a_neighbors = std::collections::HashSet::new();
+        a_neighbors.insert("b".to_string());
+        adj.insert("a".to_string(), a_neighbors);
+        let mut b_neighbors = std::collections::HashSet::new();
+        b_neighbors.insert("c".to_string());
+        adj.insert("b".to_string(), b_neighbors);
+        assert!(can_reach(&adj, "a", "c"), "a→b→c transitive path");
+    }
+
+    #[test]
+    fn can_reach_returns_false_for_unreachable() {
+        let mut adj: std::collections::HashMap<String, std::collections::HashSet<String>> =
+            std::collections::HashMap::new();
+        let mut a_neighbors = std::collections::HashSet::new();
+        a_neighbors.insert("b".to_string());
+        adj.insert("a".to_string(), a_neighbors);
+        assert!(
+            !can_reach(&adj, "a", "z"),
+            "z is not reachable from a"
+        );
+    }
+
+    #[test]
+    fn can_reach_returns_false_for_empty_graph() {
+        let adj: std::collections::HashMap<String, std::collections::HashSet<String>> =
+            std::collections::HashMap::new();
+        assert!(
+            !can_reach(&adj, "a", "b"),
+            "empty graph → nothing reachable"
+        );
+    }
+
+    // --- detect_layers: Service / Repository / Model layer tests ---
+
+    #[test]
+    fn detect_layers_service_layer_function_called_by_controller() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Controller: handles a route.
+        create_function(
+            &kit,
+            "ctrl1",
+            "demo",
+            "list_users",
+            "demo.list_users",
+            "/src/api/handler.rs",
+            1,
+        );
+        create_route(&kit, "r1", "demo", "/api/users", "GET");
+        create_edge(&kit, "e1", "ctrl1", "r1", "HANDLES_ROUTE", "demo");
+        // Service: called by the controller.
+        create_function(
+            &kit,
+            "svc1",
+            "demo",
+            "fetch_users",
+            "demo.fetch_users",
+            "/src/service/user_service.rs",
+            1,
+        );
+        create_edge(&kit, "e2", "ctrl1", "svc1", "CALLS", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        let service = result
+            .layers
+            .iter()
+            .find(|l| l.layer == "Service")
+            .expect("Service layer should exist");
+        assert!(
+            service.members.contains(&"demo.fetch_users".to_string()),
+            "Service members should contain demo.fetch_users, got: {:?}",
+            service.members
+        );
+    }
+
+    #[test]
+    fn detect_layers_repository_layer_function_with_fetches_edge() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Repository: function with a FETCHES edge (source).
+        create_function(
+            &kit,
+            "repo1",
+            "demo",
+            "find_user",
+            "demo.find_user",
+            "/src/repo/user_repo.rs",
+            1,
+        );
+        create_function(
+            &kit,
+            "model1",
+            "demo",
+            "user_data",
+            "demo.user_data",
+            "/src/model/user.rs",
+            1,
+        );
+        create_edge(&kit, "e1", "repo1", "model1", "FETCHES", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        let repository = result
+            .layers
+            .iter()
+            .find(|l| l.layer == "Repository")
+            .expect("Repository layer should exist");
+        assert!(
+            repository.members.contains(&"demo.find_user".to_string()),
+            "Repository members should contain demo.find_user, got: {:?}",
+            repository.members
+        );
+    }
+
+    #[test]
+    fn detect_layers_model_layer_type_with_has_property_and_no_calls() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Model: Class node with HAS_PROPERTY edge and no CALLS edges.
+        create_class(
+            &kit,
+            "cls1",
+            "demo",
+            "User",
+            "demo.User",
+            "/src/model/user.rs",
+            1,
+        );
+        create_function(
+            &kit,
+            "prop1",
+            "demo",
+            "name_field",
+            "demo.name_field",
+            "/src/model/user.rs",
+            5,
+        );
+        create_edge(&kit, "e1", "cls1", "prop1", "HAS_PROPERTY", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        let model = result
+            .layers
+            .iter()
+            .find(|l| l.layer == "Model")
+            .expect("Model layer should exist");
+        assert!(
+            model.members.contains(&"demo.User".to_string()),
+            "Model members should contain demo.User, got: {:?}",
+            model.members
+        );
+    }
+
+    #[test]
+    fn detect_layers_all_four_layers_populated() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Controller: handles route.
+        create_function(
+            &kit,
+            "ctrl1",
+            "demo",
+            "list_users",
+            "demo.list_users",
+            "/src/api/handler.rs",
+            1,
+        );
+        create_route(&kit, "r1", "demo", "/api/users", "GET");
+        create_edge(&kit, "e1", "ctrl1", "r1", "HANDLES_ROUTE", "demo");
+        // Service: called by controller.
+        create_function(
+            &kit,
+            "svc1",
+            "demo",
+            "fetch_users",
+            "demo.fetch_users",
+            "/src/service/user_service.rs",
+            1,
+        );
+        create_edge(&kit, "e2", "ctrl1", "svc1", "CALLS", "demo");
+        // Repository: has FETCHES edge.
+        create_function(
+            &kit,
+            "repo1",
+            "demo",
+            "find_user",
+            "demo.find_user",
+            "/src/repo/user_repo.rs",
+            1,
+        );
+        create_function(
+            &kit,
+            "data1",
+            "demo",
+            "db_query",
+            "demo.db_query",
+            "/src/repo/db.rs",
+            1,
+        );
+        create_edge(&kit, "e3", "repo1", "data1", "FETCHES", "demo");
+        // Model: Class with HAS_PROPERTY and no CALLS.
+        create_class(
+            &kit,
+            "cls1",
+            "demo",
+            "User",
+            "demo.User",
+            "/src/model/user.rs",
+            1,
+        );
+        create_function(
+            &kit,
+            "prop1",
+            "demo",
+            "name_field",
+            "demo.name_field",
+            "/src/model/user.rs",
+            5,
+        );
+        create_edge(&kit, "e4", "cls1", "prop1", "HAS_PROPERTY", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        let layer_names: Vec<&str> = result.layers.iter().map(|l| l.layer.as_str()).collect();
+        assert!(
+            layer_names.contains(&"Controller"),
+            "Controller layer should exist: {:?}",
+            layer_names
+        );
+        assert!(
+            layer_names.contains(&"Service"),
+            "Service layer should exist: {:?}",
+            layer_names
+        );
+        assert!(
+            layer_names.contains(&"Repository"),
+            "Repository layer should exist: {:?}",
+            layer_names
+        );
+        assert!(
+            layer_names.contains(&"Model"),
+            "Model layer should exist: {:?}",
+            layer_names
+        );
+    }
+
+    #[test]
+    fn detect_layers_empty_when_no_relevant_edges() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Plain function with no HANDLES_ROUTE, no CALLS, no FETCHES, no HAS_PROPERTY.
+        create_function(
+            &kit,
+            "f1",
+            "demo",
+            "plain",
+            "demo.plain",
+            "/src/lib.rs",
+            1,
+        );
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert!(
+            result.layers.is_empty(),
+            "no relevant edges → no layers, got: {:?}",
+            result.layers
+        );
+    }
 }

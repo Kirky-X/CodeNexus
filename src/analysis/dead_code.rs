@@ -1682,4 +1682,36 @@ mod tests {
             "JSON should contain confidence field: {json}"
         );
     }
+
+    // --- Additional coverage tests (targeting uncovered lines) ---
+
+    #[test]
+    fn is_exported_returns_false_for_nonexistent_id() {
+        // Line 389: `Ok(false)` when function id doesn't exist in either
+        // Function or Method table.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        assert!(
+            !detector.is_exported("nonexistent_id").expect("is_exported"),
+            "nonexistent id should return false"
+        );
+    }
+
+    #[test]
+    fn is_ffi_entry_returns_false_for_nonexistent_id() {
+        // Line 411: `Ok(false)` when function id doesn't exist in either
+        // Function or Method table.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        assert!(
+            !detector.is_ffi_entry("nonexistent_id").expect("is_ffi_entry"),
+            "nonexistent id should return false"
+        );
+    }
 }
