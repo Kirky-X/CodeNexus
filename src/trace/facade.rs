@@ -86,6 +86,142 @@ impl<'a> TraceEngine<'a> {
     pub fn storage(&self) -> &dyn Storage {
         self.storage
     }
+
+    /// Filters trace paths by the given [`PathFilter`] (R-trace-001).
+    ///
+    /// Delegates to the standalone [`apply_path_filter`].
+    pub fn apply_path_filter(
+        &self,
+        paths: Vec<super::TracePath>,
+        filter: &PathFilter,
+    ) -> Vec<super::TracePath> {
+        apply_path_filter(paths, filter)
+    }
+}
+
+// ===== Path filtering (T033) =====
+
+/// Converts a glob pattern to a regex string.
+///
+/// Supports `*` (any sequence) and `?` (single char). All other regex
+/// metacharacters are escaped.
+fn glob_to_regex(glob: &str) -> String {
+    // Note: `[` and `]` are NOT escaped — glob character classes (e.g. `[abc]`)
+    // pass through as regex character classes. An unmatched `[` will cause
+    // regex compilation to fail, handled gracefully by the caller.
+    const META_CHARS: &[char] = &['.', '+', '^', '$', '(', ')', '{', '}', '|', '\\'];
+    let mut regex = String::with_capacity(glob.len() * 2);
+    for ch in glob.chars() {
+        match ch {
+            '*' => regex.push_str(".*"),
+            '?' => regex.push('.'),
+            c if META_CHARS.contains(&c) => {
+                regex.push('\\');
+                regex.push(c);
+            }
+            c => regex.push(c),
+        }
+    }
+    regex
+}
+
+/// Returns true if `value` matches any of the glob patterns.
+fn matches_any_glob(value: &str, patterns: &[String]) -> bool {
+    patterns.iter().any(|p| {
+        let regex_str = glob_to_regex(p);
+        regex::Regex::new(&regex_str)
+            .map(|re| re.is_match(value))
+            .unwrap_or(false)
+    })
+}
+
+/// Returns true if `value` matches the regex pattern.
+fn matches_regex(value: &str, pattern: &str) -> bool {
+    regex::Regex::new(pattern)
+        .map(|re| re.is_match(value))
+        .unwrap_or(false)
+}
+
+/// Checks whether a single [`TraceNode`] passes all filter dimensions.
+fn node_passes_filter(
+    node: &super::TraceNode,
+    filter: &PathFilter,
+) -> bool {
+    // include_files: if set, node's file_path must match at least one glob.
+    if let Some(ref patterns) = filter.include_files {
+        let Some(ref file_path) = node.file_path else {
+            return false;
+        };
+        if !matches_any_glob(file_path, patterns) {
+            return false;
+        }
+    }
+    // exclude_files: if set, node's file_path must NOT match any glob.
+    if let Some(ref patterns) = filter.exclude_files {
+        if let Some(ref file_path) = node.file_path {
+            if matches_any_glob(file_path, patterns) {
+                return false;
+            }
+        }
+    }
+    // include_modules: if set, file_path must contain one of the module strings.
+    if let Some(ref modules) = filter.include_modules {
+        let Some(ref file_path) = node.file_path else {
+            return false;
+        };
+        if !modules.iter().any(|m| file_path.contains(m.as_str())) {
+            return false;
+        }
+    }
+    // symbol_pattern: if set, node's name must match the regex.
+    if let Some(ref pattern) = filter.symbol_pattern {
+        if !matches_regex(&node.name, pattern) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Filters trace paths by the given [`PathFilter`] (R-trace-001).
+///
+/// For each path, nodes that fail the filter are removed. Edges between
+/// consecutive remaining nodes are preserved; non-consecutive gaps drop the
+/// corresponding edges. Paths with zero remaining nodes are removed entirely.
+pub fn apply_path_filter(
+    paths: Vec<super::TracePath>,
+    filter: &PathFilter,
+) -> Vec<super::TracePath> {
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            let keep_indices: Vec<usize> = path
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| node_passes_filter(n, filter))
+                .map(|(i, _)| i)
+                .collect();
+            if keep_indices.is_empty() {
+                return None;
+            }
+            let nodes: Vec<super::TraceNode> = keep_indices
+                .iter()
+                .map(|&i| path.nodes[i].clone())
+                .collect();
+            let mut edges = Vec::new();
+            for window in keep_indices.windows(2) {
+                if window[1] == window[0] + 1 {
+                    edges.push(path.edges[window[0]].clone());
+                }
+            }
+            let depth = edges.len();
+            Some(super::TracePath {
+                nodes,
+                edges,
+                depth,
+            })
+        })
+        .collect()
 }
 
 /// The kind of trace to perform (PRD §4.2.3 `--type` flag).
@@ -705,5 +841,267 @@ mod tests {
         assert!(json.contains("\"paths\":[]"));
         assert!(json.contains("\"cycles\""));
         assert!(json.contains("\"Calls\""));
+    }
+
+    // --- T033: Path filtering ---
+
+    use crate::trace::{TraceEdge, TraceNode, TracePath};
+
+    fn make_node_with_path(name: &str, file_path: &str) -> TraceNode {
+        TraceNode {
+            name: name.to_string(),
+            label: "Function".to_string(),
+            file_path: Some(file_path.to_string()),
+            start_line: Some(1),
+        }
+    }
+
+    fn make_3node_path() -> TracePath {
+        // a -> b -> c, each in a different file.
+        TracePath {
+            nodes: vec![
+                make_node_with_path("a", "/src/a.rs"),
+                make_node_with_path("b", "/src/b.rs"),
+                make_node_with_path("c", "/src/c.rs"),
+            ],
+            edges: vec![
+                TraceEdge {
+                    edge_type: "CALLS".to_string(),
+                    reason: None,
+                    confidence: 1.0,
+                },
+                TraceEdge {
+                    edge_type: "CALLS".to_string(),
+                    reason: None,
+                    confidence: 1.0,
+                },
+            ],
+            depth: 2,
+        }
+    }
+
+    #[test]
+    fn apply_path_filter_include_files_keeps_only_matching() {
+        let paths = vec![make_3node_path()];
+        let filter = PathFilter {
+            include_files: Some(vec!["/src/a.rs".to_string()]),
+            ..Default::default()
+        };
+        let result = apply_path_filter(paths, &filter);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].nodes.len(), 1);
+        assert_eq!(result[0].nodes[0].name, "a");
+    }
+
+    #[test]
+    fn apply_path_filter_include_files_glob_matches_multiple() {
+        let paths = vec![make_3node_path()];
+        let filter = PathFilter {
+            include_files: Some(vec!["/src/[ab].rs".to_string()]),
+            ..Default::default()
+        };
+        let result = apply_path_filter(paths, &filter);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].nodes.len(), 2);
+        assert_eq!(result[0].nodes[0].name, "a");
+        assert_eq!(result[0].nodes[1].name, "b");
+        // Consecutive nodes: edge preserved.
+        assert_eq!(result[0].edges.len(), 1);
+    }
+
+    #[test]
+    fn apply_path_filter_exclude_files_drops_matching() {
+        let paths = vec![make_3node_path()];
+        let filter = PathFilter {
+            exclude_files: Some(vec!["/src/b.rs".to_string()]),
+            ..Default::default()
+        };
+        let result = apply_path_filter(paths, &filter);
+        assert_eq!(result.len(), 1);
+        // a and c kept; b dropped. a and c are not consecutive → no edges.
+        assert_eq!(result[0].nodes.len(), 2);
+        assert_eq!(result[0].nodes[0].name, "a");
+        assert_eq!(result[0].nodes[1].name, "c");
+        assert_eq!(result[0].edges.len(), 0);
+    }
+
+    #[test]
+    fn apply_path_filter_include_modules_keeps_matching() {
+        let paths = vec![TracePath {
+            nodes: vec![
+                make_node_with_path("a", "/src/module_a/foo.rs"),
+                make_node_with_path("b", "/src/module_b/bar.rs"),
+            ],
+            edges: vec![TraceEdge {
+                edge_type: "CALLS".to_string(),
+                reason: None,
+                confidence: 1.0,
+            }],
+            depth: 1,
+        }];
+        let filter = PathFilter {
+            include_modules: Some(vec!["module_a".to_string()]),
+            ..Default::default()
+        };
+        let result = apply_path_filter(paths, &filter);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].nodes.len(), 1);
+        assert_eq!(result[0].nodes[0].name, "a");
+    }
+
+    #[test]
+    fn apply_path_filter_symbol_pattern_keeps_matching() {
+        let paths = vec![TracePath {
+            nodes: vec![
+                make_node_with_path("handler_create", "/src/a.rs"),
+                make_node_with_path("do_work", "/src/b.rs"),
+                make_node_with_path("handler_delete", "/src/c.rs"),
+            ],
+            edges: vec![
+                TraceEdge {
+                    edge_type: "CALLS".to_string(),
+                    reason: None,
+                    confidence: 1.0,
+                },
+                TraceEdge {
+                    edge_type: "CALLS".to_string(),
+                    reason: None,
+                    confidence: 1.0,
+                },
+            ],
+            depth: 2,
+        }];
+        let filter = PathFilter {
+            symbol_pattern: Some("handler.*".to_string()),
+            ..Default::default()
+        };
+        let result = apply_path_filter(paths, &filter);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].nodes.len(), 2);
+        assert_eq!(result[0].nodes[0].name, "handler_create");
+        assert_eq!(result[0].nodes[1].name, "handler_delete");
+    }
+
+    #[test]
+    fn apply_path_filter_no_match_removes_path() {
+        let paths = vec![make_3node_path()];
+        let filter = PathFilter {
+            include_files: Some(vec!["/nonexistent.rs".to_string()]),
+            ..Default::default()
+        };
+        let result = apply_path_filter(paths, &filter);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn apply_path_filter_no_filter_returns_all_paths() {
+        let paths = vec![make_3node_path()];
+        let filter = PathFilter::default();
+        let result = apply_path_filter(paths, &filter);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].nodes.len(), 3);
+    }
+
+    #[test]
+    fn apply_path_filter_multiple_paths() {
+        let paths = vec![
+            make_3node_path(),
+            TracePath {
+                nodes: vec![
+                    make_node_with_path("x", "/src/a.rs"),
+                    make_node_with_path("y", "/src/d.rs"),
+                ],
+                edges: vec![TraceEdge {
+                    edge_type: "CALLS".to_string(),
+                    reason: None,
+                    confidence: 1.0,
+                }],
+                depth: 1,
+            },
+        ];
+        let filter = PathFilter {
+            include_files: Some(vec!["/src/a.rs".to_string()]),
+            ..Default::default()
+        };
+        let result = apply_path_filter(paths, &filter);
+        assert_eq!(result.len(), 2);
+        // First path: only "a" kept.
+        assert_eq!(result[0].nodes.len(), 1);
+        assert_eq!(result[0].nodes[0].name, "a");
+        // Second path: only "x" kept.
+        assert_eq!(result[1].nodes.len(), 1);
+        assert_eq!(result[1].nodes[0].name, "x");
+    }
+
+    #[test]
+    fn apply_path_filter_wildcard_glob_matches_any_file() {
+        let paths = vec![make_3node_path()];
+        let filter = PathFilter {
+            include_files: Some(vec!["/src/*.rs".to_string()]),
+            ..Default::default()
+        };
+        let result = apply_path_filter(paths, &filter);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].nodes.len(), 3);
+    }
+
+    #[test]
+    fn apply_path_filter_node_without_file_path_excluded_by_include() {
+        let paths = vec![TracePath {
+            nodes: vec![
+                TraceNode {
+                    name: "no_file".to_string(),
+                    label: "Function".to_string(),
+                    file_path: None,
+                    start_line: None,
+                },
+                make_node_with_path("a", "/src/a.rs"),
+            ],
+            edges: vec![TraceEdge {
+                edge_type: "CALLS".to_string(),
+                reason: None,
+                confidence: 1.0,
+            }],
+            depth: 1,
+        }];
+        let filter = PathFilter {
+            include_files: Some(vec!["/src/a.rs".to_string()]),
+            ..Default::default()
+        };
+        let result = apply_path_filter(paths, &filter);
+        assert_eq!(result.len(), 1);
+        // "no_file" dropped (no file_path), "a" kept.
+        assert_eq!(result[0].nodes.len(), 1);
+        assert_eq!(result[0].nodes[0].name, "a");
+    }
+
+    #[test]
+    fn apply_path_filter_exclude_files_keeps_node_without_file_path() {
+        let paths = vec![TracePath {
+            nodes: vec![
+                TraceNode {
+                    name: "no_file".to_string(),
+                    label: "Function".to_string(),
+                    file_path: None,
+                    start_line: None,
+                },
+                make_node_with_path("a", "/src/a.rs"),
+            ],
+            edges: vec![TraceEdge {
+                edge_type: "CALLS".to_string(),
+                reason: None,
+                confidence: 1.0,
+            }],
+            depth: 1,
+        }];
+        let filter = PathFilter {
+            exclude_files: Some(vec!["/src/a.rs".to_string()]),
+            ..Default::default()
+        };
+        let result = apply_path_filter(paths, &filter);
+        assert_eq!(result.len(), 1);
+        // "no_file" kept (no file_path to exclude), "a" dropped.
+        assert_eq!(result[0].nodes.len(), 1);
+        assert_eq!(result[0].nodes[0].name, "no_file");
     }
 }
