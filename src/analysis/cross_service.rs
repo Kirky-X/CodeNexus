@@ -31,16 +31,17 @@
 //! explicit string segmentation — no regex engine is invoked. The match
 //! outcome is fully determined by the pattern and literal bytes.
 
+use crate::analysis::dead_code::Confidence;
 use crate::storage::capability::Storage;
 use crate::storage::error::Result as StorageResult;
 use crate::storage::schema::escape_cypher_string;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Edge type stored on `CodeRelation.type` for cross-service links.
 const CROSS_SERVICE_CALLS_EDGE_TYPE: &str = "CROSS_SERVICE_CALLS";
 
 /// The kind of match between a route pattern and a string literal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MatchType {
     /// Pattern and literal are byte-equal.
     Exact,
@@ -48,6 +49,8 @@ pub enum MatchType {
     Parameterized,
     /// Pattern contains `*` wildcards; literal matches the glob.
     Wildcard,
+    /// Pattern-based match (e.g. `package.Service.Method` for gRPC).
+    Pattern,
 }
 
 /// A single cross-service link between a route and a caller.
@@ -271,6 +274,197 @@ impl<'a> CrossServiceLinker<'a> {
             escape_cypher_string(&self.project),
         );
         self.storage.execute(&cypher)
+    }
+}
+
+/// The communication protocol for a cross-service interaction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ServiceProtocol {
+    HttpRest,
+    Grpc,
+    GraphQL,
+    MessageQueue,
+    EventBus,
+}
+
+/// A cross-service interaction detected between two code symbols.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CrossServiceMatch {
+    /// The caller symbol id (Function/Method).
+    pub caller: String,
+    /// The callee symbol id or extracted target (route id, service method, topic, event).
+    pub callee: String,
+    /// The protocol used for the interaction.
+    pub protocol: ServiceProtocol,
+    /// How the interaction was matched.
+    pub match_type: MatchType,
+    /// Confidence level of the detection.
+    pub confidence: Confidence,
+    /// Human-readable explanation of the match.
+    pub reason: String,
+}
+
+/// Multi-protocol cross-service detector.
+///
+/// Unlike [`CrossServiceLinker`] which only handles HTTP REST and persists
+/// edges, `CrossServiceDetector` performs detection-only across all supported
+/// protocols and returns [`CrossServiceMatch`] entries without side effects.
+pub struct CrossServiceDetector<'a> {
+    storage: &'a dyn Storage,
+}
+
+impl<'a> CrossServiceDetector<'a> {
+    #[must_use]
+    pub fn new(storage: &'a dyn Storage) -> Self {
+        Self { storage }
+    }
+
+    /// Runs all protocol detectors and merges results.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError`] if any underlying Cypher query fails.
+    pub fn detect_all(&self, project: &str) -> StorageResult<Vec<CrossServiceMatch>> {
+        let mut matches = Vec::new();
+        matches.extend(self.detect_http(project)?);
+        matches.extend(self.detect_grpc(project)?);
+        matches.extend(self.detect_graphql(project)?);
+        matches.extend(self.detect_message_queue(project)?);
+        matches.extend(self.detect_event_bus(project)?);
+        Ok(matches)
+    }
+
+    /// Detects HTTP REST cross-service calls by matching route patterns
+    /// against string literals in function bodies.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError`] if any underlying Cypher query fails.
+    pub fn detect_http(&self, project: &str) -> StorageResult<Vec<CrossServiceMatch>> {
+        let routes = self.load_routes(project)?;
+        if routes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let callers = self.load_callers(project)?;
+        let mut matches = Vec::new();
+        for caller in &callers {
+            if caller.content.is_empty() {
+                continue;
+            }
+            let literals = extract_string_literals(&caller.content);
+            for literal in &literals {
+                for route in &routes {
+                    if let Some(match_type) = match_route(&route.path, literal) {
+                        let confidence = match match_type {
+                            MatchType::Exact => Confidence::High,
+                            MatchType::Parameterized => Confidence::Medium,
+                            MatchType::Wildcard | MatchType::Pattern => Confidence::Low,
+                        };
+                        matches.push(CrossServiceMatch {
+                            caller: caller.id.clone(),
+                            callee: route.id.clone(),
+                            protocol: ServiceProtocol::HttpRest,
+                            match_type,
+                            confidence,
+                            reason: format!("HTTP route pattern match: {}", route.path),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(matches)
+    }
+
+    /// Detects gRPC client calls. (Implemented in T009.)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError`] if any underlying Cypher query fails.
+    pub fn detect_grpc(&self, _project: &str) -> StorageResult<Vec<CrossServiceMatch>> {
+        Ok(Vec::new())
+    }
+
+    /// Detects GraphQL query/mutation/subscription calls. (Implemented in T010.)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError`] if any underlying Cypher query fails.
+    pub fn detect_graphql(&self, _project: &str) -> StorageResult<Vec<CrossServiceMatch>> {
+        Ok(Vec::new())
+    }
+
+    /// Detects message queue produce/consume patterns. (Implemented in T011.)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError`] if any underlying Cypher query fails.
+    pub fn detect_message_queue(&self, _project: &str) -> StorageResult<Vec<CrossServiceMatch>> {
+        Ok(Vec::new())
+    }
+
+    /// Detects event bus emit/listen patterns. (Implemented in T012.)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError`] if any underlying Cypher query fails.
+    pub fn detect_event_bus(&self, _project: &str) -> StorageResult<Vec<CrossServiceMatch>> {
+        Ok(Vec::new())
+    }
+
+    fn load_routes(&self, project: &str) -> StorageResult<Vec<RouteRow>> {
+        let escaped = escape_cypher_string(project);
+        let cypher = format!(
+            "MATCH (r:Route) WHERE r.project = '{escaped}' \
+             RETURN r.id AS id, r.path AS path;"
+        );
+        let rows = self.storage.query(&cypher)?;
+        let mut out = Vec::new();
+        for row in rows {
+            if row.len() < 2 {
+                continue;
+            }
+            let id = row[0].as_str().unwrap_or_default().to_string();
+            let path = row[1].as_str().unwrap_or_default().to_string();
+            if !id.is_empty() && !path.is_empty() {
+                out.push(RouteRow { id, path });
+            }
+        }
+        Ok(out)
+    }
+
+    fn load_callers(&self, project: &str) -> StorageResult<Vec<CallerRow>> {
+        let escaped = escape_cypher_string(project);
+        let mut out = Vec::new();
+        for table in &["Function", "Method"] {
+            let cypher = format!(
+                "MATCH (n:{table}) WHERE n.project = '{escaped}' \
+                 RETURN n.id AS id, n.filePath AS file_path, \
+                 n.startLine AS start_line, n.content AS content;"
+            );
+            let rows = self.storage.query(&cypher)?;
+            for row in rows {
+                if row.len() < 4 {
+                    continue;
+                }
+                let id = row[0].as_str().unwrap_or_default().to_string();
+                let file_path = row[1].as_str().unwrap_or_default().to_string();
+                let start_line = row[2]
+                    .as_i64()
+                    .map(|v| v as u32)
+                    .or_else(|| row[2].as_u64().map(|v| v as u32))
+                    .unwrap_or(0);
+                let content = row[3].as_str().unwrap_or_default().to_string();
+                if !id.is_empty() {
+                    out.push(CallerRow {
+                        id,
+                        file_path,
+                        start_line,
+                        content,
+                    });
+                }
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -1056,5 +1250,114 @@ mod tests {
         assert_eq!(links.len(), 1, "minimal Function node should still match");
         assert_eq!(links[0].caller_id, "f1");
         assert_eq!(links[0].caller_line, 5);
+    }
+
+    // ====================================================================
+    // T008: Multi-protocol types
+    // ====================================================================
+
+    #[test]
+    fn service_protocol_serializes_all_variants() {
+        assert_eq!(
+            serde_json::to_string(&ServiceProtocol::HttpRest).unwrap(),
+            "\"HttpRest\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ServiceProtocol::Grpc).unwrap(),
+            "\"Grpc\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ServiceProtocol::GraphQL).unwrap(),
+            "\"GraphQL\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ServiceProtocol::MessageQueue).unwrap(),
+            "\"MessageQueue\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ServiceProtocol::EventBus).unwrap(),
+            "\"EventBus\""
+        );
+    }
+
+    #[test]
+    fn service_protocol_roundtrips_all_variants() {
+        for proto in [
+            ServiceProtocol::HttpRest,
+            ServiceProtocol::Grpc,
+            ServiceProtocol::GraphQL,
+            ServiceProtocol::MessageQueue,
+            ServiceProtocol::EventBus,
+        ] {
+            let json = serde_json::to_string(&proto).unwrap();
+            let parsed: ServiceProtocol = serde_json::from_str(&json).unwrap();
+            assert_eq!(proto, parsed, "roundtrip failed for {json}");
+        }
+    }
+
+    #[test]
+    fn match_type_pattern_variant_serializes() {
+        assert_eq!(
+            serde_json::to_string(&MatchType::Pattern).unwrap(),
+            "\"Pattern\""
+        );
+        let json = serde_json::to_string(&MatchType::Pattern).unwrap();
+        let parsed: MatchType = serde_json::from_str(&json).unwrap();
+        assert_eq!(MatchType::Pattern, parsed);
+    }
+
+    #[test]
+    fn cross_service_match_serializes_with_all_fields() {
+        let m = CrossServiceMatch {
+            caller: "fn_1".to_string(),
+            callee: "route_1".to_string(),
+            protocol: ServiceProtocol::HttpRest,
+            match_type: MatchType::Exact,
+            confidence: Confidence::High,
+            reason: "HTTP route pattern match".to_string(),
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(json.contains("\"caller\":\"fn_1\""), "{json}");
+        assert!(json.contains("\"callee\":\"route_1\""), "{json}");
+        assert!(json.contains("\"protocol\":\"HttpRest\""), "{json}");
+        assert!(json.contains("\"match_type\":\"Exact\""), "{json}");
+        assert!(json.contains("\"confidence\":\"High\""), "{json}");
+        assert!(json.contains("\"reason\""), "{json}");
+    }
+
+    #[test]
+    fn detect_all_returns_empty_for_empty_db() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let result = detector.detect_all("demo").expect("detect_all");
+        assert!(result.is_empty(), "empty DB → empty matches");
+    }
+
+    #[test]
+    fn detect_all_dispatches_to_http_detection() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r1", "demo", "/api/users");
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            10,
+            r#"fetch("/api/users");"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_all("demo").expect("detect_all");
+        assert_eq!(matches.len(), 1, "should detect 1 HTTP match");
+        assert_eq!(matches[0].protocol, ServiceProtocol::HttpRest);
+        assert_eq!(matches[0].caller, "f1");
+        assert_eq!(matches[0].callee, "r1");
+        assert_eq!(matches[0].match_type, MatchType::Exact);
+        assert_eq!(matches[0].confidence, Confidence::High);
     }
 }
