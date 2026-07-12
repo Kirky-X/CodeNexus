@@ -170,6 +170,9 @@ impl<'a> DeadCodeDetector<'a> {
             if self.config.check_exported && self.is_exported(&func.id)? {
                 continue;
             }
+            if self.config.check_ffi && self.is_ffi_entry(&func.id)? {
+                continue;
+            }
             let language = file_languages
                 .get(&func.file_path)
                 .cloned()
@@ -289,6 +292,28 @@ impl<'a> DeadCodeDetector<'a> {
             if let Some(row) = rows.into_iter().next() {
                 if let Some(val) = row.first() {
                     return Ok(val.as_bool().unwrap_or(false));
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    /// Returns `true` if the node's `signature` contains FFI markers
+    /// (`extern "C"` or `#[no_mangle]`), marking it as an FFI entry point.
+    fn is_ffi_entry(&self, func_id: &str) -> StorageResult<bool> {
+        let escaped_id = escape_cypher_string(func_id);
+        for label in ["Function", "Method"] {
+            let cypher = format!(
+                "MATCH (n:{label}) WHERE n.id = '{escaped_id}' \
+                 RETURN n.signature AS signature LIMIT 1;"
+            );
+            let rows = self.storage.query(&cypher)?;
+            if let Some(row) = rows.into_iter().next() {
+                if let Some(sig) = row.first().and_then(|v| v.as_str()) {
+                    if sig.contains(r#"extern "C""#) || sig.contains("#[no_mangle]") {
+                        return Ok(true);
+                    }
+                    return Ok(false);
                 }
             }
         }
@@ -1139,6 +1164,140 @@ mod tests {
         assert!(
             !detector.is_exported("f_priv").expect("is_exported"),
             "f_priv should NOT be exported"
+        );
+    }
+
+    // --- T005: FFI entry point detection tests ---
+
+    #[test]
+    fn detect_excludes_ffi_entry_extern_c() {
+        // R-dead_code-003: signature with `extern "C"` → NOT dead.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_flags(
+            &kit,
+            "f_ffi",
+            "demo",
+            "ffi_fn",
+            "demo.ffi_fn",
+            "/src/lib.rs",
+            1,
+            false,
+            r#"pub extern "C" fn ffi_fn(x: i32) -> i32"#,
+        );
+        create_function(
+            &kit,
+            "f_plain",
+            "demo",
+            "plain",
+            "demo.plain",
+            "/src/lib.rs",
+            5,
+        );
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            !names.contains(&"ffi_fn"),
+            "ffi_fn is an FFI entry → not dead"
+        );
+        assert!(names.contains(&"plain"), "plain has no FFI markers → dead");
+    }
+
+    #[test]
+    fn detect_excludes_ffi_entry_no_mangle() {
+        // R-dead_code-003: signature with `#[no_mangle]` → NOT dead.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_flags(
+            &kit,
+            "f_nm",
+            "demo",
+            "native_fn",
+            "demo.native_fn",
+            "/src/lib.rs",
+            1,
+            false,
+            "#[no_mangle]\npub fn native_fn() -> u32",
+        );
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            !names.contains(&"native_fn"),
+            "native_fn has #[no_mangle] → not dead"
+        );
+    }
+
+    #[test]
+    fn detect_includes_ffi_when_check_ffi_false() {
+        // When check_ffi=false, FFI functions ARE dead code.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_flags(
+            &kit,
+            "f_ffi",
+            "demo",
+            "ffi_fn",
+            "demo.ffi_fn",
+            "/src/lib.rs",
+            1,
+            false,
+            r#"extern "C" fn ffi_fn()"#,
+        );
+
+        let storage = storage(&kit);
+        let cfg = DeadCodeConfig {
+            check_ffi: false,
+            ..DeadCodeConfig::default()
+        };
+        let detector = DeadCodeDetector::with_config(&*storage, cfg);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"ffi_fn"),
+            "with check_ffi=false, ffi_fn IS dead"
+        );
+    }
+
+    #[test]
+    fn is_ffi_entry_distinguishes_ffi_from_plain() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_flags(
+            &kit,
+            "f_ffi",
+            "demo",
+            "ffi_fn",
+            "demo.ffi_fn",
+            "/src/lib.rs",
+            1,
+            false,
+            r#"extern "C" fn ffi_fn()"#,
+        );
+        create_function(
+            &kit,
+            "f_plain",
+            "demo",
+            "plain",
+            "demo.plain",
+            "/src/lib.rs",
+            5,
+        );
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        assert!(
+            detector.is_ffi_entry("f_ffi").expect("is_ffi_entry"),
+            "f_ffi should be FFI entry"
+        );
+        assert!(
+            !detector.is_ffi_entry("f_plain").expect("is_ffi_entry"),
+            "f_plain should NOT be FFI entry"
         );
     }
 }
