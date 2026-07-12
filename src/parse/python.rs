@@ -1464,4 +1464,113 @@ class Foo(metaclass=Meta):
             "signature should contain the function name"
         );
     }
+
+    // --- base_class_name branch coverage ---
+
+    #[test]
+    fn class_with_attribute_base_class_creates_extends_edge() {
+        // `class Foo(module.Bar)` — attribute base class. Covers
+        // base_class_name's `attribute` arm (extracts the rightmost name).
+        let src = "class Foo(module.Bar):\n    pass\n";
+        let result = extract(src);
+        let extends: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Extends)
+            .collect();
+        assert_eq!(
+            extends.len(),
+            1,
+            "should create 1 EXTENDS edge for attribute base: {:?}",
+            extends
+        );
+        assert!(
+            extends[0].target.contains("Bar"),
+            "EXTENDS target should contain 'Bar': {}",
+            extends[0].target
+        );
+    }
+
+    #[test]
+    fn class_with_call_base_class_creates_extends_edge() {
+        // `class Foo(Meta())` — call expression as base class. Covers
+        // base_class_name's `call` arm (unwraps to the function identifier).
+        let src = "class Meta:\n    pass\nclass Foo(Meta()):\n    pass\n";
+        let result = extract(src);
+        let extends: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Extends)
+            .collect();
+        assert!(
+            extends.iter().any(|e| e.target.contains("Meta")),
+            "should create EXTENDS edge with 'Meta' target for call base: {:?}",
+            extends
+        );
+    }
+
+    #[test]
+    fn class_with_unknown_base_class_type_creates_no_extends_edge() {
+        // `class Foo(123)` — integer literal as base. Covers base_class_name's
+        // `_ => None` fallback (no EXTENDS edge for non-identifier/attribute/call).
+        let src = "class Foo(123):\n    pass\n";
+        let result = extract(src);
+        let extends: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Extends)
+            .collect();
+        assert!(
+            extends.is_empty(),
+            "should NOT create EXTENDS edge for integer base: {:?}",
+            extends
+        );
+    }
+
+    // --- combine_scope: nested class (Some, Some) ---
+
+    #[test]
+    fn nested_class_combines_parent_and_child_scope() {
+        // `class Outer: class Inner` — combine_scope(Some("Outer"), Some("Inner"))
+        // produces "Outer_Inner" as the parent scope for Inner's methods.
+        let src = "class Outer:\n    class Inner:\n        def method(self):\n            pass\n";
+        let result = extract(src);
+        let method = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "method")
+            .expect("should find method node");
+        assert!(
+            method.qualified_name.contains("Outer"),
+            "qualified_name should contain Outer scope: {}",
+            method.qualified_name
+        );
+        assert!(
+            method.qualified_name.contains("Inner"),
+            "qualified_name should contain Inner scope: {}",
+            method.qualified_name
+        );
+    }
+
+    // --- is_python_read_position: unknown parent kind fallback ---
+
+    #[test]
+    fn identifier_in_assert_statement_is_not_read() {
+        // `assert x` inside a function — the `x` identifier's parent is
+        // `assert_statement`, which is not in is_python_read_position's
+        // explicit list. The `_ => false` fallback should be hit, so no
+        // read is recorded for `x`.
+        let src = "def f():\n    assert x\n";
+        let result = extract(src);
+        let reads: Vec<_> = result
+            .reads
+            .iter()
+            .filter(|r| r.var_name == "x")
+            .collect();
+        assert!(
+            reads.is_empty(),
+            "identifier in assert_statement should not be a read: {:?}",
+            reads
+        );
+    }
 }
