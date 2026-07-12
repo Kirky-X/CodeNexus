@@ -167,6 +167,9 @@ impl<'a> DeadCodeDetector<'a> {
             if matches_any_pattern(&func.name, DEFAULT_TEST_PATTERNS) {
                 continue;
             }
+            if self.config.check_exported && self.is_exported(&func.id)? {
+                continue;
+            }
             let language = file_languages
                 .get(&func.file_path)
                 .cloned()
@@ -269,6 +272,27 @@ impl<'a> DeadCodeDetector<'a> {
              RETURN e.id AS id LIMIT 1;"
         );
         Ok(!self.storage.query(&cypher)?.is_empty())
+    }
+
+    /// Returns `true` if the node with `func_id` has `isExported = true`.
+    ///
+    /// Queries both `Function` and `Method` labels since LadybugDB does not
+    /// support `OR` label expressions.
+    fn is_exported(&self, func_id: &str) -> StorageResult<bool> {
+        let escaped_id = escape_cypher_string(func_id);
+        for label in ["Function", "Method"] {
+            let cypher = format!(
+                "MATCH (n:{label}) WHERE n.id = '{escaped_id}' \
+                 RETURN n.isExported AS is_exported LIMIT 1;"
+            );
+            let rows = self.storage.query(&cypher)?;
+            if let Some(row) = rows.into_iter().next() {
+                if let Some(val) = row.first() {
+                    return Ok(val.as_bool().unwrap_or(false));
+                }
+            }
+        }
+        Ok(false)
     }
 
     /// Builds a `filePath -> language` map from the `File` table for `project`.
@@ -386,6 +410,39 @@ mod tests {
             end_line,
         );
         storage.execute(&cypher).expect("create function");
+    }
+
+    /// Creates a Function node with `isExported = true` and optional `signature`.
+    fn create_function_with_flags(
+        kit: &AsyncKit<AsyncReady>,
+        id: &str,
+        project: &str,
+        name: &str,
+        qn: &str,
+        file: &str,
+        line: u32,
+        is_exported: bool,
+        signature: &str,
+    ) {
+        let storage = storage(kit);
+        let end_line = line + 10;
+        let cypher = format!(
+            "CREATE (:Function {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
+             filePath: '{}', startLine: {}, endLine: {}, signature: '{}', returnType: '', \
+             isExported: {}, docstring: '', content: '', parentQn: ''}});",
+            escape_cypher_string(id),
+            escape_cypher_string(project),
+            escape_cypher_string(name),
+            escape_cypher_string(qn),
+            escape_cypher_string(file),
+            line,
+            end_line,
+            escape_cypher_string(signature),
+            is_exported,
+        );
+        storage
+            .execute(&cypher)
+            .expect("create function with flags");
     }
 
     /// Creates a Method node via direct Cypher.
@@ -975,6 +1032,113 @@ mod tests {
                 .has_incoming_edge("f_b", EdgeType::Calls)
                 .expect("has_incoming_edge"),
             "f_b has no CALLS edge"
+        );
+    }
+
+    // --- T004: exported function detection tests ---
+
+    #[test]
+    fn detect_excludes_exported_functions() {
+        // R-dead_code-002: isExported=true with no incoming edges → NOT dead.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_flags(
+            &kit,
+            "f_pub",
+            "demo",
+            "pub_fn",
+            "demo.pub_fn",
+            "/src/lib.rs",
+            1,
+            true,
+            "",
+        );
+        create_function(
+            &kit,
+            "f_priv",
+            "demo",
+            "priv_fn",
+            "demo.priv_fn",
+            "/src/lib.rs",
+            5,
+        );
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            !names.contains(&"pub_fn"),
+            "exported pub_fn should NOT be dead"
+        );
+        assert!(names.contains(&"priv_fn"), "private priv_fn should be dead");
+    }
+
+    #[test]
+    fn detect_includes_exported_when_check_exported_false() {
+        // When check_exported=false, exported functions ARE dead code.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_flags(
+            &kit,
+            "f_pub",
+            "demo",
+            "pub_fn",
+            "demo.pub_fn",
+            "/src/lib.rs",
+            1,
+            true,
+            "",
+        );
+
+        let storage = storage(&kit);
+        let cfg = DeadCodeConfig {
+            check_exported: false,
+            ..DeadCodeConfig::default()
+        };
+        let detector = DeadCodeDetector::with_config(&*storage, cfg);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"pub_fn"),
+            "with check_exported=false, pub_fn IS dead"
+        );
+    }
+
+    #[test]
+    fn is_exported_returns_correct_value() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_flags(
+            &kit,
+            "f_pub",
+            "demo",
+            "pub_fn",
+            "demo.pub_fn",
+            "/src/lib.rs",
+            1,
+            true,
+            "",
+        );
+        create_function(
+            &kit,
+            "f_priv",
+            "demo",
+            "priv_fn",
+            "demo.priv_fn",
+            "/src/lib.rs",
+            5,
+        );
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        assert!(
+            detector.is_exported("f_pub").expect("is_exported"),
+            "f_pub should be exported"
+        );
+        assert!(
+            !detector.is_exported("f_priv").expect("is_exported"),
+            "f_priv should NOT be exported"
         );
     }
 }
