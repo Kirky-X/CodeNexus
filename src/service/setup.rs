@@ -696,4 +696,37 @@ mod tests {
         }
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
     }
+
+    // --- setup() CLI wrapper ---
+
+    #[cfg(feature = "cli")]
+    #[tokio::test]
+    async fn setup_succeeds_when_home_has_fresh_agent() {
+        let _lock = HOME_TEST_MUTEX.lock().unwrap();
+        let home = fake_home(&[Agent::ClaudeCode]);
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", home.path());
+        let result = setup(false).await;
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        assert!(result.is_ok(), "setup should succeed: {:?}", result.err());
+        let config_path = home.path().join(".claude.json");
+        assert!(config_path.exists(), "config file should be created");
+    }
+
+    #[cfg(feature = "cli")]
+    #[tokio::test]
+    async fn setup_returns_error_when_home_unset() {
+        let _lock = HOME_TEST_MUTEX.lock().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        std::env::remove_var("HOME");
+        let result = setup(false).await;
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        assert!(result.is_err(), "setup should error when HOME is unset");
+    }
 }
