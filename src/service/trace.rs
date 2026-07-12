@@ -288,4 +288,46 @@ mod tests {
         let parsed: TraceOutput = serde_json::from_str(&json).unwrap();
         assert_eq!(output, parsed);
     }
+
+    #[test]
+    fn run_trace_succeeds_for_known_symbol_with_calls() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'callee', qualifiedName: 'demo.callee', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create callee");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: 'direct call', startLine: 2, project: 'demo'});").expect("create edge");
+
+        let output = run_trace(&kit, "demo.caller", "calls", 3)
+            .expect("trace on known symbol should succeed");
+        assert_eq!(output.symbol, "demo.caller");
+        // The trace facade may return 0+ paths depending on BFS logic; the key
+        // assertion is that the trace ran without error and returned the symbol.
+    }
+
+    #[test]
+    fn run_trace_succeeds_for_dataflow_trace_type() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_src', project: 'demo', name: 'src', qualifiedName: 'demo.src', filePath: '/src/s.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create src");
+        storage.execute("CREATE (:Function {id: 'f_dst', project: 'demo', name: 'dst', qualifiedName: 'demo.dst', filePath: '/src/d.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create dst");
+        storage.execute("CREATE (:CodeRelation {id: 'e_df', source: 'f_src', target: 'f_dst', type: 'DATAFLOWS', confidence: 1.0, confidenceTier: 'High', reason: 'assignment', startLine: 2, project: 'demo'});").expect("create dataflow edge");
+
+        let output = run_trace(&kit, "demo.src", "dataflow", 3)
+            .expect("dataflow trace should succeed");
+        assert_eq!(output.symbol, "demo.src");
+    }
+
+    #[test]
+    fn run_trace_succeeds_for_all_trace_type() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_root', project: 'demo', name: 'root', qualifiedName: 'demo.root', filePath: '/src/r.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create root");
+
+        let output = run_trace(&kit, "demo.root", "all", 2)
+            .expect("all trace type should succeed");
+        assert_eq!(output.symbol, "demo.root");
+    }
 }

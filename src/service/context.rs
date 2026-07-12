@@ -144,4 +144,71 @@ mod tests {
             "unexpected message: {msg}"
         );
     }
+
+    #[test]
+    fn run_context_returns_symbol_with_incoming_and_outgoing() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        // Target symbol: demo.do_thing
+        storage.execute("CREATE (:Function {id: 'f_target', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/target.rs', startLine: 10, endLine: 20, signature: 'fn do_thing()', returnType: 'void', isExported: true, docstring: '', content: '', parentQn: ''});").expect("create target");
+        // Caller: demo.caller → CALLS → demo.do_thing (incoming edge)
+        storage.execute("CREATE (:Function {id: 'f_caller', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/caller.rs', startLine: 1, endLine: 5, signature: 'fn caller()', returnType: 'void', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller");
+        storage.execute("CREATE (:CodeRelation {id: 'e_in', source: 'f_caller', target: 'f_target', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: 'direct call', startLine: 2, project: 'demo'});").expect("create incoming edge");
+        // Callee: demo.do_thing → CALLS → demo.callee (outgoing edge)
+        storage.execute("CREATE (:Function {id: 'f_callee', project: 'demo', name: 'callee', qualifiedName: 'demo.callee', filePath: '/src/callee.rs', startLine: 1, endLine: 5, signature: 'fn callee()', returnType: 'void', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create callee");
+        storage.execute("CREATE (:CodeRelation {id: 'e_out', source: 'f_target', target: 'f_callee', type: 'CALLS', confidence: 0.9, confidenceTier: 'High', reason: 'direct call', startLine: 15, project: 'demo'});").expect("create outgoing edge");
+
+        let output = run_context(&kit, "demo.do_thing", 3).expect("context should succeed");
+        assert_eq!(output.symbol, "demo.do_thing");
+        assert_eq!(output.node.qualified_name, "demo.do_thing");
+        assert_eq!(output.node.name, "do_thing");
+        assert_eq!(output.node.label, "Function");
+        assert_eq!(output.node.file_path.as_deref(), Some("/src/target.rs"));
+        assert_eq!(output.node.start_line, Some(10));
+        assert_eq!(output.node.end_line, Some(20));
+        // incoming: demo.caller → demo.do_thing
+        assert_eq!(output.incoming.len(), 1, "should have 1 incoming caller");
+        assert_eq!(output.incoming[0].name, "caller");
+        assert_eq!(output.incoming[0].qualified_name, "demo.caller");
+        assert_eq!(output.incoming[0].edge_type, "CALLS");
+        // outgoing: demo.do_thing → demo.callee
+        assert_eq!(output.outgoing.len(), 1, "should have 1 outgoing callee");
+        assert_eq!(output.outgoing[0].name, "callee");
+        assert_eq!(output.outgoing[0].qualified_name, "demo.callee");
+        assert_eq!(output.outgoing[0].edge_type, "CALLS");
+        // no process edges seeded
+        assert!(output.processes.is_empty(), "no process edges expected");
+    }
+
+    #[test]
+    fn run_context_returns_node_only_at_depth_zero() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_solo', project: 'demo', name: 'solo', qualifiedName: 'demo.solo', filePath: '/src/solo.rs', startLine: 1, endLine: 3, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create solo");
+        storage.execute("CREATE (:Function {id: 'f_other', project: 'demo', name: 'other', qualifiedName: 'demo.other', filePath: '/src/other.rs', startLine: 1, endLine: 3, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create other");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_solo', target: 'f_other', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create edge");
+
+        // depth=0: load only the start node, no BFS expansion.
+        let output = run_context(&kit, "demo.solo", 0).expect("context depth 0 should succeed");
+        assert_eq!(output.symbol, "demo.solo");
+        assert_eq!(output.node.qualified_name, "demo.solo");
+        // At depth 0 the BFS loop doesn't run, so no edges are collected.
+        assert!(output.incoming.is_empty(), "no incoming at depth 0");
+        assert!(output.outgoing.is_empty(), "no outgoing at depth 0");
+    }
+
+    #[test]
+    fn run_context_resolves_by_short_name_when_unique() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_unique', project: 'demo', name: 'unique_name', qualifiedName: 'demo.unique_name', filePath: '/src/u.rs', startLine: 1, endLine: 2, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create unique");
+
+        // Query by short name (not qualifiedName) — resolve_start_id matches by name.
+        let output = run_context(&kit, "unique_name", 1).expect("context by name should succeed");
+        assert_eq!(output.node.qualified_name, "demo.unique_name");
+        assert_eq!(output.node.name, "unique_name");
+    }
 }
