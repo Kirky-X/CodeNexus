@@ -30,6 +30,46 @@ fn truncate_source(source: &str) -> String {
     result
 }
 
+/// Parses parameter list from a function signature string.
+///
+/// Handles signatures like `"(a: i32, b: String)"` or
+/// `"fn foo(a: i32, b: String) -> bool"`, extracting each parameter's
+/// name and type.
+fn parse_parameters(signature: &str) -> Vec<ParamInfo> {
+    let start = signature.find('(');
+    let end = signature.rfind(')');
+    let (Some(start), Some(end)) = (start, end) else {
+        return Vec::new();
+    };
+    if start >= end {
+        return Vec::new();
+    }
+    let params_str = &signature[start + 1..end];
+    if params_str.trim().is_empty() {
+        return Vec::new();
+    }
+    params_str
+        .split(',')
+        .filter_map(|p| {
+            let p = p.trim();
+            if p.is_empty() {
+                return None;
+            }
+            if let Some(colon_pos) = p.find(':') {
+                Some(ParamInfo {
+                    name: p[..colon_pos].trim().to_string(),
+                    type_name: p[colon_pos + 1..].trim().to_string(),
+                })
+            } else {
+                Some(ParamInfo {
+                    name: p.to_string(),
+                    type_name: String::new(),
+                })
+            }
+        })
+        .collect()
+}
+
 pub fn resolve_start_id(graph: &Graph, symbol: &str) -> Option<NodeId> {
     let by_name: Vec<&crate::model::Node> =
         graph.nodes.values().filter(|n| n.name == symbol).collect();
@@ -302,11 +342,46 @@ impl<'a> ContextCollector<'a> {
 
     fn collect_type_context(
         &self,
-        _symbol: &SymbolDefinition,
+        symbol: &SymbolDefinition,
     ) -> StorageResult<TypeContext> {
-        Err(crate::storage::error::StorageError::NotFound(
-            "collect_type_context not yet implemented".to_string(),
-        ))
+        let escaped_qn = escape_cypher_string(&symbol.qualified_name);
+        // Query Function/Method node for id and returnType.
+        let function_cypher = format!(
+            "MATCH (n:Function) WHERE n.qualifiedName = '{escaped_qn}' \
+             RETURN n.id AS id, n.returnType AS return_type;"
+        );
+        let method_cypher = format!(
+            "MATCH (n:Method) WHERE n.qualifiedName = '{escaped_qn}' \
+             RETURN n.id AS id, n.returnType AS return_type;"
+        );
+        let mut node_id = String::new();
+        let mut return_type = String::new();
+        for cypher in [function_cypher, method_cypher] {
+            let rows = self.storage.query(&cypher)?;
+            if let Some(row) = rows.into_iter().next() {
+                node_id = row
+                    .get(0)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                return_type = row
+                    .get(1)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                break;
+            }
+        }
+        // Parse parameters from signature.
+        let parameters = parse_parameters(&symbol.signature);
+        // Query IMPLEMENTS edges to find implemented traits.
+        let implements = self.query_implements(&node_id)?;
+        Ok(TypeContext {
+            parameters,
+            return_type,
+            generics: Vec::new(),
+            implements,
+        })
     }
 
     fn collect_module_context(&self, _file_path: &str) -> StorageResult<ModuleContext> {
@@ -345,6 +420,39 @@ impl<'a> ContextCollector<'a> {
         _symbol: &SymbolDefinition,
     ) -> StorageResult<Vec<CalleeInfo>> {
         Ok(Vec::new())
+    }
+
+    /// Queries IMPLEMENTS edges from `node_id` and resolves target Trait /
+    /// Interface names.
+    fn query_implements(&self, node_id: &str) -> StorageResult<Vec<String>> {
+        if node_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        let escaped_id = escape_cypher_string(node_id);
+        let edge_cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.source = '{escaped_id}' AND e.type = 'IMPLEMENTS' \
+             RETURN e.target AS target;"
+        );
+        let rows = self.storage.query(&edge_cypher)?;
+        let mut implements = Vec::new();
+        for row in rows {
+            if let Some(target_id) = row.first().and_then(|v| v.as_str()) {
+                let target_escaped = escape_cypher_string(target_id);
+                for label in ["Trait", "Interface"] {
+                    let name_cypher = format!(
+                        "MATCH (n:{label}) WHERE n.id = '{target_escaped}' \
+                         RETURN n.name AS name;"
+                    );
+                    if let Some(name_row) = self.storage.query(&name_cypher)?.into_iter().next() {
+                        if let Some(name) = name_row.first().and_then(|v| v.as_str()) {
+                            implements.push(name.to_string());
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(implements)
     }
 }
 
@@ -883,5 +991,92 @@ mod tests {
         assert!(result.ends_with(SOURCE_TRUNCATED_MARKER));
         // The prefix should be from the original source.
         assert!(result.starts_with('x'));
+    }
+
+    // ===== T016: collect_type_context tests =====
+
+    #[test]
+    fn parse_parameters_extracts_two_params() {
+        let params = parse_parameters("(a: i32, b: String)");
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "a");
+        assert_eq!(params[0].type_name, "i32");
+        assert_eq!(params[1].name, "b");
+        assert_eq!(params[1].type_name, "String");
+    }
+
+    #[test]
+    fn parse_parameters_handles_full_signature() {
+        let params = parse_parameters("fn foo(a: i32, b: String) -> bool");
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "a");
+        assert_eq!(params[1].name, "b");
+    }
+
+    #[test]
+    fn parse_parameters_empty_returns_empty() {
+        assert!(parse_parameters("()").is_empty());
+        assert!(parse_parameters("").is_empty());
+        assert!(parse_parameters("no parens").is_empty());
+    }
+
+    #[test]
+    fn collect_type_context_with_two_params() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'foo', qualifiedName: 'demo.foo', filePath: '/src/foo.rs', startLine: 1, endLine: 5, signature: '(a: i32, b: String)', returnType: 'bool', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create");
+
+        let collector = ContextCollector::new(&*s);
+        let symbol = collector
+            .collect_symbol_definition("demo.foo")
+            .expect("symbol");
+        let tc = collector.collect_type_context(&symbol).expect("type context");
+        assert_eq!(tc.parameters.len(), 2);
+        assert_eq!(tc.parameters[0].name, "a");
+        assert_eq!(tc.parameters[0].type_name, "i32");
+        assert_eq!(tc.parameters[1].name, "b");
+        assert_eq!(tc.parameters[1].type_name, "String");
+        assert_eq!(tc.return_type, "bool");
+        assert!(tc.implements.is_empty());
+        assert!(tc.generics.is_empty());
+    }
+
+    #[test]
+    fn collect_type_context_no_params_no_return() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Function {id: 'f2', project: 'demo', name: 'noop', qualifiedName: 'demo.noop', filePath: '/src/noop.rs', startLine: 1, endLine: 2, signature: '()', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create");
+
+        let collector = ContextCollector::new(&*s);
+        let symbol = collector
+            .collect_symbol_definition("demo.noop")
+            .expect("symbol");
+        let tc = collector.collect_type_context(&symbol).expect("type context");
+        assert!(tc.parameters.is_empty());
+        assert_eq!(tc.return_type, "");
+    }
+
+    #[test]
+    fn collect_type_context_with_implements_edge() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Function {id: 'f3', project: 'demo', name: 'bar', qualifiedName: 'demo.bar', filePath: '/src/bar.rs', startLine: 1, endLine: 5, signature: '(x: u32)', returnType: 'u32', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
+        s.execute("CREATE (:Trait {id: 't1', project: 'demo', name: 'Display', qualifiedName: 'demo.Display', filePath: '/src/display.rs', startLine: 1, endLine: 10, isExported: true, docstring: '', content: '', parentQn: ''});").expect("create trait");
+        s.execute("CREATE (:CodeRelation {id: 'e1', source: 'f3', target: 't1', type: 'IMPLEMENTS', confidence: 1.0, confidenceTier: 'High', reason: 'impl Display', startLine: 1, project: 'demo'});").expect("create edge");
+
+        let collector = ContextCollector::new(&*s);
+        let symbol = collector
+            .collect_symbol_definition("demo.bar")
+            .expect("symbol");
+        let tc = collector.collect_type_context(&symbol).expect("type context");
+        assert_eq!(tc.parameters.len(), 1);
+        assert_eq!(tc.parameters[0].name, "x");
+        assert_eq!(tc.parameters[0].type_name, "u32");
+        assert_eq!(tc.return_type, "u32");
+        assert_eq!(tc.implements.len(), 1);
+        assert_eq!(tc.implements[0], "Display");
     }
 }
