@@ -315,10 +315,7 @@ impl ScopeResolver for CScopeResolver {
             "function_definition" => {
                 // Detect C++ namespace/class/struct blocks misparsed as
                 // function_definition (tree-sitter-c quirk).
-                let type_text = node
-                    .child_by_field_name("type")
-                    .filter(|n| n.kind() == "type_identifier")
-                    .and_then(|n| node_text(n, ctx.source));
+                let type_text = node.child_by_field_name("type").filter(|n| n.kind() == "type_identifier").and_then(|n| node_text(n, ctx.source));
                 match type_text {
                     Some("namespace") => {
                         let name = node
