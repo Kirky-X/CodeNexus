@@ -15,6 +15,21 @@ const SOURCE_MAX_BYTES: usize = 10 * 1024;
 /// Suffix appended when `source` is truncated.
 const SOURCE_TRUNCATED_MARKER: &str = "[truncated]";
 
+/// Truncates `source` to [`SOURCE_MAX_BYTES`] on a UTF-8 char boundary,
+/// appending [`SOURCE_TRUNCATED_MARKER`] if truncation occurred.
+fn truncate_source(source: &str) -> String {
+    if source.len() <= SOURCE_MAX_BYTES {
+        return source.to_string();
+    }
+    let mut end = SOURCE_MAX_BYTES;
+    while end > 0 && !source.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut result = source[..end].to_string();
+    result.push_str(SOURCE_TRUNCATED_MARKER);
+    result
+}
+
 pub fn resolve_start_id(graph: &Graph, symbol: &str) -> Option<NodeId> {
     let by_name: Vec<&crate::model::Node> =
         graph.nodes.values().filter(|n| n.name == symbol).collect();
@@ -250,11 +265,39 @@ impl<'a> ContextCollector<'a> {
 
     fn collect_symbol_definition(
         &self,
-        _qualified_name: &str,
+        qualified_name: &str,
     ) -> StorageResult<SymbolDefinition> {
-        Err(crate::storage::error::StorageError::NotFound(
-            "collect_symbol_definition not yet implemented".to_string(),
-        ))
+        let escaped = escape_cypher_string(qualified_name);
+        // LadybugDB doesn't support `WHERE (n:Function OR n:Method)` label
+        // expressions, so we issue two separate queries.
+        let cols = "n.name AS name, n.qualifiedName AS qualified_name, \
+                    n.signature AS signature, n.docstring AS docstring, \
+                    n.content AS content, n.filePath AS file_path, \
+                    n.startLine AS start_line, n.endLine AS end_line";
+        let function_cypher = format!(
+            "MATCH (n:Function) WHERE n.qualifiedName = '{escaped}' RETURN {cols};"
+        );
+        let method_cypher = format!(
+            "MATCH (n:Method) WHERE n.qualifiedName = '{escaped}' RETURN {cols};"
+        );
+        for cypher in [function_cypher, method_cypher] {
+            let rows = self.storage.query(&cypher)?;
+            if let Some(row) = rows.into_iter().next() {
+                return Ok(SymbolDefinition {
+                    name: row.get(0).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    qualified_name: row.get(1).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    signature: row.get(2).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    docstring: row.get(3).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    source: truncate_source(row.get(4).and_then(|v| v.as_str()).unwrap_or_default()),
+                    file_path: row.get(5).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    start_line: row.get(6).and_then(|v| v.as_u64()).map(|v| v as u32).or_else(|| row.get(6).and_then(|v| v.as_i64()).map(|v| v as u32)).unwrap_or(0),
+                    end_line: row.get(7).and_then(|v| v.as_u64()).map(|v| v as u32).or_else(|| row.get(7).and_then(|v| v.as_i64()).map(|v| v as u32)).unwrap_or(0),
+                });
+            }
+        }
+        Err(crate::storage::error::StorageError::NotFound(format!(
+            "symbol not found: {qualified_name}"
+        )))
     }
 
     fn collect_type_context(
@@ -308,7 +351,9 @@ impl<'a> ContextCollector<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
     use crate::model::{Edge, EdgeType, Language, Node, NodeLabel};
+    use tempfile::TempDir;
 
     fn make_node(id: &str, name: &str, qn: &str, label: NodeLabel, file: &str, line: u32) -> Node {
         Node::builder(label, name, qn)
@@ -734,5 +779,109 @@ mod tests {
         assert!(json.contains("module_context"));
         assert!(json.contains("test_context"));
         assert!(json.contains("data_flow"));
+    }
+
+    // ===== Storage-based test helpers =====
+
+    fn fresh_db_path() -> (TempDir, std::path::PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("context_testdb");
+        (dir, path)
+    }
+
+    fn build_kit_for_db(db: &std::path::Path) -> AsyncKit<AsyncReady> {
+        let config = KitBootstrapConfig::new(db.to_path_buf());
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&config))
+            .expect("build_kit")
+    }
+
+    fn storage(kit: &AsyncKit<AsyncReady>) -> std::sync::Arc<dyn Storage> {
+        kit.require::<StorageModule>().expect("require_storage")
+    }
+
+    // ===== T015: collect_symbol_definition tests =====
+
+    #[test]
+    fn collect_symbol_definition_returns_function() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'foo', qualifiedName: 'demo.foo', filePath: '/src/foo.rs', startLine: 10, endLine: 20, signature: 'fn foo()', returnType: 'void', isExported: true, docstring: 'Foo function', content: 'fn foo() {}', parentQn: ''});").expect("create");
+
+        let collector = ContextCollector::new(&*s);
+        let sym = collector
+            .collect_symbol_definition("demo.foo")
+            .expect("collect");
+        assert_eq!(sym.name, "foo");
+        assert_eq!(sym.qualified_name, "demo.foo");
+        assert_eq!(sym.signature, "fn foo()");
+        assert_eq!(sym.docstring, "Foo function");
+        assert_eq!(sym.source, "fn foo() {}");
+        assert_eq!(sym.file_path, "/src/foo.rs");
+        assert_eq!(sym.start_line, 10);
+        assert_eq!(sym.end_line, 20);
+    }
+
+    #[test]
+    fn collect_symbol_definition_returns_method() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Method {id: 'm1', project: 'demo', name: 'bar', qualifiedName: 'demo.bar', filePath: '/src/bar.rs', startLine: 5, endLine: 15, signature: 'fn bar(&self)', returnType: 'bool', isExported: false, docstring: '', content: 'fn bar(&self) -> bool { true }', parentQn: 'demo'});").expect("create");
+
+        let collector = ContextCollector::new(&*s);
+        let sym = collector
+            .collect_symbol_definition("demo.bar")
+            .expect("collect");
+        assert_eq!(sym.name, "bar");
+        assert_eq!(sym.source, "fn bar(&self) -> bool { true }");
+        assert_eq!(sym.start_line, 5);
+    }
+
+    #[test]
+    fn collect_symbol_definition_not_found_returns_error() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        let collector = ContextCollector::new(&*s);
+        let err = collector
+            .collect_symbol_definition("missing.symbol")
+            .expect_err("should error");
+        assert!(err.to_string().contains("symbol not found"));
+        assert!(err.to_string().contains("missing.symbol"));
+    }
+
+    #[test]
+    fn collect_symbol_definition_empty_fields_ok() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Function {id: 'f2', project: 'demo', name: 'empty', qualifiedName: 'demo.empty', filePath: '/src/empty.rs', startLine: 1, endLine: 2, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create");
+
+        let collector = ContextCollector::new(&*s);
+        let sym = collector
+            .collect_symbol_definition("demo.empty")
+            .expect("collect");
+        assert_eq!(sym.signature, "");
+        assert_eq!(sym.docstring, "");
+        assert_eq!(sym.source, "");
+    }
+
+    #[test]
+    fn truncate_source_under_limit_returns_unchanged() {
+        let src = "fn foo() {}";
+        assert_eq!(truncate_source(src), src);
+    }
+
+    #[test]
+    fn truncate_source_over_limit_marks_truncated() {
+        let src = "x".repeat(SOURCE_MAX_BYTES + 100);
+        let result = truncate_source(&src);
+        assert!(result.len() < src.len());
+        assert!(result.ends_with(SOURCE_TRUNCATED_MARKER));
+        // The prefix should be from the original source.
+        assert!(result.starts_with('x'));
     }
 }
