@@ -4,7 +4,7 @@
 //! Context command: show a 360-degree view of a symbol.
 
 #[cfg(any(feature = "cli", feature = "mcp", test))]
-use crate::kit::{AsyncKit, AsyncReady, TraceModule};
+use crate::kit::{AsyncKit, AsyncReady, StorageModule, TraceModule};
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::service::error::CodeNexusError;
 #[cfg(any(feature = "cli", feature = "mcp"))]
@@ -12,7 +12,8 @@ use crate::service::error::{kit_not_initialized, to_api_error};
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::runtime::kit;
 use crate::trace::context::{
-    collect_incoming, collect_outgoing, collect_processes, resolve_start_id,
+    collect_incoming, collect_outgoing, collect_processes, resolve_start_id, ContextCollector,
+    SymbolContext,
 };
 use crate::trace::types::{ContextOutput, SymbolNodeOutput};
 
@@ -47,7 +48,29 @@ pub fn run_context(
     })
 }
 
+/// Runs enhanced context using [`ContextCollector`], returning [`SymbolContext`]
+/// with type context, module context, test context, and data flow.
+///
+/// Unlike [`run_context`] which uses BFS graph expansion, this method queries
+/// the storage directly for multi-dimensional context.
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+pub fn run_context_enhanced(
+    kit: &AsyncKit<AsyncReady>,
+    project: &str,
+    symbol: &str,
+) -> Result<SymbolContext, CodeNexusError> {
+    let storage = kit.require::<StorageModule>()?;
+    let collector = ContextCollector::new(&*storage);
+    collector
+        .collect(project, symbol)
+        .map_err(|e| CodeNexusError::Internal(format!("context collect failed: {e}")))
+}
+
 /// CLI wrapper — prints result to stdout as JSON.
+///
+/// When `enhanced=true`, uses [`ContextCollector`] to return [`SymbolContext`]
+/// JSON with type/module/test context and data flow. Otherwise uses the
+/// original BFS-based [`run_context`].
 #[cfg(feature = "cli")]
 #[service_api(
     name = "context",
@@ -55,13 +78,26 @@ pub fn run_context(
     description = "Show a 360-degree view of a symbol (callers, callees, processes).",
     cli = true
 )]
-async fn context(symbol: String, depth: u32) -> Result<(), ApiError> {
+async fn context(
+    symbol: String,
+    depth: u32,
+    project: String,
+    enhanced: bool,
+) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    let result =
-        run_context(&kit, &symbol, depth).map_err(|e| to_api_error(e, "context_error"))?;
-    let json = serde_json::to_string(&result)
-        .map_err(|e| to_api_error(CodeNexusError::from(e), "context_error"))?;
-    println!("{json}");
+    if enhanced {
+        let result = run_context_enhanced(&kit, &project, &symbol)
+            .map_err(|e| to_api_error(e, "context_error"))?;
+        let json = serde_json::to_string(&result)
+            .map_err(|e| to_api_error(CodeNexusError::from(e), "context_error"))?;
+        println!("{json}");
+    } else {
+        let result =
+            run_context(&kit, &symbol, depth).map_err(|e| to_api_error(e, "context_error"))?;
+        let json = serde_json::to_string(&result)
+            .map_err(|e| to_api_error(CodeNexusError::from(e), "context_error"))?;
+        println!("{json}");
+    }
     Ok(())
 }
 
@@ -73,7 +109,13 @@ async fn context(symbol: String, depth: u32) -> Result<(), ApiError> {
     tool_name = "context",
     description = "Show a 360-degree view of a symbol (callers, callees, processes)."
 )]
-async fn context_mcp(symbol: String, depth: u32) -> Result<ContextOutput, ApiError> {
+#[allow(unused_variables)]
+async fn context_mcp(
+    symbol: String,
+    depth: u32,
+    project: String,
+    enhanced: bool,
+) -> Result<ContextOutput, ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
     run_context(&kit, &symbol, depth).map_err(|e| to_api_error(e, "context_error"))
 }
@@ -210,5 +252,66 @@ mod tests {
         let output = run_context(&kit, "unique_name", 1).expect("context by name should succeed");
         assert_eq!(output.node.qualified_name, "demo.unique_name");
         assert_eq!(output.node.name, "unique_name");
+    }
+
+    // ===== T038: run_context_enhanced with ContextCollector =====
+
+    #[test]
+    fn run_context_enhanced_fails_on_unknown_symbol() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let err = run_context_enhanced(&kit, "demo", "nonexistent.symbol")
+            .expect_err("unknown symbol should error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("context collect failed"),
+            "error should mention collect failure: {msg}"
+        );
+    }
+
+    #[test]
+    fn run_context_enhanced_returns_symbol_context() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        // File node required by collect_module_context
+        storage.execute("CREATE (:File {id: 'file1', project: 'demo', filePath: '/src/target.rs', language: 'rust'});").expect("create file");
+        // Target function
+        storage.execute("CREATE (:Function {id: 'f_target', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/target.rs', startLine: 10, endLine: 20, signature: 'fn do_thing()', returnType: 'void', isExported: true, docstring: 'does a thing', content: 'fn do_thing() {}', parentQn: ''});").expect("create target");
+
+        let ctx = run_context_enhanced(&kit, "demo", "demo.do_thing")
+            .expect("enhanced context should succeed");
+        assert_eq!(ctx.symbol.name, "do_thing");
+        assert_eq!(ctx.symbol.qualified_name, "demo.do_thing");
+        assert_eq!(ctx.symbol.signature, "fn do_thing()");
+        assert_eq!(ctx.symbol.file_path, "/src/target.rs");
+        assert_eq!(ctx.symbol.start_line, 10);
+        assert_eq!(ctx.symbol.end_line, 20);
+        // type_context
+        assert_eq!(ctx.type_context.return_type, "void");
+        // module_context
+        assert_eq!(ctx.module_context.file_path, "/src/target.rs");
+        assert_eq!(ctx.module_context.package, "demo");
+    }
+
+    #[test]
+    fn run_context_enhanced_serializes_to_json() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:File {id: 'file1', project: 'demo', filePath: '/src/mod.rs', language: 'rust'});").expect("create file");
+        storage.execute("CREATE (:Function {id: 'f_mod', project: 'demo', name: 'mod_fn', qualifiedName: 'demo.mod_fn', filePath: '/src/mod.rs', startLine: 1, endLine: 5, signature: 'fn mod_fn()', returnType: '()', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
+
+        let ctx = run_context_enhanced(&kit, "demo", "demo.mod_fn")
+            .expect("enhanced context should succeed");
+        let json = serde_json::to_string(&ctx).expect("should serialize");
+        assert!(json.contains("\"symbol\""));
+        assert!(json.contains("\"qualified_name\":\"demo.mod_fn\""));
+        assert!(json.contains("\"type_context\""));
+        assert!(json.contains("\"module_context\""));
+        assert!(json.contains("\"test_context\""));
+        assert!(json.contains("\"data_flow\""));
+        assert!(json.contains("\"callers\""));
+        assert!(json.contains("\"callees\""));
     }
 }
