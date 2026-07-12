@@ -2508,4 +2508,96 @@ fn parallel(a: i32) {
         assert_eq!(detect_language("/src/unknown.xyz"), None);
         assert_eq!(detect_language("no_extension"), None);
     }
+
+    // --- Coverage tests ---
+
+    #[cfg(feature = "lang-c")]
+    #[test]
+    fn is_branch_node_c() {
+        assert!(is_branch_node(Language::C, "if_statement"));
+        assert!(is_branch_node(Language::C, "for_statement"));
+        assert!(is_branch_node(Language::C, "while_statement"));
+        assert!(is_branch_node(Language::C, "switch_statement"));
+        assert!(!is_branch_node(Language::C, "identifier"));
+    }
+
+    #[cfg(feature = "lang-go")]
+    #[test]
+    fn is_branch_node_go() {
+        assert!(is_branch_node(Language::Go, "if_statement"));
+        assert!(is_branch_node(Language::Go, "for_statement"));
+        assert!(is_branch_node(Language::Go, "switch"));
+        assert!(!is_branch_node(Language::Go, "identifier"));
+    }
+
+    #[cfg(feature = "lang-fortran")]
+    #[test]
+    fn is_branch_node_fortran() {
+        assert!(is_branch_node(Language::Fortran, "if_statement"));
+        assert!(is_branch_node(Language::Fortran, "do_statement"));
+        assert!(!is_branch_node(Language::Fortran, "identifier"));
+    }
+
+    #[test]
+    fn halstead_body_kind_returns_correct_values() {
+        assert_eq!(halstead_body_kind(Language::Rust), Some("block"));
+        assert_eq!(halstead_body_kind(Language::Python), Some("block"));
+        assert_eq!(halstead_body_kind(Language::C), Some("compound_statement"));
+        assert_eq!(halstead_body_kind(Language::TypeScript), Some("statement_block"));
+    }
+
+    #[test]
+    fn while_kind_returns_correct_values() {
+        assert_eq!(while_kind(Language::Rust), "while_expression");
+        assert_eq!(while_kind(Language::Python), "while_statement");
+        assert_eq!(while_kind(Language::C), "while_statement");
+        assert_eq!(while_kind(Language::TypeScript), "while_statement");
+    }
+
+    #[test]
+    fn is_loop_node_identifies_loops_across_languages() {
+        assert!(is_loop_node(Language::Rust, "for_expression"));
+        assert!(is_loop_node(Language::Rust, "while_expression"));
+        assert!(is_loop_node(Language::Python, "for_statement"));
+        assert!(is_loop_node(Language::Python, "while_statement"));
+        assert!(is_loop_node(Language::C, "for_statement"));
+        assert!(is_loop_node(Language::C, "while_statement"));
+        assert!(!is_loop_node(Language::Rust, "if_expression"));
+    }
+
+    #[cfg(feature = "lang-fortran")]
+    #[test]
+    fn is_loop_node_fortran_do_statement() {
+        assert!(is_loop_node(Language::Fortran, "do_statement"));
+        assert!(!is_loop_node(Language::Fortran, "if_statement"));
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn calc_cyclomatic_match_expression_with_arms() {
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        // Baseline: function with no match.
+        let baseline_tree = parser
+            .parse("fn f(x: i32) { let _ = x; }", None)
+            .unwrap();
+        let baseline = calc_cyclomatic(&baseline_tree, Language::Rust);
+        // Match with 3 arms adds arm_count - 1 = 2 to cyclomatic complexity.
+        let match_tree = parser
+            .parse("fn f(x: i32) { match x { 1 => {}, 2 => {}, _ => {} } }", None)
+            .unwrap();
+        let with_match = calc_cyclomatic(&match_tree, Language::Rust);
+        assert!(
+            with_match > baseline,
+            "match expression should increase cyclomatic complexity over baseline: baseline={baseline}, with_match={with_match}"
+        );
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn calc_cognitive_short_circuit_operators() {
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse("fn f(x: bool, y: bool) { if x && y || x { } }", None).unwrap();
+        let result = calc_cognitive(&tree, Language::Rust);
+        assert!(result >= 3, "should count && and || short-circuits: {result}");
+    }
 }
