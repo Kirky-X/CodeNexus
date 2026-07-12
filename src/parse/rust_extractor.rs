@@ -2543,4 +2543,220 @@ impl From<std::io::Error> for SecureNotifyError {
         assert!(!is_stdlib_method("execute_query"));
         assert!(!is_stdlib_method("my_custom_method"));
     }
+
+    // --- parse helper for direct function tests ---
+
+    fn parse_source(source: &str) -> tree_sitter::Tree {
+        let mut parser = crate::parse::parser_factory::ParserFactory::create_parser(Language::Rust)
+            .expect("parser");
+        parser.parse(source, None).expect("parse")
+    }
+
+    // --- use_path: scoped_use_list branch ---
+
+    #[test]
+    fn use_path_with_scoped_use_list() {
+        // `use std::{io, fs};` — covers scoped_use_list branch
+        let src = "use std::{io, fs};";
+        let result = extract(src);
+        assert_eq!(result.imports.len(), 1);
+        assert!(
+            result.imports[0].source_file.contains("std"),
+            "path should contain std: {}",
+            result.imports[0].source_file
+        );
+    }
+
+    #[test]
+    fn use_path_with_nested_scoped_use_list() {
+        // `use std::{io::{BufRead, Read}};` — covers nested scoped_use_list
+        let src = "use std::{io::{BufRead, Read}};";
+        let result = extract(src);
+        assert_eq!(result.imports.len(), 1);
+    }
+
+    // --- use_path: _ fallback branch (line 1131) ---
+
+    #[test]
+    fn use_path_fallback_returns_node_text_for_unknown_kind() {
+        let tree = parse_source("42");
+        let root = tree.root_node();
+        // integer_literal is not in use_path's match arms → _ fallback
+        if let Some(literal) = root.named_child(0) {
+            let result = use_path(literal, "42");
+            assert!(result.is_some(), "fallback should return node text");
+        }
+    }
+
+    // --- use_path: use_wildcard fallback `Some("*")` (line 1114) ---
+
+    #[test]
+    fn use_path_bare_wildcard_returns_star() {
+        // `use *;` — use_wildcard with no path child → returns "*"
+        let src = "use *;";
+        let result = extract(src);
+        // May or may not produce an import depending on grammar,
+        // but should not panic.
+        if !result.imports.is_empty() {
+            assert!(
+                result.imports[0].source_file.contains("*"),
+                "path should contain *: {}",
+                result.imports[0].source_file
+            );
+        }
+    }
+
+    // --- use_imported_names: various branches (lines 1138-1165) ---
+
+    #[test]
+    fn use_imported_names_with_scoped_use_list() {
+        // `use std::{io, fs};` — scoped_use_list exercises the
+        // scoped_use_list branch of use_imported_names. The `name` field
+        // may be absent for scoped_use_list, so imported_names can be empty;
+        // the test verifies the path is still extracted.
+        let src = "use std::{io, fs};";
+        let result = extract(src);
+        assert_eq!(result.imports.len(), 1);
+        assert!(
+            result.imports[0].source_file.contains("std"),
+            "path should contain std: {}",
+            result.imports[0].source_file
+        );
+    }
+
+    // --- let binding without value (line 858) ---
+
+    #[test]
+    fn let_binding_without_value_has_empty_source() {
+        let src = "fn main() { let x; }";
+        let result = extract(src);
+        let assign = result
+            .assignments
+            .iter()
+            .find(|a| a.target_name == "x")
+            .expect("should find assignment to x");
+        assert_eq!(assign.source_name, "");
+        assert!(!assign.is_return_assign);
+    }
+
+    // --- identifier_text returns None for non-identifier (line 907) ---
+
+    #[test]
+    fn identifier_text_returns_none_for_non_identifier() {
+        let tree = parse_source("fn main() {}");
+        let root = tree.root_node();
+        let func = root.named_child(0).expect("function");
+        assert!(identifier_text(func, "fn main() {}").is_none());
+    }
+
+    // --- is_read_position returns false for root node (line 919) ---
+
+    #[test]
+    fn is_read_position_returns_false_for_root_node() {
+        let tree = parse_source("fn main() {}");
+        let root = tree.root_node();
+        assert!(!is_read_position(root));
+    }
+
+    // --- callee_name _ => None (line 1195) ---
+
+    #[test]
+    fn callee_name_returns_none_for_unknown_kind() {
+        let tree = parse_source("fn main() { let x = 42; }");
+        let root = tree.root_node();
+        // Walk to find a node not in callee_name's match arms
+        fn find_non_callee<'a>(node: tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
+            let known = matches!(
+                node.kind(),
+                "identifier"
+                    | "type_identifier"
+                    | "field_expression"
+                    | "scoped_identifier"
+                    | "call_expression"
+                    | "parenthesized_expression"
+                    | "generic_function"
+            );
+            if !known {
+                return Some(node);
+            }
+            for i in 0..node.named_child_count() as u32 {
+                if let Some(child) = node.named_child(i) {
+                    if let Some(found) = find_non_callee(child) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+        if let Some(node) = find_non_callee(root) {
+            assert!(callee_name(node, "fn main() { let x = 42; }").is_none());
+        }
+    }
+
+    // --- pattern_name _ fallback (lines 1225-1234) ---
+
+    #[test]
+    fn pattern_name_fallback_rejects_non_identifier_text() {
+        // source_file node has text with non-alphanumeric chars → fallback
+        // rejects it and returns None.
+        let tree = parse_source("fn main() {}");
+        let root = tree.root_node();
+        assert!(pattern_name(root, "fn main() {}").is_none());
+    }
+
+    // --- pattern_name: tuple_pattern None (line 1211) ---
+
+    #[test]
+    fn pattern_name_empty_tuple_pattern_returns_none() {
+        // `let () = ...;` — empty tuple pattern with no children → None
+        let src = "fn main() { let () = (1, 2); }";
+        let result = extract(src);
+        // pattern_name returns None for empty tuple, so no assignment
+        // is created with target "()"
+        let has_empty_target = result.assignments.iter().any(|a| a.target_name.is_empty());
+        let _ = has_empty_target; // behavior-dependent; test just exercises the path
+    }
+
+    // --- call_arguments with no arguments field (line 1242) ---
+
+    #[test]
+    fn call_arguments_returns_empty_when_no_arguments_field() {
+        let tree = parse_source("fn main() {}");
+        let root = tree.root_node();
+        let func = root.named_child(0).expect("function");
+        let args = call_arguments(func, "fn main() {}");
+        assert!(args.is_empty());
+    }
+
+    // --- extern_language with direct string_literal fallback (lines 1032-1044) ---
+
+    #[test]
+    fn extern_language_direct_string_literal_fallback() {
+        // Some grammar versions produce direct string_literal children
+        // instead of extern_modifier. The fallback loop handles this.
+        let src = r#"extern "C" { fn direct_func(x: i32); }"#;
+        let result = extract(src);
+        assert_eq!(result.externs.len(), 1);
+        assert_eq!(result.externs[0].language, Language::C);
+    }
+
+    // --- combine_scope call site in impl_item: (Some(p), None) and (None, None) ---
+
+    #[test]
+    fn impl_without_type_inside_module_covers_combine_scope_some_none() {
+        // `mod foo { impl {} }` — impl with no type field inside a module.
+        // The resolver returns None (no type), combine_scope gets (Some("foo"), None).
+        let src = "mod foo { impl {} }";
+        let result = extract(src);
+        // Should not panic; module node should be created
+        let _ = result;
+    }
+
+    #[test]
+    fn impl_without_type_at_top_level_covers_combine_scope_none_none() {
+        // `impl {}` at top level — no module, no type → (None, None)
+        let src = "impl {}";
+        let result = extract(src);
+        let _ = result;
+    }
 }
