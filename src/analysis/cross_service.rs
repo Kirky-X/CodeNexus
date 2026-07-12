@@ -375,13 +375,41 @@ impl<'a> CrossServiceDetector<'a> {
         Ok(matches)
     }
 
-    /// Detects gRPC client calls. (Implemented in T009.)
+    /// Detects gRPC client calls by scanning for `grpc://` URLs and
+    /// `client.Method()` call patterns in function bodies.
     ///
     /// # Errors
     ///
     /// Returns [`StorageError`] if any underlying Cypher query fails.
-    pub fn detect_grpc(&self, _project: &str) -> StorageResult<Vec<CrossServiceMatch>> {
-        Ok(Vec::new())
+    pub fn detect_grpc(&self, project: &str) -> StorageResult<Vec<CrossServiceMatch>> {
+        let callers = self.load_callers(project)?;
+        let mut matches = Vec::new();
+        for caller in &callers {
+            if caller.content.is_empty() {
+                continue;
+            }
+            for url in extract_grpc_urls(&caller.content) {
+                matches.push(CrossServiceMatch {
+                    caller: caller.id.clone(),
+                    callee: url.clone(),
+                    protocol: ServiceProtocol::Grpc,
+                    match_type: MatchType::Pattern,
+                    confidence: Confidence::Low,
+                    reason: format!("gRPC URL: {url}"),
+                });
+            }
+            for method in extract_grpc_client_calls(&caller.content) {
+                matches.push(CrossServiceMatch {
+                    caller: caller.id.clone(),
+                    callee: method.clone(),
+                    protocol: ServiceProtocol::Grpc,
+                    match_type: MatchType::Pattern,
+                    confidence: Confidence::Low,
+                    reason: format!("gRPC client call: {method}"),
+                });
+            }
+        }
+        Ok(matches)
     }
 
     /// Detects GraphQL query/mutation/subscription calls. (Implemented in T010.)
@@ -615,6 +643,51 @@ fn extract_string_literals(content: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Extracts `grpc://` URLs from `content`. Scans for the `grpc://` prefix
+/// and reads until a delimiter (whitespace, quote, semicolon, or paren).
+fn extract_grpc_urls(content: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let pattern = "grpc://";
+    let mut cursor = 0;
+    while let Some(idx) = content[cursor..].find(pattern) {
+        let start = cursor + idx + pattern.len();
+        let rest = &content[start..];
+        let end = rest
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ';' || c == ')')
+            .unwrap_or(rest.len());
+        urls.push(format!("grpc://{}", &rest[..end]));
+        cursor = start + end;
+    }
+    urls
+}
+
+/// Extracts `client.Method()` call patterns from `content`. Matches
+/// `client.` followed by an uppercase-leading identifier and `(`.
+fn extract_grpc_client_calls(content: &str) -> Vec<String> {
+    let mut calls = Vec::new();
+    let pattern = "client.";
+    let mut cursor = 0;
+    while let Some(idx) = content[cursor..].find(pattern) {
+        let start = cursor + idx + pattern.len();
+        let rest = &content[start..];
+        let end = rest
+            .find(|c: char| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(rest.len());
+        if end > 0 {
+            let method = &rest[..end];
+            let starts_upper = method.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+            if starts_upper {
+                let after = rest[end..].trim_start();
+                if after.starts_with('(') {
+                    calls.push(format!("client.{method}"));
+                }
+            }
+        }
+        cursor = start + end;
+    }
+    calls
 }
 
 #[cfg(test)]
@@ -1359,5 +1432,98 @@ mod tests {
         assert_eq!(matches[0].callee, "r1");
         assert_eq!(matches[0].match_type, MatchType::Exact);
         assert_eq!(matches[0].confidence, Confidence::High);
+    }
+
+    // ====================================================================
+    // T009: gRPC detection
+    // ====================================================================
+
+    #[test]
+    fn detect_grpc_finds_grpc_url() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"let url = "grpc://localhost:50051"; connect(url);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_grpc("demo").expect("detect_grpc");
+        assert_eq!(matches.len(), 1, "should detect grpc:// URL");
+        assert_eq!(matches[0].protocol, ServiceProtocol::Grpc);
+        assert_eq!(matches[0].callee, "grpc://localhost:50051");
+        assert_eq!(matches[0].match_type, MatchType::Pattern);
+    }
+
+    #[test]
+    fn detect_grpc_finds_client_method_call() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"let resp = client.GetUser(GetUserRequest{id: 1});"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_grpc("demo").expect("detect_grpc");
+        assert_eq!(matches.len(), 1, "should detect client.GetUser call");
+        assert_eq!(matches[0].protocol, ServiceProtocol::Grpc);
+        assert_eq!(matches[0].callee, "client.GetUser");
+        assert_eq!(matches[0].match_type, MatchType::Pattern);
+    }
+
+    #[test]
+    fn detect_grpc_no_match_for_plain_function() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"let x = 1 + 2; println!("{}", x);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_grpc("demo").expect("detect_grpc");
+        assert!(matches.is_empty(), "plain function should not match gRPC");
+    }
+
+    #[test]
+    fn detect_grpc_skips_lowercase_client_method() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"client.connect(url);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_grpc("demo").expect("detect_grpc");
+        assert!(
+            matches.is_empty(),
+            "lowercase method should not match gRPC"
+        );
     }
 }
