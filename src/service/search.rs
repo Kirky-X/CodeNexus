@@ -39,6 +39,7 @@ fn search_result_to_json(r: &SearchResult) -> Value {
         "startLine": r.start_line,
         "qualifiedName": r.qualified_name,
         "score": r.score,
+        "matchReason": r.match_reason,
     })
 }
 
@@ -180,6 +181,7 @@ mod tests {
             start_line: Some(42),
             qualified_name: Some("demo.foo".into()),
             score: 0.8,
+            match_reason: "exact".into(),
         };
         let v = search_result_to_json(&r);
         assert_eq!(v["name"], "foo");
@@ -200,6 +202,7 @@ mod tests {
             start_line: None,
             qualified_name: None,
             score: 0.0,
+            match_reason: String::new(),
         };
         let v = search_result_to_json(&r);
         assert_eq!(v["name"], "bar");

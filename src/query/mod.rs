@@ -31,6 +31,7 @@ pub use facade::QueryFacade;
 pub use fulltext::FullTextSearcher;
 pub use module::{QueryConfig, QueryModule};
 pub use structured::StructuredSearcher;
+pub use structured::{SearchEngine, SearchMode, SearchParams, DEFAULT_LIMIT, MAX_FUZZY_DISTANCE, MAX_LIMIT};
 pub use tokenizer::{codenexus_tokenize, codenexus_tokenize_join};
 
 /// A single search hit returned by the structured and full-text searchers.
@@ -50,7 +51,10 @@ pub struct SearchResult {
     /// Fully qualified name, when available.
     pub qualified_name: Option<String>,
     /// Relevance score in `[0.0, 1.0]` (higher is more relevant).
-    pub score: f32,
+    pub score: f64,
+    /// Human-readable reason explaining why this result matched (e.g.
+    /// `"exact name match"`, `"regex match"`, `"fuzzy d=1"`).
+    pub match_reason: String,
 }
 
 /// The outcome of a Cypher query execution.
@@ -80,6 +84,7 @@ mod tests {
             start_line: Some(1),
             qualified_name: Some("demo.parse".to_string()),
             score: 1.0,
+            match_reason: "exact".to_string(),
         };
         assert_eq!(r.name, "parse");
         assert_eq!(r.label, "Function");
@@ -87,6 +92,7 @@ mod tests {
         assert_eq!(r.start_line, Some(1));
         assert_eq!(r.qualified_name.as_deref(), Some("demo.parse"));
         assert_eq!(r.score, 1.0);
+        assert_eq!(r.match_reason, "exact");
     }
 
     #[test]
@@ -98,6 +104,7 @@ mod tests {
             start_line: None,
             qualified_name: None,
             score: 0.5,
+            match_reason: String::new(),
         };
         assert_eq!(r, r.clone());
     }
@@ -111,6 +118,7 @@ mod tests {
             start_line: None,
             qualified_name: None,
             score: 1.0,
+            match_reason: "regex".to_string(),
         };
         let s = format!("{r:?}");
         assert!(s.contains("parse"));

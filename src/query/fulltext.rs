@@ -267,7 +267,7 @@ fn rows_to_search_results(
                 .get(3)
                 .and_then(|v| v.as_i64())
                 .and_then(|i| u32::try_from(i).ok());
-            let score = relevance_score(&name, query);
+            let (score, reason) = relevance_score_with_reason(&name, query);
             Some(SearchResult {
                 name,
                 label: label_str.clone(),
@@ -275,6 +275,7 @@ fn rows_to_search_results(
                 start_line,
                 qualified_name,
                 score,
+                match_reason: reason.to_string(),
             })
         })
         .collect()
@@ -290,32 +291,34 @@ fn rows_to_search_results(
 ///   `parse`)
 /// - `0.5` — name contains query as a plain substring
 /// - `0.3` — no match (defensive; callers pre-filter via `CONTAINS`)
-fn relevance_score(name: &str, query: &str) -> f32 {
+fn relevance_score(name: &str, query: &str) -> f64 {
+    relevance_score_with_reason(name, query).0
+}
+
+/// Computes both the score and a human-readable match reason.
+fn relevance_score_with_reason(name: &str, query: &str) -> (f64, &'static str) {
     let name_lower = name.to_ascii_lowercase();
     let query_lower = query.to_ascii_lowercase();
     if name_lower == query_lower {
-        return 1.0;
+        return (1.0, "exact name match");
     }
     if name_lower.starts_with(&query_lower) {
-        return 0.8;
+        return (0.8, "prefix match");
     }
     let query_tokens = codenexus_tokenize(&query_lower);
     let name_tokens = codenexus_tokenize(&name_lower);
     if !query_tokens.is_empty() && !name_tokens.is_empty() {
-        // Token-aligned match: every query token equals some name token. This
-        // ranks `my_parse_helper` (tokens `my`,`parse`,`helper`) above `xparse`
-        // (single token `xparse`) for query `parse`.
         let all_match = query_tokens
             .iter()
             .all(|qt| name_tokens.iter().any(|nt| nt == qt));
         if all_match {
-            return 0.7;
+            return (0.7, "token-aligned match");
         }
     }
     if name_lower.contains(&query_lower) {
-        return 0.5;
+        return (0.5, "substring match");
     }
-    0.3
+    (0.3, "no match")
 }
 
 /// Sorts results by descending score then ascending name, and truncates.
