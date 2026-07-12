@@ -21,7 +21,7 @@ pub use context::{collect_incoming, collect_outgoing, collect_processes, resolve
 pub use data_flow::DataFlowTracer;
 pub use error::{Result, TraceError};
 pub use facade::{PathFilter, TraceCycle, TraceEngine, TraceFacade, TraceType};
-pub use impact::ImpactAnalyzer;
+pub use impact::{ImpactAnalyzer, ImpactConfig, ImpactNode, ImpactResult, RiskAssessment, RiskFactor, RiskLevel};
 pub use module::{TraceConfig, TraceModule};
 pub use types::{
     ContextOutput, RelatedNodeOutput, SymbolNodeOutput, TraceEdge, TraceNode, TracePath,
