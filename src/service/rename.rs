@@ -885,4 +885,228 @@ mod tests {
             .unwrap_or("");
         assert_eq!(name, "b", "graph name should be updated to 'b'");
     }
+
+    // --- resolve_start_id: multiple matches ---
+
+    #[test]
+    fn resolve_start_id_multiple_name_matches_falls_back_to_first() {
+        let mut graph = Graph::new();
+        graph.add_node(
+            Node::builder(NodeLabel::Function, "foo", "demo.a.foo")
+                .id("id1")
+                .build(),
+        );
+        graph.add_node(
+            Node::builder(NodeLabel::Function, "foo", "demo.b.foo")
+                .id("id2")
+                .build(),
+        );
+        // Two nodes named "foo"; no QN match → falls back to first by name.
+        assert_eq!(
+            resolve_start_id(&graph, "foo").as_deref(),
+            Some("id1")
+        );
+    }
+
+    #[test]
+    fn resolve_start_id_multiple_names_but_single_qn_match() {
+        let mut graph = Graph::new();
+        graph.add_node(
+            Node::builder(NodeLabel::Function, "foo", "demo.a")
+                .id("id1")
+                .build(),
+        );
+        graph.add_node(
+            Node::builder(NodeLabel::Function, "foo", "demo.b")
+                .id("id2")
+                .build(),
+        );
+        // Two "foo" by name, but "demo.a" matches by QN → returns id1.
+        assert_eq!(
+            resolve_start_id(&graph, "demo.a").as_deref(),
+            Some("id1")
+        );
+    }
+
+    #[test]
+    fn resolve_start_id_no_match_returns_none() {
+        let mut graph = Graph::new();
+        graph.add_node(
+            Node::builder(NodeLabel::Function, "foo", "demo.foo")
+                .id("id1")
+                .build(),
+        );
+        assert!(resolve_start_id(&graph, "bar").is_none());
+    }
+
+    // --- collect_candidate_files: edge cases ---
+
+    #[test]
+    fn collect_candidate_files_excludes_absolute_paths_not_under_root() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let mut graph = Graph::new();
+        graph.add_node(
+            Node::builder(NodeLabel::Function, "foo", "demo.foo")
+                .id("f1")
+                .file_path("/other/path/a.rs")
+                .build(),
+        );
+        let files = collect_candidate_files(&graph, &"f1".to_string(), root);
+        assert!(
+            files.is_empty(),
+            "absolute path not under root should be excluded"
+        );
+    }
+
+    #[test]
+    fn collect_candidate_files_with_nonexistent_start_returns_empty() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let mut graph = Graph::new();
+        graph.add_node(
+            Node::builder(NodeLabel::Function, "foo", "demo.foo")
+                .id("f1")
+                .file_path("a.rs")
+                .build(),
+        );
+        let files = collect_candidate_files(&graph, &"nonexistent".to_string(), root);
+        assert!(files.is_empty(), "nonexistent start_id should return empty");
+    }
+
+    #[test]
+    fn collect_candidate_files_node_without_file_path() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let mut graph = Graph::new();
+        graph.add_node(
+            Node::builder(NodeLabel::Function, "foo", "demo.foo")
+                .id("f1")
+                .build(),
+        );
+        let files = collect_candidate_files(&graph, &"f1".to_string(), root);
+        assert!(
+            files.is_empty(),
+            "node without file_path should return empty"
+        );
+    }
+
+    // --- apply_replacements: edge cases ---
+
+    #[test]
+    fn apply_replacements_skips_edits_beyond_file_lines() {
+        let edits = [TextEdit {
+            file_path: "x".into(),
+            line: 100,
+            column: 1,
+            old_text: "foo".into(),
+            new_text: "bar".into(),
+        }];
+        let refs: Vec<&TextEdit> = edits.iter().collect();
+        let result = apply_replacements("foo\n", &refs);
+        assert_eq!(result, "foo\n", "out-of-bounds edit should be skipped");
+    }
+
+    #[test]
+    fn apply_replacements_skips_when_text_mismatch() {
+        let edits = [TextEdit {
+            file_path: "x".into(),
+            line: 1,
+            column: 1,
+            old_text: "foo".into(),
+            new_text: "bar".into(),
+        }];
+        let refs: Vec<&TextEdit> = edits.iter().collect();
+        let result = apply_replacements("baz\n", &refs);
+        assert_eq!(result, "baz\n", "mismatched edit should be skipped");
+    }
+
+    #[test]
+    fn apply_replacements_no_trailing_newline_preserved() {
+        let edits = [TextEdit {
+            file_path: "x".into(),
+            line: 1,
+            column: 1,
+            old_text: "foo".into(),
+            new_text: "bar".into(),
+        }];
+        let refs: Vec<&TextEdit> = edits.iter().collect();
+        let result = apply_replacements("foo", &refs);
+        assert_eq!(result, "bar", "no trailing newline should be preserved");
+    }
+
+    // --- apply_text_edits: error path ---
+
+    #[test]
+    fn apply_text_edits_fails_on_unreadable_file() {
+        let edits = vec![TextEdit {
+            file_path: "/nonexistent/path/file.rs".to_string(),
+            line: 1,
+            column: 1,
+            old_text: "foo".to_string(),
+            new_text: "bar".to_string(),
+        }];
+        let result = apply_text_edits(&edits);
+        assert!(result.is_err(), "should fail on unreadable file");
+    }
+
+    // --- find_word_occurrences: not found ---
+
+    #[test]
+    fn find_word_occurrences_needle_not_found() {
+        assert!(find_word_occurrences("hello world", "foo").is_empty());
+    }
+
+    // --- is_valid_identifier: single char ---
+
+    #[test]
+    fn is_valid_identifier_single_char() {
+        assert!(is_valid_identifier("a"));
+        assert!(is_valid_identifier("_"));
+        assert!(!is_valid_identifier("1"));
+    }
+
+    // --- is_ident_byte ---
+
+    #[test]
+    fn is_ident_byte_classifies_correctly() {
+        assert!(is_ident_byte(b'a'));
+        assert!(is_ident_byte(b'Z'));
+        assert!(is_ident_byte(b'0'));
+        assert!(is_ident_byte(b'_'));
+        assert!(!is_ident_byte(b'-'));
+        assert!(!is_ident_byte(b' '));
+        assert!(!is_ident_byte(b'.'));
+    }
+
+    // --- scan_text_edits: multiple files ---
+
+    #[test]
+    fn scan_text_edits_across_multiple_files() {
+        let tmp = TempDir::new().unwrap();
+        let file_a = tmp.path().join("a.rs");
+        let file_b = tmp.path().join("b.rs");
+        std::fs::write(&file_a, "fn foo() {}\n").unwrap();
+        std::fs::write(&file_b, "let foo = 1;\n").unwrap();
+        let files = vec![file_a, file_b];
+        let edits = scan_text_edits(tmp.path(), "foo", "bar", &files).unwrap();
+        assert_eq!(edits.len(), 2, "should find 'foo' in both files");
+    }
+
+    // --- rename_core: dry run with path but no matching files ---
+
+    #[test]
+    fn core_dry_run_with_path_succeeds_without_text_edits() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageModule>().unwrap();
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/nonexistent/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();
+        let tmp = TempDir::new().unwrap();
+        let result = rename_core(&kit, "a", "b", Some(tmp.path().to_str().unwrap()), false);
+        assert!(
+            result.is_ok(),
+            "dry-run with path should succeed: {:?}",
+            result.err()
+        );
+    }
 }
