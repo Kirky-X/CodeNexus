@@ -27,6 +27,12 @@ use serde::{Deserialize, Serialize};
 /// runner, which is not modelled as a CALLS edge in the graph).
 const DEFAULT_TEST_PATTERNS: &[&str] = &["test_*", "*_test", "*_spec"];
 
+/// Default entry-point function names across common languages and platforms
+/// (C/C++ main, C/C++ wmain, Python __main__, C# Main, Win32 WinMain, DLL
+/// DLLMain).
+const DEFAULT_ENTRY_PATTERNS: &[&str] =
+    &["main", "Main", "__main__", "wmain", "WinMain", "DLLMain"];
+
 /// Reason string recorded on every [`DeadCodeEntry`].
 const REASON_ZERO_INCOMING_CALLS: &str = "zero incoming CALLS edges";
 
@@ -57,7 +63,10 @@ pub struct DeadCodeConfig {
 impl Default for DeadCodeConfig {
     fn default() -> Self {
         Self {
-            entry_patterns: vec!["main".to_string()],
+            entry_patterns: DEFAULT_ENTRY_PATTERNS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
             test_patterns: DEFAULT_TEST_PATTERNS
                 .iter()
                 .map(|s| (*s).to_string())
@@ -156,15 +165,31 @@ impl<'a> DeadCodeDetector<'a> {
         let file_languages = self.load_file_languages(project)?;
 
         // (d) Filter: zero-indegree + not an entry point + not a test function.
+        let config_entry_patterns: Vec<&str> = self
+            .config
+            .entry_patterns
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        let config_test_patterns: Vec<&str> = self
+            .config
+            .test_patterns
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
         let mut entries = Vec::new();
         for func in &functions {
             if referenced_ids.contains(&func.id) {
                 continue;
             }
-            if matches_any_pattern(&func.name, entry_patterns) {
+            if matches_any_pattern(&func.name, entry_patterns)
+                || matches_any_pattern(&func.name, &config_entry_patterns)
+            {
                 continue;
             }
-            if matches_any_pattern(&func.name, DEFAULT_TEST_PATTERNS) {
+            if matches_any_pattern(&func.name, DEFAULT_TEST_PATTERNS)
+                || matches_any_pattern(&func.name, &config_test_patterns)
+            {
                 continue;
             }
             if self.config.check_exported && self.is_exported(&func.id)? {
@@ -803,8 +828,18 @@ mod tests {
     #[test]
     fn dead_code_config_default_values() {
         let cfg = DeadCodeConfig::default();
-        // Entry patterns default to ["main"] (T006 expands this).
-        assert_eq!(cfg.entry_patterns, vec!["main".to_string()]);
+        // Entry patterns default to the 6 multi-language entry points.
+        assert_eq!(
+            cfg.entry_patterns,
+            vec![
+                "main".to_string(),
+                "Main".to_string(),
+                "__main__".to_string(),
+                "wmain".to_string(),
+                "WinMain".to_string(),
+                "DLLMain".to_string(),
+            ]
+        );
         // Test patterns mirror DEFAULT_TEST_PATTERNS.
         assert_eq!(cfg.test_patterns.len(), 3);
         assert!(cfg.test_patterns.contains(&"test_*".to_string()));
@@ -1299,5 +1334,119 @@ mod tests {
             !detector.is_ffi_entry("f_plain").expect("is_ffi_entry"),
             "f_plain should NOT be FFI entry"
         );
+    }
+
+    // --- T006: expanded entry point pattern tests ---
+
+    #[test]
+    fn detect_excludes_all_default_entry_patterns() {
+        // R-dead_code-004: all 6 default entry patterns must be excluded.
+        for entry_name in ["main", "Main", "__main__", "wmain", "WinMain", "DLLMain"] {
+            let db = fresh_db_path();
+            let kit = build_kit_for_db(&db);
+            create_function(
+                &kit,
+                "f_entry",
+                "demo",
+                entry_name,
+                &format!("demo.{entry_name}"),
+                "/src/lib.rs",
+                1,
+            );
+            // Also create a control function that IS dead.
+            create_function(
+                &kit,
+                "f_dead",
+                "demo",
+                "dead_fn",
+                "demo.dead_fn",
+                "/src/lib.rs",
+                5,
+            );
+
+            let storage = storage(&kit);
+            let detector = DeadCodeDetector::new(&*storage);
+            // Pass empty entry_patterns — config defaults should still apply.
+            let result = detector.detect("demo", &[]).expect("detect");
+            let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+            assert!(
+                !names.contains(&entry_name),
+                "{entry_name} should be excluded by default config patterns"
+            );
+            assert!(names.contains(&"dead_fn"), "dead_fn should still be dead");
+        }
+    }
+
+    #[test]
+    fn detect_excludes_custom_entry_patterns_parameter() {
+        // R-dead_code-004: custom entry_patterns parameter still works.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(
+            &kit,
+            "f_h",
+            "demo",
+            "handler",
+            "demo.handler",
+            "/src/lib.rs",
+            1,
+        );
+        create_function(
+            &kit,
+            "f_d",
+            "demo",
+            "dead_fn",
+            "demo.dead_fn",
+            "/src/lib.rs",
+            5,
+        );
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &["handler"]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            !names.contains(&"handler"),
+            "handler matches custom pattern"
+        );
+        assert!(names.contains(&"dead_fn"), "dead_fn is still dead");
+    }
+
+    #[test]
+    fn detect_merges_parameter_and_config_entry_patterns() {
+        // Both the parameter and config patterns are checked.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // "main" is in config defaults; "custom_entry" is passed via parameter.
+        create_function(&kit, "f_m", "demo", "main", "demo.main", "/src/lib.rs", 1);
+        create_function(
+            &kit,
+            "f_c",
+            "demo",
+            "custom_entry",
+            "demo.custom_entry",
+            "/src/lib.rs",
+            5,
+        );
+        create_function(
+            &kit,
+            "f_d",
+            "demo",
+            "dead_fn",
+            "demo.dead_fn",
+            "/src/lib.rs",
+            10,
+        );
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &["custom_entry"]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(!names.contains(&"main"), "main excluded by config");
+        assert!(
+            !names.contains(&"custom_entry"),
+            "custom_entry excluded by parameter"
+        );
+        assert!(names.contains(&"dead_fn"), "dead_fn is dead");
     }
 }
