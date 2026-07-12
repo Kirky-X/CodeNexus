@@ -889,7 +889,7 @@ mod tests {
     // --- resolve_start_id: multiple matches ---
 
     #[test]
-    fn resolve_start_id_multiple_name_matches_falls_back_to_first() {
+    fn resolve_start_id_multiple_name_matches_falls_back_to_a_match() {
         let mut graph = Graph::new();
         graph.add_node(
             Node::builder(NodeLabel::Function, "foo", "demo.a.foo")
@@ -901,10 +901,13 @@ mod tests {
                 .id("id2")
                 .build(),
         );
-        // Two nodes named "foo"; no QN match → falls back to first by name.
-        assert_eq!(
-            resolve_start_id(&graph, "foo").as_deref(),
-            Some("id1")
+        // Two nodes named "foo"; no QN match → falls back to some node with
+        // this name. HashMap iteration order is non-deterministic, so we only
+        // assert that one of the two matching ids is returned.
+        let result = resolve_start_id(&graph, "foo");
+        assert!(
+            matches!(result.as_deref(), Some("id1") | Some("id2")),
+            "expected Some(\"id1\") or Some(\"id2\"), got {result:?}"
         );
     }
 

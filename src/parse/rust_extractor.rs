@@ -2487,4 +2487,60 @@ impl From<std::io::Error> for SecureNotifyError {
             implements
         );
     }
+
+    // --- pure utility functions ---
+
+    #[test]
+    fn strip_generics_removes_type_parameters() {
+        assert_eq!(strip_generics("ParserGuard<'_>"), "ParserGuard");
+        assert_eq!(strip_generics("Vec<u8>"), "Vec");
+        assert_eq!(strip_generics("HashMap<String, Vec<u8>>"), "HashMap");
+    }
+
+    #[test]
+    fn strip_generics_returns_unchanged_when_no_generics() {
+        assert_eq!(strip_generics("Point"), "Point");
+        assert_eq!(strip_generics(""), "");
+    }
+
+    #[test]
+    fn combine_scope_both_present() {
+        assert_eq!(
+            combine_scope(Some("parent"), Some("child")),
+            Some("parent_child".to_string())
+        );
+    }
+
+    #[test]
+    fn combine_scope_only_child() {
+        assert_eq!(combine_scope(None, Some("child")), Some("child".to_string()));
+    }
+
+    #[test]
+    fn combine_scope_only_parent() {
+        assert_eq!(
+            combine_scope(Some("parent"), None),
+            Some("parent".to_string())
+        );
+    }
+
+    #[test]
+    fn combine_scope_neither() {
+        assert_eq!(combine_scope(None, None), None);
+    }
+
+    #[test]
+    fn is_stdlib_method_recognizes_common_methods() {
+        assert!(is_stdlib_method("push"));
+        assert!(is_stdlib_method("len"));
+        assert!(is_stdlib_method("contains"));
+        assert!(is_stdlib_method("insert"));
+    }
+
+    #[test]
+    fn is_stdlib_method_rejects_user_defined_methods() {
+        assert!(!is_stdlib_method("save_nodes"));
+        assert!(!is_stdlib_method("execute_query"));
+        assert!(!is_stdlib_method("my_custom_method"));
+    }
 }

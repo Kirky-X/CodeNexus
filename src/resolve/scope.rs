@@ -1268,6 +1268,55 @@ mod tests {
         assert!(debug.contains("foo"));
         assert!(debug.contains("proj.foo"));
     }
+
+    // --- build_scope ---
+
+    #[test]
+    fn build_scope_without_parent() {
+        let scope = build_scope(
+            "main".to_string(),
+            "proj.src.main".to_string(),
+            NodeLabel::Function,
+            None,
+        );
+        assert_eq!(scope.name, "main");
+        assert_eq!(scope.qn, "proj.src.main");
+        assert_eq!(scope.label, NodeLabel::Function);
+        assert!(scope.parent.is_none());
+    }
+
+    #[test]
+    fn build_scope_with_parent() {
+        let scope = build_scope(
+            "method".to_string(),
+            "proj.src.Class_method".to_string(),
+            NodeLabel::Method,
+            Some("proj.src.Class"),
+        );
+        assert_eq!(scope.name, "method");
+        assert_eq!(scope.parent.as_deref(), Some("proj.src.Class"));
+    }
+
+    // --- make_qn ---
+
+    #[test]
+    fn make_qn_rust_without_parent() {
+        let qn = make_qn("src/main.rs", "main", "proj", Language::Rust, None);
+        assert!(qn.contains("proj"));
+        assert!(qn.contains("main"));
+    }
+
+    #[test]
+    fn make_qn_python_with_parent() {
+        let qn = make_qn("src/main.py", "MyClass", "proj", Language::Python, Some("proj.src.module"));
+        assert!(qn.contains("MyClass"));
+    }
+
+    #[test]
+    fn make_qn_c_without_parent() {
+        let qn = make_qn("src/main.c", "main", "proj", Language::C, None);
+        assert!(qn.contains("main"));
+    }
 }
 
 // ---------------------------------------------------------------------------
