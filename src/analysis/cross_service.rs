@@ -412,13 +412,31 @@ impl<'a> CrossServiceDetector<'a> {
         Ok(matches)
     }
 
-    /// Detects GraphQL query/mutation/subscription calls. (Implemented in T010.)
+    /// Detects GraphQL operations by scanning for `query {`, `mutation {`,
+    /// `subscription {` patterns and GraphQL endpoint URLs in function bodies.
     ///
     /// # Errors
     ///
     /// Returns [`StorageError`] if any underlying Cypher query fails.
-    pub fn detect_graphql(&self, _project: &str) -> StorageResult<Vec<CrossServiceMatch>> {
-        Ok(Vec::new())
+    pub fn detect_graphql(&self, project: &str) -> StorageResult<Vec<CrossServiceMatch>> {
+        let callers = self.load_callers(project)?;
+        let mut matches = Vec::new();
+        for caller in &callers {
+            if caller.content.is_empty() {
+                continue;
+            }
+            for op in extract_graphql_operations(&caller.content) {
+                matches.push(CrossServiceMatch {
+                    caller: caller.id.clone(),
+                    callee: op.clone(),
+                    protocol: ServiceProtocol::GraphQL,
+                    match_type: MatchType::Pattern,
+                    confidence: Confidence::Low,
+                    reason: format!("GraphQL {op}"),
+                });
+            }
+        }
+        Ok(matches)
     }
 
     /// Detects message queue produce/consume patterns. (Implemented in T011.)
@@ -688,6 +706,24 @@ fn extract_grpc_client_calls(content: &str) -> Vec<String> {
         cursor = start + end;
     }
     calls
+}
+
+/// Extracts GraphQL operation patterns from `content`. Detects `query {`,
+/// `mutation {`, `subscription {` keywords and `/graphql` endpoint URLs in
+/// string literals.
+fn extract_graphql_operations(content: &str) -> Vec<String> {
+    let mut ops = Vec::new();
+    for (pattern, name) in &[("query {", "query"), ("mutation {", "mutation"), ("subscription {", "subscription")] {
+        if content.contains(pattern) {
+            ops.push(name.to_string());
+        }
+    }
+    for lit in extract_string_literals(content) {
+        if lit.contains("/graphql") {
+            ops.push(format!("endpoint: {lit}"));
+        }
+    }
+    ops
 }
 
 #[cfg(test)]
@@ -1525,5 +1561,118 @@ mod tests {
             matches.is_empty(),
             "lowercase method should not match gRPC"
         );
+    }
+
+    // ====================================================================
+    // T010: GraphQL detection
+    // ====================================================================
+
+    #[test]
+    fn detect_graphql_finds_query_operation() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"let q = "query { user { id name } }"; fetch(q);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_graphql("demo").expect("detect_graphql");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].protocol, ServiceProtocol::GraphQL);
+        assert_eq!(matches[0].callee, "query");
+        assert_eq!(matches[0].match_type, MatchType::Pattern);
+    }
+
+    #[test]
+    fn detect_graphql_finds_mutation_operation() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"let m = "mutation { createUser(input: $input) { id } }"; fetch(m);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_graphql("demo").expect("detect_graphql");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].protocol, ServiceProtocol::GraphQL);
+        assert_eq!(matches[0].callee, "mutation");
+    }
+
+    #[test]
+    fn detect_graphql_finds_subscription_operation() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"let s = "subscription { newMessages { id } }"; ws.send(s);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_graphql("demo").expect("detect_graphql");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].callee, "subscription");
+        assert_eq!(matches[0].protocol, ServiceProtocol::GraphQL);
+    }
+
+    #[test]
+    fn detect_graphql_finds_endpoint_url() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"fetch("/api/graphql", { method: "POST", body: query });"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_graphql("demo").expect("detect_graphql");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].protocol, ServiceProtocol::GraphQL);
+        assert!(matches[0].callee.contains("/api/graphql"));
+    }
+
+    #[test]
+    fn detect_graphql_no_match_for_plain_function() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"let x = 1 + 2; println!("{}", x);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_graphql("demo").expect("detect_graphql");
+        assert!(matches.is_empty(), "plain function should not match GraphQL");
     }
 }
