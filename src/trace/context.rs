@@ -443,11 +443,47 @@ impl<'a> ContextCollector<'a> {
 
     fn collect_test_context(
         &self,
-        _qualified_name: &str,
+        qualified_name: &str,
     ) -> StorageResult<Vec<TestInfo>> {
-        Err(crate::storage::error::StorageError::NotFound(
-            "collect_test_context not yet implemented".to_string(),
-        ))
+        let escaped_qn = escape_cypher_string(qualified_name);
+        // Find the target symbol's id.
+        let function_cypher = format!(
+            "MATCH (n:Function) WHERE n.qualifiedName = '{escaped_qn}' RETURN n.id AS id;"
+        );
+        let method_cypher = format!(
+            "MATCH (n:Method) WHERE n.qualifiedName = '{escaped_qn}' RETURN n.id AS id;"
+        );
+        let mut symbol_id = String::new();
+        for cypher in [function_cypher, method_cypher] {
+            let rows = self.storage.query(&cypher)?;
+            if let Some(row) = rows.into_iter().next() {
+                symbol_id = row
+                    .get(0)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                break;
+            }
+        }
+        if symbol_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Query TESTS edges where target = symbol_id.
+        let escaped_id = escape_cypher_string(&symbol_id);
+        let edge_cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.target = '{escaped_id}' AND e.type = 'TESTS' \
+             RETURN e.source AS source;"
+        );
+        let rows = self.storage.query(&edge_cypher)?;
+        let mut tests = Vec::new();
+        for row in rows {
+            if let Some(source_id) = row.first().and_then(|v| v.as_str()) {
+                if let Some(info) = self.query_test_info(source_id)? {
+                    tests.push(info);
+                }
+            }
+        }
+        Ok(tests)
     }
 
     fn collect_data_flow(
@@ -552,6 +588,38 @@ impl<'a> ContextCollector<'a> {
             }
         }
         Ok(node_id.to_string())
+    }
+
+    /// Resolves a test function's name, file path, and start line by id.
+    fn query_test_info(&self, test_id: &str) -> StorageResult<Option<TestInfo>> {
+        let escaped = escape_cypher_string(test_id);
+        for label in ["Function", "Method"] {
+            let cypher = format!(
+                "MATCH (n:{label}) WHERE n.id = '{escaped}' \
+                 RETURN n.name AS name, n.filePath AS file_path, n.startLine AS line;"
+            );
+            if let Some(row) = self.storage.query(&cypher)?.into_iter().next() {
+                return Ok(Some(TestInfo {
+                    test_name: row
+                        .get(0)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    file_path: row
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    line: row
+                        .get(2)
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as u32)
+                        .or_else(|| row.get(2).and_then(|v| v.as_i64()).map(|v| v as u32))
+                        .unwrap_or(0),
+                }));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -1251,5 +1319,80 @@ mod tests {
             .collect_module_context("/missing/file.rs")
             .expect_err("should error");
         assert!(err.to_string().contains("file not found"));
+    }
+
+    // ===== T018: collect_test_context tests =====
+
+    #[test]
+    fn collect_test_context_with_tests_edge() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        // Target symbol
+        s.execute("CREATE (:Function {id: 'target1', project: 'demo', name: 'foo', qualifiedName: 'demo.foo', filePath: '/src/foo.rs', startLine: 10, endLine: 20, signature: 'fn foo()', returnType: 'void', isExported: true, docstring: '', content: '', parentQn: ''});").expect("create target");
+        // Test function
+        s.execute("CREATE (:Function {id: 'test1', project: 'demo', name: 'test_foo', qualifiedName: 'demo.test_foo', filePath: '/tests/foo_test.rs', startLine: 5, endLine: 15, signature: 'fn test_foo()', returnType: 'void', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create test");
+        // TESTS edge: test1 → target1
+        s.execute("CREATE (:CodeRelation {id: 'e_test', source: 'test1', target: 'target1', type: 'TESTS', confidence: 1.0, confidenceTier: 'High', reason: 'tests foo', startLine: 5, project: 'demo'});").expect("create tests edge");
+
+        let collector = ContextCollector::new(&*s);
+        let tests = collector
+            .collect_test_context("demo.foo")
+            .expect("test context");
+        assert_eq!(tests.len(), 1);
+        assert_eq!(tests[0].test_name, "test_foo");
+        assert_eq!(tests[0].file_path, "/tests/foo_test.rs");
+        assert_eq!(tests[0].line, 5);
+    }
+
+    #[test]
+    fn collect_test_context_no_tests_returns_empty() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Function {id: 'target2', project: 'demo', name: 'bar', qualifiedName: 'demo.bar', filePath: '/src/bar.rs', startLine: 1, endLine: 5, signature: 'fn bar()', returnType: 'void', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create target");
+
+        let collector = ContextCollector::new(&*s);
+        let tests = collector
+            .collect_test_context("demo.bar")
+            .expect("test context");
+        assert!(tests.is_empty());
+    }
+
+    #[test]
+    fn collect_test_context_multiple_tests() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        // Target symbol
+        s.execute("CREATE (:Function {id: 'target3', project: 'demo', name: 'baz', qualifiedName: 'demo.baz', filePath: '/src/baz.rs', startLine: 1, endLine: 10, signature: 'fn baz()', returnType: 'void', isExported: true, docstring: '', content: '', parentQn: ''});").expect("create target");
+        // Test function 1
+        s.execute("CREATE (:Function {id: 'test_a', project: 'demo', name: 'test_baz_basic', qualifiedName: 'demo.test_baz_basic', filePath: '/tests/baz_test.rs', startLine: 1, endLine: 10, signature: 'fn test_baz_basic()', returnType: 'void', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create test a");
+        // Test function 2
+        s.execute("CREATE (:Function {id: 'test_b', project: 'demo', name: 'test_baz_edge', qualifiedName: 'demo.test_baz_edge', filePath: '/tests/baz_test.rs', startLine: 20, endLine: 30, signature: 'fn test_baz_edge()', returnType: 'void', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create test b");
+        // TESTS edges
+        s.execute("CREATE (:CodeRelation {id: 'e_ta', source: 'test_a', target: 'target3', type: 'TESTS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create edge a");
+        s.execute("CREATE (:CodeRelation {id: 'e_tb', source: 'test_b', target: 'target3', type: 'TESTS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 20, project: 'demo'});").expect("create edge b");
+
+        let collector = ContextCollector::new(&*s);
+        let tests = collector
+            .collect_test_context("demo.baz")
+            .expect("test context");
+        assert_eq!(tests.len(), 2);
+        let names: Vec<&str> = tests.iter().map(|t| t.test_name.as_str()).collect();
+        assert!(names.contains(&"test_baz_basic"));
+        assert!(names.contains(&"test_baz_edge"));
+    }
+
+    #[test]
+    fn collect_test_context_unknown_symbol_returns_empty() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        let collector = ContextCollector::new(&*s);
+        let tests = collector
+            .collect_test_context("missing.symbol")
+            .expect("should not error");
+        assert!(tests.is_empty());
     }
 }
