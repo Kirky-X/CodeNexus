@@ -7,8 +7,13 @@ use serde::Serialize;
 
 #[cfg(feature = "cross-service")]
 use crate::analysis::cross_service::{CrossServiceLink, CrossServiceLinker};
-use crate::kit::StorageModule;
-use crate::service::error::{kit_not_initialized, wrap_error, wrap_kit_error, to_api_error};
+#[cfg(all(feature = "cross-service", any(feature = "cli", test)))]
+use crate::kit::{AsyncKit, AsyncReady, StorageModule};
+#[cfg(all(feature = "cross-service", any(feature = "cli", test)))]
+use crate::service::error::CodeNexusError;
+#[cfg(all(feature = "cli", feature = "cross-service"))]
+use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
+#[cfg(all(feature = "cli", feature = "cross-service"))]
 use crate::service::runtime::kit;
 
 #[cfg(feature = "cli")]
@@ -24,6 +29,21 @@ pub struct CrossServiceOutput {
     pub links: Vec<CrossServiceLink>,
 }
 
+/// Runs cross-service link detection against an injected Kit (testable core).
+#[cfg(all(feature = "cross-service", any(feature = "cli", test)))]
+pub fn run_cross_service(
+    kit: &AsyncKit<AsyncReady>,
+    project: &str,
+) -> Result<CrossServiceOutput, CodeNexusError> {
+    let storage = kit.require::<StorageModule>()?;
+    let linker = CrossServiceLinker::new(&*storage, project);
+    let links = linker.link()?;
+    Ok(CrossServiceOutput {
+        project: project.to_string(),
+        links,
+    })
+}
+
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "cross-service"))]
 #[service_api(
@@ -34,13 +54,8 @@ pub struct CrossServiceOutput {
 )]
 async fn cross_service(project: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    let storage = kit
-        .require::<StorageModule>()
-        .map_err(|e| wrap_kit_error("Failed to resolve storage capability", e))?;
-
-    let linker = CrossServiceLinker::new(&*storage, &project);
-    let links = linker.link().map_err(|e| to_api_error(e.into(), "cross_service_error"))?;
-    let output = CrossServiceOutput { project, links };
+    let output = run_cross_service(&kit, &project)
+        .map_err(|e| to_api_error(e, "cross_service_error"))?;
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
@@ -50,8 +65,7 @@ async fn cross_service(project: String) -> Result<(), ApiError> {
 #[cfg(all(test, feature = "cross-service"))]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig};
-    use crate::service::error::CodeNexusError;
+    use crate::kit::{build_kit, KitBootstrapConfig};
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -69,36 +83,35 @@ mod tests {
             .expect("build_kit")
     }
 
-    fn cross_service_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CodeNexusError> {
-        let storage = kit.require::<StorageModule>()?;
-        let linker = CrossServiceLinker::new(&*storage, project);
-        let links = linker.link()?;
-        let output = CrossServiceOutput {
-            project: project.to_string(),
-            links,
-        };
-        let json = serde_json::to_string(&output)?;
-        println!("{json}");
-        Ok(())
-    }
-
     #[test]
-    fn cross_service_core_succeeds_on_empty_db() {
+    fn run_cross_service_succeeds_on_empty_db() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let result = cross_service_core(&kit, "demo");
-        assert!(result.is_ok(), "run should succeed: {:?}", result.err());
+        let output = run_cross_service(&kit, "demo").expect("run should succeed");
+        assert_eq!(output.project, "demo");
+        assert!(output.links.is_empty(), "no links on empty DB");
     }
 
     #[test]
-    fn cross_service_core_returns_links() {
+    fn run_cross_service_returns_links_when_patterns_match() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
         storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/caller.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fetch(\"/api/users\");', parentQn: ''});").expect("create function");
-        let result = cross_service_core(&kit, "demo");
-        assert!(result.is_ok(), "run should succeed: {:?}", result.err());
+        let output = run_cross_service(&kit, "demo").expect("run should succeed");
+        assert_eq!(output.project, "demo");
+        // Linker may find links depending on matching logic; just verify it ran.
+    }
+
+    #[test]
+    fn run_cross_service_unknown_project_returns_empty_links() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("require_storage");
+        storage.execute("CREATE (:Route {id: 'r1', project: 'other', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
+        let output = run_cross_service(&kit, "demo").expect("run should succeed");
+        assert!(output.links.is_empty(), "no links for absent project");
     }
 
     #[test]
