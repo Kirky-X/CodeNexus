@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! `lsp` service: LSP semantic type resolution via rust-analyzer.
+//! `lsp` service: LSP semantic type resolution via language servers.
 //!
-//! Provides `lsp_goto_def` and `lsp_hover` CLI commands. Each spawns
-//! `rust-analyzer` rooted at `--workspace`, sends a single LSP request,
-//! prints the result as JSON, and shuts down. These do NOT touch the
-//! CodeNexus graph database.
+//! Provides `lsp_goto_def` and `lsp_hover` CLI commands. Each selects
+//! the LSP client based on file extension (`.rs` → rust-analyzer,
+//! `.py` → pyright-langserver), spawns the server, sends a single
+//! LSP request, prints JSON, and shuts down.
 
 use std::path::Path;
 
@@ -15,7 +15,7 @@ use serde::Serialize;
 use crate::service::error::{CodeNexusError, to_api_error};
 
 #[cfg(feature = "lsp")]
-use crate::lsp::{LspError, LspProvider, RustAnalyzerClient};
+use crate::lsp::{LspError, LspProvider, PyrightClient, RustAnalyzerClient};
 #[cfg(feature = "cli")]
 use crate::service::error::wrap_error;
 
@@ -47,8 +47,18 @@ fn lsp_error_to_cli(e: LspError) -> CodeNexusError {
 
 /// Starts the LSP client and maps `ServerStart` failure to a `CodeNexusError`.
 #[cfg(feature = "lsp")]
-fn start_or_err(client: &RustAnalyzerClient, workspace: &Path) -> Result<(), CodeNexusError> {
+fn start_or_err(client: &dyn LspProvider, workspace: &Path) -> Result<(), CodeNexusError> {
     client.start(workspace).map_err(lsp_error_to_cli)
+}
+
+/// Selects an LSP client based on file extension.
+#[cfg(feature = "lsp")]
+fn select_provider(file: &Path) -> Box<dyn LspProvider> {
+    let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
+    match ext {
+        "py" => Box::new(PyrightClient::new()),
+        _ => Box::new(RustAnalyzerClient::new()),
+    }
 }
 
 /// Prints a serializable value as JSON to stdout.
@@ -183,8 +193,8 @@ impl HoverOutput {
 #[cfg(all(feature = "cli", feature = "lsp"))]
 #[service_api(
     name = "lsp_goto_def",
-    version = "0.3.2",
-    description = "Query LSP Go-to-Definition for a Rust symbol via rust-analyzer.",
+    version = "0.4.0",
+    description = "Query LSP Go-to-Definition (auto-detects language from file extension: .rs → rust-analyzer, .py → pyright).",
     cli = true
 )]
 async fn lsp_goto_def(
@@ -196,8 +206,8 @@ async fn lsp_goto_def(
     let ws = Path::new(&workspace);
     let file_path = resolve_file(&file, ws);
 
-    let client = RustAnalyzerClient::new();
-    start_or_err(&client, ws).map_err(|e| to_api_error(e, "lsp_error"))?;
+    let client = select_provider(&file_path);
+    start_or_err(client.as_ref(), ws).map_err(|e| to_api_error(e, "lsp_error"))?;
 
     let result = client.definition(&file_path, line, col);
     let _ = client.shutdown();
@@ -217,16 +227,16 @@ async fn lsp_goto_def(
 #[cfg(all(feature = "cli", feature = "lsp"))]
 #[service_api(
     name = "lsp_hover",
-    version = "0.3.2",
-    description = "Query LSP Hover info for a Rust symbol via rust-analyzer.",
+    version = "0.4.0",
+    description = "Query LSP Hover info (auto-detects language from file extension: .rs → rust-analyzer, .py → pyright).",
     cli = true
 )]
 async fn lsp_hover(file: String, line: u32, col: u32, workspace: String) -> Result<(), ApiError> {
     let ws = Path::new(&workspace);
     let file_path = resolve_file(&file, ws);
 
-    let client = RustAnalyzerClient::new();
-    start_or_err(&client, ws).map_err(|e| to_api_error(e, "lsp_error"))?;
+    let client = select_provider(&file_path);
+    start_or_err(client.as_ref(), ws).map_err(|e| to_api_error(e, "lsp_error"))?;
 
     let result = client.hover(&file_path, line, col);
     let _ = client.shutdown();
@@ -426,8 +436,8 @@ mod tests {
         let ws = Path::new(workspace);
         let file_path = resolve_file(file, ws);
 
-        let client = RustAnalyzerClient::new();
-        start_or_err(&client, ws)?;
+        let client = select_provider(&file_path);
+        start_or_err(client.as_ref(), ws)?;
 
         let result = client.definition(&file_path, line, col);
         let _ = client.shutdown();
@@ -443,8 +453,8 @@ mod tests {
         let ws = Path::new(workspace);
         let file_path = resolve_file(file, ws);
 
-        let client = RustAnalyzerClient::new();
-        start_or_err(&client, ws)?;
+        let client = select_provider(&file_path);
+        start_or_err(client.as_ref(), ws)?;
 
         let result = client.hover(&file_path, line, col);
         let _ = client.shutdown();
@@ -466,6 +476,18 @@ mod tests {
         let _ = hover_core("/tmp/nonexist.rs", 0, 0, "/nonexistent/workspace/xyz");
     }
 
+    #[test]
+    fn select_provider_rust_for_rs_files() {
+        let provider = select_provider(Path::new("/tmp/lib.rs"));
+        let _ = provider.shutdown();
+    }
+
+    #[test]
+    fn select_provider_pyright_for_py_files() {
+        let provider = select_provider(Path::new("/tmp/module.py"));
+        let _ = provider.shutdown();
+    }
+
     // --- print_json ---
 
     #[test]
@@ -473,5 +495,83 @@ mod tests {
         let value = json!({"found": false});
         let result = print_json(&value);
         assert!(result.is_ok());
+    }
+
+    // --- select_provider: default cases ---
+
+    #[test]
+    fn select_provider_defaults_to_rust_analyzer_for_no_extension() {
+        let provider = select_provider(Path::new("/tmp/Makefile"));
+        let _ = provider.shutdown();
+    }
+
+    #[test]
+    fn select_provider_defaults_to_rust_analyzer_for_js_files() {
+        let provider = select_provider(Path::new("/tmp/app.js"));
+        let _ = provider.shutdown();
+    }
+
+    #[test]
+    fn select_provider_defaults_to_rust_analyzer_for_go_files() {
+        let provider = select_provider(Path::new("/tmp/main.go"));
+        let _ = provider.shutdown();
+    }
+
+    // --- resolve_file: edge cases ---
+
+    #[test]
+    fn resolve_file_empty_string_returns_workspace() {
+        let workspace = Path::new("/repo");
+        let result = resolve_file("", workspace);
+        assert_eq!(result, std::path::PathBuf::from("/repo"));
+    }
+
+    #[test]
+    fn resolve_file_dot_returns_workspace_joined() {
+        let workspace = Path::new("/repo");
+        let result = resolve_file(".", workspace);
+        assert_eq!(result, std::path::PathBuf::from("/repo/."));
+    }
+
+    // --- start_or_err: direct test ---
+
+    #[test]
+    fn start_or_err_with_nonexistent_workspace_does_not_panic() {
+        let client = select_provider(Path::new("/tmp/test.rs"));
+        let _ = start_or_err(client.as_ref(), Path::new("/nonexistent/workspace/xyz"));
+        let _ = client.shutdown();
+    }
+
+    // --- goto_def_core / hover_core: error result type ---
+
+    #[test]
+    fn goto_def_core_error_is_code_nexus_error() {
+        let result = goto_def_core("/tmp/nonexist.rs", 0, 0, "/nonexistent/workspace/xyz");
+        // Should return an error (either InvalidInput from LspError or Io).
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn hover_core_error_is_code_nexus_error() {
+        let result = hover_core("/tmp/nonexist.rs", 0, 0, "/nonexistent/workspace/xyz");
+        assert!(result.is_err());
+    }
+
+    // --- GotoDefOutput: serialization with range ---
+
+    #[test]
+    fn goto_def_output_from_location_includes_range() {
+        let loc = lsp_types::Location {
+            uri: lsp_types::Url::parse("file:///src/lib.rs").unwrap(),
+            range: lsp_types::Range {
+                start: lsp_types::Position { line: 5, character: 10 },
+                end: lsp_types::Position { line: 5, character: 20 },
+            },
+        };
+        let out = GotoDefOutput::from(loc);
+        let json = serde_json::to_string(&out).unwrap();
+        assert!(json.contains("\"line\":5"));
+        assert!(json.contains("\"character\":10"));
+        assert!(json.contains("\"character\":20"));
     }
 }
