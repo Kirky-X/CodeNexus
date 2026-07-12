@@ -247,3 +247,189 @@ fn path_to_url(path: &Path) -> Result<Url, LspError> {
         ))
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lsp_types::request::Shutdown;
+
+    fn make_test_session() -> (Session, Sender<Message>, Receiver<Message>) {
+        let (writer_tx, writer_rx) = bounded::<Message>(16);
+        let (reader_tx, reader_rx) = bounded::<Message>(16);
+        let connection = Connection {
+            sender: writer_tx,
+            receiver: reader_rx,
+        };
+        let child = Command::new("true").spawn().expect("spawn");
+        let session = Session {
+            child,
+            connection,
+            _reader_handle: thread::spawn(|| {}),
+            _writer_handle: thread::spawn(|| {}),
+            next_request_id: 0,
+        };
+        (session, reader_tx, writer_rx)
+    }
+
+    #[test]
+    fn decode_response_returns_error_for_server_error() {
+        let resp = Response::new_err(RequestId::from(0), 1, "test error".to_string());
+        let result: Result<(), LspError> = decode_response::<Shutdown>(resp);
+        let err = result.expect_err("should return error");
+        match err {
+            LspError::Communication(msg) => {
+                assert!(msg.contains("server error 1"), "msg: {msg}");
+                assert!(msg.contains("test error"), "msg: {msg}");
+            }
+            other => panic!("expected Communication, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn send_notification_succeeds() {
+        let (tx, rx) = bounded::<Message>(16);
+        let (_dummy_tx, dummy_rx) = bounded::<Message>(1);
+        let conn = Connection {
+            sender: tx,
+            receiver: dummy_rx,
+        };
+        send_notification(&conn, "test/method", &"params").expect("should succeed");
+        let msg = rx.recv().expect("should receive");
+        match msg {
+            Message::Notification(n) => assert_eq!(n.method, "test/method"),
+            other => panic!("expected Notification, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn send_notification_returns_error_on_closed_channel() {
+        let (tx, rx) = bounded::<Message>(16);
+        drop(rx);
+        let (_dummy_tx, dummy_rx) = bounded::<Message>(1);
+        let conn = Connection {
+            sender: tx,
+            receiver: dummy_rx,
+        };
+        let err = send_notification(&conn, "test", &"x").expect_err("should fail");
+        assert!(matches!(err, LspError::Communication(_)));
+    }
+
+    #[test]
+    fn send_request_returns_response() {
+        let (mut session, reader_tx, writer_rx) = make_test_session();
+        thread::spawn(move || {
+            let req = writer_rx.recv().expect("recv");
+            if let Message::Request(request) = req {
+                let resp = Response::new_ok(request.id, serde_json::Value::Null);
+                reader_tx.send(Message::Response(resp)).expect("send");
+            }
+        });
+        let result = send_request::<Shutdown>(&mut session, ());
+        assert!(result.is_ok(), "should return Ok: {result:?}");
+    }
+
+    #[test]
+    fn send_request_skips_response_with_wrong_id() {
+        let (mut session, reader_tx, writer_rx) = make_test_session();
+        thread::spawn(move || {
+            let req = writer_rx.recv().expect("recv");
+            if let Message::Request(request) = req {
+                let wrong = Response::new_ok(RequestId::from(999), serde_json::Value::Null);
+                reader_tx.send(Message::Response(wrong)).expect("send");
+                let correct = Response::new_ok(request.id, serde_json::Value::Null);
+                reader_tx.send(Message::Response(correct)).expect("send");
+            }
+        });
+        let result = send_request::<Shutdown>(&mut session, ());
+        assert!(result.is_ok(), "should skip wrong id: {result:?}");
+    }
+
+    #[test]
+    fn send_request_skips_notifications() {
+        let (mut session, reader_tx, writer_rx) = make_test_session();
+        thread::spawn(move || {
+            let req = writer_rx.recv().expect("recv");
+            if let Message::Request(request) = req {
+                let notif = Notification::new("test".to_string(), serde_json::Value::Null);
+                reader_tx.send(Message::Notification(notif)).expect("send");
+                let resp = Response::new_ok(request.id, serde_json::Value::Null);
+                reader_tx.send(Message::Response(resp)).expect("send");
+            }
+        });
+        let result = send_request::<Shutdown>(&mut session, ());
+        assert!(result.is_ok(), "should skip notification: {result:?}");
+    }
+
+    #[test]
+    fn send_request_returns_error_on_disconnect() {
+        let (mut session, reader_tx, _writer_rx) = make_test_session();
+        drop(reader_tx);
+        let err = send_request::<Shutdown>(&mut session, ()).expect_err("should fail");
+        match err {
+            LspError::Communication(msg) => assert!(msg.contains("closed"), "msg: {msg}"),
+            other => panic!("expected Communication, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spawn_server_succeeds_with_cat() {
+        let workspace = std::env::temp_dir();
+        let result = spawn_server(Path::new("cat"), &workspace);
+        assert!(result.is_ok(), "spawn_server should succeed: {result:?}");
+        let (mut child, stdin, stdout) = result.unwrap();
+        drop(stdin);
+        drop(stdout);
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn spawn_server_fails_with_nonexistent_binary() {
+        let workspace = std::env::temp_dir();
+        let err = spawn_server(Path::new("/nonexistent/binary/path"), &workspace)
+            .expect_err("should fail");
+        assert!(matches!(err, LspError::ServerStart(_)));
+    }
+
+    #[test]
+    fn spawn_transport_round_trips_message() {
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn cat");
+        let stdin = child.stdin.take().expect("stdin");
+        let stdout = child.stdout.take().expect("stdout");
+        let (conn, _reader_handle, _writer_handle) = spawn_transport(stdin, stdout);
+        let notif = Notification::new("test/method".to_string(), serde_json::Value::Null);
+        conn.sender
+            .send(Message::Notification(notif))
+            .expect("send");
+        let msg = conn
+            .receiver
+            .recv_timeout(Duration::from_secs(3))
+            .expect("should receive echo");
+        assert!(matches!(msg, Message::Notification(_)));
+        drop(conn);
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn initialize_session_completes_handshake() {
+        let (mut session, reader_tx, writer_rx) = make_test_session();
+        thread::spawn(move || {
+            if let Ok(Message::Request(request)) = writer_rx.recv_timeout(Duration::from_secs(2)) {
+                let init_result = serde_json::json!({ "capabilities": {} });
+                let resp = Response::new_ok(request.id, init_result);
+                reader_tx.send(Message::Response(resp)).expect("send");
+            }
+            // Keep writer_rx alive briefly so send_notification doesn't fail
+            thread::sleep(Duration::from_millis(500));
+        });
+        let workspace = std::env::current_dir().expect("cwd");
+        let result = initialize_session(&mut session, &workspace);
+        assert!(result.is_ok(), "initialize_session should succeed: {result:?}");
+    }
+}
