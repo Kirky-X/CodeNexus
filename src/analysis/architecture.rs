@@ -599,9 +599,84 @@ impl<'a> ArchitectureAnalyzer<'a> {
     ///
     /// Returns [`crate::storage::error::StorageError`] if any Cypher query
     /// fails.
-    fn analyze_dependency_directions(&self, project: &str) -> StorageResult<Vec<DepDirection>> {
-        let _ = project;
-        Ok(Vec::new())
+    fn analyze_dependency_directions(
+        &self,
+        project: &str,
+    ) -> StorageResult<Vec<DepDirection>> {
+        let escaped = escape_cypher_string(project);
+
+        // (a) Load Function + Method nodes → id → filePath.
+        let mut id_to_path: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for table in &["Function", "Method"] {
+            let cypher = format!(
+                "MATCH (n:{table}) WHERE n.project = '{escaped}' \
+                 RETURN n.id AS id, n.filePath AS file_path;"
+            );
+            let rows = self.storage.query(&cypher)?;
+            for row in rows {
+                if row.len() < 2 {
+                    continue;
+                }
+                let id = row[0].as_str().unwrap_or_default().to_string();
+                let file_path = row[1].as_str().unwrap_or_default().to_string();
+                id_to_path.insert(id, file_path);
+            }
+        }
+
+        // (b) Load CALLS edges → build module adjacency list + unique edge set.
+        let calls_cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.type = 'CALLS' AND e.project = '{escaped}' \
+             RETURN e.source AS source, e.target AS target;"
+        );
+        let calls_rows = self.storage.query(&calls_cypher)?;
+        let mut adj: std::collections::HashMap<String, std::collections::HashSet<String>> =
+            std::collections::HashMap::new();
+        let mut edges: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        for row in calls_rows {
+            if row.len() < 2 {
+                continue;
+            }
+            let source_id = row[0].as_str().unwrap_or_default().to_string();
+            let target_id = row[1].as_str().unwrap_or_default().to_string();
+            let source_path = match id_to_path.get(&source_id) {
+                Some(p) => p,
+                None => continue,
+            };
+            let target_path = match id_to_path.get(&target_id) {
+                Some(p) => p,
+                None => continue,
+            };
+            let source_module = module_name_from_path(source_path);
+            let target_module = module_name_from_path(target_path);
+            if source_module == target_module {
+                continue;
+            }
+            adj.entry(source_module.clone())
+                .or_default()
+                .insert(target_module.clone());
+            edges.insert((source_module, target_module));
+        }
+
+        // (c) For each edge (from, to), check if `to` can reach `from` (cycle).
+        let mut result: Vec<DepDirection> = edges
+            .into_iter()
+            .map(|(from, to)| {
+                let is_circular = can_reach(&adj, &to, &from);
+                DepDirection {
+                    from_module: from,
+                    to_module: to,
+                    is_circular,
+                }
+            })
+            .collect();
+        result.sort_by(|a, b| {
+            a.from_module
+                .cmp(&b.from_module)
+                .then_with(|| a.to_module.cmp(&b.to_module))
+        });
+        Ok(result)
     }
 
     /// Detects architectural layers (Controller/Service/Repository/Model) by
@@ -649,6 +724,37 @@ fn module_name_from_path(file_path: &str) -> String {
         .parent()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default()
+}
+
+/// Returns `true` if `target` is reachable from `start` in the adjacency list
+/// via DFS. Used for circular-dependency detection: if `to` can reach `from`,
+/// then the edge `(from, to)` participates in a cycle.
+fn can_reach(
+    adj: &std::collections::HashMap<String, std::collections::HashSet<String>>,
+    start: &str,
+    target: &str,
+) -> bool {
+    if start == target {
+        return true;
+    }
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut stack: Vec<String> = vec![start.to_string()];
+    while let Some(node) = stack.pop() {
+        if !visited.insert(node.clone()) {
+            continue;
+        }
+        if let Some(neighbors) = adj.get(&node) {
+            for n in neighbors {
+                if n == target {
+                    return true;
+                }
+                if !visited.contains(n) {
+                    stack.push(n.clone());
+                }
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -1377,5 +1483,64 @@ mod tests {
             "cohesion should be 1.0, got {}",
             module_a.cohesion
         );
+    }
+
+    // --- T030: dependency direction analysis tests ---
+
+    #[test]
+    fn analyze_dependency_directions_detects_circular() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "a1", "demo", "a1", "demo.a1", "/src/a/a1.rs", 1);
+        create_function(&kit, "b1", "demo", "b1", "demo.b1", "/src/b/b1.rs", 1);
+        // A→B and B→A (circular).
+        create_edge(&kit, "e1", "a1", "b1", "CALLS", "demo");
+        create_edge(&kit, "e2", "b1", "a1", "CALLS", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert_eq!(
+            result.dependency_directions.len(),
+            2,
+            "should have 2 directions"
+        );
+        for dd in &result.dependency_directions {
+            assert!(
+                dd.is_circular,
+                "edge {}→{} should be circular",
+                dd.from_module,
+                dd.to_module
+            );
+        }
+    }
+
+    #[test]
+    fn analyze_dependency_directions_no_circular() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "a1", "demo", "a1", "demo.a1", "/src/a/a1.rs", 1);
+        create_function(&kit, "b1", "demo", "b1", "demo.b1", "/src/b/b1.rs", 1);
+        create_function(&kit, "c1", "demo", "c1", "demo.c1", "/src/c/c1.rs", 1);
+        // A→B→C (no circular).
+        create_edge(&kit, "e1", "a1", "b1", "CALLS", "demo");
+        create_edge(&kit, "e2", "b1", "c1", "CALLS", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert_eq!(
+            result.dependency_directions.len(),
+            2,
+            "should have 2 directions"
+        );
+        for dd in &result.dependency_directions {
+            assert!(
+                !dd.is_circular,
+                "edge {}→{} should not be circular",
+                dd.from_module,
+                dd.to_module
+            );
+        }
     }
 }
