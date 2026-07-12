@@ -30,3 +30,6 @@ pub mod cross_service;
 
 #[cfg(feature = "complexity")]
 pub mod complexity;
+
+// Re-export EdgeType for analysis modules needing multi-edge-type queries.
+pub use crate::model::EdgeType;

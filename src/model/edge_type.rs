@@ -50,12 +50,25 @@ pub enum EdgeType {
     HandlesTool,
     /// Function is the entry point of a process/service (structural).
     EntryPointOf,
+    // --- Feature-depth-enhancement: 6 new edge types for analysis ---
+    /// Symbol is used by another symbol (inferred from usage).
+    Usage,
+    /// Test function tests a target symbol (structural).
+    Tests,
+    /// Function makes an HTTP call to a route/endpoint (inferred).
+    HttpCalls,
+    /// Function performs an async call (inferred).
+    AsyncCalls,
+    /// Function emits an event/message (inferred).
+    Emits,
+    /// Function listens on an event/message (inferred).
+    ListensOn,
 }
 
 impl EdgeType {
     /// Returns all variants in declaration order.
     #[must_use]
-    pub const fn all() -> [EdgeType; 24] {
+    pub const fn all() -> [EdgeType; 30] {
         [
             EdgeType::Contains,
             EdgeType::Defines,
@@ -81,6 +94,12 @@ impl EdgeType {
             EdgeType::Fetches,
             EdgeType::HandlesTool,
             EdgeType::EntryPointOf,
+            EdgeType::Usage,
+            EdgeType::Tests,
+            EdgeType::HttpCalls,
+            EdgeType::AsyncCalls,
+            EdgeType::Emits,
+            EdgeType::ListensOn,
         ]
     }
 
@@ -112,6 +131,13 @@ impl EdgeType {
             EdgeType::Fetches => "FETCHES",
             EdgeType::HandlesTool => "HANDLES_TOOL",
             EdgeType::EntryPointOf => "ENTRY_POINT_OF",
+            // Feature-depth-enhancement new edge types
+            EdgeType::Usage => "USAGE",
+            EdgeType::Tests => "TESTS",
+            EdgeType::HttpCalls => "HTTP_CALLS",
+            EdgeType::AsyncCalls => "ASYNC_CALLS",
+            EdgeType::Emits => "EMITS",
+            EdgeType::ListensOn => "LISTENS_ON",
         }
     }
 
@@ -162,6 +188,19 @@ impl EdgeType {
             EdgeType::EntryPointOf => (0.95, 1.0),
             // Data fetch — inferred from call patterns.
             EdgeType::Fetches => (0.75, 0.85),
+            // Feature-depth-enhancement new edge types
+            // Symbol usage — requires symbol resolution (like References).
+            EdgeType::Usage => (0.75, 0.85),
+            // Test coverage — structural relationship.
+            EdgeType::Tests => (0.95, 1.0),
+            // HTTP calls — inferred from call patterns.
+            EdgeType::HttpCalls => (0.80, 0.90),
+            // Async calls — inferred from syntax.
+            EdgeType::AsyncCalls => (0.80, 0.90),
+            // Event emission — inferred from call patterns.
+            EdgeType::Emits => (0.75, 0.85),
+            // Event subscription — inferred from call patterns.
+            EdgeType::ListensOn => (0.75, 0.85),
         }
     }
 }
@@ -201,6 +240,12 @@ impl FromStr for EdgeType {
             "FETCHES" => Ok(EdgeType::Fetches),
             "HANDLES_TOOL" => Ok(EdgeType::HandlesTool),
             "ENTRY_POINT_OF" => Ok(EdgeType::EntryPointOf),
+            "USAGE" => Ok(EdgeType::Usage),
+            "TESTS" => Ok(EdgeType::Tests),
+            "HTTP_CALLS" => Ok(EdgeType::HttpCalls),
+            "ASYNC_CALLS" => Ok(EdgeType::AsyncCalls),
+            "EMITS" => Ok(EdgeType::Emits),
+            "LISTENS_ON" => Ok(EdgeType::ListensOn),
             other => Err(format!("unknown EdgeType: {other}")),
         }
     }
@@ -211,8 +256,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn has_twenty_four_variants() {
-        assert_eq!(EdgeType::all().len(), 24);
+    fn has_thirty_variants() {
+        assert_eq!(EdgeType::all().len(), 30);
+    }
+
+    #[test]
+    fn new_variants_map_to_correct_ddl_strings() {
+        assert_eq!(EdgeType::Usage.as_db_type(), "USAGE");
+        assert_eq!(EdgeType::Tests.as_db_type(), "TESTS");
+        assert_eq!(EdgeType::HttpCalls.as_db_type(), "HTTP_CALLS");
+        assert_eq!(EdgeType::AsyncCalls.as_db_type(), "ASYNC_CALLS");
+        assert_eq!(EdgeType::Emits.as_db_type(), "EMITS");
+        assert_eq!(EdgeType::ListensOn.as_db_type(), "LISTENS_ON");
+    }
+
+    #[test]
+    fn new_variants_roundtrip_via_from_str() {
+        for edge in [
+            EdgeType::Usage,
+            EdgeType::Tests,
+            EdgeType::HttpCalls,
+            EdgeType::AsyncCalls,
+            EdgeType::Emits,
+            EdgeType::ListensOn,
+        ] {
+            let s = edge.to_string();
+            let parsed: EdgeType = s.parse().unwrap();
+            assert_eq!(edge, parsed, "roundtrip failed for {s}");
+        }
     }
 
     #[test]
@@ -241,6 +312,13 @@ mod tests {
         assert_eq!(EdgeType::Fetches.to_string(), "FETCHES");
         assert_eq!(EdgeType::HandlesTool.to_string(), "HANDLES_TOOL");
         assert_eq!(EdgeType::EntryPointOf.to_string(), "ENTRY_POINT_OF");
+        // Feature-depth-enhancement new edge types
+        assert_eq!(EdgeType::Usage.to_string(), "USAGE");
+        assert_eq!(EdgeType::Tests.to_string(), "TESTS");
+        assert_eq!(EdgeType::HttpCalls.to_string(), "HTTP_CALLS");
+        assert_eq!(EdgeType::AsyncCalls.to_string(), "ASYNC_CALLS");
+        assert_eq!(EdgeType::Emits.to_string(), "EMITS");
+        assert_eq!(EdgeType::ListensOn.to_string(), "LISTENS_ON");
     }
 
     #[test]
@@ -352,6 +430,13 @@ mod tests {
         assert_eq!(EdgeType::Fetches.confidence_range(), (0.75, 0.85));
         assert_eq!(EdgeType::HandlesTool.confidence_range(), (0.90, 1.0));
         assert_eq!(EdgeType::EntryPointOf.confidence_range(), (0.95, 1.0));
+        // Feature-depth-enhancement new edge types
+        assert_eq!(EdgeType::Usage.confidence_range(), (0.75, 0.85));
+        assert_eq!(EdgeType::Tests.confidence_range(), (0.95, 1.0));
+        assert_eq!(EdgeType::HttpCalls.confidence_range(), (0.80, 0.90));
+        assert_eq!(EdgeType::AsyncCalls.confidence_range(), (0.80, 0.90));
+        assert_eq!(EdgeType::Emits.confidence_range(), (0.75, 0.85));
+        assert_eq!(EdgeType::ListensOn.confidence_range(), (0.75, 0.85));
     }
 
     #[test]
