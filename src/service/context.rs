@@ -314,4 +314,56 @@ mod tests {
         assert!(json.contains("\"callers\""));
         assert!(json.contains("\"callees\""));
     }
+
+    // ===== run_context: process edges via HANDLES_ROUTE =====
+
+    #[test]
+    fn run_context_returns_processes_with_handles_route_edges() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_handler', project: 'demo', name: 'handler', qualifiedName: 'demo.handler', filePath: '/src/h.rs', startLine: 1, endLine: 10, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create handler");
+        storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
+        storage.execute("CREATE (:CodeRelation {id: 'e_hr', source: 'f_handler', target: 'r1', type: 'HANDLES_ROUTE', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create HANDLES_ROUTE edge");
+
+        let output = run_context(&kit, "demo.handler", 3).expect("context should succeed");
+        assert_eq!(output.symbol, "demo.handler");
+        assert!(!output.processes.is_empty(), "should have process edges");
+    }
+
+    #[test]
+    fn run_context_with_multiple_incoming_and_outgoing() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_target', project: 'demo', name: 'target', qualifiedName: 'demo.target', filePath: '/src/t.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create target");
+        storage.execute("CREATE (:Function {id: 'f_c1', project: 'demo', name: 'caller1', qualifiedName: 'demo.caller1', filePath: '/src/c1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller1");
+        storage.execute("CREATE (:Function {id: 'f_c2', project: 'demo', name: 'caller2', qualifiedName: 'demo.caller2', filePath: '/src/c2.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller2");
+        storage.execute("CREATE (:Function {id: 'f_d1', project: 'demo', name: 'callee1', qualifiedName: 'demo.callee1', filePath: '/src/d1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create callee1");
+        storage.execute("CREATE (:Function {id: 'f_d2', project: 'demo', name: 'callee2', qualifiedName: 'demo.callee2', filePath: '/src/d2.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create callee2");
+        storage.execute("CREATE (:CodeRelation {id: 'e_in1', source: 'f_c1', target: 'f_target', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create in1");
+        storage.execute("CREATE (:CodeRelation {id: 'e_in2', source: 'f_c2', target: 'f_target', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create in2");
+        storage.execute("CREATE (:CodeRelation {id: 'e_out1', source: 'f_target', target: 'f_d1', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 3, project: 'demo'});").expect("create out1");
+        storage.execute("CREATE (:CodeRelation {id: 'e_out2', source: 'f_target', target: 'f_d2', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 4, project: 'demo'});").expect("create out2");
+
+        let output = run_context(&kit, "demo.target", 3).expect("context should succeed");
+        assert_eq!(output.incoming.len(), 2, "should have 2 incoming callers");
+        assert_eq!(output.outgoing.len(), 2, "should have 2 outgoing callees");
+    }
+
+    #[test]
+    fn run_context_serializes_output_to_json() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_solo', project: 'demo', name: 'solo', qualifiedName: 'demo.solo', filePath: '/src/s.rs', startLine: 1, endLine: 3, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create solo");
+
+        let output = run_context(&kit, "demo.solo", 1).expect("context should succeed");
+        let json = serde_json::to_string(&output).expect("should serialize");
+        assert!(json.contains("\"symbol\":\"demo.solo\""));
+        assert!(json.contains("\"node\""));
+        assert!(json.contains("\"incoming\""));
+        assert!(json.contains("\"outgoing\""));
+        assert!(json.contains("\"processes\""));
+    }
 }

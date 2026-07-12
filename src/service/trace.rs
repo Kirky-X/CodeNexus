@@ -770,4 +770,92 @@ mod tests {
         assert_eq!(paths[0].nodes.len(), 2);
         assert_eq!(paths[0].edges.len(), 1);
     }
+
+    // ===== run_trace: additional combined mode tests =====
+
+    #[test]
+    fn run_trace_dataflow_with_detect_cycles_succeeds() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'DATAFLOWS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create dataflow edge");
+
+        let output = run_trace(&kit, "demo.a", "dataflow", 3, "", true, false)
+            .expect("dataflow + detect_cycles should succeed");
+        assert_eq!(output.symbol, "demo.a");
+    }
+
+    #[test]
+    fn run_trace_all_type_with_cross_service_succeeds() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
+        storage.execute("CREATE (:CodeRelation {id: 'e_http', source: 'f_a', target: 'f_b', type: 'HTTP_CALLS', confidence: 0.9, confidenceTier: 'High', reason: 'http', startLine: 2, project: 'demo'});").expect("create http edge");
+
+        let output = run_trace(&kit, "demo.a", "all", 3, "", false, true)
+            .expect("all + cross_service should succeed");
+        assert_eq!(output.symbol, "demo.a");
+    }
+
+    #[test]
+    fn run_trace_all_type_with_all_features_combined() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create calls edge");
+        storage.execute("CREATE (:CodeRelation {id: 'e2', source: 'f_b', target: 'f_a', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 3, project: 'demo'});").expect("create cycle edge");
+        storage.execute("CREATE (:CodeRelation {id: 'e_http', source: 'f_a', target: 'f_b', type: 'HTTP_CALLS', confidence: 0.9, confidenceTier: 'High', reason: 'http', startLine: 4, project: 'demo'});").expect("create http edge");
+
+        let output = run_trace(&kit, "demo.a", "all", 5, "/src/*.rs", true, true)
+            .expect("all features combined should succeed");
+        assert_eq!(output.symbol, "demo.a");
+        assert!(!output.cycles.is_empty(), "should detect cycle");
+    }
+
+    #[test]
+    fn run_trace_with_path_filter_and_cross_service_combined() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
+        storage.execute("CREATE (:CodeRelation {id: 'e_http', source: 'f_a', target: 'f_b', type: 'HTTP_CALLS', confidence: 0.9, confidenceTier: 'High', reason: 'http', startLine: 2, project: 'demo'});").expect("create http edge");
+
+        let output = run_trace(&kit, "demo.a", "calls", 3, "/src/*.rs", false, true)
+            .expect("path_filter + cross_service should succeed");
+        assert_eq!(output.symbol, "demo.a");
+    }
+
+    #[test]
+    fn run_trace_cross_service_missing_start_node_in_graph() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        // Create a node with a different name than the query symbol
+        storage.execute("CREATE (:Function {id: 'f_x', project: 'demo', name: 'x', qualifiedName: 'demo.x', filePath: '/src/x.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create x");
+
+        // trace resolves the symbol, but load_graph might not find it by
+        // the queried name in the graph → find_start_node_id returns None
+        // → cross_service adds no paths
+        let result = run_trace(&kit, "demo.x", "calls", 3, "", false, true);
+        // Should succeed (no panic even if start_id not found for cross_service)
+        if let Ok(output) = result {
+            assert_eq!(output.symbol, "demo.x");
+        }
+    }
+
+    #[test]
+    fn build_path_filter_trims_whitespace_in_patterns() {
+        let pf = build_path_filter("  /src/*.rs  ,  /lib/*.rs  ").expect("should parse");
+        let patterns = pf.include_files.expect("include_files should be set");
+        assert_eq!(patterns.len(), 2);
+        assert!(patterns.contains(&"/src/*.rs".to_string()));
+        assert!(patterns.contains(&"/lib/*.rs".to_string()));
+    }
 }

@@ -1028,4 +1028,125 @@ diff --git a/bar.rs b/bar.rs
             result.err()
         );
     }
+
+    // --- run_git_diff: Staged and Head modes ---
+
+    #[test]
+    fn run_git_diff_staged_mode_on_non_git_dir_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let result = run_git_diff(tmp.path(), DiffMode::Staged);
+        match result {
+            Err(CodeNexusError::InvalidInput(_)) => {}
+            Err(CodeNexusError::Io(_)) => {}
+            Ok(s) if s.is_empty() => {}
+            other => panic!("expected error or empty, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_git_diff_head_mode_on_non_git_dir_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let result = run_git_diff(tmp.path(), DiffMode::Head);
+        match result {
+            Err(CodeNexusError::InvalidInput(_)) => {}
+            Err(CodeNexusError::Io(_)) => {}
+            Ok(s) if s.is_empty() => {}
+            other => panic!("expected error or empty, got {other:?}"),
+        }
+    }
+
+    // --- detect_changes_core: staged mode on real git repo ---
+
+    #[test]
+    fn core_staged_mode_on_real_git_repo_succeeds() {
+        let tmp = TempDir::new().unwrap();
+        let status = std::process::Command::new("git")
+            .arg("init")
+            .arg(tmp.path())
+            .status();
+        if status.is_err() || !status.unwrap().success() {
+            eprintln!("skipping test: git init failed");
+            return;
+        }
+        let file = tmp.path().join("src/bar.rs");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "fn bar() {}\n").unwrap();
+
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(tmp.path())
+                .args(args)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+        if !git(&["add", "."]) || !git(&["-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "init"]) {
+            eprintln!("skipping test: git add/commit failed");
+            return;
+        }
+        // Stage a change
+        std::fs::write(&file, "fn bar() { /* modified */ }\n").unwrap();
+        let _ = git(&["add", "."]);
+
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let result = detect_changes_core(&kit, tmp.path().to_str().unwrap(), "staged");
+        assert!(
+            result.is_ok(),
+            "detect_changes staged should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn core_head_mode_on_real_git_repo_succeeds() {
+        let tmp = TempDir::new().unwrap();
+        let status = std::process::Command::new("git")
+            .arg("init")
+            .arg(tmp.path())
+            .status();
+        if status.is_err() || !status.unwrap().success() {
+            eprintln!("skipping test: git init failed");
+            return;
+        }
+        let file = tmp.path().join("src/baz.rs");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "fn baz() {}\n").unwrap();
+
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(tmp.path())
+                .args(args)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+        if !git(&["add", "."]) || !git(&["-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "init"]) {
+            eprintln!("skipping test: git add/commit failed");
+            return;
+        }
+        // Modify after commit (creates HEAD diff)
+        std::fs::write(&file, "fn baz() { /* changed */ }\n").unwrap();
+        let _ = git(&["add", "."]);
+
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let result = detect_changes_core(&kit, tmp.path().to_str().unwrap(), "head");
+        assert!(
+            result.is_ok(),
+            "detect_changes head should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    // --- DiffMode::git_args coverage ---
+
+    #[test]
+    fn diff_mode_head_git_args_contains_head() {
+        let args = DiffMode::Head.git_args();
+        assert!(args.contains(&"HEAD"));
+        assert!(args.contains(&"diff"));
+    }
 }

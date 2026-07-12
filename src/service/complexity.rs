@@ -739,4 +739,80 @@ mod tests {
         assert_eq!(t.time_complexity.0, TimeComplexity::ON, "time green overridden");
         assert_eq!(t.time_complexity.1, defaults.time_complexity.1, "time yellow stays default");
     }
+
+    // --- complexity_core: red_only + sort_by_severity with real entries ---
+
+    #[test]
+    #[cfg(feature = "lang-rust")]
+    fn core_red_only_with_entries_exercises_retain_closure() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit, "f_simple", "demo", "simple", "demo.simple", "/src/a.rs", 1, 1, "fn simple() {}",
+        );
+        let red_src = "fn red() { if a { if b { if c { if d { if e { if f { if g { if h { if i { if j { if k { if l { if m { if n { if o { if p { if q { if r { if s { if t { if u {} } } } } } } } } } } } } } } } } } } }";
+        create_function_with_content(
+            &kit, "f_red", "demo", "red", "demo.red", "/src/b.rs", 1, 50, red_src,
+        );
+        let result = complexity_core(
+            &kit, "demo", true, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
+            "", "", "", "",
+        );
+        assert!(result.is_ok(), "red_only with entries should succeed: {:?}", result.err());
+    }
+
+    #[test]
+    #[cfg(feature = "lang-rust")]
+    fn core_sort_by_severity_with_entries_exercises_sort() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit, "f_simple", "demo", "simple", "demo.simple", "/src/a.rs", 1, 1, "fn simple() {}",
+        );
+        let red_src = "fn red() { if a { if b { if c { if d { if e { if f { if g { if h { if i { if j { if k { if l { if m { if n { if o { if p { if q { if r { if s { if t { if u {} } } } } } } } } } } } } } } } } } } }";
+        create_function_with_content(
+            &kit, "f_red", "demo", "red", "demo.red", "/src/b.rs", 1, 50, red_src,
+        );
+        let result = complexity_core(
+            &kit, "demo", false, true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
+            "", "", "", "",
+        );
+        assert!(result.is_ok(), "sort_by_severity with entries should succeed: {:?}", result.err());
+    }
+
+    #[test]
+    #[cfg(feature = "lang-rust")]
+    fn core_red_only_and_sort_with_entries_exercises_both_branches() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit, "f_simple", "demo", "simple", "demo.simple", "/src/a.rs", 1, 1, "fn simple() {}",
+        );
+        let red_src = "fn red() { if a { if b { if c { if d { if e { if f { if g { if h { if i { if j { if k { if l { if m { if n { if o { if p { if q { if r { if s { if t { if u {} } } } } } } } } } } } } } } } } } } } }";
+        create_function_with_content(
+            &kit, "f_red", "demo", "red", "demo.red", "/src/b.rs", 1, 50, red_src,
+        );
+        let result = complexity_core(
+            &kit, "demo", true, true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
+            "", "", "", "",
+        );
+        assert!(result.is_ok(), "red_only+sort with entries should succeed: {:?}", result.err());
+    }
+
+    #[test]
+    #[cfg(feature = "lang-rust")]
+    fn core_with_custom_thresholds_and_red_only_filters_correctly() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let src = "fn f() { if a {} if b {} if c {} }";
+        create_function_with_content(
+            &kit, "f_thresh", "demo", "f", "demo.f", "/src/lib.rs", 1, 1, src,
+        );
+        // With very low thresholds (green=1, yellow=2, red=3), cyclomatic=3 → Red
+        let result = complexity_core(
+            &kit, "demo", true, false, 1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
+            "", "", "", "",
+        );
+        assert!(result.is_ok(), "custom thresholds + red_only should succeed: {:?}", result.err());
+    }
 }

@@ -163,4 +163,58 @@ mod tests {
         assert!(json.contains("\"communities\""));
         assert!(json.contains("\"size\":2"));
     }
+
+    // ===== run_community: additional edge cases =====
+
+    #[test]
+    fn run_community_with_two_separate_clusters() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("require_storage");
+        // Cluster A: a1 → a2 → a3
+        storage.execute("CREATE (:Function {id: 'f_a1', project: 'demo', name: 'a1', qualifiedName: 'demo.a1', filePath: '/src/a1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a1");
+        storage.execute("CREATE (:Function {id: 'f_a2', project: 'demo', name: 'a2', qualifiedName: 'demo.a2', filePath: '/src/a2.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a2");
+        storage.execute("CREATE (:Function {id: 'f_a3', project: 'demo', name: 'a3', qualifiedName: 'demo.a3', filePath: '/src/a3.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a3");
+        // Cluster B: b1 → b2 → b3
+        storage.execute("CREATE (:Function {id: 'f_b1', project: 'demo', name: 'b1', qualifiedName: 'demo.b1', filePath: '/src/b1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b1");
+        storage.execute("CREATE (:Function {id: 'f_b2', project: 'demo', name: 'b2', qualifiedName: 'demo.b2', filePath: '/src/b2.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b2");
+        storage.execute("CREATE (:Function {id: 'f_b3', project: 'demo', name: 'b3', qualifiedName: 'demo.b3', filePath: '/src/b3.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b3");
+        // Internal edges
+        storage.execute("CREATE (:CodeRelation {id: 'e_a1', source: 'f_a1', target: 'f_a2', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("a1->a2");
+        storage.execute("CREATE (:CodeRelation {id: 'e_a2', source: 'f_a2', target: 'f_a3', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("a2->a3");
+        storage.execute("CREATE (:CodeRelation {id: 'e_b1', source: 'f_b1', target: 'f_b2', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("b1->b2");
+        storage.execute("CREATE (:CodeRelation {id: 'e_b2', source: 'f_b2', target: 'f_b3', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("b2->b3");
+
+        let output = run_community(&kit, "demo", None).expect("run should succeed");
+        assert_eq!(output.project, "demo");
+    }
+
+    #[test]
+    fn run_community_with_low_resolution() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("require_storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create edge");
+
+        let output = run_community(&kit, "demo", Some(0.5)).expect("run should succeed");
+        assert_eq!(output.resolution, 0.5);
+    }
+
+    #[test]
+    fn run_community_serializes_output_with_communities() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("require_storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create edge");
+
+        let output = run_community(&kit, "demo", None).expect("run should succeed");
+        let json = serde_json::to_string(&output).expect("should serialize");
+        assert!(json.contains("\"project\":\"demo\""));
+        assert!(json.contains("\"resolution\""));
+        assert!(json.contains("\"communities\""));
+    }
 }

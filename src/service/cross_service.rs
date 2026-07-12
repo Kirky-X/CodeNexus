@@ -256,4 +256,55 @@ mod tests {
         // Invalid protocol → None filter → all matches (empty on empty DB)
         assert!(output.matches.is_empty());
     }
+
+    // --- run_cross_service: protocol filter with real matches (covers retain closure) ---
+
+    #[test]
+    fn run_cross_service_with_http_protocol_filters_matches() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("require_storage");
+        storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/caller.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fetch(\"/api/users\");', parentQn: ''});").expect("create function");
+
+        // With protocol="http", only HttpRest matches should be retained
+        let output = run_cross_service(&kit, "demo", "http").expect("run should succeed");
+        assert!(
+            output.matches.iter().all(|m| m.protocol == ServiceProtocol::HttpRest),
+            "filtered matches should all be HttpRest"
+        );
+    }
+
+    #[test]
+    fn run_cross_service_with_grpc_protocol_filters_matches() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("require_storage");
+        storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/caller.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fetch(\"/api/users\");', parentQn: ''});").expect("create function");
+
+        // With protocol="grpc", HTTP matches should be filtered out
+        let output = run_cross_service(&kit, "demo", "grpc").expect("run should succeed");
+        assert!(
+            output.matches.iter().all(|m| m.protocol == ServiceProtocol::Grpc),
+            "filtered matches should all be Grpc"
+        );
+    }
+
+    #[test]
+    fn run_cross_service_no_protocol_returns_all_match_types() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("require_storage");
+        storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/caller.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fetch(\"/api/users\");', parentQn: ''});").expect("create function");
+
+        // Empty protocol → all matches returned (no filter)
+        let output = run_cross_service(&kit, "demo", "").expect("run should succeed");
+        // Should have at least one HTTP match since we created route + caller
+        assert!(
+            output.matches.iter().any(|m| m.protocol == ServiceProtocol::HttpRest),
+            "should have at least one HttpRest match"
+        );
+    }
 }

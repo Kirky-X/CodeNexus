@@ -374,4 +374,108 @@ mod tests {
             .expect("empty mode should use legacy path");
         assert_eq!(output.count, 0);
     }
+
+    // ===== run_search: graph_enhanced and multi_signal modes =====
+
+    #[test]
+    fn run_search_with_graph_enhanced_mode_finds_symbol() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
+        let output = run_search(&kit, "do_thing", false, 10, "graph", "demo")
+            .expect("graph_enhanced mode should succeed");
+        assert!(output.count > 0, "should find do_thing in graph mode");
+    }
+
+    #[test]
+    fn run_search_with_graph_enhanced_alias_finds_symbol() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
+        let output = run_search(&kit, "do_thing", false, 10, "graph_enhanced", "demo")
+            .expect("graph_enhanced alias should succeed");
+        assert!(output.count > 0, "should find do_thing with graph_enhanced alias");
+    }
+
+    #[test]
+    fn run_search_with_multi_signal_mode_finds_symbol() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
+        let output = run_search(&kit, "do_thing", false, 10, "multi", "demo")
+            .expect("multi_signal mode should succeed");
+        assert!(output.count > 0, "should find do_thing in multi mode");
+    }
+
+    #[test]
+    fn run_search_with_multi_signal_alias_finds_symbol() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
+        let output = run_search(&kit, "do_thing", false, 10, "multi_signal", "demo")
+            .expect("multi_signal alias should succeed");
+        assert!(output.count > 0, "should find do_thing with multi_signal alias");
+    }
+
+    #[test]
+    fn run_search_with_graph_enhanced_on_empty_db_returns_empty() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let output = run_search(&kit, "foo", false, 10, "graph", "demo")
+            .expect("graph mode on empty DB should succeed");
+        assert_eq!(output.count, 0);
+    }
+
+    #[test]
+    fn run_search_with_multi_signal_on_empty_db_returns_empty() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let output = run_search(&kit, "foo", false, 10, "multi", "demo")
+            .expect("multi mode on empty DB should succeed");
+        assert_eq!(output.count, 0);
+    }
+
+    // ===== run_search: fulltext mode exercises legacy fulltext path =====
+
+    #[test]
+    fn run_search_fulltext_on_non_empty_db_succeeds() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'fetch_data', qualifiedName: 'demo.fetch_data', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
+        let output = run_search(&kit, "fetch_data", true, 10, "", "")
+            .expect("fulltext search should succeed");
+        let _ = output;
+    }
+
+    #[test]
+    fn run_search_with_exact_mode_on_empty_db_returns_empty() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let output = run_search(&kit, "foo", false, 10, "exact", "demo")
+            .expect("exact mode on empty DB should succeed");
+        assert_eq!(output.count, 0);
+    }
+
+    #[test]
+    fn run_search_with_regex_mode_on_empty_db_returns_empty() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let output = run_search(&kit, "foo.*", false, 10, "regex", "demo")
+            .expect("regex mode on empty DB should succeed");
+        assert_eq!(output.count, 0);
+    }
+
+    #[test]
+    fn run_search_with_fuzzy_mode_on_empty_db_returns_empty() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let output = run_search(&kit, "foo", false, 10, "fuzzy", "demo")
+            .expect("fuzzy mode on empty DB should succeed");
+        assert_eq!(output.count, 0);
+    }
 }

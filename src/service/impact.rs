@@ -498,4 +498,70 @@ mod tests {
         assert!(output.risk_assessment.is_none(), "legacy mode has no risk assessment");
         assert!(output.affected.is_empty(), "legacy mode has no affected list");
     }
+
+    // ===== build_impact_config: empty segment filtering =====
+
+    #[test]
+    fn build_impact_config_filters_empty_segments_in_edge_types() {
+        let config = build_impact_config(",CALLS,,IMPLEMENTS,", 0, false);
+        assert_eq!(config.edge_types, vec![EdgeType::Calls, EdgeType::Implements]);
+    }
+
+    #[test]
+    fn build_impact_config_all_empty_segments_falls_back_to_default() {
+        let config = build_impact_config(",,,", 0, false);
+        assert_eq!(config.edge_types, ImpactConfig::default().edge_types);
+    }
+
+    #[test]
+    fn build_impact_config_mixed_valid_invalid_edge_types() {
+        let config = build_impact_config("CALLS,BOGUS,IMPLEMENTS", 0, false);
+        assert_eq!(config.edge_types, vec![EdgeType::Calls, EdgeType::Implements]);
+    }
+
+    // ===== run_impact: include_tests parameter =====
+
+    #[test]
+    fn run_impact_with_include_tests_succeeds() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_target', project: 'demo', name: 'target', qualifiedName: 'demo.target', filePath: '/src/t.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create target");
+        storage.execute("CREATE (:Function {id: 'f_caller', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/c.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_caller', target: 'f_target', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create edge");
+
+        let output = run_impact(&kit, "demo.target", 3, "CALLS", 5, true)
+            .expect("impact with include_tests should succeed");
+        assert_eq!(output.symbol, "demo.target");
+        assert!(output.risk_assessment.is_some(), "enhanced mode should have risk assessment");
+    }
+
+    #[test]
+    fn run_impact_with_max_depth_only_uses_enhanced_mode() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+
+        // max_depth > 0 triggers enhanced mode even without edge_types
+        let output = run_impact(&kit, "demo.a", 3, "", 5, false)
+            .expect("max_depth > 0 should trigger enhanced mode");
+        assert!(output.risk_assessment.is_some(), "enhanced mode should have risk assessment");
+    }
+
+    #[test]
+    fn run_impact_enhanced_missing_start_node_returns_empty_affected() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        // Create a node but query for a symbol that doesn't match
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_a', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create self-edge");
+
+        // Query for a non-existent symbol in enhanced mode
+        let output = run_impact(&kit, "nonexistent.symbol", 3, "CALLS", 5, false)
+            .expect("enhanced impact on missing symbol should succeed");
+        assert!(output.affected.is_empty(), "missing start node → empty affected");
+        assert!(output.risk_assessment.is_none(), "missing start node → no risk assessment");
+    }
 }

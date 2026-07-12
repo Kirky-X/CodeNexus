@@ -300,4 +300,57 @@ mod tests {
         assert_eq!(module_a.outgoing_deps, 0);
         assert!((module_a.cohesion - 1.0).abs() < 0.001, "cohesion should be 1.0 for isolated module");
     }
+
+    // ===== run_architecture: cross_service_deps via Route + fetch content =====
+
+    #[test]
+    fn run_architecture_includes_cross_service_deps() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/a/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fetch(\"/api/users\");', parentQn: ''});").expect("create caller");
+
+        let output = run_architecture(&kit, "demo").expect("run should succeed");
+        assert!(
+            !output.overview.cross_service_deps.is_empty(),
+            "should detect cross-service deps via Route + fetch content"
+        );
+    }
+
+    #[test]
+    fn run_architecture_with_packages() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        storage.execute("CREATE (:File {id: 'f1', project: 'demo', name: 'main.rs', filePath: '/src/main.rs', language: 'rust', hash: '', lineCount: 100});").expect("create file");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/main.rs', startLine: 1, endLine: 50, signature: '', returnType: '', isExported: true, docstring: '', content: '', parentQn: ''});").expect("create function");
+
+        let output = run_architecture(&kit, "demo").expect("run should succeed");
+        assert_eq!(output.project, "demo");
+    }
+
+    #[test]
+    fn run_architecture_with_entry_points() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_main', project: 'demo', name: 'main', qualifiedName: 'demo.main', filePath: '/src/main.rs', startLine: 1, endLine: 50, signature: 'fn main()', returnType: '', isExported: true, docstring: '', content: '', parentQn: ''});").expect("create main");
+        storage.execute("CREATE (:CodeRelation {id: 'e_ep', source: 'f_main', target: 'f_main', type: 'ENTRY_POINT', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create entry point edge");
+
+        let output = run_architecture(&kit, "demo").expect("run should succeed");
+        assert_eq!(output.project, "demo");
+    }
+
+    #[test]
+    fn run_architecture_unknown_project_returns_empty_overview() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        storage.execute("CREATE (:File {id: 'f1', project: 'other', name: 'main.rs', filePath: '/src/main.rs', language: 'rust', hash: '', lineCount: 0});").expect("create file in other project");
+
+        let output = run_architecture(&kit, "demo").expect("run should succeed");
+        assert!(output.overview.languages.is_empty(), "no languages for absent project");
+        assert!(output.overview.packages.is_empty(), "no packages for absent project");
+    }
 }

@@ -1114,4 +1114,89 @@ mod tests {
             result.err()
         );
     }
+
+    // --- rename_core: apply path with file not under root (text edits empty, graph edit applied) ---
+
+    #[test]
+    fn core_apply_with_file_not_under_root_succeeds() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageModule>().unwrap();
+        // filePath is absolute but NOT under the passed root → collect_candidate_files
+        // excludes it → text_edits empty → apply_text_edits is a no-op.
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();
+        let tmp = TempDir::new().unwrap();
+        let result = rename_core(&kit, "a", "b", Some(tmp.path().to_str().unwrap()), true);
+        assert!(
+            result.is_ok(),
+            "apply with file not under root should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn core_dry_run_with_qualified_name_succeeds() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageModule>().unwrap();
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();
+
+        // Resolve by qualified name instead of short name
+        let result = rename_core(&kit, "demo.a", "b", None, false);
+        assert!(
+            result.is_ok(),
+            "dry-run by qualified name should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn core_apply_updates_qualified_name_in_graph() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageModule>().unwrap();
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();
+        let tmp = TempDir::new().unwrap();
+        let result = rename_core(&kit, "a", "b", Some(tmp.path().to_str().unwrap()), true);
+        assert!(result.is_ok(), "apply should succeed: {:?}", result.err());
+
+        let rows = storage
+            .query("MATCH (n:Function) WHERE n.id = 'f_a' RETURN n.qualifiedName AS qn;")
+            .unwrap();
+        let qn = rows
+            .first()
+            .and_then(|r| r.first())
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert_eq!(qn, "demo.b", "qualified name should be updated to 'demo.b'");
+    }
+
+    #[test]
+    fn core_dry_run_with_neighbor_files_collects_candidates() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageModule>().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let file_a = tmp.path().join("a.rs");
+        let file_b = tmp.path().join("b.rs");
+        std::fs::write(&file_a, "fn a() { b(); }\n").unwrap();
+        std::fs::write(&file_b, "fn b() {}\n").unwrap();
+        storage.execute(format!(
+            "CREATE (:Function {{id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '{}', startLine: 1, endLine: 1, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''}});",
+            file_a.to_str().unwrap()
+        ).as_str()).unwrap();
+        storage.execute(format!(
+            "CREATE (:Function {{id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '{}', startLine: 1, endLine: 1, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''}});",
+            file_b.to_str().unwrap()
+        ).as_str()).unwrap();
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").unwrap();
+
+        // Dry-run: should find 'a' in both a.rs and b.rs (neighbor file)
+        let result = rename_core(&kit, "a", "renamed_a", Some(tmp.path().to_str().unwrap()), false);
+        assert!(
+            result.is_ok(),
+            "dry-run with neighbors should succeed: {:?}",
+            result.err()
+        );
+    }
 }
