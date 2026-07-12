@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 #[cfg(any(feature = "cli", feature = "mcp", test))]
-use crate::kit::{AsyncKit, AsyncReady, QueryModule};
+use crate::kit::{AsyncKit, AsyncReady, QueryModule, StorageModule};
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+use crate::query::structured::{SearchEngine, SearchMode, SearchParams};
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::query::SearchResult;
 #[cfg(any(feature = "cli", feature = "mcp", test))]
@@ -43,25 +45,73 @@ fn search_result_to_json(r: &SearchResult) -> Value {
     })
 }
 
+/// Parses a search mode string into a [`SearchMode`].
+///
+/// Accepts case-insensitive mode names:
+/// - `exact` → `Exact`
+/// - `regex` → `Regex`
+/// - `fuzzy` → `Fuzzy`
+/// - `graph`, `graph_enhanced`, `graph-enhanced` → `GraphEnhanced`
+/// - `multi`, `multi_signal`, `multi-signal` → `MultiSignal`
+///
+/// Returns `None` for empty or unrecognized strings (empty = legacy mode).
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+fn parse_search_mode(mode: &str) -> Option<SearchMode> {
+    let lower = mode.trim().to_ascii_lowercase();
+    match lower.as_str() {
+        "" => None,
+        "exact" => Some(SearchMode::Exact),
+        "regex" => Some(SearchMode::Regex),
+        "fuzzy" => Some(SearchMode::Fuzzy),
+        "graph" | "graph_enhanced" | "graph-enhanced" => Some(SearchMode::GraphEnhanced),
+        "multi" | "multi_signal" | "multi-signal" => Some(SearchMode::MultiSignal),
+        _ => None,
+    }
+}
+
 /// Runs search against an injected Kit (testable core).
+///
+/// When `mode` is non-empty, uses [`SearchEngine`] with the corresponding
+/// [`SearchMode`] for multi-mode search (exact/regex/fuzzy/graph/multi).
+/// When `mode` is empty, falls back to the legacy `QueryModule` search
+/// (structured or BM25 full-text based on `fulltext` flag).
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 pub fn run_search(
     kit: &AsyncKit<AsyncReady>,
     text: &str,
     fulltext: bool,
     limit: u32,
+    mode: &str,
+    project: &str,
 ) -> Result<SearchOutput, CodeNexusError> {
-    let q = kit.require::<QueryModule>()?;
-    let results = if fulltext {
-        q.fulltext_search(text, None, limit as usize)
+    if let Some(search_mode) = parse_search_mode(mode) {
+        let storage = kit.require::<StorageModule>()?;
+        let engine = SearchEngine::new(&*storage);
+        let params = SearchParams {
+            query: text.to_string(),
+            mode: search_mode,
+            limit: limit as usize,
+            ..Default::default()
+        };
+        let results = engine.search(project, &params)?;
+        let results: Vec<Value> = results.iter().map(search_result_to_json).collect();
+        Ok(SearchOutput {
+            count: results.len(),
+            results,
+        })
     } else {
-        q.search(text, None, limit as usize)
-    }?;
-    let results: Vec<Value> = results.iter().map(search_result_to_json).collect();
-    Ok(SearchOutput {
-        count: results.len(),
-        results,
-    })
+        let q = kit.require::<QueryModule>()?;
+        let results = if fulltext {
+            q.fulltext_search(text, None, limit as usize)
+        } else {
+            q.search(text, None, limit as usize)
+        }?;
+        let results: Vec<Value> = results.iter().map(search_result_to_json).collect();
+        Ok(SearchOutput {
+            count: results.len(),
+            results,
+        })
+    }
 }
 
 /// CLI wrapper — prints result to stdout as JSON.
@@ -72,9 +122,15 @@ pub fn run_search(
     description = "Search for symbols by name (structured) or content (BM25 full-text).",
     cli = true
 )]
-async fn search(text: String, fulltext: bool, limit: u32) -> Result<(), ApiError> {
+async fn search(
+    text: String,
+    fulltext: bool,
+    limit: u32,
+    mode: String,
+    project: String,
+) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    let result = run_search(&kit, &text, fulltext, limit)
+    let result = run_search(&kit, &text, fulltext, limit, &mode, &project)
         .map_err(|e| to_api_error(e, "search_error"))?;
     let json = serde_json::to_string(&result)
         .map_err(|e| to_api_error(CodeNexusError::from(e), "search_error"))?;
@@ -90,9 +146,16 @@ async fn search(text: String, fulltext: bool, limit: u32) -> Result<(), ApiError
     tool_name = "search",
     description = "Search for symbols by name (structured) or content (BM25 full-text)."
 )]
-async fn search_mcp(text: String, fulltext: bool, limit: u32) -> Result<SearchOutput, ApiError> {
+async fn search_mcp(
+    text: String,
+    fulltext: bool,
+    limit: u32,
+    mode: String,
+    project: String,
+) -> Result<SearchOutput, ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    run_search(&kit, &text, fulltext, limit).map_err(|e| to_api_error(e, "search_error"))
+    run_search(&kit, &text, fulltext, limit, &mode, &project)
+        .map_err(|e| to_api_error(e, "search_error"))
 }
 
 #[cfg(test)]
@@ -120,7 +183,7 @@ mod tests {
     fn run_search_returns_empty_on_fresh_db() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let output = run_search(&kit, "foo", false, 10).expect("run should succeed");
+        let output = run_search(&kit, "foo", false, 10, "", "").expect("run should succeed");
         assert_eq!(output.count, 0);
         assert!(output.results.is_empty());
     }
@@ -131,9 +194,7 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
-        let output = run_search(&kit, "do_thing", false, 10).expect("run should succeed");
-        // Search may return 0+ results depending on query engine (toLower support).
-        // The core assertion is that the search ran without error.
+        let output = run_search(&kit, "do_thing", false, 10, "", "").expect("run should succeed");
         let _ = output;
     }
 
@@ -141,7 +202,7 @@ mod tests {
     fn run_search_empty_text_returns_error() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let err = run_search(&kit, "   ", false, 10).expect_err("empty text should error");
+        let err = run_search(&kit, "   ", false, 10, "", "").expect_err("empty text should error");
         assert!(matches!(err, CodeNexusError::Query(_)));
     }
 
@@ -149,7 +210,7 @@ mod tests {
     fn run_search_fulltext_empty_text_returns_error() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let err = run_search(&kit, "", true, 10).expect_err("empty fulltext should error");
+        let err = run_search(&kit, "", true, 10, "", "").expect_err("empty fulltext should error");
         assert!(matches!(err, CodeNexusError::Query(_)));
     }
 
@@ -209,5 +270,106 @@ mod tests {
         assert!(v["filePath"].is_null());
         assert!(v["startLine"].is_null());
         assert!(v["qualifiedName"].is_null());
+    }
+
+    // ===== T039: parse_search_mode unit tests =====
+
+    #[test]
+    fn parse_search_mode_empty_returns_none() {
+        assert_eq!(parse_search_mode(""), None);
+        assert_eq!(parse_search_mode("   "), None);
+    }
+
+    #[test]
+    fn parse_search_mode_exact() {
+        assert_eq!(parse_search_mode("exact"), Some(SearchMode::Exact));
+        assert_eq!(parse_search_mode("EXACT"), Some(SearchMode::Exact));
+    }
+
+    #[test]
+    fn parse_search_mode_regex() {
+        assert_eq!(parse_search_mode("regex"), Some(SearchMode::Regex));
+        assert_eq!(parse_search_mode("Regex"), Some(SearchMode::Regex));
+    }
+
+    #[test]
+    fn parse_search_mode_fuzzy() {
+        assert_eq!(parse_search_mode("fuzzy"), Some(SearchMode::Fuzzy));
+        assert_eq!(parse_search_mode("FUZZY"), Some(SearchMode::Fuzzy));
+    }
+
+    #[test]
+    fn parse_search_mode_graph_aliases() {
+        assert_eq!(parse_search_mode("graph"), Some(SearchMode::GraphEnhanced));
+        assert_eq!(parse_search_mode("graph_enhanced"), Some(SearchMode::GraphEnhanced));
+        assert_eq!(parse_search_mode("graph-enhanced"), Some(SearchMode::GraphEnhanced));
+    }
+
+    #[test]
+    fn parse_search_mode_multi_aliases() {
+        assert_eq!(parse_search_mode("multi"), Some(SearchMode::MultiSignal));
+        assert_eq!(parse_search_mode("multi_signal"), Some(SearchMode::MultiSignal));
+        assert_eq!(parse_search_mode("multi-signal"), Some(SearchMode::MultiSignal));
+    }
+
+    #[test]
+    fn parse_search_mode_invalid_returns_none() {
+        assert_eq!(parse_search_mode("invalid"), None);
+        assert_eq!(parse_search_mode("semantic"), None);
+    }
+
+    // ===== T039: run_search with mode parameter =====
+
+    #[test]
+    fn run_search_with_exact_mode_finds_symbol() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
+        let output = run_search(&kit, "do_thing", false, 10, "exact", "demo")
+            .expect("exact mode search should succeed");
+        assert!(output.count > 0, "should find do_thing in exact mode");
+    }
+
+    #[test]
+    fn run_search_with_regex_mode_finds_symbol() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
+        let output = run_search(&kit, "do_.*", false, 10, "regex", "demo")
+            .expect("regex mode search should succeed");
+        assert!(output.count > 0, "should find do_thing with regex do_.*");
+    }
+
+    #[test]
+    fn run_search_with_fuzzy_mode_finds_symbol() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
+        let output = run_search(&kit, "do_thng", false, 10, "fuzzy", "demo")
+            .expect("fuzzy mode search should succeed");
+        // Fuzzy search should find do_thing even with a typo
+        assert!(output.count > 0, "should find do_thing with fuzzy do_thng");
+    }
+
+    #[test]
+    fn run_search_with_invalid_mode_falls_back_to_legacy() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Invalid mode → None → legacy path (should succeed on empty DB)
+        let output = run_search(&kit, "foo", false, 10, "invalid_mode", "")
+            .expect("invalid mode should fall back to legacy");
+        assert_eq!(output.count, 0);
+    }
+
+    #[test]
+    fn run_search_with_empty_mode_uses_legacy_path() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let output = run_search(&kit, "foo", false, 10, "", "")
+            .expect("empty mode should use legacy path");
+        assert_eq!(output.count, 0);
     }
 }
