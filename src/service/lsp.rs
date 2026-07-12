@@ -12,7 +12,9 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::service::error::{CodeNexusError, to_api_error};
+use crate::service::error::CodeNexusError;
+#[cfg(feature = "cli")]
+use crate::service::error::to_api_error;
 
 #[cfg(feature = "lsp")]
 use crate::lsp::{LspError, LspProvider, PyrightClient, RustAnalyzerClient};

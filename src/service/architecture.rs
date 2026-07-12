@@ -5,10 +5,17 @@
 
 use serde::Serialize;
 
+#[cfg(feature = "analysis")]
 use crate::analysis::architecture::{ArchitectureAnalyzer, ArchitectureOverview};
-use crate::service::error::{CodeNexusError, to_api_error};
+#[cfg(feature = "analysis")]
+use crate::service::error::CodeNexusError;
+#[cfg(all(feature = "cli", feature = "analysis"))]
+use crate::service::error::to_api_error;
+#[cfg(feature = "analysis")]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
+#[cfg(all(feature = "cli", feature = "analysis"))]
 use crate::service::error::kit_not_initialized;
+#[cfg(all(feature = "cli", feature = "analysis"))]
 use crate::service::runtime::kit;
 
 #[cfg(all(feature = "cli", feature = "analysis"))]
@@ -17,6 +24,7 @@ use sdforge::prelude::ApiError;
 use sdforge::service_api;
 
 /// JSON-serializable architecture output.
+#[cfg(feature = "analysis")]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ArchitectureOutput {
     pub project: String,
@@ -24,6 +32,7 @@ pub struct ArchitectureOutput {
 }
 
 /// Core logic — resolves storage, runs overview, prints JSON.
+#[cfg(feature = "analysis")]
 fn architecture_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
     let analyzer = ArchitectureAnalyzer::new(&*storage);

@@ -1308,7 +1308,7 @@ fn add_definition_edges(
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-c", feature = "lang-fortran", feature = "lang-python", feature = "lang-rust"))]
 mod tests {
     use super::*;
     use crate::model::NodeLabel;

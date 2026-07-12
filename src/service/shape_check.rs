@@ -7,7 +7,10 @@ use serde::Serialize;
 
 #[cfg(feature = "api-review")]
 use crate::analysis::api_review::{ApiReviewer, ShapeViolation};
-use crate::service::error::{CodeNexusError, to_api_error};
+#[cfg(feature = "api-review")]
+use crate::service::error::CodeNexusError;
+#[cfg(all(feature = "cli", feature = "api-review"))]
+use crate::service::error::to_api_error;
 #[cfg(feature = "api-review")]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cli", feature = "api-review"))]

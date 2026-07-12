@@ -17,10 +17,12 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::service::error::{CodeNexusError, to_api_error};
+use crate::service::error::CodeNexusError;
 use crate::kit::{AsyncKit, AsyncReady, StorageModule, TraceModule};
 use crate::model::{Graph, Node, NodeId};
-use crate::service::error::{kit_not_initialized, wrap_error, wrap_kit_error};
+#[cfg(feature = "cli")]
+use crate::service::error::{kit_not_initialized, to_api_error, wrap_error, wrap_kit_error};
+#[cfg(feature = "cli")]
 use crate::service::runtime::kit;
 use crate::storage::schema::{escape_cypher_string, escape_identifier};
 use crate::trace::TraceError;

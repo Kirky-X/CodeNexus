@@ -7,7 +7,9 @@
 use std::path::Path;
 
 #[cfg(feature = "daemon")]
-use crate::service::error::{CodeNexusError, to_api_error};
+use crate::service::error::CodeNexusError;
+#[cfg(all(feature = "cli", feature = "daemon"))]
+use crate::service::error::to_api_error;
 #[cfg(feature = "daemon")]
 use crate::kit::{DaemonModule, AsyncKit, AsyncReady};
 

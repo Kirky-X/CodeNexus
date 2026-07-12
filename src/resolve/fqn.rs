@@ -166,7 +166,7 @@ impl FqnGenerator {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-c", feature = "lang-fortran", feature = "lang-python", feature = "lang-rust", feature = "lang-typescript"))]
 mod tests {
     use super::*;
 

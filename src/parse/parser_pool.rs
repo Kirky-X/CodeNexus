@@ -182,7 +182,7 @@ pub fn with_thread_pool<R>(f: impl FnOnce(&ParserPool) -> R) -> R {
     THREAD_POOL.with(f)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-c", feature = "lang-fortran", feature = "lang-python", feature = "lang-rust", feature = "lang-typescript"))]
 mod tests {
     use super::*;
 

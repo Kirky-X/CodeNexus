@@ -1020,7 +1020,7 @@ impl ScopeResolverRegistry {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-c", feature = "lang-cpp", feature = "lang-fortran", feature = "lang-go", feature = "lang-java", feature = "lang-python", feature = "lang-rust", feature = "lang-typescript"))]
 mod tests {
     use super::*;
 
@@ -1323,7 +1323,7 @@ mod tests {
 // ScopeResolver tests (Task 2.6)
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-c", feature = "lang-cpp", feature = "lang-fortran", feature = "lang-go", feature = "lang-java", feature = "lang-python", feature = "lang-rust", feature = "lang-typescript"))]
 mod resolver_tests {
     use super::*;
     use crate::parse::parser_factory::ParserFactory;

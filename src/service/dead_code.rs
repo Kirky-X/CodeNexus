@@ -5,10 +5,17 @@
 
 use serde::Serialize;
 
+#[cfg(feature = "analysis")]
 use crate::analysis::dead_code::{DeadCodeDetector, DeadCodeEntry};
-use crate::service::error::{CodeNexusError, to_api_error};
+#[cfg(feature = "analysis")]
+use crate::service::error::CodeNexusError;
+#[cfg(all(feature = "cli", feature = "analysis"))]
+use crate::service::error::to_api_error;
+#[cfg(feature = "analysis")]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
+#[cfg(all(feature = "cli", feature = "analysis"))]
 use crate::service::error::kit_not_initialized;
+#[cfg(all(feature = "cli", feature = "analysis"))]
 use crate::service::runtime::kit;
 
 #[cfg(all(feature = "cli", feature = "analysis"))]
@@ -17,6 +24,7 @@ use sdforge::prelude::ApiError;
 use sdforge::service_api;
 
 /// JSON-serializable dead-code output.
+#[cfg(feature = "analysis")]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DeadCodeOutput {
     pub project: String,
@@ -27,6 +35,7 @@ pub struct DeadCodeOutput {
 ///
 /// `entry` is a comma-separated list of extra entry-point patterns;
 /// empty string means no extra patterns (defaults to `main`, `Main`, `__main__`).
+#[cfg(feature = "analysis")]
 fn dead_code_core(kit: &AsyncKit<AsyncReady>, project: &str, entry: &str) -> Result<(), CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
     let detector = DeadCodeDetector::new(&*storage);

@@ -11,7 +11,10 @@ use crate::analysis::complexity::{
     ComplexityAnalyzer, ComplexityEntry, ComplexityThresholds, Severity, SpaceComplexity,
     TimeComplexity,
 };
-use crate::service::error::{CodeNexusError, to_api_error};
+#[cfg(feature = "complexity")]
+use crate::service::error::CodeNexusError;
+#[cfg(all(feature = "cli", feature = "complexity"))]
+use crate::service::error::to_api_error;
 #[cfg(feature = "complexity")]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cli", feature = "complexity"))]

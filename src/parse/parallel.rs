@@ -241,7 +241,7 @@ pub fn parallel_parse_ram_first(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-c", feature = "lang-python", feature = "lang-rust"))]
 mod tests {
     use super::*;
     use crate::model::Language;

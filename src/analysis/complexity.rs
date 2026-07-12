@@ -895,6 +895,7 @@ pub fn estimate_space_complexity(
 fn is_short_circuit_operator(language: Language, _node_kind: &str, child_kind: &str) -> bool {
     match language {
         Language::Python => child_kind == "and" || child_kind == "or",
+        #[cfg(feature = "lang-fortran")]
         Language::Fortran => child_kind == ".and." || child_kind == ".or.",
         _ => child_kind == "&&" || child_kind == "||",
     }
@@ -921,9 +922,13 @@ fn cyclomatic_count(node: Node<'_>, language: Language) -> u32 {
     // binary_expression (C-family) and boolean_operator (Python) can contain
     // short-circuit operators as children. Fortran tree-sitter uses
     // `logical_expression` for .AND./.OR. expressions.
+    #[cfg(feature = "lang-fortran")]
+    let is_fortran_logical = language == Language::Fortran && kind == "logical_expression";
+    #[cfg(not(feature = "lang-fortran"))]
+    let is_fortran_logical = false;
     let is_binary = kind == "binary_expression"
         || kind == "boolean_operator"
-        || (language == Language::Fortran && kind == "logical_expression");
+        || is_fortran_logical;
     let is_match = kind == "match_expression";
     let mut arm_count = 0u32;
 
@@ -961,9 +966,13 @@ fn cognitive_count(node: Node<'_>, language: Language, nesting: u32) -> u32 {
     // binary_expression (C-family) and boolean_operator (Python) can contain
     // short-circuit operators as children. Fortran tree-sitter uses
     // `logical_expression` for .AND./.OR. expressions.
+    #[cfg(feature = "lang-fortran")]
+    let is_fortran_logical = language == Language::Fortran && kind == "logical_expression";
+    #[cfg(not(feature = "lang-fortran"))]
+    let is_fortran_logical = false;
     let is_binary = kind == "binary_expression"
         || kind == "boolean_operator"
-        || (language == Language::Fortran && kind == "logical_expression");
+        || is_fortran_logical;
 
     if is_branch {
         count += 1 + nesting;

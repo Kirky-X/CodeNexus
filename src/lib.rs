@@ -8,6 +8,12 @@
 //! parsing. This crate exposes the public API used by the CLI binary and
 //! downstream embedders.
 
+// In non-full feature subsets (minimal/core/single-language), some code paths
+// (cli wrappers, analysis functions, language-specific resolvers) are compiled
+// but not exercised. Allow dead_code/unused_imports/unused_mut in those
+// configurations; the `full` feature enforces strict checks.
+#![cfg_attr(not(feature = "full"), allow(dead_code, unused_imports, unused_mut))]
+
 // Compile-time assertion: at least one language feature must be enabled
 // (unified-architecture Phase 1). Without any `lang-*` feature the crate has
 // no tree-sitter grammars and cannot parse anything; fail fast with a clear

@@ -341,6 +341,7 @@ mod tests {
         assert_eq!(err.exit_code(), 1);
     }
 
+    #[cfg(any(feature = "cli", feature = "mcp"))]
     #[test]
     fn from_api_error_invalid_input_maps_to_cli_invalid_input() {
         let api_err = ApiError::invalid_input("bad cypher", Some("query".to_string()), None);
@@ -349,6 +350,7 @@ mod tests {
         assert_eq!(cli_err.exit_code(), 2);
     }
 
+    #[cfg(any(feature = "cli", feature = "mcp"))]
     #[test]
     fn from_api_error_internal_maps_to_cli_internal_with_error_id() {
         let api_err = ApiError::internal_error("boom", "err-deadbeef");
@@ -363,6 +365,7 @@ mod tests {
         }
     }
 
+    #[cfg(any(feature = "cli", feature = "mcp"))]
     #[test]
     fn from_api_error_not_found_maps_to_cli_not_found() {
         let api_err = ApiError::not_found("symbol", Some("foo".to_string()));
@@ -371,6 +374,7 @@ mod tests {
         assert_eq!(cli_err.exit_code(), 4);
     }
 
+    #[cfg(any(feature = "cli", feature = "mcp"))]
     #[test]
     fn to_api_error_invalid_input() {
         let err = CodeNexusError::InvalidInput("bad".to_string());
@@ -378,6 +382,7 @@ mod tests {
         assert!(matches!(api_err, ApiError::InvalidInput { .. }));
     }
 
+    #[cfg(any(feature = "cli", feature = "mcp"))]
     #[test]
     fn to_api_error_trace_symbol_not_found() {
         let err = CodeNexusError::Trace(TraceError::SymbolNotFound("foo".to_string()));
@@ -385,6 +390,7 @@ mod tests {
         assert!(matches!(api_err, ApiError::NotFound { .. }));
     }
 
+    #[cfg(any(feature = "cli", feature = "mcp"))]
     #[test]
     fn to_api_error_not_found_variant() {
         let err = CodeNexusError::NotFound("project demo".to_string());
@@ -398,6 +404,7 @@ mod tests {
         }
     }
 
+    #[cfg(any(feature = "cli", feature = "mcp"))]
     #[test]
     fn to_api_error_other_maps_to_internal_with_tag() {
         let err = CodeNexusError::Internal("boom".to_string());
@@ -410,6 +417,7 @@ mod tests {
         }
     }
 
+    #[cfg(any(feature = "cli", feature = "mcp"))]
     #[test]
     fn to_api_error_other_preserves_message() {
         let err = CodeNexusError::Internal("boom".to_string());

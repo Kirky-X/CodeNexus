@@ -179,7 +179,7 @@ pub fn resolve_all(
     edges
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-c", feature = "lang-python", feature = "lang-rust", feature = "lang-typescript"))]
 mod tests {
     use super::*;
     use crate::ir::{CallInfo, ImportInfo};

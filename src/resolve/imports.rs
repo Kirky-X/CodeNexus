@@ -92,6 +92,7 @@ impl<'a> ImportResolver<'a> {
             // Scheme C (v0.3.0): C++ #include edges are handled by ResolvePhase
             // as EdgeType::Includes (scope-aware). Skip C++ here to avoid
             // duplicate IMPORTS edges — see phases.rs ResolvePhase::run.
+            #[cfg(feature = "lang-cpp")]
             if result.language == Language::Cpp {
                 continue;
             }
@@ -534,7 +535,7 @@ fn rust_relative_candidates(normalised: &str) -> Vec<String> {
     candidates
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-cpp", feature = "lang-typescript"))]
 mod tests {
     use super::*;
     use crate::model::{Language, Node, NodeLabel};

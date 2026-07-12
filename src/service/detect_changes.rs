@@ -16,7 +16,10 @@ use serde_json::Value;
 
 use crate::kit::StorageModule;
 use crate::model::NodeLabel;
-use crate::service::error::{CodeNexusError, kit_not_initialized, to_api_error, wrap_error, wrap_kit_error};
+use crate::service::error::CodeNexusError;
+#[cfg(feature = "cli")]
+use crate::service::error::{kit_not_initialized, to_api_error, wrap_error, wrap_kit_error};
+#[cfg(feature = "cli")]
 use crate::service::runtime::kit;
 use crate::storage::schema::node_table_columns;
 

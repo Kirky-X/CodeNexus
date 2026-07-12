@@ -414,10 +414,12 @@ fn build_includes_edges(
     let mut edges = Vec::new();
     let mut includes_graph = IncludesGraph::new();
 
-    // Build file_path → node_id index from File nodes (file_path is relative,
-    // normalized by ScopeResolutionPhase). Used for both source and target
-    // File node id lookup.
-    let mut file_index: HashMap<String, String> = HashMap::new();
+    #[cfg(feature = "lang-cpp")]
+    {
+        // Build file_path → node_id index from File nodes (file_path is relative,
+        // normalized by ScopeResolutionPhase). Used for both source and target
+        // File node id lookup.
+        let mut file_index: HashMap<String, String> = HashMap::new();
     for node in graph.nodes_by_label(NodeLabel::File) {
         if let Some(fp) = &node.file_path {
             file_index
@@ -509,6 +511,12 @@ fn build_includes_edges(
                 .unwrap_or(target_rel.clone());
             includes_graph.add_include(source_abs, &target_abs);
         }
+    }
+    } // end #[cfg(feature = "lang-cpp")]
+
+    #[cfg(not(feature = "lang-cpp"))]
+    {
+        let _ = (results, graph, path_to_rel, project_id);
     }
 
     (edges, includes_graph)
@@ -886,7 +894,7 @@ const _: () = {
     assert_send_sync::<LoadOutput>();
 };
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-cpp", feature = "lang-typescript"))]
 mod tests {
     use super::*;
 

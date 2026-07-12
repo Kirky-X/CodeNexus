@@ -260,7 +260,7 @@ impl<'a> TypeResolver<'a> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-rust", feature = "lang-python"))]
 mod tests {
     use super::*;
     use crate::model::{Edge, EdgeType, Graph, Language, Node, NodeLabel};

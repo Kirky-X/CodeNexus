@@ -135,7 +135,7 @@ impl Graph {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-c", feature = "lang-rust"))]
 mod tests {
     use super::super::{Language, NodeLabel};
     use super::*;

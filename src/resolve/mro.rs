@@ -212,7 +212,7 @@ impl<'a> MroResolver<'a> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-c", feature = "lang-cpp", feature = "lang-fortran", feature = "lang-go", feature = "lang-java", feature = "lang-python", feature = "lang-rust", feature = "lang-typescript"))]
 mod tests {
     use super::*;
     use crate::model::{Edge, EdgeType, Graph, Node, NodeLabel};

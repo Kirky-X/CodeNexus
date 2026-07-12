@@ -8,7 +8,9 @@ use std::io::BufRead;
 
 use serde::{Deserialize, Serialize};
 
-use crate::service::error::{CodeNexusError, to_api_error};
+use crate::service::error::CodeNexusError;
+#[cfg(feature = "cli")]
+use crate::service::error::to_api_error;
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(feature = "cli")]
 use crate::service::error::kit_not_initialized;
