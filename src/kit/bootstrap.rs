@@ -218,6 +218,7 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
     // 7. Trace — loads fresh subgraph per trace call (Task 2.10).
     kit.set_config(TraceConfig {
         db_path: config.db_path.clone(),
+        ..Default::default()
     });
     kit.register::<TraceModule>()?;
 

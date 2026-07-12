@@ -201,6 +201,7 @@ mod tests {
         let result = TraceResult {
             symbol: "demo.foo".into(),
             paths: vec![],
+            cycles: vec![],
         };
         let output = trace_output(result);
         assert_eq!(output.symbol, "demo.foo");

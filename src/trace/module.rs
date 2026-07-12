@@ -41,39 +41,81 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::kit::{AsyncAutoBuilder, AsyncKit, ModuleMeta};
+use crate::model::EdgeType;
 use crate::storage::StorageError;
 
 use super::capability::TraceEngine;
 use super::error::TraceError;
-use super::facade::{TraceFacade, TraceType};
+use super::facade::{PathFilter, TraceFacade, TraceType};
 use super::graph_loader::load_graph_for_symbol;
 use super::TraceResult;
+
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
-/// Configuration for [`TraceModule`] (Task 2.10).
+/// Configuration for [`TraceModule`] (Task 2.10) and [`TraceEngine`](super::facade::TraceEngine) (T032).
 ///
 /// Stored in Kit via `AsyncKit::set_config` and read in
 /// [`AsyncAutoBuilder::build`]. The Trace engine needs only the database
 /// path — the capability loads a fresh subgraph per `trace` call via
 /// [`load_graph_for_symbol`].
-#[derive(Debug, Clone)]
+///
+/// T032 extends this config with advanced tracing options: `max_depth`,
+/// `edge_types`, `path_filter`, `detect_cycles`, `cross_service`. These
+/// fields are consumed by the advanced [`TraceEngine`] struct and the
+/// service layer; the kit module ignores them (uses only `db_path`).
+///
+/// [`TraceEngine`]: super::facade::TraceEngine
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceConfig {
     /// Filesystem path to the LadybugDB database directory.
     ///
     /// Pass `":memory:"` for an in-memory database (useful for tests).
     pub db_path: PathBuf,
+    /// Maximum trace depth (default 5, max 10 per spec constraint).
+    pub max_depth: u32,
+    /// Edge types to traverse during tracing (default `[Calls]`).
+    pub edge_types: Vec<EdgeType>,
+    /// Optional path filter (R-trace-001).
+    pub path_filter: Option<PathFilter>,
+    /// Whether to detect cycles during tracing (default `false`).
+    pub detect_cycles: bool,
+    /// Whether to traverse `HttpCalls` edges for cross-service tracing
+    /// (default `false`).
+    pub cross_service: bool,
+}
+
+/// Maximum allowed depth (spec constraint: max_depth ≤ 10).
+const MAX_DEPTH_LIMIT: u32 = 10;
+
+impl Default for TraceConfig {
+    fn default() -> Self {
+        Self {
+            db_path: PathBuf::from(":memory:"),
+            max_depth: 5,
+            edge_types: vec![EdgeType::Calls],
+            path_filter: None,
+            detect_cycles: false,
+            cross_service: false,
+        }
+    }
 }
 
 impl TraceConfig {
-    /// Creates a config pointing at an in-memory database.
+    /// Creates a config pointing at an in-memory database with default
+    /// advanced tracing options.
     #[must_use]
     pub fn in_memory() -> Self {
-        Self {
-            db_path: PathBuf::from(":memory:"),
-        }
+        Self::default()
+    }
+
+    /// Clamps `max_depth` to the spec-mandated limit of 10.
+    #[must_use]
+    pub fn clamped_depth(&self) -> u32 {
+        self.max_depth.min(MAX_DEPTH_LIMIT)
     }
 }
 
@@ -220,6 +262,7 @@ mod tests {
         seed_call_graph(&db);
         let cap = TraceModule::build_cap(&TraceConfig {
             db_path: db.clone(),
+            ..Default::default()
         })
         .expect("TraceModule::build_cap");
         (cap, db)
@@ -272,6 +315,7 @@ mod tests {
     fn capability_trace_missing_db_returns_storage_error() {
         let cap = TraceModule::build_cap(&TraceConfig {
             db_path: std::path::PathBuf::from("/nonexistent/db.lbug"),
+            ..Default::default()
         })
         .expect("build_cap");
         let result = cap.trace("a", TraceType::Calls, 3);
@@ -290,6 +334,7 @@ mod tests {
         let mut kit = AsyncKit::new();
         kit.set_config(TraceConfig {
             db_path: db.clone(),
+            ..Default::default()
         });
         kit.register::<TraceModule>()
             .expect("register::<TraceModule>");

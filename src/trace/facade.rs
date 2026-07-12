@@ -7,13 +7,86 @@
 //! [`DataFlowTracer`] dispatch behind a single entry point. Callers look up a
 //! symbol by name and request a [`TraceType`]; the facade resolves the symbol
 //! to a node id and delegates to the appropriate tracer(s).
+//!
+//! Also provides advanced tracing types (T032): [`PathFilter`],
+//! [`TraceCycle`], and [`TraceEngine`] for configurable tracing over a
+//! [`Storage`] reference.
 
-use crate::model::{Graph, NodeId};
+use crate::model::{EdgeType, Graph, NodeId};
+use crate::storage::capability::Storage;
 
 use super::call_graph::CallGraphTracer;
 use super::data_flow::DataFlowTracer;
 use super::error::{Result, TraceError};
+use super::module::TraceConfig;
 use super::TraceResult;
+
+use serde::{Deserialize, Serialize};
+
+// ===== Advanced tracing types (T032) =====
+
+/// Filter applied to trace paths (R-trace-001).
+///
+/// All fields are optional; `None` means "no filtering on this dimension".
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PathFilter {
+    /// Glob patterns — only keep nodes whose `file_path` matches at least one.
+    pub include_files: Option<Vec<String>>,
+    /// Glob patterns — drop nodes whose `file_path` matches any.
+    pub exclude_files: Option<Vec<String>>,
+    /// Only keep nodes whose qualified name starts with one of these modules.
+    pub include_modules: Option<Vec<String>>,
+    /// Regex pattern — only keep nodes whose `name` matches.
+    pub symbol_pattern: Option<String>,
+}
+
+/// A cycle detected in the call graph (R-trace-002).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TraceCycle {
+    /// Node names along the cycle, starting and ending at the same node.
+    pub nodes: Vec<String>,
+    /// Edge types traversed along the cycle.
+    pub edge_types: Vec<EdgeType>,
+}
+
+/// Advanced trace engine backed by a [`Storage`] reference (design.md §8).
+///
+/// Holds an immutable borrow of a `dyn Storage` and a [`TraceConfig`].
+/// [`TraceEngine::new`] uses default config; [`TraceEngine::with_config`]
+/// accepts a custom config.
+pub struct TraceEngine<'a> {
+    storage: &'a dyn Storage,
+    config: TraceConfig,
+}
+
+impl<'a> TraceEngine<'a> {
+    /// Creates a `TraceEngine` with default [`TraceConfig`].
+    #[must_use]
+    pub fn new(storage: &'a dyn Storage) -> Self {
+        Self {
+            storage,
+            config: TraceConfig::default(),
+        }
+    }
+
+    /// Creates a `TraceEngine` with the supplied [`TraceConfig`].
+    #[must_use]
+    pub fn with_config(storage: &'a dyn Storage, config: TraceConfig) -> Self {
+        Self { storage, config }
+    }
+
+    /// Returns a reference to the engine's config.
+    #[must_use]
+    pub fn config(&self) -> &TraceConfig {
+        &self.config
+    }
+
+    /// Returns a reference to the underlying storage.
+    #[must_use]
+    pub fn storage(&self) -> &dyn Storage {
+        self.storage
+    }
+}
 
 /// The kind of trace to perform (PRD §4.2.3 `--type` flag).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -121,6 +194,7 @@ impl<'a> TraceFacade<'a> {
         Ok(TraceResult {
             symbol: symbol_label.to_string(),
             paths,
+            cycles: Vec::new(),
         })
     }
 
@@ -488,5 +562,148 @@ mod tests {
         // Only dataflow path; no call paths.
         assert_eq!(result.paths.len(), 1);
         assert_eq!(result.paths[0].edges[0].edge_type, "DATAFLOWS");
+    }
+
+    // --- T032: Advanced tracing types ---
+
+    fn build_storage() -> std::sync::Arc<dyn Storage> {
+        use crate::kit::StorageModule;
+        use crate::storage::StorageConfig;
+        StorageModule::build_cap(&StorageConfig::in_memory()).expect("StorageModule::build_cap")
+    }
+
+    #[test]
+    fn path_filter_default_is_all_none() {
+        let pf = PathFilter::default();
+        assert!(pf.include_files.is_none());
+        assert!(pf.exclude_files.is_none());
+        assert!(pf.include_modules.is_none());
+        assert!(pf.symbol_pattern.is_none());
+    }
+
+    #[test]
+    fn path_filter_serializes_to_json() {
+        let pf = PathFilter {
+            include_files: Some(vec!["/src/a.rs".to_string()]),
+            exclude_files: None,
+            include_modules: Some(vec!["mod_a".to_string()]),
+            symbol_pattern: Some("handler.*".to_string()),
+        };
+        let json = serde_json::to_string(&pf).expect("serialize PathFilter");
+        assert!(json.contains("\"include_files\""));
+        assert!(json.contains("/src/a.rs"));
+        assert!(json.contains("\"include_modules\""));
+        assert!(json.contains("handler.*"));
+        assert!(json.contains("\"exclude_files\":null"));
+    }
+
+    #[test]
+    fn path_filter_round_trips_through_json() {
+        let pf = PathFilter {
+            include_files: Some(vec!["/src/*.rs".to_string()]),
+            exclude_files: Some(vec!["/target/*".to_string()]),
+            include_modules: None,
+            symbol_pattern: Some("test_.*".to_string()),
+        };
+        let json = serde_json::to_string(&pf).expect("serialize");
+        let deserialized: PathFilter = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(pf, deserialized);
+    }
+
+    #[test]
+    fn trace_cycle_serializes_with_edge_types() {
+        let cycle = TraceCycle {
+            nodes: vec!["a".to_string(), "b".to_string(), "c".to_string(), "a".to_string()],
+            edge_types: vec![EdgeType::Calls, EdgeType::Calls, EdgeType::Calls],
+        };
+        let json = serde_json::to_string(&cycle).expect("serialize TraceCycle");
+        assert!(json.contains("\"nodes\""));
+        assert!(json.contains("\"edge_types\""));
+        assert!(json.contains("\"Calls\""));
+        let de: TraceCycle = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(cycle, de);
+    }
+
+    #[test]
+    fn trace_config_default_has_expected_values() {
+        let config = super::TraceConfig::default();
+        assert_eq!(config.max_depth, 5);
+        assert_eq!(config.edge_types, vec![EdgeType::Calls]);
+        assert!(config.path_filter.is_none());
+        assert!(!config.detect_cycles);
+        assert!(!config.cross_service);
+    }
+
+    #[test]
+    fn trace_config_clamped_depth_respects_limit() {
+        let mut config = super::TraceConfig::default();
+        config.max_depth = 50;
+        assert_eq!(config.clamped_depth(), 10);
+        config.max_depth = 3;
+        assert_eq!(config.clamped_depth(), 3);
+    }
+
+    #[test]
+    fn trace_config_serializes_to_json() {
+        let config = super::TraceConfig {
+            db_path: std::path::PathBuf::from(":memory:"),
+            max_depth: 7,
+            edge_types: vec![EdgeType::Calls, EdgeType::HttpCalls],
+            path_filter: Some(PathFilter {
+                include_files: Some(vec!["/src/*.rs".to_string()]),
+                ..Default::default()
+            }),
+            detect_cycles: true,
+            cross_service: true,
+        };
+        let json = serde_json::to_string(&config).expect("serialize TraceConfig");
+        assert!(json.contains("\"max_depth\":7"));
+        assert!(json.contains("\"detect_cycles\":true"));
+        assert!(json.contains("\"cross_service\":true"));
+        assert!(json.contains("\"HttpCalls\""));
+    }
+
+    #[test]
+    fn trace_engine_new_uses_default_config() {
+        let storage = build_storage();
+        let engine = TraceEngine::new(storage.as_ref());
+        assert_eq!(engine.config().max_depth, 5);
+        assert!(!engine.config().detect_cycles);
+        assert!(!engine.config().cross_service);
+    }
+
+    #[test]
+    fn trace_engine_with_config_applies_custom_config() {
+        let storage = build_storage();
+        let config = super::TraceConfig {
+            db_path: std::path::PathBuf::from(":memory:"),
+            max_depth: 10,
+            edge_types: vec![EdgeType::Calls, EdgeType::HttpCalls],
+            path_filter: None,
+            detect_cycles: true,
+            cross_service: true,
+        };
+        let engine = TraceEngine::with_config(storage.as_ref(), config);
+        assert_eq!(engine.config().max_depth, 10);
+        assert!(engine.config().detect_cycles);
+        assert!(engine.config().cross_service);
+        assert_eq!(engine.config().edge_types.len(), 2);
+    }
+
+    #[test]
+    fn trace_result_serializes_with_cycles_field() {
+        let result = super::TraceResult {
+            symbol: "a".to_string(),
+            paths: Vec::new(),
+            cycles: vec![TraceCycle {
+                nodes: vec!["a".to_string(), "b".to_string(), "a".to_string()],
+                edge_types: vec![EdgeType::Calls, EdgeType::Calls],
+            }],
+        };
+        let json = serde_json::to_string(&result).expect("serialize TraceResult");
+        assert!(json.contains("\"symbol\":\"a\""));
+        assert!(json.contains("\"paths\":[]"));
+        assert!(json.contains("\"cycles\""));
+        assert!(json.contains("\"Calls\""));
     }
 }

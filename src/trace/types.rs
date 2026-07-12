@@ -6,20 +6,23 @@
 use crate::model::Node;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq)]
+use super::facade::TraceCycle;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TraceResult {
     pub symbol: String,
     pub paths: Vec<TracePath>,
+    pub cycles: Vec<TraceCycle>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TracePath {
     pub nodes: Vec<TraceNode>,
     pub edges: Vec<TraceEdge>,
     pub depth: usize,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TraceNode {
     pub name: String,
     pub label: String,
@@ -38,7 +41,7 @@ impl From<&Node> for TraceNode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TraceEdge {
     pub edge_type: String,
     pub reason: Option<String>,
@@ -139,9 +142,11 @@ mod tests {
         let result = TraceResult {
             symbol: "foo".to_string(),
             paths: Vec::new(),
+            cycles: Vec::new(),
         };
         assert_eq!(result.symbol, "foo");
         assert!(result.paths.is_empty());
+        assert!(result.cycles.is_empty());
     }
 
     #[test]
@@ -197,6 +202,7 @@ mod tests {
                 edges: Vec::new(),
                 depth: 0,
             }],
+            cycles: Vec::new(),
         };
         let cloned = result.clone();
         assert_eq!(result, cloned);
