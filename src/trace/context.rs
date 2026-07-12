@@ -496,17 +496,108 @@ impl<'a> ContextCollector<'a> {
     fn collect_callers(
         &self,
         _project: &str,
-        _symbol: &SymbolDefinition,
+        symbol: &SymbolDefinition,
     ) -> StorageResult<Vec<CallerInfo>> {
-        Ok(Vec::new())
+        let symbol_id = self.resolve_symbol_id(&symbol.qualified_name)?;
+        if symbol_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        let escaped_id = escape_cypher_string(&symbol_id);
+        let cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.target = '{escaped_id}' AND e.type = 'CALLS' \
+             RETURN e.source AS source;"
+        );
+        let rows = self.storage.query(&cypher)?;
+        let mut callers = Vec::new();
+        for row in rows {
+            if let Some(source_id) = row.first().and_then(|v| v.as_str()) {
+                if let Some((name, qn)) = self.resolve_call_endpoint(source_id)? {
+                    callers.push(CallerInfo {
+                        name,
+                        qualified_name: qn,
+                        edge_type: "CALLS".to_string(),
+                    });
+                }
+            }
+        }
+        Ok(callers)
     }
 
     fn collect_callees(
         &self,
         _project: &str,
-        _symbol: &SymbolDefinition,
+        symbol: &SymbolDefinition,
     ) -> StorageResult<Vec<CalleeInfo>> {
-        Ok(Vec::new())
+        let symbol_id = self.resolve_symbol_id(&symbol.qualified_name)?;
+        if symbol_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        let escaped_id = escape_cypher_string(&symbol_id);
+        let cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.source = '{escaped_id}' AND e.type = 'CALLS' \
+             RETURN e.target AS target;"
+        );
+        let rows = self.storage.query(&cypher)?;
+        let mut callees = Vec::new();
+        for row in rows {
+            if let Some(target_id) = row.first().and_then(|v| v.as_str()) {
+                if let Some((name, qn)) = self.resolve_call_endpoint(target_id)? {
+                    callees.push(CalleeInfo {
+                        name,
+                        qualified_name: qn,
+                        edge_type: "CALLS".to_string(),
+                    });
+                }
+            }
+        }
+        Ok(callees)
+    }
+
+    /// Resolves a symbol's node id by qualified name (Function/Method).
+    fn resolve_symbol_id(&self, qualified_name: &str) -> StorageResult<String> {
+        let escaped = escape_cypher_string(qualified_name);
+        for label in ["Function", "Method"] {
+            let cypher = format!(
+                "MATCH (n:{label}) WHERE n.qualifiedName = '{escaped}' RETURN n.id AS id;"
+            );
+            if let Some(row) = self.storage.query(&cypher)?.into_iter().next() {
+                if let Some(id) = row.first().and_then(|v| v.as_str()) {
+                    return Ok(id.to_string());
+                }
+            }
+        }
+        Ok(String::new())
+    }
+
+    /// Resolves a call endpoint's name and qualified name by node id.
+    fn resolve_call_endpoint(
+        &self,
+        node_id: &str,
+    ) -> StorageResult<Option<(String, String)>> {
+        if node_id.is_empty() {
+            return Ok(None);
+        }
+        let escaped = escape_cypher_string(node_id);
+        for label in ["Function", "Method"] {
+            let cypher = format!(
+                "MATCH (n:{label}) WHERE n.id = '{escaped}' \
+                 RETURN n.name AS name, n.qualifiedName AS qualified_name;"
+            );
+            if let Some(row) = self.storage.query(&cypher)?.into_iter().next() {
+                let name = row
+                    .first()
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let qn = row
+                    .get(1)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                return Ok(Some((name, qn)));
+            }
+        }
+        Ok(None)
     }
 
     /// Queries IMPLEMENTS edges from `node_id` and resolves target Trait /
@@ -567,22 +658,21 @@ impl<'a> ContextCollector<'a> {
         Ok(names)
     }
 
-    /// Resolves a node's name by searching across common label tables.
+    /// Resolves a node's name by id using a single label-less MATCH query
+    /// (A-09: replaces 12 per-label queries with 1).
     /// Falls back to the id itself if no matching node is found.
     fn resolve_node_name(&self, node_id: &str) -> StorageResult<String> {
         if node_id.is_empty() {
             return Ok(String::new());
         }
         let escaped = escape_cypher_string(node_id);
-        for label in [
-            "Function", "Method", "Class", "Struct", "Enum", "Trait", "File", "Module",
-            "Interface", "Const", "Static", "Variable",
-        ] {
-            let cypher = format!(
-                "MATCH (n:{label}) WHERE n.id = '{escaped}' RETURN n.name AS name;"
-            );
-            if let Some(row) = self.storage.query(&cypher)?.into_iter().next() {
-                if let Some(name) = row.first().and_then(|v| v.as_str()) {
+        let cypher = format!(
+            "MATCH (n) WHERE n.id = '{escaped}' RETURN n.name AS name;"
+        );
+        let rows = self.storage.query(&cypher)?;
+        for row in rows {
+            if let Some(name) = row.first().and_then(|v| v.as_str()) {
+                if !name.is_empty() {
                     return Ok(name.to_string());
                 }
             }
@@ -1475,7 +1565,7 @@ mod tests {
         assert_eq!(ctx.symbol.name, "foo");
         assert_eq!(ctx.symbol.qualified_name, "demo.foo");
         assert_eq!(ctx.symbol.file_path, "/src/foo.rs");
-        // Stub methods return empty collections.
+        // No CALLS edges in this fixture, so callers/callees are empty.
         assert!(ctx.callers.is_empty());
         assert!(ctx.callees.is_empty());
         assert_eq!(ctx.data_flow, DataFlowSummary {});
@@ -1495,5 +1585,176 @@ mod tests {
             collector.collect("demo", "missing.symbol").is_err(),
             "should error when symbol is not found"
         );
+    }
+
+    // ===== A-01: collect_callers / collect_callees tests =====
+
+    fn create_caller_callee_fixture(s: &dyn Storage) {
+        s.execute("CREATE (:Function {id: 'fn_a', project: 'demo', name: 'func_a', qualifiedName: 'demo.func_a', filePath: '/src/a.rs', startLine: 1, endLine: 10, signature: 'fn func_a()', returnType: 'void', isExported: true, docstring: '', content: '', parentQn: ''});").expect("create a");
+        s.execute("CREATE (:Function {id: 'fn_b', project: 'demo', name: 'func_b', qualifiedName: 'demo.func_b', filePath: '/src/b.rs', startLine: 1, endLine: 10, signature: 'fn func_b()', returnType: 'void', isExported: true, docstring: '', content: '', parentQn: ''});").expect("create b");
+        s.execute("CREATE (:CodeRelation {id: 'e_call', source: 'fn_a', target: 'fn_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: 'calls', startLine: 5, project: 'demo'});").expect("create calls edge");
+    }
+
+    #[test]
+    fn collect_callers_returns_caller() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        create_caller_callee_fixture(&*s);
+
+        let collector = ContextCollector::new(&*s);
+        let symbol_b = collector
+            .collect_symbol_definition("demo.func_b")
+            .expect("symbol b");
+        let callers = collector
+            .collect_callers("demo", &symbol_b)
+            .expect("callers");
+        assert_eq!(callers.len(), 1);
+        assert_eq!(callers[0].name, "func_a");
+        assert_eq!(callers[0].qualified_name, "demo.func_a");
+        assert_eq!(callers[0].edge_type, "CALLS");
+    }
+
+    #[test]
+    fn collect_callees_returns_callee() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        create_caller_callee_fixture(&*s);
+
+        let collector = ContextCollector::new(&*s);
+        let symbol_a = collector
+            .collect_symbol_definition("demo.func_a")
+            .expect("symbol a");
+        let callees = collector
+            .collect_callees("demo", &symbol_a)
+            .expect("callees");
+        assert_eq!(callees.len(), 1);
+        assert_eq!(callees[0].name, "func_b");
+        assert_eq!(callees[0].qualified_name, "demo.func_b");
+        assert_eq!(callees[0].edge_type, "CALLS");
+    }
+
+    #[test]
+    fn collect_callers_empty_when_no_calls() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Function {id: 'fn_x', project: 'demo', name: 'func_x', qualifiedName: 'demo.func_x', filePath: '/src/x.rs', startLine: 1, endLine: 5, signature: 'fn func_x()', returnType: 'void', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create x");
+
+        let collector = ContextCollector::new(&*s);
+        let symbol = collector
+            .collect_symbol_definition("demo.func_x")
+            .expect("symbol");
+        let callers = collector
+            .collect_callers("demo", &symbol)
+            .expect("callers");
+        assert!(callers.is_empty());
+    }
+
+    #[test]
+    fn collect_callees_empty_when_no_calls() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Function {id: 'fn_y', project: 'demo', name: 'func_y', qualifiedName: 'demo.func_y', filePath: '/src/y.rs', startLine: 1, endLine: 5, signature: 'fn func_y()', returnType: 'void', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create y");
+
+        let collector = ContextCollector::new(&*s);
+        let symbol = collector
+            .collect_symbol_definition("demo.func_y")
+            .expect("symbol");
+        let callees = collector
+            .collect_callees("demo", &symbol)
+            .expect("callees");
+        assert!(callees.is_empty());
+    }
+
+    #[test]
+    fn collect_callers_multiple_callers() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Function {id: 'tgt', project: 'demo', name: 'target', qualifiedName: 'demo.target', filePath: '/src/t.rs', startLine: 1, endLine: 10, signature: 'fn target()', returnType: 'void', isExported: true, docstring: '', content: '', parentQn: ''});").expect("create target");
+        s.execute("CREATE (:Function {id: 'c1', project: 'demo', name: 'caller1', qualifiedName: 'demo.caller1', filePath: '/src/c1.rs', startLine: 1, endLine: 5, signature: 'fn caller1()', returnType: 'void', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create c1");
+        s.execute("CREATE (:Function {id: 'c2', project: 'demo', name: 'caller2', qualifiedName: 'demo.caller2', filePath: '/src/c2.rs', startLine: 1, endLine: 5, signature: 'fn caller2()', returnType: 'void', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create c2");
+        s.execute("CREATE (:CodeRelation {id: 'e1', source: 'c1', target: 'tgt', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("edge 1");
+        s.execute("CREATE (:CodeRelation {id: 'e2', source: 'c2', target: 'tgt', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("edge 2");
+
+        let collector = ContextCollector::new(&*s);
+        let symbol = collector
+            .collect_symbol_definition("demo.target")
+            .expect("symbol");
+        let callers = collector
+            .collect_callers("demo", &symbol)
+            .expect("callers");
+        assert_eq!(callers.len(), 2);
+        let names: Vec<&str> = callers.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"caller1"));
+        assert!(names.contains(&"caller2"));
+    }
+
+    // ===== A-09: resolve_node_name single-query tests =====
+
+    #[test]
+    fn resolve_node_name_finds_function() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'foo', qualifiedName: 'demo.foo', filePath: '/src/foo.rs', startLine: 1, endLine: 5, signature: 'fn foo()', returnType: 'void', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
+
+        let collector = ContextCollector::new(&*s);
+        let name = collector.resolve_node_name("f1").expect("resolve");
+        assert_eq!(name, "foo");
+    }
+
+    #[test]
+    fn resolve_node_name_finds_struct_label() {
+        // Struct was the 4th label in the old loop — proves label-less MATCH
+        // resolves it in a single query instead of 4 separate queries.
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Struct {id: 's1', project: 'demo', name: 'Point', qualifiedName: 'demo.Point', filePath: '/src/point.rs', startLine: 1, endLine: 10, isExported: true, docstring: '', content: '', parentQn: ''});").expect("create struct");
+
+        let collector = ContextCollector::new(&*s);
+        let name = collector.resolve_node_name("s1").expect("resolve");
+        assert_eq!(name, "Point");
+    }
+
+    #[test]
+    fn resolve_node_name_finds_enum_label() {
+        // Enum was the 5th label — also verifies label-less MATCH.
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Enum {id: 'e1', project: 'demo', name: 'Color', qualifiedName: 'demo.Color', filePath: '/src/color.rs', startLine: 1, endLine: 5, isExported: true, docstring: '', content: '', parentQn: ''});").expect("create enum");
+
+        let collector = ContextCollector::new(&*s);
+        let name = collector.resolve_node_name("e1").expect("resolve");
+        assert_eq!(name, "Color");
+    }
+
+    #[test]
+    fn resolve_node_name_falls_back_to_id_when_not_found() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        let collector = ContextCollector::new(&*s);
+        let name = collector
+            .resolve_node_name("nonexistent_id")
+            .expect("should not error");
+        assert_eq!(name, "nonexistent_id");
+    }
+
+    #[test]
+    fn resolve_node_name_empty_returns_empty() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        let collector = ContextCollector::new(&*s);
+        let name = collector
+            .resolve_node_name("")
+            .expect("should not error");
+        assert!(name.is_empty());
     }
 }
