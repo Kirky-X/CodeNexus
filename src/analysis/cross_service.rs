@@ -439,13 +439,33 @@ impl<'a> CrossServiceDetector<'a> {
         Ok(matches)
     }
 
-    /// Detects message queue produce/consume patterns. (Implemented in T011.)
+    /// Detects message queue patterns by scanning for Kafka
+    /// (`producer.send`, `consumer.subscribe`) and RabbitMQ
+    /// (`channel.publish`, `channel.consume`) call patterns. The `reason`
+    /// field annotates whether the match is an EMITS or LISTENS_ON direction.
     ///
     /// # Errors
     ///
     /// Returns [`StorageError`] if any underlying Cypher query fails.
-    pub fn detect_message_queue(&self, _project: &str) -> StorageResult<Vec<CrossServiceMatch>> {
-        Ok(Vec::new())
+    pub fn detect_message_queue(&self, project: &str) -> StorageResult<Vec<CrossServiceMatch>> {
+        let callers = self.load_callers(project)?;
+        let mut matches = Vec::new();
+        for caller in &callers {
+            if caller.content.is_empty() {
+                continue;
+            }
+            for (callee, direction) in extract_mq_patterns(&caller.content) {
+                matches.push(CrossServiceMatch {
+                    caller: caller.id.clone(),
+                    callee: callee.clone(),
+                    protocol: ServiceProtocol::MessageQueue,
+                    match_type: MatchType::Pattern,
+                    confidence: Confidence::Low,
+                    reason: format!("MessageQueue {direction}: {callee}"),
+                });
+            }
+        }
+        Ok(matches)
     }
 
     /// Detects event bus emit/listen patterns. (Implemented in T012.)
@@ -724,6 +744,38 @@ fn extract_graphql_operations(content: &str) -> Vec<String> {
         }
     }
     ops
+}
+
+/// Extracts message queue patterns from `content`. Detects Kafka
+/// (`producer.send`, `consumer.subscribe`) and RabbitMQ
+/// (`channel.publish`, `channel.consume`) call patterns. Returns
+/// `(callee, direction)` pairs where direction is `"EMITS"` or `"LISTENS_ON"`.
+fn extract_mq_patterns(content: &str) -> Vec<(String, &'static str)> {
+    let mut results = Vec::new();
+    let patterns: &[(&str, &str)] = &[
+        ("producer.send", "EMITS"),
+        ("consumer.subscribe", "LISTENS_ON"),
+        ("channel.publish", "EMITS"),
+        ("channel.consume", "LISTENS_ON"),
+    ];
+    for (pattern, direction) in patterns {
+        let mut cursor = 0;
+        while let Some(idx) = content[cursor..].find(*pattern) {
+            let after_pattern = &content[cursor + idx + pattern.len()..];
+            let trimmed = after_pattern.trim_start();
+            if let Some(rest) = trimmed.strip_prefix('(') {
+                let end = rest
+                    .find(|c: char| c == ',' || c == ')')
+                    .unwrap_or(rest.len());
+                let arg = rest[..end].trim().trim_matches('"');
+                if !arg.is_empty() {
+                    results.push((arg.to_string(), *direction));
+                }
+            }
+            cursor += idx + pattern.len();
+        }
+    }
+    results
 }
 
 #[cfg(test)]
@@ -1674,5 +1726,137 @@ mod tests {
         let detector = CrossServiceDetector::new(&*s);
         let matches = detector.detect_graphql("demo").expect("detect_graphql");
         assert!(matches.is_empty(), "plain function should not match GraphQL");
+    }
+
+    // ====================================================================
+    // T011: Message queue detection
+    // ====================================================================
+
+    #[test]
+    fn detect_message_queue_finds_producer_send() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"producer.send(topic, message);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector
+            .detect_message_queue("demo")
+            .expect("detect_message_queue");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].protocol, ServiceProtocol::MessageQueue);
+        assert!(matches[0].reason.contains("EMITS"), "{}", matches[0].reason);
+        assert_eq!(matches[0].callee, "topic");
+    }
+
+    #[test]
+    fn detect_message_queue_finds_consumer_subscribe() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"consumer.subscribe(topic);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector
+            .detect_message_queue("demo")
+            .expect("detect_message_queue");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].protocol, ServiceProtocol::MessageQueue);
+        assert!(
+            matches[0].reason.contains("LISTENS_ON"),
+            "{}",
+            matches[0].reason
+        );
+    }
+
+    #[test]
+    fn detect_message_queue_finds_channel_publish() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"channel.publish("events", msg);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector
+            .detect_message_queue("demo")
+            .expect("detect_message_queue");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].protocol, ServiceProtocol::MessageQueue);
+        assert!(matches[0].reason.contains("EMITS"), "{}", matches[0].reason);
+        assert_eq!(matches[0].callee, "events");
+    }
+
+    #[test]
+    fn detect_message_queue_finds_channel_consume() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"channel.consume("tasks", handler);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector
+            .detect_message_queue("demo")
+            .expect("detect_message_queue");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].callee, "tasks");
+        assert!(
+            matches[0].reason.contains("LISTENS_ON"),
+            "{}",
+            matches[0].reason
+        );
+    }
+
+    #[test]
+    fn detect_message_queue_no_match_for_plain_function() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"let x = 1 + 2; println!("{}", x);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector
+            .detect_message_queue("demo")
+            .expect("detect_message_queue");
+        assert!(matches.is_empty(), "plain function should not match MQ");
     }
 }
