@@ -70,6 +70,27 @@ fn parse_parameters(signature: &str) -> Vec<ParamInfo> {
         .collect()
 }
 
+/// Derives a dotted module path from a file path.
+///
+/// `/src/auth/login.rs` → `src.auth.login`
+fn derive_module_path(file_path: &str) -> String {
+    let path = std::path::Path::new(file_path);
+    let parent = path
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let full = if parent.is_empty() {
+        stem
+    } else {
+        format!("{parent}/{stem}")
+    };
+    full.strip_prefix('/').unwrap_or(&full).replace('/', ".")
+}
+
 pub fn resolve_start_id(graph: &Graph, symbol: &str) -> Option<NodeId> {
     let by_name: Vec<&crate::model::Node> =
         graph.nodes.values().filter(|n| n.name == symbol).collect();
@@ -384,10 +405,40 @@ impl<'a> ContextCollector<'a> {
         })
     }
 
-    fn collect_module_context(&self, _file_path: &str) -> StorageResult<ModuleContext> {
-        Err(crate::storage::error::StorageError::NotFound(
-            "collect_module_context not yet implemented".to_string(),
-        ))
+    fn collect_module_context(&self, file_path: &str) -> StorageResult<ModuleContext> {
+        let escaped_path = escape_cypher_string(file_path);
+        let cypher = format!(
+            "MATCH (n:File) WHERE n.filePath = '{escaped_path}' \
+             RETURN n.id AS id, n.project AS project;"
+        );
+        let rows = self.storage.query(&cypher)?;
+        let (file_id, package) = match rows.into_iter().next() {
+            Some(row) => (
+                row.get(0)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                row.get(1)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
+            None => {
+                return Err(crate::storage::error::StorageError::NotFound(format!(
+                    "file not found: {file_path}"
+                )));
+            }
+        };
+        let module_path = derive_module_path(file_path);
+        let imports = self.query_edge_target_names(&file_id, "IMPORTS")?;
+        let exports = self.query_edge_target_names(&file_id, "DEFINES")?;
+        Ok(ModuleContext {
+            file_path: file_path.to_string(),
+            module_path,
+            package,
+            imports,
+            exports,
+        })
     }
 
     fn collect_test_context(
@@ -453,6 +504,54 @@ impl<'a> ContextCollector<'a> {
             }
         }
         Ok(implements)
+    }
+
+    /// Queries edges of `edge_type` from `source_id` and resolves each
+    /// target node's name across common label tables.
+    fn query_edge_target_names(
+        &self,
+        source_id: &str,
+        edge_type: &str,
+    ) -> StorageResult<Vec<String>> {
+        if source_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        let escaped_source = escape_cypher_string(source_id);
+        let cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.source = '{escaped_source}' AND e.type = '{edge_type}' \
+             RETURN e.target AS target;"
+        );
+        let rows = self.storage.query(&cypher)?;
+        let mut names = Vec::new();
+        for row in rows {
+            if let Some(target_id) = row.first().and_then(|v| v.as_str()) {
+                names.push(self.resolve_node_name(target_id)?);
+            }
+        }
+        Ok(names)
+    }
+
+    /// Resolves a node's name by searching across common label tables.
+    /// Falls back to the id itself if no matching node is found.
+    fn resolve_node_name(&self, node_id: &str) -> StorageResult<String> {
+        if node_id.is_empty() {
+            return Ok(String::new());
+        }
+        let escaped = escape_cypher_string(node_id);
+        for label in [
+            "Function", "Method", "Class", "Struct", "Enum", "Trait", "File", "Module",
+            "Interface", "Const", "Static", "Variable",
+        ] {
+            let cypher = format!(
+                "MATCH (n:{label}) WHERE n.id = '{escaped}' RETURN n.name AS name;"
+            );
+            if let Some(row) = self.storage.query(&cypher)?.into_iter().next() {
+                if let Some(name) = row.first().and_then(|v| v.as_str()) {
+                    return Ok(name.to_string());
+                }
+            }
+        }
+        Ok(node_id.to_string())
     }
 }
 
@@ -1078,5 +1177,79 @@ mod tests {
         assert_eq!(tc.return_type, "u32");
         assert_eq!(tc.implements.len(), 1);
         assert_eq!(tc.implements[0], "Display");
+    }
+
+    // ===== T017: collect_module_context tests =====
+
+    #[test]
+    fn derive_module_path_strips_extension_and_dots() {
+        assert_eq!(derive_module_path("/src/auth/login.rs"), "src.auth.login");
+        assert_eq!(derive_module_path("/src/auth/login"), "src.auth.login");
+        assert_eq!(derive_module_path("login.rs"), "login");
+        assert_eq!(derive_module_path("/lib/util.rs"), "lib.util");
+    }
+
+    #[test]
+    fn collect_module_context_returns_file_info() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:File {id: 'file1', project: 'demo', name: 'login.rs', filePath: '/src/auth/login.rs', language: 'Rust', hash: '', lineCount: 100});").expect("create file");
+
+        let collector = ContextCollector::new(&*s);
+        let mc = collector
+            .collect_module_context("/src/auth/login.rs")
+            .expect("module context");
+        assert_eq!(mc.file_path, "/src/auth/login.rs");
+        assert_eq!(mc.module_path, "src.auth.login");
+        assert_eq!(mc.package, "demo");
+        assert!(mc.imports.is_empty());
+        assert!(mc.exports.is_empty());
+    }
+
+    #[test]
+    fn collect_module_context_with_imports() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:File {id: 'file1', project: 'demo', name: 'login.rs', filePath: '/src/auth/login.rs', language: 'Rust', hash: '', lineCount: 100});").expect("create file");
+        s.execute("CREATE (:File {id: 'file2', project: 'demo', name: 'db.rs', filePath: '/src/db/db.rs', language: 'Rust', hash: '', lineCount: 50});").expect("create imported file");
+        s.execute("CREATE (:CodeRelation {id: 'e_imp', source: 'file1', target: 'file2', type: 'IMPORTS', confidence: 1.0, confidenceTier: 'High', reason: 'use', startLine: 1, project: 'demo'});").expect("create import edge");
+
+        let collector = ContextCollector::new(&*s);
+        let mc = collector
+            .collect_module_context("/src/auth/login.rs")
+            .expect("module context");
+        assert_eq!(mc.imports.len(), 1);
+        assert_eq!(mc.imports[0], "db.rs");
+    }
+
+    #[test]
+    fn collect_module_context_with_defines() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:File {id: 'file1', project: 'demo', name: 'login.rs', filePath: '/src/auth/login.rs', language: 'Rust', hash: '', lineCount: 100});").expect("create file");
+        s.execute("CREATE (:Function {id: 'fn1', project: 'demo', name: 'login', qualifiedName: 'demo.login', filePath: '/src/auth/login.rs', startLine: 5, endLine: 20, signature: 'fn login()', returnType: 'void', isExported: true, docstring: '', content: '', parentQn: ''});").expect("create function");
+        s.execute("CREATE (:CodeRelation {id: 'e_def', source: 'file1', target: 'fn1', type: 'DEFINES', confidence: 1.0, confidenceTier: 'High', reason: 'defined in file', startLine: 5, project: 'demo'});").expect("create defines edge");
+
+        let collector = ContextCollector::new(&*s);
+        let mc = collector
+            .collect_module_context("/src/auth/login.rs")
+            .expect("module context");
+        assert_eq!(mc.exports.len(), 1);
+        assert_eq!(mc.exports[0], "login");
+    }
+
+    #[test]
+    fn collect_module_context_file_not_found() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        let collector = ContextCollector::new(&*s);
+        let err = collector
+            .collect_module_context("/missing/file.rs")
+            .expect_err("should error");
+        assert!(err.to_string().contains("file not found"));
     }
 }
