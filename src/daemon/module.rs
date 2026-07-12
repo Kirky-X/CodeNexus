@@ -132,10 +132,7 @@ impl AsyncAutoBuilder for DaemonModule {
             let config = kit
                 .config::<DaemonConfig>()
                 .map_err(|e| {
-                    DaemonError::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e.to_string(),
-                    ))
+                    DaemonError::Io(std::io::Error::other(e.to_string()))
                 })?;
             Self::build_cap(&config)
         })
