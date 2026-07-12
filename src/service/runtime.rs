@@ -58,12 +58,6 @@ pub fn reset_kit_for_testing() {
     }
 }
 
-/// Global mutex for serializing tests that use the global Kit via `init_kit`.
-/// Tests that call CLI wrappers (which rely on `kit()`) must acquire this
-/// lock to avoid racing with other tests that initialize/reset the Kit.
-#[cfg(test)]
-pub static KIT_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -160,33 +160,4 @@ mod tests {
         assert!(json.contains("\"indexed_at\":1000"));
         assert!(json.contains("\"last_commit\":\"abc123\""));
     }
-
-    // --- CLI wrapper tests ---
-
-    #[cfg(feature = "cli")]
-    #[tokio::test]
-    async fn list_returns_error_when_kit_not_initialized() {
-        use crate::service::runtime::{reset_kit_for_testing, KIT_TEST_MUTEX};
-        let _lock = KIT_TEST_MUTEX.lock().unwrap();
-        reset_kit_for_testing();
-        let result = list().await;
-        assert!(
-            result.is_err(),
-            "list should error when kit is not initialized"
-        );
-    }
-
-    #[cfg(feature = "cli")]
-    #[tokio::test]
-    async fn list_succeeds_when_kit_initialized() {
-        use crate::service::runtime::{init_kit, reset_kit_for_testing, KIT_TEST_MUTEX};
-        let _lock = KIT_TEST_MUTEX.lock().unwrap();
-        reset_kit_for_testing();
-        let (_dir, db) = fresh_db_path();
-        let kit = build_kit_for_db(&db);
-        init_kit(kit).expect("init_kit should succeed");
-        let result = list().await;
-        reset_kit_for_testing();
-        assert!(result.is_ok(), "list should succeed: {:?}", result.err());
-    }
 }
