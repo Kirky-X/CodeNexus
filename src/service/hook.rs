@@ -384,4 +384,40 @@ mod tests {
         assert!(summary.symbols_affected >= 1);
         assert!(summary.high_risk >= 1, "5 incoming → high_risk >= 1");
     }
+
+    // --- hook() CLI wrapper ---
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn hook_returns_err_when_kit_not_initialized() {
+        crate::service::runtime::reset_kit_for_testing();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(hook());
+        assert!(
+            result.is_err(),
+            "hook should error when global kit is not initialized"
+        );
+        crate::service::runtime::reset_kit_for_testing();
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn hook_succeeds_when_kit_initialized_and_stdin_not_tty() {
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() {
+            eprintln!("skipping: stdin is a TTY (would block)");
+            return;
+        }
+        crate::service::runtime::reset_kit_for_testing();
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("hook_cli_test.lbug");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let kit = rt
+            .block_on(build_kit(&KitBootstrapConfig::new(path)))
+            .expect("build_kit");
+        crate::service::runtime::init_kit(kit).expect("init_kit");
+        let result = rt.block_on(hook());
+        assert!(result.is_ok(), "hook should succeed: {:?}", result.err());
+        crate::service::runtime::reset_kit_for_testing();
+    }
 }
