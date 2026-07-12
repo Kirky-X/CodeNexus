@@ -14,7 +14,10 @@ use crate::service::error::CodeNexusError;
 use crate::service::error::{kit_not_initialized, to_api_error};
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::runtime::kit;
-use crate::trace::{TraceEdge, TraceNode, TraceResult, TraceType};
+use crate::trace::{
+    apply_path_filter, CallGraphTracer, PathFilter, TraceCycle, TraceEdge, TraceNode,
+    TracePath, TraceResult, TraceType,
+};
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::prelude::ApiError;
@@ -26,6 +29,8 @@ use sdforge::service_api;
 pub struct TraceOutput {
     pub symbol: String,
     pub paths: Vec<TracePathOutput>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cycles: Vec<TraceCycle>,
 }
 
 /// A single trace path — a sequence of nodes and edges at a given depth.
@@ -50,6 +55,7 @@ fn trace_output(r: TraceResult) -> TraceOutput {
     TraceOutput {
         symbol: r.symbol,
         paths,
+        cycles: r.cycles,
     }
 }
 
@@ -72,13 +78,100 @@ fn trace_edge_to_json(e: &TraceEdge) -> Value {
     })
 }
 
+/// Builds a [`PathFilter`] from a comma-separated list of glob patterns.
+///
+/// Each pattern is matched against node `file_path` using glob semantics
+/// (`*` = any sequence, `?` = single char). An empty string produces no
+/// filter (returns `None`).
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+fn build_path_filter(path_filter: &str) -> Option<PathFilter> {
+    let trimmed = path_filter.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let patterns: Vec<String> = trimmed
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if patterns.is_empty() {
+        return None;
+    }
+    Some(PathFilter {
+        include_files: Some(patterns),
+        ..Default::default()
+    })
+}
+
+/// Finds the start node id in the loaded graph by matching `name` or
+/// `qualified_name`.
+///
+/// Returns `None` if no node matches. If multiple nodes match, the first
+/// one is returned (sufficient for cross-service edge discovery — the
+/// trace itself already resolved the symbol unambiguously).
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+fn find_start_node_id(graph: &crate::model::Graph, symbol: &str) -> Option<String> {
+    graph
+        .nodes
+        .values()
+        .find(|n| n.name == symbol || n.qualified_name == symbol)
+        .map(|n| n.id.clone())
+}
+
+/// Collects cross-service paths by finding `HttpCalls` edges from the start
+/// node in the loaded graph.
+///
+/// Each HttpCalls edge produces a [`TracePath`] of depth 1 containing the
+/// start node and the target node. This exposes outbound HTTP dependencies
+/// that the standard `Calls`/`FfiCalls` tracers do not traverse.
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+fn collect_cross_service_paths(
+    graph: &crate::model::Graph,
+    start_id: &str,
+) -> Vec<TracePath> {
+    use crate::model::EdgeType;
+    let node_id: String = start_id.to_string();
+    let mut paths = Vec::new();
+    let Some(start_node) = graph.get_node(&node_id) else {
+        return paths;
+    };
+    let start_trace_node = TraceNode::from(start_node);
+    for edge in graph.edges_from(&node_id) {
+        if edge.edge_type != EdgeType::HttpCalls {
+            continue;
+        }
+        let Some(target_node) = graph.get_node(&edge.target) else {
+            continue;
+        };
+        paths.push(TracePath {
+            nodes: vec![start_trace_node.clone(), TraceNode::from(target_node)],
+            edges: vec![TraceEdge {
+                edge_type: edge.edge_type.to_string(),
+                reason: edge.reason.clone(),
+                confidence: edge.confidence,
+            }],
+            depth: 1,
+        });
+    }
+    paths
+}
+
 /// Runs trace against an injected Kit (testable core).
+///
+/// When `path_filter` is non-empty, trace paths are filtered by glob
+/// patterns against node `file_path`. When `detect_cycles` is true, the
+/// loaded subgraph is scanned for call-graph cycles via DFS coloring.
+/// When `cross_service` is true, `HttpCalls` edges from the start node
+/// are appended as additional paths.
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 pub fn run_trace(
     kit: &AsyncKit<AsyncReady>,
     symbol: &str,
     trace_type: &str,
     depth: u32,
+    path_filter: &str,
+    detect_cycles: bool,
+    cross_service: bool,
 ) -> Result<TraceOutput, CodeNexusError> {
     let tt = TraceType::from_cli_str(trace_type).ok_or_else(|| {
         CodeNexusError::InvalidInput(format!(
@@ -86,7 +179,35 @@ pub fn run_trace(
         ))
     })?;
     let trace_engine = kit.require::<TraceModule>()?;
-    let result = trace_engine.trace(symbol, tt, depth as usize)?;
+    let mut result = trace_engine.trace(symbol, tt, depth as usize)?;
+
+    let needs_graph = detect_cycles || cross_service;
+    let graph = if needs_graph {
+        Some(trace_engine.load_graph(symbol, depth as usize)?)
+    } else {
+        None
+    };
+
+    if cross_service {
+        if let Some(ref graph) = graph {
+            if let Some(start_id) = find_start_node_id(graph, symbol) {
+                let cross_paths = collect_cross_service_paths(graph, &start_id);
+                result.paths.extend(cross_paths);
+            }
+        }
+    }
+
+    if let Some(filter) = build_path_filter(path_filter) {
+        result.paths = apply_path_filter(result.paths, &filter);
+    }
+
+    if detect_cycles {
+        if let Some(ref graph) = graph {
+            let tracer = CallGraphTracer::new(graph);
+            result.cycles = tracer.detect_cycles();
+        }
+    }
+
     Ok(trace_output(result))
 }
 
@@ -98,10 +219,25 @@ pub fn run_trace(
     description = "Trace a symbol's call and/or data-flow paths.",
     cli = true
 )]
-async fn trace(symbol: String, trace_type: String, depth: u32) -> Result<(), ApiError> {
+async fn trace(
+    symbol: String,
+    trace_type: String,
+    depth: u32,
+    path_filter: String,
+    detect_cycles: bool,
+    cross_service: bool,
+) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    let result =
-        run_trace(&kit, &symbol, &trace_type, depth).map_err(|e| to_api_error(e, "trace_error"))?;
+    let result = run_trace(
+        &kit,
+        &symbol,
+        &trace_type,
+        depth,
+        &path_filter,
+        detect_cycles,
+        cross_service,
+    )
+    .map_err(|e| to_api_error(e, "trace_error"))?;
     let json = serde_json::to_string(&result)
         .map_err(|e| to_api_error(CodeNexusError::from(e), "trace_error"))?;
     println!("{json}");
@@ -120,9 +256,21 @@ async fn trace_mcp(
     symbol: String,
     trace_type: String,
     depth: u32,
+    path_filter: String,
+    detect_cycles: bool,
+    cross_service: bool,
 ) -> Result<TraceOutput, ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    run_trace(&kit, &symbol, &trace_type, depth).map_err(|e| to_api_error(e, "trace_error"))
+    run_trace(
+        &kit,
+        &symbol,
+        &trace_type,
+        depth,
+        &path_filter,
+        detect_cycles,
+        cross_service,
+    )
+    .map_err(|e| to_api_error(e, "trace_error"))
 }
 
 #[cfg(test)]
@@ -148,12 +296,9 @@ mod tests {
 
     #[test]
     fn run_trace_returns_trace_error_for_unknown_symbol() {
-        // The trace facade (src/trace/facade.rs:173) returns SymbolNotFound
-        // when no graph node matches the requested symbol — this is the
-        // designed behavior on a fresh/empty DB, not a success-with-empty-paths.
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let err = run_trace(&kit, "demo.foo", "calls", 3)
+        let err = run_trace(&kit, "demo.foo", "calls", 3, "", false, false)
             .expect_err("unknown symbol on empty DB should error");
         match err {
             CodeNexusError::Trace(crate::trace::TraceError::SymbolNotFound(s)) => {
@@ -167,7 +312,7 @@ mod tests {
     fn run_trace_returns_invalid_input_for_bad_trace_type() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let err = run_trace(&kit, "demo.foo", "bogus", 3)
+        let err = run_trace(&kit, "demo.foo", "bogus", 3, "", false, false)
             .expect_err("invalid trace_type should error");
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
         let msg = err.to_string();
@@ -186,7 +331,6 @@ mod tests {
             Some(TraceType::DataFlow)
         );
         assert_eq!(TraceType::from_cli_str("all"), Some(TraceType::All));
-        // Case-insensitive.
         assert_eq!(TraceType::from_cli_str("CALLS"), Some(TraceType::Calls));
     }
 
@@ -206,6 +350,7 @@ mod tests {
         let output = trace_output(result);
         assert_eq!(output.symbol, "demo.foo");
         assert!(output.paths.is_empty());
+        assert!(output.cycles.is_empty());
     }
 
     #[test]
@@ -247,7 +392,6 @@ mod tests {
         let v = trace_edge_to_json(&edge);
         assert_eq!(v["edgeType"], "Calls");
         assert_eq!(v["reason"], "direct call");
-        // f32 → f64 precision loss: 0.9_f32 serializes as 0.8999999761581421.
         let conf = v["confidence"].as_f64().expect("confidence should be a number");
         assert!((conf - 0.9).abs() < 1e-6, "confidence ~0.9, got {conf}");
     }
@@ -272,6 +416,7 @@ mod tests {
                 edges: vec![],
                 depth: 1,
             }],
+            cycles: vec![],
         };
         let json = serde_json::to_string(&output).unwrap();
         assert!(json.contains("\"symbol\":\"demo.foo\""));
@@ -284,6 +429,7 @@ mod tests {
         let output = TraceOutput {
             symbol: "demo.foo".into(),
             paths: vec![],
+            cycles: vec![],
         };
         let json = serde_json::to_string(&output).unwrap();
         let parsed: TraceOutput = serde_json::from_str(&json).unwrap();
@@ -299,11 +445,9 @@ mod tests {
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'callee', qualifiedName: 'demo.callee', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create callee");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: 'direct call', startLine: 2, project: 'demo'});").expect("create edge");
 
-        let output = run_trace(&kit, "demo.caller", "calls", 3)
+        let output = run_trace(&kit, "demo.caller", "calls", 3, "", false, false)
             .expect("trace on known symbol should succeed");
         assert_eq!(output.symbol, "demo.caller");
-        // The trace facade may return 0+ paths depending on BFS logic; the key
-        // assertion is that the trace ran without error and returned the symbol.
     }
 
     #[test]
@@ -315,7 +459,7 @@ mod tests {
         storage.execute("CREATE (:Function {id: 'f_dst', project: 'demo', name: 'dst', qualifiedName: 'demo.dst', filePath: '/src/d.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create dst");
         storage.execute("CREATE (:CodeRelation {id: 'e_df', source: 'f_src', target: 'f_dst', type: 'DATAFLOWS', confidence: 1.0, confidenceTier: 'High', reason: 'assignment', startLine: 2, project: 'demo'});").expect("create dataflow edge");
 
-        let output = run_trace(&kit, "demo.src", "dataflow", 3)
+        let output = run_trace(&kit, "demo.src", "dataflow", 3, "", false, false)
             .expect("dataflow trace should succeed");
         assert_eq!(output.symbol, "demo.src");
     }
@@ -327,8 +471,236 @@ mod tests {
         let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
         storage.execute("CREATE (:Function {id: 'f_root', project: 'demo', name: 'root', qualifiedName: 'demo.root', filePath: '/src/r.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create root");
 
-        let output = run_trace(&kit, "demo.root", "all", 2)
+        let output = run_trace(&kit, "demo.root", "all", 2, "", false, false)
             .expect("all trace type should succeed");
         assert_eq!(output.symbol, "demo.root");
+    }
+
+    // ===== T042: Enhanced trace tests =====
+
+    #[test]
+    fn build_path_filter_empty_returns_none() {
+        assert!(build_path_filter("").is_none());
+        assert!(build_path_filter("   ").is_none());
+        assert!(build_path_filter(",").is_none());
+        assert!(build_path_filter(" , , ").is_none());
+    }
+
+    #[test]
+    fn build_path_filter_parses_single_glob() {
+        let pf = build_path_filter("/src/*.rs").expect("should parse");
+        assert_eq!(pf.include_files.as_deref(), Some(&["/src/*.rs".to_string()][..]));
+        assert!(pf.exclude_files.is_none());
+        assert!(pf.include_modules.is_none());
+        assert!(pf.symbol_pattern.is_none());
+    }
+
+    #[test]
+    fn build_path_filter_parses_multiple_globs() {
+        let pf = build_path_filter("/src/*.rs, /lib/*.rs").expect("should parse");
+        let patterns = pf.include_files.expect("include_files should be set");
+        assert_eq!(patterns.len(), 2);
+        assert!(patterns.contains(&"/src/*.rs".to_string()));
+        assert!(patterns.contains(&"/lib/*.rs".to_string()));
+    }
+
+    #[test]
+    fn run_trace_with_detect_cycles_finds_cycle() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        // A→B→C→A (cycle)
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
+        storage.execute("CREATE (:Function {id: 'f_c', project: 'demo', name: 'c', qualifiedName: 'demo.c', filePath: '/src/c.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create c");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("a->b");
+        storage.execute("CREATE (:CodeRelation {id: 'e2', source: 'f_b', target: 'f_c', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("b->c");
+        storage.execute("CREATE (:CodeRelation {id: 'e3', source: 'f_c', target: 'f_a', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("c->a");
+
+        let output = run_trace(&kit, "demo.a", "calls", 5, "", true, false)
+            .expect("trace with detect_cycles should succeed");
+        assert!(
+            !output.cycles.is_empty(),
+            "should detect at least one cycle, got: {:?}",
+            output.cycles
+        );
+    }
+
+    #[test]
+    fn run_trace_with_detect_cycles_no_cycle_returns_empty() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        // A→B (no cycle)
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("a->b");
+
+        let output = run_trace(&kit, "demo.a", "calls", 3, "", true, false)
+            .expect("trace with detect_cycles should succeed");
+        assert!(
+            output.cycles.is_empty(),
+            "no cycle should be detected, got: {:?}",
+            output.cycles
+        );
+    }
+
+    #[test]
+    fn run_trace_with_cross_service_finds_http_calls() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'api_handler', qualifiedName: 'demo.api_handler', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create handler");
+        storage.execute("CREATE (:CodeRelation {id: 'e_http', source: 'f_a', target: 'f_b', type: 'HTTP_CALLS', confidence: 0.9, confidenceTier: 'High', reason: 'http request', startLine: 2, project: 'demo'});").expect("create http_calls edge");
+
+        let output = run_trace(&kit, "demo.caller", "calls", 3, "", false, true)
+            .expect("trace with cross_service should succeed");
+        // The standard Calls tracer does not traverse HttpCalls, so
+        // cross_service adds the HttpCalls edge as an additional path.
+        let has_http = output.paths.iter().any(|p| {
+            p.edges.iter().any(|e| {
+                e.get("edgeType")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| s == "HTTP_CALLS")
+            })
+        });
+        assert!(
+            has_http,
+            "cross_service should expose HttpCalls edge, paths: {:?}",
+            output.paths
+        );
+    }
+
+    #[test]
+    fn run_trace_with_cross_service_no_http_calls_returns_base() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'callee', qualifiedName: 'demo.callee', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create callee");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create calls edge");
+
+        let base = run_trace(&kit, "demo.caller", "calls", 3, "", false, false)
+            .expect("base trace should succeed");
+        let cross = run_trace(&kit, "demo.caller", "calls", 3, "", false, true)
+            .expect("cross_service trace should succeed");
+        assert_eq!(
+            base.paths.len(),
+            cross.paths.len(),
+            "no HttpCalls edges → same path count"
+        );
+    }
+
+    #[test]
+    fn run_trace_with_path_filter_filters_paths() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'callee', qualifiedName: 'demo.callee', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create callee");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create edge");
+
+        // Filter to nonexistent file → all paths should be dropped
+        let output = run_trace(&kit, "demo.caller", "calls", 3, "/nonexistent.rs", false, false)
+            .expect("trace with path_filter should succeed");
+        assert!(
+            output.paths.is_empty(),
+            "path_filter with no match should drop all paths"
+        );
+    }
+
+    #[test]
+    fn run_trace_with_path_filter_glob_keeps_matching() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create caller");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'callee', qualifiedName: 'demo.callee', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create callee");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create edge");
+
+        // Glob /src/*.rs matches both files → paths preserved
+        let output = run_trace(&kit, "demo.caller", "calls", 3, "/src/*.rs", false, false)
+            .expect("trace with path_filter should succeed");
+        assert!(
+            !output.paths.is_empty(),
+            "glob matching both files should keep paths"
+        );
+    }
+
+    #[test]
+    fn run_trace_combined_detect_cycles_and_cross_service() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        // A→B→A (cycle) + A -HTTP_CALLS-> C
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
+        storage.execute("CREATE (:Function {id: 'f_c', project: 'demo', name: 'c', qualifiedName: 'demo.c', filePath: '/src/c.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create c");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("a->b");
+        storage.execute("CREATE (:CodeRelation {id: 'e2', source: 'f_b', target: 'f_a', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("b->a");
+        storage.execute("CREATE (:CodeRelation {id: 'e3', source: 'f_a', target: 'f_c', type: 'HTTP_CALLS', confidence: 0.9, confidenceTier: 'High', reason: 'http', startLine: 3, project: 'demo'});").expect("a->c http");
+
+        let output = run_trace(&kit, "demo.a", "calls", 5, "", true, true)
+            .expect("combined trace should succeed");
+        assert!(
+            !output.cycles.is_empty(),
+            "should detect cycle, got: {:?}",
+            output.cycles
+        );
+        let has_http = output.paths.iter().any(|p| {
+            p.edges.iter().any(|e| {
+                e.get("edgeType")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| s == "HTTP_CALLS")
+            })
+        });
+        assert!(
+            has_http,
+            "should expose HttpCalls edge, paths: {:?}",
+            output.paths
+        );
+    }
+
+    #[test]
+    fn trace_output_serializes_with_cycles() {
+        let output = TraceOutput {
+            symbol: "demo.a".into(),
+            paths: vec![],
+            cycles: vec![TraceCycle {
+                nodes: vec!["a".into(), "b".into(), "a".into()],
+                edge_types: vec![crate::model::EdgeType::Calls, crate::model::EdgeType::Calls],
+            }],
+        };
+        let json = serde_json::to_string(&output).unwrap();
+        assert!(json.contains("\"cycles\""));
+        assert!(json.contains("\"nodes\""));
+        assert!(json.contains("\"edge_types\""));
+        assert!(json.contains("\"Calls\""));
+    }
+
+    #[test]
+    fn trace_output_serializes_without_cycles_when_empty() {
+        let output = TraceOutput {
+            symbol: "demo.a".into(),
+            paths: vec![],
+            cycles: vec![],
+        };
+        let json = serde_json::to_string(&output).unwrap();
+        assert!(
+            !json.contains("cycles"),
+            "empty cycles should be skipped in JSON, got: {json}"
+        );
+    }
+
+    #[test]
+    fn trace_output_deserializes_without_cycles_field() {
+        // Legacy JSON without "cycles" field should deserialize correctly
+        let legacy_json = r#"{"symbol":"demo.foo","paths":[]}"#;
+        let parsed: TraceOutput = serde_json::from_str(legacy_json)
+            .expect("legacy JSON without cycles should deserialize");
+        assert_eq!(parsed.symbol, "demo.foo");
+        assert!(parsed.paths.is_empty());
+        assert!(parsed.cycles.is_empty(), "missing cycles should default to empty");
     }
 }

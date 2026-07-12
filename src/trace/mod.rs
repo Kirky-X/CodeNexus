@@ -20,7 +20,7 @@ pub use call_graph::CallGraphTracer;
 pub use context::{collect_incoming, collect_outgoing, collect_processes, resolve_start_id};
 pub use data_flow::DataFlowTracer;
 pub use error::{Result, TraceError};
-pub use facade::{PathFilter, TraceCycle, TraceEngine, TraceFacade, TraceType};
+pub use facade::{apply_path_filter, PathFilter, TraceCycle, TraceEngine, TraceFacade, TraceType};
 pub use impact::{ImpactAnalyzer, ImpactConfig, ImpactNode, ImpactResult, RiskAssessment, RiskFactor, RiskLevel};
 pub use module::{TraceConfig, TraceModule};
 pub use types::{
