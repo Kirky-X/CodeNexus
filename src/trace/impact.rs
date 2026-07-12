@@ -252,48 +252,62 @@ impl<'a> ImpactAnalyzer<'a> {
 
     /// Assesses risk based on affected node count, max depth, and edge type
     /// weights.
+    ///
+    /// Scoring formula:
+    /// - `count_factor`: >50→1.0, 21-50→0.8, 6-20→0.5, ≤5→0.08
+    /// - `depth_factor`: depth>5→0.5+(d-5)*0.1, depth 3-5→0.5, depth<3→d/3*0.3
+    /// - `edge_factor`: max edge type weight among affected nodes
+    /// - `score = count_factor*0.6 + depth_factor*0.2 + edge_factor*0.2`
+    ///
+    /// Final level = max(count-based level, score-based level).
     fn assess_risk(&self, affected: &[ImpactNode]) -> RiskAssessment {
         let count = affected.len();
         let max_depth = affected.iter().map(|n| n.depth).max().unwrap_or(0);
 
-        // Factor 1: affected count → level.
-        let (count_level, count_value) = if count > 50 {
-            (RiskLevel::Critical, 1.0)
+        // Factor 1: affected count → count_factor and count_level.
+        let (count_factor, count_level) = if count > 50 {
+            (1.0, RiskLevel::Critical)
         } else if count > 20 {
-            (RiskLevel::High, 0.8)
+            (0.8, RiskLevel::High)
         } else if count > 5 {
-            (RiskLevel::Medium, 0.5)
+            (0.5, RiskLevel::Medium)
         } else {
-            (RiskLevel::Low, 0.2)
+            (0.08, RiskLevel::Low)
         };
 
-        // Factor 2: depth weight (depth > 5 adds weight, depth < 3 reduces).
-        let depth_weight = if max_depth > 5 {
-            1.0 + (max_depth - 5) as f64 * 0.1
-        } else if max_depth < 3 {
-            (max_depth as f64) / 3.0 * 0.5
+        // Factor 2: depth factor (depth > 5 adds weight, depth < 3 reduces).
+        let depth_factor = if max_depth > 5 {
+            (0.5 + (max_depth - 5) as f64 * 0.1).min(1.0)
+        } else if max_depth >= 3 {
+            0.5
         } else {
-            0.75
+            (max_depth as f64) / 3.0 * 0.3
         };
 
         // Factor 3: edge type weight (max weight among affected nodes).
-        let edge_weight = affected
+        let edge_factor = affected
             .iter()
             .map(|n| edge_type_weight(n.edge_type))
             .fold(0.0_f64, f64::max);
 
-        let score = ((count_value * 0.5) + (depth_weight * 0.25) + (edge_weight * 0.25))
-            .clamp(0.0, 1.0);
+        let score = (count_factor * 0.6 + depth_factor * 0.2 + edge_factor * 0.2).clamp(0.0, 1.0);
 
-        // Final level is the higher of count-based level and score-based level.
-        let level = if count > 50 || score >= 0.8 {
+        // Score-based level.
+        let score_level = if score >= 0.8 {
             RiskLevel::Critical
-        } else if count > 20 || score >= 0.6 {
+        } else if score >= 0.6 {
             RiskLevel::High
-        } else if count > 5 || score >= 0.3 {
+        } else if score >= 0.3 {
             RiskLevel::Medium
         } else {
             RiskLevel::Low
+        };
+
+        // Final level is the higher of count-based and score-based.
+        let level = if risk_level_rank(count_level) >= risk_level_rank(score_level) {
+            count_level
+        } else {
+            score_level
         };
 
         let factors = vec![
@@ -305,12 +319,12 @@ impl<'a> ImpactAnalyzer<'a> {
             RiskFactor {
                 name: "max_depth".to_string(),
                 value: max_depth as f64,
-                description: format!("max depth {max_depth} → weight {depth_weight:.2}"),
+                description: format!("max depth {max_depth} → factor {depth_factor:.2}"),
             },
             RiskFactor {
                 name: "edge_type_weight".to_string(),
-                value: edge_weight,
-                description: format!("max edge weight {edge_weight:.2}"),
+                value: edge_factor,
+                description: format!("max edge weight {edge_factor:.2}"),
             },
         ];
 
@@ -319,6 +333,16 @@ impl<'a> ImpactAnalyzer<'a> {
             score,
             factors,
         }
+    }
+}
+
+/// Returns a numeric rank for a RiskLevel (Low=0, Medium=1, High=2, Critical=3).
+fn risk_level_rank(level: RiskLevel) -> u8 {
+    match level {
+        RiskLevel::Low => 0,
+        RiskLevel::Medium => 1,
+        RiskLevel::High => 2,
+        RiskLevel::Critical => 3,
     }
 }
 
@@ -920,5 +944,153 @@ mod tests {
         let b_node = result.affected.iter().find(|n| n.name == "b").unwrap();
         assert_eq!(b_node.edge_type, EdgeType::Calls);
         assert_eq!(b_node.depth, 2);
+    }
+
+    // ===== T027: Risk assessment tests =====
+
+    #[test]
+    fn risk_assessment_60_affected_is_critical() {
+        // 60 functions all call target → 60 affected → Critical.
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        for i in 0..60 {
+            let id = format!("f{i}");
+            g.add_node(make_func(&id, &id));
+            g.add_edge(Edge::new(&id, "target", EdgeType::Calls, "proj"));
+        }
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert_eq!(result.affected.len(), 60);
+        assert_eq!(result.risk_assessment.level, RiskLevel::Critical);
+        assert!(result.risk_assessment.score >= 0.8);
+    }
+
+    #[test]
+    fn risk_assessment_10_affected_depth_5_is_high() {
+        // Chain of 5 (depths 1-5) + 5 direct callers (depth 1) = 10 affected, max depth 5.
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        // Chain: target ← c1 ← c2 ← c3 ← c4 ← c5 (depths 1-5)
+        for i in 1..=5 {
+            let id = format!("c{i}");
+            g.add_node(make_func(&id, &id));
+        }
+        g.add_edge(Edge::new("c1", "target", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c2", "c1", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c3", "c2", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c4", "c3", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c5", "c4", EdgeType::Calls, "proj"));
+        // 5 direct callers (depth 1)
+        for i in 1..=5 {
+            let id = format!("d{i}");
+            g.add_node(make_func(&id, &id));
+            g.add_edge(Edge::new(&id, "target", EdgeType::Calls, "proj"));
+        }
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert_eq!(result.affected.len(), 10);
+        let max_depth = result.affected.iter().map(|n| n.depth).max().unwrap_or(0);
+        assert_eq!(max_depth, 5);
+        assert_eq!(result.risk_assessment.level, RiskLevel::High);
+    }
+
+    #[test]
+    fn risk_assessment_3_affected_depth_2_is_low() {
+        // Chain of 2 (depths 1-2) + 1 direct caller (depth 1) = 3 affected, max depth 2.
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_node(make_func("c", "c"));
+        // Chain: target ← a ← b (depths 1-2)
+        g.add_edge(Edge::new("a", "target", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("b", "a", EdgeType::Calls, "proj"));
+        // Direct caller: target ← c (depth 1)
+        g.add_edge(Edge::new("c", "target", EdgeType::Calls, "proj"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert_eq!(result.affected.len(), 3);
+        let max_depth = result.affected.iter().map(|n| n.depth).max().unwrap_or(0);
+        assert_eq!(max_depth, 2);
+        assert_eq!(result.risk_assessment.level, RiskLevel::Low);
+    }
+
+    #[test]
+    fn risk_assessment_score_in_valid_range() {
+        // Empty affected → score should be in [0.0, 1.0].
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert!(result.affected.is_empty());
+        assert!(result.risk_assessment.score >= 0.0);
+        assert!(result.risk_assessment.score <= 1.0);
+    }
+
+    #[test]
+    fn risk_assessment_score_in_range_with_many_affected() {
+        // 60 affected → score should still be in [0.0, 1.0].
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        for i in 0..60 {
+            let id = format!("f{i}");
+            g.add_node(make_func(&id, &id));
+            g.add_edge(Edge::new(&id, "target", EdgeType::Calls, "proj"));
+        }
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert!(result.risk_assessment.score >= 0.0);
+        assert!(result.risk_assessment.score <= 1.0);
+    }
+
+    #[test]
+    fn risk_assessment_factors_contain_all_three() {
+        // RiskFactor list must contain affected_count, max_depth, edge_type_weight.
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        g.add_node(make_func("a", "a"));
+        g.add_edge(Edge::new("a", "target", EdgeType::Calls, "proj"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        let factor_names: Vec<&str> = result
+            .risk_assessment
+            .factors
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert!(factor_names.contains(&"affected_count"));
+        assert!(factor_names.contains(&"max_depth"));
+        assert!(factor_names.contains(&"edge_type_weight"));
+        // Verify factor values.
+        let count_factor = result
+            .risk_assessment
+            .factors
+            .iter()
+            .find(|f| f.name == "affected_count")
+            .unwrap();
+        assert_eq!(count_factor.value, 1.0);
+        let depth_factor = result
+            .risk_assessment
+            .factors
+            .iter()
+            .find(|f| f.name == "max_depth")
+            .unwrap();
+        assert_eq!(depth_factor.value, 1.0); // max depth is 1
+        let edge_factor = result
+            .risk_assessment
+            .factors
+            .iter()
+            .find(|f| f.name == "edge_type_weight")
+            .unwrap();
+        assert_eq!(edge_factor.value, 1.0); // Calls = 1.0
+    }
+
+    #[test]
+    fn risk_assessment_empty_affected_is_low() {
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert_eq!(result.risk_assessment.level, RiskLevel::Low);
     }
 }
