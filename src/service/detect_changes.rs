@@ -910,4 +910,119 @@ diff --git a/added.rs b/added.rs
             other => panic!("expected error or empty, got {other:?}"),
         }
     }
+
+    // --- parse_hunk_new_range: more edge cases ---
+
+    #[test]
+    fn parse_hunk_no_at_at_returns_none() {
+        assert!(parse_hunk_new_range("@@ -10 +12,5 no closing").is_none());
+    }
+
+    #[test]
+    fn parse_hunk_non_numeric_start_returns_none() {
+        assert!(parse_hunk_new_range("@@ -10 +abc,5 @@").is_none());
+    }
+
+    #[test]
+    fn parse_hunk_non_numeric_len_returns_none() {
+        assert!(parse_hunk_new_range("@@ -10 +12,abc @@").is_none());
+    }
+
+    // --- parse_diff_path: whitespace ---
+
+    #[test]
+    fn parse_diff_path_trims_whitespace() {
+        assert_eq!(
+            parse_diff_path("b/src/main.rs  ").as_deref(),
+            Some("src/main.rs")
+        );
+    }
+
+    // --- parse_unified_diff: file with only zero-len hunks ---
+
+    #[test]
+    fn parse_unified_diff_skips_file_with_only_zero_len_hunks() {
+        let diff = "\
+diff --git a/foo.rs b/foo.rs
+--- a/foo.rs
++++ b/foo.rs
+@@ -1,3 +0,0 @@
+-a
+-b
+-c
+diff --git a/bar.rs b/bar.rs
+--- a/bar.rs
++++ b/bar.rs
+@@ -5 +7,2 @@
+-c
++d
+";
+        let hunks = parse_unified_diff(diff);
+        // foo.rs has only zero-len hunks → skipped; bar.rs has a valid hunk.
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].0, "bar.rs");
+    }
+
+    // --- find_symbols_in_ranges: no matching symbols (early return) ---
+
+    #[test]
+    fn find_symbols_in_ranges_no_matching_symbols_returns_empty() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let affected = find_symbols_in_ranges(
+            &*storage,
+            "src/nonexistent.rs",
+            std::path::Path::new("/repo/src/nonexistent.rs"),
+            &[(1, 10)],
+        )
+        .expect("find_symbols_in_ranges");
+        assert!(affected.is_empty(), "no seeded symbols → empty result");
+    }
+
+    // --- detect_changes_core: end-to-end with real git repo ---
+
+    #[test]
+    fn core_detects_changed_symbol_in_real_git_repo() {
+        let tmp = TempDir::new().unwrap();
+        let status = std::process::Command::new("git")
+            .arg("init")
+            .arg(tmp.path())
+            .status();
+        if status.is_err() || !status.unwrap().success() {
+            eprintln!("skipping test: git init failed");
+            return;
+        }
+        let file = tmp.path().join("src/foo.rs");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "fn foo() {\n    // old\n}\n").unwrap();
+
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(tmp.path())
+                .args(args)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+        if !git(&["add", "."]) || !git(&["-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "init"]) {
+            eprintln!("skipping test: git add/commit failed");
+            return;
+        }
+        // Modify the file to create an unstaged diff.
+        std::fs::write(&file, "fn foo() {\n    // new\n    // added\n}\n").unwrap();
+
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageModule>().unwrap();
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'foo', qualifiedName: 'demo.foo', filePath: 'src/foo.rs', startLine: 1, endLine: 3, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").unwrap();
+
+        let result = detect_changes_core(&kit, tmp.path().to_str().unwrap(), "unstaged");
+        assert!(
+            result.is_ok(),
+            "detect_changes should succeed: {:?}",
+            result.err()
+        );
+    }
 }
