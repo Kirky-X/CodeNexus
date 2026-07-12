@@ -1925,4 +1925,126 @@ function setupSecond() {
             result.imports
         );
     }
+
+    // --- Coverage tests for uncovered branches ---
+
+    fn parse_ts(source: &str) -> tree_sitter::Tree {
+        let mut parser = crate::parse::parser_factory::ParserFactory::create_parser(Language::TypeScript)
+            .expect("parser");
+        parser.parse(source, None).expect("parse")
+    }
+
+    #[test]
+    fn variable_declarator_without_value_has_empty_source() {
+        // Covers line 865: extract_variable_declarator None value branch
+        let src = "let x;";
+        let result = extract(src);
+        let assign = result.assignments.iter().find(|a| a.target_name == "x");
+        assert!(assign.is_some(), "should produce AssignInfo for `let x;`: {:?}", result.assignments);
+        let a = assign.unwrap();
+        assert_eq!(a.source_name, "");
+        assert!(!a.is_return_assign);
+    }
+
+    #[test]
+    fn assignment_from_call_in_function_covers_call_branch() {
+        // Covers lines 888-889: extract_assignment call_expression branch
+        let src = "function f() { x = foo(); }";
+        let result = extract(src);
+        let assign = result.assignments.iter().find(|a| a.target_name == "x" && a.source_name == "foo");
+        assert!(assign.is_some(), "should find `x = foo()` assignment: {:?}", result.assignments);
+        assert!(assign.unwrap().is_return_assign);
+    }
+
+    #[test]
+    fn chained_call_covers_callee_name_call_expression() {
+        // Covers lines 933-934: callee_name call_expression arm
+        let src = "function f() { foo()(); }";
+        let result = extract(src);
+        assert!(
+            result.calls.iter().any(|c| c.callee_name == "foo"),
+            "should extract chained call: {:?}",
+            result.calls
+        );
+    }
+
+    #[test]
+    fn parenthesized_call_covers_callee_name_parenthesized() {
+        // Covers lines 937-938: callee_name parenthesized_expression arm
+        let src = "function f() { (foo)(); }";
+        let result = extract(src);
+        assert!(
+            result.calls.iter().any(|c| c.callee_name == "foo"),
+            "should extract parenthesized call: {:?}",
+            result.calls
+        );
+    }
+
+    #[test]
+    fn array_destructuring_covers_assignment_target_pattern() {
+        // Covers lines 952, 954-957, 961: assignment_target_name array_pattern
+        let src = "const [a, b] = arr;";
+        let result = extract(src);
+        let assign = result.assignments.iter().find(|a| a.target_name == "a");
+        assert!(
+            assign.is_some(),
+            "should extract array destructuring target: {:?}",
+            result.assignments
+        );
+        assert_eq!(assign.unwrap().source_name, "arr");
+    }
+
+    #[test]
+    fn object_destructuring_shorthand_covers_fallback_alphanumeric() {
+        // Covers lines 968-977: assignment_target_name _ fallback with valid text
+        // shorthand_property_identifier is not in match arms → _ fallback → text is alphanumeric → Some
+        let src = "const {a, b} = obj;";
+        let result = extract(src);
+        let assign = result.assignments.iter().find(|a| a.target_name == "a");
+        assert!(
+            assign.is_some(),
+            "should extract object shorthand destructuring: {:?}",
+            result.assignments
+        );
+        assert_eq!(assign.unwrap().source_name, "obj");
+    }
+
+    #[test]
+    fn object_destructuring_pair_covers_fallback_non_alphanumeric() {
+        // Covers line 979: assignment_target_name _ fallback returns None
+        // pair node text "a: b" contains ':' → fails alphanumeric check
+        let src = "const {a: b} = obj;";
+        let result = extract(src);
+        // Should not panic; pair destructuring may not produce AssignInfo
+        let _ = result.assignments;
+    }
+
+    #[test]
+    fn is_exported_returns_false_for_root_node() {
+        // Covers line 917: is_exported when node has no parent
+        let tree = parse_ts("const x = 1;");
+        assert!(!is_exported(tree.root_node()));
+    }
+
+    #[test]
+    fn is_ts_read_position_returns_false_for_root_node() {
+        // Covers line 1021: is_ts_read_position when node has no parent
+        let tree = parse_ts("const x = 1;");
+        assert!(!is_ts_read_position(tree.root_node()));
+    }
+
+    #[test]
+    fn is_const_declaration_returns_false_for_empty_program() {
+        // Covers line 724: is_const_declaration when node has no children
+        let tree = parse_ts("");
+        assert!(!is_const_declaration(tree.root_node()));
+    }
+
+    #[test]
+    fn is_const_declaration_returns_false_when_first_child_is_named() {
+        // Covers line 719: is_const_declaration when first child is named
+        // (program's first child is a named statement, not a const/let/var keyword)
+        let tree = parse_ts("const x = 1;");
+        assert!(!is_const_declaration(tree.root_node()));
+    }
 }
