@@ -143,4 +143,39 @@ mod tests {
         assert!(json.contains("\"node_count\":0"));
         assert!(json.contains("\"edge_count\":0"));
     }
+
+    #[test]
+    fn run_impact_returns_non_empty_graph_for_known_symbol() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'root', qualifiedName: 'demo.root', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create root");
+        storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'leaf', qualifiedName: 'demo.leaf', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create leaf");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: 'direct call', startLine: 2, project: 'demo'});").expect("create edge");
+
+        let output = run_impact(&kit, "demo.root", 3).expect("impact should succeed");
+        assert_eq!(output.symbol, "demo.root");
+        assert_eq!(output.depth, 3);
+        assert!(output.node_count >= 1, "should have at least 1 node");
+        assert!(output.edge_count >= 1, "should have at least 1 edge");
+        assert_eq!(output.nodes.len(), output.node_count);
+        assert_eq!(output.edges.len(), output.edge_count);
+    }
+
+    #[test]
+    fn run_impact_at_depth_zero_returns_only_start_node() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f_solo', project: 'demo', name: 'solo', qualifiedName: 'demo.solo', filePath: '/src/s.rs', startLine: 1, endLine: 3, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create solo");
+        storage.execute("CREATE (:Function {id: 'f_other', project: 'demo', name: 'other', qualifiedName: 'demo.other', filePath: '/src/o.rs', startLine: 1, endLine: 3, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create other");
+        storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_solo', target: 'f_other', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create edge");
+
+        let output = run_impact(&kit, "demo.solo", 0).expect("impact depth 0 should succeed");
+        assert_eq!(output.symbol, "demo.solo");
+        assert_eq!(output.depth, 0);
+        // At depth 0, only the start node is loaded (no BFS expansion).
+        assert_eq!(output.node_count, 1, "only start node at depth 0");
+        assert_eq!(output.edge_count, 0, "no edges at depth 0");
+    }
 }
