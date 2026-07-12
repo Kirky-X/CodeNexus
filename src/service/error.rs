@@ -439,4 +439,405 @@ mod tests {
         assert_eq!(err.exit_code(), 1);
         assert!(err.to_string().contains("Kit not initialized"));
     }
+
+    // --- exit_code for Index variants (delegates to IndexError::exit_code) ---
+
+    #[test]
+    fn exit_code_index_path_not_found_is_1() {
+        let err: CodeNexusError = IndexError::PathNotFound("/x".to_string()).into();
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    #[test]
+    fn exit_code_index_database_locked_is_2() {
+        let err: CodeNexusError = IndexError::DatabaseLocked.into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_index_storage_is_2() {
+        let err: CodeNexusError =
+            IndexError::Storage(crate::storage::StorageError::Query("x".to_string())).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_index_discover_is_1() {
+        let err: CodeNexusError =
+            IndexError::Discover(crate::discover::DiscoverError::from(std::io::Error::other(
+                "x",
+            )))
+            .into();
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    #[test]
+    fn exit_code_index_parse_is_0() {
+        let err: CodeNexusError = IndexError::Parse("x".to_string()).into();
+        assert_eq!(err.exit_code(), 0);
+    }
+
+    #[test]
+    fn exit_code_index_io_is_1() {
+        let err: CodeNexusError = IndexError::Io(std::io::Error::other("x")).into();
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    // --- exit_code for Query (2) ---
+
+    #[test]
+    fn exit_code_query_is_2() {
+        let err: CodeNexusError = QueryError::Query("syntax error".to_string()).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_query_storage_is_2() {
+        let err: CodeNexusError =
+            QueryError::Storage(crate::storage::StorageError::Query("x".to_string())).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_query_invalid_query_is_2() {
+        let err: CodeNexusError = QueryError::InvalidQuery("empty".to_string()).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_query_fulltext_is_2() {
+        let err: CodeNexusError = QueryError::FullText("fts unavailable".to_string()).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    // --- exit_code for Trace (2) ---
+
+    #[test]
+    fn exit_code_trace_symbol_not_found_is_2() {
+        let err: CodeNexusError = TraceError::SymbolNotFound("foo".to_string()).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_trace_ambiguous_is_2() {
+        let err: CodeNexusError = TraceError::AmbiguousSymbol {
+            symbol: "bar".to_string(),
+            candidates: vec!["a.bar".to_string()],
+        }
+        .into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_trace_invalid_depth_is_2() {
+        let err: CodeNexusError = TraceError::InvalidDepth(0).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_trace_start_node_missing_is_2() {
+        let err: CodeNexusError = TraceError::StartNodeMissing("node-1".to_string()).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_trace_storage_is_2() {
+        let err: CodeNexusError =
+            TraceError::Storage(crate::storage::StorageError::Query("x".to_string())).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    // --- exit_code for Storage (2) ---
+
+    #[test]
+    fn exit_code_storage_query_is_2() {
+        let err: CodeNexusError = crate::storage::StorageError::Query("bad cypher".to_string()).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_storage_not_found_is_2() {
+        let err: CodeNexusError = crate::storage::StorageError::NotFound("x".to_string()).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_storage_corrupt_is_2() {
+        // StorageError::Corrupt wraps as CodeNexusError::Storage (exit 2),
+        // NOT DatabaseCorrupt (exit 4) — that mapping is IndexError-only.
+        let err: CodeNexusError = crate::storage::StorageError::Corrupt("x".to_string()).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_storage_schema_is_2() {
+        let err: CodeNexusError = crate::storage::StorageError::Schema("x".to_string()).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_storage_io_is_2() {
+        let err: CodeNexusError =
+            crate::storage::StorageError::Io(std::io::Error::other("x")).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    // --- exit_code for Parse (0) ---
+
+    #[test]
+    fn exit_code_parse_unsupported_language_is_0() {
+        let err: CodeNexusError = ParseError::UnsupportedLanguage("java".to_string()).into();
+        assert_eq!(err.exit_code(), 0);
+    }
+
+    #[test]
+    fn exit_code_parse_parse_failed_is_0() {
+        let err: CodeNexusError = ParseError::ParseFailed {
+            file_path: "/x.rs".to_string(),
+        }
+        .into();
+        assert_eq!(err.exit_code(), 0);
+    }
+
+    // --- exit_code for Discover (1) ---
+
+    #[test]
+    fn exit_code_discover_io_is_1() {
+        let err: CodeNexusError =
+            crate::discover::DiscoverError::from(std::io::Error::other("x")).into();
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    // --- exit_code for Resolve (2) ---
+
+    #[test]
+    fn exit_code_resolve_symbol_not_found_is_2() {
+        let err: CodeNexusError = ResolveError::SymbolNotFound("foo".to_string()).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_resolve_ambiguous_is_2() {
+        let err: CodeNexusError = ResolveError::AmbiguousSymbol("bar".to_string(), 3).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_resolve_invalid_fqn_is_2() {
+        let err: CodeNexusError = ResolveError::InvalidFqn("bad..qn".to_string()).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_resolve_scope_is_2() {
+        let err: CodeNexusError = ResolveError::Scope("empty chain".to_string()).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    // --- exit_code for Phase (2) ---
+
+    #[test]
+    fn exit_code_phase_cycle_is_2() {
+        let err: CodeNexusError = PhaseError::Cycle("a, b".to_string()).into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_phase_missing_dependency_is_2() {
+        let err: CodeNexusError = PhaseError::MissingDependency {
+            phase: "resolve",
+            dep: "scan",
+        }
+        .into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn exit_code_phase_duplicate_is_2() {
+        let err: CodeNexusError = PhaseError::DuplicatePhase("scan").into();
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    // --- exit_code for Io (1) ---
+
+    #[test]
+    fn exit_code_io_is_1() {
+        let err: CodeNexusError = std::io::Error::other("disk full").into();
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    // --- exit_code for Json (1) ---
+
+    #[test]
+    fn exit_code_json_is_1() {
+        let json_err = serde_json::from_str::<serde_json::Value>("bad").unwrap_err();
+        let err: CodeNexusError = json_err.into();
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    // --- exit_code for ProjectNotFound (2) ---
+
+    #[test]
+    fn exit_code_project_not_found_is_2() {
+        let err = CodeNexusError::ProjectNotFound("demo".to_string());
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    // --- exit_code for Daemon (1) ---
+
+    #[cfg(feature = "daemon")]
+    #[test]
+    fn exit_code_daemon_notify_is_1() {
+        let err: CodeNexusError = DaemonError::Notify(
+            notify_debouncer_full::notify::Error::path_not_found(),
+        )
+        .into();
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    #[cfg(feature = "daemon")]
+    #[test]
+    fn exit_code_daemon_io_is_1() {
+        let err: CodeNexusError = DaemonError::Io(std::io::Error::other("x")).into();
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    // --- exit_code for Cache (1) ---
+
+    #[cfg(feature = "cache")]
+    #[test]
+    fn exit_code_cache_config_is_1() {
+        let err: CodeNexusError = CacheError::Config("missing".to_string()).into();
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    #[cfg(feature = "cache")]
+    #[test]
+    fn exit_code_cache_build_failed_is_1() {
+        let err: CodeNexusError = CacheError::BuildFailed("capacity 0".to_string()).into();
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    // --- exit_code for Embed (1) ---
+
+    #[cfg(feature = "embed")]
+    #[test]
+    fn exit_code_embed_missing_api_key_is_1() {
+        let err: CodeNexusError = EmbedError::MissingApiKey.into();
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    #[cfg(feature = "embed")]
+    #[test]
+    fn exit_code_embed_unavailable_is_1() {
+        let err: CodeNexusError = EmbedError::Unavailable("connection refused".to_string()).into();
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    // --- exit_code for Lsp (1) ---
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn exit_code_lsp_server_start_is_1() {
+        let err: CodeNexusError =
+            crate::lsp::LspError::ServerStart("binary not found".to_string()).into();
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn exit_code_lsp_communication_is_1() {
+        let err: CodeNexusError =
+            crate::lsp::LspError::Communication("channel closed".to_string()).into();
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn exit_code_lsp_timeout_is_1() {
+        let err: CodeNexusError = crate::lsp::LspError::Timeout(5000).into();
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    // --- kit_exit_code: IndexError::DatabaseCorrupt in source chain ---
+
+    #[test]
+    fn exit_code_kit_build_failed_with_index_database_corrupt_is_4() {
+        let kit_err = KitError::BuildFailed {
+            context: "index",
+            source: Box::new(IndexError::DatabaseCorrupt("schema mismatch".to_string())),
+        };
+        let err: CodeNexusError = kit_err.into();
+        assert_eq!(err.exit_code(), 4);
+    }
+
+    // --- kit_exit_code: non-corrupt source falls through to 1 ---
+
+    #[test]
+    fn exit_code_kit_build_failed_with_non_corrupt_is_1() {
+        let kit_err = KitError::BuildFailed {
+            context: "query",
+            source: Box::new(QueryError::Query("bad cypher".to_string())),
+        };
+        let err: CodeNexusError = kit_err.into();
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    // --- wrap_error / wrap_kit_error (cli/mcp feature) ---
+
+    #[cfg(any(feature = "cli", feature = "mcp"))]
+    #[test]
+    fn wrap_error_creates_internal_with_source() {
+        let api_err = wrap_error("boom", std::io::Error::other("inner"));
+        match api_err {
+            ApiError::Internal { message, .. } => {
+                assert!(message.contains("boom"), "got: {message}");
+            }
+            other => panic!("expected Internal, got {other:?}"),
+        }
+    }
+
+    #[cfg(any(feature = "cli", feature = "mcp"))]
+    #[test]
+    fn wrap_kit_error_creates_internal_with_message() {
+        let kit_err = KitError::MissingCapability { key: "storage" };
+        let api_err = wrap_kit_error("build failed", kit_err);
+        match api_err {
+            ApiError::Internal { message, .. } => {
+                assert!(message.contains("build failed"), "got: {message}");
+                assert!(message.contains("storage"), "got: {message}");
+            }
+            other => panic!("expected Internal, got {other:?}"),
+        }
+    }
+
+    #[cfg(any(feature = "cli", feature = "mcp"))]
+    #[test]
+    fn kit_not_initialized_api_error_has_fixed_id() {
+        let api_err = kit_not_initialized();
+        match api_err {
+            ApiError::Internal { message, error_id, .. } => {
+                assert_eq!(error_id, "kit_not_initialized");
+                assert!(message.contains("Kit not initialized"));
+            }
+            other => panic!("expected Internal, got {other:?}"),
+        }
+    }
+
+    #[cfg(any(feature = "cli", feature = "mcp"))]
+    #[test]
+    fn from_api_error_other_variant_maps_to_internal() {
+        // ApiError variants other than InvalidInput/Internal/NotFound map to
+        // CodeNexusError::Internal("Unexpected error: ...").
+        let api_err = ApiError::AuthenticationFailed {
+            reason: "token expired".to_string(),
+        };
+        let cli_err: CodeNexusError = api_err.into();
+        match cli_err {
+            CodeNexusError::Internal(msg) => {
+                assert!(msg.contains("Unexpected error"), "got: {msg}");
+            }
+            other => panic!("expected Internal, got {other:?}"),
+        }
+    }
 }
