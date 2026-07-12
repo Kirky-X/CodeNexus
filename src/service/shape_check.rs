@@ -114,4 +114,37 @@ mod tests {
         assert!(json.contains("\"violations\""));
         assert!(json.contains("\"mismatch\""));
     }
+
+    // --- CLI wrapper tests ---
+
+    #[cfg(feature = "cli")]
+    #[tokio::test]
+    async fn shape_check_returns_error_when_kit_not_initialized() {
+        use crate::service::runtime::{reset_kit_for_testing, KIT_TEST_MUTEX};
+        let _lock = KIT_TEST_MUTEX.lock().unwrap();
+        reset_kit_for_testing();
+        let result = shape_check("demo".to_string()).await;
+        assert!(
+            result.is_err(),
+            "shape_check should error when kit is not initialized"
+        );
+    }
+
+    #[cfg(feature = "cli")]
+    #[tokio::test]
+    async fn shape_check_succeeds_when_kit_initialized() {
+        use crate::service::runtime::{init_kit, reset_kit_for_testing, KIT_TEST_MUTEX};
+        let _lock = KIT_TEST_MUTEX.lock().unwrap();
+        reset_kit_for_testing();
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        init_kit(kit).expect("init_kit should succeed");
+        let result = shape_check("demo".to_string()).await;
+        reset_kit_for_testing();
+        assert!(
+            result.is_ok(),
+            "shape_check should succeed: {:?}",
+            result.err()
+        );
+    }
 }
