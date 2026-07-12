@@ -119,7 +119,7 @@ impl<'a> SearchEngine<'a> {
             SearchMode::MultiSignal => {
                 let mut hits = self.search_graph_enhanced(project, params)?;
                 for hit in &mut hits {
-                    hit.score = self.score_multi_signal(hit, params);
+                    hit.score = self.score_multi_signal(hit, params, project);
                     hit.match_reason = "multi-signal".to_string();
                 }
                 hits
@@ -404,13 +404,65 @@ impl<'a> SearchEngine<'a> {
     }
 
     /// Multi-signal score in `[0.0, 1.0]`:
-    /// - `name_relevance * 0.4`
-    /// - `degree_centrality * 0.3`
-    /// - `module_proximity * 0.2`
-    /// - `test_coverage * 0.1`
-    fn score_multi_signal(&self, candidate: &SearchResult, params: &SearchParams) -> f64 {
-        // T023 placeholder — implementation in next task.
-        let _ = (candidate, params);
+    /// - `name_relevance * 0.4` (exact=1.0, prefix/substring=0.8, no=0.0)
+    /// - `degree_centrality * 0.3` (min(degree/100, 1.0))
+    /// - `module_proximity * 0.2` (file_pattern match=1.0, else=0.5)
+    /// - `test_coverage * 0.1` (has incoming TESTS edges=1.0, else=0.0)
+    fn score_multi_signal(
+        &self,
+        candidate: &SearchResult,
+        params: &SearchParams,
+        project: &str,
+    ) -> f64 {
+        let name_relevance = compute_name_relevance(&candidate.name, &params.query);
+        let degree = parse_degree_from_reason(&candidate.match_reason);
+        let degree_centrality = (degree as f64 / 100.0).min(1.0);
+        let module_proximity = compute_module_proximity(&candidate.file_path, &params.file_pattern);
+        let test_coverage = self.compute_test_coverage(project, &candidate.qualified_name);
+
+        name_relevance * 0.4
+            + degree_centrality * 0.3
+            + module_proximity * 0.2
+            + test_coverage * 0.1
+    }
+
+    /// Returns 1.0 if the symbol with `qualified_name` has incoming TESTS
+    /// edges in `project`, 0.0 otherwise.
+    fn compute_test_coverage(&self, project: &str, qualified_name: &Option<String>) -> f64 {
+        let Some(qn) = qualified_name else {
+            return 0.0;
+        };
+        let project_esc = escape_cypher_string(project);
+        let qn_esc = escape_cypher_string(qn);
+        // Look up the node id across all symbol labels.
+        for &label in SYMBOL_LABELS {
+            let table = escape_identifier(label.table_name());
+            let cypher = format!(
+                "MATCH (n:{table}) WHERE n.qualifiedName = '{qn_esc}' AND n.project = '{project_esc}' \
+                 RETURN n.id AS id;"
+            );
+            if let Ok(rows) = self.storage.query(&cypher) {
+                if let Some(id) = rows.first().and_then(|r| r.first()).and_then(|v| v.as_str()) {
+                    // Check for incoming TESTS edges.
+                    let edge_cypher = format!(
+                        "MATCH (e:CodeRelation) WHERE e.type = 'TESTS' AND e.project = '{project_esc}' \
+                         AND e.target = '{}' RETURN count(e) AS cnt;",
+                        escape_cypher_string(id),
+                    );
+                    if let Ok(edge_rows) = self.storage.query(&edge_cypher) {
+                        let count = edge_rows
+                            .first()
+                            .and_then(|r| r.first())
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0);
+                        if count > 0 {
+                            return 1.0;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
         0.0
     }
 }
@@ -663,6 +715,52 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
 /// [`NodeLabel`]. Returns `None` for unknown labels.
 fn parse_node_label(name: &str) -> Option<NodeLabel> {
     name.parse::<NodeLabel>().ok()
+}
+
+/// Computes name relevance for multi-signal scoring (R-search-004).
+///
+/// - Exact case-insensitive match → 1.0
+/// - Prefix or substring match → 0.8
+/// - No match → 0.0
+fn compute_name_relevance(name: &str, query: &str) -> f64 {
+    if query.is_empty() {
+        return 1.0;
+    }
+    let name_lower = name.to_ascii_lowercase();
+    let query_lower = query.to_ascii_lowercase();
+    if name_lower == query_lower {
+        1.0
+    } else if name_lower.contains(&query_lower) {
+        0.8
+    } else {
+        0.0
+    }
+}
+
+/// Parses the degree value from a match_reason string formatted as
+/// `"... (degree=N)"`. Returns 0 if no degree marker is found.
+fn parse_degree_from_reason(reason: &str) -> u32 {
+    let marker = "degree=";
+    let Some(pos) = reason.find(marker) else {
+        return 0;
+    };
+    let after = &reason[pos + marker.len()..];
+    let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse::<u32>().unwrap_or(0)
+}
+
+/// Computes module proximity for multi-signal scoring (R-search-004).
+///
+/// - `file_pattern` is provided and matches the candidate's `file_path` → 1.0
+/// - Otherwise (no pattern or no match) → 0.5
+fn compute_module_proximity(
+    file_path: &Option<String>,
+    file_pattern: &Option<String>,
+) -> f64 {
+    match (file_path, file_pattern) {
+        (Some(path), Some(pattern)) if path.contains(pattern) => 1.0,
+        _ => 0.5,
+    }
 }
 
 /// Sorts results by descending score then ascending name, and truncates to `limit`.
@@ -1824,15 +1922,149 @@ mod tests {
     }
 
     #[test]
-    fn search_engine_multi_signal_returns_empty_placeholder() {
+    fn search_engine_multi_signal_exact_high_degree_same_module_with_tests() {
+        // R-search-004: exact match + high degree + same module + has tests
+        // → score approaches 1.0.
         let storage = build_storage();
+        let handler = Node::builder(NodeLabel::Function, "handler", "demo.handler")
+            .id("h1")
+            .project("demo")
+            .file_path("/src/handlers.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[handler], NodeLabel::Function).expect("save_nodes");
+
+        // 100 CALLS edges → degree_centrality = min(100/100, 1.0) = 1.0
+        let calls_edges: Vec<Edge> = (0..100)
+            .map(|i| Edge::new(&format!("caller_{i}"), "h1", EdgeType::Calls, "demo"))
+            .collect();
+        storage.save_edges(&calls_edges).expect("save calls edges");
+
+        // 1 TESTS edge → test_coverage = 1.0
+        let tests_edge = Edge::new("test_fn", "h1", EdgeType::Tests, "demo");
+        storage.save_edges(&[tests_edge]).expect("save tests edge");
+
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "handler".to_string(),
+            mode: SearchMode::MultiSignal,
+            file_pattern: Some("/src/handlers.rs".to_string()),
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("multi-signal search");
+        assert_eq!(results.len(), 1);
+        let score = results[0].score;
+        // name_relevance(1.0)*0.4 + degree_centrality(1.0)*0.3
+        // + module_proximity(1.0)*0.2 + test_coverage(1.0)*0.1 = 1.0
+        assert!(
+            (score - 1.0).abs() < 1e-9,
+            "exact+high_degree+same_module+tests should be 1.0, got {score}"
+        );
+        assert_eq!(results[0].match_reason, "multi-signal");
+    }
+
+    #[test]
+    fn search_engine_multi_signal_substring_low_degree_different_module_no_tests() {
+        // R-search-004: fuzzy match + low degree + different module + no tests
+        // → score < 0.5.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "request_handler", "demo.request_handler")
+            .id("h2")
+            .project("demo")
+            .file_path("/src/main.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "handler".to_string(),
+            mode: SearchMode::MultiSignal,
+            file_pattern: Some("/src/handlers.rs".to_string()),
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("multi-signal search");
+        assert_eq!(results.len(), 1);
+        let score = results[0].score;
+        // name_relevance(0.8)*0.4 + degree_centrality(0.0)*0.3
+        // + module_proximity(0.5)*0.2 + test_coverage(0.0)*0.1
+        // = 0.32 + 0.0 + 0.10 + 0.0 = 0.42
+        assert!(
+            score < 0.5,
+            "substring+low_degree+different_module+no_tests should be < 0.5, got {score}"
+        );
+        assert!(score >= 0.0, "score must be >= 0.0, got {score}");
+    }
+
+    #[test]
+    fn search_engine_multi_signal_score_always_in_unit_range() {
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "handler", "demo.handler")
+            .id("h1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
             query: "handler".to_string(),
             mode: SearchMode::MultiSignal,
             ..SearchParams::default()
         };
-        let results = engine.search("demo", &params).expect("multi-signal dispatch");
-        assert!(results.is_empty());
+        let results = engine.search("demo", &params).expect("multi-signal search");
+        for r in &results {
+            assert!(
+                (0.0..=1.0).contains(&r.score),
+                "score {} out of [0.0, 1.0]",
+                r.score
+            );
+        }
+    }
+
+    #[test]
+    fn compute_name_relevance_returns_expected_values() {
+        assert_eq!(compute_name_relevance("handler", "handler"), 1.0);
+        assert_eq!(compute_name_relevance("HANDLER", "handler"), 1.0);
+        assert_eq!(compute_name_relevance("handler_ext", "handler"), 0.8);
+        assert_eq!(compute_name_relevance("my_handler", "handler"), 0.8);
+        assert_eq!(compute_name_relevance("unrelated", "handler"), 0.0);
+        assert_eq!(compute_name_relevance("anything", ""), 1.0);
+    }
+
+    #[test]
+    fn parse_degree_from_reason_extracts_degree_value() {
+        assert_eq!(parse_degree_from_reason("exact name match (degree=5)"), 5);
+        assert_eq!(parse_degree_from_reason("prefix match (degree=0)"), 0);
+        assert_eq!(parse_degree_from_reason("degree=100"), 100);
+        assert_eq!(parse_degree_from_reason("no degree info"), 0);
+        assert_eq!(parse_degree_from_reason("multi-signal"), 0);
+    }
+
+    #[test]
+    fn compute_module_proximity_returns_expected_values() {
+        assert_eq!(
+            compute_module_proximity(&Some("/src/handlers.rs".to_string()), &Some("/src/handlers.rs".to_string())),
+            1.0
+        );
+        assert_eq!(
+            compute_module_proximity(&Some("/src/main.rs".to_string()), &Some("/src/handlers.rs".to_string())),
+            0.5
+        );
+        assert_eq!(
+            compute_module_proximity(&Some("/a.rs".to_string()), &None),
+            0.5
+        );
+        assert_eq!(
+            compute_module_proximity(&None, &Some("/a.rs".to_string())),
+            0.5
+        );
     }
 }
