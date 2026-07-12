@@ -867,4 +867,70 @@ mod tests {
             "exported type Command should have is_exported=true"
         );
     }
+
+    #[test]
+    fn extracts_type_alias() {
+        let result = extract("package main\ntype MyInt int\n");
+        let aliases: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::TypeAlias)
+            .collect();
+        assert_eq!(
+            aliases.len(),
+            1,
+            "should extract 1 type alias: {:?}",
+            result.nodes
+        );
+        assert_eq!(aliases[0].name, "MyInt");
+    }
+
+    #[test]
+    fn function_with_pointer_parameter_has_signature() {
+        let result = extract("package main\nfunc foo(x *int) {}\n");
+        let func = result.nodes.iter().find(|n| n.name == "foo").unwrap();
+        assert!(func.signature.is_some(), "should have signature");
+        let sig = func.signature.as_ref().unwrap();
+        assert!(sig.contains("foo"), "signature should contain name: {sig}");
+    }
+
+    #[test]
+    fn function_with_qualified_type_parameter_has_signature() {
+        let result = extract("package main\nimport \"fmt\"\nfunc foo(x fmt.Stringer) {}\n");
+        let func = result.nodes.iter().find(|n| n.name == "foo").unwrap();
+        assert!(func.signature.is_some(), "should have signature");
+        let sig = func.signature.as_ref().unwrap();
+        assert!(sig.contains("foo"), "signature should contain name: {sig}");
+    }
+
+    #[test]
+    fn extracts_selector_call() {
+        let result = extract("package main\nimport \"fmt\"\nfunc main() {\n\tfmt.Println()\n}\n");
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
+        assert!(
+            callees.contains(&"Println"),
+            "should extract selector call to Println: {:?}",
+            callees
+        );
+    }
+
+    #[test]
+    fn extracts_call_on_call_result() {
+        let src = "package main\nfunc getFunc() func() {\n\treturn nil\n}\nfunc main() {\n\tgetFunc()()\n}\n";
+        let result = extract(src);
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
+        assert!(
+            callees.contains(&"getFunc"),
+            "should extract call to getFunc: {:?}",
+            callees
+        );
+    }
 }

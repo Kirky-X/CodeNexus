@@ -285,4 +285,94 @@ mod tests {
         let processes = collect_processes(&graph, &"a".to_string());
         assert!(processes.is_empty());
     }
+
+    #[test]
+    fn collect_incoming_sorts_by_edge_type_then_name() {
+        let mut graph = Graph::new();
+        graph.add_node(make_node("target", "target", "demo.target", NodeLabel::Function, "/t.rs", 1));
+        graph.add_node(make_node("c1", "z_caller", "demo.z_caller", NodeLabel::Function, "/z.rs", 1));
+        graph.add_node(make_node("c2", "a_caller", "demo.a_caller", NodeLabel::Function, "/a.rs", 1));
+        graph.add_node(make_node("c3", "m_caller", "demo.m_caller", NodeLabel::Function, "/m.rs", 1));
+        graph.add_edge(Edge::new("c1", "target", EdgeType::DataFlows, "demo"));
+        graph.add_edge(Edge::new("c2", "target", EdgeType::Calls, "demo"));
+        graph.add_edge(Edge::new("c3", "target", EdgeType::Calls, "demo"));
+        let incoming = collect_incoming(&graph, &"target".to_string());
+        assert_eq!(incoming.len(), 3);
+        // Sort: edge_type asc, then name asc → CALLS before DATAFLOWS,
+        // and within CALLS: a_caller before m_caller.
+        assert_eq!(incoming[0].edge_type, "CALLS");
+        assert_eq!(incoming[0].name, "a_caller");
+        assert_eq!(incoming[1].edge_type, "CALLS");
+        assert_eq!(incoming[1].name, "m_caller");
+        assert_eq!(incoming[2].edge_type, "DATAFLOWS");
+        assert_eq!(incoming[2].name, "z_caller");
+    }
+
+    #[test]
+    fn collect_outgoing_sorts_by_edge_type_then_name() {
+        let mut graph = Graph::new();
+        graph.add_node(make_node("src", "src", "demo.src", NodeLabel::Function, "/s.rs", 1));
+        graph.add_node(make_node("d1", "z_callee", "demo.z_callee", NodeLabel::Function, "/z.rs", 1));
+        graph.add_node(make_node("d2", "a_callee", "demo.a_callee", NodeLabel::Function, "/a.rs", 1));
+        graph.add_edge(Edge::new("src", "d1", EdgeType::DataFlows, "demo"));
+        graph.add_edge(Edge::new("src", "d2", EdgeType::Calls, "demo"));
+        let outgoing = collect_outgoing(&graph, &"src".to_string());
+        assert_eq!(outgoing.len(), 2);
+        // CALLS before DATAFLOWS.
+        assert_eq!(outgoing[0].edge_type, "CALLS");
+        assert_eq!(outgoing[0].name, "a_callee");
+        assert_eq!(outgoing[1].edge_type, "DATAFLOWS");
+        assert_eq!(outgoing[1].name, "z_callee");
+    }
+
+    #[test]
+    fn collect_processes_finds_start_as_target() {
+        let mut graph = Graph::new();
+        graph.add_node(make_node("handler", "handler", "demo.handler", NodeLabel::Function, "/h.rs", 1));
+        graph.add_node(
+            Node::builder(NodeLabel::Process, "checkout", "demo.checkout")
+                .id("p1")
+                .build(),
+        );
+        // Edge from process TO start node (start is the target).
+        graph.add_edge(Edge::new("p1", "handler", EdgeType::HandlesRoute, "demo"));
+        let processes = collect_processes(&graph, &"handler".to_string());
+        assert_eq!(processes.len(), 1);
+        assert_eq!(processes[0].name, "checkout");
+        assert_eq!(processes[0].edge_type, "HANDLES_ROUTE");
+    }
+
+    #[test]
+    fn collect_processes_sorts_multiple() {
+        let mut graph = Graph::new();
+        graph.add_node(make_node("handler", "handler", "demo.handler", NodeLabel::Function, "/h.rs", 1));
+        graph.add_node(
+            Node::builder(NodeLabel::Process, "z_process", "demo.z_process")
+                .id("p1")
+                .build(),
+        );
+        graph.add_node(
+            Node::builder(NodeLabel::Process, "a_process", "demo.a_process")
+                .id("p2")
+                .build(),
+        );
+        graph.add_node(
+            Node::builder(NodeLabel::Process, "m_process", "demo.m_process")
+                .id("p3")
+                .build(),
+        );
+        // Mix of StepInProcess and HandlesTool edges.
+        graph.add_edge(Edge::new("handler", "p1", EdgeType::StepInProcess, "demo"));
+        graph.add_edge(Edge::new("handler", "p2", EdgeType::HandlesTool, "demo"));
+        graph.add_edge(Edge::new("p3", "handler", EdgeType::EntryPointOf, "demo"));
+        let processes = collect_processes(&graph, &"handler".to_string());
+        assert_eq!(processes.len(), 3);
+        // Sort: edge_type asc → ENTRY_POINT_OF, HANDLES_TOOL, STEP_IN_PROCESS.
+        assert_eq!(processes[0].edge_type, "ENTRY_POINT_OF");
+        assert_eq!(processes[0].name, "m_process");
+        assert_eq!(processes[1].edge_type, "HANDLES_TOOL");
+        assert_eq!(processes[1].name, "a_process");
+        assert_eq!(processes[2].edge_type, "STEP_IN_PROCESS");
+        assert_eq!(processes[2].name, "z_process");
+    }
 }
