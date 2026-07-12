@@ -468,13 +468,33 @@ impl<'a> CrossServiceDetector<'a> {
         Ok(matches)
     }
 
-    /// Detects event bus emit/listen patterns. (Implemented in T012.)
+    /// Detects event bus patterns by scanning for Socket.IO
+    /// (`io.emit`, `socket.on`) and EventEmitter (`emitter.emit`,
+    /// `emitter.on`) call patterns. The `reason` field annotates whether
+    /// the match is an EMITS or LISTENS_ON direction.
     ///
     /// # Errors
     ///
     /// Returns [`StorageError`] if any underlying Cypher query fails.
-    pub fn detect_event_bus(&self, _project: &str) -> StorageResult<Vec<CrossServiceMatch>> {
-        Ok(Vec::new())
+    pub fn detect_event_bus(&self, project: &str) -> StorageResult<Vec<CrossServiceMatch>> {
+        let callers = self.load_callers(project)?;
+        let mut matches = Vec::new();
+        for caller in &callers {
+            if caller.content.is_empty() {
+                continue;
+            }
+            for (callee, direction) in extract_event_bus_patterns(&caller.content) {
+                matches.push(CrossServiceMatch {
+                    caller: caller.id.clone(),
+                    callee: callee.clone(),
+                    protocol: ServiceProtocol::EventBus,
+                    match_type: MatchType::Pattern,
+                    confidence: Confidence::Low,
+                    reason: format!("EventBus {direction}: {callee}"),
+                });
+            }
+        }
+        Ok(matches)
     }
 
     fn load_routes(&self, project: &str) -> StorageResult<Vec<RouteRow>> {
@@ -768,6 +788,40 @@ fn extract_mq_patterns(content: &str) -> Vec<(String, &'static str)> {
                     .find(|c: char| c == ',' || c == ')')
                     .unwrap_or(rest.len());
                 let arg = rest[..end].trim().trim_matches('"');
+                if !arg.is_empty() {
+                    results.push((arg.to_string(), *direction));
+                }
+            }
+            cursor += idx + pattern.len();
+        }
+    }
+    results
+}
+
+/// Extracts event bus patterns from `content`. Detects Socket.IO
+/// (`io.emit`, `socket.on`) and EventEmitter (`emitter.emit`,
+/// `emitter.on`) call patterns. Returns `(callee, direction)` pairs
+/// where direction is `"EMITS"` or `"LISTENS_ON"`.
+fn extract_event_bus_patterns(content: &str) -> Vec<(String, &'static str)> {
+    let mut results = Vec::new();
+    let patterns: &[(&str, &str)] = &[
+        ("io.emit", "EMITS"),
+        ("socket.on", "LISTENS_ON"),
+        ("emitter.emit", "EMITS"),
+        ("emitter.on", "LISTENS_ON"),
+    ];
+    for (pattern, direction) in patterns {
+        let mut cursor = 0;
+        while let Some(idx) = content[cursor..].find(*pattern) {
+            let after_pattern = &content[cursor + idx + pattern.len()..];
+            let trimmed = after_pattern.trim_start();
+            if let Some(rest) = trimmed.strip_prefix('(') {
+                let end = rest
+                    .find(|c: char| c == ',' || c == ')')
+                    .unwrap_or(rest.len());
+                let arg = rest[..end]
+                    .trim()
+                    .trim_matches(|c| c == '"' || c == '\'');
                 if !arg.is_empty() {
                     results.push((arg.to_string(), *direction));
                 }
@@ -1858,5 +1912,138 @@ mod tests {
             .detect_message_queue("demo")
             .expect("detect_message_queue");
         assert!(matches.is_empty(), "plain function should not match MQ");
+    }
+
+    // ====================================================================
+    // T012: Event bus detection
+    // ====================================================================
+
+    #[test]
+    fn detect_event_bus_finds_io_emit() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"io.emit('userJoined', data);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_event_bus("demo").expect("detect_event_bus");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].protocol, ServiceProtocol::EventBus);
+        assert_eq!(matches[0].callee, "userJoined");
+        assert_eq!(matches[0].match_type, MatchType::Pattern);
+        assert!(
+            matches[0].reason.contains("EMITS"),
+            "{}",
+            matches[0].reason
+        );
+    }
+
+    #[test]
+    fn detect_event_bus_finds_socket_on() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"socket.on('message', handler);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_event_bus("demo").expect("detect_event_bus");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].protocol, ServiceProtocol::EventBus);
+        assert_eq!(matches[0].callee, "message");
+        assert!(
+            matches[0].reason.contains("LISTENS_ON"),
+            "{}",
+            matches[0].reason
+        );
+    }
+
+    #[test]
+    fn detect_event_bus_finds_emitter_emit() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"emitter.emit('update', payload);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_event_bus("demo").expect("detect_event_bus");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].protocol, ServiceProtocol::EventBus);
+        assert_eq!(matches[0].callee, "update");
+        assert!(
+            matches[0].reason.contains("EMITS"),
+            "{}",
+            matches[0].reason
+        );
+    }
+
+    #[test]
+    fn detect_event_bus_finds_emitter_on() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"emitter.on('change', callback);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_event_bus("demo").expect("detect_event_bus");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].protocol, ServiceProtocol::EventBus);
+        assert_eq!(matches[0].callee, "change");
+        assert!(
+            matches[0].reason.contains("LISTENS_ON"),
+            "{}",
+            matches[0].reason
+        );
+    }
+
+    #[test]
+    fn detect_event_bus_no_match_for_plain_function() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"let x = 1 + 2; println!("{}", x);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_event_bus("demo").expect("detect_event_bus");
+        assert!(matches.is_empty(), "plain function should not match EventBus");
     }
 }
