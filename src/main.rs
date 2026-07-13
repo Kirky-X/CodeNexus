@@ -56,21 +56,19 @@ fn main() {
 fn run_cli() {
     let cmd = sdforge::cli::CliBuilder::new()
         .with_name("codenexus")
-        .build()
-        .arg(
-            clap::Arg::new("db")
+        .with_global_arg(
+            sdforge::cli::GlobalArg::new("db")
                 .long("db")
-                .global(true)
                 .default_value(DEFAULT_DB_PATH)
                 .help("Database path"),
         )
-        .arg(
-            clap::Arg::new("debounce-ms")
+        .with_global_arg(
+            sdforge::cli::GlobalArg::new("debounce-ms")
                 .long("debounce-ms")
-                .global(true)
                 .default_value(DEFAULT_DEBOUNCE_MS.to_string())
                 .help("Daemon debounce interval (ms)"),
-        );
+        )
+        .build();
 
     let matches = cmd.get_matches();
 
@@ -136,8 +134,8 @@ fn run_cli() {
 
 /// Extracts a global arg value from top-level or subcommand matches.
 fn extract_global_arg(
-    top: &clap::ArgMatches,
-    sub: &clap::ArgMatches,
+    top: &sdforge::clap::ArgMatches,
+    sub: &sdforge::clap::ArgMatches,
     name: &str,
     fallback: &str,
 ) -> String {
@@ -148,7 +146,7 @@ fn extract_global_arg(
 }
 
 /// Extracts subcommand args into a `HashMap<String, String>` for the handler.
-fn extract_args(sub_name: &str, sub_matches: &clap::ArgMatches) -> HashMap<String, String> {
+fn extract_args(sub_name: &str, sub_matches: &sdforge::clap::ArgMatches) -> HashMap<String, String> {
     let mut args = HashMap::new();
     for reg in sdforge::inventory::iter::<sdforge::cli::CliCommandRegistration>() {
         if reg.name == sub_name {
@@ -191,11 +189,10 @@ fn run_mcp_server() {
     }
 
     runtime.block_on(async {
-        use rmcp::ServiceExt;
         let server = sdforge::mcp::build();
-        let transport = rmcp::transport::stdio();
-        let service = server.serve(transport).await.expect("MCP serve error");
-        service.waiting().await.expect("MCP service error");
+        sdforge::mcp::serve_stdio(server)
+            .await
+            .expect("MCP serve error");
     });
 }
 
@@ -262,15 +259,15 @@ mod tests {
 
     // --- extract_global_arg ---
 
-    fn build_test_cmd() -> clap::Command {
-        clap::Command::new("codenexus")
+    fn build_test_cmd() -> sdforge::clap::Command {
+        sdforge::clap::Command::new("codenexus")
             .arg(
-                clap::Arg::new("db")
+                sdforge::clap::Arg::new("db")
                     .long("db")
                     .global(true)
                     .default_value(DEFAULT_DB_PATH),
             )
-            .subcommand(clap::Command::new("index"))
+            .subcommand(sdforge::clap::Command::new("index"))
     }
 
     #[test]
@@ -284,15 +281,15 @@ mod tests {
 
     #[test]
     fn extract_global_arg_returns_sub_value_when_top_absent() {
-        let cmd = clap::Command::new("codenexus")
+        let cmd = sdforge::clap::Command::new("codenexus")
             .arg(
-                clap::Arg::new("db")
+                sdforge::clap::Arg::new("db")
                     .long("db")
                     .global(true),
             )
             .subcommand(
-                clap::Command::new("index").arg(
-                    clap::Arg::new("db").long("db"),
+                sdforge::clap::Command::new("index").arg(
+                    sdforge::clap::Arg::new("db").long("db"),
                 ),
             );
         let matches = cmd.get_matches_from(["codenexus", "index", "--db", "/sub/db"]);
@@ -303,9 +300,9 @@ mod tests {
 
     #[test]
     fn extract_global_arg_returns_fallback_when_neither_present() {
-        let cmd = clap::Command::new("codenexus")
-            .arg(clap::Arg::new("unused").long("unused").global(true))
-            .subcommand(clap::Command::new("index"));
+        let cmd = sdforge::clap::Command::new("codenexus")
+            .arg(sdforge::clap::Arg::new("unused").long("unused").global(true))
+            .subcommand(sdforge::clap::Command::new("index"));
         let matches = cmd.get_matches_from(["codenexus", "index"]);
         let sub = matches.subcommand_matches("index").unwrap();
         let result = extract_global_arg(&matches, sub, "unused", "fallback_value");
@@ -316,8 +313,8 @@ mod tests {
 
     #[test]
     fn extract_args_returns_empty_for_unregistered_command() {
-        let cmd = clap::Command::new("codenexus")
-            .subcommand(clap::Command::new("nonexistent_cmd"));
+        let cmd = sdforge::clap::Command::new("codenexus")
+            .subcommand(sdforge::clap::Command::new("nonexistent_cmd"));
         let matches = cmd.get_matches_from(["codenexus", "nonexistent_cmd"]);
         let sub = matches.subcommand_matches("nonexistent_cmd").unwrap();
         let args = extract_args("nonexistent_cmd", sub);
