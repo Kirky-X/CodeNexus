@@ -29,7 +29,7 @@ path = "tools/verification/src/main.rs"
 default = ["full"]
 minimal = ["lang-rust"]
 core = ["lang-c", "lang-rust", "lang-python"]
-full = ["core", "lang-fortran", "lang-typescript", "lang-go", "lang-java", "lang-cpp", "daemon", "analysis", "complexity", "api-review", "community", "cross-service", "lsp", "cli", "mcp", "cache"]
+full = ["core", "lang-fortran", "lang-typescript", "lang-go", "lang-java", "lang-cpp", "lang-javascript", "lang-ruby", "lang-haskell", "lang-ocaml", "lang-scala", "lang-php", "lang-csharp", "lang-bash", "lang-html", "lang-css", "lang-json", "lang-regex", "lang-verilog", "daemon", "analysis", "complexity", "api-review", "community", "cross-service", "lsp", "cli", "mcp", "cache"]
 lang-c = ["dep:tree-sitter-c"]
 lang-rust = ["dep:tree-sitter-rust"]
 lang-fortran = ["dep:tree-sitter-fortran"]
@@ -38,6 +38,19 @@ lang-typescript = ["dep:tree-sitter-typescript"]
 lang-go = ["dep:tree-sitter-go"]
 lang-java = ["dep:tree-sitter-java"]
 lang-cpp = ["dep:tree-sitter-cpp"]
+lang-javascript = ["dep:tree-sitter-javascript"]
+lang-ruby = ["dep:tree-sitter-ruby"]
+lang-haskell = ["dep:tree-sitter-haskell"]
+lang-ocaml = ["dep:tree-sitter-ocaml"]
+lang-scala = ["dep:tree-sitter-scala"]
+lang-php = ["dep:tree-sitter-php"]
+lang-csharp = ["dep:tree-sitter-c-sharp"]
+lang-bash = ["dep:tree-sitter-bash"]
+lang-html = ["dep:tree-sitter-html"]
+lang-css = ["dep:tree-sitter-css"]
+lang-json = ["dep:tree-sitter-json"]
+lang-regex = ["dep:tree-sitter-regex"]
+lang-verilog = ["dep:tree-sitter-verilog"]
 embed = ["dep:reqwest", "dep:ort", "dep:tokenizers", "dep:ndarray"]
 daemon = ["dep:notify", "dep:notify-debouncer-full"]
 analysis = []
@@ -62,6 +75,19 @@ tree-sitter-typescript = { version = "0.23", optional = true }
 tree-sitter-go = { version = "0.23", optional = true }
 tree-sitter-java = { version = "0.23", optional = true }
 tree-sitter-cpp = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.25", optional = true }
+tree-sitter-ruby = { version = "0.23", optional = true }
+tree-sitter-haskell = { version = "0.23", optional = true }
+tree-sitter-ocaml = { version = "0.25", optional = true }
+tree-sitter-scala = { version = "0.26", optional = true }
+tree-sitter-php = { version = "0.24", optional = true }
+tree-sitter-c-sharp = { version = "0.23", optional = true }
+tree-sitter-bash = { version = "0.25", optional = true }
+tree-sitter-html = { version = "0.23", optional = true }
+tree-sitter-css = { version = "0.25", optional = true }
+tree-sitter-json = { version = "0.24", optional = true }
+tree-sitter-regex = { version = "0.25", optional = true }
+tree-sitter-verilog = { version = "1.0", optional = true }
 rayon = "1"
 ignore = "0.4"
 notify = { version = "6", optional = true }

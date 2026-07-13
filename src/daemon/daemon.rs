@@ -409,7 +409,7 @@ mod tests {
 
         let event = make_event(
             EventKind::Modify(notify_debouncer_full::notify::event::ModifyKind::Any),
-            "config.json",
+            "config.ini",
         );
         assert_eq!(Daemon::convert_event(&event), None);
 
@@ -466,7 +466,7 @@ mod tests {
             ),
             make_event(
                 EventKind::Modify(notify_debouncer_full::notify::event::ModifyKind::Any),
-                "config.json",
+                "config.ini",
             ),
         ];
         daemon.process_debounced_events(&debounced_events);
@@ -873,7 +873,7 @@ mod tests {
             ),
             make_event(
                 EventKind::Modify(notify_debouncer_full::notify::event::ModifyKind::Any),
-                "config.json",
+                "config.ini",
             ),
         ];
 

@@ -284,7 +284,7 @@ mod tests {
         write_file(root, "main.rs", "fn main() {}");
         write_file(root, "notes.txt", "hello");
         write_file(root, "README.md", "# readme");
-        write_file(root, "config.json", "{}");
+        write_file(root, "config.ini", "[settings]");
         write_file(root, "data.yaml", "key: value");
 
         let walker = Walker::with_skip_dirs(root, vec![]);
@@ -459,7 +459,6 @@ mod tests {
     fn is_code_file_returns_none_for_non_code() {
         assert_eq!(is_code_file(Path::new("foo.txt")), None);
         assert_eq!(is_code_file(Path::new("foo.md")), None);
-        assert_eq!(is_code_file(Path::new("foo.json")), None);
         assert_eq!(is_code_file(Path::new("foo.yaml")), None);
         assert_eq!(is_code_file(Path::new("foo")), None);
         assert_eq!(is_code_file(Path::new(".gitignore")), None);

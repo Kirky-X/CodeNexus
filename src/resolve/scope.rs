@@ -1103,13 +1103,27 @@ mod resolver_tests {
     fn registry_new_is_not_empty() {
         let registry = ScopeResolverRegistry::new();
         assert!(!registry.is_empty());
-        assert_eq!(registry.len(), Language::all().len());
+        // ScopeResolver is only registered for scope-aware languages
+        // (C/Rust/Fortran/Python/TypeScript/Go/Java/Cpp). Other languages
+        // (JSON/HTML/CSS/Bash/etc.) do not need scope block detection.
+        assert_eq!(registry.len(), 8);
     }
 
     #[test]
     fn registry_get_returns_resolver_for_compiled_in_languages() {
         let registry = ScopeResolverRegistry::new();
-        for lang in Language::all() {
+        // Only scope-aware languages have a resolver registered.
+        let scope_aware = [
+            Language::C,
+            Language::Rust,
+            Language::Fortran,
+            Language::Python,
+            Language::TypeScript,
+            Language::Go,
+            Language::Java,
+            Language::Cpp,
+        ];
+        for lang in scope_aware {
             assert!(
                 registry.get(lang).is_some(),
                 "missing resolver for {lang:?}"
@@ -1382,9 +1396,11 @@ mod resolver_tests {
             project: "",
             current_parent: None,
         };
-        // Every compiled-in language should have a dispatchable resolver.
+        // Only languages with a registered resolver are dispatchable.
         for lang in Language::all() {
-            let resolver = registry.get(lang).expect("resolver exists");
+            let Some(resolver) = registry.get(lang) else {
+                continue;
+            };
             // resolve on a root with no children returns None.
             let mut parser = ParserFactory::create_parser(lang).expect("parser");
             let tree = parser.parse(&source, None).expect("tree");

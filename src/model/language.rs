@@ -32,6 +32,32 @@ pub enum Language {
     Java,
     #[cfg(feature = "lang-cpp")]
     Cpp,
+    #[cfg(feature = "lang-javascript")]
+    JavaScript,
+    #[cfg(feature = "lang-ruby")]
+    Ruby,
+    #[cfg(feature = "lang-haskell")]
+    Haskell,
+    #[cfg(feature = "lang-ocaml")]
+    OCaml,
+    #[cfg(feature = "lang-scala")]
+    Scala,
+    #[cfg(feature = "lang-php")]
+    Php,
+    #[cfg(feature = "lang-csharp")]
+    CSharp,
+    #[cfg(feature = "lang-bash")]
+    Bash,
+    #[cfg(feature = "lang-html")]
+    Html,
+    #[cfg(feature = "lang-css")]
+    Css,
+    #[cfg(feature = "lang-json")]
+    Json,
+    #[cfg(feature = "lang-regex")]
+    Regex,
+    #[cfg(feature = "lang-verilog")]
+    Verilog,
 }
 
 impl Language {
@@ -59,6 +85,32 @@ impl Language {
             Language::Java,
             #[cfg(feature = "lang-cpp")]
             Language::Cpp,
+            #[cfg(feature = "lang-javascript")]
+            Language::JavaScript,
+            #[cfg(feature = "lang-ruby")]
+            Language::Ruby,
+            #[cfg(feature = "lang-haskell")]
+            Language::Haskell,
+            #[cfg(feature = "lang-ocaml")]
+            Language::OCaml,
+            #[cfg(feature = "lang-scala")]
+            Language::Scala,
+            #[cfg(feature = "lang-php")]
+            Language::Php,
+            #[cfg(feature = "lang-csharp")]
+            Language::CSharp,
+            #[cfg(feature = "lang-bash")]
+            Language::Bash,
+            #[cfg(feature = "lang-html")]
+            Language::Html,
+            #[cfg(feature = "lang-css")]
+            Language::Css,
+            #[cfg(feature = "lang-json")]
+            Language::Json,
+            #[cfg(feature = "lang-regex")]
+            Language::Regex,
+            #[cfg(feature = "lang-verilog")]
+            Language::Verilog,
         ]
     }
 
@@ -82,6 +134,32 @@ impl Language {
             Language::Java => &["java"],
             #[cfg(feature = "lang-cpp")]
             Language::Cpp => &["cpp", "cc", "cxx", "c++", "hpp", "hh", "hxx", "h++"],
+            #[cfg(feature = "lang-javascript")]
+            Language::JavaScript => &["js", "jsx", "mjs", "cjs"],
+            #[cfg(feature = "lang-ruby")]
+            Language::Ruby => &["rb"],
+            #[cfg(feature = "lang-haskell")]
+            Language::Haskell => &["hs"],
+            #[cfg(feature = "lang-ocaml")]
+            Language::OCaml => &["ml"],
+            #[cfg(feature = "lang-scala")]
+            Language::Scala => &["scala", "sbt"],
+            #[cfg(feature = "lang-php")]
+            Language::Php => &["php"],
+            #[cfg(feature = "lang-csharp")]
+            Language::CSharp => &["cs", "csx"],
+            #[cfg(feature = "lang-bash")]
+            Language::Bash => &["sh", "bash"],
+            #[cfg(feature = "lang-html")]
+            Language::Html => &["html", "htm"],
+            #[cfg(feature = "lang-css")]
+            Language::Css => &["css", "scss"],
+            #[cfg(feature = "lang-json")]
+            Language::Json => &["json", "jsonc"],
+            #[cfg(feature = "lang-regex")]
+            Language::Regex => &["regex"],
+            #[cfg(feature = "lang-verilog")]
+            Language::Verilog => &["v", "sv"],
         }
     }
 
@@ -108,6 +186,32 @@ impl Language {
             "java" => Some(Language::Java),
             #[cfg(feature = "lang-cpp")]
             "cpp" | "cc" | "cxx" | "c++" | "hpp" | "hh" | "hxx" | "h++" => Some(Language::Cpp),
+            #[cfg(feature = "lang-javascript")]
+            "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
+            #[cfg(feature = "lang-ruby")]
+            "rb" => Some(Language::Ruby),
+            #[cfg(feature = "lang-haskell")]
+            "hs" => Some(Language::Haskell),
+            #[cfg(feature = "lang-ocaml")]
+            "ml" => Some(Language::OCaml),
+            #[cfg(feature = "lang-scala")]
+            "scala" | "sbt" => Some(Language::Scala),
+            #[cfg(feature = "lang-php")]
+            "php" => Some(Language::Php),
+            #[cfg(feature = "lang-csharp")]
+            "cs" | "csx" => Some(Language::CSharp),
+            #[cfg(feature = "lang-bash")]
+            "sh" | "bash" => Some(Language::Bash),
+            #[cfg(feature = "lang-html")]
+            "html" | "htm" => Some(Language::Html),
+            #[cfg(feature = "lang-css")]
+            "css" | "scss" => Some(Language::Css),
+            #[cfg(feature = "lang-json")]
+            "json" | "jsonc" => Some(Language::Json),
+            #[cfg(feature = "lang-regex")]
+            "regex" => Some(Language::Regex),
+            #[cfg(feature = "lang-verilog")]
+            "v" | "sv" => Some(Language::Verilog),
             _ => None,
         }
     }
@@ -132,6 +236,32 @@ impl fmt::Display for Language {
             Language::Java => f.write_str("java"),
             #[cfg(feature = "lang-cpp")]
             Language::Cpp => f.write_str("cpp"),
+            #[cfg(feature = "lang-javascript")]
+            Language::JavaScript => f.write_str("javascript"),
+            #[cfg(feature = "lang-ruby")]
+            Language::Ruby => f.write_str("ruby"),
+            #[cfg(feature = "lang-haskell")]
+            Language::Haskell => f.write_str("haskell"),
+            #[cfg(feature = "lang-ocaml")]
+            Language::OCaml => f.write_str("ocaml"),
+            #[cfg(feature = "lang-scala")]
+            Language::Scala => f.write_str("scala"),
+            #[cfg(feature = "lang-php")]
+            Language::Php => f.write_str("php"),
+            #[cfg(feature = "lang-csharp")]
+            Language::CSharp => f.write_str("csharp"),
+            #[cfg(feature = "lang-bash")]
+            Language::Bash => f.write_str("bash"),
+            #[cfg(feature = "lang-html")]
+            Language::Html => f.write_str("html"),
+            #[cfg(feature = "lang-css")]
+            Language::Css => f.write_str("css"),
+            #[cfg(feature = "lang-json")]
+            Language::Json => f.write_str("json"),
+            #[cfg(feature = "lang-regex")]
+            Language::Regex => f.write_str("regex"),
+            #[cfg(feature = "lang-verilog")]
+            Language::Verilog => f.write_str("verilog"),
         }
     }
 }
@@ -157,6 +287,32 @@ impl FromStr for Language {
             "java" => Ok(Language::Java),
             #[cfg(feature = "lang-cpp")]
             "cpp" => Ok(Language::Cpp),
+            #[cfg(feature = "lang-javascript")]
+            "javascript" | "js" => Ok(Language::JavaScript),
+            #[cfg(feature = "lang-ruby")]
+            "ruby" | "rb" => Ok(Language::Ruby),
+            #[cfg(feature = "lang-haskell")]
+            "haskell" | "hs" => Ok(Language::Haskell),
+            #[cfg(feature = "lang-ocaml")]
+            "ocaml" | "ml" => Ok(Language::OCaml),
+            #[cfg(feature = "lang-scala")]
+            "scala" => Ok(Language::Scala),
+            #[cfg(feature = "lang-php")]
+            "php" => Ok(Language::Php),
+            #[cfg(feature = "lang-csharp")]
+            "csharp" | "c#" | "cs" => Ok(Language::CSharp),
+            #[cfg(feature = "lang-bash")]
+            "bash" | "sh" => Ok(Language::Bash),
+            #[cfg(feature = "lang-html")]
+            "html" => Ok(Language::Html),
+            #[cfg(feature = "lang-css")]
+            "css" => Ok(Language::Css),
+            #[cfg(feature = "lang-json")]
+            "json" => Ok(Language::Json),
+            #[cfg(feature = "lang-regex")]
+            "regex" => Ok(Language::Regex),
+            #[cfg(feature = "lang-verilog")]
+            "verilog" | "v" => Ok(Language::Verilog),
             other => Err(format!("unknown Language: {other}")),
         }
     }

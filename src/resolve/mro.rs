@@ -62,6 +62,43 @@ pub fn mro_for(lang: Language) -> MroStrategy {
         // is reserved for Python's diamond inheritance semantics.
         #[cfg(feature = "lang-cpp")]
         Language::Cpp => MroStrategy::FirstWins,
+        // C# has single inheritance (class : Base) + interface implementation,
+        // matching the FirstWins DFS pre-order model used for Java/Rust/C.
+        #[cfg(feature = "lang-csharp")]
+        Language::CSharp => MroStrategy::FirstWins,
+        // Verilog has no inheritance semantics; fail-loud with None (like Go).
+        #[cfg(feature = "lang-verilog")]
+        Language::Verilog => MroStrategy::None,
+        // Markup/data languages (HTML, CSS, JSON, Regex) have no inheritance
+        // semantics; fail-loud with None (like Go/Fortran).
+        #[cfg(feature = "lang-html")]
+        Language::Html => MroStrategy::None,
+        #[cfg(feature = "lang-css")]
+        Language::Css => MroStrategy::None,
+        #[cfg(feature = "lang-json")]
+        Language::Json => MroStrategy::None,
+        #[cfg(feature = "lang-regex")]
+        Language::Regex => MroStrategy::None,
+        // JavaScript (ES6) single inheritance via `class extends` → FirstWins.
+        #[cfg(feature = "lang-javascript")]
+        Language::JavaScript => MroStrategy::FirstWins,
+        // PHP single inheritance (extends) + interface implementation → FirstWins.
+        #[cfg(feature = "lang-php")]
+        Language::Php => MroStrategy::FirstWins,
+        // Scala single inheritance (extends) + trait mixing → FirstWins.
+        #[cfg(feature = "lang-scala")]
+        Language::Scala => MroStrategy::FirstWins,
+        // Ruby mixin-based inheritance (include/extend) → RubyMixin (design.md D5).
+        #[cfg(feature = "lang-ruby")]
+        Language::Ruby => MroStrategy::RubyMixin,
+        // Haskell (typeclasses) and OCaml have no classical OO inheritance → None.
+        #[cfg(feature = "lang-haskell")]
+        Language::Haskell => MroStrategy::None,
+        #[cfg(feature = "lang-ocaml")]
+        Language::OCaml => MroStrategy::None,
+        // Bash has no inheritance semantics → None.
+        #[cfg(feature = "lang-bash")]
+        Language::Bash => MroStrategy::None,
     }
 }
 
