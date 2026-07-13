@@ -86,6 +86,7 @@ codenexus search <TEXT> [OPTIONS]
 - `--kind <LABEL>` — Narrow by node label, e.g. `"Function"` (H14)
 - `--mode <MODE>` — Search mode: `exact` (default, case-insensitive substring), `regex` (Rust regex over name/qualifiedName), `fuzzy` (Levenshtein, `--max-distance` controls threshold), `graph` (name + degree/label filter), or `multi` (multi-signal scoring: name + degree + module + tests)
 - `--fulltext` — Use BM25 full-text search over `content`/`docstring` instead of structured name search
+- `--project <NAME>` — Optional project filter (empty string = no filter)
 
 **Output (JSON):** Array of `{name, label, file_path, start_line, qualified_name, score, match_reason, degree}`
 
@@ -258,12 +259,12 @@ Decompresses a team artifact and loads it into a LadybugDB database. Optionally 
 
 ### Refactoring & MCP integration
 
-#### detect-changes — Detect symbols affected by git changes (H8)
+#### detect_changes — Detect symbols affected by git changes (H8)
 
 Runs `git diff` in `--path` and maps each touched file/line range to indexed symbols, then classifies each affected symbol's risk level by incoming edge count.
 
 ```bash
-codenexus detect-changes <PATH> [OPTIONS]
+codenexus detect_changes <PATH> [OPTIONS]
 ```
 
 **Options:**
@@ -345,14 +346,14 @@ codenexus trace rust_entry_point --type calls --depth 10
 codenexus query "MATCH (a:Function)-[:FFI_CALLS]->(b:Function) RETURN a.name, b.name, a.filePath, b.filePath"
 ```
 
-### Workflow 5: Refactoring with confidence filtering
+### Workflow 5: Refactoring with multi-dimensional impact
 
 ```bash
-# Only trust same-file + import-scoped edges (design.md D4)
-codenexus impact critical_function --depth 5 --min-confidence 0.85
-codenexus trace data_var --type dataflow --min-confidence 0.85
+# Multi-edge-type impact with risk assessment (design.md D4)
+codenexus impact critical_function --depth 5 --edge-types "CALLS,IMPLEMENTS,USES_TYPE" --max-depth 5
+codenexus trace data_var --type dataflow --path-filter "/src/**"
 # Detect what a git change touches, then propose a rename
-codenexus detect-changes /repo --mode unstaged
+codenexus detect_changes /repo --mode unstaged
 codenexus rename old_name new_name --path /repo --db /repo/codenexus.lbug
 codenexus rename old_name new_name --path /repo --apply
 ```
@@ -408,7 +409,7 @@ codenexus mcp --db /work/graph.lbug
 **Original (14):** CONTAINS, DEFINES, MEMBER_OF, CALLS, FFI_CALLS, DATAFLOWS, READS, WRITES, IMPLEMENTS, EXTENDS, USES_TYPE, REFERENCES, IMPORTS, INCLUDES
 **H1 T9 extension (10):** HAS_METHOD, HAS_PROPERTY, ACCESSES, METHOD_OVERRIDES, METHOD_IMPLEMENTS, STEP_IN_PROCESS, HANDLES_ROUTE, FETCHES, HANDLES_TOOL, ENTRY_POINT_OF
 
-Each edge carries a `confidence` score in `[0.0, 1.0]` and a `confidenceTier` (`SameFile` / `ImportScoped` / `Global`) populated during resolution. Use `--min-confidence` on `trace`/`impact` to filter by tier/score (design.md D4).
+Each edge carries a `confidence` score in `[0.0, 1.0]` and a `confidenceTier` (`SameFile` / `ImportScoped` / `Global`) populated during resolution. Use `--edge-types` on `impact` and `--path-filter` on `trace` to scope results by edge type or file path (design.md D4).
 
 ## Exit Codes
 

@@ -177,7 +177,7 @@ codenexus architecture myproject
 | `query` | 执行 Cypher 查询 |
 | `trace` | 追踪符号的调用/数据流路径（`--uid`/`--file`/`--kind` 收窄；`--path-filter`/`--detect-cycles`/`--cross-service` 增强追踪） |
 | `impact` | 分析符号变更的影响半径（`--edge-types`/`--max-depth`/`--include-tests` 多维分析 + `risk_assessment`） |
-| `search` | 按名称或内容搜索符号（`--mode` exact/regex/fuzzy/graph/multi；`--fulltext` BM25 全文） |
+| `search` | 按名称或内容搜索符号（`--mode` exact/regex/fuzzy/graph/multi；`--fulltext` BM25 全文；`--project` 项目过滤） |
 | `context` | 360° 符号视图：入度调用/导入、出度调用、所属流程（`--project`/`--enhanced` 多维 SymbolContext） |
 | `detect_changes` | git diff → 受影响符号 + risk_level |
 | `rename` | 高置信度图编辑 + 文本搜索编辑（`--dry-run`） |

@@ -22,7 +22,7 @@ Supports **8 languages**: C, Rust, Fortran, Python, TypeScript, Go, Java, C++.
 
 - **Impact analysis before refactoring** — find every caller of a function across files and languages before editing it.
 - **Onboarding a new codebase** — index a repo, then `query`/`context`/`trace` to navigate symbols and their relationships instead of grepping.
-- **AI agent grounding** — run `codenexus mcp` so Claude Code / Cursor / Codex can call `query`, `context`, `impact`, and `detect-changes` tools with real call-graph data.
+- **AI agent grounding** — run `codenexus mcp` so Claude Code / Cursor / Codex can call `query`, `context`, `impact`, and `detect_changes` tools with real call-graph data.
 - **Team knowledge sharing** — `export` an index as a `.graph.zst` artifact and `import` it on a teammate's machine.
 
 ## Key Features
@@ -189,19 +189,25 @@ codenexus context main
 # Trace call paths (with disambiguation narrowing)
 codenexus trace main --type calls --depth 5
 codenexus trace main --uid "proj.fn.main.1" --depth 5
+# Enhanced tracing: path filter + cycle detection + cross-service
+codenexus trace main --path-filter "/src/api/**" --detect-cycles --cross-service
 
-# Analyze change impact (filter by confidence)
+# Analyze change impact (multi-dimensional + risk assessment)
 codenexus impact parse_function --depth 3
-codenexus impact parse_function --depth 3 --min-confidence 0.7
+codenexus impact parse_function --edge-types "CALLS,IMPLEMENTS,USES_TYPE" --max-depth 5 --include-tests
 
-# Search symbols
+# Search symbols (5 modes + BM25 full-text)
 codenexus search "parse" --limit 20
+codenexus search "get.*user" --mode regex
+codenexus search "getuser" --mode fuzzy --max-distance 2
+codenexus search "authentication logic" --fulltext
 
-# 360° symbol context: incoming calls/imports, outgoing calls, processes
+# 360° symbol context (basic + enhanced)
 codenexus context main
+codenexus context main --project myproject --enhanced
 
 # Detect git-diff affected symbols before committing
-codenexus detect-changes /path/to/project
+codenexus detect_changes /path/to/project
 
 # Rename a symbol (graph-edits + text-search, --dry-run supported)
 codenexus rename old_name new_name --dry-run
@@ -215,6 +221,17 @@ codenexus daemon /path/to/project --name myproject
 
 # Remove a project and its index
 codenexus clean myproject
+
+# Dead code detection (multi-edge-type + FFI/export + confidence)
+codenexus dead_code myproject
+codenexus dead_code myproject --check-exported true --check-ffi true
+
+# Cross-service call chain detection (HTTP/gRPC/GraphQL/MQ/event bus)
+codenexus cross_service myproject
+codenexus cross_service myproject --protocol grpc
+
+# Architecture overview (module boundaries + dependency directions + layers)
+codenexus architecture myproject
 ```
 
 ## CLI Commands
@@ -223,11 +240,11 @@ codenexus clean myproject
 |---------|-------------|
 | `index` | Index a codebase into the knowledge graph (`--ram-first` for LZ4 in-memory) |
 | `query` | Execute a Cypher query |
-| `trace` | Trace a symbol's call/data-flow paths (`--uid`/`--file`/`--kind` narrowing) |
-| `impact` | Analyze the impact radius of changing a symbol (`--min-confidence` filter) |
-| `search` | Search symbols by name or content (`--uid`/`--file`/`--kind` narrowing) |
-| `context` | 360° symbol view: incoming calls/imports, outgoing calls, processes |
-| `detect-changes` | Git diff → affected symbols + risk_level |
+| `trace` | Trace a symbol's call/data-flow paths (`--uid`/`--file`/`--kind` narrowing; `--path-filter`/`--detect-cycles`/`--cross-service` enhanced tracing) |
+| `impact` | Analyze the impact radius of changing a symbol (`--edge-types`/`--max-depth`/`--include-tests` multi-dimensional + `risk_assessment`) |
+| `search` | Search symbols by name or content (`--mode` exact/regex/fuzzy/graph/multi; `--fulltext` BM25; `--project` filter) |
+| `context` | 360° symbol view (`--project`/`--enhanced` multi-dimensional SymbolContext) |
+| `detect_changes` | Git diff → affected symbols + risk_level |
 | `rename` | Graph-edits for high-confidence + text-search edits (`--dry-run`) |
 | `export` | Export LadybugDB dump → zstd `codenexus.graph.zst` artifact |
 | `import` | Import artifact → LadybugDB (optional `--reindex` for local diff) |
@@ -238,15 +255,15 @@ codenexus clean myproject
 | `status` | Show indexing status |
 | `list` | List all indexed projects |
 | `clean` | Remove a project and its index |
-| `dead-code` | Dead code detection (uncalled functions, `analysis` feature) |
-| `architecture` | Architecture overview (module dependency graph, `analysis` feature) |
+| `dead_code` | Dead code detection (9 edge types + FFI/export + High/Medium/Low confidence, `analysis` feature) |
+| `architecture` | Architecture overview (module boundaries + dependency directions + layers + cross-service deps, `analysis` feature) |
 | `complexity` | AST complexity analysis (8 metrics + configurable thresholds, `complexity` feature) |
 | `api-route-map` | HTTP route mapping (API endpoint inventory, `api-review` feature) |
 | `api-shape-check` | API shape check (request/response structure validation, `api-review` feature) |
 | `api-impact` | API change impact analysis (`api-review` feature) |
 | `api-tool-map` | Tool mapping (MCP tool inventory, `api-review` feature) |
 | `community` | Community detection (Louvain modularity optimization, `community` feature) |
-| `cross-service` | Cross-service call chain detection (HTTP route pattern matching, `cross-service` feature) |
+| `cross_service` | Cross-service call chain detection (HTTP REST/gRPC/GraphQL/message queue/event bus, `cross-service` feature) |
 | `lsp-goto-def` | LSP go-to-definition (rust-analyzer integration, `lsp` feature) |
 | `lsp-hover` | LSP hover info (rust-analyzer integration, `lsp` feature) |
 
@@ -328,7 +345,7 @@ See [`.env.example`](.env.example) for a copy-paste template. CodeNexus does not
 
 ### Agent Integration
 
-Run `codenexus setup` to auto-detect installed AI agents (Claude Code, Cursor, Codex) and write the MCP configuration into the right location for each. After setup, the agent can call CodeNexus tools (`query`, `context`, `impact`, `detect-changes`, `rename`, ...) over the MCP stdio server started by `codenexus mcp`.
+Run `codenexus setup` to auto-detect installed AI agents (Claude Code, Cursor, Codex) and write the MCP configuration into the right location for each. After setup, the agent can call CodeNexus tools (`query`, `context`, `impact`, `detect_changes`, `rename`, ...) over the MCP stdio server started by `codenexus mcp`.
 
 For Git hooks, `codenexus hook` emits `PreToolUse`/`PostToolUse` JSON events and always exits 0, so it can be wired into a hook without blocking agent actions.
 
