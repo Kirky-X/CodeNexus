@@ -20,7 +20,7 @@ use crate::service::runtime::kit;
 #[cfg(feature = "cli")]
 use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// JSON-serializable hook decision output.
 ///
@@ -141,7 +141,7 @@ fn run(kit: &AsyncKit<AsyncReady>) -> Result<(), CodeNexusError> {
 
 /// CLI wrapper — reads stdin, prints the decision as JSON.
 #[cfg(feature = "cli")]
-#[service_api(
+#[forge(
     name = "hook",
     version = "0.3.2",
     description = "Read a git hook payload from stdin and emit a JSON decision.",

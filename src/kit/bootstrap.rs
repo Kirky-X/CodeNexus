@@ -167,7 +167,7 @@ pub const DEFAULT_DEBOUNCE_MS: u64 = 2000;
 ///
 /// Returns [`KitError`] if any module's `build` fails (e.g. `StorageModule`
 /// cannot open the database at `db_path`), or
-/// [`KitError::DuplicateCapability`] if a module is somehow already
+/// [`KitError::AlreadyRegistered`] if a module is somehow already
 /// registered (should not happen with a fresh [`AsyncKit::new`]).
 ///
 /// # Example

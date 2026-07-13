@@ -28,7 +28,7 @@ use crate::service::runtime::kit;
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// JSON-serializable import-command output.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -171,7 +171,7 @@ pub fn run_import(
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
-#[service_api(
+#[forge(
     name = "import",
     version = "0.3.2",
     description = "Import a zstd team artifact into the graph database.",

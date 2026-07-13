@@ -26,7 +26,7 @@ use crate::storage::schema::node_table_columns;
 #[cfg(feature = "cli")]
 use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// Git diff mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -321,7 +321,7 @@ pub struct AffectedSymbolOutput {
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
-#[service_api(
+#[forge(
     name = "detect_changes",
     version = "0.3.2",
     description = "Detect symbols affected by uncommitted git changes and classify their risk.",
@@ -406,7 +406,7 @@ mod tests {
 
     /// Core logic mirroring the service function, taking explicit params
     /// (no DetectChangesArgs) so tests can exercise error paths without the
-    /// `#[service_api]` macro wrapper.
+    /// `#[forge]` macro wrapper.
     fn detect_changes_core(kit: &AsyncKit<AsyncReady>, path: &str, mode: &str) -> Result<(), CodeNexusError> {
         let repo_root = Path::new(path);
         if !repo_root.is_dir() {

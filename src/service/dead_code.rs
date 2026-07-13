@@ -23,7 +23,7 @@ use crate::service::runtime::kit;
 #[cfg(all(feature = "cli", feature = "analysis"))]
 use sdforge::prelude::ApiError;
 #[cfg(all(feature = "cli", feature = "analysis"))]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// JSON-serializable dead-code output.
 #[cfg(feature = "analysis")]
@@ -89,7 +89,7 @@ pub fn run_dead_code(
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "analysis"))]
-#[service_api(
+#[forge(
     name = "dead_code",
     version = "0.3.2",
     description = "Detect unreferenced (dead) functions in a project.",

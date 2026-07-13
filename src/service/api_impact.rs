@@ -21,7 +21,7 @@ use crate::service::runtime::kit;
 #[cfg(all(feature = "cli", feature = "api-review"))]
 use sdforge::prelude::ApiError;
 #[cfg(all(feature = "cli", feature = "api-review"))]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// JSON-serializable api-impact output.
 #[cfg(feature = "api-review")]
@@ -50,7 +50,7 @@ fn api_impact_core(kit: &AsyncKit<AsyncReady>, project: &str, endpoint: &str) ->
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "api-review"))]
-#[service_api(
+#[forge(
     name = "api_impact",
     version = "0.3.2",
     description = "Trace callers affected by changing an API endpoint.",

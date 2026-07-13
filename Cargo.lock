@@ -2102,9 +2102,7 @@ dependencies = [
 
 [[package]]
 name = "oxcache"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21a802bd946194ef7b2bd60e145c7838d926b90431471c93465d57a66d3cc35a"
+version = "0.3.8"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -2979,9 +2977,7 @@ checksum = "d68f2ec51b097e4c1a75b681a8bec621909b5e91f15bb7b840c4f2f7b01148b2"
 
 [[package]]
 name = "sdforge"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f59ab94a3625a7fb0c8c6f120390abe618c2ca5532eb5d82983febeff15fb393"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2999,9 +2995,7 @@ dependencies = [
 
 [[package]]
 name = "sdforge-macros"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "239a2282e17777d8f394d9351a4757c72649a81ee3a06c659b201a860497b850"
+version = "0.4.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3680,9 +3674,7 @@ dependencies = [
 
 [[package]]
 name = "trait-kit"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85f45a98e72d128b1a619752a53d6d60fdc448d1567571688f477303e730953e"
+version = "0.3.0"
 dependencies = [
  "thiserror",
 ]

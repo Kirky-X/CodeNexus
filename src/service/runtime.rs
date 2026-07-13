@@ -4,12 +4,12 @@
 //! Global Kit runtime injection for CLI and MCP service handlers.
 //!
 //! Provides a process-global `Mutex<Option<Arc<AsyncKit<AsyncReady>>>>` so that
-//! `#[service_api]` handlers (which cannot accept injected state) can access
+//! `#[forge]` handlers (which cannot accept injected state) can access
 //! the Kit via [`kit()`].
 //!
 //! # Why AsyncKit<AsyncReady> and not Kit
 //!
-//! trait-kit 0.2.4's synchronous `Kit` uses `RefCell` internally and is
+//! trait-kit 0.3's synchronous `Kit` uses `RefCell` internally and is
 //! therefore `!Send + !Sync`. A `static Mutex<Option<Arc<Kit>>>` requires
 //! `Send + Sync`, so we store `AsyncKit<AsyncReady>` instead — it is backed
 //! by `Arc<RwLock<...>>` and implements `Send + Sync`. See `kit/mod.rs` and

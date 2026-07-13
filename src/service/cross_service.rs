@@ -21,7 +21,7 @@ use crate::service::runtime::kit;
 #[cfg(feature = "cli")]
 use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// JSON-serializable cross-service link output.
 #[cfg(feature = "cross-service")]
@@ -89,7 +89,7 @@ pub fn run_cross_service(
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "cross-service"))]
-#[service_api(
+#[forge(
     name = "cross_service",
     version = "0.3.2",
     description = "Detect cross-service links by matching HTTP route patterns against caller string literals.",

@@ -22,7 +22,7 @@ use crate::trace::{
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::prelude::ApiError;
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// JSON-serializable trace result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -216,7 +216,7 @@ pub fn run_trace(
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
-#[service_api(
+#[forge(
     name = "trace",
     version = "0.3.2",
     description = "Trace a symbol's call and/or data-flow paths.",
@@ -249,7 +249,7 @@ async fn trace(
 
 /// MCP wrapper — returns result for MCP protocol.
 #[cfg(feature = "mcp")]
-#[service_api(
+#[forge(
     name = "trace",
     version = "0.3.2",
     tool_name = "trace",

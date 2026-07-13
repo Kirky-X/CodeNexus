@@ -21,7 +21,7 @@ use crate::service::runtime::kit;
 #[cfg(all(feature = "cli", feature = "api-review"))]
 use sdforge::prelude::ApiError;
 #[cfg(all(feature = "cli", feature = "api-review"))]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// JSON-serializable shape-check output.
 #[cfg(feature = "api-review")]
@@ -48,7 +48,7 @@ fn shape_check_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), Cod
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "api-review"))]
-#[service_api(
+#[forge(
     name = "shape_check",
     version = "0.3.2",
     description = "Validate API endpoint schema consistency.",

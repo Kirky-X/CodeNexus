@@ -18,7 +18,7 @@ use crate::service::error::wrap_error;
 #[cfg(feature = "cli")]
 use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// MCP server entry written into agent config files.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -290,7 +290,7 @@ fn write_pretty(path: &Path, value: &serde_json::Value) -> Result<(), CodeNexusE
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
-#[service_api(
+#[forge(
     name = "setup",
     version = "0.3.2",
     description = "Auto-detect installed AI coding agents and write MCP server config.",

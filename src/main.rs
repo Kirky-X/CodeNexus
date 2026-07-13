@@ -3,11 +3,11 @@
 
 //! CodeNexus binary entry point.
 //!
-//! CLI mode: sdforge `CliBuilder` dispatches to `#[service_api(cli = true)]`
+//! CLI mode: sdforge `CliBuilder` dispatches to `#[forge(cli = true)]`
 //! handlers registered via `inventory` in the service layer.
 //!
 //! MCP mode (gated by `mcp` feature): sdforge MCP server serves
-//! `#[service_api]` tools over stdio via rmcp.
+//! `#[forge]` tools over stdio via rmcp.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

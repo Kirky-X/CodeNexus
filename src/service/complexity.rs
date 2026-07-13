@@ -25,7 +25,7 @@ use crate::service::runtime::kit;
 #[cfg(all(feature = "cli", feature = "complexity"))]
 use sdforge::prelude::ApiError;
 #[cfg(all(feature = "cli", feature = "complexity"))]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// JSON-serializable complexity output.
 #[cfg(feature = "complexity")]
@@ -262,7 +262,7 @@ fn complexity_core(
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "complexity"))]
 #[allow(clippy::too_many_arguments)]
-#[service_api(
+#[forge(
     name = "complexity",
     version = "0.3.2",
     description = "Analyze AST-based complexity metrics for all functions in a project.",

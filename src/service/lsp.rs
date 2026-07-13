@@ -24,7 +24,7 @@ use crate::service::error::wrap_error;
 #[cfg(feature = "cli")]
 use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
-use sdforge::service_api;
+use sdforge::forge;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -193,7 +193,7 @@ impl HoverOutput {
 
 /// CLI wrapper for lsp-goto-def — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "lsp"))]
-#[service_api(
+#[forge(
     name = "lsp_goto_def",
     version = "0.4.0",
     description = "Query LSP Go-to-Definition (auto-detects language from file extension: .rs → rust-analyzer, .py → pyright).",
@@ -227,7 +227,7 @@ async fn lsp_goto_def(
 
 /// CLI wrapper for lsp-hover — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "lsp"))]
-#[service_api(
+#[forge(
     name = "lsp_hover",
     version = "0.4.0",
     description = "Query LSP Hover info (auto-detects language from file extension: .rs → rust-analyzer, .py → pyright).",

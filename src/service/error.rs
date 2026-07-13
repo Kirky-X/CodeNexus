@@ -222,7 +222,7 @@ fn next_error_id() -> String {
 ///
 /// The caller must ensure `E: Send + Sync` — required by sdforge's
 /// `ApiError::internal_with_source`. For `KitError` (which is `Send` but
-/// not `Sync` due to trait-kit 0.2.4's `Box<dyn StdError + Send + 'static>`),
+/// not `Sync` due to trait-kit 0.3's `Box<dyn StdError + Send + 'static>`),
 /// use [`wrap_kit_error`] instead.
 #[cfg(any(feature = "cli", feature = "mcp"))]
 pub fn wrap_error<E: std::error::Error + Send + Sync + 'static>(
@@ -234,7 +234,7 @@ pub fn wrap_error<E: std::error::Error + Send + Sync + 'static>(
 
 /// Wraps a [`KitError`] as an `ApiError::Internal` with a unique `error_id`.
 ///
-/// Needed because trait-kit 0.2.4's `KitError` uses
+/// Needed because trait-kit 0.3's `KitError` uses
 /// `Box<dyn StdError + Send + 'static>` (no `Sync` bound), making it
 /// `Send + !Sync`. `ApiError::internal_with_source` requires `Send + Sync`,
 /// so we convert the `KitError` to a string and use `ApiError::internal_error`.
@@ -260,7 +260,7 @@ pub fn kit_not_initialized() -> ApiError {
 ///
 /// # Why not `internal_with_source`
 ///
-/// `CodeNexusError::Kit(#[from] KitError)` makes `CodeNexusError: !Sync` (trait-kit 0.2.4's
+/// `CodeNexusError::Kit(#[from] KitError)` makes `CodeNexusError: !Sync` (trait-kit 0.3's
 /// `KitError` uses `Box<dyn StdError + Send + 'static>` without `Sync`).
 /// `ApiError::internal_with_source` requires `Send + Sync`, so we cannot pass
 /// `CodeNexusError` as a source. We convert to a string-based `ApiError::internal_error`

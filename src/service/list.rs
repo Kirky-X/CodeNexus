@@ -18,7 +18,7 @@ use crate::storage::ProjectRecord;
 #[cfg(feature = "cli")]
 use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// JSON-serializable view of a project record.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -56,7 +56,7 @@ pub fn run_list(kit: &AsyncKit<AsyncReady>) -> Result<Vec<ProjectOutput>, CodeNe
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
-#[service_api(
+#[forge(
     name = "list",
     version = "0.3.2",
     description = "List all indexed projects in the database.",

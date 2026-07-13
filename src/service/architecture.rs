@@ -21,7 +21,7 @@ use crate::service::runtime::kit;
 #[cfg(all(feature = "analysis", any(feature = "cli", feature = "mcp")))]
 use sdforge::prelude::ApiError;
 #[cfg(all(feature = "analysis", any(feature = "cli", feature = "mcp")))]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// JSON-serializable architecture output.
 #[cfg(feature = "analysis")]
@@ -52,7 +52,7 @@ pub fn run_architecture(
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "analysis"))]
-#[service_api(
+#[forge(
     name = "architecture",
     version = "0.3.2",
     description = "Show high-level architecture overview of a project.",
@@ -70,7 +70,7 @@ async fn architecture(project: String) -> Result<(), ApiError> {
 
 /// MCP wrapper — returns result for MCP protocol.
 #[cfg(all(feature = "mcp", feature = "analysis"))]
-#[service_api(
+#[forge(
     name = "architecture",
     version = "0.3.2",
     tool_name = "architecture",

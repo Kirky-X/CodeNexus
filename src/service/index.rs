@@ -26,7 +26,7 @@ use crate::storage::StorageConfig;
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// JSON-serializable view of [`IndexResult`].
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -166,7 +166,7 @@ fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Resul
 
 /// Core index pipeline: indexer + DQ checks + CHECKPOINT + optional LSP.
 ///
-/// Separated from the `#[service_api]` function for reuse by `import.rs`
+/// Separated from the `#[forge]` function for reuse by `import.rs`
 /// reindex logic.
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 #[allow(clippy::result_large_err)]
@@ -229,7 +229,7 @@ pub(crate) fn index_core(
 // never dropped — the stale boot-time connections never checkpoint over the
 // indexer's writes (same effect as `std::mem::forget(kit)` in `main.rs`).
 #[cfg(feature = "cli")]
-#[service_api(
+#[forge(
     name = "index",
     version = "0.3.2",
     description = "Index a codebase into the knowledge graph.",

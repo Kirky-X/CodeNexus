@@ -20,7 +20,7 @@ use crate::trace::types::{ContextOutput, SymbolNodeOutput};
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::prelude::ApiError;
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// Runs context against an injected Kit (testable core).
 #[cfg(any(feature = "cli", feature = "mcp", test))]
@@ -72,7 +72,7 @@ pub fn run_context_enhanced(
 /// JSON with type/module/test context and data flow. Otherwise uses the
 /// original BFS-based [`run_context`].
 #[cfg(feature = "cli")]
-#[service_api(
+#[forge(
     name = "context",
     version = "0.3.2",
     description = "Show a 360-degree view of a symbol (callers, callees, processes).",
@@ -103,7 +103,7 @@ async fn context(
 
 /// MCP wrapper — returns result for MCP protocol.
 #[cfg(feature = "mcp")]
-#[service_api(
+#[forge(
     name = "context",
     version = "0.3.2",
     tool_name = "context",

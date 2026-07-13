@@ -20,7 +20,7 @@ use crate::storage::ProjectRecord;
 #[cfg(feature = "cli")]
 use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// JSON-serializable status output.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -101,7 +101,7 @@ pub fn run_status(kit: &AsyncKit<AsyncReady>) -> Result<StatusOutput, CodeNexusE
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
-#[service_api(
+#[forge(
     name = "status",
     version = "0.3.2",
     description = "List all indexed projects and check their staleness.",

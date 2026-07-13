@@ -188,7 +188,7 @@ fn mcp_server_initializes_and_lists_tools() {
         .filter_map(|t| t.get("name").and_then(|n| n.as_str()))
         .collect();
 
-    let expected = ["query", "trace", "impact", "search", "context"];
+    let expected = ["architecture", "query", "trace", "impact", "search", "context"];
     for name in &expected {
         assert!(
             tool_names.contains(name),

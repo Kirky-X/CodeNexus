@@ -28,7 +28,7 @@ use crate::service::runtime::kit;
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// Artifact magic bytes — "CNXP" (CodeNexus eXPort).
 pub const ARTIFACT_MAGIC: [u8; 4] = *b"CNXP";
@@ -166,7 +166,7 @@ pub fn run_export(
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
-#[service_api(
+#[forge(
     name = "export",
     version = "0.3.2",
     description = "Export the graph database to a compressed zstd team artifact.",

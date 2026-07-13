@@ -20,7 +20,7 @@ use crate::service::runtime::kit;
 #[cfg(feature = "cli")]
 use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// JSON-serializable community detection output.
 #[cfg(feature = "community")]
@@ -53,7 +53,7 @@ pub fn run_community(
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "community"))]
-#[service_api(
+#[forge(
     name = "community",
     version = "0.3.2",
     description = "Detect communities in the CALLS graph via Louvain modularity optimization.",

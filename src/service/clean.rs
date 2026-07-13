@@ -19,7 +19,7 @@ use crate::service::runtime::kit;
 #[cfg(feature = "cli")]
 use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// JSON-serializable clean-command output.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -68,7 +68,7 @@ pub fn run_clean(
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
-#[service_api(
+#[forge(
     name = "clean",
     version = "0.3.2",
     description = "Remove a project and its index by name or id.",

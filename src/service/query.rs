@@ -19,7 +19,7 @@ use crate::service::runtime::kit;
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::prelude::ApiError;
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// Mirrors [`QueryResult`] with `Serialize`/`Deserialize` for JSON transport.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -52,7 +52,7 @@ pub fn run_query(
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
-#[service_api(
+#[forge(
     name = "query",
     version = "0.3.2",
     description = "Execute a Cypher query against the CodeNexus knowledge graph.",
@@ -69,7 +69,7 @@ async fn query(cypher: String) -> Result<(), ApiError> {
 
 /// MCP wrapper — returns result for MCP protocol.
 #[cfg(feature = "mcp")]
-#[service_api(
+#[forge(
     name = "query",
     version = "0.3.2",
     tool_name = "query",

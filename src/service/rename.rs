@@ -30,7 +30,7 @@ use crate::trace::TraceError;
 #[cfg(feature = "cli")]
 use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// Resolves a symbol name to a node id by matching `name` first, then
 /// `qualified_name`.
@@ -274,7 +274,7 @@ pub struct TextEdit {
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
-#[service_api(
+#[forge(
     name = "rename",
     version = "0.3.2",
     description = "Propose graph + text edits for renaming a symbol.",
@@ -390,7 +390,7 @@ mod tests {
 
     /// Core logic mirroring the service function, taking explicit params
     /// (no RenameArgs) so tests can exercise error paths without the
-    /// `#[service_api]` macro wrapper.
+    /// `#[forge]` macro wrapper.
     fn rename_core(
         kit: &AsyncKit<AsyncReady>,
         from: &str,

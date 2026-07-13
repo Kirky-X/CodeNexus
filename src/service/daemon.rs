@@ -21,12 +21,12 @@ use crate::service::runtime::kit;
 #[cfg(all(feature = "cli", feature = "daemon"))]
 use sdforge::prelude::ApiError;
 #[cfg(all(feature = "cli", feature = "daemon"))]
-use sdforge::service_api;
+use sdforge::forge;
 
 /// Validates the watch path, resolves the DaemonRunner capability, and enters
 /// the blocking event loop.
 ///
-/// Separated from the `#[service_api]` function for testability.
+/// Separated from the `#[forge]` function for testability.
 #[cfg(feature = "daemon")]
 fn daemon_core(kit: &AsyncKit<AsyncReady>, path: &str, name: &str) -> Result<(), CodeNexusError> {
     let watch_path = Path::new(path);
@@ -43,7 +43,7 @@ fn daemon_core(kit: &AsyncKit<AsyncReady>, path: &str, name: &str) -> Result<(),
 
 /// CLI wrapper — starts the blocking daemon event loop.
 #[cfg(all(feature = "cli", feature = "daemon"))]
-#[service_api(
+#[forge(
     name = "daemon",
     version = "0.3.2",
     description = "Run the file-watcher daemon for incremental indexing.",

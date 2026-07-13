@@ -4,12 +4,12 @@
 //! Kit — unified capability & configuration registry (T6/unified-architecture
 //! Phase 2).
 //!
-//! This module re-exports the trait-kit 0.2.4 `AsyncKit` API (see design.md D5)
+//! This module re-exports the trait-kit 0.3 `AsyncKit` API (see design.md D5)
 //! and the 9 subsystem module types used for capability lookup.
 //!
 //! ## AsyncKit vs. Kit
 //!
-//! trait-kit 0.2.4's synchronous `Kit` uses `RefCell` internally and is
+//! trait-kit 0.3's synchronous `Kit` uses `RefCell` internally and is
 //! therefore `!Send + !Sync`. CodeNexus stores the kit in a
 //! `static Mutex<Option<Arc<AsyncKit<Ready>>>>` (see `service::runtime`),
 //! which requires `Send + Sync`. We therefore use `AsyncKit`, which is backed
@@ -29,7 +29,7 @@ extern crate trait_kit;
 pub mod bootstrap;
 pub use bootstrap::{build_kit, KitBootstrapConfig};
 
-// Re-export the trait-kit 0.2.4 AsyncKit API. These are the canonical
+// Re-export the trait-kit 0.3 AsyncKit API. These are the canonical
 // imports for call sites that need to interact with the Kit registry.
 // Note: we import `AsyncReady`/`AsyncUnbuilt` (the async-feature re-exports),
 // NOT `Ready`/`Unbuilt` (the synchronous Kit markers). trait-kit exports the
@@ -37,7 +37,9 @@ pub use bootstrap::{build_kit, KitBootstrapConfig};
 // AsyncUnbuilt}` — the two `Ready` types are distinct structs (sync `Ready`
 // in `kit.rs` vs async `Ready` in `async_kit.rs`). Using the wrong one causes
 // a type mismatch: `AsyncKit::build()` returns `AsyncKit<async_kit::Ready>`.
-pub use trait_kit::core::error::KitError;
+// trait-kit 0.3 renamed `KitError` to `TraitKitError` (ProjectNameError
+// convention); alias preserves the CodeNexus-internal `KitError` name.
+pub use trait_kit::TraitKitError as KitError;
 pub use trait_kit::core::meta::{AsyncAutoBuilder, ModuleMeta};
 pub use trait_kit::kit::{AsyncKit, AsyncReady, AsyncUnbuilt};
 
@@ -67,7 +69,7 @@ mod tests {
     use super::*;
 
     /// `AsyncKit::new()` creates an empty `AsyncKit<Unbuilt>` without
-    /// panicking. This is a smoke test that the trait-kit 0.2.4 wiring loads
+    /// panicking. This is a smoke test that the trait-kit 0.3 wiring loads
     /// correctly after the migration from 0.1.0.
     #[test]
     fn async_kit_new_creates_empty_unbuilt_kit() {
