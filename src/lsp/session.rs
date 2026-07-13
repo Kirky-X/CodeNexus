@@ -83,8 +83,10 @@ pub(crate) fn spawn_transport(
 pub(crate) fn spawn_server(
     server_path: &Path,
     workspace: &Path,
+    args: &[&str],
 ) -> Result<(Child, ChildStdin, ChildStdout), LspError> {
     let mut child = Command::new(server_path)
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -374,7 +376,7 @@ mod tests {
     #[test]
     fn spawn_server_succeeds_with_cat() {
         let workspace = std::env::temp_dir();
-        let result = spawn_server(Path::new("cat"), &workspace);
+        let result = spawn_server(Path::new("cat"), &workspace, &[]);
         assert!(result.is_ok(), "spawn_server should succeed: {result:?}");
         let (mut child, stdin, stdout) = result.unwrap();
         drop(stdin);
@@ -386,7 +388,7 @@ mod tests {
     #[test]
     fn spawn_server_fails_with_nonexistent_binary() {
         let workspace = std::env::temp_dir();
-        let err = spawn_server(Path::new("/nonexistent/binary/path"), &workspace)
+        let err = spawn_server(Path::new("/nonexistent/binary/path"), &workspace, &[])
             .expect_err("should fail");
         assert!(matches!(err, LspError::ServerStart(_)));
     }

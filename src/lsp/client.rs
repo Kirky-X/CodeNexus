@@ -47,7 +47,7 @@ impl LspProvider for RustAnalyzerClient {
         if guard.is_some() {
             return Ok(());
         }
-        let (child, stdin, stdout) = session::spawn_server(&self.server_path, workspace)?;
+        let (child, stdin, stdout) = session::spawn_server(&self.server_path, workspace, &[])?;
         let (connection, reader_handle, writer_handle) = session::spawn_transport(stdin, stdout);
         let mut session = Session {
             child,

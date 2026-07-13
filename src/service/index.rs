@@ -61,13 +61,30 @@ impl From<IndexResult> for IndexOutput {
 #[cfg(feature = "lsp")]
 #[allow(clippy::result_large_err)]
 fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Result<(), CodeNexusError> {
-    use crate::lsp::{LspError, LspProvider, PyrightClient, RustAnalyzerClient};
+    use crate::lsp::{
+        ClangdClient, FortlsClient, GoplsClient, JdtlsClient, LspError, LspProvider,
+        PyrightClient, RustAnalyzerClient, TypeScriptLanguageClient,
+    };
     use crate::storage::schema::escape_cypher_string;
 
     // Build a map: file_ext → (dyn LspProvider, &str)
     let rust_client = RustAnalyzerClient::new();
     let py_client = PyrightClient::new();
-    let providers: [(&str, &dyn LspProvider); 2] = [("rs", &rust_client), ("py", &py_client)];
+    let clangd_client = ClangdClient::new();
+    let gopls_client = GoplsClient::new();
+    let ts_client = TypeScriptLanguageClient::new();
+    let fortls_client = FortlsClient::new();
+    let jdtls_client = JdtlsClient::new();
+    let providers: [(&str, &dyn LspProvider); 8] = [
+        ("rs", &rust_client),
+        ("py", &py_client),
+        ("c", &clangd_client),
+        ("cpp", &clangd_client),
+        ("go", &gopls_client),
+        ("ts", &ts_client),
+        ("f90", &fortls_client),
+        ("java", &jdtls_client),
+    ];
 
     // Start each provider (best-effort; failures degrade to partial enhancement)
     for (_ext, provider) in &providers {

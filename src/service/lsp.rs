@@ -5,8 +5,10 @@
 //!
 //! Provides `lsp_goto_def` and `lsp_hover` CLI commands. Each selects
 //! the LSP client based on file extension (`.rs` → rust-analyzer,
-//! `.py` → pyright-langserver), spawns the server, sends a single
-//! LSP request, prints JSON, and shuts down.
+//! `.py` → pyright, `.c`/`.cpp` → clangd, `.go` → gopls, `.ts` →
+//! typescript-language-server, `.f90` → fortls, `.java` → jdtls),
+//! spawns the server, sends a single LSP request, prints JSON, and
+//! shuts down.
 
 use std::path::Path;
 
@@ -17,7 +19,10 @@ use crate::service::error::CodeNexusError;
 use crate::service::error::to_api_error;
 
 #[cfg(feature = "lsp")]
-use crate::lsp::{LspError, LspProvider, PyrightClient, RustAnalyzerClient};
+use crate::lsp::{
+    ClangdClient, FortlsClient, GoplsClient, JdtlsClient, LspError, LspProvider, PyrightClient,
+    RustAnalyzerClient, TypeScriptLanguageClient,
+};
 #[cfg(feature = "cli")]
 use crate::service::error::wrap_error;
 
@@ -59,6 +64,11 @@ fn select_provider(file: &Path) -> Box<dyn LspProvider> {
     let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
     match ext {
         "py" => Box::new(PyrightClient::new()),
+        "c" | "cpp" => Box::new(ClangdClient::new()),
+        "go" => Box::new(GoplsClient::new()),
+        "ts" => Box::new(TypeScriptLanguageClient::new()),
+        "f90" => Box::new(FortlsClient::new()),
+        "java" => Box::new(JdtlsClient::new()),
         _ => Box::new(RustAnalyzerClient::new()),
     }
 }
@@ -196,7 +206,7 @@ impl HoverOutput {
 #[forge(
     name = "lsp_goto_def",
     version = "0.4.0",
-    description = "Query LSP Go-to-Definition (auto-detects language from file extension: .rs → rust-analyzer, .py → pyright).",
+    description = "Query LSP Go-to-Definition (auto-detects language server from file extension).",
     cli = true
 )]
 async fn lsp_goto_def(
@@ -230,7 +240,7 @@ async fn lsp_goto_def(
 #[forge(
     name = "lsp_hover",
     version = "0.4.0",
-    description = "Query LSP Hover info (auto-detects language from file extension: .rs → rust-analyzer, .py → pyright).",
+    description = "Query LSP Hover info (auto-detects language server from file extension).",
     cli = true
 )]
 async fn lsp_hover(file: String, line: u32, col: u32, workspace: String) -> Result<(), ApiError> {
@@ -514,7 +524,7 @@ mod tests {
     }
 
     #[test]
-    fn select_provider_defaults_to_rust_analyzer_for_go_files() {
+    fn select_provider_gopls_for_go_files() {
         let provider = select_provider(Path::new("/tmp/main.go"));
         let _ = provider.shutdown();
     }

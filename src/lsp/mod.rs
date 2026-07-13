@@ -11,10 +11,12 @@
 //!
 //! # Scope (v0.2.0)
 //!
-//! Only the Rust language is wired up (`RustAnalyzerClient`). Other languages
-//! (Python/pyright, Go/gopls, Java/jdtls, C++/clangd) are deferred to
-//! v0.3.0+. `textDocument/references` is intentionally out of scope — the
-//! existing `trace --type calls` traversal already covers callers.
+//! Seven languages are wired up: Rust (`RustAnalyzerClient`), Python
+//! (`PyrightClient`), C/C++ (`ClangdClient`), Go (`GoplsClient`),
+//! TypeScript/JavaScript (`TypeScriptLanguageClient`), Fortran
+//! (`FortlsClient`), and Java (`JdtlsClient`). `textDocument/references`
+//! is intentionally out of scope — the existing `trace --type calls`
+//! traversal already covers callers.
 //!
 //! # Feature gating
 //!
@@ -27,12 +29,22 @@
 pub mod client;
 pub mod extract;
 pub mod pyright;
+pub mod clangd;
+pub mod gopls;
+pub mod typescript_ls;
+pub mod fortls;
+pub mod jdtls;
 pub(crate) mod session;
 pub mod types;
 
 pub use client::RustAnalyzerClient;
 pub use extract::extract_hover_text;
 pub use pyright::PyrightClient;
+pub use clangd::ClangdClient;
+pub use gopls::GoplsClient;
+pub use typescript_ls::TypeScriptLanguageClient;
+pub use fortls::FortlsClient;
+pub use jdtls::JdtlsClient;
 pub use types::map_lsp_symbol_kind;
 
 use std::path::Path;
