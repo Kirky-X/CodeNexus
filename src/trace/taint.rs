@@ -16,11 +16,10 @@
 //!
 //! [`DataFlowTracer`]: super::data_flow::DataFlowTracer
 
-use std::collections::VecDeque;
-
 use crate::model::{EdgeType, Graph, NodeId};
 
-use super::{TraceEdge, TraceNode, TracePath};
+use super::bfs::bfs_trace;
+use super::TracePath;
 
 /// BFS tracer over `DataFlows` / `Reads` / `Writes` / `FfiCalls` edges for
 /// source-to-sink taint analysis (v0.3.0).
@@ -35,13 +34,6 @@ use super::{TraceEdge, TraceNode, TracePath};
 /// [`trace_from_source`]: TaintPathTracer::trace_from_source
 pub struct TaintPathTracer<'a> {
     graph: &'a Graph,
-}
-
-/// Internal BFS work item: tracks the chain of visited node ids alongside the
-/// in-progress [`TracePath`] so cycles can be detected.
-struct WorkPath {
-    visited_ids: Vec<NodeId>,
-    path: TracePath,
 }
 
 impl<'a> TaintPathTracer<'a> {
@@ -67,70 +59,7 @@ impl<'a> TaintPathTracer<'a> {
         sink: &NodeId,
         max_depth: usize,
     ) -> Vec<TracePath> {
-        let Some(start_node) = self.graph.get_node(source) else {
-            return Vec::new();
-        };
-        if self.graph.get_node(sink).is_none() {
-            return Vec::new();
-        }
-
-        let mut queue: VecDeque<WorkPath> = VecDeque::new();
-        queue.push_back(WorkPath {
-            visited_ids: vec![source.clone()],
-            path: TracePath {
-                nodes: vec![TraceNode::from(start_node)],
-                edges: Vec::new(),
-                depth: 0,
-            },
-        });
-
-        let mut results = Vec::new();
-
-        while let Some(work) = queue.pop_front() {
-            let current_id = work
-                .visited_ids
-                .last()
-                .expect("work path always has at least one visited id")
-                .clone();
-
-            // Reached sink: record this path (only if it has edges, i.e., depth > 0).
-            if current_id == *sink && !work.path.edges.is_empty() {
-                results.push(work.path);
-                continue;
-            }
-
-            if work.path.depth >= max_depth {
-                continue;
-            }
-
-            for edge in self.graph.edges_from(&current_id) {
-                if !is_taint_edge(&edge.edge_type) {
-                    continue;
-                }
-                let Some(target_node) = self.graph.get_node(&edge.target) else {
-                    continue;
-                };
-                if work.visited_ids.contains(&edge.target) {
-                    continue;
-                }
-                let mut new_visited = work.visited_ids.clone();
-                new_visited.push(edge.target.clone());
-                let mut new_path = work.path.clone();
-                new_path.nodes.push(TraceNode::from(target_node));
-                new_path.edges.push(TraceEdge {
-                    edge_type: edge.edge_type.to_string(),
-                    reason: edge.reason.clone(),
-                    confidence: edge.confidence,
-                });
-                new_path.depth = work.path.depth + 1;
-                queue.push_back(WorkPath {
-                    visited_ids: new_visited,
-                    path: new_path,
-                });
-            }
-        }
-
-        results
+        bfs_trace(self.graph, source, max_depth, is_taint_edge, Some(sink))
     }
 
     /// Performs a BFS traversal from `source` over `DataFlows`, `Reads`,
@@ -146,70 +75,7 @@ impl<'a> TaintPathTracer<'a> {
     ///
     /// [`DataFlowTracer::trace`]: super::data_flow::DataFlowTracer::trace
     pub fn trace_from_source(&self, source: &NodeId, max_depth: usize) -> Vec<TracePath> {
-        let Some(start_node) = self.graph.get_node(source) else {
-            return Vec::new();
-        };
-
-        let mut queue: VecDeque<WorkPath> = VecDeque::new();
-        queue.push_back(WorkPath {
-            visited_ids: vec![source.clone()],
-            path: TracePath {
-                nodes: vec![TraceNode::from(start_node)],
-                edges: Vec::new(),
-                depth: 0,
-            },
-        });
-
-        let mut results = Vec::new();
-
-        while let Some(work) = queue.pop_front() {
-            let has_edges = !work.path.edges.is_empty();
-            let can_extend = work.path.depth < max_depth;
-
-            if !can_extend {
-                if has_edges {
-                    results.push(work.path);
-                }
-                continue;
-            }
-
-            let current_id = work
-                .visited_ids
-                .last()
-                .expect("work path always has at least one visited id")
-                .clone();
-            for edge in self.graph.edges_from(&current_id) {
-                if !is_taint_edge(&edge.edge_type) {
-                    continue;
-                }
-                let Some(target_node) = self.graph.get_node(&edge.target) else {
-                    continue;
-                };
-                if work.visited_ids.contains(&edge.target) {
-                    continue;
-                }
-                let mut new_visited = work.visited_ids.clone();
-                new_visited.push(edge.target.clone());
-                let mut new_path = work.path.clone();
-                new_path.nodes.push(TraceNode::from(target_node));
-                new_path.edges.push(TraceEdge {
-                    edge_type: edge.edge_type.to_string(),
-                    reason: edge.reason.clone(),
-                    confidence: edge.confidence,
-                });
-                new_path.depth = work.path.depth + 1;
-                queue.push_back(WorkPath {
-                    visited_ids: new_visited,
-                    path: new_path,
-                });
-            }
-
-            if has_edges {
-                results.push(work.path);
-            }
-        }
-
-        results
+        bfs_trace(self.graph, source, max_depth, is_taint_edge, None)
     }
 }
 

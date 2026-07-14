@@ -8,11 +8,10 @@
 //! depth limit (AC-TRACE-004). Each traversal produces a list of [`TracePath`]s
 //! recording the nodes and edges visited along the way.
 
-use std::collections::VecDeque;
-
 use crate::model::{EdgeType, Graph, NodeId};
 
-use super::{TraceEdge, TraceNode, TracePath};
+use super::bfs::bfs_trace;
+use super::TracePath;
 
 /// BFS tracer over `DataFlows` / `Reads` / `Writes` edges (PRD §4.2,
 /// AC-TRACE-002/004, BR-TRACE-001~006).
@@ -23,14 +22,6 @@ use super::{TraceEdge, TraceNode, TracePath};
 /// [`trace`]: DataFlowTracer::trace
 pub struct DataFlowTracer<'a> {
     graph: &'a Graph,
-}
-
-/// Internal BFS work item: tracks the chain of visited node ids alongside the
-/// in-progress [`TracePath`] so cycles can be detected without storing an
-/// `id` field on [`TraceNode`] itself.
-struct WorkPath {
-    visited_ids: Vec<NodeId>,
-    path: TracePath,
 }
 
 impl<'a> DataFlowTracer<'a> {
@@ -51,82 +42,17 @@ impl<'a> DataFlowTracer<'a> {
     /// Returns an empty vector if `start_id` is not in the graph or has no
     /// outgoing data-flow edges.
     pub fn trace(&self, start_id: &NodeId, depth: usize) -> Vec<TracePath> {
-        let Some(start_node) = self.graph.get_node(start_id) else {
-            return Vec::new();
-        };
-        let mut queue: VecDeque<WorkPath> = VecDeque::new();
-        queue.push_back(WorkPath {
-            visited_ids: vec![start_id.clone()],
-            // Single-line for coverage: tarpaulin attribute continuation
-            path: TracePath {
-                nodes: vec![TraceNode::from(start_node)],
-                edges: Vec::new(),
-                depth: 0,
-            },
-        });
-
-        let mut results = Vec::new();
-
-        while let Some(work) = queue.pop_front() {
-            let has_edges = !work.path.edges.is_empty();
-            let can_extend = work.path.depth < depth;
-
-            if !can_extend {
-                // Depth limit reached: record this path if it has edges.
-                // Single-line for coverage: tarpaulin attribute continuation
-                if has_edges {
-                    results.push(work.path);
-                }
-                continue;
-            }
-
-            // Single-line for coverage: tarpaulin attribute continuation
-            let current_id = work
-                .visited_ids
-                .last()
-                .expect("work path always has at least one visited id")
-                .clone();
-            for edge in self.graph.edges_from(&current_id) {
-                // Single-line for coverage: tarpaulin attribute continuation
-                if !matches!(
-                    edge.edge_type,
-                    EdgeType::DataFlows | EdgeType::Reads | EdgeType::Writes
-                ) {
-                    continue;
-                }
-                // Single-line for coverage: tarpaulin attribute continuation
-                let Some(target_node) = self.graph.get_node(&edge.target) else {
-                    continue;
-                };
-                // Cycle prevention: skip targets already on this path.
-                // Single-line for coverage: tarpaulin attribute continuation
-                if work.visited_ids.contains(&edge.target) {
-                    continue;
-                }
-                let mut new_visited = work.visited_ids.clone();
-                new_visited.push(edge.target.clone());
-                let mut new_path = work.path.clone();
-                new_path.nodes.push(TraceNode::from(target_node));
-                new_path.edges.push(TraceEdge {
-                    edge_type: edge.edge_type.to_string(),
-                    reason: edge.reason.clone(),
-                    confidence: edge.confidence,
-                });
-                new_path.depth = work.path.depth + 1;
-                queue.push_back(WorkPath {
-                    visited_ids: new_visited,
-                    path: new_path,
-                });
-            }
-
-            // Record the current path itself (every prefix is a valid path).
-            if has_edges {
-                results.push(work.path);
-            }
-        }
-
-        results
+        bfs_trace(self.graph, start_id, depth, is_dataflow_edge, None)
     }
+}
+
+/// Returns `true` if the edge type is a data-flow edge.
+#[inline]
+fn is_dataflow_edge(edge_type: &EdgeType) -> bool {
+    matches!(
+        edge_type,
+        EdgeType::DataFlows | EdgeType::Reads | EdgeType::Writes
+    )
 }
 
 #[cfg(test)]

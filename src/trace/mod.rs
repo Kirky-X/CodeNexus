@@ -6,6 +6,7 @@
 //! BFS traversal over call graph and data flow edges, plus impact analysis
 //! and cross-language taint path tracking.
 
+pub mod bfs;
 pub mod call_graph;
 pub mod capability;
 pub mod context;
