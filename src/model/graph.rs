@@ -79,11 +79,7 @@ impl Graph {
         self.adjacency_out
             .get(id)
             .into_iter()
-            .flat_map(|indices| {
-                indices
-                    .iter()
-                    .map(|&i| self.edge_at(i))
-            })
+            .flat_map(|indices| indices.iter().map(|&i| self.edge_at(i)))
             .filter(|e| Self::type_matches(e.edge_type, edge_type))
             .filter_map(|e| self.nodes.get(&e.target))
             .collect()
@@ -96,11 +92,7 @@ impl Graph {
         self.adjacency_in
             .get(id)
             .into_iter()
-            .flat_map(|indices| {
-                indices
-                    .iter()
-                    .map(|&i| self.edge_at(i))
-            })
+            .flat_map(|indices| indices.iter().map(|&i| self.edge_at(i)))
             .filter(|e| Self::type_matches(e.edge_type, edge_type))
             .filter_map(|e| self.nodes.get(&e.source))
             .collect()
@@ -199,9 +191,9 @@ impl Graph {
     /// message if the index is stale (caller mutated `edges` without
     /// `rebuild_index`).
     fn edge_at(&self, idx: usize) -> &Edge {
-        self.edges.get(idx).expect(
-            "adjacency index stale: call Graph::rebuild_index after mutating Graph::edges",
-        )
+        self.edges
+            .get(idx)
+            .expect("adjacency index stale: call Graph::rebuild_index after mutating Graph::edges")
     }
 }
 
@@ -739,16 +731,14 @@ mod index_tests {
     fn edges_from_preserves_insertion_order() {
         let mut g = Graph::new();
         for i in 0..10 {
-            g.add_edge(Edge::new(
-                "src",
-                format!("t{i}"),
-                EdgeType::Calls,
-                "proj",
-            ));
+            g.add_edge(Edge::new("src", format!("t{i}"), EdgeType::Calls, "proj"));
         }
         let edges = g.edges_from(&"src".to_string());
         let targets: Vec<&str> = edges.iter().map(|e| e.target.as_str()).collect();
-        assert_eq!(targets, ["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9"]);
+        assert_eq!(
+            targets,
+            ["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9"]
+        );
     }
 
     #[test]
@@ -855,7 +845,11 @@ mod index_tests {
             g.add_edge(Edge::new(
                 "hub",
                 spoke,
-                if i % 2 == 0 { EdgeType::Calls } else { EdgeType::Reads },
+                if i % 2 == 0 {
+                    EdgeType::Calls
+                } else {
+                    EdgeType::Reads
+                },
                 "proj",
             ));
         }

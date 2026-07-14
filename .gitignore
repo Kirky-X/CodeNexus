@@ -3,7 +3,6 @@
 # ========================
 target/
 **/*.rs.bk
-Cargo.lock
 
 # ========================
 # IDE / Editor
@@ -57,6 +56,9 @@ docs/TRD.md
 # Temporary files
 temp/
 
+# Logs
+logs/
+
 # Database files
 *.lbug
 
@@ -86,3 +88,7 @@ tarpaulin-report.*
 __pycache__/
 *.py[cod]
 *.pyo
+.ruff_cache/
+
+# Tool lock files
+.mimocode/

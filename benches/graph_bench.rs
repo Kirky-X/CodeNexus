@@ -73,9 +73,10 @@ fn bench_edges_from(c: &mut Criterion) {
     // Single-node hotspot: one edges_from call on a node with K outgoing
     // edges, but the graph has N*K total edges. Pre-MED-002 this scans
     // all N*K edges every call.
+    let f0 = "f0".to_string();
     group.bench_function("single_node", |b| {
         b.iter(|| {
-            let edges = graph.edges_from(&"f0".to_string());
+            let edges = graph.edges_from(&f0);
             black_box(edges);
         });
     });
@@ -97,9 +98,10 @@ fn bench_edges_to(c: &mut Criterion) {
     let mut group = c.benchmark_group("graph_edges_to");
     group.sample_size(50);
 
+    let f0 = "f0".to_string();
     group.bench_function("single_node", |b| {
         b.iter(|| {
-            let edges = graph.edges_to(&"f0".to_string());
+            let edges = graph.edges_to(&f0);
             black_box(edges);
         });
     });
@@ -113,16 +115,17 @@ fn bench_neighbors(c: &mut Criterion) {
     let mut group = c.benchmark_group("graph_neighbors");
     group.sample_size(50);
 
+    let f0 = "f0".to_string();
     group.bench_function("unfiltered", |b| {
         b.iter(|| {
-            let ns = graph.neighbors(&"f0".to_string(), None);
+            let ns = graph.neighbors(&f0, None);
             black_box(ns);
         });
     });
 
     group.bench_function("filtered_by_type", |b| {
         b.iter(|| {
-            let ns = graph.neighbors(&"f0".to_string(), Some(EdgeType::Calls));
+            let ns = graph.neighbors(&f0, Some(EdgeType::Calls));
             black_box(ns);
         });
     });
@@ -141,8 +144,9 @@ fn bench_scaling(c: &mut Criterion) {
             BenchmarkId::new("edges_from_single", nodes),
             &nodes,
             |b, _| {
+                let f0 = "f0".to_string();
                 b.iter(|| {
-                    let edges = graph.edges_from(&"f0".to_string());
+                    let edges = graph.edges_from(&f0);
                     black_box(edges);
                 });
             },
@@ -152,5 +156,11 @@ fn bench_scaling(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_edges_from, bench_edges_to, bench_neighbors, bench_scaling);
+criterion_group!(
+    benches,
+    bench_edges_from,
+    bench_edges_to,
+    bench_neighbors,
+    bench_scaling
+);
 criterion_main!(benches);
