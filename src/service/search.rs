@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+use std::str::FromStr;
 
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::kit::{AsyncKit, AsyncReady, QueryModule, StorageModule};
@@ -45,30 +47,6 @@ fn search_result_to_json(r: &SearchResult) -> Value {
     })
 }
 
-/// Parses a search mode string into a [`SearchMode`].
-///
-/// Accepts case-insensitive mode names:
-/// - `exact` → `Exact`
-/// - `regex` → `Regex`
-/// - `fuzzy` → `Fuzzy`
-/// - `graph`, `graph_enhanced`, `graph-enhanced` → `GraphEnhanced`
-/// - `multi`, `multi_signal`, `multi-signal` → `MultiSignal`
-///
-/// Returns `None` for empty or unrecognized strings (empty = legacy mode).
-#[cfg(any(feature = "cli", feature = "mcp", test))]
-fn parse_search_mode(mode: &str) -> Option<SearchMode> {
-    let lower = mode.trim().to_ascii_lowercase();
-    match lower.as_str() {
-        "" => None,
-        "exact" => Some(SearchMode::Exact),
-        "regex" => Some(SearchMode::Regex),
-        "fuzzy" => Some(SearchMode::Fuzzy),
-        "graph" | "graph_enhanced" | "graph-enhanced" => Some(SearchMode::GraphEnhanced),
-        "multi" | "multi_signal" | "multi-signal" => Some(SearchMode::MultiSignal),
-        _ => None,
-    }
-}
-
 /// Runs search against an injected Kit (testable core).
 ///
 /// When `mode` is non-empty, uses [`SearchEngine`] with the corresponding
@@ -84,7 +62,7 @@ pub fn run_search(
     mode: &str,
     project: &str,
 ) -> Result<SearchOutput, CodeNexusError> {
-    if let Some(search_mode) = parse_search_mode(mode) {
+    if let Ok(search_mode) = SearchMode::from_str(mode) {
         let storage = kit.require::<StorageModule>()?;
         let engine = SearchEngine::new(&*storage);
         let params = SearchParams {
@@ -275,64 +253,6 @@ mod tests {
         assert!(v["filePath"].is_null());
         assert!(v["startLine"].is_null());
         assert!(v["qualifiedName"].is_null());
-    }
-
-    // ===== T039: parse_search_mode unit tests =====
-
-    #[test]
-    fn parse_search_mode_empty_returns_none() {
-        assert_eq!(parse_search_mode(""), None);
-        assert_eq!(parse_search_mode("   "), None);
-    }
-
-    #[test]
-    fn parse_search_mode_exact() {
-        assert_eq!(parse_search_mode("exact"), Some(SearchMode::Exact));
-        assert_eq!(parse_search_mode("EXACT"), Some(SearchMode::Exact));
-    }
-
-    #[test]
-    fn parse_search_mode_regex() {
-        assert_eq!(parse_search_mode("regex"), Some(SearchMode::Regex));
-        assert_eq!(parse_search_mode("Regex"), Some(SearchMode::Regex));
-    }
-
-    #[test]
-    fn parse_search_mode_fuzzy() {
-        assert_eq!(parse_search_mode("fuzzy"), Some(SearchMode::Fuzzy));
-        assert_eq!(parse_search_mode("FUZZY"), Some(SearchMode::Fuzzy));
-    }
-
-    #[test]
-    fn parse_search_mode_graph_aliases() {
-        assert_eq!(parse_search_mode("graph"), Some(SearchMode::GraphEnhanced));
-        assert_eq!(
-            parse_search_mode("graph_enhanced"),
-            Some(SearchMode::GraphEnhanced)
-        );
-        assert_eq!(
-            parse_search_mode("graph-enhanced"),
-            Some(SearchMode::GraphEnhanced)
-        );
-    }
-
-    #[test]
-    fn parse_search_mode_multi_aliases() {
-        assert_eq!(parse_search_mode("multi"), Some(SearchMode::MultiSignal));
-        assert_eq!(
-            parse_search_mode("multi_signal"),
-            Some(SearchMode::MultiSignal)
-        );
-        assert_eq!(
-            parse_search_mode("multi-signal"),
-            Some(SearchMode::MultiSignal)
-        );
-    }
-
-    #[test]
-    fn parse_search_mode_invalid_returns_none() {
-        assert_eq!(parse_search_mode("invalid"), None);
-        assert_eq!(parse_search_mode("semantic"), None);
     }
 
     // ===== T039: run_search with mode parameter =====

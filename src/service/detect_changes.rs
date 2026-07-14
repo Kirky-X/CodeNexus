@@ -10,6 +10,8 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::fmt;
+use std::str::FromStr;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -36,14 +38,33 @@ enum DiffMode {
     Head,
 }
 
+impl fmt::Display for DiffMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unstaged => f.write_str("unstaged"),
+            Self::Staged => f.write_str("staged"),
+            Self::Head => f.write_str("head"),
+        }
+    }
+}
+
+impl FromStr for DiffMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "" => Err("diff mode is empty".to_string()),
+            "unstaged" => Ok(Self::Unstaged),
+            "staged" => Ok(Self::Staged),
+            "head" => Ok(Self::Head),
+            other => Err(format!("unknown diff mode: {other}")),
+        }
+    }
+}
+
 impl DiffMode {
     fn from_cli_str(s: &str) -> Option<Self> {
-        match s {
-            "unstaged" => Some(Self::Unstaged),
-            "staged" => Some(Self::Staged),
-            "head" => Some(Self::Head),
-            _ => None,
-        }
+        Self::from_str(s).ok()
     }
 
     fn git_args(self) -> &'static [&'static str] {
@@ -470,6 +491,56 @@ mod tests {
         assert!(DiffMode::Unstaged.git_args().contains(&"diff"));
         assert!(DiffMode::Staged.git_args().contains(&"--staged"));
         assert!(DiffMode::Head.git_args().contains(&"HEAD"));
+    }
+
+    // --- DiffMode FromStr / Display ---
+
+    #[test]
+    fn diff_mode_display_canonical_strings() {
+        assert_eq!(DiffMode::Unstaged.to_string(), "unstaged");
+        assert_eq!(DiffMode::Staged.to_string(), "staged");
+        assert_eq!(DiffMode::Head.to_string(), "head");
+    }
+
+    #[test]
+    fn diff_mode_from_str_parses_canonical_forms() {
+        assert_eq!(DiffMode::from_str("unstaged").unwrap(), DiffMode::Unstaged);
+        assert_eq!(DiffMode::from_str("staged").unwrap(), DiffMode::Staged);
+        assert_eq!(DiffMode::from_str("head").unwrap(), DiffMode::Head);
+    }
+
+    #[test]
+    fn diff_mode_from_str_is_case_insensitive() {
+        assert_eq!(DiffMode::from_str("UNSTAGED").unwrap(), DiffMode::Unstaged);
+        assert_eq!(DiffMode::from_str("Staged").unwrap(), DiffMode::Staged);
+        assert_eq!(DiffMode::from_str("HEAD").unwrap(), DiffMode::Head);
+    }
+
+    #[test]
+    fn diff_mode_from_str_trims_whitespace() {
+        assert_eq!(
+            DiffMode::from_str("  unstaged  ").unwrap(),
+            DiffMode::Unstaged
+        );
+        assert_eq!(
+            DiffMode::from_str("\tstaged\n").unwrap(),
+            DiffMode::Staged
+        );
+    }
+
+    #[test]
+    fn diff_mode_from_str_rejects_empty_and_unknown() {
+        assert!(DiffMode::from_str("").is_err());
+        assert!(DiffMode::from_str("   ").is_err());
+        assert!(DiffMode::from_str("bogus").is_err());
+    }
+
+    #[test]
+    fn diff_mode_display_fromstr_roundtrip() {
+        for variant in [DiffMode::Unstaged, DiffMode::Staged, DiffMode::Head] {
+            let s = variant.to_string();
+            assert_eq!(DiffMode::from_str(&s).unwrap(), variant);
+        }
     }
 
     // --- parse_diff_path ---

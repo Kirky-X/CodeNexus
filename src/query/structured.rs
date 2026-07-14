@@ -19,6 +19,8 @@ use crate::storage::schema::{escape_cypher_string, escape_identifier};
 use crate::storage::StorageConnection;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::str::FromStr;
 
 /// Maximum value accepted for [`SearchParams::limit`].
 pub const MAX_LIMIT: usize = 500;
@@ -40,6 +42,34 @@ pub enum SearchMode {
     GraphEnhanced,
     /// Multi-signal scored search (name + degree + module + test coverage).
     MultiSignal,
+}
+
+impl fmt::Display for SearchMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SearchMode::Exact => f.write_str("exact"),
+            SearchMode::Regex => f.write_str("regex"),
+            SearchMode::Fuzzy => f.write_str("fuzzy"),
+            SearchMode::GraphEnhanced => f.write_str("graph_enhanced"),
+            SearchMode::MultiSignal => f.write_str("multi_signal"),
+        }
+    }
+}
+
+impl FromStr for SearchMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "" => Err("search mode is empty".to_string()),
+            "exact" => Ok(SearchMode::Exact),
+            "regex" => Ok(SearchMode::Regex),
+            "fuzzy" => Ok(SearchMode::Fuzzy),
+            "graph" | "graph_enhanced" | "graph-enhanced" => Ok(SearchMode::GraphEnhanced),
+            "multi" | "multi_signal" | "multi-signal" => Ok(SearchMode::MultiSignal),
+            other => Err(format!("unknown search mode: {other}")),
+        }
+    }
 }
 
 /// Parameters for [`SearchEngine::search`].
@@ -3539,5 +3569,93 @@ mod tests {
         }];
         sort_and_truncate(&mut results, 100);
         assert_eq!(results.len(), 1, "should not be truncated");
+    }
+
+    // ===== SearchMode FromStr / Display tests =====
+
+    #[test]
+    fn search_mode_display_canonical_strings() {
+        assert_eq!(SearchMode::Exact.to_string(), "exact");
+        assert_eq!(SearchMode::Regex.to_string(), "regex");
+        assert_eq!(SearchMode::Fuzzy.to_string(), "fuzzy");
+        assert_eq!(SearchMode::GraphEnhanced.to_string(), "graph_enhanced");
+        assert_eq!(SearchMode::MultiSignal.to_string(), "multi_signal");
+    }
+
+    #[test]
+    fn search_mode_from_str_parses_canonical_forms() {
+        assert_eq!("exact".parse::<SearchMode>().unwrap(), SearchMode::Exact);
+        assert_eq!("regex".parse::<SearchMode>().unwrap(), SearchMode::Regex);
+        assert_eq!("fuzzy".parse::<SearchMode>().unwrap(), SearchMode::Fuzzy);
+        assert_eq!(
+            "graph_enhanced".parse::<SearchMode>().unwrap(),
+            SearchMode::GraphEnhanced
+        );
+        assert_eq!(
+            "multi_signal".parse::<SearchMode>().unwrap(),
+            SearchMode::MultiSignal
+        );
+    }
+
+    #[test]
+    fn search_mode_from_str_parses_aliases() {
+        assert_eq!("graph".parse::<SearchMode>().unwrap(), SearchMode::GraphEnhanced);
+        assert_eq!(
+            "graph-enhanced".parse::<SearchMode>().unwrap(),
+            SearchMode::GraphEnhanced
+        );
+        assert_eq!("multi".parse::<SearchMode>().unwrap(), SearchMode::MultiSignal);
+        assert_eq!(
+            "multi-signal".parse::<SearchMode>().unwrap(),
+            SearchMode::MultiSignal
+        );
+    }
+
+    #[test]
+    fn search_mode_from_str_is_case_insensitive() {
+        assert_eq!("EXACT".parse::<SearchMode>().unwrap(), SearchMode::Exact);
+        assert_eq!("Regex".parse::<SearchMode>().unwrap(), SearchMode::Regex);
+        assert_eq!("FUZZY".parse::<SearchMode>().unwrap(), SearchMode::Fuzzy);
+        assert_eq!("GRAPH".parse::<SearchMode>().unwrap(), SearchMode::GraphEnhanced);
+        assert_eq!("MULTI".parse::<SearchMode>().unwrap(), SearchMode::MultiSignal);
+    }
+
+    #[test]
+    fn search_mode_from_str_trims_whitespace() {
+        assert_eq!("  exact  ".parse::<SearchMode>().unwrap(), SearchMode::Exact);
+        assert_eq!(" regex ".parse::<SearchMode>().unwrap(), SearchMode::Regex);
+    }
+
+    #[test]
+    fn search_mode_from_str_rejects_empty() {
+        assert!("".parse::<SearchMode>().is_err());
+        assert!("   ".parse::<SearchMode>().is_err());
+    }
+
+    #[test]
+    fn search_mode_from_str_rejects_unknown() {
+        assert!("semantic".parse::<SearchMode>().is_err());
+        assert!("invalid".parse::<SearchMode>().is_err());
+    }
+
+    #[test]
+    fn search_mode_from_str_error_contains_input() {
+        let err = "bogus".parse::<SearchMode>().unwrap_err();
+        assert!(err.contains("bogus"));
+    }
+
+    #[test]
+    fn search_mode_display_fromstr_roundtrip() {
+        for mode in [
+            SearchMode::Exact,
+            SearchMode::Regex,
+            SearchMode::Fuzzy,
+            SearchMode::GraphEnhanced,
+            SearchMode::MultiSignal,
+        ] {
+            let s = mode.to_string();
+            let parsed: SearchMode = s.parse().unwrap();
+            assert_eq!(mode, parsed);
+        }
     }
 }

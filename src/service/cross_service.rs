@@ -9,6 +9,8 @@ use serde::Serialize;
 use crate::analysis::cross_service::{
     CrossServiceDetector, CrossServiceLink, CrossServiceLinker, CrossServiceMatch, ServiceProtocol,
 };
+#[cfg(feature = "cross-service")]
+use std::str::FromStr;
 #[cfg(all(feature = "cross-service", any(feature = "cli", test)))]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cross-service", any(feature = "cli", test)))]
@@ -34,30 +36,6 @@ pub struct CrossServiceOutput {
     pub matches: Vec<CrossServiceMatch>,
 }
 
-/// Parses a protocol filter string into a [`ServiceProtocol`].
-///
-/// Accepts case-insensitive aliases:
-/// - `http_rest`, `http`, `rest` → `HttpRest`
-/// - `grpc` → `Grpc`
-/// - `graphql` → `GraphQL`
-/// - `message_queue`, `mq`, `message` → `MessageQueue`
-/// - `event_bus`, `event` → `EventBus`
-///
-/// Returns `None` for empty or unrecognized strings (empty = all protocols).
-#[cfg(feature = "cross-service")]
-fn parse_protocol(protocol: &str) -> Option<ServiceProtocol> {
-    let lower = protocol.trim().to_ascii_lowercase();
-    match lower.as_str() {
-        "" => None,
-        "http_rest" | "http" | "rest" => Some(ServiceProtocol::HttpRest),
-        "grpc" => Some(ServiceProtocol::Grpc),
-        "graphql" => Some(ServiceProtocol::GraphQL),
-        "message_queue" | "mq" | "message" => Some(ServiceProtocol::MessageQueue),
-        "event_bus" | "event" => Some(ServiceProtocol::EventBus),
-        _ => None,
-    }
-}
-
 /// Runs cross-service link detection against an injected Kit (testable core).
 ///
 /// `protocol` filters the multi-protocol `matches` field:
@@ -77,7 +55,7 @@ pub fn run_cross_service(
     let links = linker.link()?;
     let detector = CrossServiceDetector::new(&*storage);
     let mut matches = detector.detect_all(project)?;
-    if let Some(filter) = parse_protocol(protocol) {
+    if let Ok(filter) = ServiceProtocol::from_str(protocol) {
         matches.retain(|m| m.protocol == filter);
     }
     Ok(CrossServiceOutput {
@@ -178,61 +156,6 @@ mod tests {
         assert!(json.contains("\"route_id\":\"r1\""));
         assert!(json.contains("\"match_type\":\"Exact\""));
         assert!(json.contains("\"matches\""));
-    }
-
-    // ===== T037: parse_protocol unit tests =====
-
-    #[test]
-    fn parse_protocol_empty_returns_none() {
-        assert_eq!(parse_protocol(""), None);
-        assert_eq!(parse_protocol("   "), None);
-    }
-
-    #[test]
-    fn parse_protocol_http_aliases() {
-        assert_eq!(parse_protocol("http_rest"), Some(ServiceProtocol::HttpRest));
-        assert_eq!(parse_protocol("http"), Some(ServiceProtocol::HttpRest));
-        assert_eq!(parse_protocol("rest"), Some(ServiceProtocol::HttpRest));
-        assert_eq!(parse_protocol("HTTP_REST"), Some(ServiceProtocol::HttpRest));
-        assert_eq!(parse_protocol("  http  "), Some(ServiceProtocol::HttpRest));
-    }
-
-    #[test]
-    fn parse_protocol_grpc() {
-        assert_eq!(parse_protocol("grpc"), Some(ServiceProtocol::Grpc));
-        assert_eq!(parse_protocol("GRPC"), Some(ServiceProtocol::Grpc));
-    }
-
-    #[test]
-    fn parse_protocol_graphql() {
-        assert_eq!(parse_protocol("graphql"), Some(ServiceProtocol::GraphQL));
-        assert_eq!(parse_protocol("GraphQL"), Some(ServiceProtocol::GraphQL));
-    }
-
-    #[test]
-    fn parse_protocol_message_queue_aliases() {
-        assert_eq!(
-            parse_protocol("message_queue"),
-            Some(ServiceProtocol::MessageQueue)
-        );
-        assert_eq!(parse_protocol("mq"), Some(ServiceProtocol::MessageQueue));
-        assert_eq!(
-            parse_protocol("message"),
-            Some(ServiceProtocol::MessageQueue)
-        );
-    }
-
-    #[test]
-    fn parse_protocol_event_bus_aliases() {
-        assert_eq!(parse_protocol("event_bus"), Some(ServiceProtocol::EventBus));
-        assert_eq!(parse_protocol("event"), Some(ServiceProtocol::EventBus));
-    }
-
-    #[test]
-    fn parse_protocol_invalid_returns_none() {
-        assert_eq!(parse_protocol("invalid"), None);
-        assert_eq!(parse_protocol("ftp"), None);
-        assert_eq!(parse_protocol("websocket"), None);
     }
 
     // ===== T037: run_cross_service with protocol filter =====

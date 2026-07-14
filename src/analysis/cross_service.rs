@@ -36,6 +36,8 @@ use crate::storage::capability::Storage;
 use crate::storage::error::Result as StorageResult;
 use crate::storage::schema::escape_cypher_string;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::str::FromStr;
 
 /// Edge type stored on `CodeRelation.type` for cross-service links.
 const CROSS_SERVICE_CALLS_EDGE_TYPE: &str = "CROSS_SERVICE_CALLS";
@@ -285,6 +287,34 @@ pub enum ServiceProtocol {
     GraphQL,
     MessageQueue,
     EventBus,
+}
+
+impl fmt::Display for ServiceProtocol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::HttpRest => f.write_str("http_rest"),
+            Self::Grpc => f.write_str("grpc"),
+            Self::GraphQL => f.write_str("graphql"),
+            Self::MessageQueue => f.write_str("message_queue"),
+            Self::EventBus => f.write_str("event_bus"),
+        }
+    }
+}
+
+impl FromStr for ServiceProtocol {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "" => Err("protocol is empty".to_string()),
+            "http_rest" | "http" | "rest" => Ok(Self::HttpRest),
+            "grpc" => Ok(Self::Grpc),
+            "graphql" => Ok(Self::GraphQL),
+            "message_queue" | "mq" | "message" => Ok(Self::MessageQueue),
+            "event_bus" | "event" => Ok(Self::EventBus),
+            other => Err(format!("unknown protocol: {other}")),
+        }
+    }
 }
 
 /// A cross-service interaction detected between two code symbols.
@@ -2734,5 +2764,124 @@ mod tests {
             !match_parameterized("/:a/:b", "/foo/"),
             "trailing empty parameter segment should not match"
         );
+    }
+
+    // ===== ServiceProtocol FromStr / Display tests =====
+
+    #[test]
+    fn service_protocol_display_canonical_strings() {
+        assert_eq!(ServiceProtocol::HttpRest.to_string(), "http_rest");
+        assert_eq!(ServiceProtocol::Grpc.to_string(), "grpc");
+        assert_eq!(ServiceProtocol::GraphQL.to_string(), "graphql");
+        assert_eq!(ServiceProtocol::MessageQueue.to_string(), "message_queue");
+        assert_eq!(ServiceProtocol::EventBus.to_string(), "event_bus");
+    }
+
+    #[test]
+    fn service_protocol_from_str_parses_canonical_forms() {
+        assert_eq!(
+            ServiceProtocol::from_str("http_rest").unwrap(),
+            ServiceProtocol::HttpRest
+        );
+        assert_eq!(
+            ServiceProtocol::from_str("grpc").unwrap(),
+            ServiceProtocol::Grpc
+        );
+        assert_eq!(
+            ServiceProtocol::from_str("graphql").unwrap(),
+            ServiceProtocol::GraphQL
+        );
+        assert_eq!(
+            ServiceProtocol::from_str("message_queue").unwrap(),
+            ServiceProtocol::MessageQueue
+        );
+        assert_eq!(
+            ServiceProtocol::from_str("event_bus").unwrap(),
+            ServiceProtocol::EventBus
+        );
+    }
+
+    #[test]
+    fn service_protocol_from_str_parses_aliases() {
+        assert_eq!(
+            ServiceProtocol::from_str("http").unwrap(),
+            ServiceProtocol::HttpRest
+        );
+        assert_eq!(
+            ServiceProtocol::from_str("rest").unwrap(),
+            ServiceProtocol::HttpRest
+        );
+        assert_eq!(
+            ServiceProtocol::from_str("mq").unwrap(),
+            ServiceProtocol::MessageQueue
+        );
+        assert_eq!(
+            ServiceProtocol::from_str("message").unwrap(),
+            ServiceProtocol::MessageQueue
+        );
+        assert_eq!(
+            ServiceProtocol::from_str("event").unwrap(),
+            ServiceProtocol::EventBus
+        );
+    }
+
+    #[test]
+    fn service_protocol_from_str_is_case_insensitive() {
+        assert_eq!(
+            ServiceProtocol::from_str("HTTP_REST").unwrap(),
+            ServiceProtocol::HttpRest
+        );
+        assert_eq!(
+            ServiceProtocol::from_str("GRPC").unwrap(),
+            ServiceProtocol::Grpc
+        );
+        assert_eq!(
+            ServiceProtocol::from_str("GraphQL").unwrap(),
+            ServiceProtocol::GraphQL
+        );
+    }
+
+    #[test]
+    fn service_protocol_from_str_trims_whitespace() {
+        assert_eq!(
+            ServiceProtocol::from_str("  grpc  ").unwrap(),
+            ServiceProtocol::Grpc
+        );
+        assert_eq!(
+            ServiceProtocol::from_str("\tevent_bus\n").unwrap(),
+            ServiceProtocol::EventBus
+        );
+    }
+
+    #[test]
+    fn service_protocol_from_str_rejects_empty() {
+        assert!(ServiceProtocol::from_str("").is_err());
+        assert!(ServiceProtocol::from_str("   ").is_err());
+    }
+
+    #[test]
+    fn service_protocol_from_str_rejects_unknown() {
+        assert!(ServiceProtocol::from_str("ftp").is_err());
+        assert!(ServiceProtocol::from_str("websocket").is_err());
+    }
+
+    #[test]
+    fn service_protocol_from_str_error_contains_input() {
+        let err = ServiceProtocol::from_str("ftp").unwrap_err();
+        assert!(err.contains("ftp"), "error should contain input: {err}");
+    }
+
+    #[test]
+    fn service_protocol_display_fromstr_roundtrip() {
+        for variant in [
+            ServiceProtocol::HttpRest,
+            ServiceProtocol::Grpc,
+            ServiceProtocol::GraphQL,
+            ServiceProtocol::MessageQueue,
+            ServiceProtocol::EventBus,
+        ] {
+            let s = variant.to_string();
+            assert_eq!(ServiceProtocol::from_str(&s).unwrap(), variant);
+        }
     }
 }

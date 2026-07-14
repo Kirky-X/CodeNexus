@@ -22,6 +22,8 @@ use super::module::TraceConfig;
 use super::TraceResult;
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::str::FromStr;
 
 // ===== Advanced tracing types (T032) =====
 
@@ -233,19 +235,34 @@ pub enum TraceType {
     All,
 }
 
+impl fmt::Display for TraceType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_cli_str())
+    }
+}
+
+impl FromStr for TraceType {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "" => Err("trace type is empty".to_string()),
+            "calls" => Ok(Self::Calls),
+            "dataflow" | "data_flow" | "data-flow" => Ok(Self::DataFlow),
+            "all" => Ok(Self::All),
+            other => Err(format!("unknown trace type: {other}")),
+        }
+    }
+}
+
 impl TraceType {
     /// Parses the `--type` string from the CLI (`calls`/`dataflow`/`all`).
     ///
-    /// Returns `None` for unrecognized strings so the CLI can surface a
-    /// helpful error.
+    /// Delegates to [`FromStr`] and returns `None` for unrecognized strings
+    /// so the CLI can surface a helpful error.
     #[must_use]
     pub fn from_cli_str(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "calls" => Some(Self::Calls),
-            "dataflow" => Some(Self::DataFlow),
-            "all" => Some(Self::All),
-            _ => None,
-        }
+        Self::from_str(s).ok()
     }
 
     /// Returns the canonical CLI string for this trace type.
@@ -445,7 +462,6 @@ mod tests {
     fn trace_type_from_cli_str_rejects_unknown() {
         assert!(TraceType::from_cli_str("unknown").is_none());
         assert!(TraceType::from_cli_str("").is_none());
-        assert!(TraceType::from_cli_str("calls ").is_none());
     }
 
     #[test]
@@ -1229,5 +1245,60 @@ mod tests {
         assert_eq!(result.symbol, "label_a");
         assert_eq!(result.paths.len(), 1);
         assert_eq!(path_node_names(&result.paths[0]), vec!["a", "b"]);
+    }
+
+    // ===== TraceType FromStr / Display tests =====
+
+    #[test]
+    fn trace_type_display_canonical_strings() {
+        assert_eq!(TraceType::Calls.to_string(), "calls");
+        assert_eq!(TraceType::DataFlow.to_string(), "dataflow");
+        assert_eq!(TraceType::All.to_string(), "all");
+    }
+
+    #[test]
+    fn trace_type_from_str_parses_canonical_forms() {
+        assert_eq!(TraceType::from_str("calls").unwrap(), TraceType::Calls);
+        assert_eq!(TraceType::from_str("dataflow").unwrap(), TraceType::DataFlow);
+        assert_eq!(TraceType::from_str("all").unwrap(), TraceType::All);
+    }
+
+    #[test]
+    fn trace_type_from_str_parses_aliases() {
+        assert_eq!(TraceType::from_str("data_flow").unwrap(), TraceType::DataFlow);
+        assert_eq!(TraceType::from_str("data-flow").unwrap(), TraceType::DataFlow);
+    }
+
+    #[test]
+    fn trace_type_from_str_is_case_insensitive() {
+        assert_eq!(TraceType::from_str("CALLS").unwrap(), TraceType::Calls);
+        assert_eq!(TraceType::from_str("DataFlow").unwrap(), TraceType::DataFlow);
+        assert_eq!(TraceType::from_str("ALL").unwrap(), TraceType::All);
+    }
+
+    #[test]
+    fn trace_type_from_str_trims_whitespace() {
+        assert_eq!(TraceType::from_str("  calls  ").unwrap(), TraceType::Calls);
+        assert_eq!(TraceType::from_str("\tdataflow\n").unwrap(), TraceType::DataFlow);
+    }
+
+    #[test]
+    fn trace_type_from_str_rejects_empty() {
+        assert!(TraceType::from_str("").is_err());
+        assert!(TraceType::from_str("   ").is_err());
+    }
+
+    #[test]
+    fn trace_type_from_str_rejects_unknown() {
+        assert!(TraceType::from_str("bogus").is_err());
+        assert!(TraceType::from_str("trace").is_err());
+    }
+
+    #[test]
+    fn trace_type_display_fromstr_roundtrip() {
+        for variant in [TraceType::Calls, TraceType::DataFlow, TraceType::All] {
+            let s = variant.to_string();
+            assert_eq!(TraceType::from_str(&s).unwrap(), variant);
+        }
     }
 }
