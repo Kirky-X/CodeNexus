@@ -45,7 +45,7 @@ pub fn new_node_id_with_prefix(prefix: &str) -> String {
 pub struct Node {
     /// UUIDv7 string identifier.
     pub id: NodeId,
-    /// The node label (one of 20 types, DDD §7.1).
+    /// The node label (one of 44 types, DDD §7.1).
     pub label: NodeLabel,
     /// Short display name of the node.
     pub name: String,

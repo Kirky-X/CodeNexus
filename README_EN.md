@@ -4,7 +4,7 @@
 
 **A multi-language code knowledge graph tool built on LadybugDB and tree-sitter**
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Rust Version](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org) [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Rust Version](https://img.shields.io/badge/rust-1.91%2B-orange.svg)](https://www.rust-lang.org) [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml)
 
 English | [简体中文](README.md)
 
@@ -16,7 +16,7 @@ CodeNexus indexes source code repositories into a queryable knowledge graph. It 
 
 CodeNexus turns a codebase into a structured graph of symbols and their relationships (calls, data flows, imports, FFI bindings, ...). Once indexed, you can query the graph with a Cypher subset, trace how a symbol is reached, measure the blast radius of a change, and feed the graph to AI agents through a Model Context Protocol (MCP) server.
 
-Supports **8 languages**: C, Rust, Fortran, Python, TypeScript, Go, Java, C++.
+Supports **21 languages** with the default `full` preset: C, Rust, Fortran, Python, TypeScript, Go, Java, C++, JavaScript, Ruby, Haskell, OCaml, Scala, PHP, C#, Bash, HTML, CSS, JSON, Regex, Verilog. Build a minimal subset with `lang-*` features.
 
 ### Typical Use Cases
 
@@ -29,14 +29,14 @@ Supports **8 languages**: C, Rust, Fortran, Python, TypeScript, Go, Java, C++.
 
 | Feature | Description |
 |---------|-------------|
-| Multi-language parsing | C / Rust / Fortran / Python / TypeScript / Go / Java / C++ via tree-sitter |
-| Graph database | LadybugDB storage with 44 node types + 24 edge types |
+| Multi-language parsing | 21 languages (default `full` preset) via tree-sitter, trimmable with `lang-*` features |
+| Graph database | LadybugDB storage with 44 node types + 30 edge types |
 | Incremental indexing | SHA-256 file hash diffing, re-parses only changed files |
 | Parallel parsing | Rayon parallelism + thread-local parser pool |
 | RAM-first indexing | LZ4-compress source into memory, single `COPY FROM` dump (`--ram-first`) |
 | Symbol tracing | Bidirectional call (Calls) and data-flow (DataFlows) tracing |
 | Impact analysis | Change impact radius analysis, layered by depth |
-| Disambiguation | Ranked multi-match symbol resolution with `--uid`/`--file`/`--kind` narrowing |
+| Disambiguation | Ranked multi-match symbol resolution by confidence (auto-selects the unique match; errors if it cannot be disambiguated) |
 | Confidence tiers | Each edge carries a tier (SameFile / ImportScoped / Global) + 0.0-1.0 score |
 | Cross-language FFI | C-Fortran `bind(C)`, Rust `extern`, and other FFI call resolution |
 | Team artifacts | `export`/`import` compressed `.graph.zst` artifacts for sharing indexes |
@@ -66,7 +66,7 @@ CodeNexus is split across three entry points:
 
 - `src/lib.rs` — Rust SDK interface (library crate). Embed the indexing pipeline, query facade, or trace engine in another Rust project by depending on the `codenexus` crate.
 - `src/main.rs` — CLI binary. Uses sdforge `CliBuilder` + `inventory` to dispatch to `service::*` handlers.
-- `src/service/` — Unified service layer. sdforge `#[service_api]` macro exposes both CLI and MCP interfaces, gated by `cli`/`mcp` features. Each command defines a core function + CLI wrapper + MCP wrapper.
+- `src/service/` — Unified service layer. sdforge `#[forge]` macro exposes both CLI and MCP interfaces, gated by `cli`/`mcp` features. Each command defines a core function + CLI wrapper + MCP wrapper.
 
 ### Indexing Pipeline
 
@@ -79,10 +79,12 @@ CodeNexus is split across three entry points:
 ### Graph Model
 
 - **44 node types**: Project, Folder, File, Module, Class, Struct, Enum, Trait, Impl, Function, Method, Variable, GlobalVar, Parameter, Const, Static, Macro, TypeAlias, Typedef, Namespace, Interface, Constructor, Property, Record, Delegate, Annotation, Template, Union, Variant, Field, Event, Handler, Middleware, Service, Endpoint, Route, Process, Database, Config, Test, Section, Community, Tool, Embedding
-- **24 edge types**: Contains, Defines, MemberOf, Calls, FfiCalls, DataFlows, Reads, Writes, Implements, Extends, UsesType, References, Imports, Includes, HasMethod, HasProperty, Accesses, MethodOverrides, MethodImplements, StepInProcess, HandlesRoute, Fetches, HandlesTool, EntryPointOf
+- **30 edge types**: Contains, Defines, MemberOf, Calls, FfiCalls, DataFlows, Reads, Writes, Implements, Extends, UsesType, References, Imports, Includes, HasMethod, HasProperty, Accesses, MethodOverrides, MethodImplements, StepInProcess, HandlesRoute, Fetches, HandlesTool, EntryPointOf, Usage, Tests, HttpCalls, AsyncCalls, Emits, ListensOn
 - Each edge carries a confidence score (0.0-1.0) and a confidence tier (`SameFile` / `ImportScoped` / `Global`)
 
 ### Supported Languages
+
+The default `full` preset compiles **21 languages**. The table below lists the core 8; `full` additionally enables JavaScript, Ruby, Haskell, OCaml, Scala, PHP, C#, Bash, HTML, CSS, JSON, Regex, and Verilog.
 
 | Language | Node Types | Edge Types |
 |----------|------------|------------|
@@ -101,7 +103,7 @@ CodeNexus is split across three entry points:
 
 | Dependency | Version | Notes |
 |------------|---------|-------|
-| Rust toolchain | 1.85+ (stable) | Required for `cargo build`. CI pins 1.85. |
+| Rust toolchain | 1.91+ (stable) | Required for `cargo build`. CI pins 1.91. |
 | nightly rustfmt | latest | `cargo fmt` uses nightly-only options (`imports_granularity`, `group_imports`). |
 | C/C++ compiler | system default | Required to build tree-sitter grammar crates. |
 | `zstd` CLI | any recent version | Used by `export`/`import` for `.graph.zst` artifacts. |
@@ -126,7 +128,7 @@ cargo build --release
 |---------|---------|-------------|
 | `minimal` | — | Minimal preset: `lang-rust` only |
 | `core` | — | Core preset: `lang-c` + `lang-rust` + `lang-python` |
-| `full` | enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++ + daemon/analysis/complexity/api-review/community/cross-service/lsp/mcp |
+| `full` | enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/lsp/cli/mcp/cache |
 | `lang-c` | — | C language parser (tree-sitter-c) |
 | `lang-rust` | enabled | Rust language parser (tree-sitter-rust) |
 | `lang-fortran` | — | Fortran language parser (tree-sitter-fortran) |
@@ -135,15 +137,31 @@ cargo build --release
 | `lang-go` | — | Go language parser (tree-sitter-go) |
 | `lang-java` | — | Java language parser (tree-sitter-java) |
 | `lang-cpp` | — | C++ language parser (tree-sitter-cpp) |
+| `lang-javascript` | — | JavaScript language parser (tree-sitter-javascript) |
+| `lang-ruby` | — | Ruby language parser (tree-sitter-ruby) |
+| `lang-haskell` | — | Haskell language parser (tree-sitter-haskell) |
+| `lang-ocaml` | — | OCaml language parser (tree-sitter-ocaml) |
+| `lang-scala` | — | Scala language parser (tree-sitter-scala) |
+| `lang-php` | — | PHP language parser (tree-sitter-php) |
+| `lang-csharp` | — | C# language parser (tree-sitter-c-sharp) |
+| `lang-bash` | — | Bash language parser (tree-sitter-bash) |
+| `lang-html` | — | HTML language parser (tree-sitter-html) |
+| `lang-css` | — | CSS language parser (tree-sitter-css) |
+| `lang-json` | — | JSON language parser (tree-sitter-json) |
+| `lang-regex` | — | Regex language parser (tree-sitter-regex) |
+| `lang-verilog` | — | Verilog language parser (tree-sitter-verilog) |
 | `daemon` | enabled | File-watching daemon (notify + notify-debouncer-full) |
 | `embed` | disabled | Vector embedding semantic search (reqwest HTTP + local ONNX inference) |
-| `lsp` | disabled | LSP-enhanced extraction (rust-analyzer integration, semantic type augmentation) |
+| `lsp` | enabled | LSP-enhanced extraction (rust-analyzer integration, semantic type augmentation) |
 | `analysis` | enabled | Dead code detection + architecture overview (pure Cypher aggregation) |
 | `complexity` | enabled | AST complexity analysis (cyclomatic/cognitive/nesting/length/Halstead/maintainability/time/space, depends on `analysis`) |
-| `api-review` | enabled | API review toolkit (route-map/shape-check/api-impact/tool-map) |
+| `api-review` | enabled | API review toolkit (route_map/shape_check/api_impact/tool_map) |
 | `community` | enabled | Community detection (Louvain modularity optimization, depends on petgraph) |
 | `cross-service` | enabled | Cross-service call chain detection (HTTP route pattern matching) |
-| `mcp` | enabled | MCP server via sdforge (replaces hand-written JSON-RPC, stdio transport) |
+| `mcp` | enabled | MCP server via sdforge `mcp` stdio transport |
+| `cli` | enabled | CLI binary (sdforge `cli` transport; required by the binary) |
+| `cache` | enabled | Query result caching (oxcache) |
+| `inklog` | disabled | Structured logging backend (inklog, replaces tracing-subscriber) |
 
 ```bash
 # Minimal build (Rust only, no daemon/analysis)
@@ -169,69 +187,70 @@ cargo build --release --features mcp
 
 ```bash
 # 1. Index a codebase into the knowledge graph
-codenexus index /path/to/project --name myproject
+codenexus index --path /path/to/project --name myproject
 
 # 1b. RAM-first indexing (LZ4 in-memory, faster for small-medium repos)
-codenexus index /path/to/project --name myproject --ram-first
+codenexus index --path /path/to/project --name myproject --ram_first true
 
 # 2. Verify the index
 codenexus status
 codenexus list
 
 # 3. Start exploring
-codenexus query "MATCH (f:Function) RETURN f.name LIMIT 10"
-codenexus context main
+codenexus query --cypher "MATCH (f:Function) RETURN f.name LIMIT 10"
+codenexus context --symbol main --depth 1 --project "" --enhanced false
 ```
 
 ### Common Workflows
 
+> All subcommand flags are **required snake_case long options** (e.g. `--symbol`, `--trace_type`); boolean options take an explicit `true`/`false` value. The database path is the global `--db` option (default `./codenexus.lbug`, placed before the subcommand).
+
 ```bash
-# Trace call paths (with disambiguation narrowing)
-codenexus trace main --type calls --depth 5
-codenexus trace main --uid "proj.fn.main.1" --depth 5
+# Trace call paths
+codenexus trace --symbol main --trace_type calls --depth 5 --path_filter "" --detect_cycles false --cross_service false
 # Enhanced tracing: path filter + cycle detection + cross-service
-codenexus trace main --path-filter "/src/api/**" --detect-cycles --cross-service
+codenexus trace --symbol main --trace_type calls --depth 5 --path_filter "/src/api/**" --detect_cycles true --cross_service true
 
 # Analyze change impact (multi-dimensional + risk assessment)
-codenexus impact parse_function --depth 3
-codenexus impact parse_function --edge-types "CALLS,IMPLEMENTS,USES_TYPE" --max-depth 5 --include-tests
+codenexus impact --symbol parse_function --depth 3 --edge_types "" --max_depth 0 --include_tests false
+codenexus impact --symbol parse_function --edge_types "CALLS,IMPLEMENTS,USES_TYPE" --max_depth 5 --include_tests true
 
 # Search symbols (5 modes + BM25 full-text)
-codenexus search "parse" --limit 20
-codenexus search "get.*user" --mode regex
-codenexus search "getuser" --mode fuzzy --max-distance 2
-codenexus search "authentication logic" --fulltext
+codenexus search --text "parse" --limit 20 --mode exact --fulltext false --project ""
+codenexus search --text "get.*user" --mode regex --fulltext false --project ""
+codenexus search --text "getuser" --mode fuzzy --fulltext false --project ""
+codenexus search --text "authentication logic" --fulltext true --project ""
 
 # 360° symbol context (basic + enhanced)
-codenexus context main
-codenexus context main --project myproject --enhanced
+codenexus context --symbol main --depth 1 --project "" --enhanced false
+codenexus context --symbol main --project myproject --enhanced true
 
 # Detect git-diff affected symbols before committing
-codenexus detect_changes /path/to/project
+codenexus detect_changes --path /path/to/project --mode git
 
-# Rename a symbol (graph-edits + text-search, --dry-run supported)
-codenexus rename old_name new_name --dry-run
+# Rename a symbol (graph-edits + text-search; --apply false = dry-run)
+codenexus rename --from old_name --to new_name --path /path/to/project --apply false
 
-# Export / import team artifacts
-codenexus export --db ./my.lbug --output team.graph.zst
-codenexus import --input team.graph.zst --db ./shared.lbug
+# Export / import team artifacts (--db is a global option, before the subcommand)
+codenexus --db ./my.lbug export --output team.graph.zst --project ""
+codenexus --db ./shared.lbug import --input team.graph.zst --reindex false --path "" --name ""
 
 # Start file-watching daemon for auto-incremental indexing
-codenexus daemon /path/to/project --name myproject
+codenexus daemon --path /path/to/project --name myproject
 
 # Remove a project and its index
-codenexus clean myproject
+codenexus clean --project myproject
 
 # Dead code detection (multi-edge-type + FFI/export + confidence)
-codenexus dead_code myproject
-codenexus dead_code myproject --check-exported true --check-ffi true
+codenexus dead_code --project myproject --entry "" --check_exported true --check_ffi true
+codenexus dead_code --project myproject --edge_types "CALLS,FFI_CALLS,IMPLEMENTS,USAGE,TESTS"
 
 # Cross-service call chain detection (HTTP/gRPC/GraphQL/MQ/event bus)
-codenexus cross_service myproject
-codenexus cross_service myproject --protocol grpc
+codenexus cross_service --project myproject --protocol ""
+codenexus cross_service --project myproject --protocol grpc
 
 # Architecture overview (module boundaries + dependency directions + layers)
-codenexus architecture myproject
+codenexus architecture --project myproject
 ```
 
 ## CLI Commands
@@ -240,14 +259,14 @@ codenexus architecture myproject
 |---------|-------------|
 | `index` | Index a codebase into the knowledge graph (`--ram-first` for LZ4 in-memory) |
 | `query` | Execute a Cypher query |
-| `trace` | Trace a symbol's call/data-flow paths (`--uid`/`--file`/`--kind` narrowing; `--path-filter`/`--detect-cycles`/`--cross-service` enhanced tracing) |
+| `trace` | Trace a symbol's call/data-flow paths (`--symbol`/`--trace_type`/`--depth`/`--path_filter`/`--detect_cycles`/`--cross_service`) |
 | `impact` | Analyze the impact radius of changing a symbol (`--edge-types`/`--max-depth`/`--include-tests` multi-dimensional + `risk_assessment`) |
 | `search` | Search symbols by name or content (`--mode` exact/regex/fuzzy/graph/multi; `--fulltext` BM25; `--project` filter) |
 | `context` | 360° symbol view (`--project`/`--enhanced` multi-dimensional SymbolContext) |
 | `detect_changes` | Git diff → affected symbols + risk_level |
-| `rename` | Graph-edits for high-confidence + text-search edits (`--dry-run`) |
-| `export` | Export LadybugDB dump → zstd `codenexus.graph.zst` artifact |
-| `import` | Import artifact → LadybugDB (optional `--reindex` for local diff) |
+| `rename` | Graph-edits for high-confidence + text-search edits (`--from`/`--to`/`--path`; `--apply false` = dry-run) |
+| `export` | Export LadybugDB dump → zstd artifact (`--output`; `--project` optional; DB via global `--db`) |
+| `import` | Import artifact → LadybugDB (`--input`; `--reindex` with `--path`/`--name` for local diff) |
 | `setup` | Auto-detect installed agents (Claude Code/Cursor/Codex) and write MCP config |
 | `hook` | Emit PreToolUse/PostToolUse JSON (exit 0, never blocks) |
 | `mcp` | stdio MCP server (JSON-RPC 2.0, protocol 2024-11-05) |
@@ -258,14 +277,14 @@ codenexus architecture myproject
 | `dead_code` | Dead code detection (9 edge types + FFI/export + High/Medium/Low confidence, `analysis` feature) |
 | `architecture` | Architecture overview (module boundaries + dependency directions + layers + cross-service deps, `analysis` feature) |
 | `complexity` | AST complexity analysis (8 metrics + configurable thresholds, `complexity` feature) |
-| `api-route-map` | HTTP route mapping (API endpoint inventory, `api-review` feature) |
-| `api-shape-check` | API shape check (request/response structure validation, `api-review` feature) |
-| `api-impact` | API change impact analysis (`api-review` feature) |
-| `api-tool-map` | Tool mapping (MCP tool inventory, `api-review` feature) |
+| `route_map` | HTTP route mapping (API endpoint inventory, `api-review` feature) |
+| `shape_check` | API shape check (request/response structure validation, `api-review` feature) |
+| `api_impact` | API change impact analysis (`api-review` feature) |
+| `tool_map` | Tool mapping (MCP tool inventory, `api-review` feature) |
 | `community` | Community detection (Louvain modularity optimization, `community` feature) |
 | `cross_service` | Cross-service call chain detection (HTTP REST/gRPC/GraphQL/message queue/event bus, `cross-service` feature) |
-| `lsp-goto-def` | LSP go-to-definition (rust-analyzer integration, `lsp` feature) |
-| `lsp-hover` | LSP hover info (rust-analyzer integration, `lsp` feature) |
+| `lsp_goto_def` | LSP go-to-definition (rust-analyzer integration, `lsp` feature) |
+| `lsp_hover` | LSP hover info (rust-analyzer integration, `lsp` feature) |
 
 ## Complexity Analysis
 
@@ -290,14 +309,14 @@ Each metric is classified Green / Yellow / Red / Critical against thresholds; `o
 
 | Flag | Description |
 |------|-------------|
-| `--cyclomatic-green <N>` / `--cyclomatic-yellow <N>` / `--cyclomatic-red <N>` | Cyclomatic thresholds |
-| `--cognitive-green <N>` / `--cognitive-yellow <N>` / `--cognitive-red <N>` | Cognitive thresholds |
-| `--nesting-green <N>` / `--nesting-yellow <N>` / `--nesting-red <N>` | Nesting depth thresholds |
-| `--func-length-green <N>` / `--func-length-yellow <N>` / `--func-length-red <N>` | Function length thresholds |
-| `--halstead-volume-green <N>` / `--halstead-volume-yellow <N>` / `--halstead-volume-red <N>` | Halstead volume thresholds |
-| `--maintainability-green <N>` / `--maintainability-yellow <N>` / `--maintainability-red <N>` | Maintainability Index thresholds (higher = better) |
-| `--time-complexity-green <O(...)>` / `--time-complexity-yellow <O(...)>` / `--time-complexity-red <O(...)>` | Time complexity thresholds |
-| `--space-complexity-yellow <O(...)>` / `--space-complexity-red <O(...)>` | Space complexity thresholds (3-level, no Critical) |
+| `--cyclomatic_green <N>` / `--cyclomatic_yellow <N>` / `--cyclomatic_red <N>` | Cyclomatic thresholds |
+| `--cognitive_green <N>` / `--cognitive_yellow <N>` / `--cognitive_red <N>` | Cognitive thresholds |
+| `--nesting_green <N>` / `--nesting_yellow <N>` / `--nesting_red <N>` | Nesting depth thresholds |
+| `--func_length_green <N>` / `--func_length_yellow <N>` / `--func_length_red <N>` | Function length thresholds |
+| `--halstead_volume_green <N>` / `--halstead_volume_yellow <N>` / `--halstead_volume_red <N>` | Halstead volume thresholds |
+| `--maintainability_green <N>` / `--maintainability_yellow <N>` / `--maintainability_red <N>` | Maintainability Index thresholds (higher = better) |
+| `--time_complexity_green <O(...)>` / `--time_complexity_yellow <O(...)>` / `--time_complexity_red <O(...)>` | Time complexity thresholds |
+| `--space_complexity_yellow <O(...)>` / `--space_complexity_red <O(...)>` | Space complexity thresholds (3-level, no Critical) |
 
 `<O(...)>` values: time `O(1)` / `O(log n)` / `O(n)` / `O(n log n)` / `O(n^2)` / `O(n^3)` / `O(2^n)`, space `O(1)` / `O(n)` / `O(n^2)`. Unset flags fall back to defaults.
 
@@ -320,16 +339,16 @@ Each metric is classified Green / Yellow / Red / Critical against thresholds; `o
 
 ```bash
 # Analyse with default thresholds
-codenexus complexity myproject
+codenexus complexity --project myproject
 
 # Custom cyclomatic thresholds (green=5, yellow=10, red=15)
-codenexus complexity myproject --cyclomatic-green 5 --cyclomatic-yellow 10 --cyclomatic-red 15
+codenexus complexity --project myproject --cyclomatic_green 5 --cyclomatic_yellow 10 --cyclomatic_red 15
 
 # Show only Red and Critical functions, sorted by severity
-codenexus complexity myproject --red-only --sort-by-severity
+codenexus complexity --project myproject --red_only true --sort_by_severity true
 
 # Custom time complexity thresholds (green=O(1), yellow=O(n log n), red=O(n^2))
-codenexus complexity myproject --time-complexity-green "O(1)" --time-complexity-yellow "O(n log n)" --time-complexity-red "O(n^2)"
+codenexus complexity --project myproject --time_complexity_green "O(1)" --time_complexity_yellow "O(n log n)" --time_complexity_red "O(n^2)"
 ```
 
 ## Configuration
@@ -355,11 +374,11 @@ CodeNexus exposes two programmatic interfaces:
 
 ### MCP Server (`codenexus mcp`)
 
-A sdforge-based MCP server over stdio implementing [Model Context Protocol](https://modelcontextprotocol.io/) (version 2024-11-05). The hand-written JSON-RPC layer has been replaced by sdforge's declarative `#[service_api]` macro + rmcp stdio transport. AI agents call it to query the knowledge graph.
+A sdforge-based MCP server over stdio implementing [Model Context Protocol](https://modelcontextprotocol.io/) (version 2024-11-05). The hand-written JSON-RPC layer has been replaced by sdforge's declarative `#[forge]` macro + sdforge `mcp` stdio transport. AI agents call it to query the knowledge graph.
 
 **Usage**: `codenexus mcp [--db <DB_PATH>]`
 
-**Tools** (5):
+**Tools** (6):
 
 | Tool | Description |
 |------|-------------|
@@ -368,6 +387,7 @@ A sdforge-based MCP server over stdio implementing [Model Context Protocol](http
 | `impact` | Analyze the impact radius of changing a symbol |
 | `search` | Search symbols by name or content (full-text or semantic) |
 | `context` | Show a 360-degree view of a symbol (callers, callees, processes) |
+| `architecture` | Architecture overview (module boundaries + dependency directions + layers + cross-service deps) |
 
 Run `codenexus setup` once to auto-detect installed agents (Claude Code / Cursor / Codex) and register the server; the agent then starts `codenexus mcp` automatically.
 
@@ -418,7 +438,7 @@ By participating, you agree to abide by the [Code of Conduct](CODE_OF_CONDUCT.md
 
 CodeNexus is at v0.3.2. Planned work, ordered by current priority:
 
-- [x] v0.1.0 — Multi-language indexing (C/Rust/Fortran/Python/TypeScript), graph schema (44 node types + 24 edge types), `query`/`trace`/`impact`/`context`/`search`, incremental indexing, RAM-first mode, MCP server, team `export`/`import`, daemon mode, confidence tiers, disambiguation
+- [x] v0.1.0 — Multi-language indexing (C/Rust/Fortran/Python/TypeScript), graph schema (44 node types + 30 edge types), `query`/`trace`/`impact`/`context`/`search`, incremental indexing, RAM-first mode, MCP server, team `export`/`import`, daemon mode, confidence tiers, disambiguation
 - [x] v0.1.x — Stability and performance hardening: incremental reindex coverage, larger-repo memory tuning, more language-specific edge extraction
 - [x] v0.2.0 — `lsp` feature: LSP-enhanced extraction for type-accurate resolution beyond tree-sitter (rust-analyzer integration)
 - [x] v0.2.0 — Expand language coverage (Go, Java, C++) behind new `lang-*` features

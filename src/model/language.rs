@@ -1,7 +1,9 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Language enum representing the 5 supported source languages (DDD §7.3).
+//! Language enum representing the source languages supported by CodeNexus
+//! (DDD §7.3). Variants are feature-gated by `lang-*` Cargo features; the
+//! default `full` preset enables 21 languages.
 
 use std::fmt;
 use std::str::FromStr;
