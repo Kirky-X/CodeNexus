@@ -58,6 +58,13 @@ repos:
         types: [rust]
         pass_filenames: false
         stages: [pre-push]
+      - id: cargo-coverage
+        name: cargo coverage (≥95%)
+        entry: bash -c 'cargo llvm-cov --lib --fail-under-lines 95 2>/dev/null || { echo "→ 先运行: cargo install cargo-llvm-cov"; exit 1; }'
+        language: system
+        types: [rust]
+        pass_filenames: false
+        stages: [pre-push]
       - id: cargo-audit
         name: cargo audit (RustSec 漏洞库)
         entry: bash -c 'cargo audit 2>/dev/null || { echo "→ 先运行: cargo install cargo-audit"; exit 1; }'

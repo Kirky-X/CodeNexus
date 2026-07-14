@@ -1,0 +1,3 @@
+# Clippy configuration for CodeNexus.
+# MSRV must match rust-version in Cargo.toml.
+msrv = "1.91"
