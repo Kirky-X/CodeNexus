@@ -14,6 +14,7 @@ pub mod facade;
 pub mod graph_loader;
 pub mod impact;
 pub mod module;
+pub mod taint;
 pub mod types;
 
 pub use call_graph::CallGraphTracer;
@@ -23,6 +24,7 @@ pub use error::{Result, TraceError};
 pub use facade::{apply_path_filter, PathFilter, TraceCycle, TraceEngine, TraceFacade, TraceType};
 pub use impact::{ImpactAnalyzer, ImpactConfig, ImpactNode, ImpactResult, RiskAssessment, RiskFactor, RiskLevel};
 pub use module::{TraceConfig, TraceModule};
+pub use taint::TaintPathTracer;
 pub use types::{
     ContextOutput, RelatedNodeOutput, SymbolNodeOutput, TraceEdge, TraceNode, TracePath,
     TraceResult,
