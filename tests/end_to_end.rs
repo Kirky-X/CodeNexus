@@ -16,10 +16,13 @@ use codenexus::query::QueryFacade;
 use tempfile::TempDir;
 
 // SubTask 17.3: tracing capture helpers (used by index_emits_all_log_events).
+use crossbeam_channel::unbounded;
+use inklog::domain::core::LoggerSubscriber;
+use inklog::{LogRecord, Metrics};
 use std::cell::RefCell;
-use std::io::Write;
-use std::sync::{Arc, Mutex};
-use tracing_subscriber::fmt::MakeWriter;
+use std::sync::Arc;
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::prelude::*;
 
 /// 在 `dir/rel` 写入文件（自动创建父目录）。
 fn write_file(dir: &Path, rel: &str, content: &str) {
@@ -445,36 +448,6 @@ end module math_utils
 
 // --- SubTask 17.3: end-to-end LOG event verification (LOG-001/002/006) ---
 
-/// A `MakeWriter` that buffers emitted tracing events into a shared `Vec<u8>`.
-struct CapturingMakeWriter {
-    buf: Arc<Mutex<Vec<u8>>>,
-}
-
-impl MakeWriter<'_> for CapturingMakeWriter {
-    type Writer = CapturingWriter;
-
-    fn make_writer(&self) -> Self::Writer {
-        CapturingWriter {
-            buf: self.buf.clone(),
-        }
-    }
-}
-
-struct CapturingWriter {
-    buf: Arc<Mutex<Vec<u8>>>,
-}
-
-impl Write for CapturingWriter {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.buf.lock().unwrap().write_all(bytes)?;
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 // Thread-local storage for the tracing `DefaultGuard` on rayon worker
 // threads. Each worker thread sets its own subscriber via
 // `tracing::subscriber::set_default` and stores the guard here so it stays
@@ -482,6 +455,30 @@ impl Write for CapturingWriter {
 thread_local! {
     static TRACING_GUARD: RefCell<Option<tracing::subscriber::DefaultGuard>> =
         const { RefCell::new(None) };
+}
+
+/// Formats a `LogRecord` into a string containing the message and all
+/// structured fields as `key=value` pairs.
+fn format_record(record: &LogRecord) -> String {
+    let mut output = record.message.clone();
+    for (key, value) in &record.fields {
+        output.push(' ');
+        output.push_str(key);
+        output.push('=');
+        output.push_str(&value.to_string());
+    }
+    output
+}
+
+/// Drains all pending records from `rx` and concatenates them into a single
+/// string (one line per record).
+fn drain_to_string(rx: &crossbeam_channel::Receiver<Arc<LogRecord>>) -> String {
+    let mut output = String::new();
+    while let Ok(record) = rx.try_recv() {
+        output.push_str(&format_record(&record));
+        output.push('\n');
+    }
+    output
 }
 
 /// Verifies that `codenexus index` emits all LOG events defined in the spec
@@ -492,36 +489,39 @@ thread_local! {
 ///
 /// Because `parallel_parse` uses rayon worker threads that do NOT inherit the
 /// current thread's tracing subscriber, this test builds a custom rayon thread
-/// pool whose `start_handler` installs the same capturing subscriber on each
-/// worker thread. The index call is run via `pool.install()` so that `par_iter`
-/// inside the pipeline uses worker threads that have the subscriber set.
+/// pool whose `start_handler` installs an inklog `LoggerSubscriber` (sharing
+/// the same console channel) on each worker thread. The index call is run via
+/// `pool.install()` so that `par_iter` inside the pipeline uses worker threads
+/// that have the subscriber set.
 #[test]
 fn index_emits_all_log_events() {
     use rayon::ThreadPoolBuilder;
 
-    let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let (console_tx, console_rx) = unbounded::<Arc<LogRecord>>();
+    let (async_tx, _async_rx) = unbounded::<Arc<LogRecord>>();
+    let metrics = Arc::new(Metrics::new());
 
     // Subscriber for the main thread (captures LOG-001 and LOG-006).
-    let main_subscriber = tracing_subscriber::FmtSubscriber::builder()
-        .with_target(false)
-        .with_max_level(tracing::Level::DEBUG)
-        .with_writer(CapturingMakeWriter { buf: buf.clone() })
-        .finish();
+    let main_layer = LoggerSubscriber::new(console_tx.clone(), async_tx.clone(), metrics.clone())
+        .with_filter(LevelFilter::DEBUG);
+    let main_registry = tracing_subscriber::registry().with(main_layer);
 
-    // Custom rayon pool: each worker installs a capturing subscriber sharing
-    // the same buffer, so LOG-002 file_parsed events on worker threads are
-    // captured too.
-    let buf_for_handler = buf.clone();
+    // Custom rayon pool: each worker installs an inklog LoggerSubscriber
+    // sharing the same console channel, so LOG-002 file_parsed events on
+    // worker threads are captured too.
+    let console_tx_for_handler = console_tx.clone();
+    let async_tx_for_handler = async_tx.clone();
+    let metrics_for_handler = metrics.clone();
     let pool = ThreadPoolBuilder::new()
         .start_handler(move |_idx| {
-            let worker_subscriber = tracing_subscriber::FmtSubscriber::builder()
-                .with_target(false)
-                .with_max_level(tracing::Level::DEBUG)
-                .with_writer(CapturingMakeWriter {
-                    buf: buf_for_handler.clone(),
-                })
-                .finish();
-            let guard = tracing::subscriber::set_default(worker_subscriber);
+            let worker_layer = LoggerSubscriber::new(
+                console_tx_for_handler.clone(),
+                async_tx_for_handler.clone(),
+                metrics_for_handler.clone(),
+            )
+            .with_filter(LevelFilter::DEBUG);
+            let worker_registry = tracing_subscriber::registry().with(worker_layer);
+            let guard = tracing::subscriber::set_default(worker_registry);
             TRACING_GUARD.with(|g| *g.borrow_mut() = Some(guard));
         })
         .build()
@@ -534,15 +534,14 @@ fn index_emits_all_log_events() {
     let db = fresh_db_path();
     let src_path = tmp.path().to_path_buf();
 
-    tracing::subscriber::with_default(main_subscriber, || {
+    tracing::subscriber::with_default(main_registry, || {
         pool.install(|| {
             let facade = IndexFacade::new(&db).expect("IndexFacade::new");
             facade.index(&src_path, "log_e2e", false).expect("index");
         });
     });
 
-    let bytes = buf.lock().unwrap().clone();
-    let captured = String::from_utf8(bytes).unwrap();
+    let captured = drain_to_string(&console_rx);
 
     // LOG-001: index_started
     assert!(

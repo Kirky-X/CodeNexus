@@ -60,10 +60,9 @@ community = ["analysis", "dep:petgraph"]
 cross-service = ["analysis"]
 complexity = ["analysis"]
 lsp = ["dep:lsp-types", "dep:lsp-server", "dep:crossbeam-channel"]
-mcp = ["dep:sdforge", "dep:tokio", "sdforge/mcp", "dep:oxiarc-zstd"]
-cli = ["dep:sdforge", "dep:tokio", "sdforge/cli", "dep:oxiarc-zstd"]
+mcp = ["dep:sdforge", "sdforge/mcp", "dep:oxiarc-zstd"]
+cli = ["dep:sdforge", "sdforge/cli", "dep:oxiarc-zstd"]
 cache = ["dep:oxcache"]
-inklog = ["dep:inklog", "dep:tokio"]
 
 [dependencies]
 trait-kit = { version = "0.3", default-features = false, features = ["async"] }
@@ -107,7 +106,6 @@ anyhow = "1"
 pest = "2.7"
 pest_derive = "2.7"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 csv = "1"
@@ -119,10 +117,10 @@ lsp-types = { version = "0.95", optional = true }
 lsp-server = { version = "0.7", optional = true }
 crossbeam-channel = { version = "0.5", optional = true }
 sdforge = { version = "0.4", default-features = false, optional = true }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
 oxcache = { version = "0.3", default-features = false, features = ["minimal"], optional = true }
 oxiarc-zstd = { version = "0.3", default-features = false, optional = true }
-inklog = { version = "0.1", default-features = false, optional = true }
+inklog = { version = "0.1", default-features = false }
 regex = "1"
 
 [dev-dependencies]
@@ -133,6 +131,8 @@ sysinfo = "0.30"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serial_test = "3"
 oxiarc-zstd = { version = "0.3", default-features = false }
+tracing-subscriber = "0.3"
+crossbeam-channel = "0.5"
 
 [build-dependencies]
 pkg-config = "0.3"

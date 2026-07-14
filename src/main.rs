@@ -12,9 +12,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[cfg(not(feature = "inklog"))]
-use tracing_subscriber::EnvFilter;
-
 use codenexus::service::error::CodeNexusError;
 use codenexus::kit::{build_kit, KitBootstrapConfig};
 use codenexus::service::init_kit;
@@ -30,31 +27,15 @@ use codenexus::daemon::DEFAULT_DEBOUNCE_MS;
 #[cfg(not(feature = "daemon"))]
 use codenexus::kit::bootstrap::DEFAULT_DEBOUNCE_MS;
 
-/// Initialize the global `tracing` subscriber.
+/// Initialize the global `tracing` subscriber using inklog as the sole backend.
 ///
-/// When the `inklog` feature is enabled, uses inklog as the tracing backend
-/// (console sink, `RUST_LOG` level filter). Otherwise, uses `tracing-subscriber`
-/// with `FmtSubscriber` writing to stdout.
+/// Configures console (colored) + file output with daily rotation, 100 MB max
+/// file size, zstd compression, and 30-day retention. The log level is read
+/// from `RUST_LOG` (default: `info`).
 pub fn init_logging() {
-    #[cfg(feature = "inklog")]
-    {
-        init_inklog();
-    }
-    #[cfg(not(feature = "inklog"))]
-    {
-        init_tracing();
-    }
+    init_inklog();
 }
 
-#[cfg(not(feature = "inklog"))]
-fn init_tracing() {
-    tracing_subscriber::FmtSubscriber::builder()
-        .with_env_filter(EnvFilter::from_default_env())
-        .with_target(false)
-        .init();
-}
-
-#[cfg(feature = "inklog")]
 fn init_inklog() {
     let level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
 
@@ -63,7 +44,15 @@ fn init_inklog() {
         .block_on(async {
             inklog::LoggerManager::builder()
                 .level(&level)
+                .format("{timestamp} [{level}] {target} - {message}")
                 .console(true)
+                .console_colored(true)
+                .file("logs/codenexus.log")
+                .file_max_size("100MB")
+                .file_compress(true)
+                .file_rotation_time("daily")
+                .file_keep_files(30)
+                .channel_capacity(10000)
                 .build()
                 .await
         })
@@ -232,54 +221,31 @@ fn run_mcp_server() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use std::sync::{Arc, Mutex};
-    use tracing_subscriber::fmt::MakeWriter;
-
-    struct CapturingMakeWriter {
-        buf: Arc<Mutex<Vec<u8>>>,
-    }
-
-    impl MakeWriter<'_> for CapturingMakeWriter {
-        type Writer = CapturingWriter;
-        fn make_writer(&self) -> Self::Writer {
-            CapturingWriter {
-                buf: self.buf.clone(),
-            }
-        }
-    }
-
-    struct CapturingWriter {
-        buf: Arc<Mutex<Vec<u8>>>,
-    }
-
-    impl Write for CapturingWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.buf.lock().unwrap().write_all(bytes)?;
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
+    use crossbeam_channel::unbounded;
+    use inklog::domain::core::LoggerSubscriber;
+    use inklog::{LogRecord, Metrics};
+    use std::sync::Arc;
+    use tracing_subscriber::prelude::*;
 
     #[test]
-    fn fmt_subscriber_captures_tracing_events() {
-        let buf = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::FmtSubscriber::builder()
-            .with_target(false)
-            .with_writer(CapturingMakeWriter { buf: buf.clone() })
-            .finish();
+    fn inklog_captures_tracing_events() {
+        let (console_tx, console_rx) = unbounded::<Arc<LogRecord>>();
+        let (async_tx, _async_rx) = unbounded::<Arc<LogRecord>>();
+        let metrics = Arc::new(Metrics::new());
+        let layer = LoggerSubscriber::new(console_tx, async_tx, metrics);
+        let registry = tracing_subscriber::registry().with(layer);
 
-        tracing::subscriber::with_default(subscriber, || {
+        tracing::subscriber::with_default(registry, || {
             tracing::info!("codenexus_test_marker");
         });
 
-        let bytes = buf.lock().unwrap().clone();
-        let captured = String::from_utf8(bytes).unwrap();
+        let record = console_rx
+            .try_recv()
+            .expect("should capture tracing event via inklog LoggerSubscriber");
         assert!(
-            captured.contains("codenexus_test_marker"),
-            "expected captured output to contain the event message, got: {captured:?}"
+            record.message.contains("codenexus_test_marker"),
+            "expected message to contain the marker, got: {:?}",
+            record.message
         );
     }
 

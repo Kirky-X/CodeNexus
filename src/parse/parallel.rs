@@ -245,11 +245,15 @@ pub fn parallel_parse_ram_first(
 mod tests {
     use super::*;
     use crate::model::Language;
+    use crate::test_log_capture::drain_to_string;
+    use crossbeam_channel::unbounded;
+    use inklog::domain::core::LoggerSubscriber;
+    use inklog::{LogRecord, Metrics};
     use rayon::ThreadPoolBuilder;
     use std::cell::RefCell;
-    use std::io::Write;
-    use std::sync::{Arc, Mutex};
-    use tracing_subscriber::fmt::MakeWriter;
+    use std::sync::Arc;
+    use tracing_subscriber::filter::LevelFilter;
+    use tracing_subscriber::prelude::*;
 
     /// Builds a `FileInfo` for a file written to `dir/name` with `content`
     /// and the given language.
@@ -567,37 +571,6 @@ mod tests {
     // LOG-002: file_parsed event emission
     // -----------------------------------------------------------------------
 
-    /// A `MakeWriter` that buffers emitted events into a shared `Vec<u8>` so a
-    /// test can assert on what the subscriber actually wrote.
-    struct CapturingMakeWriter {
-        buf: Arc<Mutex<Vec<u8>>>,
-    }
-
-    impl MakeWriter<'_> for CapturingMakeWriter {
-        type Writer = CapturingWriter;
-
-        fn make_writer(&self) -> Self::Writer {
-            CapturingWriter {
-                buf: self.buf.clone(),
-            }
-        }
-    }
-
-    struct CapturingWriter {
-        buf: Arc<Mutex<Vec<u8>>>,
-    }
-
-    impl Write for CapturingWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.buf.lock().unwrap().write_all(bytes)?;
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
     // Thread-local storage for the tracing `DefaultGuard` on rayon worker
     // threads. Each worker thread sets its own subscriber via
     // `tracing::subscriber::set_default` and stores the guard here so it
@@ -607,49 +580,51 @@ mod tests {
             const { RefCell::new(None) };
     }
 
-    /// Runs `f` inside a scoped tracing subscriber (with DEBUG level) that
+    /// Runs `f` inside a scoped tracing subscriber (DEBUG and above) that
     /// captures all event output into a string, returning that string.
     ///
     /// Because `parallel_parse` uses rayon worker threads that do NOT inherit
     /// the current thread's tracing subscriber, this helper builds a custom
-    /// rayon thread pool whose `start_handler` installs the same capturing
-    /// subscriber on each worker thread. The test function `f` is then run via
-    /// `pool.install()` so that `par_iter` calls inside `f` use worker threads
-    /// that have the subscriber set.
+    /// rayon thread pool whose `start_handler` installs an inklog
+    /// `LoggerSubscriber` (sharing the same console channel) on each worker
+    /// thread. The test function `f` is then run via `pool.install()` so that
+    /// `par_iter` calls inside `f` use worker threads that have the subscriber
+    /// set.
     fn capture_tracing_debug<R: Send>(f: impl FnOnce() -> R + Send) -> String {
-        let buf = Arc::new(Mutex::new(Vec::new()));
+        let (console_tx, console_rx) = unbounded::<Arc<LogRecord>>();
+        let (async_tx, _async_rx) = unbounded::<Arc<LogRecord>>();
+        let metrics = Arc::new(Metrics::new());
 
-        // Build the subscriber for the main thread.
-        let subscriber = tracing_subscriber::FmtSubscriber::builder()
-            .with_target(false)
-            .with_max_level(tracing::Level::DEBUG)
-            .with_writer(CapturingMakeWriter { buf: buf.clone() })
-            .finish();
+        // Main thread subscriber
+        let main_layer = LoggerSubscriber::new(console_tx.clone(), async_tx.clone(), metrics.clone())
+            .with_filter(LevelFilter::DEBUG);
+        let main_registry = tracing_subscriber::registry().with(main_layer);
 
-        // Build a custom rayon thread pool that installs a capturing subscriber
-        // (sharing the same buffer) on each worker thread.
-        let buf_for_handler = buf.clone();
+        // Build a custom rayon thread pool that installs an inklog
+        // LoggerSubscriber (sharing the same console channel) on each worker.
+        let console_tx_for_handler = console_tx.clone();
+        let async_tx_for_handler = async_tx.clone();
+        let metrics_for_handler = metrics.clone();
         let pool = ThreadPoolBuilder::new()
             .start_handler(move |_idx| {
-                let worker_subscriber = tracing_subscriber::FmtSubscriber::builder()
-                    .with_target(false)
-                    .with_max_level(tracing::Level::DEBUG)
-                    .with_writer(CapturingMakeWriter {
-                        buf: buf_for_handler.clone(),
-                    })
-                    .finish();
-                let guard = tracing::subscriber::set_default(worker_subscriber);
+                let worker_layer = LoggerSubscriber::new(
+                    console_tx_for_handler.clone(),
+                    async_tx_for_handler.clone(),
+                    metrics_for_handler.clone(),
+                )
+                .with_filter(LevelFilter::DEBUG);
+                let worker_registry = tracing_subscriber::registry().with(worker_layer);
+                let guard = tracing::subscriber::set_default(worker_registry);
                 TRACING_GUARD.with(|g| *g.borrow_mut() = Some(guard));
             })
             .build()
             .expect("rayon thread pool");
 
-        tracing::subscriber::with_default(subscriber, || {
+        tracing::subscriber::with_default(main_registry, || {
             pool.install(f);
         });
 
-        let bytes = buf.lock().unwrap().clone();
-        String::from_utf8(bytes).unwrap()
+        drain_to_string(&console_rx)
     }
 
     #[test]

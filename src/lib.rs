@@ -27,10 +27,24 @@
     feature = "lang-go",
     feature = "lang-java",
     feature = "lang-cpp",
+    feature = "lang-javascript",
+    feature = "lang-ruby",
+    feature = "lang-haskell",
+    feature = "lang-ocaml",
+    feature = "lang-scala",
+    feature = "lang-php",
+    feature = "lang-csharp",
+    feature = "lang-bash",
+    feature = "lang-html",
+    feature = "lang-css",
+    feature = "lang-json",
+    feature = "lang-regex",
+    feature = "lang-verilog",
+    feature = "lsp",
 )))]
 compile_error!(
-    "CodeNexus requires at least one `lang-*` feature enabled. \
-     Use `--features lang-rust` (or lang-c/lang-fortran/lang-python/lang-typescript/lang-go/lang-java/lang-cpp), \
+    "CodeNexus requires at least one `lang-*` or `lsp` feature enabled. \
+     Use `--features lang-rust` (or any lang-* variant), `--features lsp`, \
      or a preset like `--features minimal`/`core`/`full`."
 );
 
@@ -60,6 +74,11 @@ pub mod embed;
 
 #[cfg(feature = "lsp")]
 pub mod lsp;
+
+/// Test log capture utilities backed by inklog's `LoggerSubscriber`.
+/// Available only in test builds; used by unit tests across the crate.
+#[cfg(test)]
+mod test_log_capture;
 
 /// Returns the crate version, primarily for use by the CLI `--version` flag.
 #[must_use]

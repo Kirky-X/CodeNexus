@@ -220,14 +220,13 @@ mod tests {
     use super::*;
     use crate::daemon::index_observer::IndexObserver;
     use crate::index::IndexFacade;
+    use crate::test_log_capture::capture_tracing;
     use notify_debouncer_full::notify::event::EventAttributes;
     use notify_debouncer_full::notify::Event;
     use std::fs;
-    use std::io::Write;
     use std::sync::Mutex;
     use std::thread;
     use tempfile::TempDir;
-    use tracing_subscriber::fmt::MakeWriter;
 
     // --- 测试辅助函数 ---
 
@@ -831,46 +830,6 @@ mod tests {
     }
 
     // --- LOG-005: daemon_event 事件发出验证 ---
-
-    struct CapturingMakeWriter {
-        buf: Arc<Mutex<Vec<u8>>>,
-    }
-
-    impl MakeWriter<'_> for CapturingMakeWriter {
-        type Writer = CapturingWriter;
-
-        fn make_writer(&self) -> Self::Writer {
-            CapturingWriter {
-                buf: self.buf.clone(),
-            }
-        }
-    }
-
-    struct CapturingWriter {
-        buf: Arc<Mutex<Vec<u8>>>,
-    }
-
-    impl Write for CapturingWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.buf.lock().unwrap().write_all(bytes)?;
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    fn capture_tracing<R>(f: impl FnOnce() -> R) -> String {
-        let buf = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::FmtSubscriber::builder()
-            .with_target(false)
-            .with_writer(CapturingMakeWriter { buf: buf.clone() })
-            .finish();
-        tracing::subscriber::with_default(subscriber, f);
-        let bytes = buf.lock().unwrap().clone();
-        String::from_utf8(bytes).unwrap()
-    }
 
     #[test]
     #[cfg(feature = "lang-c")]

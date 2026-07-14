@@ -161,7 +161,8 @@ cargo build --release
 | `mcp` | enabled | MCP server via sdforge `mcp` stdio transport |
 | `cli` | enabled | CLI binary (sdforge `cli` transport; required by the binary) |
 | `cache` | enabled | Query result caching (oxcache) |
-| `inklog` | disabled | Structured logging backend (inklog, replaces tracing-subscriber) |
+
+> **Logging**: inklog is the sole logging backend (console + file rotation + daily rotation + LZ4 compression); the tracing-subscriber optional backend is no longer available.
 
 ```bash
 # Minimal build (Rust only, no daemon/analysis)

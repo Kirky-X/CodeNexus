@@ -94,7 +94,8 @@ cargo build --release --features mcp
 | `mcp` | 启用 | MCP 服务器（sdforge `mcp` stdio 传输） |
 | `cli` | 启用 | CLI 二进制（sdforge `cli` 传输，二进制必需） |
 | `cache` | 启用 | 查询结果缓存（oxcache） |
-| `inklog` | 关闭 | 结构化日志后端（inklog，替代 tracing-subscriber） |
+
+> **日志系统**：inklog 是唯一日志后端（console + file rotation + daily 滚动 + LZ4 压缩），不再提供 tracing-subscriber 可选后端。
 
 ```bash
 # 最小构建（仅 Rust，不含 daemon/analysis）

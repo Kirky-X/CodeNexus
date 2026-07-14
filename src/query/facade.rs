@@ -167,9 +167,7 @@ mod tests {
     use super::*;
     use crate::model::NodeLabel;
     use crate::query::error::QueryError;
-    use std::io::Write;
-    use std::sync::{Arc, Mutex};
-    use tracing_subscriber::fmt::MakeWriter;
+    use crate::test_log_capture::capture_tracing_debug;
 
     /// Builds a facade backed by an in-memory database with the schema
     /// initialized.
@@ -392,51 +390,6 @@ mod tests {
     }
 
     // --- LOG-003: query_executed event emission ---
-
-    /// A `MakeWriter` that buffers emitted events into a shared `Vec<u8>` so a
-    /// test can assert on what the subscriber actually wrote.
-    struct CapturingMakeWriter {
-        buf: Arc<Mutex<Vec<u8>>>,
-    }
-
-    impl MakeWriter<'_> for CapturingMakeWriter {
-        type Writer = CapturingWriter;
-
-        fn make_writer(&self) -> Self::Writer {
-            CapturingWriter {
-                buf: self.buf.clone(),
-            }
-        }
-    }
-
-    struct CapturingWriter {
-        buf: Arc<Mutex<Vec<u8>>>,
-    }
-
-    impl Write for CapturingWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.buf.lock().unwrap().write_all(bytes)?;
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    /// Runs `f` inside a scoped tracing subscriber (with DEBUG level) that
-    /// captures all event output into a string, returning that string.
-    fn capture_tracing_debug<R>(f: impl FnOnce() -> R) -> String {
-        let buf = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::FmtSubscriber::builder()
-            .with_target(false)
-            .with_max_level(tracing::Level::DEBUG)
-            .with_writer(CapturingMakeWriter { buf: buf.clone() })
-            .finish();
-        tracing::subscriber::with_default(subscriber, f);
-        let bytes = buf.lock().unwrap().clone();
-        String::from_utf8(bytes).unwrap()
-    }
 
     #[test]
     fn log_003_cypher_emits_query_executed() {
