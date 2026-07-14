@@ -17,10 +17,16 @@
 //! The full [`TracePath`] is materialized via [`WorkItem::build_path`] only
 //! when a result is recorded.
 //!
+//! # Cycle detection (MED-002)
+//!
+//! Each [`WorkItem`] also carries an `Rc<HashSet<NodeId>>` of every node on
+//! its path, so [`WorkItem::path_contains`] is O(1) instead of an O(depth)
+//! parent-chain walk — important because it runs in the inner BFS edge loop.
+//!
 //! [`DataFlowTracer::trace`]: super::data_flow::DataFlowTracer::trace
 //! [`TaintPathTracer`]: super::taint::TaintPathTracer
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::rc::Rc;
 
 use crate::model::{EdgeType, Graph, NodeId};
@@ -35,11 +41,16 @@ pub(crate) struct WorkItem {
     edge: Option<TraceEdge>,
     depth: usize,
     parent: Option<Rc<WorkItem>>,
+    /// O(1) membership set for cycle detection (MED-002). Each child clones
+    /// the parent set and inserts its own id so [`path_contains`](Self::path_contains)
+    /// is a HashSet lookup instead of an O(depth) parent-chain walk.
+    path_set: Rc<HashSet<NodeId>>,
 }
 
 impl WorkItem {
     fn new_root(node_id: NodeId, node: TraceNode) -> Self {
         Self {
+            path_set: Rc::new(HashSet::from([node_id.clone()])),
             node_id,
             node,
             edge: None,
@@ -49,7 +60,10 @@ impl WorkItem {
     }
 
     fn child(parent: &Rc<WorkItem>, node_id: NodeId, node: TraceNode, edge: TraceEdge) -> Self {
+        let mut path_set = (*parent.path_set).clone();
+        path_set.insert(node_id.clone());
         Self {
+            path_set: Rc::new(path_set),
             node_id,
             node,
             edge: Some(edge),
@@ -58,22 +72,13 @@ impl WorkItem {
         }
     }
 
-    fn has_edges(&self) -> bool {
+    fn has_parent_edge(&self) -> bool {
         self.edge.is_some()
     }
 
-    /// Returns true if `id` appears anywhere in this path's parent chain.
+    /// Returns true if `id` is on this path (O(1) HashSet lookup, MED-002).
     fn path_contains(&self, id: &NodeId) -> bool {
-        let mut current: &WorkItem = self;
-        loop {
-            if &current.node_id == id {
-                return true;
-            }
-            match &current.parent {
-                Some(parent) => current = parent,
-                None => return false,
-            }
-        }
+        self.path_set.contains(id)
     }
 
     /// Reconstructs the full [`TracePath`] by walking the parent chain.
@@ -135,12 +140,12 @@ pub(crate) fn bfs_trace(
     let mut results = Vec::new();
 
     while let Some(work) = queue.pop_front() {
-        let has_edges = work.has_edges();
+        let has_parent_edge = work.has_parent_edge();
         let current_id = work.node_id.clone();
 
         // Sink mode: record complete paths and stop expansion at sink.
         if let Some(sink_id) = sink {
-            if &current_id == sink_id && has_edges {
+            if &current_id == sink_id && has_parent_edge {
                 results.push(work.build_path());
                 continue;
             }
@@ -148,7 +153,7 @@ pub(crate) fn bfs_trace(
 
         if work.depth >= max_depth {
             // Non-sink mode: record prefix at depth limit.
-            if sink.is_none() && has_edges {
+            if sink.is_none() && has_parent_edge {
                 results.push(work.build_path());
             }
             continue;
@@ -171,7 +176,7 @@ pub(crate) fn bfs_trace(
                 edge.target.clone(),
                 TraceNode::from(target_node),
                 TraceEdge {
-                    edge_type: edge.edge_type.to_string(),
+                    edge_type: edge.edge_type.as_db_type().to_string(),
                     reason: edge.reason.clone(),
                     confidence: edge.confidence,
                 },
@@ -180,7 +185,7 @@ pub(crate) fn bfs_trace(
         }
 
         // Non-sink mode: record every path prefix with edges.
-        if sink.is_none() && has_edges {
+        if sink.is_none() && has_parent_edge {
             results.push(work_rc.build_path());
         }
     }
@@ -228,15 +233,15 @@ mod tests {
     }
 
     #[test]
-    fn has_edges_false_for_root_true_for_child() {
+    fn has_parent_edge_false_for_root_true_for_child() {
         let g = abc_graph();
         let a = g.get_node(&"a".to_string()).unwrap();
         let b = g.get_node(&"b".to_string()).unwrap();
         let root = WorkItem::new_root("a".to_string(), TraceNode::from(a));
-        assert!(!root.has_edges());
+        assert!(!root.has_parent_edge());
         let rc_root = Rc::new(root);
         let child = WorkItem::child(&rc_root, "b".to_string(), TraceNode::from(b), trace_edge());
-        assert!(child.has_edges());
+        assert!(child.has_parent_edge());
     }
 
     #[test]

@@ -41,6 +41,36 @@ fn build_call_chain(size: usize) -> Graph {
     g
 }
 
+/// Builds a deep call chain where every non-root node also calls back to
+/// `func_0`. Each back-edge is a cycle rejected by `path_contains`, stressing
+/// the cycle-detection hot path (MED-002): O(1) with the path_set vs O(depth)
+/// with a parent-chain walk.
+fn build_call_chain_with_back_edges(size: usize) -> Graph {
+    let mut g = Graph::new();
+    for i in 0..size {
+        let name = format!("func_{i}");
+        let node = Node::builder(NodeLabel::Function, name.clone(), format!("bench.{name}"))
+            .id(format!("f{i}"))
+            .project("bench")
+            .file_path(format!("src/{name}.rs"))
+            .start_line(10)
+            .build();
+        g.add_node(node);
+    }
+    for i in 0..size.saturating_sub(1) {
+        g.add_edge(Edge::new(
+            format!("f{i}"),
+            format!("f{}", i + 1),
+            EdgeType::Calls,
+            "bench",
+        ));
+    }
+    for i in 1..size {
+        g.add_edge(Edge::new(format!("f{i}"), "f0", EdgeType::Calls, "bench"));
+    }
+    g
+}
+
 fn bench_trace(c: &mut Criterion) {
     let graph = build_call_chain(100);
     let facade = TraceFacade::new(&graph);
@@ -79,5 +109,26 @@ fn bench_trace(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_trace);
+fn bench_trace_path_contains(c: &mut Criterion) {
+    // 120-node chain with a back-edge to the root from every non-root node:
+    // each BFS expansion rejects one cyclic edge via path_contains. At depth
+    // 100 the baseline O(depth) walk dominates; the O(1) HashSet lookup
+    // (MED-002) removes that cost.
+    let graph = build_call_chain_with_back_edges(120);
+    let facade = TraceFacade::new(&graph);
+
+    let mut group = c.benchmark_group("trace_path_contains");
+    group.sample_size(50);
+
+    group.bench_function("deep_chain_with_back_edges_depth_100", |b| {
+        b.iter(|| {
+            let result = facade.trace("func_0", TraceType::Calls, 100).unwrap();
+            black_box(result);
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_trace, bench_trace_path_contains);
 criterion_main!(benches);
