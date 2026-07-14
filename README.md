@@ -1,14 +1,32 @@
-# CodeNexus
-
 <div align="center">
+
+<img src="docs/assets/CodeNexus.png" alt="CodeNexus Logo" width="200">
 
 **基于 LadybugDB 与 tree-sitter 的多语言代码知识图谱工具**
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Rust Version](https://img.shields.io/badge/rust-1.91%2B-orange.svg)](https://www.rust-lang.org) [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) &nbsp; [![Rust Version](https://img.shields.io/badge/rust-1.91%2B-orange.svg)](https://www.rust-lang.org) &nbsp; [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) &nbsp; [![Crates.io](https://img.shields.io/crates/v/codenexus.svg)](https://crates.io/crates/codenexus)
 
 [English](README_EN.md) | 简体中文
 
 </div>
+
+---
+
+## 目录
+
+- [简介](#简介)
+- [核心特性](#核心特性)
+- [安装](#安装)
+- [快速开始](#快速开始)
+- [CLI 命令](#cli-命令)
+- [MCP 集成](#mcp-集成)
+- [复杂度分析](#复杂度分析)
+- [架构](#架构)
+- [支持语言](#支持语言)
+- [开发](#开发)
+- [贡献](#贡献)
+- [路线图](#路线图)
+- [许可证](#许可证)
 
 ## 简介
 
@@ -34,6 +52,7 @@ CodeNexus 将源代码仓库索引为可查询的知识图谱。它使用 [tree-
 | 多智能体 MCP | `setup` 自动检测 Claude Code/Cursor/Codex；`hook` 输出 PreToolUse/PostToolUse JSON；`mcp` stdio 服务 |
 | 文件监视 | 守护进程模式，自动增量索引（`daemon` feature） |
 | 向量嵌入 | 可选的语义搜索（`embed` feature） |
+| 污点追踪 | 跨语言多跳污点路径追踪（`TaintPathTracer`，BFS 遍历 DataFlows/Reads/Writes/FfiCalls） |
 
 ## 安装
 
@@ -186,7 +205,7 @@ codenexus cross_service --project myproject --protocol grpc
 codenexus architecture --project myproject
 ```
 
-## CLI 命令
+## [CLI 命令](#cli-命令)
 
 | 命令 | 说明 |
 |------|------|
@@ -219,9 +238,9 @@ codenexus architecture --project myproject
 | `lsp_goto_def` | LSP 定义跳转（rust-analyzer 集成，`lsp` feature） |
 | `lsp_hover` | LSP 悬停信息（rust-analyzer 集成，`lsp` feature） |
 
-## MCP 集成
+## [MCP 集成](#mcp-集成)
 
-CodeNexus v0.3.0 使用 [sdforge](https://crates.io/crates/sdforge) 提供 MCP（Model Context Protocol）服务器，通过 sdforge `mcp` stdio 传输暴露 **6 个工具**：
+CodeNexus 使用 [sdforge](https://crates.io/crates/sdforge) 提供 MCP（Model Context Protocol）服务器，通过 sdforge `mcp` stdio 传输暴露 **6 个工具**：
 
 | 工具 | 说明 |
 |------|------|
@@ -242,7 +261,7 @@ codenexus setup
 
 `setup` 自动检测已安装的 Claude Code（`~/.claude/`）、Cursor（`~/.cursor/`）、Codex（`~/.codex/`），并写入对应的 MCP 配置文件，指向 `codenexus mcp`。使用 `--force` 可跳过确认提示覆盖已有配置。
 
-## 复杂度分析（complexity）
+## [复杂度分析](#复杂度分析)
 
 `complexity` 子命令对项目内所有函数计算 AST 复杂度指标，输出 JSON（含 `complexity` 数组与 `summary` 统计）。
 
@@ -307,7 +326,7 @@ codenexus complexity --project myproject --red_only true --sort_by_severity true
 codenexus complexity --project myproject --time_complexity_green "O(1)" --time_complexity_yellow "O(n log n)" --time_complexity_red "O(n^2)"
 ```
 
-## 架构
+## [架构](#架构)
 
 ### 三层源码结构
 
@@ -322,18 +341,45 @@ codenexus complexity --project myproject --time_complexity_green "O(1)" --time_c
 
 ### 索引管线
 
-```
-┌─────────────────────────────────────────────┐
-│                   CLI (clap)                 │
-├─────────────────────────────────────────────┤
-│  Index Pipeline  │  Query  │  Trace │ Daemon │
-├──────────────────┴─────────┴────────┴────────┤
-│           Resolve (符号解析 + 数据流)          │
-├──────────────────────────────────────────────┤
-│        Parse (tree-sitter 多语言提取)          │
-├──────────────────────────────────────────────┤
-│     Discover (ignore)  │  Storage (LadybugDB) │
-└──────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph "用户层"
+        CLI["CLI (sdforge CliBuilder)"]
+    end
+    
+    subgraph "核心层"
+        IP["Index Pipeline<br/>索引流水线"]
+        Q["Query<br/>查询引擎"]
+        T["Trace<br/>追踪引擎"]
+        D["Daemon<br/>守护进程"]
+    end
+    
+    subgraph "解析层"
+        R["Resolve<br/>符号解析 + 数据流"]
+        P["Parse<br/>tree-sitter 多语言提取"]
+    end
+    
+    subgraph "存储层"
+        S["Storage<br/>LadybugDB"]
+        H["Hash<br/>SHA-256 增量"]
+    end
+    
+    CLI --> IP
+    CLI --> Q
+    CLI --> T
+    CLI --> D
+    IP --> R
+    IP --> P
+    IP --> S
+    IP --> H
+    Q --> S
+    T --> S
+    D --> IP
+    
+    style CLI fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    style IP fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    style S fill:#ffcdd2,stroke:#c62828,stroke-width:2px
+    style P fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
 ```
 
 ### 索引流程
@@ -350,7 +396,7 @@ codenexus complexity --project myproject --time_complexity_green "O(1)" --time_c
 - **30 种边类型**：Contains, Defines, MemberOf, Calls, FfiCalls, DataFlows, Reads, Writes, Implements, Extends, UsesType, References, Imports, Includes, HasMethod, HasProperty, Accesses, MethodOverrides, MethodImplements, StepInProcess, HandlesRoute, Fetches, HandlesTool, EntryPointOf, Usage, Tests, HttpCalls, AsyncCalls, Emits, ListensOn
 - 每条边携带置信度分数 (0.0-1.0) 和置信度分层（`SameFile` / `ImportScoped` / `Global`）
 
-## 支持语言
+## [支持语言](#支持语言)
 
 默认 `full` 预设编译 **21 种语言**。下表列出其中 8 种核心语言（C/Rust/Fortran/Python/TypeScript/Go/Java/C++）及其主要提取的节点/边类型；`full` 在此基础上额外启用 JavaScript、Ruby、Haskell、OCaml、Scala、PHP、C#、Bash、HTML、CSS、JSON、Regex、Verilog。
 
@@ -365,7 +411,7 @@ codenexus complexity --project myproject --time_complexity_green "O(1)" --time_c
 | Java | Class, Interface, Enum, Method | Defines, Calls, Imports |
 | C++ | Function, Method, Class, Struct, Namespace, Enum, Template | Defines, Calls, Imports |
 
-## 开发
+## [开发](#开发)
 
 ```bash
 # 运行测试
@@ -375,19 +421,21 @@ cargo test
 cargo clippy -- -D warnings
 
 # 格式化
-cargo fmt
+cargo +nightly fmt
 
 # 基准测试
 cargo bench
 ```
 
-## 贡献
+## [贡献](#贡献)
 
 欢迎提交 Issue 和 Pull Request。请确保通过 `cargo test` 和 `cargo clippy -- -D warnings`。
 
-## 路线图
+详细贡献指南请参考 [CONTRIBUTING.md](docs/CONTRIBUTING.md)。
 
-CodeNexus 当前版本 v0.3.2。按当前优先级排序的规划工作：
+## [路线图](#路线图)
+
+CodeNexus 按当前优先级排序的规划工作：
 
 - [x] v0.1.0 — 多语言索引（C/Rust/Fortran/Python/TypeScript）、图模式（44 种节点类型 + 30 种边类型）、`query`/`trace`/`impact`/`context`/`search`、增量索引、RAM 优先模式、MCP 服务、团队 `export`/`import`、守护进程模式、置信度分层、歧义消解
 - [x] v0.1.x — 稳定性与性能加固：增量重索引覆盖、大仓库内存调优、更多语言专属边提取
@@ -396,10 +444,10 @@ CodeNexus 当前版本 v0.3.2。按当前优先级排序的规划工作：
 - [x] v0.2.0 — 分析工具包：死代码检测、架构概览、API 审查（route_map/shape_check/api_impact/tool_map）、社区检测、跨服务链接检测
 - [x] v0.2.1 — AST 复杂度分析：圈/认知复杂度、嵌套深度、函数长度，绿/黄/红/致命四级告警
 - [x] v0.3.0 — sdforge-based MCP 服务器：`#[forge]` 宏 + sdforge `mcp` stdio 传输，替代手写 JSON-RPC；6 个工具（query/trace/impact/search/context/architecture）
-- [ ] v0.3.0 — 跨语言数据流端到端追踪（当前已记录边；多跳污点路径需专用查询路径）
-- [ ] v0.3.0 — 向量嵌入默认开启语义搜索（待 ONNX 模型大小与启动开销可接受后）
+- [x] v0.3.2 — 跨语言数据流端到端追踪：`TaintPathTracer` BFS 遍历 DataFlows/Reads/Writes/FfiCalls 边
+- [x] v0.3.2 — 向量嵌入默认开启语义搜索（`embed` feature 已包含在 `full` 预设中）
 - [ ] 未来 — 基于查询门面的 Web UI / 图可视化
 
-## 许可证
+## [许可证](#许可证)
 
 [MIT](LICENSE)

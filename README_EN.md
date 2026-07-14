@@ -1,14 +1,32 @@
-# CodeNexus
-
 <div align="center">
+
+<img src="docs/assets/CodeNexus.png" alt="CodeNexus Logo" width="200">
 
 **A multi-language code knowledge graph tool built on LadybugDB and tree-sitter**
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Rust Version](https://img.shields.io/badge/rust-1.91%2B-orange.svg)](https://www.rust-lang.org) [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) &nbsp; [![Rust Version](https://img.shields.io/badge/rust-1.91%2B-orange.svg)](https://www.rust-lang.org) &nbsp; [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) &nbsp; [![Crates.io](https://img.shields.io/crates/v/codenexus.svg)](https://crates.io/crates/codenexus)
 
 English | [简体中文](README.md)
 
 </div>
+
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Key Features](#key-features)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [CLI Commands](#cli-commands)
+- [MCP Integration](#mcp-integration)
+- [Complexity Analysis](#complexity-analysis)
+- [Architecture](#architecture)
+- [Supported Languages](#supported-languages)
+- [Development](#development)
+- [Contributing](#contributing)
+- [Roadmap](#roadmap)
+- [License](#license)
 
 ## Overview
 
@@ -43,81 +61,24 @@ Supports **21 languages** with the default `full` preset: C, Rust, Fortran, Pyth
 | Multi-agent MCP | `setup` auto-detects Claude Code/Cursor/Codex; `hook` emits PreToolUse/PostToolUse JSON; `mcp` stdio server |
 | File watching | Daemon mode with auto-incremental indexing (`daemon` feature) |
 | Vector embedding | Optional semantic search (`embed` feature) |
+| Taint tracing | Cross-language multi-hop taint path tracing (`TaintPathTracer`, BFS over DataFlows/Reads/Writes/FfiCalls) |
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────┐
-│                   CLI (clap)                 │
-├─────────────────────────────────────────────┤
-│  Index Pipeline  │  Query  │  Trace │ Daemon │
-├──────────────────┴─────────┴────────┴────────┤
-│           Resolve (symbol + data-flow)        │
-├──────────────────────────────────────────────┤
-│        Parse (tree-sitter multi-language)     │
-├──────────────────────────────────────────────┤
-│     Discover (ignore)  │  Storage (LadybugDB) │
-└──────────────────────────────────────────────┘
-```
-
-### Source Layout
-
-CodeNexus is split across three entry points:
-
-- `src/lib.rs` — Rust SDK interface (library crate). Embed the indexing pipeline, query facade, or trace engine in another Rust project by depending on the `codenexus` crate.
-- `src/main.rs` — CLI binary. Uses sdforge `CliBuilder` + `inventory` to dispatch to `service::*` handlers.
-- `src/service/` — Unified service layer. sdforge `#[forge]` macro exposes both CLI and MCP interfaces, gated by `cli`/`mcp` features. Each command defines a core function + CLI wrapper + MCP wrapper.
-
-### Indexing Pipeline
-
-1. **File discovery** — `ignore` crate honors `.gitignore` rules
-2. **Incremental hashing** — SHA-256 diffing, skips unchanged files
-3. **Parallel parsing** — Rayon parallelism + tree-sitter node/edge extraction
-4. **Symbol resolution** — FQN generation, call resolution, data-flow analysis, cross-language FFI
-5. **Bulk loading** — CSV generation + `COPY FROM` batch insert
-
-### Graph Model
-
-- **44 node types**: Project, Folder, File, Module, Class, Struct, Enum, Trait, Impl, Function, Method, Variable, GlobalVar, Parameter, Const, Static, Macro, TypeAlias, Typedef, Namespace, Interface, Constructor, Property, Record, Delegate, Annotation, Template, Union, Variant, Field, Event, Handler, Middleware, Service, Endpoint, Route, Process, Database, Config, Test, Section, Community, Tool, Embedding
-- **30 edge types**: Contains, Defines, MemberOf, Calls, FfiCalls, DataFlows, Reads, Writes, Implements, Extends, UsesType, References, Imports, Includes, HasMethod, HasProperty, Accesses, MethodOverrides, MethodImplements, StepInProcess, HandlesRoute, Fetches, HandlesTool, EntryPointOf, Usage, Tests, HttpCalls, AsyncCalls, Emits, ListensOn
-- Each edge carries a confidence score (0.0-1.0) and a confidence tier (`SameFile` / `ImportScoped` / `Global`)
-
-### Supported Languages
-
-The default `full` preset compiles **21 languages**. The table below lists the core 8; `full` additionally enables JavaScript, Ruby, Haskell, OCaml, Scala, PHP, C#, Bash, HTML, CSS, JSON, Regex, and Verilog.
-
-| Language | Node Types | Edge Types |
-|----------|------------|------------|
-| C | Function, GlobalVar, Struct, Enum, Typedef, Macro | Calls, Imports, Reads, Writes, Includes |
-| Rust | Function, Struct, Enum, Trait, Impl, Const, Static, Macro, Module, TypeAlias | Calls, Imports, Reads, Writes |
-| Fortran | Module, Function | Calls, Imports, FfiCalls |
-| Python | Function, Method, Class | Calls, Imports, Extends |
-| TypeScript | Function, Class, Method, Interface, Enum, TypeAlias, Const | Calls, Imports |
-| Go | Function, Method, Struct, Interface, TypeAlias | Defines, Calls, Imports |
-| Java | Class, Interface, Enum, Method | Defines, Calls, Imports |
-| C++ | Function, Method, Class, Struct, Namespace, Enum, Template | Defines, Calls, Imports |
-
-## Quick Start
-
-### Prerequisites
-
-| Dependency | Version | Notes |
-|------------|---------|-------|
-| Rust toolchain | 1.91+ (stable) | Required for `cargo build`. CI pins 1.91. |
-| nightly rustfmt | latest | `cargo fmt` uses nightly-only options (`imports_granularity`, `group_imports`). |
-| C/C++ compiler | system default | Required to build tree-sitter grammar crates. |
-| `zstd` CLI | any recent version | Used by `export`/`import` for `.graph.zst` artifacts. |
-
-### Installation
+## Installation
 
 ```bash
+# Install from crates.io (default full preset, all 21 languages + all features)
+cargo install codenexus
+
 # Build from source
 git clone https://github.com/Kirky-X/codenexus.git
 cd codenexus
 cargo install --path .
 
-# Or compile directly (binary at target/release/codenexus)
+# Or compile directly
 cargo build --release
+
+# Build MCP only (default full preset includes all languages)
+cargo build --release --features mcp
 ```
 
 ### Feature Flags
@@ -179,12 +140,11 @@ cargo build --release
 
 # Build with vector embedding
 cargo build --release --features embed
-
-# MCP-only build (sdforge MCP server, no daemon/analysis)
-cargo build --release --features mcp
 ```
 
-### First Index
+## Quick Start
+
+> All subcommand flags are **required snake_case long options** (e.g. `--symbol`, `--trace_type`); boolean options take an explicit `true`/`false` value. The database path is the global `--db` option (default `./codenexus.lbug`, placed before the subcommand).
 
 ```bash
 # 1. Index a codebase into the knowledge graph
@@ -203,8 +163,6 @@ codenexus context --symbol main --depth 1 --project "" --enhanced false
 ```
 
 ### Common Workflows
-
-> All subcommand flags are **required snake_case long options** (e.g. `--symbol`, `--trace_type`); boolean options take an explicit `true`/`false` value. The database path is the global `--db` option (default `./codenexus.lbug`, placed before the subcommand).
 
 ```bash
 # Trace call paths
@@ -254,7 +212,7 @@ codenexus cross_service --project myproject --protocol grpc
 codenexus architecture --project myproject
 ```
 
-## CLI Commands
+## [CLI Commands](#cli-commands)
 
 | Command | Description |
 |---------|-------------|
@@ -287,7 +245,7 @@ codenexus architecture --project myproject
 | `lsp_goto_def` | LSP go-to-definition (rust-analyzer integration, `lsp` feature) |
 | `lsp_hover` | LSP hover info (rust-analyzer integration, `lsp` feature) |
 
-## Complexity Analysis
+## [Complexity Analysis](#complexity-analysis)
 
 The `complexity` subcommand computes AST complexity metrics for every function in a project, emitting JSON with a `complexity` array and a `summary` aggregate.
 
@@ -352,6 +310,88 @@ codenexus complexity --project myproject --red_only true --sort_by_severity true
 codenexus complexity --project myproject --time_complexity_green "O(1)" --time_complexity_yellow "O(n log n)" --time_complexity_red "O(n^2)"
 ```
 
+## [Architecture](#architecture)
+
+### Source Layout
+
+CodeNexus is split across three entry points:
+
+- `src/lib.rs` — Rust SDK interface (library crate). Embed the indexing pipeline, query facade, or trace engine in another Rust project by depending on the `codenexus` crate.
+- `src/main.rs` — CLI binary. Uses sdforge `CliBuilder` + `inventory` to dispatch to `service::*` handlers.
+- `src/service/` — Unified service layer. sdforge `#[forge]` macro exposes both CLI and MCP interfaces, gated by `cli`/`mcp` features. Each command defines a core function + CLI wrapper + MCP wrapper.
+
+### Indexing Pipeline
+
+```mermaid
+graph TB
+    subgraph "User Layer"
+        CLI["CLI (sdforge CliBuilder)"]
+    end
+    
+    subgraph "Core Layer"
+        IP["Index Pipeline"]
+        Q["Query Engine"]
+        T["Trace Engine"]
+        D["Daemon"]
+    end
+    
+    subgraph "Parse Layer"
+        R["Resolve<br/>Symbol + DataFlow"]
+        P["Parse<br/>tree-sitter"]
+    end
+    
+    subgraph "Storage Layer"
+        S["Storage<br/>LadybugDB"]
+        H["Hash<br/>SHA-256"]
+    end
+    
+    CLI --> IP
+    CLI --> Q
+    CLI --> T
+    CLI --> D
+    IP --> R
+    IP --> P
+    IP --> S
+    IP --> H
+    Q --> S
+    T --> S
+    D --> IP
+    
+    style CLI fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    style IP fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    style S fill:#ffcdd2,stroke:#c62828,stroke-width:2px
+    style P fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+```
+
+### Indexing Flow
+
+1. **File discovery** — `ignore` crate honors `.gitignore` rules
+2. **Incremental hashing** — SHA-256 diffing, skips unchanged files
+3. **Parallel parsing** — Rayon parallelism + tree-sitter node/edge extraction
+4. **Symbol resolution** — FQN generation, call resolution, data-flow analysis, cross-language FFI
+5. **Bulk loading** — CSV generation + `COPY FROM` batch insert
+
+### Graph Model
+
+- **44 node types**: Project, Folder, File, Module, Class, Struct, Enum, Trait, Impl, Function, Method, Variable, GlobalVar, Parameter, Const, Static, Macro, TypeAlias, Typedef, Namespace, Interface, Constructor, Property, Record, Delegate, Annotation, Template, Union, Variant, Field, Event, Handler, Middleware, Service, Endpoint, Route, Process, Database, Config, Test, Section, Community, Tool, Embedding
+- **30 edge types**: Contains, Defines, MemberOf, Calls, FfiCalls, DataFlows, Reads, Writes, Implements, Extends, UsesType, References, Imports, Includes, HasMethod, HasProperty, Accesses, MethodOverrides, MethodImplements, StepInProcess, HandlesRoute, Fetches, HandlesTool, EntryPointOf, Usage, Tests, HttpCalls, AsyncCalls, Emits, ListensOn
+- Each edge carries a confidence score (0.0-1.0) and a confidence tier (`SameFile` / `ImportScoped` / `Global`)
+
+### Supported Languages
+
+The default `full` preset compiles **21 languages**. The table below lists the core 8; `full` additionally enables JavaScript, Ruby, Haskell, OCaml, Scala, PHP, C#, Bash, HTML, CSS, JSON, Regex, and Verilog.
+
+| Language | Node Types | Edge Types |
+|----------|------------|------------|
+| C | Function, GlobalVar, Struct, Enum, Typedef, Macro | Calls, Imports, Reads, Writes, Includes |
+| Rust | Function, Struct, Enum, Trait, Impl, Const, Static, Macro, Module, TypeAlias | Calls, Imports, Reads, Writes |
+| Fortran | Module, Function | Calls, Imports, FfiCalls |
+| Python | Function, Method, Class | Calls, Imports, Extends |
+| TypeScript | Function, Class, Method, Interface, Enum, TypeAlias, Const | Calls, Imports |
+| Go | Function, Method, Struct, Interface, TypeAlias | Defines, Calls, Imports |
+| Java | Class, Interface, Enum, Method | Defines, Calls, Imports |
+| C++ | Function, Method, Class, Struct, Namespace, Enum, Template | Defines, Calls, Imports |
+
 ## Configuration
 
 CodeNexus is a CLI tool and is configured primarily through command-line flags. A small number of environment variables are honored:
@@ -369,43 +409,7 @@ Run `codenexus setup` to auto-detect installed AI agents (Claude Code, Cursor, C
 
 For Git hooks, `codenexus hook` emits `PreToolUse`/`PostToolUse` JSON events and always exits 0, so it can be wired into a hook without blocking agent actions.
 
-## API Documentation
-
-CodeNexus exposes two programmatic interfaces:
-
-### MCP Server (`codenexus mcp`)
-
-A sdforge-based MCP server over stdio implementing [Model Context Protocol](https://modelcontextprotocol.io/) (version 2024-11-05). The hand-written JSON-RPC layer has been replaced by sdforge's declarative `#[forge]` macro + sdforge `mcp` stdio transport. AI agents call it to query the knowledge graph.
-
-**Usage**: `codenexus mcp [--db <DB_PATH>]`
-
-**Tools** (6):
-
-| Tool | Description |
-|------|-------------|
-| `query` | Execute a Cypher query against the knowledge graph |
-| `trace` | Trace a symbol's call/data-flow paths |
-| `impact` | Analyze the impact radius of changing a symbol |
-| `search` | Search symbols by name or content (full-text or semantic) |
-| `context` | Show a 360-degree view of a symbol (callers, callees, processes) |
-| `architecture` | Architecture overview (module boundaries + dependency directions + layers + cross-service deps) |
-
-Run `codenexus setup` once to auto-detect installed agents (Claude Code / Cursor / Codex) and register the server; the agent then starts `codenexus mcp` automatically.
-
-### Library Crate
-
-CodeNexus is published as a Rust library (`codenexus` lib crate, see `Cargo.toml` `[lib]`). Embed the indexing pipeline, query facade, or trace engine in another Rust project by depending on the crate. Runnable usage examples live under [`examples/`](examples/).
-
-### In-Repo Design Docs
-
-Detailed design material is kept in `docs/` (note: some of these files are git-ignored as they are internal working documents):
-
-- `docs/PRD.md` — Product Requirements Document
-- `docs/TRD.md` — Technical Requirements Document
-- `docs/DDD.md` — Detailed Design Document
-- `docs/ADD.md` — Architecture Design Document (ADRs)
-
-## Development
+## [Development](#development)
 
 ```bash
 # Run tests
@@ -421,11 +425,11 @@ cargo +nightly fmt
 cargo bench
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development workflow, and [`.editorconfig`](.editorconfig) / [`rustfmt.toml`](rustfmt.toml) for style rules.
+See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the full development workflow.
 
-## Contributing
+## [Contributing](#contributing)
 
-Issues and Pull Requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) for:
+Issues and Pull Requests are welcome. Please read [CONTRIBUTING.md](docs/CONTRIBUTING.md) for:
 
 - Development environment setup
 - Conventional Commits conventions
@@ -433,11 +437,11 @@ Issues and Pull Requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING
 - Test and lint requirements (`cargo test` and `cargo clippy -- -D warnings` must pass)
 - Code style (`cargo +nightly fmt`)
 
-By participating, you agree to abide by the [Code of Conduct](CODE_OF_CONDUCT.md).
+By participating, you agree to abide by the [Code of Conduct](docs/CODE_OF_CONDUCT.md).
 
-## Roadmap
+## [Roadmap](#roadmap)
 
-CodeNexus is at v0.3.2. Planned work, ordered by current priority:
+CodeNexus planned work, ordered by current priority:
 
 - [x] v0.1.0 — Multi-language indexing (C/Rust/Fortran/Python/TypeScript), graph schema (44 node types + 30 edge types), `query`/`trace`/`impact`/`context`/`search`, incremental indexing, RAM-first mode, MCP server, team `export`/`import`, daemon mode, confidence tiers, disambiguation
 - [x] v0.1.x — Stability and performance hardening: incremental reindex coverage, larger-repo memory tuning, more language-specific edge extraction
@@ -445,11 +449,12 @@ CodeNexus is at v0.3.2. Planned work, ordered by current priority:
 - [x] v0.2.0 — Expand language coverage (Go, Java, C++) behind new `lang-*` features
 - [x] v0.2.0 — Analysis toolkit: dead-code detection, architecture overview, API review (route-map/shape-check/api-impact/tool-map), community detection, cross-service link detection
 - [x] v0.2.1 — AST complexity analysis: cyclomatic/cognitive complexity, nesting depth, function length with green/yellow/red/critical severity alerting
-- [ ] v0.3.0 — Cross-language data-flow tracing end-to-end (currently edges are recorded; multi-hop taint paths need a dedicated query path)
-- [ ] v0.3.0 — Vector embedding default-on semantic search once ONNX model size and startup cost are acceptable
+- [x] v0.3.0 — sdforge-based MCP server: `#[forge]` macro + sdforge `mcp` stdio transport, replacing hand-written JSON-RPC; 6 tools (query/trace/impact/search/context/architecture)
+- [x] v0.3.2 — Cross-language data-flow tracing end-to-end: `TaintPathTracer` BFS over DataFlows/Reads/Writes/FfiCalls edges
+- [x] v0.3.2 — Vector embedding default-on semantic search (`embed` feature included in `full` preset)
 - [ ] Future — Web UI / graph visualization on top of the query facade
 
-## License
+## [License](#license)
 
 [MIT](LICENSE)
 
@@ -461,7 +466,7 @@ CodeNexus would not be possible without these projects:
 - [LadybugDB](https://github.com/ladybugdb/ladybugdb) — graph database backing the knowledge graph
 - [Rayon](https://github.com/rayon-rs/rayon) — data-parallel parsing
 - [ignore](https://docs.rs/ignore) — `.gitignore`-aware file discovery
-- [clap](https://docs.rs/clap) — CLI framework
+- [sdforge](https://crates.io/crates/sdforge) — CLI and MCP framework
 - [Model Context Protocol](https://modelcontextprotocol.io/) — spec for the `mcp` server
 - Every tree-sitter grammar maintainer — the per-language grammar crates do the hard parsing work
 

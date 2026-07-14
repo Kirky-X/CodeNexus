@@ -8,7 +8,7 @@ Thanks for your interest in contributing to CodeNexus. This document describes h
 
 | Tool | Version | Why |
 |------|---------|-----|
-| Rust toolchain (stable) | 1.81+ | Minimum supported version, pinned in CI and `Cargo.toml` (`rust-version = "1.81"`). |
+| Rust toolchain (stable) | 1.91+ | Minimum supported version, pinned in CI and `Cargo.toml` (`rust-version = "1.91"`). |
 | Rust nightly toolchain | latest | `cargo fmt` uses the nightly-only options `imports_granularity` and `group_imports` (see `rustfmt.toml`). |
 | C/C++ compiler | system default | Required to build the `tree-sitter` grammar crates. |
 | `zstd` CLI | any recent version | Used by `export`/`import` for `.graph.zst` artifacts. |
@@ -17,9 +17,9 @@ Thanks for your interest in contributing to CodeNexus. This document describes h
 Install both Rust toolchains with [rustup](https://rustup.rs/):
 
 ```bash
-rustup toolchain install 1.81
+rustup toolchain install 1.91
 rustup toolchain install nightly
-rustup component add clippy --toolchain 1.81
+rustup component add clippy --toolchain 1.91
 rustup component add rustfmt --toolchain nightly
 ```
 
@@ -34,7 +34,7 @@ cargo test                     # smoke test
 
 ### Build Variants
 
-The default feature set is `full` (all 5 languages + `daemon`). For faster iteration during development you can build a leaner binary:
+The default feature set is `full` (all 21 languages + daemon + analysis + complexity + api-review + community + cross-service + lsp + mcp + cli + cache + embed). For faster iteration during development you can build a leaner binary:
 
 ```bash
 # Minimal: Rust only, no daemon (fastest compile)
@@ -83,7 +83,7 @@ feat(parse): add Go language extractor
 fix(storage): prevent orphan edges when parser endpoint IDs desync
 perf(parse): dedupe_qn O(N²) → O(1) HashSet
 docs(readme): add Roadmap and Acknowledgments sections
-chore(ci): pin Rust 1.81 in workflow
+chore(ci): pin Rust 1.91 in workflow
 ```
 
 `BREAKING CHANGE:` in the footer or `feat!:` / `fix!:` (with `!`) flag breaking changes and must include migration notes.
