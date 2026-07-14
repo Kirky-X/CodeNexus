@@ -10,6 +10,7 @@ pub mod edge;
 pub mod edge_type;
 pub mod flow_type;
 pub mod graph;
+pub mod i18n;
 pub mod language;
 pub mod node;
 pub mod node_label;

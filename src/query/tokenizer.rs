@@ -29,7 +29,10 @@
 //! 4. **letter → digit** (`file2`): split before the digit.
 //! 5. **digit → letter** (`2nd`): split before the letter.
 //!
-//! All output tokens are lowercased for case-insensitive matching.
+//! All output tokens are case-folded for case-insensitive matching.
+//! With the `i18n` feature, Unicode case folding is used (e.g. `ß` → `ss`);
+//! without it, ASCII-only `to_ascii_lowercase` is used.
+//! CJK characters are treated as token characters (not separators).
 
 /// Splits an identifier into lowercase sub-token tokens.
 ///
@@ -41,12 +44,16 @@ pub fn codenexus_tokenize(name: &str) -> Vec<String> {
 
     for ch in name.chars() {
         if ch.is_uppercase() {
-            // camelCase boundary: lowercase→Uppercase (parseFile → parse | File)
-            if current.ends_with(|c: char| c.is_lowercase()) {
+            // camelCase boundary: lowercase→Uppercase or CJK→Uppercase
+            if current.ends_with(|c: char| c.is_lowercase() || crate::model::i18n::is_cjk(c)) {
                 flush(&mut current, &mut tokens);
             }
             current.push(ch);
         } else if ch.is_lowercase() {
+            // CJK→lowercase boundary
+            if current.ends_with(|c: char| crate::model::i18n::is_cjk(c)) {
+                flush(&mut current, &mut tokens);
+            }
             // Uppercase-run → Uppercase+lowercase (HTTPClient → HTTP | Client):
             // when a lowercase follows an uppercase run of length > 1, split
             // off the last uppercase to start the new CamelCase word.
@@ -65,6 +72,14 @@ pub fn codenexus_tokenize(name: &str) -> Vec<String> {
                 flush(&mut current, &mut tokens);
             }
             current.push(ch);
+        } else if crate::model::i18n::is_cjk(ch) {
+            // CJK: flush on non-CJK → CJK boundary
+            if !current.is_empty()
+                && !current.chars().last().is_some_and(crate::model::i18n::is_cjk)
+            {
+                flush(&mut current, &mut tokens);
+            }
+            current.push(ch);
         } else {
             // Separator (underscore, hyphen, dot, space, etc.)
             flush(&mut current, &mut tokens);
@@ -74,10 +89,10 @@ pub fn codenexus_tokenize(name: &str) -> Vec<String> {
     tokens
 }
 
-/// Pushes `current` (lowercased) into `tokens` and clears `current`.
+/// Pushes `current` (case-folded) into `tokens` and clears `current`.
 fn flush(current: &mut String, tokens: &mut Vec<String>) {
     if !current.is_empty() {
-        tokens.push(current.to_ascii_lowercase());
+        tokens.push(crate::model::i18n::fold_case(current));
         current.clear();
     }
 }
@@ -202,5 +217,32 @@ mod tests {
     fn tokenize_preserves_no_case_in_output() {
         let tokens = codenexus_tokenize("ParseFile");
         assert!(tokens.iter().all(|t| t == &t.to_ascii_lowercase()));
+    }
+
+    // ===== i18n / Unicode tests =====
+
+    #[cfg(feature = "i18n")]
+    #[test]
+    fn tokenize_unicode_case_folding() {
+        // ParseStraße → parse | straße → fold_case folds ß to ss
+        assert_eq!(
+            codenexus_tokenize("ParseStraße"),
+            vec!["parse", "strasse"]
+        );
+    }
+
+    #[test]
+    fn tokenize_cjk_identifier_no_split() {
+        // CJK chars accumulate into a single token; ASCII letter triggers flush
+        assert_eq!(codenexus_tokenize("你好World"), vec!["你好", "world"]);
+    }
+
+    #[test]
+    fn tokenize_mixed_script_preserves_cjk() {
+        // CJK between ASCII words: each script segment is a separate token
+        assert_eq!(
+            codenexus_tokenize("parse你好File"),
+            vec!["parse", "你好", "file"]
+        );
     }
 }
