@@ -337,6 +337,35 @@ mod tests {
     }
 
     #[test]
+    fn trace_taint_zero_depth_returns_empty() {
+        // max_depth=0: initial path has no edges, so sink check's
+        // !edges.is_empty() guard skips it; depth 0 >= 0 prevents expansion.
+        let mut g = Graph::new();
+        g.add_node(make_var("source", "source"));
+        g.add_node(make_var("sink", "sink"));
+        g.add_edge(Edge::new("source", "sink", EdgeType::DataFlows, "proj"));
+        let tracer = TaintPathTracer::new(&g);
+        let paths = tracer.trace_taint(&"source".to_string(), &"sink".to_string(), 0);
+        assert!(paths.is_empty(), "zero depth yields no path with edges");
+    }
+
+    #[test]
+    fn trace_taint_sink_reached_at_exact_depth_limit() {
+        // source -> mid -> sink, max_depth=2: path reaches sink at depth==max_depth.
+        let mut g = Graph::new();
+        g.add_node(make_var("source", "source"));
+        g.add_node(make_var("mid", "mid"));
+        g.add_node(make_var("sink", "sink"));
+        g.add_edge(Edge::new("source", "mid", EdgeType::DataFlows, "proj"));
+        g.add_edge(Edge::new("mid", "sink", EdgeType::DataFlows, "proj"));
+        let tracer = TaintPathTracer::new(&g);
+        let paths = tracer.trace_taint(&"source".to_string(), &"sink".to_string(), 2);
+        assert_eq!(paths.len(), 1, "sink reached at exact depth limit");
+        assert_eq!(paths[0].depth, 2);
+        assert_eq!(paths[0].nodes.len(), 3);
+    }
+
+    #[test]
     fn trace_taint_multiple_paths() {
         // source -> a -> sink, source -> b -> sink (two paths)
         let mut g = Graph::new();

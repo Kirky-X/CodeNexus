@@ -151,7 +151,7 @@ cargo build --release
 | `lang-regex` | — | Regex language parser (tree-sitter-regex) |
 | `lang-verilog` | — | Verilog language parser (tree-sitter-verilog) |
 | `daemon` | enabled | File-watching daemon (notify + notify-debouncer-full) |
-| `embed` | disabled | Vector embedding semantic search (reqwest HTTP + local ONNX inference) |
+| `embed` | enabled | Vector embedding semantic search (reqwest HTTP + local ONNX inference) |
 | `lsp` | enabled | LSP-enhanced extraction (rust-analyzer integration, semantic type augmentation) |
 | `analysis` | enabled | Dead code detection + architecture overview (pure Cypher aggregation) |
 | `complexity` | enabled | AST complexity analysis (cyclomatic/cognitive/nesting/length/Halstead/maintainability/time/space, depends on `analysis`) |

@@ -2179,7 +2179,7 @@ function setupSecond() {
     fn abstract_class_does_not_break_extraction() {
         let src = "abstract class Animal { abstract makeSound(): void; }";
         let result = extract(src);
-        assert!(result.nodes.iter().all(|n| n.name != ""));
+        assert!(result.nodes.iter().all(|n| !n.name.is_empty()));
     }
 
     #[test]

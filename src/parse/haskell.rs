@@ -481,7 +481,7 @@ mod tests {
             .filter(|n| n.label == NodeLabel::Function)
             .collect();
         assert!(
-            funcs.len() >= 1,
+            !funcs.is_empty(),
             "should extract at least 1 function: {:?}",
             result.nodes
         );
@@ -501,7 +501,7 @@ mod tests {
             .filter(|n| n.label == NodeLabel::TypeAlias)
             .collect();
         assert!(
-            sigs.len() >= 1,
+            !sigs.is_empty(),
             "should extract type signature: {:?}",
             result.nodes
         );
@@ -517,7 +517,7 @@ mod tests {
             .filter(|n| n.label == NodeLabel::Struct)
             .collect();
         assert!(
-            structs.len() >= 1,
+            !structs.is_empty(),
             "should extract data type: {:?}",
             result.nodes
         );
@@ -533,7 +533,7 @@ mod tests {
             .filter(|n| n.label == NodeLabel::TypeAlias && n.name == "Foo")
             .collect();
         assert!(
-            aliases.len() >= 1,
+            !aliases.is_empty(),
             "should extract newtype: {:?}",
             result.nodes
         );
@@ -548,7 +548,7 @@ mod tests {
             .filter(|n| n.label == NodeLabel::TypeAlias && n.name == "Foo")
             .collect();
         assert!(
-            aliases.len() >= 1,
+            !aliases.is_empty(),
             "should extract type alias: {:?}",
             result.nodes
         );
@@ -563,7 +563,7 @@ mod tests {
             .filter(|n| n.label == NodeLabel::Module)
             .collect();
         assert!(
-            modules.len() >= 1,
+            !modules.is_empty(),
             "should extract module: {:?}",
             result.nodes
         );
@@ -574,7 +574,7 @@ mod tests {
     fn extracts_import() {
         let result = extract("import Data.List\n");
         assert!(
-            result.imports.len() >= 1,
+            !result.imports.is_empty(),
             "should extract import: {:?}",
             result.imports
         );
@@ -893,13 +893,11 @@ mod tests {
         walk_and_call(root, src, &mut results);
         // If any node without name field but with variable child is found,
         // function_name should return Some via Strategy 2
-        for r in &results {
-            if let Some(ref name) = r {
-                assert!(
-                    !name.is_empty(),
-                    "function_name Strategy 2 should return non-empty name: {name}"
-                );
-            }
+        for ref name in results.iter().flatten() {
+            assert!(
+                !name.is_empty(),
+                "function_name Strategy 2 should return non-empty name: {name}"
+            );
         }
     }
 

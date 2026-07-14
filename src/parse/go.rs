@@ -1011,8 +1011,7 @@ mod tests {
         let typ = result
             .nodes
             .iter()
-            .filter(|n| n.label == NodeLabel::Struct)
-            .next()
+            .find(|n| n.label == NodeLabel::Struct)
             .expect("should find struct");
         assert!(!typ.is_exported, "unexported type should have is_exported=false");
     }

@@ -84,7 +84,7 @@ cargo build --release --features mcp
 | `lang-regex` | — | 正则语言解析器（tree-sitter-regex） |
 | `lang-verilog` | — | Verilog 语言解析器（tree-sitter-verilog） |
 | `daemon` | 启用 | 文件监视守护进程（notify + notify-debouncer-full） |
-| `embed` | 关闭 | 向量嵌入语义搜索（reqwest HTTP + 本地 ONNX 推理） |
+| `embed` | 启用 | 向量嵌入语义搜索（reqwest HTTP + 本地 ONNX 推理） |
 | `lsp` | 启用 | LSP 增强解析（rust-analyzer 集成，语义类型增强） |
 | `analysis` | 启用 | 死代码检测 + 架构概览（纯 Cypher 聚合） |
 | `complexity` | 启用 | AST 复杂度分析（圈/认知/嵌套/长度/Halstead/可维护性/时间/空间复杂度，依赖 `analysis`） |

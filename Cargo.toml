@@ -132,6 +132,7 @@ rust_decimal = "1.37"
 sysinfo = "0.30"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serial_test = "3"
+oxiarc-zstd = { version = "0.3", default-features = false }
 
 [build-dependencies]
 pkg-config = "0.3"

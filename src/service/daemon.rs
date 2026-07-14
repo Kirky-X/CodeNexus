@@ -212,6 +212,9 @@ mod tests {
         init_kit(kit).expect("init_kit");
 
         let watch_path = tmp.path().to_str().unwrap().to_string();
+        // ApiError 来自 sdforge（168 字节），项目约束禁止修改外部库，
+        // 故局部允许 result_large_err lint。
+        #[allow(clippy::result_large_err)]
         let handle = thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("runtime");
             rt.block_on(daemon(watch_path, "demo".to_string()))

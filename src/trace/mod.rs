@@ -3,7 +3,8 @@
 
 //! Tracing engine (PRD §4.2, ADD §3.4).
 //!
-//! BFS traversal over call graph and data flow edges, plus impact analysis.
+//! BFS traversal over call graph and data flow edges, plus impact analysis
+//! and cross-language taint path tracking.
 
 pub mod call_graph;
 pub mod capability;

@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_No unreleased changes yet._
+### Added
+
+- **feat(trace): `TaintPathTracer` for cross-language multi-hop taint tracking** — new `src/trace/taint.rs` module with BFS traversal over DataFlows/Reads/Writes/FfiCalls edges, supporting source-to-sink taint path queries and all-reachable-path queries. 30 unit tests covering basic paths, cycle detection, FFI edge following, depth limits, and boundary conditions.
+- **feat(embed): enable semantic search by default in `full` feature** — `embed` feature (vector embedding via ONNX local inference + OpenAI HTTP) is now included in `full`, making semantic search available out of the box. Automatic fallback to BM25 on model absence or unsupported platforms.
 
 ## [0.3.2] - 2026-07-11
 
