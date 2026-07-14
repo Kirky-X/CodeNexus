@@ -58,6 +58,37 @@ pub fn reset_kit_for_testing() {
     }
 }
 
+/// Force-resets the global Kit, recovering from a poisoned mutex.
+/// Test-only — use when a previous test may have panicked while holding
+/// the KIT lock, leaving the mutex poisoned and `reset_kit_for_testing`
+/// silently ineffective.
+#[cfg(test)]
+pub fn force_reset_kit_for_testing() {
+    match KIT.lock() {
+        Ok(mut guard) => *guard = None,
+        Err(poisoned) => *poisoned.into_inner() = None,
+    }
+}
+
+/// Force-initializes the global Kit, overwriting any existing value.
+/// Test-only — bypasses the "already initialized" check in [`init_kit`]
+/// to ensure test isolation regardless of prior KIT state.
+#[cfg(test)]
+pub fn force_init_kit_for_testing(kit: AsyncKit<AsyncReady>) {
+    match KIT.lock() {
+        Ok(mut guard) => *guard = Some(Arc::new(kit)),
+        Err(poisoned) => *poisoned.into_inner() = Some(Arc::new(kit)),
+    }
+}
+
+#[cfg(test)]
+pub fn kit_debug_state() -> String {
+    match KIT.lock() {
+        Ok(guard) => format!("kit_is_some={}, not_poisoned", guard.is_some()),
+        Err(_) => "POISONED".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

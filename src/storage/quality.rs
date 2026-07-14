@@ -1268,4 +1268,652 @@ mod tests {
             "should still detect DQ-005 in Function table: {violations:?}"
         );
     }
+
+    #[test]
+    fn test_run_all_skips_edge_integrity_on_code_relation_drop() {
+        // Cover `if let Ok(v) = self.check_edge_integrity()` Err branch in
+        // run_all (line 81): when the CodeRelation table is dropped,
+        // check_edge_integrity returns Err and run_all skips it, still
+        // returning violations from other checks.
+        let storage = fresh_storage();
+        storage
+            .save_project(&sample_project("demo", "demo"))
+            .expect("save_project");
+        storage
+            .save_nodes(
+                &[
+                    sample_function("f1", "demo", "main", "demo.main"),
+                    sample_function("f2", "demo", "other", "demo.main"),
+                ],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+        storage
+            .execute("DROP TABLE CodeRelation;")
+            .expect("drop CodeRelation");
+        let checker = QualityChecker::new(&*storage);
+        let report = checker.run_all().expect("run_all");
+        assert!(
+            report.count_for_rule("DQ-002") > 0,
+            "DQ-002 should still run and detect duplicate FQN"
+        );
+    }
+
+    #[test]
+    fn test_run_all_skips_hash_integrity_on_file_table_drop() {
+        // Cover `if let Ok(v) = self.check_hash_integrity()` Err branch in
+        // run_all (line 87): when the File table is dropped,
+        // check_hash_integrity returns Err and run_all skips it.
+        let storage = fresh_storage();
+        storage
+            .save_project(&sample_project("demo", "demo"))
+            .expect("save_project");
+        storage
+            .save_nodes(
+                &[sample_function("f1", "demo", "main", "demo.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+        storage
+            .execute("DROP TABLE File;")
+            .expect("drop File");
+        let checker = QualityChecker::new(&*storage);
+        let report = checker.run_all().expect("run_all");
+        assert!(report.is_clean(), "DQ-006 skipped, other checks clean");
+    }
+
+    #[test]
+    fn test_run_all_skips_project_isolation_on_project_table_drop() {
+        // Cover `if let Ok(v) = self.check_project_isolation()` Err branch in
+        // run_all (line 84): when the Project table is dropped,
+        // check_project_isolation returns Err (via list_projects) and run_all
+        // skips it.
+        let storage = fresh_storage();
+        storage
+            .save_nodes(
+                &[sample_function("f1", "demo", "main", "demo.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+        storage
+            .execute("DROP TABLE Project;")
+            .expect("drop Project");
+        let checker = QualityChecker::new(&*storage);
+        let report = checker.run_all().expect("run_all");
+        assert_eq!(
+            report.count_for_rule("DQ-005"),
+            0,
+            "DQ-005 should be skipped when Project table is dropped"
+        );
+    }
+
+    #[test]
+    fn test_dq002_skips_node_with_empty_qualified_name() {
+        // Cover `if !project.is_empty() && !qn.is_empty()` false branch
+        // (line 140): a node with an empty qualifiedName passes the
+        // `IS NOT NULL` WHERE clause but is skipped by the emptiness check.
+        let storage = fresh_storage();
+        storage
+            .save_project(&sample_project("demo", "demo"))
+            .expect("save_project");
+        let empty_qn_func = crate::model::Node::builder(
+            NodeLabel::Function,
+            "empty_qn",
+            "",
+        )
+        .id("f1")
+        .project("demo")
+        .file_path("/src/empty.rs")
+        .start_line(1)
+        .end_line(5)
+        .build();
+        storage
+            .save_nodes(&[empty_qn_func], NodeLabel::Function)
+            .expect("save_nodes");
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_fqn_uniqueness()
+            .expect("check_fqn_uniqueness");
+        assert!(
+            violations.is_empty(),
+            "node with empty qn should be skipped, got {violations:?}"
+        );
+    }
+
+    // --- Additional coverage: empty project, no projects, null hash, ---
+
+    #[test]
+    fn test_dq002_skips_node_with_empty_project() {
+        // Cover `!project.is_empty() && !qn.is_empty()` false branch when
+        // project is empty but qn is non-empty (line 140).
+        let storage = fresh_storage();
+        let empty_project_func = crate::model::Node::builder(
+            NodeLabel::Function,
+            "no_proj",
+            "demo.no_proj",
+        )
+        .id("f1")
+        .project("")
+        .file_path("/src/no_proj.rs")
+        .start_line(1)
+        .end_line(5)
+        .build();
+        storage
+            .save_nodes(&[empty_project_func], NodeLabel::Function)
+            .expect("save_nodes");
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_fqn_uniqueness()
+            .expect("check_fqn_uniqueness");
+        assert!(
+            violations.is_empty(),
+            "node with empty project should be skipped, got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn test_dq005_no_projects_returns_empty() {
+        // When no Project nodes exist, list_projects returns empty →
+        // per_project_count stays 0 for every table. Total count > 0 for
+        // any table with nodes → violation. But with no nodes either,
+        // everything is 0 → clean.
+        let storage = fresh_storage();
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_project_isolation()
+            .expect("check_project_isolation");
+        assert!(
+            violations.is_empty(),
+            "no projects and no nodes → no violations: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn test_dq005_violation_when_nodes_exist_but_no_projects() {
+        // Nodes exist in a project but no Project nodes → per-project sum
+        // stays 0, total > 0 → DQ-005 violation for every table with nodes.
+        let storage = fresh_storage();
+        storage
+            .save_nodes(
+                &[sample_function("f1", "demo", "main", "demo.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_project_isolation()
+            .expect("check_project_isolation");
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.rule == "DQ-005" && v.message.contains("Function")),
+            "should detect DQ-005 for Function table: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn test_dq006_detects_null_hash() {
+        // A File node with no hash property at all (null) should be detected
+        // as a violation, same as an empty-string hash.
+        let storage = fresh_storage();
+        let no_hash_file = crate::model::Node::builder(
+            NodeLabel::File,
+            "/c.rs",
+            "/c.rs",
+        )
+        .id("f1")
+        .project("demo")
+        .file_path("/c.rs")
+        .language(Language::Rust)
+        .properties(serde_json::json!({"lineCount": 50}))
+        .build();
+        storage
+            .save_nodes(&[no_hash_file], NodeLabel::File)
+            .expect("save_nodes");
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_hash_integrity()
+            .expect("check_hash_integrity");
+        assert_eq!(violations.len(), 1, "null hash should be detected: {violations:?}");
+        assert_eq!(violations[0].rule, "DQ-006");
+        assert!(violations[0].message.contains("f1"));
+    }
+
+    #[test]
+    fn test_run_all_skips_fqn_uniqueness_on_function_table_drop() {
+        // Cover `if let Ok(v) = self.check_fqn_uniqueness()` Err branch in
+        // run_all (line 78): when the Function table is dropped,
+        // check_fqn_uniqueness returns Err and run_all skips it.
+        let storage = fresh_storage();
+        storage
+            .save_project(&sample_project("demo", "demo"))
+            .expect("save_project");
+        storage
+            .save_nodes(
+                &[sample_file("file1", "demo", "/a.rs", "")],
+                NodeLabel::File,
+            )
+            .expect("save_nodes file");
+        storage
+            .execute("DROP TABLE Function;")
+            .expect("drop Function");
+        let checker = QualityChecker::new(&*storage);
+        let report = checker.run_all().expect("run_all");
+        // DQ-002 should be skipped (Function table dropped), but DQ-006
+        // should still detect the empty hash file.
+        assert_eq!(
+            report.count_for_rule("DQ-002"),
+            0,
+            "DQ-002 should be skipped when Function table is dropped"
+        );
+        assert!(
+            report.count_for_rule("DQ-006") >= 1,
+            "DQ-006 should still detect empty hash"
+        );
+    }
+
+    // --- Direct error propagation tests (? operator) ---
+
+    #[test]
+    fn check_edge_integrity_returns_err_when_code_relation_dropped() {
+        // check_edge_integrity uses `?` on the CodeRelation query (line 195).
+        // Dropping the table should cause the method to return Err.
+        let storage = fresh_storage();
+        storage
+            .execute("DROP TABLE CodeRelation;")
+            .expect("drop CodeRelation");
+        let checker = QualityChecker::new(&*storage);
+        assert!(
+            checker.check_edge_integrity().is_err(),
+            "check_edge_integrity should return Err when CodeRelation table is dropped"
+        );
+    }
+
+    #[test]
+    fn check_hash_integrity_returns_err_when_file_table_dropped() {
+        // check_hash_integrity uses `?` on the File query (line 301).
+        // Dropping the table should cause the method to return Err.
+        let storage = fresh_storage();
+        storage
+            .execute("DROP TABLE File;")
+            .expect("drop File");
+        let checker = QualityChecker::new(&*storage);
+        assert!(
+            checker.check_hash_integrity().is_err(),
+            "check_hash_integrity should return Err when File table is dropped"
+        );
+    }
+
+    #[test]
+    fn check_project_isolation_returns_err_when_project_table_dropped() {
+        // check_project_isolation uses `?` on list_projects (line 234).
+        // Dropping the Project table should cause the method to return Err.
+        let storage = fresh_storage();
+        storage
+            .execute("DROP TABLE Project;")
+            .expect("drop Project");
+        let checker = QualityChecker::new(&*storage);
+        assert!(
+            checker.check_project_isolation().is_err(),
+            "check_project_isolation should return Err when Project table is dropped"
+        );
+    }
+
+    #[test]
+    fn quality_report_count_for_rule_nonexistent_returns_zero() {
+        // A rule that doesn't exist at all should return 0.
+        let report = QualityReport {
+            violations: vec![QualityViolation {
+                rule: "DQ-002",
+                message: "test".into(),
+                project: None,
+            }],
+        };
+        assert_eq!(
+            report.count_for_rule("DQ-999"),
+            0,
+            "non-existent rule should return 0"
+        );
+    }
+
+    // --- Multi-table iteration coverage ---
+
+    #[test]
+    fn test_dq002_duplicates_in_method_table_only() {
+        // Exercises the NodeLabel::all() iteration in check_fqn_uniqueness
+        // with duplicates in the Method table (not just Function).
+        let storage = fresh_storage();
+        storage
+            .save_nodes(
+                &[sample_function("f1", "demo", "main", "demo.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes function");
+        let method1 = crate::model::Node::builder(NodeLabel::Method, "process", "demo.process")
+            .id("m1")
+            .project("demo")
+            .file_path("/src/m.rs")
+            .start_line(1)
+            .end_line(5)
+            .build();
+        let method2 = crate::model::Node::builder(NodeLabel::Method, "handle", "demo.process")
+            .id("m2")
+            .project("demo")
+            .file_path("/src/m.rs")
+            .start_line(10)
+            .end_line(15)
+            .build();
+        storage
+            .save_nodes(&[method1, method2], NodeLabel::Method)
+            .expect("save_nodes method");
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_fqn_uniqueness()
+            .expect("check_fqn_uniqueness");
+        assert_eq!(
+            violations.len(),
+            1,
+            "should detect duplicate FQN in Method table: {violations:?}"
+        );
+        assert_eq!(violations[0].rule, "DQ-002");
+        assert!(violations[0].message.contains("demo.process"));
+    }
+
+    #[test]
+    fn test_dq002_duplicates_across_function_and_method_tables() {
+        // Same FQN appears in both Function and Method tables → duplicate
+        // detected across node types.
+        let storage = fresh_storage();
+        storage
+            .save_nodes(
+                &[sample_function("f1", "demo", "main", "demo.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes function");
+        let method = crate::model::Node::builder(NodeLabel::Method, "main", "demo.main")
+            .id("m1")
+            .project("demo")
+            .file_path("/src/m.rs")
+            .start_line(1)
+            .end_line(5)
+            .build();
+        storage
+            .save_nodes(&[method], NodeLabel::Method)
+            .expect("save_nodes method");
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_fqn_uniqueness()
+            .expect("check_fqn_uniqueness");
+        assert_eq!(
+            violations.len(),
+            1,
+            "should detect duplicate FQN across Function and Method: {violations:?}"
+        );
+        assert_eq!(violations[0].rule, "DQ-002");
+        assert!(violations[0].message.contains("2 nodes"));
+    }
+
+    #[test]
+    fn test_dq004_multiple_edges_sorted_deterministically() {
+        // Multiple orphan edges → violations sorted by message for
+        // deterministic output (line 222 sort_by).
+        let storage = fresh_storage();
+        storage
+            .save_nodes(
+                &[sample_function("f1", "demo", "main", "demo.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+        storage
+            .save_edges(&[
+                crate::model::Edge::builder("f1", "zebra_missing", EdgeType::Calls, "demo").build(),
+                crate::model::Edge::builder("f1", "alpha_missing", EdgeType::Calls, "demo").build(),
+                crate::model::Edge::builder("f1", "mid_missing", EdgeType::Calls, "demo").build(),
+            ])
+            .expect("save_edges");
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_edge_integrity()
+            .expect("check_edge_integrity");
+        assert_eq!(
+            violations.len(),
+            3,
+            "should detect three orphan targets: {violations:?}"
+        );
+        // Verify sort order: alpha < mid < zebra.
+        let targets: Vec<&str> = violations
+            .iter()
+            .map(|v| {
+                v.message
+                    .split('\'')
+                    .nth(1)
+                    .unwrap_or("")
+            })
+            .collect();
+        assert_eq!(
+            targets,
+            vec!["alpha_missing", "mid_missing", "zebra_missing"],
+            "violations should be sorted by message: {targets:?}"
+        );
+    }
+
+    #[test]
+    fn test_dq005_violations_for_multiple_tables_when_no_projects() {
+        // Nodes in both Function and File tables, no Project nodes →
+        // DQ-005 violations for both tables (exercises iteration across
+        // multiple labels with per-project count = 0).
+        let storage = fresh_storage();
+        storage
+            .save_nodes(
+                &[sample_function("f1", "demo", "main", "demo.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes function");
+        storage
+            .save_nodes(
+                &[sample_file("file1", "demo", "/a.rs", "hash1")],
+                NodeLabel::File,
+            )
+            .expect("save_nodes file");
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_project_isolation()
+            .expect("check_project_isolation");
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.rule == "DQ-005" && v.message.contains("Function")),
+            "should have DQ-005 for Function table: {violations:?}"
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.rule == "DQ-005" && v.message.contains("File")),
+            "should have DQ-005 for File table: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn test_dq005_per_project_count_sums_across_multiple_tables() {
+        // Multiple tables with nodes in known projects → per-project count
+        // sums correctly for each table (exercises line 261 +=
+        // for File table in addition to Function).
+        let storage = fresh_storage();
+        storage
+            .save_project(&sample_project("alpha", "alpha"))
+            .expect("save_project");
+        storage
+            .save_nodes(
+                &[sample_function("a1", "alpha", "main", "alpha.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes function");
+        storage
+            .save_nodes(&[sample_file("file1", "alpha", "/a.rs", "hash1")], NodeLabel::File)
+            .expect("save_nodes file");
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_project_isolation()
+            .expect("check_project_isolation");
+        assert!(
+            violations.is_empty(),
+            "single project with all nodes should have no DQ-005: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn test_run_all_with_only_dq005_asserts_other_rules_clean() {
+        // run_all with only DQ-005 violation → other rules should be clean.
+        // Explicitly verifies that run_all aggregates only the expected
+        // violations (lines 78-89 if-let branches).
+        let storage = fresh_storage();
+        storage
+            .save_project(&sample_project("alpha", "alpha"))
+            .expect("save_project");
+        storage
+            .save_nodes(
+                &[sample_function("g1", "ghost", "main", "ghost.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes ghost");
+        let checker = QualityChecker::new(&*storage);
+        let report = checker.run_all().expect("run_all");
+        assert!(
+            report.count_for_rule("DQ-005") >= 1,
+            "should have DQ-005 violations: {:?}",
+            report.violations
+        );
+        assert_eq!(
+            report.count_for_rule("DQ-002"),
+            0,
+            "should have no DQ-002: {:?}",
+            report.violations
+        );
+        assert_eq!(
+            report.count_for_rule("DQ-004"),
+            0,
+            "should have no DQ-004: {:?}",
+            report.violations
+        );
+        assert_eq!(
+            report.count_for_rule("DQ-006"),
+            0,
+            "should have no DQ-006: {:?}",
+            report.violations
+        );
+    }
+
+    #[test]
+    fn escape_cypher_combined_backslash_and_single_quote() {
+        // String with both backslash and single quote → both escaped.
+        assert_eq!(
+            escape_cypher("it's\\path"),
+            "it\\'s\\\\path"
+        );
+        assert_eq!(
+            escape_cypher("\\'"),
+            "\\\\\\'"
+        );
+    }
+
+    // --- NULL value defensive branch tests ---
+
+    #[test]
+    fn test_dq006_handles_null_project_in_file_node() {
+        // Cover the `unwrap_or("")` branch for project in check_hash_integrity
+        // (line 313). A File node with NULL project and empty hash should
+        // still be detected as a DQ-006 violation with project = Some("").
+        let storage = fresh_storage();
+        storage
+            .execute(
+                "CREATE (:File {id: 'f1', project: NULL, name: 'a.rs', \
+                 filePath: '/a.rs', language: 'rust', hash: '', lineCount: 0});",
+            )
+            .expect("insert file with null project");
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_hash_integrity()
+            .expect("check_hash_integrity");
+        assert_eq!(violations.len(), 1, "should detect DQ-006: {violations:?}");
+        assert_eq!(violations[0].rule, "DQ-006");
+        assert_eq!(
+            violations[0].project.as_deref(),
+            Some(""),
+            "null project should map to empty string"
+        );
+    }
+
+    #[test]
+    fn test_dq004_handles_null_source_in_edge() {
+        // Cover the `unwrap_or("")` branch for source in check_edge_integrity
+        // (line 199). A CodeRelation with NULL source should produce a
+        // violation for the orphan source "".
+        let storage = fresh_storage();
+        // Save a valid target node so only the source is orphaned.
+        storage
+            .save_nodes(
+                &[sample_function("f1", "demo", "main", "demo.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+        storage
+            .execute(
+                "CREATE (:CodeRelation {id: 'e1', source: NULL, target: 'f1', \
+                 type: 'CALLS', confidence: 1.0, confidenceTier: 'HIGH', \
+                 reason: 'test', startLine: 1, project: 'demo'});",
+            )
+            .expect("insert edge with null source");
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_edge_integrity()
+            .expect("check_edge_integrity");
+        assert_eq!(
+            violations.len(),
+            1,
+            "should detect one DQ-004 for null source: {violations:?}"
+        );
+        assert_eq!(violations[0].rule, "DQ-004");
+        assert!(
+            violations[0].message.contains("source"),
+            "violation should mention source: {}",
+            violations[0].message
+        );
+    }
+
+    #[test]
+    fn test_dq004_handles_null_project_in_edge() {
+        // Cover the `unwrap_or("")` branch for project in check_edge_integrity
+        // (line 202). A CodeRelation with NULL project should produce a
+        // violation with project = Some("").
+        let storage = fresh_storage();
+        // Save a valid source node; target is missing → 1 violation.
+        storage
+            .save_nodes(
+                &[sample_function("f1", "demo", "main", "demo.main")],
+                NodeLabel::Function,
+            )
+            .expect("save_nodes");
+        storage
+            .execute(
+                "CREATE (:CodeRelation {id: 'e1', source: 'f1', target: 'ghost', \
+                 type: 'CALLS', confidence: 1.0, confidenceTier: 'HIGH', \
+                 reason: 'test', startLine: 1, project: NULL});",
+            )
+            .expect("insert edge with null project");
+        let checker = QualityChecker::new(&*storage);
+        let violations = checker
+            .check_edge_integrity()
+            .expect("check_edge_integrity");
+        assert_eq!(
+            violations.len(),
+            1,
+            "should detect one DQ-004 for orphan target: {violations:?}"
+        );
+        assert_eq!(violations[0].rule, "DQ-004");
+        assert_eq!(
+            violations[0].project.as_deref(),
+            Some(""),
+            "null project should map to empty string"
+        );
+    }
 }

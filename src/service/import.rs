@@ -3,17 +3,16 @@
 
 //! Import command: decompress a zstd team artifact into the database.
 //!
-//! See [`crate::service::export`] for the artifact format and zstd CLI
+//! See [`crate::service::export`] for the artifact format and zstd library
 //! dependency rationale.
 
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
 
 use serde::Serialize;
 
-use crate::service::export::{ArtifactManifest, ARTIFACT_FORMAT_VERSION, ARTIFACT_MAGIC, ZSTD_BIN};
+use crate::service::export::{ArtifactManifest, ARTIFACT_FORMAT_VERSION, ARTIFACT_MAGIC};
 use crate::storage::StorageConfig;
 
 #[cfg(any(feature = "cli", feature = "mcp", test))]
@@ -40,40 +39,11 @@ pub struct ImportOutput {
     pub reindexed: bool,
 }
 
-/// Decompresses `input` (zstd-compressed bytes) via the system `zstd` CLI.
+/// Decompresses `input` (zstd-compressed bytes) via the `oxiarc-zstd` pure-Rust library.
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 fn zstd_decompress(input: &[u8]) -> Result<Vec<u8>, CodeNexusError> {
-    let mut child = Command::new(ZSTD_BIN)
-        .args(["-q", "-d", "-c"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                CodeNexusError::InvalidInput(format!(
-                    "zstd binary not found on PATH — install zstd to use export/import. Error: {e}"
-                ))
-            } else {
-                CodeNexusError::Io(e)
-            }
-        })?;
-    {
-        let mut stdin = child.stdin.take().ok_or_else(|| {
-            CodeNexusError::Internal("zstd stdin not captured".to_string())
-        })?;
-        stdin.write_all(input)?;
-    }
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(CodeNexusError::InvalidInput(format!(
-            "zstd decompression failed (status {}): {}",
-            output.status,
-            stderr.trim()
-        )));
-    }
-    Ok(output.stdout)
+    oxiarc_zstd::decompress(input)
+        .map_err(|e| CodeNexusError::Internal(format!("zstd decompression failed: {e}")))
 }
 
 /// Runs import against an injected Kit (testable core).
@@ -134,6 +104,11 @@ pub fn run_import(
 
     let compressed_payload = &artifact_bytes[header_total..];
     let db_bytes = zstd_decompress(compressed_payload)?;
+
+    // Remove stale WAL sidecar so LadybugDB doesn't reject the imported DB
+    // (the WAL carries the old database ID; importing replaces the DB bytes).
+    let wal_path = format!("{}.wal", db_path.display());
+    let _ = std::fs::remove_file(&wal_path);
 
     {
         let mut out = File::create(&db_path)?;
@@ -236,19 +211,30 @@ mod tests {
     #[test]
     fn zstd_decompress_returns_error_for_invalid_input() {
         let garbage = b"this is not valid zstd data at all";
-        match zstd_decompress(garbage) {
-            Ok(_) => panic!("decompressing garbage should fail"),
-            Err(CodeNexusError::InvalidInput(msg)) if msg.contains("zstd binary not found") => {
-                // zstd not installed — skip.
-            }
-            Err(CodeNexusError::InvalidInput(msg)) => {
-                assert!(
-                    msg.contains("zstd decompression failed"),
-                    "unexpected error: {msg}"
-                );
-            }
-            Err(e) => panic!("unexpected error type: {e}"),
-        }
+        let err = zstd_decompress(garbage)
+            .expect_err("decompressing garbage should fail");
+        // zstd library returns io::Error for invalid data, converted to CodeNexusError::Io.
+        let msg = err.to_string();
+        assert!(
+            !msg.is_empty(),
+            "error should have a message"
+        );
+    }
+
+    #[test]
+    fn zstd_decompress_succeeds_for_valid_compressed_data() {
+        let original = b"Hello, zstd! This is a test for round-trip decompression.";
+        let compressed = oxiarc_zstd::compress_with_level(&original[..], 19).expect("zstd encode");
+        let decompressed = zstd_decompress(&compressed).expect("zstd_decompress should succeed");
+        assert_eq!(decompressed, original, "decompressed should match original");
+    }
+
+    #[test]
+    fn zstd_decompress_returns_error_for_empty_input() {
+        let err = zstd_decompress(b"")
+            .expect_err("empty input should fail decompression");
+        let msg = err.to_string();
+        assert!(!msg.is_empty(), "error should have a message");
     }
 
     #[test]
@@ -364,17 +350,61 @@ mod tests {
         }
     }
 
+    // Covers line 127: serde_json::from_slice error path when manifest JSON
+    // is malformed (valid magic + manifest_len, but invalid JSON content).
+    #[test]
+    fn run_import_returns_error_for_malformed_manifest_json() {
+        let (dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let artifact = dir.path().join("malformed.cnxp");
+        let bad_manifest = b"{ this is not valid json";
+        let mut data = ARTIFACT_MAGIC.to_vec();
+        data.extend(&(bad_manifest.len() as u32).to_le_bytes());
+        data.extend(bad_manifest);
+        data.extend(b"fake_compressed_data");
+        std::fs::write(&artifact, &data).unwrap();
+        let err = run_import(&kit, artifact.to_str().unwrap(), false, "", "")
+            .expect_err("malformed manifest JSON should error");
+        // serde_json::from_slice error is wrapped via `?` on line 127,
+        // producing a serde_json error (converted to CodeNexusError).
+        // The error should NOT be InvalidInput (that's for our explicit checks);
+        // it should be a serialization/deserialization error.
+        let msg = err.to_string();
+        assert!(
+            msg.to_lowercase().contains("json")
+                || msg.to_lowercase().contains("deserialize")
+                || msg.to_lowercase().contains("parse"),
+            "unexpected error for malformed manifest: {msg}"
+        );
+    }
+
+    // Covers the case where the manifest_len is 0 (header says 0 bytes for
+    // manifest). This triggers serde_json::from_slice on an empty slice,
+    // which returns an EOF error.
+    #[test]
+    fn run_import_returns_error_for_zero_manifest_len() {
+        let (dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let artifact = dir.path().join("zerolen.cnxp");
+        let mut data = ARTIFACT_MAGIC.to_vec();
+        data.extend(&0u32.to_le_bytes()); // manifest_len = 0
+        data.extend(b"fake_compressed_data");
+        std::fs::write(&artifact, &data).unwrap();
+        let err = run_import(&kit, artifact.to_str().unwrap(), false, "", "")
+            .expect_err("zero manifest_len should error");
+        let msg = err.to_string();
+        // Empty slice → serde_json EOF error
+        assert!(
+            !msg.is_empty(),
+            "error message should not be empty"
+        );
+    }
+
     #[test]
     fn run_import_returns_error_for_reindex_without_path() {
         let (dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        // Create a valid artifact but with bad compressed data so it fails
-        // before reaching the reindex check — wait, no, we need it to fail
-        // at the reindex check. So we need a valid artifact with valid zstd data.
-        // Instead, test the reindex validation directly by checking that
-        // the error message mentions "--reindex requires --path".
         let artifact = dir.path().join("valid.cnxp");
-        // Write a minimal artifact with empty zstd payload.
         let manifest = ArtifactManifest {
             format_version: ARTIFACT_FORMAT_VERSION.to_string(),
             codenexus_version: "0.3.2".into(),
@@ -384,27 +414,23 @@ mod tests {
             original_size: 0,
         };
         let manifest_json = serde_json::to_vec(&manifest).unwrap();
+        let compressed = oxiarc_zstd::compress_with_level(&b"fake_db_bytes"[..], 19).expect("zstd encode");
         let mut data = ARTIFACT_MAGIC.to_vec();
         data.extend(&(manifest_json.len() as u32).to_le_bytes());
         data.extend(&manifest_json);
-        // No compressed payload — zstd_decompress will fail.
+        data.extend(&compressed);
         std::fs::write(&artifact, &data).unwrap();
 
-        // This will fail at zstd_decompress, not at reindex check.
-        // To test the reindex check, we need valid compressed data.
-        // Let's just verify the error path logic by checking the message.
-        let result = run_import(&kit, artifact.to_str().unwrap(), true, "", "demo");
-        // The error could be either from zstd_decompress or from the reindex check.
-        // If zstd is available and empty input works, it'll reach the reindex check.
-        match result {
-            Err(CodeNexusError::InvalidInput(msg)) if msg.contains("--reindex requires --path") => {
-                // Reached the reindex check — perfect.
+        let err = run_import(&kit, artifact.to_str().unwrap(), true, "", "demo")
+            .expect_err("reindex without path should error");
+        match err {
+            CodeNexusError::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("--reindex requires --path"),
+                    "should mention --reindex requires --path: {msg}"
+                );
             }
-            Err(CodeNexusError::InvalidInput(msg)) if msg.contains("zstd") => {
-                // zstd failed first — acceptable, can't test reindex path without valid data.
-            }
-            Err(e) => panic!("unexpected error: {e}"),
-            Ok(_) => panic!("should not succeed with empty compressed data"),
+            other => panic!("expected InvalidInput, got {other:?}"),
         }
     }
 
@@ -422,23 +448,23 @@ mod tests {
             original_size: 0,
         };
         let manifest_json = serde_json::to_vec(&manifest).unwrap();
+        let compressed = oxiarc_zstd::compress_with_level(&b"fake_db_bytes"[..], 19).expect("zstd encode");
         let mut data = ARTIFACT_MAGIC.to_vec();
         data.extend(&(manifest_json.len() as u32).to_le_bytes());
         data.extend(&manifest_json);
+        data.extend(&compressed);
         std::fs::write(&artifact, &data).unwrap();
 
-        let result = run_import(&kit, artifact.to_str().unwrap(), true, "/some/path", "");
-        match result {
-            Err(CodeNexusError::InvalidInput(msg))
-                if msg.contains("--reindex requires --name") =>
-            {
-                // Reached the reindex name check — perfect.
+        let err = run_import(&kit, artifact.to_str().unwrap(), true, "/some/path", "")
+            .expect_err("reindex without name should error");
+        match err {
+            CodeNexusError::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("--reindex requires --name"),
+                    "should mention --reindex requires --name: {msg}"
+                );
             }
-            Err(CodeNexusError::InvalidInput(msg)) if msg.contains("zstd") => {
-                // zstd failed first — acceptable.
-            }
-            Err(e) => panic!("unexpected error: {e}"),
-            Ok(_) => panic!("should not succeed with empty compressed data"),
+            other => panic!("expected InvalidInput, got {other:?}"),
         }
     }
 
@@ -451,17 +477,12 @@ mod tests {
         let src_kit = build_kit_for_db(&src_db);
         let artifact = src_dir.path().join("roundtrip.cnxp");
 
-        let export_output = match crate::service::export::run_export(
+        let export_output = crate::service::export::run_export(
             &src_kit,
             artifact.to_str().unwrap(),
             "demo",
-        ) {
-            Ok(o) => o,
-            Err(CodeNexusError::InvalidInput(msg)) if msg.contains("zstd binary not found") => {
-                return; // zstd not installed — skip.
-            }
-            Err(e) => panic!("unexpected run_export error: {e}"),
-        };
+        )
+        .expect("run_export should succeed");
 
         let (_dst_dir, dst_db) = fresh_db_path();
         let dst_kit = build_kit_for_db(&dst_db);
@@ -490,13 +511,8 @@ mod tests {
         let src_kit = build_kit_for_db(&src_db);
         let artifact = src_dir.path().join("reindex.cnxp");
 
-        match crate::service::export::run_export(&src_kit, artifact.to_str().unwrap(), "demo") {
-            Ok(_) => {}
-            Err(CodeNexusError::InvalidInput(msg)) if msg.contains("zstd binary not found") => {
-                return;
-            }
-            Err(e) => panic!("unexpected run_export error: {e}"),
-        }
+        crate::service::export::run_export(&src_kit, artifact.to_str().unwrap(), "demo")
+            .expect("run_export should succeed");
 
         let reindex_src = TempDir::new().unwrap();
         std::fs::write(
@@ -518,5 +534,139 @@ mod tests {
 
         assert!(import_output.reindexed, "reindex=true → reindexed should be true");
         assert!(import_output.db_size > 0);
+    }
+
+    // ===== #[forge] wrapper tests via init_kit =====
+
+    /// RAII guard that resets the global Kit on Drop, ensuring test isolation.
+    #[cfg(feature = "cli")]
+    struct KitGuard;
+
+    #[cfg(feature = "cli")]
+    impl KitGuard {
+        fn new() -> Self {
+            crate::service::runtime::force_reset_kit_for_testing();
+            Self
+        }
+    }
+
+    #[cfg(feature = "cli")]
+    impl Drop for KitGuard {
+        fn drop(&mut self) {
+            crate::service::runtime::force_reset_kit_for_testing();
+        }
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn import_wrapper_fails_with_nonexistent_artifact() {
+        let _guard = KitGuard::new();
+        let (_dir, db) = fresh_db_path();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let kit = rt.block_on(async {
+            let config = KitBootstrapConfig::new(db.to_path_buf());
+            build_kit(&config).await.expect("build_kit")
+        });
+        crate::service::runtime::force_init_kit_for_testing(kit);
+        let result = rt.block_on(import(
+            "/nonexistent/path/artifact.cnxp".to_string(),
+            false,
+            String::new(),
+            String::new(),
+        ));
+        let err = result.expect_err("nonexistent artifact should error");
+        assert!(
+            matches!(err, ApiError::InvalidInput { .. }),
+            "expected InvalidInput, got {err:?}"
+        );
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn import_wrapper_fails_when_kit_not_initialized() {
+        let _guard = KitGuard::new();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(import(
+            "/nonexistent/path/artifact.cnxp".to_string(),
+            false,
+            String::new(),
+            String::new(),
+        ));
+        assert!(result.is_err(), "wrapper should fail without kit");
+    }
+
+    // Covers the import wrapper success path (lines 180-188):
+    // kit() resolves, run_export creates artifact, run_import succeeds,
+    // serde_json::to_string succeeds, println outputs JSON.
+    #[cfg(feature = "cli")]
+    #[test]
+    fn import_wrapper_succeeds_via_init_kit() {
+        let _guard = KitGuard::new();
+
+        let (src_dir, src_db) = fresh_db_path();
+        let src_rt = tokio::runtime::Runtime::new().expect("runtime");
+        let src_kit = src_rt.block_on(async {
+            let config = KitBootstrapConfig::new(src_db.to_path_buf());
+            build_kit(&config).await.expect("build_kit")
+        });
+        let artifact = src_dir.path().join("wrapper_roundtrip.cnxp");
+
+        // Export to create a valid artifact.
+        crate::service::export::run_export(
+            &src_kit,
+            artifact.to_str().unwrap(),
+            "demo",
+        )
+        .expect("run_export should succeed");
+
+        // Set up a fresh kit for the import side.
+        let (_dst_dir, dst_db) = fresh_db_path();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let dst_kit = rt.block_on(async {
+            let config = KitBootstrapConfig::new(dst_db.to_path_buf());
+            build_kit(&config).await.expect("build_kit")
+        });
+        crate::service::runtime::force_init_kit_for_testing(dst_kit);
+        let result = rt.block_on(import(
+            artifact.to_string_lossy().into_owned(),
+            false,
+            String::new(),
+            String::new(),
+        ));
+        assert!(
+            result.is_ok(),
+            "import wrapper should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    // Covers the import wrapper with reindex=false and a nonexistent artifact
+    // through the #[forge] wrapper → ApiError conversion path.
+    #[cfg(feature = "cli")]
+    #[test]
+    fn import_wrapper_with_malformed_artifact_returns_api_error() {
+        let _guard = KitGuard::new();
+        let (dir, db) = fresh_db_path();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let kit = rt.block_on(async {
+            let config = KitBootstrapConfig::new(db.to_path_buf());
+            build_kit(&config).await.expect("build_kit")
+        });
+        crate::service::runtime::force_init_kit_for_testing(kit);
+
+        let bad_artifact = dir.path().join("too_small.cnxp");
+        std::fs::write(&bad_artifact, b"CNXP").unwrap();
+
+        let result = rt.block_on(import(
+            bad_artifact.to_string_lossy().into_owned(),
+            false,
+            String::new(),
+            String::new(),
+        ));
+        let err = result.expect_err("too-small artifact should error");
+        assert!(
+            matches!(err, ApiError::InvalidInput { .. }),
+            "expected InvalidInput, got {err:?}"
+        );
     }
 }

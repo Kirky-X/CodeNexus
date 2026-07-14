@@ -559,4 +559,84 @@ mod tests {
         let d_count = mro.iter().filter(|n| *n == "d").count();
         assert_eq!(d_count, 1, "D should appear exactly once, got {mro:?}");
     }
+
+    // --- mro_for: remaining language arms ---
+
+    #[cfg(feature = "lang-csharp")]
+    #[test]
+    fn mro_for_csharp_is_first_wins() {
+        assert_eq!(mro_for(Language::CSharp), MroStrategy::FirstWins);
+    }
+
+    #[cfg(feature = "lang-javascript")]
+    #[test]
+    fn mro_for_javascript_is_first_wins() {
+        assert_eq!(mro_for(Language::JavaScript), MroStrategy::FirstWins);
+    }
+
+    #[cfg(feature = "lang-php")]
+    #[test]
+    fn mro_for_php_is_first_wins() {
+        assert_eq!(mro_for(Language::Php), MroStrategy::FirstWins);
+    }
+
+    #[cfg(feature = "lang-scala")]
+    #[test]
+    fn mro_for_scala_is_first_wins() {
+        assert_eq!(mro_for(Language::Scala), MroStrategy::FirstWins);
+    }
+
+    #[cfg(feature = "lang-ruby")]
+    #[test]
+    fn mro_for_ruby_is_ruby_mixin() {
+        assert_eq!(mro_for(Language::Ruby), MroStrategy::RubyMixin);
+    }
+
+    #[cfg(feature = "lang-verilog")]
+    #[test]
+    fn mro_for_verilog_is_none() {
+        assert_eq!(mro_for(Language::Verilog), MroStrategy::None);
+    }
+
+    #[cfg(feature = "lang-html")]
+    #[test]
+    fn mro_for_html_is_none() {
+        assert_eq!(mro_for(Language::Html), MroStrategy::None);
+    }
+
+    #[cfg(feature = "lang-css")]
+    #[test]
+    fn mro_for_css_is_none() {
+        assert_eq!(mro_for(Language::Css), MroStrategy::None);
+    }
+
+    #[cfg(feature = "lang-json")]
+    #[test]
+    fn mro_for_json_is_none() {
+        assert_eq!(mro_for(Language::Json), MroStrategy::None);
+    }
+
+    #[cfg(feature = "lang-regex")]
+    #[test]
+    fn mro_for_regex_is_none() {
+        assert_eq!(mro_for(Language::Regex), MroStrategy::None);
+    }
+
+    #[cfg(feature = "lang-haskell")]
+    #[test]
+    fn mro_for_haskell_is_none() {
+        assert_eq!(mro_for(Language::Haskell), MroStrategy::None);
+    }
+
+    #[cfg(feature = "lang-ocaml")]
+    #[test]
+    fn mro_for_ocaml_is_none() {
+        assert_eq!(mro_for(Language::OCaml), MroStrategy::None);
+    }
+
+    #[cfg(feature = "lang-bash")]
+    #[test]
+    fn mro_for_bash_is_none() {
+        assert_eq!(mro_for(Language::Bash), MroStrategy::None);
+    }
 }

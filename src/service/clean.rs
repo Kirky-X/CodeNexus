@@ -172,4 +172,37 @@ mod tests {
         assert!(json.contains("\"project_id\":\"p1\""));
         assert!(json.contains("\"deleted\":1"));
     }
+
+    // ===== #[forge] wrapper tests via init_kit =====
+
+    #[test]
+    #[cfg(feature = "cli")]
+    fn clean_wrapper_succeeds_via_init_kit() {
+        use crate::service::runtime::{init_kit, reset_kit_for_testing};
+
+        reset_kit_for_testing();
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "p1", "demo");
+        init_kit(kit).expect("init_kit");
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(clean("demo".to_string()));
+        assert!(result.is_ok(), "wrapper should succeed: {:?}", result.err());
+
+        reset_kit_for_testing();
+    }
+
+    #[test]
+    #[cfg(feature = "cli")]
+    fn clean_wrapper_fails_when_kit_not_initialized() {
+        use crate::service::runtime::reset_kit_for_testing;
+
+        reset_kit_for_testing();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(clean("demo".to_string()));
+        assert!(result.is_err(), "wrapper should fail without kit");
+        reset_kit_for_testing();
+    }
 }

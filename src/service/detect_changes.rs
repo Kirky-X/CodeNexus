@@ -1149,4 +1149,254 @@ diff --git a/bar.rs b/bar.rs
         assert!(args.contains(&"HEAD"));
         assert!(args.contains(&"diff"));
     }
+
+    // ===== #[forge] wrapper tests via init_kit =====
+
+    /// RAII guard that resets the global Kit on Drop, ensuring test isolation
+    /// even when a test panics after `init_kit`.
+    #[cfg(feature = "cli")]
+    struct KitGuard;
+
+    #[cfg(feature = "cli")]
+    impl KitGuard {
+        fn new() -> Self {
+            crate::service::runtime::force_reset_kit_for_testing();
+            Self
+        }
+    }
+
+    #[cfg(feature = "cli")]
+    impl Drop for KitGuard {
+        fn drop(&mut self) {
+            crate::service::runtime::force_reset_kit_for_testing();
+        }
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn detect_changes_wrapper_fails_with_nonexistent_path() {
+        let _guard = KitGuard::new();
+        let (_dir, db) = fresh_db_path();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let kit = rt.block_on(async {
+            let config = KitBootstrapConfig::new(PathBuf::from(db.to_str().unwrap()));
+            build_kit(&config).await.expect("build_kit")
+        });
+        crate::service::runtime::force_init_kit_for_testing(kit);
+        let result = rt.block_on(detect_changes(
+            "/nonexistent/path/xyz".to_string(),
+            "unstaged".to_string(),
+        ));
+        let err = result.expect_err("nonexistent path should error");
+        assert!(
+            matches!(err, ApiError::InvalidInput { .. }),
+            "expected InvalidInput, got {err:?}"
+        );
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn detect_changes_wrapper_fails_with_invalid_mode() {
+        let _guard = KitGuard::new();
+        let (_dir, db) = fresh_db_path();
+        let tmp = TempDir::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let kit = rt.block_on(async {
+            let config = KitBootstrapConfig::new(PathBuf::from(db.to_str().unwrap()));
+            build_kit(&config).await.expect("build_kit")
+        });
+        crate::service::runtime::force_init_kit_for_testing(kit);
+        let result = rt.block_on(detect_changes(
+            tmp.path().to_string_lossy().into_owned(),
+            "bogus".to_string(),
+        ));
+        let err = result.expect_err("invalid mode should error");
+        assert!(
+            matches!(err, ApiError::InvalidInput { .. }),
+            "expected InvalidInput, got {err:?}"
+        );
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn detect_changes_wrapper_fails_when_kit_not_initialized() {
+        let _guard = KitGuard::new();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(detect_changes(
+            "/tmp".to_string(),
+            "unstaged".to_string(),
+        ));
+        assert!(result.is_err(), "wrapper should fail without kit");
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn detect_changes_wrapper_succeeds_on_real_git_repo() {
+        let tmp = TempDir::new().unwrap();
+        let status = std::process::Command::new("git")
+            .arg("init")
+            .arg(tmp.path())
+            .status();
+        if status.is_err() || !status.unwrap().success() {
+            eprintln!("skipping test: git init failed");
+            return;
+        }
+
+        let _guard = KitGuard::new();
+        let (_dir, db) = fresh_db_path();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let kit = rt.block_on(async {
+            let config = KitBootstrapConfig::new(PathBuf::from(db.to_str().unwrap()));
+            build_kit(&config).await.expect("build_kit")
+        });
+        crate::service::runtime::force_init_kit_for_testing(kit);
+        let result = rt.block_on(detect_changes(
+            tmp.path().to_string_lossy().into_owned(),
+            "unstaged".to_string(),
+        ));
+        assert!(
+            result.is_ok(),
+            "detect_changes wrapper should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    // Covers the wrapper with staged mode on a real git repo.
+    #[cfg(feature = "cli")]
+    #[test]
+    fn detect_changes_wrapper_succeeds_with_staged_mode() {
+        let tmp = TempDir::new().unwrap();
+        let status = std::process::Command::new("git")
+            .arg("init")
+            .arg(tmp.path())
+            .status();
+        if status.is_err() || !status.unwrap().success() {
+            eprintln!("skipping test: git init failed");
+            return;
+        }
+
+        let file = tmp.path().join("src/foo.rs");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "fn foo() {}\n").unwrap();
+
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(tmp.path())
+                .args(args)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+        if !git(&["add", "."])
+            || !git(&["-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "init"])
+        {
+            eprintln!("skipping test: git add/commit failed");
+            return;
+        }
+        // Stage a change
+        std::fs::write(&file, "fn foo() { /* modified */ }\n").unwrap();
+        let _ = git(&["add", "."]);
+
+        let _guard = KitGuard::new();
+        let (_dir, db) = fresh_db_path();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let kit = rt.block_on(async {
+            let config = KitBootstrapConfig::new(PathBuf::from(db.to_str().unwrap()));
+            build_kit(&config).await.expect("build_kit")
+        });
+        crate::service::runtime::force_init_kit_for_testing(kit);
+        let result = rt.block_on(detect_changes(
+            tmp.path().to_string_lossy().into_owned(),
+            "staged".to_string(),
+        ));
+        assert!(
+            result.is_ok(),
+            "detect_changes wrapper staged should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    // Covers the wrapper with head mode on a real git repo.
+    #[cfg(feature = "cli")]
+    #[test]
+    fn detect_changes_wrapper_succeeds_with_head_mode() {
+        let tmp = TempDir::new().unwrap();
+        let status = std::process::Command::new("git")
+            .arg("init")
+            .arg(tmp.path())
+            .status();
+        if status.is_err() || !status.unwrap().success() {
+            eprintln!("skipping test: git init failed");
+            return;
+        }
+
+        let file = tmp.path().join("src/bar.rs");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "fn bar() {}\n").unwrap();
+
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(tmp.path())
+                .args(args)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+        if !git(&["add", "."])
+            || !git(&["-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "init"])
+        {
+            eprintln!("skipping test: git add/commit failed");
+            return;
+        }
+        // Modify after commit (creates HEAD diff)
+        std::fs::write(&file, "fn bar() { /* changed */ }\n").unwrap();
+        let _ = git(&["add", "."]);
+
+        let _guard = KitGuard::new();
+        let (_dir, db) = fresh_db_path();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let kit = rt.block_on(async {
+            let config = KitBootstrapConfig::new(PathBuf::from(db.to_str().unwrap()));
+            build_kit(&config).await.expect("build_kit")
+        });
+        crate::service::runtime::force_init_kit_for_testing(kit);
+        let result = rt.block_on(detect_changes(
+            tmp.path().to_string_lossy().into_owned(),
+            "head".to_string(),
+        ));
+        assert!(
+            result.is_ok(),
+            "detect_changes wrapper head should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    // Covers the wrapper failing when path is a file, not a directory.
+    #[cfg(feature = "cli")]
+    #[test]
+    fn detect_changes_wrapper_fails_with_file_path() {
+        let tmp = TempDir::new().unwrap();
+        let file_path = tmp.path().join("not_a_dir.txt");
+        std::fs::write(&file_path, "hello").unwrap();
+
+        let _guard = KitGuard::new();
+        let (_dir, db) = fresh_db_path();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let kit = rt.block_on(async {
+            let config = KitBootstrapConfig::new(PathBuf::from(db.to_str().unwrap()));
+            build_kit(&config).await.expect("build_kit")
+        });
+        crate::service::runtime::force_init_kit_for_testing(kit);
+        let result = rt.block_on(detect_changes(
+            file_path.to_string_lossy().into_owned(),
+            "unstaged".to_string(),
+        ));
+        let err = result.expect_err("file path should error");
+        assert!(
+            matches!(err, ApiError::InvalidInput { .. }),
+            "expected InvalidInput for file path, got {err:?}"
+        );
+    }
 }

@@ -1341,4 +1341,90 @@ mod tests {
             "should NOT resolve to bar.cpp's foo, got: {qn}"
         );
     }
+
+    #[test]
+    fn class_extends_template_type_creates_extends_edge() {
+        // `class Derived : public std::vector<int>` — template_type in
+        // base_class_clause. Covers for_each_type_name's template_type arm.
+        let result = extract(
+            "namespace std { template<typename T> class vector {}; }\nclass Derived : public std::vector<int> {};\n",
+        );
+        let extends: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Extends)
+            .collect();
+        assert_eq!(
+            extends.len(),
+            1,
+            "template base class should produce 1 EXTENDS edge: {:?}",
+            extends
+        );
+        assert!(
+            extends[0].target.contains("vector"),
+            "target should contain vector: {}",
+            extends[0].target
+        );
+    }
+
+    #[test]
+    fn comment_only_source_returns_empty() {
+        let result = extract("// just a comment\n");
+        assert!(result.is_empty(), "comment-only should produce no nodes");
+    }
+
+    #[test]
+    fn multiple_namespaces_all_extracted() {
+        let result = extract("namespace a { void f() {} }\nnamespace b { void g() {} }\n");
+        let namespaces: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Namespace)
+            .collect();
+        assert_eq!(namespaces.len(), 2, "should extract 2 namespaces");
+    }
+
+    #[test]
+    fn class_with_multiple_methods_all_extracted() {
+        let result = extract("class Calc { public: int add() { return 0; } int sub() { return 0; } int mul() { return 0; } };\n");
+        let methods: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Method)
+            .collect();
+        assert_eq!(methods.len(), 3, "should extract 3 methods");
+    }
+
+    #[test]
+    fn nested_class_extracts_both() {
+        let result = extract("class Outer { public: class Inner {}; };\n");
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 2, "should extract outer and inner class");
+        let names: Vec<_> = classes.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"Outer"));
+        assert!(names.contains(&"Inner"));
+    }
+
+    #[test]
+    fn enum_class_extracts_enum_node() {
+        let result = extract("enum class Color { RED, GREEN, BLUE };\n");
+        let enums: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Enum)
+            .collect();
+        assert_eq!(enums.len(), 1);
+        assert_eq!(enums[0].name, "Color");
+    }
+
+    #[test]
+    fn system_include_extracted() {
+        let result = extract("#include <stdio.h>\n");
+        assert_eq!(result.imports.len(), 1);
+        assert_eq!(result.imports[0].source_file, "stdio.h");
+    }
 }

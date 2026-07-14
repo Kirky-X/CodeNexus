@@ -4,12 +4,11 @@
 //! Export command: compress the database to a zstd team artifact.
 //!
 //! Artifact format: `[magic (4B)] [manifest_len (4B LE)] [manifest JSON] [zstd-compressed DB bytes]`.
-//! The `zstd` CLI binary is required for compression/decompression.
+//! Compression is handled by the `zstd` library (no external CLI binary required).
 
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -36,7 +35,8 @@ pub const ARTIFACT_MAGIC: [u8; 4] = *b"CNXP";
 /// Current artifact format version.
 pub const ARTIFACT_FORMAT_VERSION: &str = "1.0";
 
-/// Name of the zstd CLI binary invoked for compression.
+/// Name of the zstd CLI binary formerly invoked for compression.
+/// Retained for backward compatibility; compression now uses the `zstd` library.
 pub const ZSTD_BIN: &str = "zstd";
 
 /// zstd compression level used by `export`.
@@ -63,40 +63,12 @@ pub struct ExportOutput {
     pub exported_at: u64,
 }
 
-/// Compresses `input` bytes via the system `zstd` CLI.
+/// Compresses `input` bytes via the `oxiarc-zstd` pure-Rust library.
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 fn zstd_compress(input: &[u8]) -> Result<Vec<u8>, CodeNexusError> {
-    let mut child = Command::new(ZSTD_BIN)
-        .args(["-q", "--ultra", format!("-{ZSTD_LEVEL}").as_str(), "-c"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                CodeNexusError::InvalidInput(format!(
-                    "zstd binary not found on PATH — install zstd to use export/import. Error: {e}"
-                ))
-            } else {
-                CodeNexusError::Io(e)
-            }
-        })?;
-    {
-        let mut stdin = child.stdin.take().ok_or_else(|| {
-            CodeNexusError::Internal("zstd stdin not captured".to_string())
-        })?;
-        stdin.write_all(input)?;
-    }
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(CodeNexusError::InvalidInput(format!(
-            "zstd compression failed (status {}): {}",
-            output.status,
-            stderr.trim()
-        )));
-    }
-    Ok(output.stdout)
+    let level: i32 = ZSTD_LEVEL.parse().unwrap_or(19);
+    oxiarc_zstd::compress_with_level(input, level)
+        .map_err(|e| CodeNexusError::Internal(format!("zstd compression failed: {e}")))
 }
 
 /// Runs export against an injected Kit (testable core).
@@ -285,33 +257,23 @@ mod tests {
     #[test]
     fn zstd_compress_succeeds_for_nonempty_input() {
         let data = b"Hello, World! This is a test for zstd compression.";
-        match zstd_compress(data) {
-            Ok(compressed) => {
-                assert!(
-                    !compressed.is_empty(),
-                    "compressed data should not be empty"
-                );
-            }
-            Err(CodeNexusError::InvalidInput(msg)) if msg.contains("zstd binary not found") => {
-                // zstd not installed — skip this test gracefully.
-            }
-            Err(e) => panic!("unexpected zstd_compress error: {e}"),
-        }
+        let compressed = zstd_compress(data).expect("zstd_compress should succeed");
+        assert!(!compressed.is_empty(), "compressed data should not be empty");
+        assert_ne!(&compressed[..], &data[..], "compressed should differ from original");
     }
 
     #[test]
-    fn zstd_compress_returns_error_for_empty_input() {
-        // zstd can compress empty input, but the result should be valid.
-        match zstd_compress(b"") {
-            Ok(compressed) => {
-                // zstd produces a valid frame even for empty input.
-                assert!(!compressed.is_empty(), "zstd empty frame should be non-empty");
-            }
-            Err(CodeNexusError::InvalidInput(msg)) if msg.contains("zstd binary not found") => {
-                // zstd not installed — skip.
-            }
-            Err(e) => panic!("unexpected zstd_compress error for empty input: {e}"),
-        }
+    fn zstd_compress_succeeds_for_empty_input() {
+        let compressed = zstd_compress(b"").expect("zstd_compress should succeed for empty input");
+        assert!(!compressed.is_empty(), "zstd empty frame should be non-empty");
+    }
+
+    #[test]
+    fn zstd_compress_round_trips_with_decompress() {
+        let data = b"Round-trip test: compress then decompress should yield original.";
+        let compressed = zstd_compress(data).expect("compress");
+        let decompressed = oxiarc_zstd::decompress(&compressed[..]).expect("decompress");
+        assert_eq!(decompressed, data, "round-trip should preserve data");
     }
 
     #[test]
@@ -320,32 +282,24 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let artifact = dir.path().join("exported.cnxp");
 
-        let result = run_export(&kit, artifact.to_str().unwrap(), "demo");
-        match result {
-            Ok(output) => {
-                assert!(artifact.exists(), "artifact file should be created");
-                assert!(output.artifact_size > 0, "artifact size should be > 0");
-                assert!(output.original_size > 0, "original size should be > 0");
-                assert_eq!(output.artifact, artifact.to_str().unwrap());
+        let output = run_export(&kit, artifact.to_str().unwrap(), "demo")
+            .expect("run_export should succeed");
+        assert!(artifact.exists(), "artifact file should be created");
+        assert!(output.artifact_size > 0, "artifact size should be > 0");
+        assert!(output.original_size > 0, "original size should be > 0");
+        assert_eq!(output.artifact, artifact.to_str().unwrap());
 
-                // Verify magic bytes.
-                let bytes = std::fs::read(&artifact).unwrap();
-                assert_eq!(&bytes[0..4], &ARTIFACT_MAGIC);
-                // Verify manifest_len is readable.
-                let manifest_len = u32::from_le_bytes([
-                    bytes[4], bytes[5], bytes[6], bytes[7],
-                ]);
-                assert!(manifest_len > 0, "manifest should not be empty");
-                assert!(
-                    bytes.len() >= 8 + manifest_len as usize,
-                    "artifact should contain at least header + manifest"
-                );
-            }
-            Err(CodeNexusError::InvalidInput(msg)) if msg.contains("zstd binary not found") => {
-                // zstd not installed — skip.
-            }
-            Err(e) => panic!("unexpected run_export error: {e}"),
-        }
+        // Verify magic bytes.
+        let bytes = std::fs::read(&artifact).unwrap();
+        assert_eq!(&bytes[0..4], &ARTIFACT_MAGIC);
+        let manifest_len = u32::from_le_bytes([
+            bytes[4], bytes[5], bytes[6], bytes[7],
+        ]);
+        assert!(manifest_len > 0, "manifest should not be empty");
+        assert!(
+            bytes.len() >= 8 + manifest_len as usize,
+            "artifact should contain at least header + manifest"
+        );
     }
 
     // Covers run_export with empty project name → manifest.project = None
@@ -356,25 +310,163 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let artifact = dir.path().join("empty_project.cnxp");
 
-        match run_export(&kit, artifact.to_str().unwrap(), "") {
-            Ok(output) => {
-                assert!(artifact.exists());
-                let bytes = std::fs::read(&artifact).unwrap();
-                let manifest_len = u32::from_le_bytes([
-                    bytes[4], bytes[5], bytes[6], bytes[7],
-                ]) as usize;
-                let manifest: ArtifactManifest =
-                    serde_json::from_slice(&bytes[8..8 + manifest_len]).unwrap();
+        let output = run_export(&kit, artifact.to_str().unwrap(), "")
+            .expect("run_export should succeed");
+        assert!(artifact.exists());
+        let bytes = std::fs::read(&artifact).unwrap();
+        let manifest_len = u32::from_le_bytes([
+            bytes[4], bytes[5], bytes[6], bytes[7],
+        ]) as usize;
+        let manifest: ArtifactManifest =
+            serde_json::from_slice(&bytes[8..8 + manifest_len]).unwrap();
+        assert!(
+            manifest.project.is_none(),
+            "empty project → None in manifest"
+        );
+        assert_eq!(output.artifact, artifact.to_str().unwrap());
+    }
+
+    // Covers line 143: File::create error path when the output directory
+    // does not exist.
+    #[test]
+    fn run_export_returns_error_when_output_directory_does_not_exist() {
+        let (dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Point output to a path under a nonexistent directory.
+        let artifact = dir.path().join("nonexistent_dir").join("out.cnxp");
+        match run_export(&kit, artifact.to_str().unwrap(), "demo") {
+            Err(e) => {
+                // Should be an IO error (File::create fails because parent dir
+                // doesn't exist).
+                let msg = e.to_string();
                 assert!(
-                    manifest.project.is_none(),
-                    "empty project → None in manifest"
+                    !msg.is_empty(),
+                    "error should have a message"
                 );
-                assert_eq!(output.artifact, artifact.to_str().unwrap());
             }
-            Err(CodeNexusError::InvalidInput(msg)) if msg.contains("zstd binary not found") => {
-                // zstd not installed — skip.
-            }
-            Err(e) => panic!("unexpected run_export error: {e}"),
+            Ok(_) => panic!("should fail when output directory doesn't exist"),
         }
+    }
+
+    // Covers manifest content verification: codenexus_version, exported_at,
+    // source_db_path, original_size fields are populated correctly.
+    #[test]
+    fn run_export_manifest_contains_all_expected_fields() {
+        let (dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let artifact = dir.path().join("full_manifest.cnxp");
+
+        let output = run_export(&kit, artifact.to_str().unwrap(), "test_project")
+            .expect("run_export should succeed");
+        let bytes = std::fs::read(&artifact).unwrap();
+        let manifest_len = u32::from_le_bytes([
+            bytes[4], bytes[5], bytes[6], bytes[7],
+        ]) as usize;
+        let manifest: ArtifactManifest =
+            serde_json::from_slice(&bytes[8..8 + manifest_len]).unwrap();
+        assert_eq!(manifest.format_version, ARTIFACT_FORMAT_VERSION);
+        assert!(!manifest.codenexus_version.is_empty());
+        assert!(manifest.exported_at > 0, "exported_at should be set");
+        assert!(
+            manifest.source_db_path.contains("svc_export_testdb"),
+            "source_db_path should contain db filename"
+        );
+        assert_eq!(manifest.project.as_deref(), Some("test_project"));
+        assert!(manifest.original_size > 0, "original_size should be > 0");
+        assert_eq!(output.codenexus_version, manifest.codenexus_version);
+        assert_eq!(output.exported_at, manifest.exported_at);
+        assert_eq!(output.original_size, manifest.original_size);
+    }
+
+    // ===== #[forge] wrapper tests via init_kit =====
+
+    /// RAII guard that resets the global Kit on Drop, ensuring test isolation.
+    #[cfg(feature = "cli")]
+    struct KitGuard;
+
+    #[cfg(feature = "cli")]
+    impl KitGuard {
+        fn new() -> Self {
+            crate::service::runtime::force_reset_kit_for_testing();
+            Self
+        }
+    }
+
+    #[cfg(feature = "cli")]
+    impl Drop for KitGuard {
+        fn drop(&mut self) {
+            crate::service::runtime::force_reset_kit_for_testing();
+        }
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn export_wrapper_succeeds_via_init_kit() {
+        let _guard = KitGuard::new();
+        let (dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        crate::service::runtime::force_init_kit_for_testing(kit);
+
+        let artifact = dir.path().join("wrapper_export.cnxp");
+        rt.block_on(export(
+            artifact.to_string_lossy().into_owned(),
+            "demo".to_string(),
+        ))
+        .expect("export wrapper should succeed");
+        assert!(artifact.exists(), "artifact file should be created");
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn export_wrapper_fails_when_kit_not_initialized() {
+        let _guard = KitGuard::new();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(export("/tmp/out.cnxp".to_string(), "demo".to_string()));
+        assert!(result.is_err(), "wrapper should fail without kit");
+    }
+
+    // Covers the export wrapper failing when DB doesn't exist (line 113-117
+    // error path through the #[forge] wrapper → ApiError conversion).
+    #[cfg(feature = "cli")]
+    #[test]
+    fn export_wrapper_fails_when_db_does_not_exist() {
+        let _guard = KitGuard::new();
+        let (dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let _ = std::fs::remove_file(&db);
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        crate::service::runtime::force_init_kit_for_testing(kit);
+
+        let artifact = dir.path().join("missing_db.cnxp");
+        let result = rt.block_on(export(
+            artifact.to_string_lossy().into_owned(),
+            "demo".to_string(),
+        ));
+        let err = result.expect_err("missing DB should error");
+        assert!(
+            matches!(err, ApiError::InvalidInput { .. }),
+            "expected InvalidInput for missing DB, got {err:?}"
+        );
+    }
+
+    // Covers the export wrapper with empty project string (None branch in
+    // manifest construction through the wrapper).
+    #[cfg(feature = "cli")]
+    #[test]
+    fn export_wrapper_succeeds_with_empty_project() {
+        let _guard = KitGuard::new();
+        let (dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        crate::service::runtime::force_init_kit_for_testing(kit);
+
+        let artifact = dir.path().join("empty_proj_wrapper.cnxp");
+        rt.block_on(export(
+            artifact.to_string_lossy().into_owned(),
+            String::new(),
+        ))
+        .expect("export wrapper should succeed with empty project");
+        assert!(artifact.exists(), "artifact should be created");
     }
 }

@@ -655,4 +655,285 @@ mod tests {
             "caller_qn should be the dotted FQN of the enclosing function"
         );
     }
+
+    #[test]
+    fn comment_only_source_returns_empty_result() {
+        let result = extract("<?php\n// just a comment\n");
+        assert!(result.is_empty(), "comment-only file should produce no nodes");
+    }
+
+    #[test]
+    fn multiple_classes_extracted() {
+        let src = "<?php\nclass A {}\nclass B {}\nclass C {}\n";
+        let result = extract(src);
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 3, "should extract 3 classes");
+    }
+
+    #[test]
+    fn class_with_extends_does_not_break_extraction() {
+        let src = "<?php\nclass Base {}\nclass Child extends Base {}\n";
+        let result = extract(src);
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 2, "should extract both Base and Child");
+        let names: Vec<_> = classes.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"Base"));
+        assert!(names.contains(&"Child"));
+    }
+
+    #[test]
+    fn class_with_implements_does_not_break_extraction() {
+        let src = "<?php\ninterface IFoo {}\nclass Foo implements IFoo {}\n";
+        let result = extract(src);
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 1, "should extract Foo class");
+        assert_eq!(classes[0].name, "Foo");
+    }
+
+    #[test]
+    fn trait_declaration_does_not_break_extraction() {
+        let src = "<?php\ntrait Loggable { public function log() {} }\n";
+        let result = extract(src);
+        let methods: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Method)
+            .collect();
+        assert_eq!(methods.len(), 1, "should extract log method from trait");
+        assert_eq!(methods[0].name, "log");
+    }
+
+    #[test]
+    fn method_with_parameters_has_signature() {
+        let src = "<?php\nclass Foo { public function bar($a, $b) { return $a + $b; } }\n";
+        let result = extract(src);
+        let method = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "bar")
+            .expect("should find bar method");
+        assert!(method.signature.is_some());
+        assert!(method.signature.as_deref().unwrap().contains("bar"));
+    }
+
+    #[test]
+    fn qualified_function_call_extracts_last_component() {
+        let src = "<?php\nfunction main() { \\NS\\foo(); }\n";
+        let result = extract(src);
+        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(
+            callees.contains(&"foo"),
+            "should extract last component of qualified call: {callees:?}"
+        );
+    }
+
+    #[test]
+    fn function_with_return_type() {
+        let src = "<?php\nfunction add(int $a, int $b): int { return $a + $b; }\n";
+        let result = extract(src);
+        let func = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "add")
+            .expect("should find add function");
+        assert_eq!(func.label, NodeLabel::Function);
+        assert!(func.signature.is_some());
+    }
+
+    #[test]
+    fn empty_class_extracted() {
+        let src = "<?php\nclass EmptyClass {}\n";
+        let result = extract(src);
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name, "EmptyClass");
+    }
+
+    #[test]
+    fn nested_function_calls_extracted() {
+        let src = "<?php\nfunction main() { outer(inner()); }\n";
+        let result = extract(src);
+        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(
+            callees.contains(&"outer"),
+            "should extract outer call: {callees:?}"
+        );
+        assert!(
+            callees.contains(&"inner"),
+            "should extract inner call: {callees:?}"
+        );
+    }
+
+    #[test]
+    fn method_call_in_class_context() {
+        let src = "<?php\nclass Foo { public function bar() { baz(); } }\n";
+        let result = extract(src);
+        let call = result
+            .calls
+            .iter()
+            .find(|c| c.callee_name == "baz")
+            .expect("should find call to baz");
+        assert!(call.caller_qn.is_some(), "method call should have caller_qn");
+        assert!(call.caller_qn.as_deref().unwrap().contains("bar"));
+    }
+
+    #[test]
+    fn parenthesized_call_expression_extracts_callee() {
+        // Covers the `parenthesized_expression` branch in callee_name
+        // (line 374-377): `(foo)()` should extract `foo` as the callee.
+        let src = "<?php\nfunction main() { (foo)(); }\n";
+        let result = extract(src);
+        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(
+            callees.contains(&"foo"),
+            "should extract callee from parenthesized expression: {callees:?}"
+        );
+    }
+
+    #[test]
+    fn nested_function_call_expression_as_callee() {
+        // Covers the `function_call_expression` branch in callee_name
+        // (line 370-373): `foo()()` should extract `foo` as the callee of
+        // the outer call.
+        let src = "<?php\nfunction main() { getCallable()(); }\n";
+        let result = extract(src);
+        // The outer call's callee should be extracted from the inner
+        // function_call_expression.
+        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        assert!(
+            callees.contains(&"getCallable"),
+            "should extract callee from nested function_call_expression: {callees:?}"
+        );
+    }
+
+    #[test]
+    fn call_without_arguments_extracts_empty_args() {
+        // Covers the early return when `arguments` field is missing (line 383).
+        let src = "<?php\nfunction main() { foo(); }\n";
+        let result = extract(src);
+        let call = result
+            .calls
+            .iter()
+            .find(|c| c.callee_name == "foo")
+            .expect("should find call to foo");
+        assert!(call.args.is_empty(), "foo() should have 0 args");
+    }
+
+    #[test]
+    fn interface_declaration_does_not_break_extraction() {
+        // Interface declarations should not crash the extractor (they are
+        // not yet promoted to Class nodes, but the visitor should not break).
+        let src = "<?php\ninterface IFoo { public function bar(); }\nclass Foo implements IFoo {}\n";
+        let result = extract(src);
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 1, "should still extract Foo class");
+        assert_eq!(classes[0].name, "Foo");
+    }
+
+    #[test]
+    fn abstract_class_with_method() {
+        // Abstract class with abstract method should extract the method.
+        let src = "<?php\nabstract class Base { abstract public function render(); }\n";
+        let result = extract(src);
+        let methods: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Method)
+            .collect();
+        assert_eq!(methods.len(), 1, "should extract render method");
+        assert_eq!(methods[0].name, "render");
+    }
+
+    #[test]
+    fn function_with_default_parameter_values() {
+        // Function with default parameter values should still extract the
+        // function and its signature.
+        let src = "<?php\nfunction greet($name = 'World') { echo $name; }\n";
+        let result = extract(src);
+        let func = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "greet")
+            .expect("should find greet function");
+        assert_eq!(func.label, NodeLabel::Function);
+        assert!(func.signature.is_some());
+        assert!(func.signature.as_deref().unwrap().contains("greet"));
+    }
+
+    #[test]
+    fn class_with_static_method_and_property() {
+        // Class with static method and static property should not crash.
+        let src = "<?php\nclass Counter { private static $count = 0; public static function increment() { self::$count++; } }\n";
+        let result = extract(src);
+        let methods: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Method)
+            .collect();
+        assert_eq!(methods.len(), 1, "should extract increment method");
+        assert_eq!(methods[0].name, "increment");
+    }
+
+    #[test]
+    fn multiple_namespaces_in_one_file() {
+        // Multiple namespace declarations should each produce a Namespace node.
+        let src = "<?php\nnamespace App\\Models;\nnamespace App\\Services;\n";
+        let result = extract(src);
+        let namespaces: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Namespace)
+            .collect();
+        assert_eq!(namespaces.len(), 2, "should extract 2 namespaces");
+    }
+
+    #[test]
+    fn function_with_variadic_parameter() {
+        // Function with variadic parameter should extract correctly.
+        let src = "<?php\nfunction sum(...$nums) { return array_sum($nums); }\n";
+        let result = extract(src);
+        let func = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "sum")
+            .expect("should find sum function");
+        assert_eq!(func.label, NodeLabel::Function);
+        assert!(func.signature.is_some());
+    }
+
+    #[test]
+    fn class_with_constructor_and_destructor() {
+        // Class with __construct and __destruct methods.
+        let src = "<?php\nclass Lifecycle { public function __construct() {} public function __destruct() {} }\n";
+        let result = extract(src);
+        let methods: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Method)
+            .collect();
+        assert_eq!(methods.len(), 2, "should extract 2 methods");
+        let names: Vec<_> = methods.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"__construct"));
+        assert!(names.contains(&"__destruct"));
+    }
 }

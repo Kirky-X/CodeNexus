@@ -488,4 +488,97 @@ mod tests {
             callees
         );
     }
+
+    #[test]
+    fn comment_only_source_returns_empty() {
+        let result = extract("// just a comment\n");
+        assert!(result.is_empty(), "comment-only should produce no nodes");
+    }
+
+    #[test]
+    fn multiple_imports_extracted() {
+        let src = "import scala.collection.mutable\nimport akka.actor.Actor\n";
+        let result = extract(src);
+        assert_eq!(result.imports.len(), 2, "should extract 2 imports");
+    }
+
+    #[test]
+    fn class_with_methods_extracts_all() {
+        let src = "class Calculator {\n  def add(a: Int, b: Int): Int = a + b\n  def sub(a: Int, b: Int): Int = a - b\n}\n";
+        let result = extract(src);
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 2, "should extract 2 methods");
+        let names: Vec<_> = funcs.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"add"));
+        assert!(names.contains(&"sub"));
+    }
+
+    #[test]
+    fn nested_object_definition() {
+        let src = "object Outer { object Inner { def foo(): Int = 1 } }\n";
+        let result = extract(src);
+        assert!(
+            result.nodes.iter().any(|n| n.name == "Outer"),
+            "should extract outer object"
+        );
+        assert!(
+            result.nodes.iter().any(|n| n.name == "Inner"),
+            "should extract inner object"
+        );
+    }
+
+    #[test]
+    fn trait_with_method_signature() {
+        let src = "trait Drawable { def draw(): Unit }\n";
+        let result = extract(src);
+        let traits: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Trait)
+            .collect();
+        assert_eq!(traits.len(), 1);
+        assert_eq!(traits[0].name, "Drawable");
+    }
+
+    #[test]
+    fn call_inside_function_has_caller_qn() {
+        let src = "object Foo { def main(): Int = { helper() } def helper(): Int = 1 }\n";
+        let result = extract(src);
+        let call = result
+            .calls
+            .iter()
+            .find(|c| c.callee_name == "helper")
+            .expect("should find call to helper");
+        assert!(
+            call.caller_qn.is_some(),
+            "call inside function should have caller_qn"
+        );
+    }
+
+    #[test]
+    fn empty_class_extracts_class_node() {
+        let result = extract("class Empty\n");
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name, "Empty");
+    }
+
+    #[test]
+    fn case_class_extracts_class_node() {
+        let result = extract("case class Point(x: Int, y: Int)\n");
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert!(!classes.is_empty(), "case class should be extracted");
+    }
 }

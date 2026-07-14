@@ -406,6 +406,7 @@ dependencies = [
  "notify-debouncer-full",
  "ort",
  "oxcache",
+ "oxiarc-zstd",
  "pest",
  "pest_derive",
  "petgraph 0.6.5",
@@ -2103,6 +2104,24 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "oxiarc-core"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "119a925483e4917b645fd77acef86859164e166faa4cce3353c1d7cecfd3665a"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
+name = "oxiarc-zstd"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5dfe82b51b13660b3c44c80706eecf7e477bbce3a2b1509a83631a2ca6b955ce"
+dependencies = [
+ "oxiarc-core",
 ]
 
 [[package]]

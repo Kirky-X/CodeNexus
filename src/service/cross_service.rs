@@ -307,4 +307,35 @@ mod tests {
             "should have at least one HttpRest match"
         );
     }
+
+    // ===== #[forge] wrapper tests via init_kit =====
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn cross_service_wrapper_succeeds_via_init_kit() {
+        use crate::service::runtime::{init_kit, reset_kit_for_testing};
+
+        reset_kit_for_testing();
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        init_kit(kit).expect("init_kit");
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(cross_service("demo".to_string(), "".to_string()));
+        assert!(result.is_ok(), "wrapper should succeed: {:?}", result.err());
+
+        reset_kit_for_testing();
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn cross_service_wrapper_fails_when_kit_not_initialized() {
+        use crate::service::runtime::reset_kit_for_testing;
+
+        reset_kit_for_testing();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(cross_service("demo".to_string(), "".to_string()));
+        assert!(result.is_err(), "wrapper should fail without kit");
+        reset_kit_for_testing();
+    }
 }

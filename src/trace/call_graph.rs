@@ -1028,4 +1028,433 @@ mod tests {
         }
         assert!(paths.iter().any(|p| p.depth == 1));
     }
+
+    #[test]
+    fn trace_cross_service_branching_http_calls() {
+        // A --HttpCalls--> R1, A --HttpCalls--> R2.
+        // B1 --HandlesRoute--> R1, B2 --HandlesRoute--> R2.
+        // Trace from A should produce two depth-2 paths: A→R1→B1 and A→R2→B2.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_route("r1", "/api/r1"));
+        g.add_node(make_route("r2", "/api/r2"));
+        g.add_node(make_func("b1", "b1"));
+        g.add_node(make_func("b2", "b2"));
+        g.add_edge(Edge::new("a", "r1", EdgeType::HttpCalls, "proj"));
+        g.add_edge(Edge::new("a", "r2", EdgeType::HttpCalls, "proj"));
+        g.add_edge(Edge::new("b1", "r1", EdgeType::HandlesRoute, "proj"));
+        g.add_edge(Edge::new("b2", "r2", EdgeType::HandlesRoute, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 5);
+        let depth2: Vec<_> = paths.iter().filter(|p| p.depth == 2).collect();
+        assert_eq!(
+            depth2.len(),
+            2,
+            "expected two depth-2 branching paths, got {depth2:?}"
+        );
+    }
+
+    #[test]
+    fn detect_cycles_disconnected_graph_finds_all_cycles() {
+        // Two disconnected subgraphs each containing a cycle, plus a third
+        // acyclic subgraph. detect_cycles iterates all node ids, so it should
+        // find cycles in both cyclic subgraphs.
+        let mut g = Graph::new();
+        // Subgraph 1: a→b→a (cycle)
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("b", "a", EdgeType::Calls, "proj"));
+        // Subgraph 2: c→d→c (cycle)
+        g.add_node(make_func("c", "c"));
+        g.add_node(make_func("d", "d"));
+        g.add_edge(Edge::new("c", "d", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("d", "c", EdgeType::Calls, "proj"));
+        // Subgraph 3: e→f (no cycle)
+        g.add_node(make_func("e", "e"));
+        g.add_node(make_func("f", "f"));
+        g.add_edge(Edge::new("e", "f", EdgeType::Calls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let cycles = tracer.detect_cycles();
+        assert_eq!(
+            cycles.len(),
+            2,
+            "expected 2 cycles from disconnected subgraphs, got {cycles:?}"
+        );
+    }
+
+    // --- Coverage gap tests: trace_cross_service with FfiCalls ---
+
+    #[test]
+    fn trace_cross_service_follows_ffi_calls_edges() {
+        // Cross-service trace should also follow FfiCalls edges (line 276).
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "b", EdgeType::FfiCalls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 5);
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].edges[0].edge_type, "FFI_CALLS");
+    }
+
+    // --- Coverage gap tests: trace with mixed edge types from same node ---
+
+    #[test]
+    fn trace_node_with_mixed_edge_types_only_follows_calls() {
+        // A has both Calls and DataFlows edges to B. Only Calls should be followed.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("a", "b", EdgeType::DataFlows, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace(&"a".to_string(), 3);
+        // Should find exactly one path (via Calls), not duplicate via DataFlows.
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].edges[0].edge_type, "CALLS");
+    }
+
+    // --- Coverage gap tests: detect_cycles with FfiCalls self-loop ---
+
+    #[test]
+    fn detect_cycles_ffi_self_loop_returns_cycle() {
+        // Self-loop via FfiCalls: A→A should be detected as a cycle.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_edge(Edge::new("a", "a", EdgeType::FfiCalls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let cycles = tracer.detect_cycles();
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0].nodes, vec!["a", "a"]);
+        assert_eq!(cycles[0].edge_types, vec![EdgeType::FfiCalls]);
+    }
+
+    // --- Coverage gap tests: trace_cross_service both forward and reverse ---
+
+    #[test]
+    fn trace_cross_service_forward_and_reverse_to_different_nodes() {
+        // A --HttpCalls--> R1, B --HandlesRoute--> R2.
+        // Tracing from A should reach R1 (forward) but NOT R2 or B
+        // (no reverse HandlesRoute to R1).
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_route("r1", "/api/r1"));
+        g.add_node(make_route("r2", "/api/r2"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "r1", EdgeType::HttpCalls, "proj"));
+        g.add_edge(Edge::new("b", "r2", EdgeType::HandlesRoute, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 5);
+        // Only A→R1 should be found; R2 has no connection from A.
+        assert!(paths.iter().any(|p| p.depth == 1 && p.nodes[1].name == "/api/r1"));
+        assert!(!paths.iter().any(|p| p.nodes.iter().any(|n| n.name == "b")));
+    }
+
+    // --- Coverage gap tests: trace empty graph ---
+
+    #[test]
+    fn trace_empty_graph_returns_empty() {
+        let g = Graph::new();
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace(&"any".to_string(), 5);
+        assert!(paths.is_empty());
+    }
+
+    // --- Coverage gap tests: detect_cycles single node no edges ---
+
+    #[test]
+    fn detect_cycles_single_node_no_edges_returns_empty() {
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        let tracer = CallGraphTracer::new(&g);
+        assert!(tracer.detect_cycles().is_empty());
+    }
+
+    // --- trace_cross_service: start node with no outgoing edges ---
+
+    #[test]
+    fn trace_cross_service_no_outgoing_edges_returns_empty() {
+        // Start node exists in graph but has no Calls/FfiCalls/HttpCalls edges
+        // and no reverse HandlesRoute edges. Should return empty.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 5);
+        assert!(
+            paths.is_empty(),
+            "node with no outgoing edges should return empty: {paths:?}"
+        );
+    }
+
+    // --- trace_cross_service: both forward and reverse from same node ---
+
+    #[test]
+    fn trace_cross_service_both_forward_and_reverse_from_same_node() {
+        // A has HttpCalls to R (forward) AND is the target of HandlesRoute
+        // from B (reverse). Both paths should be found in the same iteration.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_route("r", "/api/r"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "r", EdgeType::HttpCalls, "proj"));
+        g.add_edge(Edge::new("b", "a", EdgeType::HandlesRoute, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 5);
+        // Should find A→R (HttpCalls forward) and A→B (HandlesRoute reverse).
+        let forward = paths.iter().find(|p| {
+            p.depth == 1 && p.nodes.len() == 2 && p.nodes[1].name == "/api/r"
+        });
+        assert!(forward.is_some(), "should find A→R forward path: {paths:?}");
+        assert_eq!(
+            forward.unwrap().edges[0].edge_type,
+            "HTTP_CALLS"
+        );
+        let reverse = paths.iter().find(|p| {
+            p.depth == 1 && p.nodes.len() == 2 && p.nodes[1].name == "b"
+        });
+        assert!(reverse.is_some(), "should find A→B reverse path: {paths:?}");
+        assert_eq!(
+            reverse.unwrap().edges[0].edge_type,
+            "HANDLES_ROUTE"
+        );
+    }
+
+    // ====================================================================
+    // Mid-path nodes with only skippable edges
+    // ====================================================================
+
+    #[test]
+    fn trace_mid_path_node_with_only_non_call_edges_records_prefix() {
+        // A→B (Calls), B→C (Reads). Trace from A with depth 3.
+        // When B is reached (has_edges=true, can_extend=true), the Reads
+        // edge is skipped. The prefix A→B should still be recorded
+        // (line 119-121: `if has_edges { results.push(work.path); }`).
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_node(make_func("c", "c"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("b", "c", EdgeType::Reads, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace(&"a".to_string(), 3);
+        assert_eq!(paths.len(), 1, "should record A→B prefix only");
+        assert_eq!(paths[0].depth, 1);
+        assert_eq!(paths[0].nodes.len(), 2);
+    }
+
+    #[test]
+    fn trace_mid_path_node_with_only_edges_to_missing_targets_records_prefix() {
+        // A→B (Calls), B→missing (Calls, target not in graph). Trace from A.
+        // The dangling edge from B is skipped, but A→B is still recorded.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("b", "missing", EdgeType::Calls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace(&"a".to_string(), 3);
+        assert_eq!(paths.len(), 1, "should record A→B prefix");
+        assert_eq!(paths[0].depth, 1);
+    }
+
+    #[test]
+    fn trace_cross_service_mid_path_node_with_no_valid_edges_records_prefix() {
+        // A→R (HttpCalls), R has only Reads edges (no forward or reverse
+        // valid edges). The prefix A→R should still be recorded.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_route("r", "/api/r"));
+        g.add_node(make_func("c", "c"));
+        g.add_edge(Edge::new("a", "r", EdgeType::HttpCalls, "proj"));
+        g.add_edge(Edge::new("r", "c", EdgeType::Reads, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 5);
+        assert!(
+            paths.iter().any(|p| p.depth == 1 && p.nodes[1].name == "/api/r"),
+            "should record A→R prefix: {paths:?}"
+        );
+    }
+
+    // ====================================================================
+    // Parallel edges (same source and target, different edge types)
+    // ====================================================================
+
+    #[test]
+    fn trace_parallel_edges_same_target_different_types_produces_two_paths() {
+        // A→B (Calls) and A→B (FfiCalls). Each edge produces a separate
+        // path since cycle prevention is per-path, not per-edge.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("a", "b", EdgeType::FfiCalls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace(&"a".to_string(), 3);
+        assert_eq!(paths.len(), 2, "parallel edges should produce 2 paths");
+        let edge_types: Vec<&str> = paths.iter().map(|p| p.edges[0].edge_type.as_str()).collect();
+        assert!(edge_types.contains(&"CALLS"));
+        assert!(edge_types.contains(&"FFI_CALLS"));
+    }
+
+    #[test]
+    fn detect_cycles_parallel_edges_no_false_cycle() {
+        // A→B (Calls) and A→B (FfiCalls). No cycle (B doesn't call back).
+        // Parallel edges should not create a false cycle.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("a", "b", EdgeType::FfiCalls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let cycles = tracer.detect_cycles();
+        assert!(cycles.is_empty(), "parallel edges without back-edge should not create a cycle");
+    }
+
+    // ====================================================================
+    // trace_cross_service: depth boundary at exact path depth
+    // ====================================================================
+
+    #[test]
+    fn trace_cross_service_depth_exactly_2_includes_depth_2_paths() {
+        // A→R (HttpCalls), B→R (HandlesRoute). Depth 2 should include
+        // both depth-1 (A→R) and depth-2 (A→R→B) paths.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_route("r", "/api/r"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "r", EdgeType::HttpCalls, "proj"));
+        g.add_edge(Edge::new("b", "r", EdgeType::HandlesRoute, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 2);
+        assert!(paths.iter().any(|p| p.depth == 1), "should include depth-1 path");
+        assert!(paths.iter().any(|p| p.depth == 2), "should include depth-2 path");
+    }
+
+    // ====================================================================
+    // detect_cycles: larger cycle with mixed edge types
+    // ====================================================================
+
+    #[test]
+    fn detect_cycles_larger_cycle_with_mixed_edge_types() {
+        // A→B (Calls), B→C (FfiCalls), C→D (Calls), D→A (FfiCalls).
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_node(make_func("c", "c"));
+        g.add_node(make_func("d", "d"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("b", "c", EdgeType::FfiCalls, "proj"));
+        g.add_edge(Edge::new("c", "d", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("d", "a", EdgeType::FfiCalls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let cycles = tracer.detect_cycles();
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0].nodes, vec!["a", "b", "c", "d", "a"]);
+        assert_eq!(
+            cycles[0].edge_types,
+            vec![EdgeType::Calls, EdgeType::FfiCalls, EdgeType::Calls, EdgeType::FfiCalls]
+        );
+    }
+
+    // ====================================================================
+    // trace: branching with different depths
+    // ====================================================================
+
+    #[test]
+    fn trace_branching_with_different_depths_records_all_prefixes() {
+        // A→B, A→C, B→D. Trace from A with depth 3.
+        // Should record: A→B, A→C, A→B→D (3 paths).
+        // A→C has no further edges, so A→C is recorded at depth 1.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_node(make_func("c", "c"));
+        g.add_node(make_func("d", "d"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("a", "c", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("b", "d", EdgeType::Calls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace(&"a".to_string(), 3);
+        assert_eq!(paths.len(), 3, "should record A→B, A→C, A→B→D");
+        let depths: Vec<usize> = paths.iter().map(|p| p.depth).collect();
+        assert!(depths.contains(&1));
+        assert!(depths.contains(&2));
+    }
+
+    // ====================================================================
+    // Coverage gap: detect_cycles through nonexistent intermediate node
+    // (exercises extract_cycle's filter_map filtering missing stack nodes)
+    // ====================================================================
+
+    #[test]
+    fn detect_cycles_cycle_through_nonexistent_intermediate_node() {
+        // Edges A→B and B→A form a cycle, but B is NOT a node in the graph.
+        // The DFS recurses into B (not in colors → None arm), pushes B onto
+        // the stack, then finds B→A (A is Gray → back-edge → cycle).
+        // extract_cycle's filter_map (line 216) filters out B since
+        // get_node(B) is None, yielding nodes=[A, A].
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        // B is intentionally NOT added as a node; edges can still reference it.
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("b", "a", EdgeType::Calls, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let cycles = tracer.detect_cycles();
+        assert_eq!(cycles.len(), 1, "should detect cycle via back-edge B→A");
+        // B is filtered out of node names since it doesn't exist in the graph.
+        assert_eq!(
+            cycles[0].nodes,
+            vec!["a".to_string(), "a".to_string()],
+            "nonexistent B should be filtered out by extract_cycle"
+        );
+        assert_eq!(
+            cycles[0].edge_types,
+            vec![EdgeType::Calls, EdgeType::Calls]
+        );
+    }
+
+    // ====================================================================
+    // Coverage gap: trace_cross_service mid-path node with BOTH forward
+    // HttpCalls and reverse HandlesRoute edges
+    // ====================================================================
+
+    #[test]
+    fn trace_cross_service_mid_path_node_with_both_forward_and_reverse_edges() {
+        // Mid-path route R1 has BOTH a forward HttpCalls edge (R1→R2) AND a
+        // reverse HandlesRoute edge (B→R1). Tracing from A should find:
+        //   A→R1 (depth 1)
+        //   A→R1→R2 (depth 2, forward HttpCalls from R1)
+        //   A→R1→B (depth 2, reverse HandlesRoute from R1)
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_route("r1", "/api/r1"));
+        g.add_node(make_route("r2", "/api/r2"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "r1", EdgeType::HttpCalls, "proj"));
+        g.add_edge(Edge::new("r1", "r2", EdgeType::HttpCalls, "proj"));
+        g.add_edge(Edge::new("b", "r1", EdgeType::HandlesRoute, "proj"));
+        let tracer = CallGraphTracer::new(&g);
+        let paths = tracer.trace_cross_service(&"a".to_string(), 5);
+        let depth2: Vec<_> = paths.iter().filter(|p| p.depth == 2).collect();
+        assert_eq!(
+            depth2.len(),
+            2,
+            "should have two depth-2 paths (forward to R2, reverse to B): {paths:?}"
+        );
+        let has_r2 = depth2
+            .iter()
+            .any(|p| p.nodes.iter().any(|n| n.name == "/api/r2"));
+        let has_b = depth2
+            .iter()
+            .any(|p| p.nodes.iter().any(|n| n.name == "b"));
+        assert!(
+            has_r2,
+            "should reach R2 via forward HttpCalls from mid-path R1: {paths:?}"
+        );
+        assert!(
+            has_b,
+            "should reach B via reverse HandlesRoute from mid-path R1: {paths:?}"
+        );
+    }
 }

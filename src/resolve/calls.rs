@@ -1167,4 +1167,206 @@ mod tests {
         );
         assert_eq!(graph.edge_count(), 0);
     }
+
+    // --- is_builder_type_method direct unit tests ---
+
+    #[test]
+    fn is_builder_type_method_no_hash_returns_false() {
+        assert!(!is_builder_type_method("proj.a.rs.foo"));
+        assert!(!is_builder_type_method("simple_name"));
+    }
+
+    #[test]
+    fn is_builder_type_method_non_builder_disambiguator_returns_false() {
+        // Has '#' but disambiguator doesn't end with "Builder" and
+        // method_name != "builder".
+        assert!(!is_builder_type_method("proj.a.rs.save_nodes#Repo"));
+        assert!(!is_builder_type_method("proj.a.rs.method#MyType"));
+    }
+
+    // --- with_includes_graph builder ---
+
+    #[test]
+    fn with_includes_graph_is_chainable() {
+        let table = ProjectSymbolTable::new();
+        let graph = IncludesGraph::new();
+        let resolver = CallResolver::new(&table, "proj").with_includes_graph(graph);
+        assert!(resolver.includes_graph.is_empty());
+    }
+
+    // --- resolve_calls batch with includes_graph (scope-aware lookup) ---
+
+    #[test]
+    fn resolve_calls_batch_with_includes_graph_uses_scope_aware_lookup() {
+        // Batch resolution should use scope-aware lookup when caller has
+        // #include edges, matching single-call behavior.
+        use crate::resolve::symbol_table::SymbolEntry;
+
+        let mut table = ProjectSymbolTable::new();
+        table.add_symbol(
+            SymbolEntry::new(
+                "foo",
+                "proj.foo_h.foo",
+                NodeLabel::Function,
+                "/abs/foo.h",
+                "proj",
+            )
+            .with_exported(true),
+        );
+        table.add_symbol(
+            SymbolEntry::new(
+                "foo",
+                "proj.bar_cpp.foo",
+                NodeLabel::Function,
+                "/abs/bar.cpp",
+                "proj",
+            )
+            .with_exported(true),
+        );
+
+        let mut includes = IncludesGraph::new();
+        includes.add_include("/abs/main.cpp", "/abs/foo.h");
+
+        let mut result = ExtractResult::new("/abs/main.cpp", Language::Rust);
+        result.calls.push(CallInfo {
+            caller_qn: Some("proj.main_cpp.caller".to_string()),
+            callee_name: "foo".to_string(),
+            line: 5,
+            args: vec![],
+        });
+
+        let results = vec![result];
+        let mut graph = Graph::new();
+        graph.add_node(
+            Node::builder(NodeLabel::Function, "caller", "proj.main_cpp.caller")
+                .id("proj.main_cpp.caller")
+                .build(),
+        );
+
+        let resolver = CallResolver::new(&table, "proj").with_includes_graph(includes);
+        let edges = resolver.resolve_calls(&results, &mut graph);
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(
+            edges[0].target, "proj.foo_h.foo",
+            "batch resolution should use scope-aware lookup"
+        );
+    }
+
+    // --- resolve_calls batch with import-based lookup ---
+
+    #[test]
+    fn resolve_calls_uses_import_lookup_in_batch_mode() {
+        // Batch resolve_calls uses result.imports directly (not self.imports),
+        // so import-based lookup works without calling with_imports.
+        // This exercises the import lookup path in resolve_call_internal
+        // (line 226-237) within the batch loop, producing confidence 0.90.
+        let bar_node = make_exported_node("bar", "b.rs", "proj", NodeLabel::Function);
+        let bar_qn = fqn("proj", "b.rs", "bar", Language::Rust);
+        let a_node = make_node("caller", "a.rs", "proj", NodeLabel::Function);
+        let a_qn = fqn("proj", "a.rs", "caller", Language::Rust);
+
+        let mut a_result = make_result("a.rs", vec![a_node]);
+        a_result.imports.push(ImportInfo {
+            source_file: "b.rs".to_string(),
+            imported_names: vec!["bar".to_string()],
+            line: 1,
+        });
+        a_result.calls.push(CallInfo {
+            caller_qn: Some(a_qn.clone()),
+            callee_name: "bar".to_string(),
+            line: 5,
+            args: vec![],
+        });
+        let b_result = make_result("b.rs", vec![bar_node]);
+
+        let results = vec![a_result, b_result];
+        let table = build_symbol_table(&results, "proj");
+        let mut graph = Graph::new();
+        add_nodes_to_graph(&mut graph, &results, "proj");
+
+        // with_imports is NOT called — resolve_calls uses result.imports.
+        let resolver = CallResolver::new(&table, "proj");
+        let edges = resolver.resolve_calls(&results, &mut graph);
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].source, a_qn);
+        assert_eq!(edges[0].target, bar_qn);
+        assert!(
+            (edges[0].confidence - 0.90).abs() < 1e-6,
+            "import-based lookup should give 0.90"
+        );
+        assert_eq!(edges[0].confidence_tier, ConfidenceTier::ImportScoped);
+    }
+
+    // --- is_builder_type_method: true branches (direct unit tests) ---
+
+    #[test]
+    fn is_builder_type_method_builder_name_returns_true() {
+        // method_name == "builder" with a type-name disambiguator (not ending
+        // with "Builder") → true (Builder entry method pattern).
+        assert!(is_builder_type_method("proj.a.rs.builder#Edge"));
+        assert!(is_builder_type_method("proj.a.rs.builder#Node"));
+    }
+
+    #[test]
+    fn is_builder_type_method_builder_disambiguator_returns_true() {
+        // Disambiguator ending with "Builder" → true (Builder type method pattern).
+        assert!(is_builder_type_method("proj.a.rs.build#NodeBuilder"));
+        assert!(is_builder_type_method("proj.a.rs.language#EdgeBuilder"));
+    }
+
+    #[test]
+    fn resolve_calls_mixed_builder_and_non_builder_produces_only_non_builder() {
+        // Mixed Builder type method calls and non-Builder method calls in the
+        // same result: only non-Builder calls produce CALLS edges.
+        let build_method = make_node_with_disambiguator(
+            "build",
+            "a.rs",
+            "proj",
+            NodeLabel::Function,
+            Some("NodeBuilder"),
+        );
+        let save_method = make_node_with_disambiguator(
+            "save_nodes",
+            "a.rs",
+            "proj",
+            NodeLabel::Function,
+            Some("Repo"),
+        );
+        let caller_node = make_node("caller", "a.rs", "proj", NodeLabel::Function);
+        let caller_qn = fqn("proj", "a.rs", "caller", Language::Rust);
+        let save_qn = save_method.qualified_name.clone();
+
+        let mut result = make_result("a.rs", vec![build_method, save_method, caller_node]);
+        result.calls.push(CallInfo {
+            caller_qn: Some(caller_qn.clone()),
+            callee_name: "build".to_string(),
+            line: 5,
+            args: vec![],
+        });
+        result.calls.push(CallInfo {
+            caller_qn: Some(caller_qn.clone()),
+            callee_name: "save_nodes".to_string(),
+            line: 6,
+            args: vec![],
+        });
+
+        let results = vec![result];
+        let table = build_symbol_table(&results, "proj");
+        let mut graph = Graph::new();
+        add_nodes_to_graph(&mut graph, &results, "proj");
+
+        let resolver = CallResolver::new(&table, "proj");
+        let edges = resolver.resolve_calls(&results, &mut graph);
+
+        assert_eq!(
+            edges.len(),
+            1,
+            "only non-Builder method call should produce edge"
+        );
+        assert_eq!(edges[0].source, caller_qn);
+        assert_eq!(edges[0].target, save_qn);
+        assert_eq!(edges[0].start_line, Some(6));
+    }
 }

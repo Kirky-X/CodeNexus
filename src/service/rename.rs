@@ -1199,4 +1199,204 @@ mod tests {
             result.err()
         );
     }
+
+    // ===== #[forge] wrapper tests via init_kit =====
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn rename_wrapper_fails_with_invalid_identifier() {
+        use crate::service::runtime::{init_kit, reset_kit_for_testing};
+
+        reset_kit_for_testing();
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        init_kit(kit).expect("init_kit");
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(rename(
+            "foo".to_string(),
+            "1bad".to_string(),
+            String::new(),
+            false,
+        ));
+        let err = result.expect_err("invalid identifier should error");
+        assert!(
+            matches!(err, ApiError::InvalidInput { .. }),
+            "expected InvalidInput, got {err:?}"
+        );
+
+        reset_kit_for_testing();
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn rename_wrapper_fails_with_apply_without_path() {
+        use crate::service::runtime::{init_kit, reset_kit_for_testing};
+
+        reset_kit_for_testing();
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        init_kit(kit).expect("init_kit");
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(rename(
+            "foo".to_string(),
+            "bar".to_string(),
+            String::new(),
+            true,
+        ));
+        let err = result.expect_err("apply without path should error");
+        assert!(
+            matches!(err, ApiError::InvalidInput { .. }),
+            "expected InvalidInput, got {err:?}"
+        );
+
+        reset_kit_for_testing();
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn rename_wrapper_fails_when_kit_not_initialized() {
+        use crate::service::runtime::reset_kit_for_testing;
+
+        reset_kit_for_testing();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(rename(
+            "foo".to_string(),
+            "bar".to_string(),
+            String::new(),
+            false,
+        ));
+        assert!(result.is_err(), "wrapper should fail without kit");
+        reset_kit_for_testing();
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn rename_wrapper_succeeds_dry_run() {
+        use crate::service::runtime::{init_kit, reset_kit_for_testing};
+
+        reset_kit_for_testing();
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageModule>().expect("require_storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create symbol");
+        init_kit(kit).expect("init_kit");
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(rename(
+            "a".to_string(),
+            "b".to_string(),
+            String::new(),
+            false,
+        ));
+        assert!(result.is_ok(), "dry-run rename should succeed: {:?}", result.err());
+
+        reset_kit_for_testing();
+    }
+
+    // Covers the wrapper apply=true success path (lines 351-354):
+    // apply_graph_edit + apply_text_edits through the #[forge] wrapper.
+    // Uses an absolute filePath NOT under the root so that
+    // collect_candidate_files excludes it → text_edits empty →
+    // apply_text_edits is a no-op (same pattern as core_apply_updates_graph_name).
+    #[cfg(feature = "cli")]
+    #[test]
+    fn rename_wrapper_succeeds_with_apply() {
+        use crate::service::runtime::{init_kit, reset_kit_for_testing};
+
+        reset_kit_for_testing();
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageModule>().expect("require_storage");
+        storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create symbol");
+        init_kit(kit).expect("init_kit");
+
+        let tmp = TempDir::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(rename(
+            "a".to_string(),
+            "b".to_string(),
+            tmp.path().to_string_lossy().into_owned(),
+            true,
+        ));
+        assert!(result.is_ok(), "apply rename should succeed: {:?}", result.err());
+
+        // Verify the graph was updated.
+        let rows = storage
+            .query("MATCH (n:Function) WHERE n.id = 'f_a' RETURN n.name AS name;")
+            .unwrap();
+        let name = rows
+            .first()
+            .and_then(|r| r.first())
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert_eq!(name, "b", "graph name should be updated to 'b'");
+
+        reset_kit_for_testing();
+    }
+
+    // Covers the wrapper symbol-not-found error path (lines 311-321):
+    // load_graph returns SymbolNotFound → ApiError::NotFound.
+    #[cfg(feature = "cli")]
+    #[test]
+    fn rename_wrapper_fails_with_symbol_not_found() {
+        use crate::service::runtime::{init_kit, reset_kit_for_testing};
+
+        reset_kit_for_testing();
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        init_kit(kit).expect("init_kit");
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(rename(
+            "nonexistent_symbol".to_string(),
+            "bar".to_string(),
+            String::new(),
+            false,
+        ));
+        let err = result.expect_err("missing symbol should error");
+        assert!(
+            matches!(err, ApiError::NotFound { .. }),
+            "expected NotFound, got {err:?}"
+        );
+
+        reset_kit_for_testing();
+    }
+
+    // Covers the wrapper dry-run with path (lines 342-349):
+    // text_edits are computed but not applied.
+    #[cfg(feature = "cli")]
+    #[test]
+    fn rename_wrapper_succeeds_dry_run_with_path() {
+        use crate::service::runtime::{init_kit, reset_kit_for_testing};
+
+        reset_kit_for_testing();
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(db.to_str().unwrap());
+        let storage = kit.require::<StorageModule>().expect("require_storage");
+        let tmp = TempDir::new().unwrap();
+        let file_a = tmp.path().join("a.rs");
+        std::fs::write(&file_a, "fn a() {}\n").unwrap();
+        storage.execute(format!(
+            "CREATE (:Function {{id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '{}', startLine: 1, endLine: 1, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''}});",
+            file_a.to_str().unwrap()
+        ).as_str()).expect("create symbol");
+        init_kit(kit).expect("init_kit");
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(rename(
+            "a".to_string(),
+            "b".to_string(),
+            tmp.path().to_string_lossy().into_owned(),
+            false,
+        ));
+        assert!(result.is_ok(), "dry-run with path should succeed: {:?}", result.err());
+
+        // Verify the file was NOT modified (dry run).
+        let content = std::fs::read_to_string(&file_a).unwrap();
+        assert!(content.contains("fn a()"), "file should be unchanged in dry run: {content}");
+
+        reset_kit_for_testing();
+    }
 }

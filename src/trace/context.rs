@@ -1918,4 +1918,70 @@ mod tests {
             .expect("should not error");
         assert!(info.is_none(), "unresolvable test id should return None");
     }
+
+    // --- Coverage gap: query_implements with Interface label ---
+
+    #[test]
+    fn collect_type_context_with_implements_interface_edge() {
+        // Cover the `Interface` label branch in query_implements (line 619).
+        // When the IMPLEMENTS edge target is an Interface node (not a Trait),
+        // the first loop iteration (Trait) finds nothing, and the second
+        // iteration (Interface) resolves the name.
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Function {id: 'f_iface', project: 'demo', name: 'impl_iface', qualifiedName: 'demo.impl_iface', filePath: '/src/impl.rs', startLine: 1, endLine: 10, signature: 'fn impl_iface()', returnType: 'void', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
+        s.execute("CREATE (:Interface {id: 'iface1', project: 'demo', name: 'Runnable', qualifiedName: 'demo.Runnable', filePath: '/src/runnable.rs', startLine: 1, endLine: 5, isExported: true, docstring: '', content: '', parentQn: ''});").expect("create interface");
+        s.execute("CREATE (:CodeRelation {id: 'e_iface', source: 'f_iface', target: 'iface1', type: 'IMPLEMENTS', confidence: 1.0, confidenceTier: 'High', reason: 'impl Runnable', startLine: 1, project: 'demo'});").expect("create implements edge");
+
+        let collector = ContextCollector::new(&*s);
+        let symbol = collector
+            .collect_symbol_definition("demo.impl_iface")
+            .expect("symbol");
+        let tc = collector.collect_type_context(&symbol).expect("type context");
+        assert_eq!(tc.implements.len(), 1);
+        assert_eq!(tc.implements[0], "Runnable");
+    }
+
+    #[test]
+    fn query_implements_skips_target_not_found() {
+        // Cover the case where the IMPLEMENTS edge target node doesn't exist
+        // in any label table. Both Trait and Interface queries return empty,
+        // so nothing is pushed to `implements`.
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Function {id: 'f_dangling', project: 'demo', name: 'dangling', qualifiedName: 'demo.dangling', filePath: '/src/dangling.rs', startLine: 1, endLine: 5, signature: 'fn dangling()', returnType: 'void', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
+        s.execute("CREATE (:CodeRelation {id: 'e_dangling', source: 'f_dangling', target: 'nonexistent_target', type: 'IMPLEMENTS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create dangling edge");
+
+        let collector = ContextCollector::new(&*s);
+        let implements = collector
+            .query_implements("f_dangling")
+            .expect("should not error");
+        assert!(implements.is_empty(), "dangling IMPLEMENTS target should produce no implements");
+    }
+
+    #[test]
+    fn collect_data_flow_returns_empty_summary() {
+        // Explicitly exercise collect_data_flow — it always returns an empty
+        // DataFlowSummary, but the function is worth covering directly.
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        let symbol = SymbolDefinition {
+            name: "foo".to_string(),
+            qualified_name: "demo.foo".to_string(),
+            signature: "fn foo()".to_string(),
+            docstring: String::new(),
+            source: String::new(),
+            file_path: "/src/foo.rs".to_string(),
+            start_line: 1,
+            end_line: 5,
+        };
+        let collector = ContextCollector::new(&*s);
+        let df = collector
+            .collect_data_flow(&symbol)
+            .expect("should not error");
+        assert_eq!(df, DataFlowSummary {});
+    }
 }

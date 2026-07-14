@@ -1816,6 +1816,142 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
+    #[test]
+    fn with_retry_with_zero_max_retries_returns_after_one_attempt() {
+        // max_retries=0 means 1 initial attempt, 0 retries. A lock error
+        // on that single attempt should immediately return DatabaseLocked.
+        let calls = AtomicU32::new(0);
+        let result: Result<u32> = with_retry(0, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err(lock_error())
+        });
+        assert!(
+            matches!(result, Err(IndexError::DatabaseLocked)),
+            "should return DatabaseLocked with 0 retries: {result:?}"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "should attempt exactly once with max_retries=0"
+        );
+    }
+
+    #[test]
+    fn with_retry_succeeds_on_second_attempt_with_max_one() {
+        // max_retries=1 means up to 2 total attempts. The first fails with
+        // a lock, the second succeeds.
+        let calls = AtomicU32::new(0);
+        let result: Result<u32> = with_retry(1, || {
+            let n = calls.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                Err(lock_error())
+            } else {
+                Ok(99)
+            }
+        });
+        assert_eq!(result.unwrap(), 99);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn index_facade_index_incremental_same_as_index() {
+        // index_incremental should behave the same as index (it delegates).
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "a.rs", "fn a() {}\n");
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        let result = facade
+            .index_incremental(tmp.path(), "demo", false)
+            .expect("index_incremental");
+        assert!(result.files_indexed > 0, "should index files");
+    }
+
+    #[test]
+    fn pipeline_run_returns_error_for_nonexistent_path() {
+        // Pipeline::run should return PathNotFound for a missing path.
+        let repo = Repository::in_memory().expect("repo");
+        let pipeline = Pipeline::new(repo);
+        let result = pipeline.run(Path::new("/nonexistent/xyz"), "demo", false);
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), IndexError::PathNotFound(_)),
+            "should be PathNotFound"
+        );
+    }
+
+    #[test]
+    fn pipeline_run_ram_first_returns_error_for_nonexistent_path() {
+        // Pipeline::run_ram_first should return PathNotFound for a missing path.
+        let repo = Repository::in_memory().expect("repo");
+        let pipeline = Pipeline::new(repo);
+        let result = pipeline.run_ram_first(
+            Path::new("/nonexistent/xyz"),
+            "demo",
+            false,
+            std::collections::HashMap::new(),
+        );
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), IndexError::PathNotFound(_)),
+            "should be PathNotFound"
+        );
+    }
+
+    #[test]
+    fn index_ram_first_with_empty_directory_succeeds() {
+        // RAM-first indexing of an empty directory should succeed with
+        // files_indexed = 0.
+        let tmp = TempDir::new().unwrap();
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        let result = facade
+            .index_ram_first(tmp.path(), "empty", false)
+            .expect("index_ram_first should succeed");
+        assert_eq!(result.files_indexed, 0, "empty dir → 0 files indexed");
+    }
+
+    #[test]
+    fn with_retry_propagates_storage_error_that_is_not_lock() {
+        // A StorageError::Query whose message doesn't contain "locked" or
+        // "Lock" should be propagated immediately (not retried).
+        let calls = AtomicU32::new(0);
+        let result: Result<u32> = with_retry(3, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err(IndexError::Storage(StorageError::Query(
+                "syntax error near CALL".to_string(),
+            )))
+        });
+        assert!(result.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "should not retry on non-lock error");
+    }
+
+    #[test]
+    fn build_file_nodes_uses_fallback_language_when_none() {
+        // When file.language is None, build_file_nodes should fall back to
+        // the first compiled-in language (Language::all()[0]).
+        let tmp = TempDir::new().unwrap();
+        let f = FileInfo {
+            path: tmp.path().join("unknown.xyz"),
+            relative_path: "unknown.xyz".to_string(),
+            language: None,
+            size: 0,
+        };
+        fs::write(&f.path, "content\n").unwrap();
+        let mut diff = FileDiff::new();
+        diff.added.push(f);
+        let nodes = build_file_nodes(&diff, "proj");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].language, Some(Language::all()[0]));
+    }
+
+    #[test]
+    fn line_count_of_file_with_no_trailing_newline() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("no_newline.rs");
+        fs::write(&path, "line1\nline2").unwrap();
+        assert_eq!(line_count_of(&path), Some(2));
+    }
+
     #[cfg(feature = "cache")]
     #[test]
     fn index_ram_first_invalidates_cache_on_success() {

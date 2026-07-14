@@ -27,6 +27,8 @@ use crate::storage::StorageConfig;
 use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
 use sdforge::forge;
+#[cfg(feature = "lsp")]
+use crate::lsp::LspProvider;
 
 /// JSON-serializable view of [`IndexResult`].
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -52,49 +54,31 @@ impl From<IndexResult> for IndexOutput {
     }
 }
 
-/// LSP-driven `semantic_type` enhancement.
-///
-/// Spawns language servers (rust-analyzer, pyright-langserver, …) based on
-/// file extensions found in the project, queries each symbol's hover info,
-/// and writes the extracted type signature back to `semantic_type`.
-/// Failures degrade gracefully to pure tree-sitter extraction.
 #[cfg(feature = "lsp")]
-#[allow(clippy::result_large_err)]
-fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Result<(), CodeNexusError> {
+fn build_lsp_providers() -> Vec<(&'static str, Box<dyn LspProvider>)> {
     use crate::lsp::{
-        ClangdClient, FortlsClient, GoplsClient, JdtlsClient, LspError, LspProvider,
-        PyrightClient, RustAnalyzerClient, TypeScriptLanguageClient,
+        ClangdClient, FortlsClient, GoplsClient, JdtlsClient, PyrightClient,
+        RustAnalyzerClient, TypeScriptLanguageClient,
     };
+
+    vec![
+        ("rs", Box::new(RustAnalyzerClient::new())),
+        ("py", Box::new(PyrightClient::new())),
+        ("c", Box::new(ClangdClient::new())),
+        ("cpp", Box::new(ClangdClient::new())),
+        ("go", Box::new(GoplsClient::new())),
+        ("ts", Box::new(TypeScriptLanguageClient::new())),
+        ("f90", Box::new(FortlsClient::new())),
+        ("java", Box::new(JdtlsClient::new())),
+    ]
+}
+
+#[cfg(feature = "lsp")]
+fn build_symbol_queries(project: &str) -> [String; 2] {
     use crate::storage::schema::escape_cypher_string;
 
-    // Build a map: file_ext → (dyn LspProvider, &str)
-    let rust_client = RustAnalyzerClient::new();
-    let py_client = PyrightClient::new();
-    let clangd_client = ClangdClient::new();
-    let gopls_client = GoplsClient::new();
-    let ts_client = TypeScriptLanguageClient::new();
-    let fortls_client = FortlsClient::new();
-    let jdtls_client = JdtlsClient::new();
-    let providers: [(&str, &dyn LspProvider); 8] = [
-        ("rs", &rust_client),
-        ("py", &py_client),
-        ("c", &clangd_client),
-        ("cpp", &clangd_client),
-        ("go", &gopls_client),
-        ("ts", &ts_client),
-        ("f90", &fortls_client),
-        ("java", &jdtls_client),
-    ];
-
-    // Start each provider (best-effort; failures degrade to partial enhancement)
-    for (_ext, provider) in &providers {
-        if let Err(LspError::ServerStart(msg)) = provider.start(workspace) {
-            eprintln!("[warn] LSP server start failed (degrading): {msg}");
-        }
-    }
-
     let proj = escape_cypher_string(project);
-    let queries = [
+    [
         format!(
             "MATCH (n:Function) WHERE n.project = '{proj}' \
              AND n.filePath IS NOT NULL AND n.startLine IS NOT NULL \
@@ -105,7 +89,76 @@ fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Resul
              AND n.filePath IS NOT NULL AND n.startLine IS NOT NULL \
              RETURN n.id AS id, n.filePath AS filePath, n.startLine AS startLine;"
         ),
-    ];
+    ]
+}
+
+#[cfg(feature = "lsp")]
+fn select_provider_for_ext<'a>(
+    providers: &'a [(&'static str, Box<dyn LspProvider>)],
+    ext: &str,
+) -> &'a dyn LspProvider {
+    providers
+        .iter()
+        .find(|(e, _)| *e == ext)
+        .map(|(_, p)| p.as_ref())
+        .unwrap_or_else(|| providers[0].1.as_ref())
+}
+
+#[cfg(feature = "lsp")]
+fn build_semantic_type_update(id: &str, project: &str, text: &str) -> String {
+    use crate::storage::schema::escape_cypher_string;
+
+    format!(
+        "MATCH (n {{id: '{id}', project: '{proj}'}}) \
+         SET n.semantic_type = '{sem}';",
+        id = escape_cypher_string(id),
+        proj = escape_cypher_string(project),
+        sem = escape_cypher_string(text),
+    )
+}
+
+/// Extracts `(id, file_path_str, start_line)` from a Cypher query result row.
+/// Returns `None` if any field is missing or has the wrong type.
+#[cfg(feature = "lsp")]
+fn extract_lsp_row_fields(row: &[serde_json::Value]) -> Option<(String, String, u64)> {
+    let id = row.first().and_then(|v| v.as_str())?.to_string();
+    let file_path_str = row.get(1).and_then(|v| v.as_str())?.to_string();
+    let start_line = row.get(2).and_then(|v| v.as_u64())?;
+    Some((id, file_path_str, start_line))
+}
+
+/// Resolves a file path to an absolute path, joining with `workspace` if the
+/// path is relative.
+#[cfg(feature = "lsp")]
+fn resolve_abs_file_path(workspace: &Path, file_path_str: &str) -> std::path::PathBuf {
+    let file_path = Path::new(file_path_str);
+    if file_path.is_absolute() {
+        file_path.to_path_buf()
+    } else {
+        workspace.join(file_path)
+    }
+}
+
+/// LSP-driven `semantic_type` enhancement.
+///
+/// Spawns language servers (rust-analyzer, pyright-langserver, …) based on
+/// file extensions found in the project, queries each symbol's hover info,
+/// and writes the extracted type signature back to `semantic_type`.
+/// Failures degrade gracefully to pure tree-sitter extraction.
+#[cfg(feature = "lsp")]
+#[allow(clippy::result_large_err)]
+fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Result<(), CodeNexusError> {
+    use crate::lsp::LspError;
+
+    let providers = build_lsp_providers();
+
+    for (_ext, provider) in &providers {
+        if let Err(LspError::ServerStart(msg)) = provider.start(workspace) {
+            eprintln!("[warn] LSP server start failed (degrading): {msg}");
+        }
+    }
+
+    let queries = build_symbol_queries(project);
     let mut rows = Vec::new();
     for q in &queries {
         let r = repo.connection().query(q).map_err(|e| {
@@ -117,41 +170,21 @@ fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Resul
     let mut enhanced: u32 = 0;
     let mut skipped: u32 = 0;
     for row in &rows {
-        let Some(id) = row.first().and_then(|v| v.as_str()) else {
-            skipped += 1;
-            continue;
-        };
-        let Some(file_path_str) = row.get(1).and_then(|v| v.as_str()) else {
-            skipped += 1;
-            continue;
-        };
-        let Some(start_line) = row.get(2).and_then(|v| v.as_u64()) else {
+        let Some((id, file_path_str, start_line)) = extract_lsp_row_fields(row) else {
             skipped += 1;
             continue;
         };
 
-        let file_path = Path::new(file_path_str);
-        let abs_file = if file_path.is_absolute() {
-            file_path.to_path_buf()
-        } else {
-            workspace.join(file_path)
-        };
+        let abs_file = resolve_abs_file_path(workspace, &file_path_str);
 
-        // Select provider by file extension
         let ext = abs_file.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let client: &dyn LspProvider = providers.iter().find(|(e, _)| *e == ext).map(|(_, p)| *p).unwrap_or_else(|| &rust_client);
+        let client = select_provider_for_ext(&providers, ext);
 
         let line = u32::try_from(start_line).unwrap_or(0);
         match client.hover(&abs_file, line, 0) {
             Ok(Some(hover)) => {
                 if let Some(text) = crate::lsp::extract_hover_text(&hover) {
-                    let update = format!(
-                        "MATCH (n {{id: '{id}', project: '{proj}'}}) \
-                         SET n.semantic_type = '{sem}';",
-                        id = escape_cypher_string(id),
-                        proj = escape_cypher_string(project),
-                        sem = escape_cypher_string(&text),
-                    );
+                    let update = build_semantic_type_update(&id, project, &text);
                     if repo.connection().execute(&update).is_ok() {
                         enhanced += 1;
                     } else {
@@ -566,5 +599,366 @@ mod tests {
         )
         .expect("forced ram_first reindex should succeed");
         assert!(output2.files_indexed >= 1);
+    }
+
+    // --- Pure function tests (extracted from enhance_with_lsp) ---
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn build_lsp_providers_returns_8_providers() {
+        let providers = build_lsp_providers();
+        assert_eq!(providers.len(), 8);
+        let exts: Vec<&str> = providers.iter().map(|(e, _)| *e).collect();
+        assert!(exts.contains(&"rs"));
+        assert!(exts.contains(&"py"));
+        assert!(exts.contains(&"go"));
+        assert!(exts.contains(&"java"));
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn build_symbol_queries_contains_project_name() {
+        let queries = build_symbol_queries("demo");
+        assert!(queries[0].contains("demo"));
+        assert!(queries[1].contains("demo"));
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn build_symbol_queries_escapes_special_chars() {
+        let queries = build_symbol_queries("demo' OR '1'='1");
+        assert!(!queries[0].contains("' OR '1'='1"));
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn select_provider_for_ext_returns_rust_for_rs() {
+        let providers = build_lsp_providers();
+        let provider = select_provider_for_ext(&providers, "rs");
+        let _ = provider.shutdown();
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn select_provider_for_ext_returns_default_for_unknown() {
+        let providers = build_lsp_providers();
+        let provider = select_provider_for_ext(&providers, "unknown");
+        let _ = provider.shutdown();
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn build_semantic_type_update_escapes_id() {
+        let update = build_semantic_type_update("id'with'quotes", "demo", "type_text");
+        assert!(update.contains(r"id\'with\'quotes"));
+    }
+
+    // --- extract_lsp_row_fields tests ---
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn extract_lsp_row_fields_returns_all_fields_when_valid() {
+        let row = vec![
+            serde_json::Value::String("sym_id".into()),
+            serde_json::Value::String("/src/main.rs".into()),
+            serde_json::Value::Number(serde_json::Number::from(42u64)),
+        ];
+        let (id, file_path, start_line) =
+            extract_lsp_row_fields(&row).expect("valid row should extract");
+        assert_eq!(id, "sym_id");
+        assert_eq!(file_path, "/src/main.rs");
+        assert_eq!(start_line, 42);
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn extract_lsp_row_fields_returns_none_when_id_missing() {
+        let row = vec![
+            serde_json::Value::Null,
+            serde_json::Value::String("/src/main.rs".into()),
+            serde_json::Value::Number(serde_json::Number::from(1u64)),
+        ];
+        assert!(extract_lsp_row_fields(&row).is_none());
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn extract_lsp_row_fields_returns_none_when_file_path_missing() {
+        let row = vec![
+            serde_json::Value::String("sym_id".into()),
+            serde_json::Value::Null,
+            serde_json::Value::Number(serde_json::Number::from(1u64)),
+        ];
+        assert!(extract_lsp_row_fields(&row).is_none());
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn extract_lsp_row_fields_returns_none_when_start_line_missing() {
+        let row = vec![
+            serde_json::Value::String("sym_id".into()),
+            serde_json::Value::String("/src/main.rs".into()),
+            serde_json::Value::Null,
+        ];
+        assert!(extract_lsp_row_fields(&row).is_none());
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn extract_lsp_row_fields_returns_none_for_empty_row() {
+        let row: Vec<serde_json::Value> = vec![];
+        assert!(extract_lsp_row_fields(&row).is_none());
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn extract_lsp_row_fields_returns_none_when_id_not_string() {
+        let row = vec![
+            serde_json::Value::Number(serde_json::Number::from(123u64)),
+            serde_json::Value::String("/src/main.rs".into()),
+            serde_json::Value::Number(serde_json::Number::from(1u64)),
+        ];
+        assert!(extract_lsp_row_fields(&row).is_none());
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn extract_lsp_row_fields_returns_none_when_start_line_not_number() {
+        let row = vec![
+            serde_json::Value::String("sym_id".into()),
+            serde_json::Value::String("/src/main.rs".into()),
+            serde_json::Value::String("not_a_number".into()),
+        ];
+        assert!(extract_lsp_row_fields(&row).is_none());
+    }
+
+    // --- resolve_abs_file_path tests ---
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn resolve_abs_file_path_returns_absolute_unchanged() {
+        let workspace = std::path::Path::new("/workspace");
+        let abs = resolve_abs_file_path(workspace, "/src/main.rs");
+        assert_eq!(abs, std::path::PathBuf::from("/src/main.rs"));
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn resolve_abs_file_path_joins_relative_with_workspace() {
+        let workspace = std::path::Path::new("/workspace");
+        let abs = resolve_abs_file_path(workspace, "src/main.rs");
+        assert_eq!(abs, std::path::PathBuf::from("/workspace/src/main.rs"));
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn resolve_abs_file_path_handles_empty_string() {
+        let workspace = std::path::Path::new("/workspace");
+        let abs = resolve_abs_file_path(workspace, "");
+        assert_eq!(abs, std::path::PathBuf::from("/workspace"));
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn resolve_abs_file_path_handles_relative_with_dots() {
+        let workspace = std::path::Path::new("/workspace");
+        let abs = resolve_abs_file_path(workspace, "./src/main.rs");
+        assert_eq!(abs, std::path::PathBuf::from("/workspace/./src/main.rs"));
+    }
+
+    // --- #[forge] index wrapper tests ---
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn index_wrapper_fails_when_kit_not_initialized() {
+        use crate::service::runtime::reset_kit_for_testing;
+
+        reset_kit_for_testing();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(index(
+            "/nonexistent/path".to_string(),
+            "test_project".to_string(),
+            false,
+            false,
+            false,
+            false,
+        ));
+        assert!(result.is_err(), "wrapper should fail without kit");
+        reset_kit_for_testing();
+    }
+
+    #[cfg(all(feature = "cli", feature = "lang-rust"))]
+    #[test]
+    fn index_wrapper_succeeds_via_init_kit() {
+        use crate::kit::{build_kit, KitBootstrapConfig};
+        use crate::service::runtime::{init_kit, reset_kit_for_testing};
+        use std::fs;
+        use tempfile::TempDir;
+
+        reset_kit_for_testing();
+
+        let src_dir = TempDir::new().unwrap();
+        fs::write(src_dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+
+        let db_dir = TempDir::new().unwrap();
+        let db_path = db_dir.path().join("wrapper_testdb");
+        let config = KitBootstrapConfig::new(db_path.clone());
+        let kit = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&config))
+            .expect("build_kit");
+        init_kit(kit).expect("init_kit");
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(index(
+            src_dir.path().to_str().unwrap().to_string(),
+            "wrapper_test".to_string(),
+            true,
+            false,
+            false,
+            false,
+        ));
+        assert!(result.is_ok(), "wrapper should succeed: {:?}", result.err());
+
+        reset_kit_for_testing();
+    }
+
+    // Covers the `embed=true` deprecation warning branch (lines 296-301).
+    #[cfg(all(feature = "cli", feature = "lang-rust"))]
+    #[test]
+    fn index_wrapper_with_embed_true_emits_deprecation_warning() {
+        use crate::kit::{build_kit, KitBootstrapConfig};
+        use crate::service::runtime::{init_kit, reset_kit_for_testing};
+        use std::fs;
+        use tempfile::TempDir;
+
+        reset_kit_for_testing();
+
+        let src_dir = TempDir::new().unwrap();
+        fs::write(src_dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+
+        let db_dir = TempDir::new().unwrap();
+        let db_path = db_dir.path().join("embed_warn_testdb");
+        let config = KitBootstrapConfig::new(db_path.clone());
+        let kit = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&config))
+            .expect("build_kit");
+        init_kit(kit).expect("init_kit");
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(index(
+            src_dir.path().to_str().unwrap().to_string(),
+            "embed_warn_test".to_string(),
+            true,
+            false,
+            true,
+            false,
+        ));
+        assert!(result.is_ok(), "wrapper should succeed even with embed=true: {:?}", result.err());
+
+        reset_kit_for_testing();
+    }
+
+    // Covers the DQ violation reporting branch in index_core (lines 248-258).
+    // Pre-populates the DB with a File node that has an empty hash (DQ-006
+    // violation), then calls index_core. The DQ check should detect the
+    // violation and trigger the `if !dq_report.is_clean()` branch.
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn index_core_reports_dq_violations_when_present() {
+        use crate::kit::{build_kit, KitBootstrapConfig};
+        use crate::storage::Repository;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let src_dir = TempDir::new().unwrap();
+        let src_path = src_dir.path();
+        fs::write(src_path.join("main.rs"), "fn main() {}\n").unwrap();
+
+        let db_dir = TempDir::new().unwrap();
+        let db_path = db_dir.path().join("dq_violation_testdb");
+        let config = KitBootstrapConfig::new(db_path.clone());
+        let kit = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&config))
+            .expect("build_kit");
+
+        // Pre-populate the DB with a DQ-006 violation: a File node with empty
+        // hash. Use a separate project name to avoid conflicts with the
+        // indexer. The data is committed via a fresh Repository connection
+        // (LadybugDB auto-commits each execute), so the fresh_repo opened
+        // inside index_core will see it.
+        let repo = Repository::open(&db_path).expect("open repo for injection");
+        repo.connection()
+            .execute(
+                "CREATE (:File {id: 'bad_file', project: 'ghost_proj', name: 'bad.rs', \
+                 filePath: '/bad.rs', language: 'rust', hash: '', lineCount: 0});",
+            )
+            .expect("insert bad file");
+
+        // Call index_core — the DQ check should detect the empty hash and
+        // trigger the `if !dq_report.is_clean()` branch (lines 248-258).
+        // DQ violations are reported via eprintln! but don't fail indexing.
+        let output = index_core(
+            &kit,
+            &db_path,
+            src_path.to_str().unwrap(),
+            "test_project",
+            false,
+            false,
+            false,
+        )
+        .expect("index should succeed even with DQ violations");
+
+        assert!(output.files_indexed >= 1);
+    }
+
+    // Covers the `kit.config::<StorageConfig>().map_err(...)` error path
+    // (lines 304-306) in the index wrapper. Creates a kit WITHOUT registering
+    // StorageModule or setting StorageConfig, then calls the index wrapper.
+    #[cfg(feature = "cli")]
+    #[test]
+    fn index_wrapper_fails_when_storage_config_not_registered() {
+        use crate::kit::AsyncKit;
+        use crate::service::runtime::{init_kit, reset_kit_for_testing};
+        use sdforge::prelude::ApiError;
+
+        reset_kit_for_testing();
+
+        // Build an empty kit (no modules registered, no configs set).
+        // build() succeeds on an empty dependency graph.
+        let kit = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(AsyncKit::new().build())
+            .expect("build empty kit");
+        init_kit(kit).expect("init_kit");
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(index(
+            "/nonexistent/path".to_string(),
+            "test_project".to_string(),
+            false,
+            false,
+            false,
+            false,
+        ));
+        assert!(
+            result.is_err(),
+            "wrapper should fail without StorageConfig"
+        );
+        // The error should be an Internal ApiError with a message mentioning
+        // storage config (from wrap_kit_error).
+        match result.unwrap_err() {
+            ApiError::Internal { message, .. } => {
+                assert!(
+                    message.contains("storage config"),
+                    "error should mention storage config: {message}"
+                );
+            }
+            other => panic!("expected Internal error, got {other:?}"),
+        }
+
+        reset_kit_for_testing();
     }
 }

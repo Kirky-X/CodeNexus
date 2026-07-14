@@ -696,4 +696,124 @@ mod tests {
             "top-level call should have None caller_qn"
         );
     }
+
+    #[test]
+    fn comment_only_source_returns_empty() {
+        let result = extract("// just a comment\n");
+        assert!(result.is_empty(), "comment-only should produce no nodes");
+    }
+
+    #[test]
+    fn parenthesized_call_extracts_callee() {
+        let result = extract("function foo() {}\n(foo)();\n");
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
+        assert!(
+            callees.contains(&"foo"),
+            "should extract parenthesized call to foo: {:?}",
+            callees
+        );
+    }
+
+    #[test]
+    fn chained_call_extracts_callee() {
+        let result = extract("function getFunc() { return function() {} }\ngetFunc()();\n");
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
+        assert!(
+            callees.contains(&"getFunc"),
+            "should extract chained call to getFunc: {:?}",
+            callees
+        );
+    }
+
+    #[test]
+    fn generator_function_does_not_break_extraction() {
+        let result = extract("function* gen() { yield 1; }\n");
+        assert!(result.nodes.iter().all(|n| !n.name.is_empty()));
+    }
+
+    #[test]
+    fn class_extends_does_not_break_extraction() {
+        let result = extract("class Dog extends Animal { bark() {} }\n");
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name, "Dog");
+    }
+
+    #[test]
+    fn export_function_extracts_function() {
+        let result = extract("export function foo() { return 1; }\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "foo");
+    }
+
+    #[test]
+    fn export_default_class_extracts_class() {
+        let result = extract("export default class Foo {}\n");
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name, "Foo");
+    }
+
+    #[test]
+    fn multiple_classes_extracted() {
+        let result = extract("class A {}\nclass B {}\nclass C {}\n");
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 3, "should extract 3 classes");
+    }
+
+    #[test]
+    fn import_with_alias_extracts_import() {
+        let result = extract("import { foo as bar } from './mod'\n");
+        assert_eq!(result.imports.len(), 1);
+        assert_eq!(result.imports[0].source_file, "./mod");
+    }
+
+    #[test]
+    fn const_arrow_function_not_extracted_as_function() {
+        let result = extract("const fn = () => 1;\n");
+        let vars: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Variable)
+            .collect();
+        assert_eq!(vars.len(), 1, "arrow function assigned to const is a Variable");
+        assert_eq!(vars[0].name, "fn");
+    }
+
+    #[test]
+    fn class_with_getter_method_does_not_break() {
+        let result = extract("class Foo { get value() { return 42; } }\n");
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name, "Foo");
+    }
 }

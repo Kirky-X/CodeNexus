@@ -2117,4 +2117,248 @@ function setupSecond() {
             result.writes
         );
     }
+
+    #[test]
+    fn decorator_on_class_does_not_break_extraction() {
+        let src = "@decorator\nclass Foo {}";
+        let result = extract(src);
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 1, "should still extract Foo class");
+        assert_eq!(classes[0].name, "Foo");
+    }
+
+    #[test]
+    fn decorator_on_method_does_not_break_extraction() {
+        let src = "class Foo { @log bar() {} }";
+        let result = extract(src);
+        let methods: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Method)
+            .collect();
+        assert_eq!(methods.len(), 1, "should still extract bar method");
+        assert_eq!(methods[0].name, "bar");
+    }
+
+    #[test]
+    fn generic_constraint_does_not_break_extraction() {
+        let src = "function foo<T extends number>(x: T): T { return x; }";
+        let result = extract(src);
+        let func = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "foo")
+            .expect("should find foo function");
+        assert_eq!(func.label, NodeLabel::Function);
+    }
+
+    #[test]
+    fn generic_interface_does_not_break_extraction() {
+        let src = "interface Repo<T> { get(): T; }";
+        let result = extract(src);
+        let ifaces: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Interface)
+            .collect();
+        assert_eq!(ifaces.len(), 1);
+        assert_eq!(ifaces[0].name, "Repo");
+    }
+
+    #[test]
+    fn comment_only_source_returns_empty_result() {
+        let result = extract("// just a comment\n");
+        assert!(result.is_empty(), "comment-only file should produce no nodes");
+    }
+
+    #[test]
+    fn abstract_class_does_not_break_extraction() {
+        let src = "abstract class Animal { abstract makeSound(): void; }";
+        let result = extract(src);
+        assert!(result.nodes.iter().all(|n| n.name != ""));
+    }
+
+    #[test]
+    fn multiple_interfaces_extracted() {
+        let src = "interface A {} interface B {} interface C {}";
+        let result = extract(src);
+        let ifaces: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Interface)
+            .collect();
+        assert_eq!(ifaces.len(), 3);
+    }
+
+    #[test]
+    fn enum_with_string_values() {
+        let src = "enum Direction { Up = 'UP', Down = 'DOWN' }";
+        let result = extract(src);
+        let enums: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Enum)
+            .collect();
+        assert_eq!(enums.len(), 1);
+        assert_eq!(enums[0].name, "Direction");
+    }
+
+    #[test]
+    fn const_enum_declaration() {
+        let src = "const enum Color { Red, Green, Blue }";
+        let result = extract(src);
+        let enums: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Enum)
+            .collect();
+        assert_eq!(enums.len(), 1);
+        assert_eq!(enums[0].name, "Color");
+    }
+
+    #[test]
+    fn type_alias_with_union() {
+        let src = "type Status = 'active' | 'inactive' | 'pending';";
+        let result = extract(src);
+        let aliases: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::TypeAlias)
+            .collect();
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0].name, "Status");
+    }
+
+    #[test]
+    fn generator_function_declaration() {
+        let src = "function* counter() { yield 1; }";
+        let result = extract(src);
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "counter");
+    }
+
+    #[test]
+    fn class_implements_interface_does_not_break_extraction() {
+        let src = "interface IFoo {} class Foo implements IFoo {}";
+        let result = extract(src);
+        assert!(
+            result.nodes.iter().any(|n| n.label == NodeLabel::Interface && n.name == "IFoo"),
+            "should extract IFoo interface"
+        );
+        assert!(
+            result.nodes.iter().any(|n| n.label == NodeLabel::Class && n.name == "Foo"),
+            "should extract Foo class"
+        );
+    }
+
+    // --- Coverage tests for remaining uncovered branches ---
+
+    fn find_first_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+        if node.kind() == kind {
+            return Some(node);
+        }
+        for i in 0..node.named_child_count() as u32 {
+            if let Some(child) = node.named_child(i) {
+                if let Some(found) = find_first_by_kind(child, kind) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn call_arguments_returns_empty_for_node_without_arguments_field() {
+        // Covers line 987: call_arguments when node has no arguments field
+        let src = "const x = 1;";
+        let tree = parse_ts(src);
+        let root = tree.root_node();
+        let decl = find_first_by_kind(root, "lexical_declaration")
+            .expect("should find lexical_declaration");
+        let args = call_arguments(decl, src);
+        assert!(args.is_empty(), "should return empty vec for non-call node");
+    }
+
+    #[test]
+    fn collect_imported_names_namespace_import_alias_branch() {
+        // Covers lines 647-649: collect_imported_names namespace_import
+        // with alias field present (import * as foo from 'mod')
+        let src = "import * as foo from 'mod';";
+        let tree = parse_ts(src);
+        let root = tree.root_node();
+        let ns_import = find_first_by_kind(root, "namespace_import")
+            .expect("should find namespace_import node");
+        let mut names = Vec::new();
+        collect_imported_names(ns_import, src, &mut names);
+        assert_eq!(names, vec!["foo".to_string()]);
+    }
+
+    #[test]
+    fn extract_function_anonymous_in_export_uses_default_name() {
+        // Covers lines 460-463, 467: extract_function None name branch
+        // when parent is export_statement → synthesizes "default" name
+        let src = "export default function() {}";
+        let tree = parse_ts(src);
+        let root = tree.root_node();
+        let export_stmt = find_first_by_kind(root, "export_statement")
+            .expect("should find export_statement");
+        let func_node = export_stmt
+            .child_by_field_name("value")
+            .expect("export_statement should have a value field");
+
+        let registry = ScopeResolverRegistry::new();
+        let ctx = VisitContext {
+            file_path: "test.ts",
+            project: "proj",
+            current_func: None,
+            current_parent: None,
+            resolver: &registry,
+        };
+        let mut result = ExtractResult::new("test.ts", Language::TypeScript);
+        extract_function(func_node, src, &ctx, &mut result);
+
+        assert!(
+            result.nodes.iter().any(|n| n.name == "default"),
+            "should produce a Function node named 'default': {:?}",
+            result.nodes
+        );
+    }
+
+    #[test]
+    fn extract_function_anonymous_not_in_export_returns_early() {
+        // Covers lines 460-461, 464-465: extract_function None name branch
+        // when parent is NOT export_statement → early return (no node produced)
+        let src = "let x = function() {};";
+        let tree = parse_ts(src);
+        let root = tree.root_node();
+        let func_node = find_first_by_kind(root, "function_expression")
+            .or_else(|| find_first_by_kind(root, "function"))
+            .expect("should find a function expression node");
+
+        let registry = ScopeResolverRegistry::new();
+        let ctx = VisitContext {
+            file_path: "test.ts",
+            project: "proj",
+            current_func: None,
+            current_parent: None,
+            resolver: &registry,
+        };
+        let mut result = ExtractResult::new("test.ts", Language::TypeScript);
+        extract_function(func_node, src, &ctx, &mut result);
+
+        assert!(
+            result.nodes.is_empty(),
+            "should not produce any nodes for anonymous non-export function: {:?}",
+            result.nodes
+        );
+    }
 }

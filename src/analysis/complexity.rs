@@ -2695,4 +2695,192 @@ fn parallel(a: i32) {
             "function with unknown language should be skipped"
         );
     }
+
+    // --- Additional coverage: is_exit_node for non-Rust languages ---
+
+    #[test]
+    fn is_exit_node_non_rust_uses_statement_kinds() {
+        // Lines 466-469: the `_` branch for non-Rust languages uses
+        // `return_statement` / `break_statement` / `continue_statement`.
+        assert!(is_exit_node(Language::Python, "return_statement"));
+        assert!(is_exit_node(Language::Python, "break_statement"));
+        assert!(is_exit_node(Language::Python, "continue_statement"));
+        assert!(!is_exit_node(Language::Python, "return_expression"));
+        // Rust uses its own node kinds.
+        assert!(is_exit_node(Language::Rust, "return_expression"));
+        assert!(!is_exit_node(Language::Rust, "return_statement"));
+    }
+
+    // --- Additional coverage: has_allocation_pattern all variants ---
+
+    #[test]
+    fn has_allocation_pattern_detects_all_collection_types() {
+        // Lines 836-840: each allocation pattern variant.
+        assert!(has_allocation_pattern("let v = Vec::new();"));
+        assert!(has_allocation_pattern("let v = vec![1, 2, 3];"));
+        assert!(has_allocation_pattern("let m = HashMap::new();"));
+        assert!(has_allocation_pattern("let m = BTreeMap::new();"));
+        assert!(has_allocation_pattern("let s = String::new();"));
+        // No allocation patterns.
+        assert!(!has_allocation_pattern("let x = 1;"));
+        assert!(!has_allocation_pattern("let arr = [0u8; 10];"));
+    }
+
+    // --- Additional coverage: has_binary_search_pattern with >> 1 ---
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn tc_binary_search_with_right_shift_is_ologn() {
+        // Line 769: `text.contains(">> 1")` branch in has_binary_search_pattern.
+        let src = r#"
+fn f(arr: &[i32], target: i32) -> i32 {
+    let mut left = 0;
+    let mut right = arr.len() as i32 - 1;
+    while left <= right {
+        let mid = (left + right) >> 1;
+        if arr[mid as usize] == target { return mid; }
+        if arr[mid as usize] < target { left = mid + 1; }
+        else { right = mid - 1; }
+    }
+    -1
+}
+"#;
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(
+            estimate_time_complexity(&tree, src.as_bytes(), Language::Rust, "f"),
+            TimeComplexity::OLogN,
+            "binary search with >> 1 should be O(log n)"
+        );
+    }
+
+    // --- Additional coverage: self.method() style recursion ---
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn tc_self_method_recursion_is_on() {
+        // Lines 726, 750: `text.ends_with(&format!(".{function_name}"))` branch
+        // in has_direct_recursion / count_recursive_calls for `self.f()` style.
+        let src = "impl S { fn f(&self, n: i32) { self.f(n - 1); } }";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(
+            estimate_time_complexity(&tree, src.as_bytes(), Language::Rust, "f"),
+            TimeComplexity::ON,
+            "self.f() style recursion should be detected as O(n)"
+        );
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn sc_self_method_recursion_is_on() {
+        // Lines 726: `text.ends_with(&format!(".{function_name}"))` branch
+        // in has_direct_recursion for space complexity.
+        let src = "impl S { fn f(&self, n: i32) { self.f(n - 1); } }";
+        let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        assert_eq!(
+            estimate_space_complexity(&tree, src.as_bytes(), Language::Rust, "f"),
+            SpaceComplexity::ON,
+            "self.f() style recursion should be detected as O(n) space"
+        );
+    }
+
+    // --- Additional coverage: analyze with Method nodes ---
+
+    /// Creates a Method node with the given `content` via direct Cypher.
+    #[allow(clippy::too_many_arguments)]
+    fn create_method_with_content(
+        kit: &AsyncKit<AsyncReady>,
+        id: &str,
+        project: &str,
+        name: &str,
+        qn: &str,
+        file: &str,
+        start_line: u32,
+        end_line: u32,
+        content: &str,
+    ) {
+        let storage = storage(kit);
+        let cypher = format!(
+            "CREATE (:Method {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
+             filePath: '{}', startLine: {}, endLine: {}, signature: '', returnType: '', \
+             isExported: false, docstring: '', content: '{}', parameterCount: 0, parentQn: ''}});",
+            escape_cypher_string(id),
+            escape_cypher_string(project),
+            escape_cypher_string(name),
+            escape_cypher_string(qn),
+            escape_cypher_string(file),
+            start_line,
+            end_line,
+            escape_cypher_string(content),
+        );
+        storage.execute(&cypher).expect("create method");
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn analyze_processes_method_nodes() {
+        // Lines 1067-1076: the Method label query path in `analyze`.
+        // LadybugDB doesn't support OR label expressions, so Method is
+        // queried separately and must be merged into results.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_method_with_content(
+            &kit,
+            "m_foo",
+            "demo",
+            "foo",
+            "demo.impl.foo",
+            "/src/lib.rs",
+            1,
+            1,
+            "fn foo() {}",
+        );
+
+        let storage = storage(&kit);
+        let analyzer = ComplexityAnalyzer::new(&*storage);
+        let result = analyzer.analyze("demo").expect("analyze");
+        assert_eq!(result.len(), 1, "Method node should be analyzed");
+        assert_eq!(result[0].name, "foo");
+        assert_eq!(result[0].qualified_name, "demo.impl.foo");
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn analyze_merges_function_and_method_nodes() {
+        // Both Function and Method nodes should appear in analyze results.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f_fn",
+            "demo",
+            "free_fn",
+            "demo.free_fn",
+            "/src/lib.rs",
+            1,
+            1,
+            "fn free_fn() {}",
+        );
+        create_method_with_content(
+            &kit,
+            "m_method",
+            "demo",
+            "method",
+            "demo.impl.method",
+            "/src/lib.rs",
+            5,
+            5,
+            "fn method() {}",
+        );
+
+        let storage = storage(&kit);
+        let analyzer = ComplexityAnalyzer::new(&*storage);
+        let result = analyzer.analyze("demo").expect("analyze");
+        assert_eq!(result.len(), 2, "both Function and Method should be analyzed");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"free_fn"), "Function node should be in results");
+        assert!(names.contains(&"method"), "Method node should be in results");
+    }
 }

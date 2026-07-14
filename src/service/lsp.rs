@@ -586,4 +586,58 @@ mod tests {
         assert!(json.contains("\"character\":10"));
         assert!(json.contains("\"character\":20"));
     }
+
+    // ===== #[forge] wrapper tests =====
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn lsp_goto_def_wrapper_fails_when_kit_not_initialized() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(lsp_goto_def(
+            "/tmp/nonexist.rs".to_string(),
+            0,
+            0,
+            "/nonexistent/workspace/xyz".to_string(),
+        ));
+        assert!(result.is_err(), "wrapper should fail on nonexistent workspace");
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn lsp_hover_wrapper_fails_when_kit_not_initialized() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(lsp_hover(
+            "/tmp/nonexist.rs".to_string(),
+            0,
+            0,
+            "/nonexistent/workspace/xyz".to_string(),
+        ));
+        assert!(result.is_err(), "wrapper should fail on nonexistent workspace");
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn lsp_goto_def_wrapper_with_nonexistent_file_returns_error() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(lsp_goto_def(
+            "/tmp/does_not_exist.rs".to_string(),
+            0,
+            0,
+            "/nonexistent/workspace/xyz".to_string(),
+        ));
+        assert!(result.is_err(), "wrapper should return error for nonexistent file");
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn lsp_hover_wrapper_with_nonexistent_file_returns_error() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(lsp_hover(
+            "/tmp/does_not_exist.rs".to_string(),
+            0,
+            0,
+            "/nonexistent/workspace/xyz".to_string(),
+        ));
+        assert!(result.is_err(), "wrapper should return error for nonexistent file");
+    }
 }

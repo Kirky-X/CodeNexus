@@ -1081,4 +1081,233 @@ mod tests {
         let results = searcher.search("parse", None, 100).expect("search");
         assert!(results.iter().any(|r| r.name == "parse"));
     }
+
+    // --- Coverage gap tests: relevance_score_with_reason all branches ---
+
+    #[test]
+    fn relevance_score_with_reason_exact_match_returns_one() {
+        let (score, reason) = relevance_score_with_reason("parse", "parse");
+        assert_eq!(score, 1.0);
+        assert_eq!(reason, "exact name match");
+    }
+
+    #[test]
+    fn relevance_score_with_reason_prefix_match_returns_zero_eight() {
+        let (score, reason) = relevance_score_with_reason("parse_file", "parse");
+        assert_eq!(score, 0.8);
+        assert_eq!(reason, "prefix match");
+    }
+
+    #[test]
+    fn relevance_score_with_reason_token_aligned_match_returns_zero_seven() {
+        // Cover token-aligned match: "my_parse_helper" tokenized as
+        // ["my","parse","helper"], query "parse" → all query tokens
+        // present in name tokens → 0.7
+        let (score, reason) = relevance_score_with_reason("my_parse_helper", "parse");
+        assert_eq!(score, 0.7);
+        assert_eq!(reason, "token-aligned match");
+    }
+
+    #[test]
+    fn relevance_score_with_reason_substring_match_returns_zero_five() {
+        // Cover substring match: name contains query but not as prefix,
+        // and token alignment doesn't fully match.
+        let (score, reason) = relevance_score_with_reason("myparsehelper", "parse");
+        assert_eq!(score, 0.5);
+        assert_eq!(reason, "substring match");
+    }
+
+    #[test]
+    fn relevance_score_with_reason_no_match_returns_zero_three() {
+        // Cover `(0.3, "no match")`: name doesn't contain query at all.
+        let (score, reason) = relevance_score_with_reason("read_input", "parse");
+        assert_eq!(score, 0.3);
+        assert_eq!(reason, "no match");
+    }
+
+    #[test]
+    fn relevance_score_with_reason_camel_case_token_alignment() {
+        // camelCase "parseFile" tokenized as ["parse","file"],
+        // query "fileparse" tokenized as ["fileparse"] → not all tokens
+        // match → falls through to substring → 0.3
+        let (score, _) = relevance_score_with_reason("parseFile", "fileparse");
+        assert_eq!(score, 0.3);
+    }
+
+    // --- Coverage gap tests: relevance_score wrapper ---
+
+    #[test]
+    fn relevance_score_returns_score_only() {
+        // Cover the #[allow(dead_code)] wrapper that delegates to
+        // relevance_score_with_reason and returns only the score.
+        assert_eq!(relevance_score("parse", "parse"), 1.0);
+        assert_eq!(relevance_score("parse_file", "parse"), 0.8);
+        assert_eq!(relevance_score("read_input", "parse"), 0.3);
+    }
+
+    // --- Coverage gap tests: is_fts_unsupported_error all branches ---
+
+    #[test]
+    fn is_fts_unsupported_error_already_exists() {
+        // Cover `msg.contains("already exists")` branch
+        let err = QueryError::InvalidQuery("index already exists".to_string());
+        assert!(is_fts_unsupported_error(&err));
+    }
+
+    #[test]
+    fn is_fts_unsupported_error_not_supported() {
+        let err = QueryError::InvalidQuery("FTS not supported".to_string());
+        assert!(is_fts_unsupported_error(&err));
+    }
+
+    #[test]
+    fn is_fts_unsupported_error_parser_exception() {
+        let err = QueryError::InvalidQuery("parser exception at line 1".to_string());
+        assert!(is_fts_unsupported_error(&err));
+    }
+
+    #[test]
+    fn is_fts_unsupported_error_does_not_exist() {
+        let err = QueryError::InvalidQuery("table does not exist".to_string());
+        assert!(is_fts_unsupported_error(&err));
+    }
+
+    #[test]
+    fn is_fts_unsupported_error_other_error_returns_false() {
+        // Cover the non-matching error path → false
+        let err = QueryError::InvalidQuery("connection refused".to_string());
+        assert!(!is_fts_unsupported_error(&err));
+    }
+
+    // --- Coverage gap tests: sort_and_truncate ---
+
+    #[test]
+    fn sort_and_truncate_preserves_order_when_within_limit() {
+        let mut results = vec![
+            SearchResult {
+                name: "b".to_string(),
+                label: "Function".to_string(),
+                file_path: None,
+                start_line: None,
+                qualified_name: None,
+                score: 1.0,
+                match_reason: "exact".to_string(),
+                degree: 0,
+            },
+            SearchResult {
+                name: "a".to_string(),
+                label: "Function".to_string(),
+                file_path: None,
+                start_line: None,
+                qualified_name: None,
+                score: 1.0,
+                match_reason: "exact".to_string(),
+                degree: 0,
+            },
+        ];
+        sort_and_truncate(&mut results, 10);
+        assert_eq!(results.len(), 2);
+        // Same score → sorted by name ascending
+        assert_eq!(results[0].name, "a");
+        assert_eq!(results[1].name, "b");
+    }
+
+    #[test]
+    fn sort_and_truncate_truncates_when_exceeding_limit() {
+        let mut results: Vec<SearchResult> = (0..5)
+            .map(|i| SearchResult {
+                name: format!("func{i}"),
+                label: "Function".to_string(),
+                file_path: None,
+                start_line: None,
+                qualified_name: None,
+                score: 1.0 - i as f64 * 0.1,
+                match_reason: "match".to_string(),
+                degree: 0,
+            })
+            .collect();
+        sort_and_truncate(&mut results, 3);
+        assert_eq!(results.len(), 3);
+        // Highest scores first
+        assert_eq!(results[0].name, "func0");
+        assert_eq!(results[1].name, "func1");
+    }
+
+    #[test]
+    fn sort_and_truncate_zero_limit_empties_results() {
+        let mut results = vec![SearchResult {
+            name: "x".to_string(),
+            label: "Function".to_string(),
+            file_path: None,
+            start_line: None,
+            qualified_name: None,
+            score: 1.0,
+            match_reason: "exact".to_string(),
+            degree: 0,
+        }];
+        sort_and_truncate(&mut results, 0);
+        assert!(results.is_empty());
+    }
+
+    // --- Coverage gap: whitespace-only query, empty-token name ---
+
+    #[test]
+    fn search_rejects_whitespace_only_query() {
+        // Cover `text.trim().is_empty()` for non-empty whitespace input
+        // (line 101). The existing test only uses "".
+        let repo = fresh_repo();
+        let searcher = FullTextSearcher::new(repo.connection());
+        let err = searcher
+            .search("   \t\n", None, 10)
+            .expect_err("whitespace-only query should error");
+        assert!(err.is_invalid_query());
+    }
+
+    #[test]
+    fn relevance_score_with_reason_name_with_empty_tokens() {
+        // Cover the false branch of `!query_tokens.is_empty() && !name_tokens.is_empty()`
+        // (line 312). When the name is all digits, codenexus_tokenize returns
+        // empty → the token-alignment check is skipped → falls through to
+        // substring → 0.3 (since "12345" doesn't contain "parse").
+        let (score, reason) = relevance_score_with_reason("12345", "parse");
+        assert_eq!(score, 0.3);
+        assert_eq!(reason, "no match");
+    }
+
+    #[test]
+    fn relevance_score_with_reason_query_with_empty_tokens() {
+        // Cover the false branch when query_tokens is empty (query is all
+        // digits). The name "parse" does contain... wait, "parse" doesn't
+        // contain "12345". So it falls to substring → 0.3.
+        let (score, reason) = relevance_score_with_reason("parse", "12345");
+        assert_eq!(score, 0.3);
+        assert_eq!(reason, "no match");
+    }
+
+    #[test]
+    fn search_finds_module_by_name() {
+        // Cover searching for a Module-labeled node (line_expr = "NULL"
+        // branch in fallback_contains_search for Module which has no startLine).
+        let repo = fresh_repo();
+        repo.save_nodes(
+            &[sample_symbol(
+                NodeLabel::Module,
+                "mod1",
+                "demo",
+                "parser",
+                "demo.parser",
+                "/a.rs",
+                1,
+            )],
+            NodeLabel::Module,
+        )
+        .expect("save_nodes");
+        let searcher = FullTextSearcher::new(repo.connection());
+        let results = searcher.search("parser", None, 100).expect("search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "parser");
+        assert_eq!(results[0].label, "Module");
+        // Module has no startLine column → start_line should be None.
+        assert!(results[0].start_line.is_none());
+    }
 }

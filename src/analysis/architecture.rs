@@ -2196,4 +2196,577 @@ mod tests {
             result.layers
         );
     }
+
+    // --- Additional coverage tests (targeting uncovered lines) ---
+
+    #[test]
+    fn detect_module_boundaries_root_level_file() {
+        // Files at root level (no directory) → module_name_from_path returns "".
+        // Covers: module_name_from_path with root-level file path.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f1", "demo", "foo", "demo.foo", "main.rs", 1);
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        let root_module = result
+            .module_boundaries
+            .iter()
+            .find(|m| m.module_name.is_empty())
+            .expect("root-level module should exist with empty name");
+        assert!(
+            root_module.members.contains(&"main.rs".to_string()),
+            "root module should contain main.rs"
+        );
+        assert_eq!(root_module.cohesion, 1.0, "no CALLS edges → cohesion 1.0");
+    }
+
+    #[test]
+    fn analyze_dependency_directions_deep_chain() {
+        // A→B→C→D chain: tests can_reach with longer transitive paths.
+        // Also verifies that non-circular deep chains are detected as non-circular.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "a1", "demo", "a1", "demo.a1", "/src/a/a1.rs", 1);
+        create_function(&kit, "b1", "demo", "b1", "demo.b1", "/src/b/b1.rs", 1);
+        create_function(&kit, "c1", "demo", "c1", "demo.c1", "/src/c/c1.rs", 1);
+        create_function(&kit, "d1", "demo", "d1", "demo.d1", "/src/d/d1.rs", 1);
+        // A→B→C→D (deep chain, no cycle).
+        create_edge(&kit, "e1", "a1", "b1", "CALLS", "demo");
+        create_edge(&kit, "e2", "b1", "c1", "CALLS", "demo");
+        create_edge(&kit, "e3", "c1", "d1", "CALLS", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert_eq!(
+            result.dependency_directions.len(),
+            3,
+            "should have 3 directed edges"
+        );
+        for dd in &result.dependency_directions {
+            assert!(
+                !dd.is_circular,
+                "edge {}→{} should not be circular",
+                dd.from_module,
+                dd.to_module
+            );
+        }
+    }
+
+    #[test]
+    fn detect_layers_model_excluded_when_type_has_calls() {
+        // Type with HAS_PROPERTY but ALSO appears in CALLS edges → NOT Model.
+        // Covers: `!all_calls_ids.contains(id)` negative branch (line 826).
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Class with HAS_PROPERTY.
+        create_class(
+            &kit,
+            "cls1",
+            "demo",
+            "ActiveClass",
+            "demo.ActiveClass",
+            "/src/model/user.rs",
+            1,
+        );
+        create_function(
+            &kit,
+            "prop1",
+            "demo",
+            "field",
+            "demo.field",
+            "/src/model/user.rs",
+            5,
+        );
+        create_edge(&kit, "e1", "cls1", "prop1", "HAS_PROPERTY", "demo");
+        // Class also appears in a CALLS edge → all_calls_ids contains cls1.
+        create_function(
+            &kit,
+            "caller",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/svc.rs",
+            1,
+        );
+        create_edge(&kit, "e2", "caller", "cls1", "CALLS", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        let model_layer = result.layers.iter().find(|l| l.layer == "Model");
+        assert!(
+            model_layer.is_none() || !model_layer.unwrap().members.contains(&"demo.ActiveClass".to_string()),
+            "ActiveClass has CALLS edge → should NOT be in Model layer"
+        );
+    }
+
+    #[test]
+    fn detect_layers_service_takes_precedence_over_repository() {
+        // Function called by controller AND has FETCHES edge → Service (not Repository).
+        // Covers: priority order in classification (lines 817-820).
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Controller handles a route.
+        create_function(
+            &kit,
+            "ctrl1",
+            "demo",
+            "list_users",
+            "demo.list_users",
+            "/src/api/handler.rs",
+            1,
+        );
+        create_route(&kit, "r1", "demo", "/api/users", "GET");
+        create_edge(&kit, "e1", "ctrl1", "r1", "HANDLES_ROUTE", "demo");
+        // Function called by controller AND has FETCHES edge.
+        create_function(
+            &kit,
+            "svc_repo",
+            "demo",
+            "fetch_and_load",
+            "demo.fetch_and_load",
+            "/src/service/svc.rs",
+            1,
+        );
+        create_function(
+            &kit,
+            "data1",
+            "demo",
+            "db_query",
+            "demo.db_query",
+            "/src/repo/db.rs",
+            1,
+        );
+        // Controller calls svc_repo → svc_repo is in called_by_controllers.
+        create_edge(&kit, "e2", "ctrl1", "svc_repo", "CALLS", "demo");
+        // svc_repo also has FETCHES edge → svc_repo is in repository_ids.
+        create_edge(&kit, "e3", "svc_repo", "data1", "FETCHES", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        let service = result.layers.iter().find(|l| l.layer == "Service");
+        assert!(
+            service.is_some(),
+            "Service layer should exist"
+        );
+        assert!(
+            service.unwrap().members.contains(&"demo.fetch_and_load".to_string()),
+            "fetch_and_load should be Service (priority over Repository)"
+        );
+    }
+
+    #[test]
+    fn overview_multiple_routes_with_handlers() {
+        // Multiple routes with different handlers → tests route_to_handler
+        // map building with multiple entries.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r1", "demo", "/api/users", "GET");
+        create_route(&kit, "r2", "demo", "/api/products", "POST");
+        create_route(&kit, "r3", "demo", "/api/orders", "DELETE");
+        create_handler(&kit, "h1", "demo", "list_users");
+        create_handler(&kit, "h2", "demo", "create_product");
+        // r3 has no handler → handler should be empty.
+        create_edge(&kit, "e1", "h1", "r1", "HANDLES", "demo");
+        create_edge(&kit, "e2", "h2", "r2", "HANDLES", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert_eq!(result.routes.len(), 3, "should have 3 routes");
+        let r1 = result.routes.iter().find(|r| r.path == "/api/users").expect("r1");
+        assert_eq!(r1.handler, "list_users");
+        let r2 = result.routes.iter().find(|r| r.path == "/api/products").expect("r2");
+        assert_eq!(r2.handler, "create_product");
+        let r3 = result.routes.iter().find(|r| r.path == "/api/orders").expect("r3");
+        assert_eq!(r3.handler, "", "r3 should have empty handler");
+    }
+
+    #[test]
+    fn detect_module_boundaries_no_calls_edges_at_all() {
+        // Module with functions but no CALLS edges anywhere.
+        // total=0 → cohesion=1.0 (the `if total == 0` branch).
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "a1", "demo", "a1", "demo.a1", "/src/a/a1.rs", 1);
+        create_function(&kit, "a2", "demo", "a2", "demo.a2", "/src/a/a2.rs", 1);
+        create_function(&kit, "b1", "demo", "b1", "demo.b1", "/src/b/b1.rs", 1);
+        // No edges at all.
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        for mb in &result.module_boundaries {
+            assert_eq!(
+                mb.cohesion, 1.0,
+                "module {} with no CALLS edges should have cohesion 1.0",
+                mb.module_name
+            );
+            assert_eq!(mb.incoming_deps, 0);
+            assert_eq!(mb.outgoing_deps, 0);
+        }
+    }
+
+    // --- module_name_from_path unit tests ---
+
+    #[test]
+    fn module_name_from_path_returns_parent_directory() {
+        assert_eq!(module_name_from_path("/src/a/foo.rs"), "/src/a");
+        assert_eq!(module_name_from_path("src/a/foo.rs"), "src/a");
+    }
+
+    #[test]
+    fn module_name_from_path_nested_directories() {
+        assert_eq!(module_name_from_path("/a/b/c/d.rs"), "/a/b/c");
+    }
+
+    #[test]
+    fn module_name_from_path_root_level_file_returns_empty() {
+        assert_eq!(module_name_from_path("foo.rs"), "");
+    }
+
+    #[test]
+    fn module_name_from_path_with_trailing_slash() {
+        // Path with trailing slash: Path::new("/src/a/").parent() == "/src"
+        // (trailing slash is normalized away, last component "a" is removed).
+        assert_eq!(module_name_from_path("/src/a/"), "/src");
+    }
+
+    #[test]
+    fn module_name_from_path_single_component() {
+        assert_eq!(module_name_from_path("a"), "");
+    }
+
+    #[test]
+    fn module_name_from_path_empty_returns_empty() {
+        assert_eq!(module_name_from_path(""), "");
+    }
+
+    // --- package_prefix additional edge cases ---
+
+    #[test]
+    fn package_prefix_multiple_dots_returns_first_two() {
+        assert_eq!(package_prefix("a.b.c.d.e"), Some("a.b"));
+    }
+
+    #[test]
+    fn package_prefix_trailing_dot_returns_first_two() {
+        // "a.b." splits to ["a", "b", ""] → first 2 = "a.b".
+        assert_eq!(package_prefix("a.b."), Some("a.b"));
+    }
+
+    #[test]
+    fn package_prefix_single_char_components() {
+        assert_eq!(package_prefix("x.y.Z"), Some("x.y"));
+    }
+
+    // --- can_reach additional edge cases ---
+
+    #[test]
+    fn can_reach_handles_cycle_in_graph() {
+        // Graph with cycle: a→b→a. Searching for "c" (not in graph) should
+        // terminate and return false despite the cycle.
+        let mut adj: std::collections::HashMap<String, std::collections::HashSet<String>> =
+            std::collections::HashMap::new();
+        let mut a_neighbors = std::collections::HashSet::new();
+        a_neighbors.insert("b".to_string());
+        adj.insert("a".to_string(), a_neighbors);
+        let mut b_neighbors = std::collections::HashSet::new();
+        b_neighbors.insert("a".to_string());
+        adj.insert("b".to_string(), b_neighbors);
+        assert!(
+            !can_reach(&adj, "a", "c"),
+            "should return false for unreachable node despite cycle"
+        );
+    }
+
+    #[test]
+    fn can_reach_returns_true_for_long_path() {
+        // a→b→c→d→e→target: long transitive path.
+        let mut adj: std::collections::HashMap<String, std::collections::HashSet<String>> =
+            std::collections::HashMap::new();
+        let edges = [("a", "b"), ("b", "c"), ("c", "d"), ("d", "e"), ("e", "target")];
+        for (from, to) in &edges {
+            adj.entry((*from).to_string())
+                .or_default()
+                .insert((*to).to_string());
+        }
+        assert!(can_reach(&adj, "a", "target"), "long path should be reachable");
+    }
+
+    #[test]
+    fn can_reach_returns_false_when_target_not_in_adjacency() {
+        // Target node not in adjacency list at all.
+        let mut adj: std::collections::HashMap<String, std::collections::HashSet<String>> =
+            std::collections::HashMap::new();
+        let mut a_neighbors = std::collections::HashSet::new();
+        a_neighbors.insert("b".to_string());
+        adj.insert("a".to_string(), a_neighbors);
+        assert!(
+            !can_reach(&adj, "a", "nonexistent"),
+            "nonexistent target should return false"
+        );
+    }
+
+    // --- overview: entry point with non-matching name ---
+
+    #[test]
+    fn overview_entry_points_excludes_non_matching_names() {
+        // Functions named "main_handler", "mainFunc", etc. should NOT match.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f1", "demo", "main_helper", "demo.main_helper", "/src/a.rs", 1);
+        create_function(&kit, "f2", "demo", "mainFunc", "demo.mainFunc", "/src/b.rs", 1);
+        create_function(&kit, "f3", "demo", "run", "demo.run", "/src/c.rs", 1);
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert!(
+            result.entry_points.is_empty(),
+            "non-matching names should not be entry points: {:?}",
+            result.entry_points
+        );
+    }
+
+    // --- overview: hotspots with CALLS edge to missing node ---
+
+    #[test]
+    fn overview_hotspots_excludes_targets_not_in_function_or_method() {
+        // CALLS edge targets a node that is NOT a Function or Method
+        // (e.g., a Class) → should not appear in hotspots.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_class(&kit, "cls1", "demo", "MyClass", "demo.MyClass", "/src/cls.rs", 1);
+        create_function(&kit, "f1", "demo", "caller", "demo.caller", "/src/a.rs", 1);
+        // Edge pointing to a Class (not a Function/Method).
+        create_edge(&kit, "e1", "f1", "cls1", "CALLS", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        // MyClass should NOT be a hotspot (it's a Class, not Function/Method).
+        assert!(
+            !result.hotspots.iter().any(|h| h.name == "MyClass"),
+            "Class node should not appear in hotspots: {:?}",
+            result.hotspots
+        );
+    }
+
+    // --- overview: routes sorted by path ---
+
+    #[test]
+    fn overview_routes_sorted_by_path() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r3", "demo", "/api/zebra", "GET");
+        create_route(&kit, "r1", "demo", "/api/alpha", "GET");
+        create_route(&kit, "r2", "demo", "/api/middle", "GET");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert_eq!(result.routes.len(), 3);
+        assert_eq!(result.routes[0].path, "/api/alpha");
+        assert_eq!(result.routes[1].path, "/api/middle");
+        assert_eq!(result.routes[2].path, "/api/zebra");
+    }
+
+    // --- overview: packages sorted by count desc then name ---
+
+    #[test]
+    fn overview_packages_sorted_by_count_desc_then_name() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // aaa.pkg has 1 symbol, bbb.pkg has 3 symbols, ccc.pkg has 3 symbols.
+        create_class(&kit, "c1", "demo", "A1", "aaa.pkg.A1", "/a.rs", 1);
+        create_class(&kit, "c2", "demo", "B1", "bbb.pkg.B1", "/b.rs", 1);
+        create_class(&kit, "c3", "demo", "B2", "bbb.pkg.B2", "/b.rs", 1);
+        create_class(&kit, "c4", "demo", "B3", "bbb.pkg.B3", "/b.rs", 1);
+        create_class(&kit, "c5", "demo", "C1", "ccc.pkg.C1", "/c.rs", 1);
+        create_class(&kit, "c6", "demo", "C2", "ccc.pkg.C2", "/c.rs", 1);
+        create_class(&kit, "c7", "demo", "C3", "ccc.pkg.C3", "/c.rs", 1);
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        // Both bbb.pkg and ccc.pkg have 3 symbols; bbb.pkg should come first
+        // (alphabetical tiebreaker).
+        assert_eq!(result.packages[0].package, "bbb.pkg");
+        assert_eq!(result.packages[0].symbol_count, 3);
+        assert_eq!(result.packages[1].package, "ccc.pkg");
+        assert_eq!(result.packages[1].symbol_count, 3);
+        // aaa.pkg has 1 symbol → last.
+        assert_eq!(result.packages[2].package, "aaa.pkg");
+        assert_eq!(result.packages[2].symbol_count, 1);
+    }
+
+    // --- overview: module boundaries sorted by name ---
+
+    #[test]
+    fn overview_module_boundaries_sorted_by_name() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f1", "demo", "a", "demo.a", "/src/zebra/a.rs", 1);
+        create_function(&kit, "f2", "demo", "b", "demo.b", "/src/alpha/b.rs", 1);
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        // Modules should be sorted by name: alpha before zebra.
+        assert!(result.module_boundaries.len() >= 2);
+        assert_eq!(result.module_boundaries[0].module_name, "/src/alpha");
+        assert_eq!(result.module_boundaries[1].module_name, "/src/zebra");
+    }
+
+    // --- overview: languages sorted alphabetically ---
+
+    #[test]
+    fn overview_languages_sorted_alphabetically() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_file(&kit, "f1", "demo", "/a.py", "python");
+        create_file(&kit, "f2", "demo", "/b.rs", "rust");
+        create_file(&kit, "f3", "demo", "/c.ts", "typescript");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert_eq!(result.languages.len(), 3);
+        assert_eq!(result.languages[0].language, "python");
+        assert_eq!(result.languages[1].language, "rust");
+        assert_eq!(result.languages[2].language, "typescript");
+    }
+
+    // --- overview: dependency directions sorted by from then to ---
+
+    #[test]
+    fn overview_dependency_directions_sorted_by_from_then_to() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Create edges in non-sorted order.
+        create_function(&kit, "z1", "demo", "z", "demo.z", "/src/zebra/z.rs", 1);
+        create_function(&kit, "a1", "demo", "a", "demo.a", "/src/alpha/a.rs", 1);
+        create_function(&kit, "m1", "demo", "m", "demo.m", "/src/middle/m.rs", 1);
+        // zebra→middle, alpha→zebra, alpha→middle
+        create_edge(&kit, "e1", "z1", "m1", "CALLS", "demo");
+        create_edge(&kit, "e2", "a1", "z1", "CALLS", "demo");
+        create_edge(&kit, "e3", "a1", "m1", "CALLS", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert_eq!(result.dependency_directions.len(), 3);
+        // Sorted by from_module then to_module.
+        assert_eq!(result.dependency_directions[0].from_module, "/src/alpha");
+        assert_eq!(result.dependency_directions[0].to_module, "/src/middle");
+        assert_eq!(result.dependency_directions[1].from_module, "/src/alpha");
+        assert_eq!(result.dependency_directions[1].to_module, "/src/zebra");
+        assert_eq!(result.dependency_directions[2].from_module, "/src/zebra");
+        assert_eq!(result.dependency_directions[2].to_module, "/src/middle");
+    }
+
+    // --- overview: entry points sorted by qualified name ---
+
+    #[test]
+    fn overview_entry_points_sorted_by_qualified_name() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Create entry points in non-sorted order.
+        create_function(&kit, "f1", "demo", "main", "demo.zebra.main", "/src/z.rs", 1);
+        create_function(&kit, "f2", "demo", "main", "demo.alpha.main", "/src/a.rs", 1);
+        create_function(&kit, "f3", "demo", "main", "demo.middle.main", "/src/m.rs", 1);
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert_eq!(result.entry_points.len(), 3);
+        // Sorted by qualified_name.
+        assert_eq!(result.entry_points[0].qualified_name, "demo.alpha.main");
+        assert_eq!(result.entry_points[1].qualified_name, "demo.middle.main");
+        assert_eq!(result.entry_points[2].qualified_name, "demo.zebra.main");
+    }
+
+    // --- overview: hotspots sorted by count desc then qn ---
+
+    #[test]
+    fn overview_hotspots_tiebreaker_by_qualified_name() {
+        // Two functions with the same caller_count → sorted by qualified_name.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f_zebra", "demo", "zebra", "demo.zebra", "/src/z.rs", 1);
+        create_function(&kit, "f_alpha", "demo", "alpha", "demo.alpha", "/src/a.rs", 1);
+        create_function(&kit, "f_caller", "demo", "caller", "demo.caller", "/src/c.rs", 1);
+        // Both zebra and alpha have 1 caller.
+        create_edge(&kit, "e1", "f_caller", "f_zebra", "CALLS", "demo");
+        create_edge(&kit, "e2", "f_caller", "f_alpha", "CALLS", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert_eq!(result.hotspots.len(), 2);
+        // Both have 1 caller; alpha should come first (alphabetical).
+        assert_eq!(result.hotspots[0].name, "alpha");
+        assert_eq!(result.hotspots[1].name, "zebra");
+    }
+
+    // --- overview: layers sorted by Controller > Service > Repository > Model ---
+
+    #[test]
+    fn overview_layers_in_precedence_order() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Controller.
+        create_function(&kit, "ctrl1", "demo", "list_users", "demo.list_users", "/src/api/handler.rs", 1);
+        create_route(&kit, "r1", "demo", "/api/users", "GET");
+        create_edge(&kit, "e1", "ctrl1", "r1", "HANDLES_ROUTE", "demo");
+        // Model.
+        create_class(&kit, "cls1", "demo", "User", "demo.User", "/src/model/user.rs", 1);
+        create_function(&kit, "prop1", "demo", "name_field", "demo.name_field", "/src/model/user.rs", 5);
+        create_edge(&kit, "e2", "cls1", "prop1", "HAS_PROPERTY", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        // Controller should come before Model.
+        let layer_names: Vec<&str> = result.layers.iter().map(|l| l.layer.as_str()).collect();
+        let ctrl_idx = layer_names.iter().position(|&n| n == "Controller");
+        let model_idx = layer_names.iter().position(|&n| n == "Model");
+        assert!(ctrl_idx.is_some() && model_idx.is_some());
+        assert!(ctrl_idx.unwrap() < model_idx.unwrap());
+    }
+
+    // --- overview: module with only external incoming deps ---
+
+    #[test]
+    fn overview_module_with_only_incoming_deps() {
+        // Module B has only incoming deps (no outgoing).
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "a1", "demo", "a", "demo.a", "/src/a/a1.rs", 1);
+        create_function(&kit, "b1", "demo", "b", "demo.b", "/src/b/b1.rs", 1);
+        // A→B: A has outgoing, B has incoming.
+        create_edge(&kit, "e1", "a1", "b1", "CALLS", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        let module_b = result
+            .module_boundaries
+            .iter()
+            .find(|m| m.module_name.ends_with("src/b"))
+            .expect("module B should exist");
+        assert_eq!(module_b.incoming_deps, 1, "B should have 1 incoming dep");
+        assert_eq!(module_b.outgoing_deps, 0, "B should have 0 outgoing deps");
+        // cohesion = 0 / (0 + 1 + 0) = 0.0
+        assert!(
+            (module_b.cohesion - 0.0).abs() < 0.001,
+            "cohesion should be 0.0, got {}",
+            module_b.cohesion
+        );
+    }
 }

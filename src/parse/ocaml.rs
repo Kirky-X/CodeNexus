@@ -406,4 +406,96 @@ mod tests {
         assert!(add.signature.is_some(), "function should have a signature");
         assert!(add.signature.as_deref().unwrap().contains("add"));
     }
+
+    #[test]
+    fn include_statement_extracts_import() {
+        let result = extract("include List\n");
+        assert!(
+            !result.imports.is_empty(),
+            "include should produce an import: {:?}",
+            result.imports
+        );
+    }
+
+    #[test]
+    fn include_qualified_module_extracts_import() {
+        let result = extract("include MyLib.SubModule\n");
+        assert!(
+            result.imports.iter().any(|i| i.source_file.contains("SubModule")),
+            "should extract qualified include: {:?}",
+            result.imports
+        );
+    }
+
+    #[test]
+    fn nested_module_extracts_inner_let() {
+        let src = "module Foo = struct\n  let bar = 42\nend\n";
+        let result = extract(src);
+        assert!(
+            result.nodes.iter().any(|n| n.label == NodeLabel::Module && n.name == "Foo"),
+            "should extract outer module"
+        );
+        assert!(
+            result.nodes.iter().any(|n| n.name == "bar"),
+            "should extract inner let binding"
+        );
+    }
+
+    #[test]
+    fn multiple_type_definitions() {
+        let src = "type color = Red | Green\ntype shape = Circle | Square\n";
+        let result = extract(src);
+        let types: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::TypeAlias)
+            .collect();
+        assert_eq!(types.len(), 2, "should extract 2 types");
+        let names: Vec<_> = types.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"color"));
+        assert!(names.contains(&"shape"));
+    }
+
+    #[test]
+    fn comment_only_source_returns_empty() {
+        let result = extract("(* just a comment *)\n");
+        assert!(result.is_empty(), "comment-only should produce no nodes");
+    }
+
+    #[test]
+    fn let_with_complex_pattern() {
+        let result = extract("let (x, y) = (1, 2)\n");
+        assert!(
+            !result.nodes.is_empty(),
+            "should extract something from tuple pattern"
+        );
+    }
+
+    #[test]
+    fn nested_let_inside_function() {
+        let src = "let outer x =\n  let inner = x + 1 in\n  inner * 2\n";
+        let result = extract(src);
+        assert!(
+            result.nodes.iter().any(|n| n.name == "outer"),
+            "should extract outer function"
+        );
+    }
+
+    #[test]
+    fn type_with_parameters() {
+        let result = extract("type 'a tree = Leaf | Node of 'a * 'a tree * 'a tree\n");
+        let types: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::TypeAlias)
+            .collect();
+        assert_eq!(types.len(), 1);
+        assert_eq!(types[0].name, "tree");
+    }
+
+    #[test]
+    fn module_without_name_does_not_panic() {
+        let result = extract("module struct\n  let x = 1\nend\n");
+        let _ = result;
+    }
 }

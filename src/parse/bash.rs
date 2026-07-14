@@ -437,4 +437,303 @@ mod tests {
         assert_eq!(funcs[0].name, "setup");
         assert_eq!(globals[0].name, "NAME");
     }
+
+    #[test]
+    fn nested_variable_assignment_not_extracted_as_global() {
+        let result = extract("foo() { LOCAL=bar; }\n");
+        let globals: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::GlobalVar)
+            .collect();
+        assert!(
+            globals.iter().all(|n| n.name != "LOCAL"),
+            "nested variable should not be extracted as global: {:?}",
+            globals.iter().map(|n| &n.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn comment_only_source_returns_empty() {
+        let result = extract("# just a comment\n");
+        assert!(result.is_empty(), "comment-only should produce no nodes");
+    }
+
+    #[test]
+    fn function_with_local_variable() {
+        let result = extract("foo() { local x=1; echo $x; }\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1, "should extract function foo");
+        assert_eq!(funcs[0].name, "foo");
+    }
+
+    #[test]
+    fn function_with_if_statement() {
+        let result = extract("check() { if [ -f /etc/passwd ]; then echo yes; fi }\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "check");
+    }
+
+    #[test]
+    fn function_with_loop() {
+        let result = extract("iterate() { for i in 1 2 3; do echo $i; done }\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "iterate");
+    }
+
+    #[test]
+    fn multiple_functions_and_globals_mixed() {
+        let result = extract("A=1\nfoo() { echo hi; }\nB=2\nbar() { echo bye; }\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        let globals: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::GlobalVar)
+            .collect();
+        assert_eq!(funcs.len(), 2, "should extract 2 functions");
+        assert_eq!(globals.len(), 2, "should extract 2 globals");
+    }
+
+    #[test]
+    fn function_with_keyword_and_braces() {
+        let result = extract("function greet { echo hello; }\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "greet");
+    }
+
+    #[test]
+    fn empty_function_body() {
+        let result = extract("noop() { }\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "noop");
+    }
+
+    #[test]
+    fn variable_assignment_with_dollar_sign() {
+        let result = extract("X=$HOME\n");
+        let globals: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::GlobalVar)
+            .collect();
+        assert_eq!(globals.len(), 1);
+        assert_eq!(globals[0].name, "X");
+    }
+
+    #[test]
+    fn function_with_command_substitution() {
+        let result = extract("getdate() { DATE=$(date); echo $DATE; }\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "getdate");
+    }
+
+    #[test]
+    fn function_with_case_statement() {
+        // Exercises the default `_ => visit_children` branch for `case_statement`
+        // nodes inside a function body.
+        let result = extract("dispatch() { case $1 in start) echo start;; stop) echo stop;; esac }\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "dispatch");
+    }
+
+    #[test]
+    fn function_with_heredoc() {
+        // Exercises visit_children traversal through a heredoc body.
+        let result = extract("write_config() { cat <<EOF\nkey=value\nEOF\n}\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "write_config");
+    }
+
+    #[test]
+    fn function_with_while_loop() {
+        // Exercises the default branch for while loops inside functions.
+        let result = extract("read_lines() { while read line; do echo $line; done }\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "read_lines");
+    }
+
+    #[test]
+    fn function_with_subshell() {
+        // Exercises traversal through subshell `( ... )` nodes.
+        let result = extract("run_in_subshell() { ( cd /tmp && ls ); }\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "run_in_subshell");
+    }
+
+    #[test]
+    fn global_array_assignment() {
+        // Array assignment at top level should produce a GlobalVar node.
+        let result = extract("FILES=(a.txt b.txt c.txt)\n");
+        let globals: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::GlobalVar)
+            .collect();
+        assert_eq!(globals.len(), 1);
+        assert_eq!(globals[0].name, "FILES");
+    }
+
+    #[test]
+    fn function_with_keyword_and_parens() {
+        // `function foo()` syntax — exercises the name field path with
+        // parentheses.
+        let result = extract("function bar() { echo hi; }\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "bar");
+    }
+
+    #[test]
+    fn function_with_redirection() {
+        // Function body with output redirection should not break extraction.
+        let result = extract("log_msg() { echo \"msg\" >> /var/log/app.log; }\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "log_msg");
+    }
+
+    #[test]
+    fn function_with_pipe() {
+        // Function body with a pipe should not break extraction.
+        let result = extract("process() { cat input.txt | grep pattern | sort; }\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "process");
+    }
+
+    #[test]
+    fn function_with_background_command() {
+        // Function body with a backgrounded command.
+        let result = extract("start_workers() { worker & worker & }\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "start_workers");
+    }
+
+    #[test]
+    fn multiple_global_vars_and_functions_mixed_with_comments() {
+        // Comments interspersed with definitions should be skipped.
+        let result = extract("# header comment\nA=1\n# mid comment\nfoo() { echo hi; }\n# tail comment\nB=2\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        let globals: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::GlobalVar)
+            .collect();
+        assert_eq!(funcs.len(), 1, "should extract 1 function");
+        assert_eq!(globals.len(), 2, "should extract 2 globals");
+    }
+
+    #[test]
+    fn function_definition_with_empty_name_field_fallback() {
+        // A function defined with `function` keyword and braces but whose
+        // name field may be empty — exercises the command_name/word fallback
+        // paths in function_name.
+        let result = extract("function my_func { echo hi; }\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "my_func");
+    }
+
+    #[test]
+    fn function_with_arithmetic_expansion() {
+        // Function body with $(( ... )) arithmetic.
+        let result = extract("compute() { RESULT=$((1 + 2)); echo $RESULT; }\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "compute");
+    }
+
+    #[test]
+    fn defines_edge_for_global_var() {
+        // Global variable assignments should also produce DEFINES edges.
+        let result = extract("MY_VAR=value\n");
+        let defines_count = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Defines)
+            .count();
+        assert_eq!(defines_count, 1, "global var should have a DEFINES edge");
+    }
 }

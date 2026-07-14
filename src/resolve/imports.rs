@@ -1696,4 +1696,113 @@ mod tests {
         );
         assert_eq!(edges[0].target, "src/com/google/gson/Gson.java");
     }
+
+    // --- Coverage gap tests: build_file_index, strip_js_style_extension, resolve_java_class_import ---
+
+    #[test]
+    fn build_file_index_handles_node_without_file_path() {
+        // File node with no file_path → only name is indexed (line 166 None branch).
+        let mut graph = Graph::new();
+        let node = Node::builder(NodeLabel::File, "name_only.ts", "name_only.ts")
+            .id("name_only.ts")
+            .project("proj")
+            .language(Language::TypeScript)
+            .build();
+        graph.add_node(node);
+
+        let index = build_file_index(&graph);
+        assert_eq!(index.get("name_only.ts"), Some(&"name_only.ts".to_string()));
+    }
+
+    #[test]
+    fn strip_js_style_extension_preserves_non_js_extensions() {
+        assert_eq!(strip_js_style_extension("src/a.ts"), "src/a.ts");
+        assert_eq!(strip_js_style_extension("src/a.rs"), "src/a.rs");
+        assert_eq!(strip_js_style_extension("src/a.go"), "src/a.go");
+    }
+
+    #[test]
+    fn resolve_java_class_import_with_slash_returns_none() {
+        // Source with '/' is a file path, not a Java package → early None.
+        let index = HashMap::new();
+        assert_eq!(resolve_java_class_import("src/Main.java", "src/App.java", &index), None);
+    }
+
+    #[test]
+    fn resolve_java_class_import_without_dot_returns_none() {
+        // Source without '.' is not a Java package path → early None.
+        let index = HashMap::new();
+        assert_eq!(resolve_java_class_import("react", "src/App.java", &index), None);
+    }
+
+    #[test]
+    fn resolve_include_suffix_prefers_same_directory() {
+        // Two files both suffix-match "format.h": one in the same directory
+        // as the importer, one in a different directory. Same-dir wins.
+        let mut index = HashMap::new();
+        index.insert("src/format.h".to_string(), "id-same".to_string());
+        index.insert("include/fmt/format.h".to_string(), "id-other".to_string());
+
+        let result = resolve_include_suffix("format.h", "src/main.cpp", &index);
+        assert_eq!(result, Some("id-same".to_string()));
+    }
+
+    #[test]
+    fn resolve_include_suffix_falls_back_to_other_directory() {
+        // No same-directory match, only other-directory → same_dir.or(other)
+        // returns the other match (line 347 `other` branch).
+        let mut index = HashMap::new();
+        index.insert("include/fmt/format.h".to_string(), "id-other".to_string());
+
+        let result = resolve_include_suffix("format.h", "src/main.cpp", &index);
+        assert_eq!(result, Some("id-other".to_string()));
+    }
+
+    #[test]
+    fn resolve_include_suffix_returns_none_when_no_match() {
+        // No file suffix-matches the include path → returns None.
+        let mut index = HashMap::new();
+        index.insert("src/utils.h".to_string(), "id-utils".to_string());
+
+        let result = resolve_include_suffix("format.h", "src/main.cpp", &index);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn resolve_include_suffix_exact_match_with_no_importer_directory() {
+        // Exact match (prefix_len == 0) and importer_path has no '/' →
+        // importer_dir = "", match_dir = "" → same_dir match.
+        let mut index = HashMap::new();
+        index.insert("format.h".to_string(), "id-exact".to_string());
+
+        let result = resolve_include_suffix("format.h", "main.cpp", &index);
+        assert_eq!(result, Some("id-exact".to_string()));
+    }
+
+    #[test]
+    fn normalise_relative_dot_dot_from_root_pops_empty() {
+        // `../b` from `a.ts` (root-level file): importer_dir is empty,
+        // combined = "../b", segments.pop() on empty stack is a no-op.
+        let n = normalise_relative("../b", "a.ts");
+        assert_eq!(n, "b");
+    }
+
+    #[test]
+    fn resolve_include_suffix_picks_shortest_other_dir() {
+        // Multiple other-directory matches: shortest path wins (closest to root).
+        let mut index = HashMap::new();
+        index.insert("lib/fmt/format.h".to_string(), "id-short".to_string());
+        index.insert("include/fmt/format.h".to_string(), "id-long".to_string());
+
+        let result = resolve_include_suffix("format.h", "src/main.cpp", &index);
+        assert_eq!(result, Some("id-short".to_string()));
+    }
+
+    #[test]
+    fn strip_js_style_extension_strips_all_js_variants() {
+        assert_eq!(strip_js_style_extension("src/a.js"), "src/a");
+        assert_eq!(strip_js_style_extension("src/a.jsx"), "src/a");
+        assert_eq!(strip_js_style_extension("src/a.mjs"), "src/a");
+        assert_eq!(strip_js_style_extension("src/a.cjs"), "src/a");
+    }
 }

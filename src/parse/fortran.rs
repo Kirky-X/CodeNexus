@@ -1551,4 +1551,84 @@ end function"#;
             result.nodes.iter().map(|n| &n.name).collect::<Vec<_>>()
         );
     }
+
+    // --- Coverage gap: do while, field_expression, combine_scope ---
+
+    #[test]
+    fn do_while_loop_does_not_produce_loop_variable_write() {
+        // Cover do_loop_variable returning None for `do while` loops.
+        // A `do while` has no loop_control_expression child, so
+        // do_loop_variable returns None and no WriteInfo is pushed.
+        let src = "subroutine looper()\n    integer :: i\n    do while (i < 10)\n        i = i + 1\n    end do\nend subroutine\n";
+        let result = extract(src);
+        // The `i = i + 1` inside the loop body still writes i via
+        // assignment_statement, but the do_loop itself should NOT
+        // produce a write (no loop variable).
+        let i_writes: Vec<_> = result
+            .writes
+            .iter()
+            .filter(|w| w.var_name == "i")
+            .collect();
+        // There should be exactly 1 write (from the assignment, not the loop).
+        assert_eq!(
+            i_writes.len(),
+            1,
+            "do while should not produce a loop variable write, only assignment write: {:?}",
+            result.writes
+        );
+    }
+
+    #[test]
+    fn field_expression_identifier_not_read() {
+        // Cover is_fortran_read_position returning false for identifiers
+        // inside field_expression (e.g., `obj%field` — the field identifier
+        // is not a read).
+        let src = "subroutine test()\n    integer :: obj, val\n    val = obj%field\nend subroutine\n";
+        let result = extract(src);
+        // `field` is part of a field_expression and should not be captured
+        // as a read. `obj` is the object side and should be read. `val` is
+        // the assignment target and should be written.
+        let reads: Vec<_> = result
+            .reads
+            .iter()
+            .map(|r| r.var_name.as_str())
+            .collect();
+        assert!(
+            !reads.contains(&"field"),
+            "field_expression field identifier should not be a read: {:?}",
+            reads
+        );
+    }
+
+    #[test]
+    fn combine_scope_all_branches() {
+        // Directly exercise all four match arms of combine_scope.
+        assert_eq!(
+            combine_scope(Some("parent"), Some("child")),
+            Some("parent_child".to_string())
+        );
+        assert_eq!(
+            combine_scope(None, Some("child")),
+            Some("child".to_string())
+        );
+        assert_eq!(
+            combine_scope(Some("parent"), None),
+            Some("parent".to_string())
+        );
+        assert_eq!(combine_scope(None, None), None);
+    }
+
+    #[test]
+    fn parse_error_on_invalid_source() {
+        // The extract method should still succeed on malformed input
+        // (tree-sitter produces ERROR nodes but doesn't fail outright).
+        // This verifies the error path is not triggered for partial parses.
+        let result = extract("this is not fortran at all !!!");
+        // No nodes should be extracted from invalid source.
+        assert!(
+            result.nodes.is_empty(),
+            "invalid source should produce no nodes: {:?}",
+            result.nodes
+        );
+    }
 }

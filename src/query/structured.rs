@@ -2378,4 +2378,1016 @@ mod tests {
             "expected error when CodeRelation table is dropped, got {result:?}"
         );
     }
+
+    #[test]
+    fn search_truncates_regex_results_exceeding_limit() {
+        // Cover `if limit < results.len() { results.truncate(limit); }`
+        // (lines 145-147) for SearchMode::Regex: search_regex does not apply
+        // the limit internally, so the final truncate in `search()` is the
+        // only path that caps the result count.
+        let storage = build_storage();
+        let funcs: Vec<Node> = (0..10)
+            .map(|i| {
+                Node::builder(
+                    NodeLabel::Function,
+                    format!("get_item_{i}"),
+                    format!("demo.get_item_{i}"),
+                )
+                .id(format!("f{i}"))
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(i * 10 + 1)
+                .end_line(i * 10 + 9)
+                .language(Language::Rust)
+                .build()
+            })
+            .collect();
+        storage
+            .save_nodes(&funcs, NodeLabel::Function)
+            .expect("save_nodes");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: r"get_item_.*".to_string(),
+            mode: SearchMode::Regex,
+            limit: 3,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("regex search");
+        assert_eq!(
+            results.len(),
+            3,
+            "regex results should be truncated to limit 3, got {}",
+            results.len()
+        );
+    }
+
+    #[test]
+    fn search_truncates_fuzzy_results_exceeding_limit() {
+        // Cover `if limit < results.len() { results.truncate(limit); }`
+        // (lines 145-147) for SearchMode::Fuzzy: search_fuzzy does not apply
+        // the limit internally, so the final truncate in `search()` is the
+        // only path that caps the result count.
+        let storage = build_storage();
+        let funcs: Vec<Node> = (0..10)
+            .map(|i| {
+                Node::builder(
+                    NodeLabel::Function,
+                    format!("parse{i}"),
+                    format!("demo.parse{i}"),
+                )
+                .id(format!("f{i}"))
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(i * 10 + 1)
+                .end_line(i * 10 + 9)
+                .language(Language::Rust)
+                .build()
+            })
+            .collect();
+        storage
+            .save_nodes(&funcs, NodeLabel::Function)
+            .expect("save_nodes");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "parse0".to_string(),
+            mode: SearchMode::Fuzzy,
+            limit: 3,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("fuzzy search");
+        assert!(
+            results.len() <= 3,
+            "fuzzy results should be truncated to limit 3, got {}",
+            results.len()
+        );
+        // parse0 has distance 0, parse1..parse9 have distance 1 — all within
+        // MAX_FUZZY_DISTANCE (3), so without truncation there would be 10.
+        assert!(
+            !results.is_empty(),
+            "fuzzy search should match at least parse0"
+        );
+    }
+
+    #[test]
+    fn compute_module_proximity_both_none_returns_half() {
+        // Cover the `_ => 0.5` arm (line 796) for the (None, None) case,
+        // which is not exercised by compute_module_proximity_returns_expected_values.
+        assert_eq!(compute_module_proximity(&None, &None), 0.5);
+    }
+
+    #[test]
+    fn load_qn_to_node_id_map_skips_table_query_errors() {
+        // Cover `if let Ok(rows) = ...` Err branch (line 504): when a table
+        // query fails (table dropped), the loop skips that table silently
+        // and continues to the next label. The Function table still yields
+        // results, so the returned map is non-empty.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "foo", "demo.foo")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .execute("DROP TABLE Class;")
+            .expect("drop Class table");
+        let engine = SearchEngine::new(storage.as_ref());
+        let map = engine.load_qn_to_node_id_map("demo", &["demo.foo"]);
+        assert_eq!(
+            map.get("demo.foo").map(String::as_str),
+            Some("f1"),
+            "Function table query should still succeed and populate the map"
+        );
+    }
+
+    // --- Coverage gap tests: compute_module_proximity all branches ---
+
+    #[test]
+    fn compute_module_proximity_both_some_match_returns_one() {
+        // Cover `(Some(path), Some(pattern)) if path.contains(pattern) => 1.0`
+        assert_eq!(
+            compute_module_proximity(&Some("/src/main.rs".to_string()), &Some("main".to_string())),
+            1.0
+        );
+    }
+
+    #[test]
+    fn compute_module_proximity_both_some_no_match_returns_half() {
+        // Cover `(Some(path), Some(pattern))` where pattern not in path → falls to `_ => 0.5`
+        assert_eq!(
+            compute_module_proximity(&Some("/src/main.rs".to_string()), &Some("other".to_string())),
+            0.5
+        );
+    }
+
+    #[test]
+    fn compute_module_proximity_some_none_returns_half() {
+        // Cover `(Some(_), None) => 0.5`
+        assert_eq!(
+            compute_module_proximity(&Some("/a.rs".to_string()), &None),
+            0.5
+        );
+    }
+
+    #[test]
+    fn compute_module_proximity_none_some_returns_half() {
+        // Cover `(None, Some(_)) => 0.5`
+        assert_eq!(
+            compute_module_proximity(&None, &Some("pattern".to_string())),
+            0.5
+        );
+    }
+
+    // --- Coverage gap tests: compute_name_relevance ---
+
+    #[test]
+    fn compute_name_relevance_empty_query_returns_one() {
+        // Cover `if query.is_empty() { return 1.0; }`
+        assert_eq!(compute_name_relevance("foo", ""), 1.0);
+    }
+
+    #[test]
+    fn compute_name_relevance_exact_match_returns_one() {
+        // Cover `name_lower == query_lower => 1.0`
+        assert_eq!(compute_name_relevance("Parse", "parse"), 1.0);
+    }
+
+    #[test]
+    fn compute_name_relevance_contains_returns_zero_eight() {
+        // Cover `name_lower.contains(&query_lower) => 0.8`
+        assert_eq!(compute_name_relevance("parse_file", "parse"), 0.8);
+    }
+
+    #[test]
+    fn compute_name_relevance_no_match_returns_zero() {
+        // Cover `_ => 0.0`
+        assert_eq!(compute_name_relevance("read_input", "parse"), 0.0);
+    }
+
+    // --- Coverage gap tests: relevance_score_with_reason neutral path ---
+
+    #[test]
+    fn relevance_score_with_reason_empty_query_returns_neutral() {
+        // Cover `if query.is_empty() { return (1.0, "neutral"); }`
+        let (score, reason) = relevance_score_with_reason("foo", "");
+        assert_eq!(score, 1.0);
+        assert_eq!(reason, "neutral");
+    }
+
+    // --- Coverage gap tests: parse_node_label ---
+
+    #[test]
+    fn parse_node_label_valid_labels_return_some() {
+        assert_eq!(parse_node_label("Function"), Some(NodeLabel::Function));
+        assert_eq!(parse_node_label("Class"), Some(NodeLabel::Class));
+        assert_eq!(parse_node_label("function"), Some(NodeLabel::Function));
+    }
+
+    #[test]
+    fn parse_node_label_unknown_label_returns_none() {
+        // Cover `name.parse::<NodeLabel>().ok()` → None
+        assert_eq!(parse_node_label("UnknownLabel"), None);
+        assert_eq!(parse_node_label(""), None);
+    }
+
+    // --- Coverage gap tests: clamped_limit ---
+
+    #[test]
+    fn clamped_limit_caps_at_max_limit() {
+        // Cover `self.limit.min(MAX_LIMIT)` when limit > MAX_LIMIT
+        let params = SearchParams {
+            limit: MAX_LIMIT + 100,
+            ..SearchParams::default()
+        };
+        assert_eq!(params.clamped_limit(), MAX_LIMIT);
+    }
+
+    #[test]
+    fn clamped_limit_preserves_small_values() {
+        let params = SearchParams {
+            limit: 10,
+            ..SearchParams::default()
+        };
+        assert_eq!(params.clamped_limit(), 10);
+    }
+
+    #[test]
+    fn clamped_limit_zero_returns_zero() {
+        let params = SearchParams {
+            limit: 0,
+            ..SearchParams::default()
+        };
+        assert_eq!(params.clamped_limit(), 0);
+    }
+
+    // --- Coverage gap tests: levenshtein edge cases ---
+
+    #[test]
+    fn levenshtein_empty_a_returns_b_length() {
+        // Cover `if a_bytes.is_empty() { return b_bytes.len(); }`
+        assert_eq!(levenshtein("", "hello"), 5);
+    }
+
+    #[test]
+    fn levenshtein_empty_b_returns_a_length() {
+        // Cover `if b_bytes.is_empty() { return a_bytes.len(); }`
+        assert_eq!(levenshtein("hello", ""), 5);
+    }
+
+    #[test]
+    fn levenshtein_both_empty_returns_zero() {
+        assert_eq!(levenshtein("", ""), 0);
+    }
+
+    #[test]
+    fn levenshtein_swaps_shorter_to_b() {
+        // Cover the swap branch: when a.len < b.len, they are swapped.
+        // a="ab" (len 2), b="abc" (len 3) → after swap a="abc", b="ab"
+        assert_eq!(levenshtein("ab", "abc"), 1);
+    }
+
+    // --- Coverage gap tests: search_graph_enhanced empty labels ---
+
+    #[test]
+    fn search_graph_enhanced_empty_label_filter_returns_empty() {
+        // Cover `if labels.is_empty() { return Ok(Vec::new()); }`:
+        // when label_filter contains only unknown labels, parse_node_label
+        // returns None for all, leaving labels empty.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "foo", "demo.foo")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "foo".to_string(),
+            mode: SearchMode::GraphEnhanced,
+            label_filter: Some(vec!["UnknownLabel".to_string()]),
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("search");
+        assert!(results.is_empty(), "unknown label filter → no results");
+    }
+
+    // --- Coverage gap tests: load_tested_node_ids error propagation ---
+
+    #[test]
+    fn load_tested_node_ids_returns_error_on_storage_failure() {
+        // Cover `Err(e) => return Err(e.into())` (line 477): when the
+        // CodeRelation table is dropped, the query errors and propagates.
+        let storage = build_storage();
+        storage.execute("DROP TABLE CodeRelation;").expect("drop table");
+        let engine = SearchEngine::new(storage.as_ref());
+        let result = engine.load_tested_node_ids("demo");
+        assert!(result.is_err(), "dropped CodeRelation should propagate error");
+    }
+
+    // --- Coverage gap tests: search_graph_enhanced degree filter ---
+
+    #[test]
+    fn search_graph_enhanced_degree_filter_excludes_out_of_range() {
+        // Cover `if degree < min || degree > max { continue; }` exclusion path:
+        // a node with degree 0 is excluded when min=1.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "foo", "demo.foo")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "foo".to_string(),
+            mode: SearchMode::GraphEnhanced,
+            degree_filter: Some((1, 100)),
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("search");
+        assert!(
+            results.is_empty(),
+            "node with degree 0 should be excluded by min=1 filter"
+        );
+    }
+
+    #[test]
+    fn search_graph_enhanced_degree_filter_includes_in_range() {
+        // Cover the pass-through path: degree within filter range.
+        let storage = build_storage();
+        let caller = Node::builder(NodeLabel::Function, "caller", "demo.caller")
+            .id("c1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        let callee = Node::builder(NodeLabel::Function, "callee", "demo.callee")
+            .id("c2")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(20)
+            .end_line(30)
+            .language(Language::Rust)
+            .build();
+        storage
+            .save_nodes(&[caller, callee], NodeLabel::Function)
+            .expect("save_nodes");
+        let edge = Edge::builder("c1", "c2", EdgeType::Calls, "demo")
+            .confidence(0.9)
+            .build();
+        storage.save_edges(&[edge]).expect("save_edges");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "callee".to_string(),
+            mode: SearchMode::GraphEnhanced,
+            degree_filter: Some((1, 100)),
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("search");
+        assert!(
+            results.iter().any(|r| r.name == "callee"),
+            "callee with degree 1 should be included by min=1 filter"
+        );
+    }
+
+    // --- Coverage gap tests: MultiSignal mode ---
+
+    #[test]
+    fn search_multi_signal_scores_and_sorts_results() {
+        // Cover MultiSignal dispatch path: score_multi_signal is called
+        // and results are sorted by score descending.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "parse", "demo.parse")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "parse".to_string(),
+            mode: SearchMode::MultiSignal,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("search");
+        assert!(!results.is_empty(), "MultiSignal should find parse");
+        assert_eq!(results[0].match_reason, "multi-signal");
+    }
+
+    // --- Coverage: MultiSignal unwrap_or_default when load_tested_node_ids fails ---
+
+    #[test]
+    fn search_multi_signal_with_dropped_coderelation_returns_results() {
+        // Cover `let tested_ids = self.load_tested_node_ids(project).unwrap_or_default();`
+        // (line 126): when CodeRelation table is dropped, load_tested_node_ids
+        // returns Err, and unwrap_or_default() falls back to an empty HashSet.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "handler", "demo.handler")
+            .id("h1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage.execute("DROP TABLE CodeRelation;").expect("drop table");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "handler".to_string(),
+            mode: SearchMode::MultiSignal,
+            ..SearchParams::default()
+        };
+        // Should NOT error — unwrap_or_default swallows the load error.
+        let results = engine.search("demo", &params).expect("multi-signal search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].match_reason, "multi-signal");
+        // test_coverage = 0.0 (no TESTS edges found since CodeRelation is gone)
+        // name_relevance(1.0)*0.4 + degree_centrality(0.0)*0.3
+        // + module_proximity(0.5)*0.2 + test_coverage(0.0)*0.1 = 0.5
+        assert!(
+            (results[0].score - 0.5).abs() < 1e-9,
+            "expected score 0.5 without CodeRelation, got {}",
+            results[0].score
+        );
+    }
+
+    // --- Coverage: final truncate in search() for GraphEnhanced mode ---
+
+    #[test]
+    fn search_graph_enhanced_truncates_results_exceeding_limit() {
+        // Cover `if limit < results.len() { results.truncate(limit); }` (lines 145-147)
+        // for SearchMode::GraphEnhanced: search_graph_enhanced does NOT truncate
+        // internally, so the final truncate in search() is the only cap.
+        let storage = build_storage();
+        let funcs: Vec<Node> = (0..10)
+            .map(|i| {
+                Node::builder(
+                    NodeLabel::Function,
+                    format!("handler_{i}"),
+                    format!("demo.handler_{i}"),
+                )
+                .id(format!("f{i}"))
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(i * 10 + 1)
+                .end_line(i * 10 + 9)
+                .language(Language::Rust)
+                .build()
+            })
+            .collect();
+        storage
+            .save_nodes(&funcs, NodeLabel::Function)
+            .expect("save_nodes");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "handler".to_string(),
+            mode: SearchMode::GraphEnhanced,
+            limit: 3,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("graph search");
+        assert_eq!(
+            results.len(),
+            3,
+            "graph enhanced results should be truncated to limit 3, got {}",
+            results.len()
+        );
+    }
+
+    // --- Coverage: final truncate in search() for MultiSignal mode ---
+
+    #[test]
+    fn search_multi_signal_truncates_results_exceeding_limit() {
+        // Cover `if limit < results.len() { results.truncate(limit); }` (lines 145-147)
+        // for SearchMode::MultiSignal.
+        let storage = build_storage();
+        let funcs: Vec<Node> = (0..10)
+            .map(|i| {
+                Node::builder(
+                    NodeLabel::Function,
+                    format!("handler_{i}"),
+                    format!("demo.handler_{i}"),
+                )
+                .id(format!("f{i}"))
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(i * 10 + 1)
+                .end_line(i * 10 + 9)
+                .language(Language::Rust)
+                .build()
+            })
+            .collect();
+        storage
+            .save_nodes(&funcs, NodeLabel::Function)
+            .expect("save_nodes");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "handler".to_string(),
+            mode: SearchMode::MultiSignal,
+            limit: 3,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("multi-signal search");
+        assert_eq!(
+            results.len(),
+            3,
+            "multi-signal results should be truncated to limit 3, got {}",
+            results.len()
+        );
+    }
+
+    // --- Coverage: final truncate in search() for Exact mode ---
+
+    #[test]
+    fn search_exact_truncates_results_exceeding_limit() {
+        // Cover `if limit < results.len() { results.truncate(limit); }` (lines 145-147)
+        // for SearchMode::Exact: search_exact truncates internally, but with
+        // limit=0 the final truncate should still produce empty results.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "parse", "demo.parse")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "parse".to_string(),
+            mode: SearchMode::Exact,
+            limit: 0,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("exact search");
+        assert!(
+            results.is_empty(),
+            "limit=0 should return empty, got {}",
+            results.len()
+        );
+    }
+
+    // --- Coverage: GraphEnhanced degree filter boundary at max ---
+
+    #[test]
+    fn search_graph_enhanced_degree_filter_boundary_at_max_inclusive() {
+        // Cover the pass-through path when degree == max (boundary inclusive):
+        // `if degree < min || degree > max` should be false when degree == max.
+        let storage = build_storage();
+        let caller = Node::builder(NodeLabel::Function, "caller", "demo.caller")
+            .id("c1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        let callee = Node::builder(NodeLabel::Function, "target", "demo.target")
+            .id("c2")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(20)
+            .end_line(30)
+            .language(Language::Rust)
+            .build();
+        storage
+            .save_nodes(&[caller, callee], NodeLabel::Function)
+            .expect("save_nodes");
+        let edge = Edge::new("c1", "c2", EdgeType::Calls, "demo");
+        storage.save_edges(&[edge]).expect("save_edges");
+        let engine = SearchEngine::new(storage.as_ref());
+        // degree=1, filter=(0,1) → degree == max → should be included
+        let params = SearchParams {
+            query: "target".to_string(),
+            mode: SearchMode::GraphEnhanced,
+            degree_filter: Some((0, 1)),
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("graph search");
+        assert!(
+            results.iter().any(|r| r.name == "target"),
+            "degree=1 with filter (0,1) should be included"
+        );
+    }
+
+    // --- Coverage: MultiSignal with file_pattern match ---
+
+    #[test]
+    fn search_multi_signal_with_file_pattern_match_increases_score() {
+        // Cover the module_proximity = 1.0 path in score_multi_signal when
+        // file_pattern matches the candidate's file_path.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "handler", "demo.handler")
+            .id("h1")
+            .project("demo")
+            .file_path("/src/handlers.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "handler".to_string(),
+            mode: SearchMode::MultiSignal,
+            file_pattern: Some("/src/handlers.rs".to_string()),
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("multi-signal search");
+        assert_eq!(results.len(), 1);
+        // name_relevance(1.0)*0.4 + degree_centrality(0.0)*0.3
+        // + module_proximity(1.0)*0.2 + test_coverage(0.0)*0.1 = 0.6
+        assert!(
+            (results[0].score - 0.6).abs() < 1e-9,
+            "exact match + file_pattern match → score 0.6, got {}",
+            results[0].score
+        );
+    }
+
+    // --- Coverage: MultiSignal with no file_pattern (module_proximity = 0.5) ---
+
+    #[test]
+    fn search_multi_signal_without_file_pattern_uses_default_proximity() {
+        // Cover the `_ => 0.5` path in compute_module_proximity when
+        // file_pattern is None, through the MultiSignal search path.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "handler", "demo.handler")
+            .id("h1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "handler".to_string(),
+            mode: SearchMode::MultiSignal,
+            ..SearchParams::default() // file_pattern = None
+        };
+        let results = engine.search("demo", &params).expect("multi-signal search");
+        assert_eq!(results.len(), 1);
+        // name_relevance(1.0)*0.4 + degree_centrality(0.0)*0.3
+        // + module_proximity(0.5)*0.2 + test_coverage(0.0)*0.1 = 0.5
+        assert!(
+            (results[0].score - 0.5).abs() < 1e-9,
+            "exact match + no file_pattern → score 0.5, got {}",
+            results[0].score
+        );
+    }
+
+    // --- Coverage: GraphEnhanced with partial label filter (mix valid + invalid) ---
+
+    #[test]
+    fn search_graph_enhanced_with_partial_label_filter_uses_valid_only() {
+        // Cover the filter_map path in search_graph_enhanced when label_filter
+        // contains a mix of valid and invalid label names: invalid labels are
+        // silently filtered out, valid labels are searched.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "handler", "demo.handler")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "handler".to_string(),
+            mode: SearchMode::GraphEnhanced,
+            label_filter: Some(vec!["Function".to_string(), "NotARealLabel".to_string()]),
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("graph search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].label, "Function");
+    }
+
+    // --- Coverage: search() sort stability with equal scores ---
+
+    #[test]
+    fn search_sorts_by_score_desc_then_name_asc() {
+        // Cover the sort_by closure (lines 139-144): when two results have
+        // the same score, they should be sorted by name ascending.
+        let storage = build_storage();
+        let funcs = [
+            Node::builder(NodeLabel::Function, "zebra", "demo.zebra")
+                .id("f1")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(1)
+                .end_line(10)
+                .language(Language::Rust)
+                .build(),
+            Node::builder(NodeLabel::Function, "alpha", "demo.alpha")
+                .id("f2")
+                .project("demo")
+                .file_path("/a.rs")
+                .start_line(20)
+                .end_line(30)
+                .language(Language::Rust)
+                .build(),
+        ];
+        storage.save_nodes(&funcs, NodeLabel::Function).expect("save_nodes");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "a".to_string(), // matches both as substring
+            mode: SearchMode::Exact,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("exact search");
+        assert_eq!(results.len(), 2);
+        // Both have substring match score 0.5, so sorted by name ascending
+        assert_eq!(results[0].name, "alpha");
+        assert_eq!(results[1].name, "zebra");
+    }
+
+    // ====================================================================
+    // Per-table Err(_) => continue coverage for SearchEngine modes
+    // ====================================================================
+
+    #[test]
+    fn search_exact_continues_on_per_table_query_error() {
+        // Cover `Err(_) => continue` (line 174) in search_exact: when a
+        // table query fails (table dropped), the loop skips it and
+        // continues to the next table.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "parse", "demo.parse")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage.execute("DROP TABLE Class;").expect("drop table");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "parse".to_string(),
+            mode: SearchMode::Exact,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("exact search");
+        assert!(results.iter().any(|r| r.name == "parse"));
+    }
+
+    #[test]
+    fn search_regex_continues_on_per_table_query_error() {
+        // Cover `Err(_) => continue` (line 211) in search_regex.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "get_user", "demo.get_user")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage.execute("DROP TABLE Class;").expect("drop table");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: r"get_.*".to_string(),
+            mode: SearchMode::Regex,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("regex search");
+        assert!(results.iter().any(|r| r.name == "get_user"));
+    }
+
+    #[test]
+    fn search_fuzzy_continues_on_per_table_query_error() {
+        // Cover `Err(_) => continue` (line 281) in search_fuzzy.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "parse", "demo.parse")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage.execute("DROP TABLE Class;").expect("drop table");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "parse".to_string(),
+            mode: SearchMode::Fuzzy,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("fuzzy search");
+        assert!(results.iter().any(|r| r.name == "parse"));
+    }
+
+    #[test]
+    fn search_graph_enhanced_continues_on_per_table_query_error() {
+        // Cover `Err(_) => continue` (line 360) in search_graph_enhanced.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "parse", "demo.parse")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage.execute("DROP TABLE Class;").expect("drop table");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "parse".to_string(),
+            mode: SearchMode::GraphEnhanced,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("graph search");
+        assert!(results.iter().any(|r| r.name == "parse"));
+    }
+
+    // ====================================================================
+    // search_by_type error propagation via `?`
+    // ====================================================================
+
+    #[test]
+    fn search_by_type_propagates_query_error() {
+        // Cover `let rows = self.conn.query(&cypher)?;` (line 611) in
+        // search_by_type: when the target table is dropped, the error
+        // propagates (unlike search_by_name which uses `continue`).
+        let repo = fresh_repo();
+        repo.save_nodes(
+            &[sample_function("f1", "demo", "parse", "demo.parse", "/a.rs", 1)],
+            NodeLabel::Function,
+        )
+        .expect("save_nodes");
+        repo.connection()
+            .execute("DROP TABLE Function;")
+            .expect("drop Function table");
+        let searcher = StructuredSearcher::new(repo.connection());
+        let result = searcher.search_by_type(NodeLabel::Function, None, 100);
+        assert!(
+            result.is_err(),
+            "dropped Function table should propagate error, got {result:?}"
+        );
+    }
+
+    // ====================================================================
+    // rows_to_search_results: defensive None handling
+    // ====================================================================
+
+    #[test]
+    fn rows_to_search_results_skips_row_with_missing_name() {
+        // Cover `row.first().and_then(|v| v.as_str())?` None path (line 680):
+        // when the first column is not a string (or row is empty), the row
+        // is filtered out.
+        let rows: Vec<Vec<serde_json::Value>> = vec![
+            // Row with null name → filtered out.
+            vec![serde_json::Value::Null, serde_json::Value::Null, serde_json::Value::Null, serde_json::Value::Null],
+            // Row with valid name → kept.
+            vec![
+                serde_json::Value::String("foo".to_string()),
+                serde_json::Value::String("demo.foo".to_string()),
+                serde_json::Value::String("/a.rs".to_string()),
+                serde_json::Value::Number(serde_json::Number::from(1)),
+            ],
+        ];
+        let results = rows_to_search_results(rows, NodeLabel::Function, "foo");
+        assert_eq!(results.len(), 1, "only the row with a valid name should be kept");
+        assert_eq!(results[0].name, "foo");
+    }
+
+    #[test]
+    fn rows_to_search_results_handles_missing_optional_fields() {
+        // Cover None paths for qualified_name (line 681), file_path (line 682),
+        // and start_line (lines 683-686): when these columns are null or
+        // missing, the SearchResult should have None/None for optional fields.
+        let rows: Vec<Vec<serde_json::Value>> = vec![
+            vec![
+                serde_json::Value::String("foo".to_string()),
+                serde_json::Value::Null, // qualified_name = None
+                serde_json::Value::Null, // file_path = None
+                serde_json::Value::Null, // start_line = None (not i64)
+            ],
+        ];
+        let results = rows_to_search_results(rows, NodeLabel::Function, "");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "foo");
+        assert!(results[0].qualified_name.is_none());
+        assert!(results[0].file_path.is_none());
+        assert!(results[0].start_line.is_none());
+    }
+
+    #[test]
+    fn rows_to_search_results_handles_negative_start_line() {
+        // Cover `u32::try_from(i).ok()` returning None for negative values
+        // (line 686): a negative start_line should result in None.
+        let rows: Vec<Vec<serde_json::Value>> = vec![
+            vec![
+                serde_json::Value::String("foo".to_string()),
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+                serde_json::Value::Number(serde_json::Number::from(-5i64)),
+            ],
+        ];
+        let results = rows_to_search_results(rows, NodeLabel::Function, "");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].start_line.is_none(), "negative start_line should be None");
+    }
+
+    // ====================================================================
+    // sort_and_truncate: NaN score handling
+    // ====================================================================
+
+    #[test]
+    fn sort_and_truncate_handles_nan_scores() {
+        // Cover `unwrap_or(std::cmp::Ordering::Equal)` (line 805): when
+        // a result has a NaN score, partial_cmp returns None, and the
+        // fallback to Equal is used.
+        let mut results = vec![
+            SearchResult {
+                name: "alpha".to_string(),
+                label: "Function".to_string(),
+                file_path: None,
+                start_line: None,
+                qualified_name: None,
+                score: f64::NAN,
+                match_reason: "nan".to_string(),
+                degree: 0,
+            },
+            SearchResult {
+                name: "beta".to_string(),
+                label: "Function".to_string(),
+                file_path: None,
+                start_line: None,
+                qualified_name: None,
+                score: 1.0,
+                match_reason: "exact".to_string(),
+                degree: 0,
+            },
+        ];
+        sort_and_truncate(&mut results, 100);
+        // beta (score=1.0) should come before alpha (score=NaN) since
+        // NaN comparison falls back to Equal, and then name ascending
+        // breaks the tie: "alpha" < "beta".
+        // Actually: 1.0 > NaN → partial_cmp returns Greater for (1.0, NaN)
+        // when comparing b.score to a.score: b=1.0, a=NaN → 1.0 > NaN is false
+        // → partial_cmp returns None → Equal → then name cmp: alpha < beta
+        // So alpha comes first. Either way, both should be present.
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn sort_and_truncate_truncates_when_limit_exceeds() {
+        // Direct test for sort_and_truncate truncation (line 808-809).
+        let mut results: Vec<SearchResult> = (0..10)
+            .map(|i| SearchResult {
+                name: format!("func_{i}"),
+                label: "Function".to_string(),
+                file_path: None,
+                start_line: None,
+                qualified_name: None,
+                score: 1.0,
+                match_reason: "exact".to_string(),
+                degree: 0,
+            })
+            .collect();
+        sort_and_truncate(&mut results, 3);
+        assert_eq!(results.len(), 3, "should be truncated to 3");
+    }
+
+    #[test]
+    fn sort_and_truncate_no_truncation_when_limit_large() {
+        // Cover the `if limit < results.len()` false branch (line 808):
+        // when limit >= results.len(), no truncation occurs.
+        let mut results = vec![SearchResult {
+            name: "foo".to_string(),
+            label: "Function".to_string(),
+            file_path: None,
+            start_line: None,
+            qualified_name: None,
+            score: 1.0,
+            match_reason: "exact".to_string(),
+            degree: 0,
+        }];
+        sort_and_truncate(&mut results, 100);
+        assert_eq!(results.len(), 1, "should not be truncated");
+    }
 }

@@ -819,4 +819,402 @@ mod tests {
         assert_eq!(fixed.len(), 1, "B's edge should be resolved");
         assert_eq!(graph.edges[0].target, "proj.a.py.A");
     }
+
+    #[test]
+    fn resolve_types_skips_result_node_not_in_graph() {
+        // Cover `graph.nodes.get(&node.qualified_name)` None branch (line 170):
+        // result "c.py" has node C, but C's FQN is not in the graph. The
+        // path-mapping loop skips C and moves to the next node. Result "a.py"
+        // has node A which IS in the graph, so the mapping is built for "a.py"
+        // only. The dangling edge from A is still resolved.
+        let class_a = make_class("A", "a.py", Language::Python);
+        let class_c = make_class("C", "c.py", Language::Python);
+
+        let results = vec![
+            {
+                let mut r = ExtractResult::new("a.py", Language::Python);
+                r.push_node(class_a);
+                r
+            },
+            {
+                let mut r = ExtractResult::new("c.py", Language::Python);
+                r.push_node(class_c);
+                r
+            },
+        ];
+        let table = build_symbol_table(&results, "proj");
+
+        let mut graph = Graph::new();
+        // Only A is in the graph — C is in results but NOT in graph.
+        graph.add_node(make_class("A", "a.py", Language::Python));
+        // Dangling edge: A extends proj.a.py.Nonexistent.
+        add_extends(&mut graph, "proj.a.py.A", "proj.a.py.Nonexistent");
+
+        let resolver = TypeResolver::new(&table);
+        let fixed = resolver.resolve_types(&results, &mut graph);
+        // "Nonexistent" is not in the symbol table → unresolvable → no fix.
+        assert!(fixed.is_empty(), "unresolvable edge → no fix");
+    }
+
+    #[test]
+    fn resolve_types_lookup_file_fallback_when_no_path_mapping() {
+        // Cover `graph_to_result_fp.get(source_file).copied().unwrap_or
+        // (source_file)` fallback (line 237): when the source node's file_path
+        // is not in graph_to_result_fp (no matching result), lookup_file
+        // falls back to source_file itself.
+        //
+        // Setup: Source node B is in graph with file_path "b.py". There is
+        // NO ExtractResult for "b.py". But result "a.py" has an exported
+        // class A. B's dangling edge targets "proj.b.py.A" (wrong file).
+        // Since no result matches B, no path mapping is built for "b.py".
+        // lookup_file falls back to "b.py". File-level and import-based
+        // lookups fail (no entries for "b.py"), but project-level exported
+        // lookup finds A → resolves to "proj.a.py.A".
+        let class_a = make_class("A", "a.py", Language::Python);
+        let results = vec![{
+            let mut r = ExtractResult::new("a.py", Language::Python);
+            r.push_node(class_a);
+            r
+        }];
+        let table = build_symbol_table(&results, "proj");
+
+        let mut graph = Graph::new();
+        graph.add_node(make_class("A", "a.py", Language::Python));
+        // B is in the graph but has NO corresponding ExtractResult.
+        let b = Node::builder(NodeLabel::Class, "B", "proj.b.py.B")
+            .file_path("b.py")
+            .language(Language::Python)
+            .project("proj")
+            .build();
+        graph.add_node(b);
+        // Dangling edge: B extends proj.b.py.A (wrong file in FQN).
+        add_extends(&mut graph, "proj.b.py.B", "proj.b.py.A");
+
+        let resolver = TypeResolver::new(&table);
+        let fixed = resolver.resolve_types(&results, &mut graph);
+        // Project-level exported lookup should find A → resolve to proj.a.py.A.
+        assert_eq!(fixed.len(), 1, "should resolve via global exported lookup");
+        assert_eq!(graph.edges[0].target, "proj.a.py.A");
+    }
+
+    #[test]
+    fn resolve_types_skips_non_resolvable_edge_type() {
+        // Calls edges are NOT in RESOLVABLE_EDGE_TYPES — should be skipped
+        // (line 215-217). Only Extends/Implements/UsesType are processed.
+        let class_a = make_class("A", "a.py", Language::Python);
+        let class_b = make_class("B", "b.py", Language::Python);
+        let (results, table) = build_results_and_table(vec![(class_a, "a.py"), (class_b, "b.py")]);
+
+        let mut graph = Graph::new();
+        graph.add_node(make_class("A", "a.py", Language::Python));
+        graph.add_node(make_class("B", "b.py", Language::Python));
+        graph.add_edge(Edge::new(
+            "proj.b.py.B",
+            "proj.b.py.A",
+            EdgeType::Calls,
+            "proj",
+        ));
+
+        let resolver = TypeResolver::new(&table);
+        let fixed = resolver.resolve_types(&results, &mut graph);
+        assert!(fixed.is_empty(), "Calls edge should not be resolved");
+        assert_eq!(
+            graph.edges[0].target, "proj.b.py.A",
+            "edge target unchanged"
+        );
+    }
+
+    #[test]
+    fn resolve_types_skips_non_dangling_edge() {
+        // Edge target already exists in graph → not dangling → skip
+        // (line 219-221). Only dangling edges (target not in graph) are fixed.
+        let class_a = make_class("A", "a.py", Language::Python);
+        let class_b = make_class("B", "b.py", Language::Python);
+        let (results, table) = build_results_and_table(vec![(class_a, "a.py"), (class_b, "b.py")]);
+
+        let mut graph = Graph::new();
+        graph.add_node(make_class("A", "a.py", Language::Python));
+        graph.add_node(make_class("B", "b.py", Language::Python));
+        // B extends A — A exists in graph → not dangling → skip.
+        graph.add_edge(Edge::new(
+            "proj.b.py.B",
+            "proj.a.py.A",
+            EdgeType::Extends,
+            "proj",
+        ));
+
+        let resolver = TypeResolver::new(&table);
+        let fixed = resolver.resolve_types(&results, &mut graph);
+        assert!(fixed.is_empty(), "non-dangling edge should be skipped");
+        assert_eq!(
+            graph.edges[0].target, "proj.a.py.A",
+            "edge target unchanged"
+        );
+        assert!(
+            (graph.edges[0].confidence - 1.0).abs() < f32::EPSILON,
+            "confidence unchanged"
+        );
+    }
+
+    #[test]
+    fn resolve_types_skips_edge_when_source_has_no_file_path() {
+        // Source node exists in graph but has no file_path →
+        // fqn_to_file.get returns None → skip (line 224-226).
+        let class_a = make_class("A", "a.py", Language::Python);
+        let (results, table) = build_results_and_table(vec![(class_a, "a.py")]);
+
+        let mut graph = Graph::new();
+        graph.add_node(make_class("A", "a.py", Language::Python));
+        // B exists in graph but has NO file_path.
+        let b_no_fp = Node::builder(NodeLabel::Class, "B", "proj.b.py.B")
+            .language(Language::Python)
+            .project("proj")
+            .build();
+        graph.add_node(b_no_fp);
+        add_extends(&mut graph, "proj.b.py.B", "proj.b.py.Nonexistent");
+
+        let resolver = TypeResolver::new(&table);
+        let fixed = resolver.resolve_types(&results, &mut graph);
+        assert!(fixed.is_empty(), "source with no file_path → skip");
+    }
+
+    // --- resolve_type: imported but not found (is_imported=true, lookup empty) ---
+
+    #[test]
+    fn resolve_type_imported_but_not_found_returns_none() {
+        // Type name appears in imports, but is not in the symbol table at all
+        // (external dependency). `lookup` returns empty → falls through to
+        // `lookup_exported` which also returns empty → None.
+        let (results, table) = build_results_and_table(vec![]);
+        let imports = vec![ImportInfo {
+            source_file: "external".to_string(),
+            imported_names: vec!["ExternalType".to_string()],
+            line: 1,
+        }];
+        let resolver = TypeResolver::new(&table);
+        assert!(
+            resolver.resolve_type("a.py", "ExternalType", &imports).is_none(),
+            "imported type not in symbol table should return None"
+        );
+        let _ = &results;
+    }
+
+    // --- resolve_types: resolve_type returns None → edge skipped ---
+
+    #[test]
+    fn resolve_types_skips_when_type_not_found_in_symbol_table() {
+        // Dangling Extends edge where the type name is NOT in the symbol table.
+        // resolve_type returns None → edge is skipped (line 241-245).
+        let class_b = make_class("B", "b.py", Language::Python);
+        let (results, table) = build_results_and_table(vec![(class_b, "b.py")]);
+
+        let mut graph = Graph::new();
+        graph.add_node(make_class("B", "b.py", Language::Python));
+        // B extends TrulyNonexistent (not in symbol table at all).
+        add_extends(&mut graph, "proj.b.py.B", "proj.b.py.TruelyNonexistent");
+
+        let resolver = TypeResolver::new(&table);
+        let fixed = resolver.resolve_types(&results, &mut graph);
+        assert!(
+            fixed.is_empty(),
+            "edge with unresolvable type should be skipped: {:?}",
+            fixed
+        );
+        // Edge target should be unchanged.
+        assert_eq!(
+            graph.edges[0].target, "proj.b.py.TruelyNonexistent",
+            "unresolvable edge target should remain unchanged"
+        );
+    }
+
+    // --- resolve_type: imported and found via project-level (import true, lookup empty, exported found) ---
+
+    #[test]
+    fn resolve_type_imported_but_found_via_project_export() {
+        // Type is in imports AND is an exported symbol. `lookup` might find it
+        // directly (since it's in the symbol table), but this test verifies the
+        // import path is exercised when the type is also project-exported.
+        let class_a = make_class("A", "a.py", Language::Python);
+        let (results, table) = build_results_and_table(vec![(class_a, "a.py")]);
+        let imports = vec![ImportInfo {
+            source_file: "a".to_string(),
+            imported_names: vec!["A".to_string()],
+            line: 1,
+        }];
+        let resolver = TypeResolver::new(&table);
+        // A is in the symbol table, so lookup should find it via import path.
+        let result = resolver.resolve_type("b.py", "A", &imports);
+        assert!(result.is_some(), "imported type should be found");
+        let (qn, _conf, tier) = result.unwrap();
+        assert_eq!(qn, "proj.a.py.A");
+        // Since A is in the symbol table, lookup finds it → ImportScoped.
+        assert_eq!(tier, ConfidenceTier::ImportScoped);
+        let _ = &results;
+    }
+
+    // --- resolve_types: file-level (SameFile) resolution where edge IS fixed ---
+
+    #[test]
+    fn resolve_types_fixes_edge_via_same_file_resolution() {
+        // Dangling edge resolved via file-level lookup (SameFile confidence).
+        // Type A is in the same file as source B, but the edge target FQN has
+        // the wrong file path (proj.a.py.A instead of proj.b.py.A). Since
+        // proj.a.py.A is NOT in the graph, the edge is dangling. resolve_type
+        // finds A via file-level lookup → returns proj.b.py.A (different from
+        // edge.target) → edge is fixed with SameFile confidence.
+        let class_a = make_class("A", "b.py", Language::Python);
+        let class_b = make_class("B", "b.py", Language::Python);
+        let (results, table) = build_results_and_table(vec![(class_a, "b.py"), (class_b, "b.py")]);
+
+        let mut graph = Graph::new();
+        graph.add_node(make_class("A", "b.py", Language::Python));
+        graph.add_node(make_class("B", "b.py", Language::Python));
+        // Dangling: target proj.a.py.A not in graph (A is at proj.b.py.A).
+        add_extends(&mut graph, "proj.b.py.B", "proj.a.py.A");
+
+        let resolver = TypeResolver::new(&table);
+        let fixed = resolver.resolve_types(&results, &mut graph);
+        assert_eq!(fixed.len(), 1, "should fix via same-file lookup");
+        assert_eq!(graph.edges[0].target, "proj.b.py.A");
+        assert!(
+            (graph.edges[0].confidence - 0.95).abs() < f32::EPSILON,
+            "SameFile confidence should be 0.95"
+        );
+        assert_eq!(graph.edges[0].confidence_tier, ConfidenceTier::SameFile);
+    }
+
+    // --- resolve_types: empty results ---
+
+    #[test]
+    fn resolve_types_with_empty_results_skips_all_edges() {
+        // Empty results → no path mapping, no imports_map, fqn_to_file still
+        // built from graph nodes. Edges with source in graph can be processed
+        // but resolve_type will fail (empty symbol table) → no fixes.
+        let class_b = make_class("B", "b.py", Language::Python);
+        let results: Vec<ExtractResult> = vec![];
+        let table = build_symbol_table(&results, "proj");
+
+        let mut graph = Graph::new();
+        graph.add_node(class_b);
+        add_extends(&mut graph, "proj.b.py.B", "proj.b.py.Nonexistent");
+
+        let resolver = TypeResolver::new(&table);
+        let fixed = resolver.resolve_types(&results, &mut graph);
+        assert!(fixed.is_empty(), "empty results → no resolution possible");
+    }
+
+    // --- resolve_types: multiple dangling edges ---
+
+    #[test]
+    fn resolve_types_fixes_multiple_dangling_edges() {
+        // Multiple dangling edges in the same graph — some resolvable, some
+        // not. Verifies the edge iteration loop accumulates resolved_edges
+        // correctly (line 257 push for each fixed edge).
+        let class_a = make_class("A", "a.py", Language::Python);
+        let class_b = make_class("B", "b.py", Language::Python);
+        let class_c = make_class("C", "c.py", Language::Python);
+        let (results, table) = build_results_and_table(vec![
+            (class_a, "a.py"),
+            (class_b, "b.py"),
+            (class_c, "c.py"),
+        ]);
+
+        let mut graph = Graph::new();
+        graph.add_node(make_class("A", "a.py", Language::Python));
+        graph.add_node(make_class("B", "b.py", Language::Python));
+        graph.add_node(make_class("C", "c.py", Language::Python));
+        // Edge 1: B extends proj.b.py.A (dangling, resolvable via global).
+        add_extends(&mut graph, "proj.b.py.B", "proj.b.py.A");
+        // Edge 2: C extends proj.c.py.Nonexistent (dangling, unresolvable).
+        add_extends(&mut graph, "proj.c.py.C", "proj.c.py.Nonexistent");
+
+        let resolver = TypeResolver::new(&table);
+        let fixed = resolver.resolve_types(&results, &mut graph);
+        assert_eq!(fixed.len(), 1, "only one edge should be fixed");
+        assert_eq!(fixed[0].source, "proj.b.py.B");
+        assert_eq!(fixed[0].target, "proj.a.py.A");
+    }
+
+    // --- resolve_types: mixed dangling and non-dangling edges ---
+
+    #[test]
+    fn resolve_types_mixed_dangling_and_non_dangling_edges() {
+        // Graph with both dangling and non-dangling edges — only dangling
+        // edges should be processed (line 219-221 skip for non-dangling).
+        let class_a = make_class("A", "a.py", Language::Python);
+        let class_b = make_class("B", "b.py", Language::Python);
+        let (results, table) = build_results_and_table(vec![(class_a, "a.py"), (class_b, "b.py")]);
+
+        let mut graph = Graph::new();
+        graph.add_node(make_class("A", "a.py", Language::Python));
+        graph.add_node(make_class("B", "b.py", Language::Python));
+        // Edge 1: non-dangling (target exists in graph).
+        graph.add_edge(Edge::new(
+            "proj.b.py.B",
+            "proj.a.py.A",
+            EdgeType::Extends,
+            "proj",
+        ));
+        // Edge 2: dangling (target not in graph, resolvable via global).
+        add_extends(&mut graph, "proj.b.py.B", "proj.b.py.A");
+
+        let resolver = TypeResolver::new(&table);
+        let fixed = resolver.resolve_types(&results, &mut graph);
+        assert_eq!(fixed.len(), 1, "only the dangling edge should be fixed");
+        // First edge (non-dangling) should be unchanged.
+        assert_eq!(graph.edges[0].target, "proj.a.py.A");
+        // Second edge (dangling) should be fixed.
+        assert_eq!(graph.edges[1].target, "proj.a.py.A");
+    }
+
+    // --- resolve_types: graph with no edges ---
+
+    #[test]
+    fn resolve_types_with_no_edges_returns_empty() {
+        // Graph with nodes but no edges → edge iteration loop body never
+        // executes → resolved_edges is empty.
+        let class_a = make_class("A", "a.py", Language::Python);
+        let (results, table) = build_results_and_table(vec![(class_a, "a.py")]);
+
+        let mut graph = Graph::new();
+        graph.add_node(make_class("A", "a.py", Language::Python));
+
+        let resolver = TypeResolver::new(&table);
+        let fixed = resolver.resolve_types(&results, &mut graph);
+        assert!(fixed.is_empty(), "no edges → no fixes");
+    }
+
+    // --- resolve_types: multiple resolvable edges accumulate in order ---
+
+    #[test]
+    fn resolve_types_multiple_resolved_edges_preserve_insertion_order() {
+        // Two dangling edges, both resolvable → both fixed and pushed to
+        // resolved_edges in iteration order (line 257).
+        let class_a = make_class("A", "a.py", Language::Python);
+        let class_b = make_class("B", "b.py", Language::Python);
+        let class_c = make_class("C", "c.py", Language::Python);
+        let (results, table) = build_results_and_table(vec![
+            (class_a, "a.py"),
+            (class_b, "b.py"),
+            (class_c, "c.py"),
+        ]);
+
+        let mut graph = Graph::new();
+        graph.add_node(make_class("A", "a.py", Language::Python));
+        graph.add_node(make_class("B", "b.py", Language::Python));
+        graph.add_node(make_class("C", "c.py", Language::Python));
+        // Both edges are dangling and resolvable via global exported lookup.
+        add_extends(&mut graph, "proj.b.py.B", "proj.b.py.A");
+        add_extends(&mut graph, "proj.c.py.C", "proj.c.py.A");
+
+        let resolver = TypeResolver::new(&table);
+        let fixed = resolver.resolve_types(&results, &mut graph);
+        assert_eq!(fixed.len(), 2, "both edges should be fixed");
+        // Verify insertion order matches edge iteration order.
+        assert_eq!(fixed[0].source, "proj.b.py.B");
+        assert_eq!(fixed[1].source, "proj.c.py.C");
+        // Both should resolve to the same target (proj.a.py.A).
+        assert_eq!(fixed[0].target, "proj.a.py.A");
+        assert_eq!(fixed[1].target, "proj.a.py.A");
+    }
 }

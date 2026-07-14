@@ -451,6 +451,59 @@ mod tests {
         assert_eq!(Daemon::convert_event(&event), None);
     }
 
+    #[test]
+    fn convert_event_modify_rust_file() {
+        // Cover EventKind::Modify branch (line 211) without requiring
+        // lang-c feature. The existing modify test uses "lib.c" which
+        // is gated behind #[cfg(feature = "lang-c")].
+        let event = make_event(
+            EventKind::Modify(notify_debouncer_full::notify::event::ModifyKind::Any),
+            "src/main.rs",
+        );
+        let result = Daemon::convert_event(&event);
+        assert_eq!(result, Some(DaemonEvent::Modify(PathBuf::from("src/main.rs"))));
+    }
+
+    #[test]
+    fn convert_event_remove_rust_file() {
+        // Cover EventKind::Remove branch (line 212) without requiring
+        // lang-python feature. The existing remove test uses "old.py"
+        // which is gated behind #[cfg(feature = "lang-python")].
+        let event = make_event(
+            EventKind::Remove(notify_debouncer_full::notify::event::RemoveKind::File),
+            "src/main.rs",
+        );
+        let result = Daemon::convert_event(&event);
+        assert_eq!(result, Some(DaemonEvent::Remove(PathBuf::from("src/main.rs"))));
+    }
+
+    #[test]
+    fn process_events_modify_and_remove_rust_files() {
+        // Cover the Modify and Remove daemon_event logging branches
+        // (lines 189-190) without requiring lang-c or lang-python features.
+        let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
+        let (observer, call_count, events) = CountingObserver::new();
+        daemon.add_observer(Box::new(observer));
+
+        let debounced_events = vec![
+            make_event(
+                EventKind::Modify(notify_debouncer_full::notify::event::ModifyKind::Any),
+                "main.rs",
+            ),
+            make_event(
+                EventKind::Remove(notify_debouncer_full::notify::event::RemoveKind::File),
+                "util.rs",
+            ),
+        ];
+        daemon.process_debounced_events(&debounced_events);
+
+        assert_eq!(*call_count.lock().unwrap(), 1, "observer should be called once");
+        let received = events.lock().unwrap();
+        assert_eq!(received.len(), 2, "should receive 2 events");
+        assert_eq!(received[0], DaemonEvent::Modify(PathBuf::from("main.rs")));
+        assert_eq!(received[1], DaemonEvent::Remove(PathBuf::from("util.rs")));
+    }
+
     // --- Daemon::process_debounced_events ---
 
     #[test]

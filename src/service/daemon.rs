@@ -190,4 +190,53 @@ mod tests {
 
         assert!(!handle.is_finished(), "daemon should still be running");
     }
+
+    // ===== #[forge] wrapper tests via init_kit =====
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn daemon_wrapper_succeeds_via_init_kit() {
+        use crate::service::runtime::{init_kit, reset_kit_for_testing};
+
+        // daemon() enters a blocking event loop (daemon.run()), so unlike
+        // architecture/search/cross_service we cannot block_on it directly.
+        // Instead we spawn it on a thread; if kit init succeeded the thread
+        // stays alive (daemon running). kit() returns an Arc clone, so
+        // reset_kit_for_testing() is safe even while the daemon thread runs.
+        reset_kit_for_testing();
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "main.rs", "fn main() {}\n");
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 200);
+        init_kit(kit).expect("init_kit");
+
+        let watch_path = tmp.path().to_str().unwrap().to_string();
+        let handle = thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("runtime");
+            rt.block_on(daemon(watch_path, "demo".to_string()))
+        });
+
+        thread::sleep(Duration::from_millis(500));
+        assert!(
+            !handle.is_finished(),
+            "daemon should be running — kit init succeeded"
+        );
+
+        reset_kit_for_testing();
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn daemon_wrapper_fails_when_kit_not_initialized() {
+        use crate::service::runtime::reset_kit_for_testing;
+
+        reset_kit_for_testing();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(daemon(
+            "/nonexistent/path/xyz".to_string(),
+            "demo".to_string(),
+        ));
+        assert!(result.is_err(), "wrapper should fail without kit");
+        reset_kit_for_testing();
+    }
 }

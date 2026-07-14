@@ -449,4 +449,107 @@ mod tests {
             "duplicate tag names should have distinct FQNs"
         );
     }
+
+    #[test]
+    fn element_with_non_id_attribute_no_id_in_name() {
+        let result = extract("<a href=\"link.html\">text</a>\n");
+        let a = result
+            .nodes
+            .iter()
+            .find(|n| n.name.starts_with("a"))
+            .expect("should find a element");
+        assert_eq!(a.name, "a", "non-id attribute should not affect name");
+    }
+
+    #[test]
+    fn element_with_multiple_attributes_extracts_id() {
+        let result = extract("<input type=\"text\" id=\"username\" name=\"user\"/>\n");
+        let input = result
+            .nodes
+            .iter()
+            .find(|n| n.name.starts_with("input"))
+            .expect("should find input element");
+        assert_eq!(input.name, "input#username");
+    }
+
+    #[test]
+    fn element_with_class_but_no_id() {
+        let result = extract("<div class=\"container\"></div>\n");
+        let div = result
+            .nodes
+            .iter()
+            .find(|n| n.name.starts_with("div"))
+            .expect("should find div element");
+        assert_eq!(div.name, "div", "class attribute should not affect name");
+    }
+
+    #[test]
+    fn comment_only_html_produces_no_nodes() {
+        let result = extract("<!-- just a comment -->\n");
+        assert!(
+            result.nodes.is_empty(),
+            "comment-only should produce no nodes: {:?}",
+            result.nodes
+        );
+    }
+
+    #[test]
+    fn deeply_nested_elements_all_extracted() {
+        let result = extract("<html><body><div><p><span>text</span></p></div></body></html>\n");
+        let names: Vec<_> = result.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"html"), "should contain html");
+        assert!(names.contains(&"body"), "should contain body");
+        assert!(names.contains(&"div"), "should contain div");
+        assert!(names.contains(&"p"), "should contain p");
+        assert!(names.contains(&"span"), "should contain span");
+        assert_eq!(result.nodes.len(), 5, "should extract 5 elements");
+    }
+
+    #[test]
+    fn self_closing_tag_without_attributes() {
+        let result = extract("<br/>\n");
+        let br = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "br")
+            .expect("should find br element");
+        assert_eq!(br.name, "br");
+    }
+
+    #[test]
+    fn element_with_empty_id_attribute() {
+        let result = extract("<div id=\"\"></div>\n");
+        let div = result
+            .nodes
+            .iter()
+            .find(|n| n.name.starts_with("div"))
+            .expect("should find div element");
+        assert!(
+            div.name.starts_with("div"),
+            "element with empty id should still be extracted"
+        );
+    }
+
+    #[test]
+    fn text_content_does_not_create_extra_nodes() {
+        let result = extract("<p>hello world</p>\n");
+        let elements: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Property)
+            .collect();
+        assert_eq!(elements.len(), 1, "text content should not create extra nodes");
+        assert_eq!(elements[0].name, "p");
+    }
+
+    #[test]
+    fn element_with_data_attributes() {
+        let result = extract("<div data-id=\"42\" data-name=\"test\"></div>\n");
+        let div = result
+            .nodes
+            .iter()
+            .find(|n| n.name.starts_with("div"))
+            .expect("should find div element");
+        assert_eq!(div.name, "div", "data attributes should not affect name");
+    }
 }

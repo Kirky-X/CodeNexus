@@ -1375,4 +1375,298 @@ mod tests {
             "should find Static via cross-file fallback"
         );
     }
+
+    #[test]
+    fn resolve_var_identifier_finds_variable_via_global_var_lookup() {
+        // GlobalVar x defined in file B (not exported), used in file A →
+        // lookup_in_file fails, lookup_exported fails (not exported),
+        // cross-file fallback matches GlobalVar label (line 407).
+        let x_node = make_node("x", "b.rs", "proj", NodeLabel::GlobalVar);
+        let results = vec![
+            make_result("a.rs", vec![]),
+            make_result("b.rs", vec![x_node]),
+        ];
+        let table = build_symbol_table(&results, "proj");
+
+        let resolver = DataFlowResolver::new(&table, "proj");
+        let mut graph = Graph::new();
+        let edge = resolver
+            .resolve_var_assign("a.rs", "y", "x", &mut graph, Language::Rust)
+            .unwrap();
+
+        assert_eq!(
+            edge.source,
+            fqn("proj", "b.rs", "x", Language::Rust),
+            "should find GlobalVar via cross-file fallback"
+        );
+    }
+
+    #[test]
+    fn resolve_var_identifier_finds_variable_via_const_lookup() {
+        // Const x defined in file B (not exported), used in file A →
+        // lookup_in_file fails, lookup_exported fails (not exported),
+        // cross-file fallback matches Const label (line 407).
+        let x_node = make_node("x", "b.rs", "proj", NodeLabel::Const);
+        let results = vec![
+            make_result("a.rs", vec![]),
+            make_result("b.rs", vec![x_node]),
+        ];
+        let table = build_symbol_table(&results, "proj");
+
+        let resolver = DataFlowResolver::new(&table, "proj");
+        let mut graph = Graph::new();
+        let edge = resolver
+            .resolve_var_assign("a.rs", "y", "x", &mut graph, Language::Rust)
+            .unwrap();
+
+        assert_eq!(
+            edge.source,
+            fqn("proj", "b.rs", "x", Language::Rust),
+            "should find Const via cross-file fallback"
+        );
+    }
+
+    #[test]
+    fn resolve_var_identifier_fallback_when_lookup_finds_only_non_matching_labels() {
+        // lookup(name) returns entries but none are GlobalVar/Static/Const
+        // (e.g. only Variable/Parameter) → or_else closure finds nothing →
+        // falls through to FQN generator fallback.
+        let x_node = make_node("x", "b.rs", "proj", NodeLabel::Variable);
+        let results = vec![
+            make_result("a.rs", vec![]),
+            make_result("b.rs", vec![x_node]),
+        ];
+        let table = build_symbol_table(&results, "proj");
+
+        let resolver = DataFlowResolver::new(&table, "proj");
+        let mut graph = Graph::new();
+        let edge = resolver
+            .resolve_var_assign("a.rs", "y", "x", &mut graph, Language::Rust)
+            .unwrap();
+
+        // Variable label is NOT in GlobalVar|Static|Const → fallback FQN used.
+        assert_eq!(
+            edge.source,
+            fqn("proj", "a.rs", "x", Language::Rust),
+            "should use fallback FQN when lookup finds only non-matching labels"
+        );
+    }
+
+    // --- resolve_dataflows: call arg processing (BR-TRACE-001 integration) ---
+
+    #[test]
+    fn resolve_dataflows_processes_call_args_creating_parameter_node() {
+        // Full integration: resolve_dataflows processes call args, creating a
+        // DataFlows edge from the arg variable to a Parameter node (lines 115-151).
+        let foo_node = make_node("foo", "a.rs", "proj", NodeLabel::Function);
+        let bar_node = make_node("bar", "a.rs", "proj", NodeLabel::Function);
+        let foo_qn = fqn("proj", "a.rs", "foo", Language::Rust);
+
+        let mut result = make_result("a.rs", vec![foo_node, bar_node]);
+        // foo calls bar(var) — var flows to bar's param0.
+        result.calls.push(CallInfo {
+            caller_qn: Some(foo_qn.clone()),
+            callee_name: "bar".to_string(),
+            line: 5,
+            args: vec!["var".to_string()],
+        });
+
+        let results = vec![result];
+        let table = build_symbol_table(&results, "proj");
+        let mut graph = Graph::new();
+
+        let resolver = DataFlowResolver::new(&table, "proj");
+        let edges = resolver.resolve_dataflows(&results, &mut graph);
+
+        let dataflow_edges: Vec<_> = edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::DataFlows)
+            .collect();
+        assert_eq!(
+            dataflow_edges.len(),
+            1,
+            "should create 1 DataFlows edge for call arg"
+        );
+
+        let edge = dataflow_edges[0];
+        assert_eq!(edge.source, "proj.a.rs.var");
+        assert_eq!(edge.target, "proj.a.rs.bar.param0");
+        assert!((edge.confidence - 0.80).abs() < 1e-6);
+        assert_eq!(edge.start_line, Some(5));
+
+        // Parameter node should be materialized in the graph (DQ-004).
+        let param = graph
+            .get_node(&"proj.a.rs.bar.param0".to_string())
+            .expect("Parameter node should be created");
+        assert_eq!(param.label, NodeLabel::Parameter);
+        assert_eq!(param.name, "param0");
+    }
+
+    #[test]
+    fn resolve_dataflows_skips_literal_call_args() {
+        // Literal args like "42" are not identifiers → is_identifier returns
+        // false → skip (line 119-121). No DataFlows edge should be created.
+        let foo_node = make_node("foo", "a.rs", "proj", NodeLabel::Function);
+        let bar_node = make_node("bar", "a.rs", "proj", NodeLabel::Function);
+        let foo_qn = fqn("proj", "a.rs", "foo", Language::Rust);
+
+        let mut result = make_result("a.rs", vec![foo_node, bar_node]);
+        result.calls.push(CallInfo {
+            caller_qn: Some(foo_qn.clone()),
+            callee_name: "bar".to_string(),
+            line: 5,
+            args: vec!["42".to_string(), "\"hello\"".to_string()],
+        });
+
+        let results = vec![result];
+        let table = build_symbol_table(&results, "proj");
+        let mut graph = Graph::new();
+
+        let resolver = DataFlowResolver::new(&table, "proj");
+        let edges = resolver.resolve_dataflows(&results, &mut graph);
+
+        assert!(
+            edges.iter().all(|e| e.edge_type != EdgeType::DataFlows),
+            "literal args should not produce DataFlows edges"
+        );
+    }
+
+    #[test]
+    fn resolve_dataflows_skips_call_args_when_callee_not_found() {
+        // When resolve_arg_pass returns None (callee not in symbol table),
+        // no edge or Parameter node is created (line 123 None branch).
+        let foo_node = make_node("foo", "a.rs", "proj", NodeLabel::Function);
+        let foo_qn = fqn("proj", "a.rs", "foo", Language::Rust);
+
+        let mut result = make_result("a.rs", vec![foo_node]);
+        result.calls.push(CallInfo {
+            caller_qn: Some(foo_qn.clone()),
+            callee_name: "nonexistent".to_string(),
+            line: 5,
+            args: vec!["var".to_string()],
+        });
+
+        let results = vec![result];
+        let table = build_symbol_table(&results, "proj");
+        let mut graph = Graph::new();
+
+        let resolver = DataFlowResolver::new(&table, "proj");
+        let edges = resolver.resolve_dataflows(&results, &mut graph);
+
+        assert!(
+            edges
+                .iter()
+                .all(|e| e.edge_type != EdgeType::DataFlows),
+            "unresolvable callee should not produce DataFlows edge"
+        );
+        assert_eq!(graph.edge_count(), 0);
+    }
+
+    // --- resolve_dataflows: return assignment with unresolvable function ---
+
+    #[test]
+    fn resolve_dataflows_skips_return_assign_with_unresolvable_function() {
+        // x = nonexistent() → is_return_assign=true, but 'nonexistent' is not
+        // in the symbol table → resolve_return_assign returns None → no edge.
+        let mut result = make_result("a.rs", vec![]);
+        result.assignments.push(AssignInfo {
+            target_name: "x".to_string(),
+            source_name: "nonexistent".to_string(),
+            line: 5,
+            is_return_assign: true,
+        });
+
+        let results = vec![result];
+        let table = build_symbol_table(&results, "proj");
+        let mut graph = Graph::new();
+
+        let resolver = DataFlowResolver::new(&table, "proj");
+        let edges = resolver.resolve_dataflows(&results, &mut graph);
+
+        assert!(
+            edges.is_empty(),
+            "return assignment with unresolvable function should produce no edge: {:?}",
+            edges
+        );
+        assert_eq!(graph.edge_count(), 0);
+    }
+
+    #[test]
+    fn resolve_dataflows_mixed_resolvable_and_unresolvable_return_assigns() {
+        // Two return assignments: one resolvable (foo exists), one not (bar
+        // doesn't). The loop should continue after the None and still produce
+        // the edge for the resolvable one.
+        let foo_node = make_node("foo", "a.rs", "proj", NodeLabel::Function);
+
+        let mut result = make_result("a.rs", vec![foo_node]);
+        result.assignments.push(AssignInfo {
+            target_name: "x".to_string(),
+            source_name: "nonexistent".to_string(),
+            line: 3,
+            is_return_assign: true,
+        });
+        result.assignments.push(AssignInfo {
+            target_name: "y".to_string(),
+            source_name: "foo".to_string(),
+            line: 5,
+            is_return_assign: true,
+        });
+
+        let results = vec![result];
+        let table = build_symbol_table(&results, "proj");
+        let mut graph = Graph::new();
+
+        let resolver = DataFlowResolver::new(&table, "proj");
+        let edges = resolver.resolve_dataflows(&results, &mut graph);
+
+        // Only one DataFlows edge should be created (for foo → y).
+        let dataflow_edges: Vec<_> = edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::DataFlows)
+            .collect();
+        assert_eq!(
+            dataflow_edges.len(),
+            1,
+            "only the resolvable return assignment should produce an edge"
+        );
+        assert_eq!(dataflow_edges[0].source, fqn("proj", "a.rs", "foo", Language::Rust));
+    }
+
+    #[test]
+    fn resolve_dataflows_var_assign_always_produces_edge() {
+        // x = y (is_return_assign=false) → resolve_var_assign always returns
+        // Some, even when neither x nor y is in the symbol table (fallback
+        // creates Variable nodes).
+        let mut result = make_result("a.rs", vec![]);
+        result.assignments.push(AssignInfo {
+            target_name: "x".to_string(),
+            source_name: "y".to_string(),
+            line: 5,
+            is_return_assign: false,
+        });
+
+        let results = vec![result];
+        let table = build_symbol_table(&results, "proj");
+        let mut graph = Graph::new();
+
+        let resolver = DataFlowResolver::new(&table, "proj");
+        let edges = resolver.resolve_dataflows(&results, &mut graph);
+
+        let dataflow_edges: Vec<_> = edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::DataFlows)
+            .collect();
+        assert_eq!(
+            dataflow_edges.len(),
+            1,
+            "variable assignment should always produce an edge even with fallback"
+        );
+        // Both source and target should have fallback Variable nodes created.
+        assert!(graph
+            .get_node(&"proj.a.rs.y".to_string())
+            .is_some());
+        assert!(graph
+            .get_node(&"proj.a.rs.x".to_string())
+            .is_some());
+    }
 }

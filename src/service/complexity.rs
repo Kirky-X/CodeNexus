@@ -815,4 +815,53 @@ mod tests {
         );
         assert!(result.is_ok(), "custom thresholds + red_only should succeed: {:?}", result.err());
     }
+
+    // ===== #[forge] wrapper tests via init_kit =====
+
+    #[test]
+    fn complexity_wrapper_succeeds_via_init_kit() {
+        use crate::service::runtime::{init_kit, reset_kit_for_testing};
+
+        reset_kit_for_testing();
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        init_kit(kit).expect("init_kit");
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(complexity(
+            "demo".to_string(),
+            false,
+            false,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
+        ));
+        assert!(result.is_ok(), "wrapper should succeed: {:?}", result.err());
+
+        reset_kit_for_testing();
+    }
+
+    #[test]
+    fn complexity_wrapper_fails_when_kit_not_initialized() {
+        use crate::service::runtime::reset_kit_for_testing;
+
+        reset_kit_for_testing();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(complexity(
+            "demo".to_string(),
+            false,
+            false,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
+        ));
+        assert!(result.is_err(), "wrapper should fail without kit");
+        reset_kit_for_testing();
+    }
 }

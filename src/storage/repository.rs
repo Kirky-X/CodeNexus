@@ -1395,4 +1395,160 @@ mod tests {
             .unwrap();
         assert!(rows.is_empty(), "both files should be deleted");
     }
+
+    // --- Coverage gap tests: lastCommit property, empty orphan_ids ---
+
+    #[test]
+    fn save_project_with_last_commit_persists_value() {
+        let repo = fresh_repo();
+        let node = Node::builder(NodeLabel::Project, "demo", "demo")
+            .id("p1")
+            .language(Language::Rust)
+            .properties(serde_json::json!({
+                "rootPath": "/repo/demo",
+                "fileCount": 5,
+                "indexedAt": 1_700_000_001,
+                "lastCommit": "abc123def",
+            }))
+            .build();
+        repo.save_project(&node).expect("save_project");
+
+        let rec = repo.get_project("p1").unwrap().unwrap();
+        assert_eq!(rec.last_commit, "abc123def");
+    }
+
+    #[test]
+    fn delete_file_nodes_batch_nonexistent_paths_is_noop() {
+        // Non-existent paths → orphan_ids stays empty → CodeRelation
+        // cleanup is skipped (line 390 false branch).
+        let repo = fresh_repo();
+        repo.save_project(&sample_project("demo", "demo")).unwrap();
+        repo.save_nodes(
+            &[sample_file("f1", "demo", "/src/a.rs", "h1")],
+            NodeLabel::File,
+        )
+        .unwrap();
+
+        repo.delete_file_nodes_batch(
+            &["/nonexistent.rs".to_string()],
+            "demo",
+        )
+        .expect("batch delete non-existent paths");
+
+        // Original file should still exist.
+        let rows = repo
+            .connection()
+            .query("MATCH (f:File) RETURN f.filePath AS p;")
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0].as_str(), Some("/src/a.rs"));
+    }
+
+    #[test]
+    fn project_record_debug_format() {
+        let rec = ProjectRecord {
+            id: "p1".into(),
+            name: "demo".into(),
+            root_path: "/".into(),
+            language: "rust".into(),
+            file_count: 1,
+            indexed_at: 2,
+            last_commit: "abc".into(),
+        };
+        let s = format!("{rec:?}");
+        assert!(s.contains("ProjectRecord"));
+        assert!(s.contains("demo"));
+    }
+
+    // --- Coverage gap: save_project without language ---
+
+    #[test]
+    fn save_project_without_language_defaults_to_empty() {
+        // Cover the `node.language.map(...).unwrap_or_default()` branch
+        // (line 121) when language is None → empty string in the DB.
+        let repo = fresh_repo();
+        let node = Node::builder(NodeLabel::Project, "nolang", "nolang")
+            .id("p_nolang")
+            .properties(serde_json::json!({
+                "rootPath": "/repo/nolang",
+                "fileCount": 0,
+                "indexedAt": 0,
+            }))
+            .build();
+        repo.save_project(&node).expect("save_project");
+
+        let rec = repo.get_project("p_nolang").unwrap().unwrap();
+        assert_eq!(rec.language, "", "language should default to empty string");
+        assert_eq!(rec.name, "nolang");
+    }
+
+    #[test]
+    fn save_project_without_last_commit_defaults_to_empty() {
+        // Cover the str_prop returning empty for lastCommit when the
+        // property is absent.
+        let repo = fresh_repo();
+        let node = Node::builder(NodeLabel::Project, "nocommit", "nocommit")
+            .id("p_nocommit")
+            .language(Language::Rust)
+            .properties(serde_json::json!({
+                "rootPath": "/repo/nocommit",
+                "fileCount": 1,
+                "indexedAt": 100,
+            }))
+            .build();
+        repo.save_project(&node).expect("save_project");
+
+        let rec = repo.get_project("p_nocommit").unwrap().unwrap();
+        assert_eq!(rec.last_commit, "");
+        assert_eq!(rec.file_count, 1);
+    }
+
+    #[test]
+    fn delete_file_nodes_batch_removes_related_edges() {
+        // Cover the orphan_ids cleanup path in delete_file_nodes_batch
+        // (lines 390-405) when edges reference the deleted nodes.
+        let repo = fresh_repo();
+        repo.save_project(&sample_project("demo", "demo")).unwrap();
+        repo.save_nodes(
+            &[
+                sample_file("f1", "demo", "/src/a.rs", "h1"),
+                sample_file("f2", "demo", "/src/b.rs", "h2"),
+            ],
+            NodeLabel::File,
+        )
+        .unwrap();
+        repo.save_nodes(
+            &[
+                sample_function("fn1", "demo", "func_a", "demo.func_a"),
+                sample_function("fn2", "demo", "func_b", "demo.func_b"),
+            ],
+            NodeLabel::Function,
+        )
+        .unwrap();
+        repo.save_edges(&[Edge::builder("fn1", "fn2", EdgeType::Calls, "demo")
+            .start_line(1)
+            .build()])
+        .unwrap();
+
+        // Sanity: edge exists.
+        let rows = repo
+            .connection()
+            .query("MATCH (r:CodeRelation) RETURN count(r) AS cnt;")
+            .unwrap();
+        assert_eq!(rows[0][0], serde_json::json!(1));
+
+        // Delete both files → orphan_ids should include fn1, fn2 → edge deleted.
+        repo.delete_file_nodes_batch(
+            &["/src/main.rs".to_string()],
+            "demo",
+        )
+        .expect("batch delete");
+
+        // The edge should be gone because the nodes it references were deleted.
+        let rows = repo
+            .connection()
+            .query("MATCH (r:CodeRelation) RETURN count(r) AS cnt;")
+            .unwrap();
+        assert_eq!(rows[0][0], serde_json::json!(0));
+    }
 }

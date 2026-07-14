@@ -858,4 +858,51 @@ mod tests {
         assert!(patterns.contains(&"/src/*.rs".to_string()));
         assert!(patterns.contains(&"/lib/*.rs".to_string()));
     }
+
+    // ===== #[forge] wrapper tests via init_kit =====
+
+    #[test]
+    #[cfg(feature = "cli")]
+    fn trace_wrapper_succeeds_via_init_kit() {
+        use crate::service::runtime::{init_kit, reset_kit_for_testing};
+
+        reset_kit_for_testing();
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'f1', qualifiedName: 'demo.f1', filePath: '/src/f1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create f1");
+        init_kit(kit).expect("init_kit");
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(trace(
+            "demo.f1".to_string(),
+            "calls".to_string(),
+            3,
+            "".to_string(),
+            false,
+            false,
+        ));
+        assert!(result.is_ok(), "wrapper should succeed: {:?}", result.err());
+
+        reset_kit_for_testing();
+    }
+
+    #[test]
+    #[cfg(feature = "cli")]
+    fn trace_wrapper_fails_when_kit_not_initialized() {
+        use crate::service::runtime::reset_kit_for_testing;
+
+        reset_kit_for_testing();
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(trace(
+            "demo.f1".to_string(),
+            "calls".to_string(),
+            3,
+            "".to_string(),
+            false,
+            false,
+        ));
+        assert!(result.is_err(), "wrapper should fail without kit");
+        reset_kit_for_testing();
+    }
 }

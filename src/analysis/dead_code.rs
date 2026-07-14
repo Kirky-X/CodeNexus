@@ -1714,4 +1714,243 @@ mod tests {
             "nonexistent id should return false"
         );
     }
+
+    // --- Additional coverage: glob_helper edge cases ---
+
+    #[test]
+    fn glob_match_returns_false_when_pattern_char_but_empty_text() {
+        // Line 469: `(Some(_), None) => false` — non-`*` pattern char with
+        // empty text cannot match.
+        assert!(!glob_match("a", ""));
+        assert!(!glob_match("abc", ""));
+    }
+
+    #[test]
+    fn glob_match_returns_false_when_first_char_mismatches() {
+        // Line 470: `*pc == *tc` evaluates false → short-circuits to false.
+        assert!(!glob_match("a", "b"));
+        assert!(!glob_match("xa", "yb"));
+    }
+
+    // --- Additional coverage: load_referenced_ids early return ---
+
+    #[test]
+    fn load_referenced_ids_returns_empty_when_edge_types_empty() {
+        // Line 285-287: `if self.config.edge_types.is_empty() { return Ok(HashSet::new()) }`
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f_a", "demo", "a", "demo.a", "/src/lib.rs", 1);
+        create_function(&kit, "f_b", "demo", "b", "demo.b", "/src/lib.rs", 5);
+        create_calls_edge(&kit, "e1", "f_a", "f_b", "demo");
+
+        let storage = storage(&kit);
+        let cfg = DeadCodeConfig {
+            edge_types: vec![],
+            ..DeadCodeConfig::default()
+        };
+        let detector = DeadCodeDetector::with_config(&*storage, cfg);
+        let referenced = detector
+            .load_referenced_ids("demo")
+            .expect("load_referenced_ids");
+        assert!(
+            referenced.is_empty(),
+            "empty edge_types → empty referenced set"
+        );
+    }
+
+    // --- Additional coverage: Method label iteration in is_exported / is_ffi_entry ---
+
+    /// Creates a Method node with `isExported` and `signature` flags.
+    #[allow(clippy::too_many_arguments)]
+    fn create_method_with_flags(
+        kit: &AsyncKit<AsyncReady>,
+        id: &str,
+        project: &str,
+        name: &str,
+        qn: &str,
+        file: &str,
+        line: u32,
+        is_exported: bool,
+        signature: &str,
+    ) {
+        let storage = storage(kit);
+        let end_line = line + 10;
+        let cypher = format!(
+            "CREATE (:Method {{id: '{}', project: '{}', name: '{}', qualifiedName: '{}', \
+             filePath: '{}', startLine: {}, endLine: {}, signature: '{}', returnType: '', \
+             isExported: {}, docstring: '', content: '', parameterCount: 0, parentQn: ''}});",
+            escape_cypher_string(id),
+            escape_cypher_string(project),
+            escape_cypher_string(name),
+            escape_cypher_string(qn),
+            escape_cypher_string(file),
+            line,
+            end_line,
+            escape_cypher_string(signature),
+            is_exported,
+        );
+        storage
+            .execute(&cypher)
+            .expect("create method with flags");
+    }
+
+    #[test]
+    fn is_exported_checks_method_label() {
+        // Lines 377-388: `is_exported` loops over ["Function", "Method"].
+        // When the id is a Method (not a Function), the Method branch must
+        // find it and return its `isExported` value.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_method_with_flags(
+            &kit,
+            "m_pub",
+            "demo",
+            "method_pub",
+            "demo.Class.method_pub",
+            "/src/lib.rs",
+            1,
+            true,
+            "",
+        );
+        create_method(
+            &kit,
+            "m_priv",
+            "demo",
+            "method_priv",
+            "demo.Class.method_priv",
+            "/src/lib.rs",
+            5,
+        );
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        assert!(
+            detector.is_exported("m_pub").expect("is_exported"),
+            "m_pub should be exported (Method label)"
+        );
+        assert!(
+            !detector.is_exported("m_priv").expect("is_exported"),
+            "m_priv should NOT be exported (Method label)"
+        );
+    }
+
+    #[test]
+    fn is_ffi_entry_checks_method_label() {
+        // Lines 396-410: `is_ffi_entry` loops over ["Function", "Method"].
+        // When the id is a Method with FFI markers, the Method branch must
+        // find it and return true.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_method_with_flags(
+            &kit,
+            "m_ffi",
+            "demo",
+            "method_ffi",
+            "demo.Class.method_ffi",
+            "/src/lib.rs",
+            1,
+            false,
+            r#"extern "C" fn method_ffi()"#,
+        );
+        create_method(
+            &kit,
+            "m_plain",
+            "demo",
+            "method_plain",
+            "demo.Class.method_plain",
+            "/src/lib.rs",
+            5,
+        );
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        assert!(
+            detector.is_ffi_entry("m_ffi").expect("is_ffi_entry"),
+            "m_ffi should be FFI entry (Method label)"
+        );
+        assert!(
+            !detector.is_ffi_entry("m_plain").expect("is_ffi_entry"),
+            "m_plain should NOT be FFI entry (Method label)"
+        );
+    }
+
+    #[test]
+    fn detect_excludes_exported_method_nodes() {
+        // Integration: an exported Method with zero incoming edges is NOT dead.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_method_with_flags(
+            &kit,
+            "m_pub",
+            "demo",
+            "method_pub",
+            "demo.Class.method_pub",
+            "/src/lib.rs",
+            1,
+            true,
+            "",
+        );
+        create_method(
+            &kit,
+            "m_priv",
+            "demo",
+            "method_priv",
+            "demo.Class.method_priv",
+            "/src/lib.rs",
+            5,
+        );
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            !names.contains(&"method_pub"),
+            "exported Method should NOT be dead"
+        );
+        assert!(
+            names.contains(&"method_priv"),
+            "non-exported Method should be dead"
+        );
+    }
+
+    #[test]
+    fn detect_excludes_ffi_method_nodes() {
+        // Integration: a Method with FFI signature and zero incoming edges is NOT dead.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_method_with_flags(
+            &kit,
+            "m_ffi",
+            "demo",
+            "method_ffi",
+            "demo.Class.method_ffi",
+            "/src/lib.rs",
+            1,
+            false,
+            r#"extern "C" fn method_ffi()"#,
+        );
+        create_method(
+            &kit,
+            "m_plain",
+            "demo",
+            "method_plain",
+            "demo.Class.method_plain",
+            "/src/lib.rs",
+            5,
+        );
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            !names.contains(&"method_ffi"),
+            "FFI Method should NOT be dead"
+        );
+        assert!(
+            names.contains(&"method_plain"),
+            "non-FFI Method should be dead"
+        );
+    }
 }

@@ -1406,4 +1406,321 @@ mod tests {
             "c11 at depth 11 should not be found due to clamping"
         );
     }
+
+    #[test]
+    fn trace_upstream_skips_tests_edge_when_in_filter_but_include_tests_false() {
+        // Cover `!config.include_tests && edge.edge_type == EdgeType::Tests`
+        // true branch (line 236-238) when Tests IS in the edge_types filter.
+        // The existing test `trace_upstream_skips_tests_edge_when_include_tests_false`
+        // uses the default config where Tests is NOT in the filter, so the
+        // edge_filter check (line 233) skips it first. This test explicitly
+        // adds Tests to the filter so the include_tests check is reached.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Tests, "proj"));
+        let config = ImpactConfig {
+            max_depth: 5,
+            edge_types: vec![EdgeType::Tests],
+            include_tests: false,
+        };
+        let analyzer = ImpactAnalyzer::with_config(&g, config);
+        let result = analyzer.analyze_impact(&"b".to_string());
+        assert!(
+            result.affected.is_empty(),
+            "Tests edge in filter but include_tests=false should still be skipped"
+        );
+    }
+
+    #[test]
+    fn risk_assessment_low_count_but_medium_score() {
+        // 5 affected (≤5 → Low count_level), depth 5 (≥3 → depth_factor=0.5),
+        // Calls edges (edge_factor=1.0).
+        // score = 0.08*0.6 + 0.5*0.2 + 1.0*0.2 = 0.348 → Medium.
+        // Final level = max(Low, Medium) = Medium (score_level wins).
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        for i in 1..=5 {
+            let id = format!("c{i}");
+            g.add_node(make_func(&id, &id));
+        }
+        g.add_edge(Edge::new("c1", "target", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c2", "c1", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c3", "c2", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c4", "c3", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c5", "c4", EdgeType::Calls, "proj"));
+        let config = ImpactConfig {
+            max_depth: 8,
+            edge_types: vec![EdgeType::Calls],
+            include_tests: false,
+        };
+        let analyzer = ImpactAnalyzer::with_config(&g, config);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert_eq!(result.affected.len(), 5);
+        let max_depth = result.affected.iter().map(|n| n.depth).max().unwrap_or(0);
+        assert_eq!(max_depth, 5);
+        assert_eq!(result.risk_assessment.level, RiskLevel::Medium);
+    }
+
+    // --- Additional coverage: max_depth=0, predecessor without file_path, ---
+    // --- count_level vs score_level divergence, depth clamp boundary      ---
+
+    #[test]
+    fn trace_upstream_max_depth_zero_returns_empty() {
+        // max_depth=0: the initial queue item has current_depth=0 and
+        // 0 >= 0 → continue immediately. No predecessors are found even
+        // though upstream edges exist.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("b", "a", EdgeType::Calls, "proj"));
+        let config = ImpactConfig {
+            max_depth: 0,
+            edge_types: vec![EdgeType::Calls],
+            include_tests: false,
+        };
+        let analyzer = ImpactAnalyzer::with_config(&g, config);
+        let result = analyzer.analyze_impact(&"a".to_string());
+        assert!(result.affected.is_empty(), "max_depth=0 should find nothing");
+        assert_eq!(result.risk_assessment.level, RiskLevel::Low);
+    }
+
+    #[test]
+    fn analyze_impact_predecessor_without_file_path_uses_default() {
+        // Predecessor is a Variable (make_var sets no file_path). The
+        // ImpactNode's file_path should be "" via unwrap_or_default().
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        g.add_node(make_var("v", "v"));
+        g.add_edge(Edge::new("v", "target", EdgeType::UsesType, "proj"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert_eq!(result.affected.len(), 1);
+        assert_eq!(result.affected[0].name, "v");
+        assert_eq!(
+            result.affected[0].file_path, "",
+            "Variable with no file_path → default empty string"
+        );
+    }
+
+    #[test]
+    fn risk_assessment_count_critical_score_high_count_wins() {
+        // 51 affected with HttpCalls edges → count > 50 → count_level=Critical.
+        // edge_factor=0.4 (HttpCalls), depth_factor=0.1 (depth 1 < 3).
+        // score = 1.0*0.6 + 0.1*0.2 + 0.4*0.2 = 0.708 → score_level=High.
+        // Final level = max(Critical, High) = Critical (count_level wins).
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        for i in 0..51 {
+            let id = format!("f{i}");
+            g.add_node(make_func(&id, &id));
+            g.add_edge(Edge::new(&id, "target", EdgeType::HttpCalls, "proj"));
+        }
+        let config = ImpactConfig {
+            max_depth: 5,
+            edge_types: vec![EdgeType::HttpCalls],
+            include_tests: false,
+        };
+        let analyzer = ImpactAnalyzer::with_config(&g, config);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert_eq!(result.affected.len(), 51);
+        assert_eq!(result.risk_assessment.level, RiskLevel::Critical);
+        // Verify score is in High range (< 0.8) to confirm divergence.
+        assert!(result.risk_assessment.score < 0.8);
+        assert!(result.risk_assessment.score >= 0.6);
+    }
+
+    #[test]
+    fn risk_assessment_depth_factor_at_clamp_boundary() {
+        // Chain of 10 (max allowed by MAX_DEPTH_LIMIT). max_depth=10 →
+        // depth_factor = 0.5 + (10-5)*0.1 = 1.0 (exactly at .min(1.0) clamp).
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        for i in 1..=10 {
+            let id = format!("c{i}");
+            g.add_node(make_func(&id, &id));
+        }
+        for i in 1..=10 {
+            let from = format!("c{i}");
+            let to = if i == 1 { "target".to_string() } else { format!("c{}", i - 1) };
+            g.add_edge(Edge::new(&from, &to, EdgeType::Calls, "proj"));
+        }
+        let config = ImpactConfig {
+            max_depth: 10,
+            edge_types: vec![EdgeType::Calls],
+            include_tests: false,
+        };
+        let analyzer = ImpactAnalyzer::with_config(&g, config);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert_eq!(result.affected.len(), 10);
+        let max_depth = result.affected.iter().map(|n| n.depth).max().unwrap_or(0);
+        assert_eq!(max_depth, 10);
+        // depth_factor=1.0, count=10>5→Medium(0.5), edge_factor=1.0
+        // score = 0.5*0.6 + 1.0*0.2 + 1.0*0.2 = 0.7 → High
+        assert_eq!(result.risk_assessment.level, RiskLevel::High);
+    }
+
+    #[test]
+    fn analyze_self_loop_skips_already_visited_start() {
+        // A calls A (self-loop). reverse_neighbors returns A, but A is already
+        // in visited → skipped. Result is empty.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_edge(Edge::new("a", "a", EdgeType::Calls, "proj"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let impacted = analyzer.analyze(&"a".to_string(), 3);
+        assert!(
+            impacted.is_empty(),
+            "self-loop should be skipped (start already visited)"
+        );
+    }
+
+    // --- assess_risk: mixed edge types (fold max) ---
+
+    #[test]
+    fn assess_risk_mixed_edge_types_picks_max_weight() {
+        // Two affected nodes: one with Calls (1.0), one with HttpCalls (0.4).
+        // edge_factor should be max(1.0, 0.4) = 1.0.
+        let mut g = Graph::new();
+        g.add_node(make_func("target", "target"));
+        g.add_node(make_func("caller1", "caller1"));
+        g.add_node(make_func("caller2", "caller2"));
+        g.add_edge(Edge::new("caller1", "target", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("caller2", "target", EdgeType::HttpCalls, "proj"));
+        let config = ImpactConfig {
+            max_depth: 5,
+            edge_types: vec![EdgeType::Calls, EdgeType::HttpCalls],
+            include_tests: false,
+        };
+        let analyzer = ImpactAnalyzer::with_config(&g, config);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert_eq!(result.affected.len(), 2);
+        let edge_factor = result
+            .risk_assessment
+            .factors
+            .iter()
+            .find(|f| f.name == "edge_type_weight")
+            .expect("should have edge_type_weight factor");
+        assert!(
+            (edge_factor.value - 1.0).abs() < 1e-6,
+            "edge_factor should be max(1.0, 0.4) = 1.0, got {}",
+            edge_factor.value
+        );
+    }
+
+    #[test]
+    fn edge_type_weight_returns_default_for_extends_and_has_property() {
+        // Extends and HasProperty are not in the weight table → fallback 0.3.
+        assert_eq!(edge_type_weight(EdgeType::Extends), DEFAULT_EDGE_WEIGHT);
+        assert_eq!(edge_type_weight(EdgeType::HasProperty), DEFAULT_EDGE_WEIGHT);
+        assert_eq!(
+            edge_type_weight(EdgeType::HandlesRoute),
+            DEFAULT_EDGE_WEIGHT
+        );
+    }
+
+    #[test]
+    fn analyze_impact_with_symbol_name_preserves_name() {
+        // When the symbol IS in the graph, analyze_impact should return its
+        // name (not empty string). This covers the normal (non-default) path
+        // of `get_node(symbol_id).map(|n| n.name.clone()).unwrap_or_default()`.
+        let mut g = Graph::new();
+        g.add_node(make_func("my_func", "my_func"));
+        let analyzer = ImpactAnalyzer::new(&g);
+        let result = analyzer.analyze_impact(&"my_func".to_string());
+        assert_eq!(
+            result.symbol, "my_func",
+            "symbol name should be preserved when node exists"
+        );
+    }
+
+    // ====================================================================
+    // Coverage gap: empty edge_types filter, max_depth=1 boundary,
+    // DataFlows fallback edge weight through analyze_impact
+    // ====================================================================
+
+    #[test]
+    fn trace_upstream_empty_edge_types_returns_empty() {
+        // With an empty edge_types filter, no edges match (edge_filter is
+        // empty), so trace_upstream returns empty even though upstream Calls
+        // edges exist. This exercises the edge_filter.contains() false branch
+        // for every incoming edge.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("b", "a", EdgeType::Calls, "proj"));
+        let config = ImpactConfig {
+            max_depth: 5,
+            edge_types: vec![],
+            include_tests: false,
+        };
+        let analyzer = ImpactAnalyzer::with_config(&g, config);
+        let result = analyzer.analyze_impact(&"a".to_string());
+        assert!(
+            result.affected.is_empty(),
+            "empty edge_types should match no edges"
+        );
+    }
+
+    #[test]
+    fn trace_upstream_max_depth_one_finds_only_direct_predecessors() {
+        // max_depth=1 boundary: only direct predecessors (depth 1) are found.
+        // Transitive predecessors at depth 2 are not, because when
+        // current_depth=1 >= max_depth=1, the continue fires.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_node(make_func("c", "c"));
+        // C → B → A (chain)
+        g.add_edge(Edge::new("b", "a", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("c", "b", EdgeType::Calls, "proj"));
+        let config = ImpactConfig {
+            max_depth: 1,
+            edge_types: vec![EdgeType::Calls],
+            include_tests: false,
+        };
+        let analyzer = ImpactAnalyzer::with_config(&g, config);
+        let result = analyzer.analyze_impact(&"a".to_string());
+        assert_eq!(result.affected.len(), 1);
+        assert_eq!(result.affected[0].name, "b");
+        assert_eq!(result.affected[0].depth, 1);
+        assert!(
+            !result.affected.iter().any(|n| n.name == "c"),
+            "C at depth 2 should not be found with max_depth=1"
+        );
+    }
+
+    #[test]
+    fn analyze_impact_with_data_flows_uses_fallback_edge_weight() {
+        // DataFlows is NOT in DEFAULT_EDGE_TYPE_WEIGHTS, so edge_type_weight
+        // returns the fallback DEFAULT_EDGE_WEIGHT (0.3). With a config that
+        // includes DataFlows in edge_types, the edge is followed and the
+        // edge_factor in assess_risk should be 0.3 (the fallback).
+        let mut g = Graph::new();
+        g.add_node(make_var("target", "target"));
+        g.add_node(make_var("src", "src"));
+        g.add_edge(Edge::new("src", "target", EdgeType::DataFlows, "proj"));
+        let config = ImpactConfig {
+            max_depth: 5,
+            edge_types: vec![EdgeType::DataFlows],
+            include_tests: false,
+        };
+        let analyzer = ImpactAnalyzer::with_config(&g, config);
+        let result = analyzer.analyze_impact(&"target".to_string());
+        assert_eq!(result.affected.len(), 1);
+        assert_eq!(result.affected[0].name, "src");
+        assert_eq!(result.affected[0].edge_type, EdgeType::DataFlows);
+        let edge_factor = result
+            .risk_assessment
+            .factors
+            .iter()
+            .find(|f| f.name == "edge_type_weight")
+            .expect("should have edge_type_weight factor");
+        assert!(
+            (edge_factor.value - DEFAULT_EDGE_WEIGHT).abs() < 1e-6,
+            "DataFlows should use fallback weight {}, got {}",
+            DEFAULT_EDGE_WEIGHT,
+            edge_factor.value
+        );
+    }
 }

@@ -2384,4 +2384,350 @@ mod tests {
         assert!(confidence_rank(Confidence::High) < confidence_rank(Confidence::Medium));
         assert!(confidence_rank(Confidence::Medium) < confidence_rank(Confidence::Low));
     }
+
+    // --- Additional coverage tests (targeting uncovered lines) ---
+
+    #[test]
+    fn extract_grpc_urls_with_various_delimiters() {
+        // Tests delimiter detection in extract_grpc_urls: whitespace, quote,
+        // semicolon, and paren all terminate the URL.
+        // Whitespace delimiter.
+        let urls = extract_grpc_urls(r#"let url = "grpc://host:50051 ;"#);
+        assert_eq!(urls, vec!["grpc://host:50051".to_string()]);
+        // Semicolon delimiter.
+        let urls = extract_grpc_urls("connect(grpc://svc:9090);");
+        assert_eq!(urls, vec!["grpc://svc:9090".to_string()]);
+        // Paren delimiter.
+        let urls = extract_grpc_urls("dial(grpc://api:443)");
+        assert_eq!(urls, vec!["grpc://api:443".to_string()]);
+        // Quote delimiter (inside a string literal).
+        let urls = extract_grpc_urls(r#"let u = "grpc://a:1";"#);
+        assert_eq!(urls, vec!["grpc://a:1".to_string()]);
+    }
+
+    #[test]
+    fn detect_grpc_finds_multiple_urls_in_same_function() {
+        // Multiple grpc:// URLs in the same function → multiple matches.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"let a = "grpc://alpha:50051"; let b = "grpc://beta:50052";"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_grpc("demo").expect("detect_grpc");
+        assert_eq!(matches.len(), 2, "should detect 2 grpc:// URLs");
+        let callees: Vec<&str> = matches.iter().map(|m| m.callee.as_str()).collect();
+        assert!(callees.contains(&"grpc://alpha:50051"));
+        assert!(callees.contains(&"grpc://beta:50052"));
+    }
+
+    #[test]
+    fn detect_event_bus_patterns_with_double_quotes() {
+        // Event bus patterns with double-quoted event names.
+        // Covers: double-quote trimming in extract_patterns_by_keywords for EventBus.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"io.emit("userLeft", data); socket.on("ping", cb);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_event_bus("demo").expect("detect_event_bus");
+        assert_eq!(matches.len(), 2, "should detect 2 event bus patterns");
+        let callees: Vec<&str> = matches.iter().map(|m| m.callee.as_str()).collect();
+        assert!(callees.contains(&"userLeft"), "callees: {:?}", callees);
+        assert!(callees.contains(&"ping"), "callees: {:?}", callees);
+    }
+
+    #[test]
+    fn detect_message_queue_multiple_patterns_in_same_function() {
+        // Multiple MQ patterns (producer.send + channel.consume) in one function.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"producer.send("topic1", msg); channel.consume("topic2", handler);"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector
+            .detect_message_queue("demo")
+            .expect("detect_message_queue");
+        assert_eq!(matches.len(), 2, "should detect 2 MQ patterns");
+        let callees: Vec<&str> = matches.iter().map(|m| m.callee.as_str()).collect();
+        assert!(callees.contains(&"topic1"), "callees: {:?}", callees);
+        assert!(callees.contains(&"topic2"), "callees: {:?}", callees);
+    }
+
+    #[test]
+    fn detect_graphql_multiple_operations_in_same_function() {
+        // Multiple GraphQL operations (query + endpoint URL) in one function.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            1,
+            r#"let q = "query { user { id } }"; fetch("/api/graphql");"#,
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_graphql("demo").expect("detect_graphql");
+        assert_eq!(matches.len(), 2, "should detect 2 GraphQL operations");
+        let callees: Vec<&str> = matches.iter().map(|m| m.callee.as_str()).collect();
+        assert!(callees.contains(&"query"), "callees: {:?}", callees);
+        assert!(
+            callees.iter().any(|c| c.contains("/api/graphql")),
+            "callees: {:?}",
+            callees
+        );
+    }
+
+    #[test]
+    fn link_next_edge_id_increments_correctly() {
+        // Tests that next_edge_id correctly parses existing csl_ prefixed ids
+        // and increments. After first link() call creates csl_1, a second
+        // link() for a different (caller, route) pair should create csl_2.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r1", "demo", "/api/users");
+        create_route(&kit, "r2", "demo", "/api/products");
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller1",
+            "demo.caller1",
+            "/src/c1.rs",
+            1,
+            r#"fetch("/api/users"); fetch("/api/products");"#,
+        );
+
+        let s = storage(&kit);
+        let linker = CrossServiceLinker::new(&*s, "demo");
+        let links = linker.link().expect("link");
+        assert_eq!(links.len(), 2, "should match 2 routes");
+        // Both edges should be persisted with unique ids.
+        assert_eq!(
+            count_cross_service_edges(&kit, "demo"),
+            2,
+            "should have 2 CROSS_SERVICE_CALLS edges"
+        );
+    }
+
+    #[test]
+    fn extract_grpc_client_calls_multiple_methods() {
+        // Multiple client.Method() calls in the same content.
+        let content = r#"client.GetUser(req); client.UpdateUser(req); client.DeleteUser(req);"#;
+        let calls = extract_grpc_client_calls(content);
+        assert_eq!(calls.len(), 3, "should find 3 client calls");
+        assert!(calls.contains(&"client.GetUser".to_string()));
+        assert!(calls.contains(&"client.UpdateUser".to_string()));
+        assert!(calls.contains(&"client.DeleteUser".to_string()));
+    }
+
+    #[test]
+    fn extract_mq_patterns_handles_empty_arg() {
+        // producer.send() with empty arg → should be skipped.
+        let patterns = extract_mq_patterns("producer.send(, msg);");
+        // The arg before comma is empty, so it should be skipped.
+        assert!(
+            patterns.iter().all(|(c, _)| !c.is_empty()),
+            "empty args should be skipped"
+        );
+    }
+
+    // ====================================================================
+    // Additional edge-case coverage for pure extractor functions
+    // ====================================================================
+
+    #[test]
+    fn extract_grpc_client_calls_returns_empty_when_client_dot_followed_by_non_alphanumeric() {
+        // `client.` immediately followed by a non-alphanumeric char →
+        // `end == 0` → the `if end > 0` guard skips (line 753 else branch).
+        let calls = extract_grpc_client_calls("let x = client.;");
+        assert!(
+            calls.is_empty(),
+            "client. followed by non-alphanumeric should yield no calls"
+        );
+        // Also verify `client.` at end of content (no chars after).
+        let calls = extract_grpc_client_calls("let x = client.");
+        assert!(calls.is_empty(), "client. at EOF should yield no calls");
+    }
+
+    #[test]
+    fn extract_grpc_client_calls_skips_method_not_followed_by_paren() {
+        // `client.GetUser` without `(` → the `if after.starts_with('(')`
+        // guard skips (line 758 else branch).
+        let calls = extract_grpc_client_calls("let handler = client.GetUser;");
+        assert!(
+            calls.is_empty(),
+            "method not followed by '(' should not be detected as a call"
+        );
+        // Method followed by something other than '(' (e.g. '=').
+        let calls = extract_grpc_client_calls("client.GetUser = fetch;");
+        assert!(calls.is_empty(), "method followed by '=' should be skipped");
+    }
+
+    #[test]
+    fn extract_mq_patterns_skips_pattern_not_followed_by_paren() {
+        // `producer.send` without `(` → strip_prefix('(') returns None
+        // (line 826 else branch).
+        let patterns = extract_mq_patterns("let x = producer.send;");
+        assert!(
+            patterns.is_empty(),
+            "pattern not followed by '(' should be skipped"
+        );
+        // Pattern followed by whitespace then no paren.
+        let patterns = extract_mq_patterns("producer.send topic;");
+        assert!(patterns.is_empty(), "pattern without '(' should be skipped");
+    }
+
+    #[test]
+    fn extract_mq_patterns_handles_arg_without_delimiter() {
+        // `producer.send(topic` with no `,` or `)` → unwrap_or(rest.len())
+        // (line 829). The entire remaining content becomes the arg.
+        let patterns = extract_mq_patterns("producer.send(mytopic");
+        assert_eq!(patterns.len(), 1, "should extract arg without delimiter");
+        assert_eq!(patterns[0].0, "mytopic");
+        assert_eq!(patterns[0].1, "EMITS");
+    }
+
+    #[test]
+    fn extract_event_bus_patterns_skips_pattern_not_followed_by_paren() {
+        // `io.emit` without `(` → strip_prefix('(') returns None
+        // (line 826 else branch for EventBus protocol).
+        let patterns = extract_event_bus_patterns("let x = io.emit;");
+        assert!(
+            patterns.is_empty(),
+            "event bus pattern without '(' should be skipped"
+        );
+    }
+
+    #[test]
+    fn extract_event_bus_patterns_trims_single_quotes_from_arg() {
+        // EventBus patterns trim both single and double quotes.
+        // Already partially covered, but test single-quote trimming
+        // with no closing delimiter (unwrap_or path).
+        let patterns = extract_event_bus_patterns("io.emit('myEvent");
+        assert_eq!(patterns.len(), 1);
+        assert_eq!(patterns[0].0, "myEvent");
+        assert_eq!(patterns[0].1, "EMITS");
+    }
+
+    #[test]
+    fn extract_grpc_urls_handles_url_at_end_of_content() {
+        // `grpc://` URL runs to end of content without a delimiter →
+        // unwrap_or(rest.len()) path (line 734).
+        let urls = extract_grpc_urls("let url = grpc://host:50051");
+        assert_eq!(urls, vec!["grpc://host:50051".to_string()]);
+        // URL at very start of content, no delimiter.
+        let urls = extract_grpc_urls("grpc://api:443");
+        assert_eq!(urls, vec!["grpc://api:443".to_string()]);
+    }
+
+    #[test]
+    fn extract_string_literals_handles_backslash_at_end_of_content() {
+        // String literal ending with `\` at EOF → `j + 1 < bytes.len()`
+        // is false, so the escape branch is skipped. The `\` is pushed
+        // as a normal char, then j reaches bytes.len(), exiting the
+        // inner loop. Since `j < bytes.len()` is false, the literal is
+        // discarded (unterminated).
+        let lits = extract_string_literals(r#"let s = "hello\"#);
+        assert!(
+            lits.is_empty(),
+            "string ending with backslash at EOF is unterminated → no literal"
+        );
+    }
+
+    #[test]
+    fn extract_string_literals_extracts_multiple_mixed_literals() {
+        // Multiple literals with mixed content and escapes.
+        let content = r#"let a = "foo"; let b = "bar\nbaz"; let c = "x\\y";"#;
+        let lits = extract_string_literals(content);
+        assert_eq!(lits.len(), 3);
+        assert_eq!(lits[0], "foo");
+        assert_eq!(lits[1], "bar\nbaz");
+        assert_eq!(lits[2], r"x\y");
+    }
+
+    #[test]
+    fn match_wildcard_empty_pattern_with_star_matches_anything() {
+        // Pattern `*` alone → parts = ["", ""] → first = "" (empty),
+        // last = "" (empty). Should match any literal.
+        assert!(
+            match_wildcard("*", "anything"),
+            "single star should match any literal"
+        );
+        assert!(
+            match_wildcard("*", ""),
+            "single star should match empty string"
+        );
+    }
+
+    #[test]
+    fn match_wildcard_pattern_ending_with_star_skips_last_check() {
+        // Pattern ending with `*` → last part is empty → the
+        // `!last.is_empty()` guard is false, so the ends_with check
+        // is skipped (line 656 short-circuit).
+        assert!(
+            match_wildcard("/api/v1/*", "/api/v1/users/123"),
+            "trailing star should match any suffix"
+        );
+        assert!(
+            match_wildcard("/api/*", "/api/"),
+            "trailing star should match empty suffix after prefix"
+        );
+    }
+
+    #[test]
+    fn match_parameterized_param_at_first_segment() {
+        // Parameter at the first path segment.
+        assert!(
+            match_parameterized(":version/users", "v1/users"),
+            "leading parameter should match non-empty segment"
+        );
+        assert!(
+            !match_parameterized(":version/users", "/users"),
+            "leading parameter should reject empty segment"
+        );
+    }
+
+    #[test]
+    fn match_parameterized_all_segments_are_params() {
+        // All segments are parameters.
+        assert!(
+            match_parameterized("/:a/:b", "/foo/bar"),
+            "all-parameter pattern should match"
+        );
+        assert!(
+            !match_parameterized("/:a/:b", "/foo/"),
+            "trailing empty parameter segment should not match"
+        );
+    }
 }

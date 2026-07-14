@@ -510,4 +510,99 @@ mod tests {
         let paths = tracer.trace(&"solo".to_string(), 5);
         assert!(paths.is_empty());
     }
+
+    #[test]
+    fn trace_node_includes_location_info() {
+        // Verifies TraceNode::from(&Node) carries file_path and start_line
+        // from nodes that have location info (make_func sets both).
+        let mut g = Graph::new();
+        g.add_node(make_func("foo", "foo"));
+        g.add_node(make_func("bar", "bar"));
+        g.add_edge(Edge::new("foo", "bar", EdgeType::DataFlows, "proj"));
+        let tracer = DataFlowTracer::new(&g);
+        let paths = tracer.trace(&"foo".to_string(), 3);
+        assert_eq!(paths.len(), 1);
+        let path = &paths[0];
+        assert_eq!(path.nodes[0].file_path.as_deref(), Some("src/foo.rs"));
+        assert_eq!(path.nodes[0].start_line, Some(10));
+        assert_eq!(path.nodes[1].file_path.as_deref(), Some("src/bar.rs"));
+        assert_eq!(path.nodes[1].start_line, Some(10));
+    }
+
+    #[test]
+    fn trace_node_without_location_has_none() {
+        // Verifies TraceNode::from(&Node) yields None for file_path and
+        // start_line when the source node has no location info (make_var
+        // sets neither).
+        let mut g = Graph::new();
+        g.add_node(make_var("x", "x"));
+        g.add_node(make_var("y", "y"));
+        g.add_edge(Edge::new("x", "y", EdgeType::DataFlows, "proj"));
+        let tracer = DataFlowTracer::new(&g);
+        let paths = tracer.trace(&"x".to_string(), 3);
+        assert_eq!(paths.len(), 1);
+        let path = &paths[0];
+        assert!(path.nodes[0].file_path.is_none());
+        assert!(path.nodes[0].start_line.is_none());
+        assert!(path.nodes[1].file_path.is_none());
+        assert!(path.nodes[1].start_line.is_none());
+    }
+
+    #[test]
+    fn trace_empty_graph_returns_empty() {
+        // No nodes at all → get_node returns None → empty result.
+        let g = Graph::new();
+        let tracer = DataFlowTracer::new(&g);
+        let paths = tracer.trace(&"any".to_string(), 3);
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn trace_dataflow_with_reason_and_confidence_default_values() {
+        // Edge created with Edge::new (no builder) has confidence=1.0 and
+        // reason=None. Verifies the default edge fields are carried through
+        // to TraceEdge without modification.
+        let mut g = Graph::new();
+        g.add_node(make_var("x", "x"));
+        g.add_node(make_var("y", "y"));
+        g.add_edge(Edge::new("x", "y", EdgeType::DataFlows, "proj"));
+        let tracer = DataFlowTracer::new(&g);
+        let paths = tracer.trace(&"x".to_string(), 3);
+        assert_eq!(paths.len(), 1);
+        let edge = &paths[0].edges[0];
+        assert!((edge.confidence - 1.0).abs() < f32::EPSILON);
+        assert!(edge.reason.is_none());
+    }
+
+    #[test]
+    fn trace_ffi_calls_edge_not_followed() {
+        // FfiCalls edges should NOT be followed by the data-flow tracer.
+        let mut g = Graph::new();
+        g.add_node(make_func("a", "a"));
+        g.add_node(make_func("b", "b"));
+        g.add_edge(Edge::new("a", "b", EdgeType::FfiCalls, "proj"));
+        let tracer = DataFlowTracer::new(&g);
+        let paths = tracer.trace(&"a".to_string(), 3);
+        assert!(paths.is_empty(), "FfiCalls should not be followed by data-flow tracer");
+    }
+
+    #[test]
+    fn trace_multiple_writes_from_same_node() {
+        // Node with multiple outgoing Writes edges: each produces a path.
+        let mut g = Graph::new();
+        g.add_node(make_func("foo", "foo"));
+        g.add_node(make_var("v1", "v1"));
+        g.add_node(make_var("v2", "v2"));
+        g.add_node(make_var("v3", "v3"));
+        g.add_edge(Edge::new("foo", "v1", EdgeType::Writes, "proj"));
+        g.add_edge(Edge::new("foo", "v2", EdgeType::Writes, "proj"));
+        g.add_edge(Edge::new("foo", "v3", EdgeType::Writes, "proj"));
+        let tracer = DataFlowTracer::new(&g);
+        let paths = tracer.trace(&"foo".to_string(), 3);
+        assert_eq!(paths.len(), 3);
+        for p in &paths {
+            assert_eq!(p.depth, 1);
+            assert_eq!(p.edges[0].edge_type, "WRITES");
+        }
+    }
 }

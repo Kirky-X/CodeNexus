@@ -1973,4 +1973,177 @@ mod tests {
         assert_eq!(extract_c_type(""), "");
         assert_eq!(extract_c_type("\t\n"), "");
     }
+
+    // --- Coverage gap tests: match_by_signature zero params, extract_rust_type no colon ---
+
+    #[test]
+    fn match_by_signature_zero_params_returns_full_confidence() {
+        // No params → type_match_ratio = 1.0 → confidence = 0.85.
+        let confidence = FfiResolver::match_by_signature("fn foo()", "void foo()").unwrap();
+        assert!((confidence - 0.85).abs() < 1e-6);
+    }
+
+    #[test]
+    fn extract_rust_type_no_colon_returns_param_as_is() {
+        // No ':' in param → returns trimmed param (line 210).
+        assert_eq!(extract_rust_type("x"), "x");
+        assert_eq!(extract_rust_type("  Vec  "), "Vec");
+    }
+
+    #[test]
+    fn resolve_extern_extern_sig_but_candidate_no_sig_falls_back_to_name_only() {
+        // extern has signature but candidate has no signature →
+        // `if let Some(c_sig)` is None → skip sig match → name-only (0.70).
+        let mut table = ProjectSymbolTable::new();
+        table.add_symbol(
+            SymbolEntry::new(
+                "c_func",
+                "proj.c.c_func",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C),
+        );
+
+        let resolver = FfiResolver::new(&table, "proj");
+        let extern_info = ExternInfo {
+            language: Language::C,
+            names: vec!["c_func".to_string()],
+            line: 1,
+            signature: Some("fn c_func(x: i32)".to_string()),
+        };
+
+        let result = resolver.resolve_extern(&extern_info, "main.rs");
+        assert!(result.is_some());
+        let (_, confidence, _) = result.unwrap();
+        assert!((confidence - 0.70).abs() < 1e-6);
+    }
+
+    #[test]
+    fn types_compatible_both_unknown_returns_true() {
+        // Two unknown types both canonicalize to None → None == None → true.
+        assert!(TypeMapper::types_compatible(
+            "unknown1",
+            Language::C,
+            "unknown2",
+            Language::Rust
+        ));
+    }
+
+    #[test]
+    fn extract_c_type_preserves_type_when_last_id_is_keyword() {
+        // "unsigned int" — last identifier "int" IS a C type keyword →
+        // return the whole string (line 255-257 branch).
+        assert_eq!(extract_c_type("unsigned int"), "unsigned int");
+        assert_eq!(extract_c_type("const char"), "const char");
+        assert_eq!(extract_c_type("signed long"), "signed long");
+    }
+
+    #[test]
+    fn resolve_extern_keeps_first_name_only_when_second_name_also_matches() {
+        // Two names both match with name-only (no signature). The first
+        // name's candidate is kept; `best_name_only.is_none()` is false for
+        // the second name → skip recording (line 415 false branch).
+        let mut table = ProjectSymbolTable::new();
+        table.add_symbol(
+            SymbolEntry::new(
+                "first_func",
+                "proj.c.first_func",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C),
+        );
+        table.add_symbol(
+            SymbolEntry::new(
+                "second_func",
+                "proj.c.second_func",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C),
+        );
+
+        let resolver = FfiResolver::new(&table, "proj");
+        let extern_info = ExternInfo {
+            language: Language::C,
+            names: vec!["first_func".to_string(), "second_func".to_string()],
+            line: 1,
+            signature: None,
+        };
+
+        let result = resolver.resolve_extern(&extern_info, "main.rs");
+        assert!(result.is_some());
+        let (qn, confidence, _) = result.unwrap();
+        assert_eq!(
+            qn, "proj.c.first_func",
+            "first name-only match should be kept, not overwritten by second"
+        );
+        assert!((confidence - 0.70).abs() < 1e-6);
+    }
+
+    #[test]
+    fn resolve_extern_first_candidate_no_sig_second_sig_match_returns_sig_match() {
+        // First candidate has no signature (c_sig is None → skipped),
+        // second candidate has matching signature → returns signature match.
+        let mut table = ProjectSymbolTable::new();
+        table.add_symbol(
+            SymbolEntry::new("c_func", "proj.a.c_func", NodeLabel::Function, "a.c", "proj")
+                .with_language(Language::C),
+        );
+        table.add_symbol(
+            SymbolEntry::new("c_func", "proj.b.c_func", NodeLabel::Function, "b.c", "proj")
+                .with_language(Language::C)
+                .with_signature("int c_func(int, int)"),
+        );
+
+        let resolver = FfiResolver::new(&table, "proj");
+        let extern_info = ExternInfo {
+            language: Language::C,
+            names: vec!["c_func".to_string()],
+            line: 1,
+            signature: Some("fn c_func(x: i32, y: i32)".to_string()),
+        };
+
+        let result = resolver.resolve_extern(&extern_info, "main.rs");
+        assert!(result.is_some());
+        let (qn, confidence, _) = result.unwrap();
+        assert_eq!(qn, "proj.b.c_func");
+        assert!((confidence - 0.85).abs() < 1e-6);
+    }
+
+    #[test]
+    fn resolve_ffi_mixed_resolvable_and_unresolvable_produces_only_resolvable() {
+        let mut table = ProjectSymbolTable::new();
+        table.add_symbol(
+            SymbolEntry::new("c_func", "proj.c.c_func", NodeLabel::Function, "c.c", "proj")
+                .with_language(Language::C),
+        );
+
+        let mut result = ExtractResult::new("main.rs", Language::Rust);
+        result.externs.push(ExternInfo {
+            language: Language::C,
+            names: vec!["missing_func".to_string()],
+            line: 3,
+            signature: None,
+        });
+        result.externs.push(ExternInfo {
+            language: Language::C,
+            names: vec!["c_func".to_string()],
+            line: 5,
+            signature: None,
+        });
+
+        let results = vec![result];
+        let mut graph = Graph::new();
+        let resolver = FfiResolver::new(&table, "proj");
+        let edges = resolver.resolve_ffi(&results, &mut graph);
+
+        assert_eq!(edges.len(), 1, "only resolvable extern should produce edge");
+        assert_eq!(edges[0].target, "proj.c.c_func");
+        assert_eq!(edges[0].start_line, Some(5));
+    }
 }

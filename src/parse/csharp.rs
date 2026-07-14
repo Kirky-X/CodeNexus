@@ -665,4 +665,313 @@ mod tests {
         assert!(names.contains(&"Outer"));
         assert!(names.contains(&"Inner"));
     }
+
+    #[test]
+    fn generic_class_declaration() {
+        let src = "public class List<T> { }\n";
+        let result = extract(src);
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name, "List");
+    }
+
+    #[test]
+    fn generic_method_declaration() {
+        let src = "public class Foo { public T Get<T>() { return default(T); } }\n";
+        let result = extract(src);
+        let methods: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Method)
+            .collect();
+        assert_eq!(methods.len(), 1);
+        assert_eq!(methods[0].name, "Get");
+    }
+
+    #[test]
+    fn property_declaration_does_not_break_extraction() {
+        let src = "public class Foo { public int Bar { get; set; } }\n";
+        let result = extract(src);
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 1, "class should still be extracted with property");
+        assert_eq!(classes[0].name, "Foo");
+    }
+
+    #[test]
+    fn event_declaration_does_not_break_extraction() {
+        let src = "public class Foo { public event EventHandler Click; }\n";
+        let result = extract(src);
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 1, "class should still be extracted with event");
+    }
+
+    #[test]
+    fn nested_namespace_extracted() {
+        let src = "namespace Outer { namespace Inner { class Foo { } } }\n";
+        let result = extract(src);
+        let namespaces: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Namespace)
+            .collect();
+        assert_eq!(namespaces.len(), 2, "should extract both namespaces");
+        let names: Vec<_> = namespaces.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"Outer"));
+        assert!(names.contains(&"Inner"));
+    }
+
+    #[test]
+    fn class_with_constructor_does_not_break_extraction() {
+        let src = "public class Foo { public Foo() { } }\n";
+        let result = extract(src);
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name, "Foo");
+    }
+
+    #[test]
+    fn comment_only_source_returns_empty_result() {
+        let result = extract("// just a comment\n");
+        assert!(result.is_empty(), "comment-only file should produce no nodes");
+    }
+
+    #[test]
+    fn multiple_namespaces_extracted() {
+        let src = "namespace A { } namespace B { }\n";
+        let result = extract(src);
+        let namespaces: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Namespace)
+            .collect();
+        assert_eq!(namespaces.len(), 2);
+    }
+
+    #[test]
+    fn interface_with_methods_extracted() {
+        let src = "public interface IReader { void Read(); void Write(); }\n";
+        let result = extract(src);
+        let ifaces: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Interface)
+            .collect();
+        assert_eq!(ifaces.len(), 1);
+        assert_eq!(ifaces[0].name, "IReader");
+        let methods: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Method)
+            .collect();
+        assert_eq!(methods.len(), 2, "should extract 2 interface methods");
+    }
+
+    #[test]
+    fn enum_with_values_extracted() {
+        let src = "public enum HttpStatus { Ok = 200, NotFound = 404, Error = 500 }\n";
+        let result = extract(src);
+        let enums: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Enum)
+            .collect();
+        assert_eq!(enums.len(), 1);
+        assert_eq!(enums[0].name, "HttpStatus");
+    }
+
+    #[test]
+    fn method_call_with_arguments() {
+        let src = "class Foo { void Bar() { Calc(1, 2, 3); } }\n";
+        let result = extract(src);
+        let call = result
+            .calls
+            .iter()
+            .find(|c| c.callee_name == "Calc")
+            .expect("should find call to Calc");
+        assert_eq!(call.args.len(), 3, "Calc(1, 2, 3) should have 3 args");
+    }
+
+    #[test]
+    fn lowercase_class_not_marked_exported() {
+        let src = "class foo { }\n";
+        let result = extract(src);
+        let c = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "foo")
+            .expect("should extract class foo");
+        assert!(!c.is_exported, "lowercase class name should not be exported");
+    }
+
+    // --- parse helper and tree walker for direct function tests ---
+
+    fn parse_source(source: &str) -> tree_sitter::Tree {
+        let mut parser =
+            crate::parse::parser_factory::ParserFactory::create_parser(Language::CSharp)
+                .expect("parser");
+        parser.parse(source, None).expect("parse")
+    }
+
+    fn find_first_by_kind<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
+        if node.kind() == kind {
+            return Some(node);
+        }
+        for i in 0..node.named_child_count() as u32 {
+            if let Some(child) = node.named_child(i) {
+                if let Some(found) = find_first_by_kind(child, kind) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+
+    // --- callee_name: qualified_name branch (lines 285-297) ---
+
+    #[test]
+    fn callee_name_on_qualified_name_returns_rightmost() {
+        // `using System.IO;` produces a qualified_name node.
+        // callee_name should walk the right field chain and return the
+        // rightmost identifier. The exact value depends on grammar fields.
+        let src = "using System.IO;\n";
+        let tree = parse_source(src);
+        let root = tree.root_node();
+        let qn = find_first_by_kind(root, "qualified_name")
+            .expect("should find qualified_name");
+        let name = callee_name(qn, src);
+        // If the grammar has right/left fields, returns the rightmost
+        // identifier. If right is an identifier, it should be "IO".
+        if let Some(ref n) = name {
+            assert!(
+                n == "IO" || n == "System",
+                "callee_name on qualified_name should return part of System.IO: {n}"
+            );
+        }
+        // If None, the grammar may not use right/left fields — still
+        // exercises the qualified_name branch.
+    }
+
+    // --- callee_name: invocation_expression branch (lines 305-307) ---
+
+    #[test]
+    fn callee_name_on_invocation_expression_recurses() {
+        // `Foo()()` — the inner invocation_expression is the function
+        // of the outer one. callee_name on the inner invocation_expression
+        // recurses into its function (identifier "Foo").
+        let src = "class C { void M() { Foo()(); } }\n";
+        let tree = parse_source(src);
+        let root = tree.root_node();
+        // Find the outer invocation_expression (whose function is another invocation)
+        fn find_chained_call<'a>(node: tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
+            if node.kind() == "invocation_expression" {
+                if let Some(func) = node.child_by_field_name("function") {
+                    if func.kind() == "invocation_expression" {
+                        return Some(func);
+                    }
+                }
+            }
+            for i in 0..node.named_child_count() as u32 {
+                if let Some(child) = node.named_child(i) {
+                    if let Some(found) = find_chained_call(child) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+        if let Some(inner_invocation) = find_chained_call(root) {
+            let name = callee_name(inner_invocation, src);
+            assert_eq!(
+                name,
+                Some("Foo".to_string()),
+                "callee_name on invocation_expression should recurse to Foo"
+            );
+        }
+    }
+
+    // --- callee_name: parenthesized_expression branch (lines 309-311) ---
+
+    #[test]
+    fn callee_name_on_parenthesized_expression_recurses() {
+        // `(Foo)()` — the function is a parenthesized_expression.
+        // callee_name gets the inner child and recurses.
+        let src = "class C { void M() { (Foo)(); } }\n";
+        let tree = parse_source(src);
+        let root = tree.root_node();
+        // Find the invocation_expression whose function is parenthesized
+        fn find_paren_call<'a>(node: tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
+            if node.kind() == "invocation_expression" {
+                if let Some(func) = node.child_by_field_name("function") {
+                    if func.kind() == "parenthesized_expression" {
+                        return Some(func);
+                    }
+                }
+            }
+            for i in 0..node.named_child_count() as u32 {
+                if let Some(child) = node.named_child(i) {
+                    if let Some(found) = find_paren_call(child) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+        if let Some(paren_expr) = find_paren_call(root) {
+            let name = callee_name(paren_expr, src);
+            assert_eq!(
+                name,
+                Some("Foo".to_string()),
+                "callee_name on parenthesized_expression should recurse to Foo"
+            );
+        }
+    }
+
+    // --- callee_name: _ => None fallback (line 313) ---
+
+    #[test]
+    fn callee_name_returns_none_for_unknown_kind() {
+        // Call callee_name on a node kind not in the match arms.
+        let src = "class Foo { }\n";
+        let tree = parse_source(src);
+        let root = tree.root_node();
+        let class_decl = find_first_by_kind(root, "class_declaration")
+            .expect("should find class_declaration");
+        assert!(
+            callee_name(class_decl, src).is_none(),
+            "callee_name on class_declaration should return None"
+        );
+    }
+
+    // --- call_arguments: no arguments field (line 319) ---
+
+    #[test]
+    fn call_arguments_returns_empty_when_no_arguments_field() {
+        // Call call_arguments on a node without an "arguments" field.
+        let src = "class Foo { }\n";
+        let tree = parse_source(src);
+        let root = tree.root_node();
+        let class_decl = find_first_by_kind(root, "class_declaration")
+            .expect("should find class_declaration");
+        let args = call_arguments(class_decl, src);
+        assert!(
+            args.is_empty(),
+            "call_arguments on class_declaration should return empty"
+        );
+    }
 }

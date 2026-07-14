@@ -933,4 +933,87 @@ mod tests {
             callees
         );
     }
+
+    #[test]
+    fn parenthesized_call_extracts_callee() {
+        let src = "package main\nfunc foo() {}\nfunc main() {\n\t(foo)()\n}\n";
+        let result = extract(src);
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
+        assert!(
+            callees.contains(&"foo"),
+            "should extract parenthesized call to foo: {:?}",
+            callees
+        );
+    }
+
+    #[test]
+    fn comment_only_source_returns_empty() {
+        let result = extract("// just a comment\n");
+        assert!(result.is_empty(), "comment-only should produce no nodes");
+    }
+
+    #[test]
+    fn method_on_pointer_receiver_with_qualified_type() {
+        let src = "package main\nimport \"fmt\"\ntype T struct{}\nfunc (t *T) String() string { return fmt.Sprintf(\"%v\", t) }\n";
+        let result = extract(src);
+        let methods: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Method && n.name == "String")
+            .collect();
+        assert_eq!(methods.len(), 1);
+        assert_eq!(methods[0].parent_qn.as_deref(), Some("T"));
+    }
+
+    #[test]
+    fn empty_struct_extracts_struct_node() {
+        let result = extract("package main\ntype Empty struct{}\n");
+        let structs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Struct)
+            .collect();
+        assert_eq!(structs.len(), 1);
+        assert_eq!(structs[0].name, "Empty");
+    }
+
+    #[test]
+    fn multiple_functions_all_extracted() {
+        let result = extract("package main\nfunc a() {}\nfunc b() {}\nfunc c() {}\n");
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Function)
+            .collect();
+        assert_eq!(funcs.len(), 3, "should extract 3 functions");
+    }
+
+    #[test]
+    fn interface_with_multiple_methods_extracts_interface() {
+        let src = "package main\ntype Reader interface {\n\tRead() int\n\tClose() error\n}\n";
+        let result = extract(src);
+        let ifaces: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Interface)
+            .collect();
+        assert_eq!(ifaces.len(), 1);
+        assert_eq!(ifaces[0].name, "Reader");
+    }
+
+    #[test]
+    fn unexported_type_has_is_exported_false() {
+        let result = extract("package main\ntype myType struct{}\n");
+        let typ = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Struct)
+            .next()
+            .expect("should find struct");
+        assert!(!typ.is_exported, "unexported type should have is_exported=false");
+    }
 }
