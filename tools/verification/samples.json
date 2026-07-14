@@ -4,7 +4,7 @@
     {
       "name": "CodeNexus",
       "language": "rust",
-      "repo_path": "/home/dev/projects/CodeNexus",
+      "repo_path": "/home/kirky/projects/CodeNexus",
       "gitnexus_name": "CodeNexus",
       "commit": "ee97bc8",
       "expected_node_min": 5000,
@@ -58,7 +58,7 @@
     {
       "name": "redis",
       "language": "c",
-      "repo_path": "/home/dev/projects/redis",
+      "repo_path": "/home/kirky/projects/redis",
       "gitnexus_name": "redis",
       "commit": "7.4.0",
       "expected_node_min": 3000,
@@ -67,7 +67,7 @@
     {
       "name": "LAPACK",
       "language": "fortran",
-      "repo_path": "/home/dev/projects/LAPACK",
+      "repo_path": "/home/kirky/projects/LAPACK",
       "gitnexus_name": "LAPACK",
       "commit": "v3.12.0",
       "expected_node_min": 2000,
@@ -76,7 +76,7 @@
     {
       "name": "cobra",
       "language": "go",
-      "repo_path": "/home/dev/projects/cobra",
+      "repo_path": "/home/kirky/projects/cobra",
       "gitnexus_name": "cobra",
       "commit": "ad460ea",
       "expected_node_min": 500,
@@ -85,7 +85,7 @@
     {
       "name": "gson",
       "language": "java",
-      "repo_path": "/home/dev/projects/gson",
+      "repo_path": "/home/kirky/projects/gson",
       "gitnexus_name": "gson",
       "commit": "c9f3fd5",
       "expected_node_min": 3000,
@@ -94,7 +94,7 @@
     {
       "name": "fmt",
       "language": "c_cpp",
-      "repo_path": "/home/dev/projects/fmt",
+      "repo_path": "/home/kirky/projects/fmt",
       "gitnexus_name": "fmt",
       "commit": "6dac6ca",
       "expected_node_min": 300,
