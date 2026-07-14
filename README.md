@@ -51,8 +51,9 @@ CodeNexus 将源代码仓库索引为可查询的知识图谱。它使用 [tree-
 | 团队制品 | `export`/`import` 压缩 `.graph.zst` 制品，共享索引 |
 | 多智能体 MCP | `setup` 自动检测 Claude Code/Cursor/Codex；`hook` 输出 PreToolUse/PostToolUse JSON；`mcp` stdio 服务 |
 | 文件监视 | 守护进程模式，自动增量索引（`daemon` feature） |
-| 向量嵌入 | 可选的语义搜索（`embed` feature） |
+| 向量嵌入 | 默认启用的语义搜索（`embed` feature，含于 `full` 预设） |
 | 污点追踪 | 跨语言多跳污点路径追踪（`TaintPathTracer`，BFS 遍历 DataFlows/Reads/Writes/FfiCalls） |
+| 国际化 | Unicode case folding + NFC 规范化（ICU4X，`i18n` feature，含于 `full` 预设） |
 
 ## 安装
 
@@ -80,7 +81,7 @@ cargo build --release --features mcp
 |---------|------|------|
 | `minimal` | — | 最小预设：仅 `lang-rust` |
 | `core` | — | 核心预设：`lang-c` + `lang-rust` + `lang-python` |
-| `full` | 启用 | 完整预设：`core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/lsp/cli/mcp/cache |
+| `full` | 启用 | 完整预设：`core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/lsp/cli/mcp/cache/embed/i18n |
 | `lang-c` | — | C 语言解析器（tree-sitter-c） |
 | `lang-rust` | 启用 | Rust 语言解析器（tree-sitter-rust） |
 | `lang-fortran` | — | Fortran 语言解析器（tree-sitter-fortran） |
@@ -104,7 +105,7 @@ cargo build --release --features mcp
 | `lang-verilog` | — | Verilog 语言解析器（tree-sitter-verilog） |
 | `daemon` | 启用 | 文件监视守护进程（notify + notify-debouncer-full） |
 | `embed` | 启用 | 向量嵌入语义搜索（reqwest HTTP + 本地 ONNX 推理） |
-| `lsp` | 启用 | LSP 增强解析（rust-analyzer 集成，语义类型增强） |
+| `lsp` | 启用 | LSP 增强解析（7 个 LSP 客户端：Rust rust-analyzer、Python pyright、C/C++ clangd、Go gopls、TypeScript ts-lang-server、Fortran fortls、Java jdtls） |
 | `analysis` | 启用 | 死代码检测 + 架构概览（纯 Cypher 聚合） |
 | `complexity` | 启用 | AST 复杂度分析（圈/认知/嵌套/长度/Halstead/可维护性/时间/空间复杂度，依赖 `analysis`） |
 | `api-review` | 启用 | API 审查工具包（route_map/shape_check/api_impact/tool_map） |
@@ -113,6 +114,7 @@ cargo build --release --features mcp
 | `mcp` | 启用 | MCP 服务器（sdforge `mcp` stdio 传输） |
 | `cli` | 启用 | CLI 二进制（sdforge `cli` 传输，二进制必需） |
 | `cache` | 启用 | 查询结果缓存（oxcache） |
+| `i18n` | 启用 | Unicode case folding + NFC 规范化（ICU4X，`full` 预设含） |
 
 > **日志系统**：inklog 是唯一日志后端（console + file rotation + daily 滚动 + LZ4 压缩），不再提供 tracing-subscriber 可选后端。
 
@@ -446,6 +448,8 @@ CodeNexus 按当前优先级排序的规划工作：
 - [x] v0.3.0 — sdforge-based MCP 服务器：`#[forge]` 宏 + sdforge `mcp` stdio 传输，替代手写 JSON-RPC；6 个工具（query/trace/impact/search/context/architecture）
 - [x] v0.3.2 — 跨语言数据流端到端追踪：`TaintPathTracer` BFS 遍历 DataFlows/Reads/Writes/FfiCalls 边
 - [x] v0.3.2 — 向量嵌入默认开启语义搜索（`embed` feature 已包含在 `full` 预设中）
+- [x] v0.3.3 — 国际化模块（`i18n` feature）：ICU4X Unicode case folding + NFC 规范化 + CJK 边界检测
+- [x] v0.3.3 — Harness 现代化：CI 升级 Rust 1.91 + 6 特性矩阵 + dependabot + codeql + crates.io 发布
 - [ ] 未来 — 基于查询门面的 Web UI / 图可视化
 
 ## [许可证](#许可证)

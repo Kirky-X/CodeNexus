@@ -30,7 +30,7 @@ path = "tools/verification/src/main.rs"
 default = ["full"]
 minimal = ["lang-rust"]
 core = ["lang-c", "lang-rust", "lang-python"]
-full = ["core", "lang-fortran", "lang-typescript", "lang-go", "lang-java", "lang-cpp", "lang-javascript", "lang-ruby", "lang-haskell", "lang-ocaml", "lang-scala", "lang-php", "lang-csharp", "lang-bash", "lang-html", "lang-css", "lang-json", "lang-regex", "lang-verilog", "daemon", "analysis", "complexity", "api-review", "community", "cross-service", "lsp", "cli", "mcp", "cache", "embed"]
+full = ["core", "lang-fortran", "lang-typescript", "lang-go", "lang-java", "lang-cpp", "lang-javascript", "lang-ruby", "lang-haskell", "lang-ocaml", "lang-scala", "lang-php", "lang-csharp", "lang-bash", "lang-html", "lang-css", "lang-json", "lang-regex", "lang-verilog", "daemon", "analysis", "complexity", "api-review", "community", "cross-service", "lsp", "cli", "mcp", "cache", "embed", "i18n"]
 lang-c = ["dep:tree-sitter-c"]
 lang-rust = ["dep:tree-sitter-rust"]
 lang-fortran = ["dep:tree-sitter-fortran"]
@@ -63,6 +63,7 @@ lsp = ["dep:lsp-types", "dep:lsp-server", "dep:crossbeam-channel"]
 mcp = ["dep:sdforge", "sdforge/mcp", "dep:oxiarc-zstd"]
 cli = ["dep:sdforge", "sdforge/cli", "dep:oxiarc-zstd"]
 cache = ["dep:oxcache"]
+i18n = ["dep:icu_normalizer", "dep:icu_casemap"]
 
 [dependencies]
 trait-kit = { version = "0.3", default-features = false, features = ["async"] }
@@ -122,6 +123,8 @@ oxcache = { version = "0.3", default-features = false, features = ["minimal"], o
 oxiarc-zstd = { version = "0.3", default-features = false, optional = true }
 inklog = { version = "0.1", default-features = false }
 regex = "1"
+icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"], optional = true }
+icu_casemap = { version = "2", default-features = false, features = ["compiled_data"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

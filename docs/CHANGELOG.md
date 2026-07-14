@@ -7,10 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-07-15
+
 ### Added
 
+- **feat(i18n): ICU4X-based Unicode case folding + NFC normalization** — new `src/model/i18n.rs` module (`i18n` feature, included in `full` preset) providing `fold_case` (Unicode-aware, e.g. German ß→ss, Turkish İ→i̇), `normalize_nfc` (NFC composition), and `is_cjk` (CJK script detection). Tokenizer now uses case folding + CJK script boundary detection so CJK identifiers are not split on ASCII boundaries. 15 unit tests.
 - **feat(trace): `TaintPathTracer` for cross-language multi-hop taint tracking** — new `src/trace/taint.rs` module with BFS traversal over DataFlows/Reads/Writes/FfiCalls edges, supporting source-to-sink taint path queries and all-reachable-path queries. 30 unit tests covering basic paths, cycle detection, FFI edge following, depth limits, and boundary conditions.
 - **feat(embed): enable semantic search by default in `full` feature** — `embed` feature (vector embedding via ONNX local inference + OpenAI HTTP) is now included in `full`, making semantic search available out of the box. Automatic fallback to BM25 on model absence or unsupported platforms.
+- **refactor(model): FromStr/Display for 4 high-impact enums** — `SearchMode`, `TraceType`, `ServiceProtocol`, `DiffMode` now implement `FromStr` + `Display`, replacing ad-hoc string parsing with standard trait-based conversion.
+
+### Changed
+
+- **chore(harness): CI modernization** — `.github/workflows/ci.yml` upgraded to Rust 1.91, split into 4 jobs (lint/test/coverage/security) with a 6-combination feature matrix (minimal/core/full/mixed). Added `.github/dependabot.yml`, `.github/codeql.yml`, `clippy.toml` (msrv=1.91). `release.yml` adds conditional crates.io publish. `.pre-commit-config.yaml` adds coverage gate (≥95% lines). `rustfmt.toml` fixes deprecated `fn_args_layout` → `fn_params_layout`.
 
 ## [0.3.2] - 2026-07-11
 
@@ -129,7 +137,8 @@ Initial public release. CodeNexus indexes source code into a queryable knowledge
 - **Database corruption detection** — corrupt LadybugDB files are detected at startup and reported with a distinct exit code (4) instead of being loaded into a half-valid state.
 - **`.env` files ignored by default** in `.gitignore`, with an explicit `!.env.example` allow-list so the template is tracked but real secrets never are.
 
-[Unreleased]: https://github.com/Kirky-X/codenexus/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/Kirky-X/codenexus/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.3
 [0.3.2]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.2
 [0.3.1]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.1
 [0.3.0]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.0

@@ -60,8 +60,9 @@ Supports **21 languages** with the default `full` preset: C, Rust, Fortran, Pyth
 | Team artifacts | `export`/`import` compressed `.graph.zst` artifacts for sharing indexes |
 | Multi-agent MCP | `setup` auto-detects Claude Code/Cursor/Codex; `hook` emits PreToolUse/PostToolUse JSON; `mcp` stdio server |
 | File watching | Daemon mode with auto-incremental indexing (`daemon` feature) |
-| Vector embedding | Optional semantic search (`embed` feature) |
+| Vector embedding | Enabled-by-default semantic search (`embed` feature, included in `full` preset) |
 | Taint tracing | Cross-language multi-hop taint path tracing (`TaintPathTracer`, BFS over DataFlows/Reads/Writes/FfiCalls) |
+| Internationalization | Unicode case folding + NFC normalization (ICU4X, `i18n` feature, included in `full` preset) |
 
 ## Installation
 
@@ -89,7 +90,7 @@ cargo build --release --features mcp
 |---------|---------|-------------|
 | `minimal` | — | Minimal preset: `lang-rust` only |
 | `core` | — | Core preset: `lang-c` + `lang-rust` + `lang-python` |
-| `full` | enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/lsp/cli/mcp/cache |
+| `full` | enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/lsp/cli/mcp/cache/embed/i18n |
 | `lang-c` | — | C language parser (tree-sitter-c) |
 | `lang-rust` | enabled | Rust language parser (tree-sitter-rust) |
 | `lang-fortran` | — | Fortran language parser (tree-sitter-fortran) |
@@ -113,7 +114,7 @@ cargo build --release --features mcp
 | `lang-verilog` | — | Verilog language parser (tree-sitter-verilog) |
 | `daemon` | enabled | File-watching daemon (notify + notify-debouncer-full) |
 | `embed` | enabled | Vector embedding semantic search (reqwest HTTP + local ONNX inference) |
-| `lsp` | enabled | LSP-enhanced extraction (rust-analyzer integration, semantic type augmentation) |
+| `lsp` | enabled | LSP-enhanced extraction (7 LSP clients: Rust rust-analyzer, Python pyright, C/C++ clangd, Go gopls, TypeScript ts-lang-server, Fortran fortls, Java jdtls) |
 | `analysis` | enabled | Dead code detection + architecture overview (pure Cypher aggregation) |
 | `complexity` | enabled | AST complexity analysis (cyclomatic/cognitive/nesting/length/Halstead/maintainability/time/space, depends on `analysis`) |
 | `api-review` | enabled | API review toolkit (route_map/shape_check/api_impact/tool_map) |
@@ -122,6 +123,7 @@ cargo build --release --features mcp
 | `mcp` | enabled | MCP server via sdforge `mcp` stdio transport |
 | `cli` | enabled | CLI binary (sdforge `cli` transport; required by the binary) |
 | `cache` | enabled | Query result caching (oxcache) |
+| `i18n` | enabled | Unicode case folding + NFC normalization (ICU4X, included in `full` preset) |
 
 > **Logging**: inklog is the sole logging backend (console + file rotation + daily rotation + LZ4 compression); the tracing-subscriber optional backend is no longer available.
 
@@ -452,6 +454,8 @@ CodeNexus planned work, ordered by current priority:
 - [x] v0.3.0 — sdforge-based MCP server: `#[forge]` macro + sdforge `mcp` stdio transport, replacing hand-written JSON-RPC; 6 tools (query/trace/impact/search/context/architecture)
 - [x] v0.3.2 — Cross-language data-flow tracing end-to-end: `TaintPathTracer` BFS over DataFlows/Reads/Writes/FfiCalls edges
 - [x] v0.3.2 — Vector embedding default-on semantic search (`embed` feature included in `full` preset)
+- [x] v0.3.3 — Internationalization module (`i18n` feature): ICU4X Unicode case folding + NFC normalization + CJK boundary detection
+- [x] v0.3.3 — Harness modernization: CI upgraded to Rust 1.91 + 6-feature matrix + dependabot + codeql + crates.io publish
 - [ ] Future — Web UI / graph visualization on top of the query facade
 
 ## [License](#license)
