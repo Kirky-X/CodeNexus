@@ -12,6 +12,7 @@ keywords = ["code-analysis", "knowledge-graph", "tree-sitter", "ladybugdb", "cod
 categories = ["command-line-utilities", "development-tools", "parsing"]
 homepage = "https://github.com/Kirky-X/codenexus"
 documentation = "https://github.com/Kirky-X/codenexus#readme"
+build = "build.rs"
 
 [lib]
 name = "codenexus"
@@ -62,6 +63,7 @@ lsp = ["dep:lsp-types", "dep:lsp-server", "dep:crossbeam-channel"]
 mcp = ["dep:sdforge", "dep:tokio", "sdforge/mcp", "dep:oxiarc-zstd"]
 cli = ["dep:sdforge", "dep:tokio", "sdforge/cli", "dep:oxiarc-zstd"]
 cache = ["dep:oxcache"]
+inklog = ["dep:inklog", "dep:tokio"]
 
 [dependencies]
 trait-kit = { version = "0.3", default-features = false, features = ["async"] }
@@ -120,6 +122,7 @@ sdforge = { version = "0.4", default-features = false, optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"], optional = true }
 oxcache = { version = "0.3", default-features = false, features = ["minimal"], optional = true }
 oxiarc-zstd = { version = "0.3", default-features = false, optional = true }
+inklog = { version = "0.1", default-features = false, optional = true }
 regex = "1"
 
 [dev-dependencies]
@@ -189,3 +192,4 @@ unexpected_cfgs = "allow"
 trait-kit = { path = "/home/kirky/projects/base/trait-kit" }
 sdforge = { path = "/home/kirky/projects/base/sdforge" }
 oxcache = { path = "/home/kirky/projects/base/oxcache" }
+inklog = { path = "/home/kirky/projects/base/inklog" }

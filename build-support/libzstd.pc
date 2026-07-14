@@ -1,0 +1,9 @@
+prefix=/usr
+libdir=/usr/lib/x86_64-linux-gnu
+includedir=/usr/include
+
+Name: libzstd
+Description: Zstandard compression library (system runtime)
+Version: 1.5.5
+Libs: -L${libdir} -l:libzstd.so.1
+Cflags:

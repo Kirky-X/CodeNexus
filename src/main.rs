@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+#[cfg(not(feature = "inklog"))]
 use tracing_subscriber::EnvFilter;
 
 use codenexus::service::error::CodeNexusError;
@@ -31,13 +32,45 @@ use codenexus::kit::bootstrap::DEFAULT_DEBOUNCE_MS;
 
 /// Initialize the global `tracing` subscriber.
 ///
-/// Events are filtered via `RUST_LOG` and written to stdout with the `target`
-/// field omitted for concision.
+/// When the `inklog` feature is enabled, uses inklog as the tracing backend
+/// (console sink, `RUST_LOG` level filter). Otherwise, uses `tracing-subscriber`
+/// with `FmtSubscriber` writing to stdout.
 pub fn init_logging() {
+    #[cfg(feature = "inklog")]
+    {
+        init_inklog();
+    }
+    #[cfg(not(feature = "inklog"))]
+    {
+        init_tracing();
+    }
+}
+
+#[cfg(not(feature = "inklog"))]
+fn init_tracing() {
     tracing_subscriber::FmtSubscriber::builder()
         .with_env_filter(EnvFilter::from_default_env())
         .with_target(false)
         .init();
+}
+
+#[cfg(feature = "inklog")]
+fn init_inklog() {
+    let level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+
+    let rt = tokio::runtime::Runtime::new().expect("create tokio runtime for inklog");
+    let logger = rt
+        .block_on(async {
+            inklog::LoggerManager::builder()
+                .level(&level)
+                .console(true)
+                .build()
+                .await
+        })
+        .expect("init inklog");
+
+    std::mem::forget(logger);
+    std::mem::forget(rt);
 }
 
 fn main() {
