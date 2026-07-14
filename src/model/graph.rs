@@ -79,7 +79,11 @@ impl Graph {
         self.adjacency_out
             .get(id)
             .into_iter()
-            .flat_map(|indices| indices.iter().map(|&i| &self.edges[i]))
+            .flat_map(|indices| {
+                indices
+                    .iter()
+                    .map(|&i| self.edge_at(i))
+            })
             .filter(|e| Self::type_matches(e.edge_type, edge_type))
             .filter_map(|e| self.nodes.get(&e.target))
             .collect()
@@ -92,7 +96,11 @@ impl Graph {
         self.adjacency_in
             .get(id)
             .into_iter()
-            .flat_map(|indices| indices.iter().map(|&i| &self.edges[i]))
+            .flat_map(|indices| {
+                indices
+                    .iter()
+                    .map(|&i| self.edge_at(i))
+            })
             .filter(|e| Self::type_matches(e.edge_type, edge_type))
             .filter_map(|e| self.nodes.get(&e.source))
             .collect()
@@ -131,7 +139,7 @@ impl Graph {
     pub fn edges_from(&self, id: &NodeId) -> Vec<&Edge> {
         self.adjacency_out
             .get(id)
-            .map(|indices| indices.iter().map(|&i| &self.edges[i]).collect())
+            .map(|indices| indices.iter().map(|&i| self.edge_at(i)).collect())
             .unwrap_or_default()
     }
 
@@ -140,7 +148,7 @@ impl Graph {
     pub fn edges_to(&self, id: &NodeId) -> Vec<&Edge> {
         self.adjacency_in
             .get(id)
-            .map(|indices| indices.iter().map(|&i| &self.edges[i]).collect())
+            .map(|indices| indices.iter().map(|&i| self.edge_at(i)).collect())
             .unwrap_or_default()
     }
 
@@ -185,6 +193,15 @@ impl Graph {
             Some(t) => edge == t,
             None => true,
         }
+    }
+
+    /// Looks up an edge by adjacency index, panicking with a diagnostic
+    /// message if the index is stale (caller mutated `edges` without
+    /// `rebuild_index`).
+    fn edge_at(&self, idx: usize) -> &Edge {
+        self.edges.get(idx).expect(
+            "adjacency index stale: call Graph::rebuild_index after mutating Graph::edges",
+        )
     }
 }
 
@@ -850,5 +867,17 @@ mod index_tests {
             .filter(|e| e.source == "hub" && e.edge_type == EdgeType::Calls)
             .count();
         assert_eq!(indexed.len(), linear_count);
+    }
+
+    #[test]
+    #[should_panic(expected = "adjacency index stale")]
+    fn retain_without_rebuild_panics() {
+        let mut g = Graph::new();
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("a", "c", EdgeType::Reads, "proj"));
+        // Directly retain on edges without rebuild_index — indices become stale.
+        g.edges.retain(|e| e.edge_type == EdgeType::Calls);
+        // This should panic because adjacency_out still references index 1 (now removed).
+        let _ = g.edges_from(&"a".to_string());
     }
 }

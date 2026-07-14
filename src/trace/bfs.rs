@@ -187,3 +187,199 @@ pub(crate) fn bfs_trace(
 
     results
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Edge, Node, NodeLabel};
+
+    /// Builds a 3-node graph A -Calls-> B -Calls-> C.
+    fn abc_graph() -> Graph {
+        let mut g = Graph::new();
+        g.add_node(
+            Node::builder(NodeLabel::Function, "a", "proj.a")
+                .id("a")
+                .project("proj")
+                .build(),
+        );
+        g.add_node(
+            Node::builder(NodeLabel::Function, "b", "proj.b")
+                .id("b")
+                .project("proj")
+                .build(),
+        );
+        g.add_node(
+            Node::builder(NodeLabel::Function, "c", "proj.c")
+                .id("c")
+                .project("proj")
+                .build(),
+        );
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("b", "c", EdgeType::Calls, "proj"));
+        g
+    }
+
+    fn trace_edge() -> TraceEdge {
+        TraceEdge {
+            edge_type: "Calls".to_string(),
+            reason: None,
+            confidence: 1.0,
+        }
+    }
+
+    #[test]
+    fn has_edges_false_for_root_true_for_child() {
+        let g = abc_graph();
+        let a = g.get_node(&"a".to_string()).unwrap();
+        let b = g.get_node(&"b".to_string()).unwrap();
+        let root = WorkItem::new_root("a".to_string(), TraceNode::from(a));
+        assert!(!root.has_edges());
+        let rc_root = Rc::new(root);
+        let child = WorkItem::child(&rc_root, "b".to_string(), TraceNode::from(b), trace_edge());
+        assert!(child.has_edges());
+    }
+
+    #[test]
+    fn build_path_root_returns_single_node_no_edges() {
+        let g = abc_graph();
+        let a = g.get_node(&"a".to_string()).unwrap();
+        let root = WorkItem::new_root("a".to_string(), TraceNode::from(a));
+        let path = root.build_path();
+        assert_eq!(path.depth, 0);
+        assert_eq!(path.nodes.len(), 1);
+        assert!(path.edges.is_empty());
+    }
+
+    #[test]
+    fn build_path_reconstructs_root_to_leaf_order() {
+        let g = abc_graph();
+        let a = g.get_node(&"a".to_string()).unwrap();
+        let b = g.get_node(&"b".to_string()).unwrap();
+        let c = g.get_node(&"c".to_string()).unwrap();
+
+        let root = WorkItem::new_root("a".to_string(), TraceNode::from(a));
+        let rc_root = Rc::new(root);
+        let mid = WorkItem::child(&rc_root, "b".to_string(), TraceNode::from(b), trace_edge());
+        let rc_mid = Rc::new(mid);
+        let leaf = WorkItem::child(&rc_mid, "c".to_string(), TraceNode::from(c), trace_edge());
+
+        let path = leaf.build_path();
+        assert_eq!(path.depth, 2);
+        assert_eq!(path.nodes.len(), 3);
+        assert_eq!(path.nodes[0].name, "a");
+        assert_eq!(path.nodes[1].name, "b");
+        assert_eq!(path.nodes[2].name, "c");
+        assert_eq!(path.edges.len(), 2);
+        assert_eq!(path.edges[0].edge_type, "Calls");
+        assert_eq!(path.edges[1].edge_type, "Calls");
+    }
+
+    #[test]
+    fn path_contains_returns_true_for_self() {
+        let g = abc_graph();
+        let a = g.get_node(&"a".to_string()).unwrap();
+        let root = WorkItem::new_root("a".to_string(), TraceNode::from(a));
+        assert!(root.path_contains(&"a".to_string()));
+    }
+
+    #[test]
+    fn path_contains_returns_true_for_ancestor() {
+        let g = abc_graph();
+        let a = g.get_node(&"a".to_string()).unwrap();
+        let b = g.get_node(&"b".to_string()).unwrap();
+        let root = WorkItem::new_root("a".to_string(), TraceNode::from(a));
+        let rc_root = Rc::new(root);
+        let mid = WorkItem::child(&rc_root, "b".to_string(), TraceNode::from(b), trace_edge());
+        assert!(mid.path_contains(&"a".to_string()));
+        assert!(mid.path_contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn path_contains_returns_false_for_outside_node() {
+        let g = abc_graph();
+        let a = g.get_node(&"a".to_string()).unwrap();
+        let root = WorkItem::new_root("a".to_string(), TraceNode::from(a));
+        assert!(!root.path_contains(&"zzz".to_string()));
+    }
+
+    #[test]
+    fn bfs_trace_start_not_in_graph_returns_empty() {
+        let g = abc_graph();
+        let paths = bfs_trace(&g, &"zzz".to_string(), 5, |_| true, None);
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn bfs_trace_sink_not_in_graph_returns_empty() {
+        let g = abc_graph();
+        let paths = bfs_trace(&g, &"a".to_string(), 5, |_| true, Some(&"zzz".to_string()));
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn bfs_trace_sink_mode_skips_trivial_start_eq_sink() {
+        // start == sink: the root has no edges, so no path is recorded.
+        // Guards against accidentally emitting a 0-edge trivial path.
+        let g = abc_graph();
+        let paths = bfs_trace(&g, &"a".to_string(), 5, |_| true, Some(&"a".to_string()));
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn bfs_trace_sink_mode_records_complete_path() {
+        let g = abc_graph();
+        let paths = bfs_trace(&g, &"a".to_string(), 5, |_| true, Some(&"c".to_string()));
+        assert_eq!(paths.len(), 1);
+        let path = &paths[0];
+        assert_eq!(path.depth, 2);
+        assert_eq!(path.nodes.len(), 3);
+        assert_eq!(path.nodes[0].name, "a");
+        assert_eq!(path.nodes[2].name, "c");
+    }
+
+    #[test]
+    fn bfs_trace_sink_mode_records_path_at_max_depth_boundary() {
+        // max_depth = 2: a→b→c is exactly 2 hops, must still reach sink.
+        let g = abc_graph();
+        let paths = bfs_trace(&g, &"a".to_string(), 2, |_| true, Some(&"c".to_string()));
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].nodes.last().unwrap().name, "c");
+    }
+
+    #[test]
+    fn bfs_trace_sink_mode_max_depth_below_sink_returns_empty() {
+        // max_depth = 1: a→b→c needs 2 hops; sink unreachable.
+        let g = abc_graph();
+        let paths = bfs_trace(&g, &"a".to_string(), 1, |_| true, Some(&"c".to_string()));
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn bfs_trace_non_sink_returns_all_prefixes() {
+        let g = abc_graph();
+        let paths = bfs_trace(&g, &"a".to_string(), 5, |_| true, None);
+        // Prefixes with at least one edge: a→b, a→b→c.
+        assert_eq!(paths.len(), 2);
+        let depths: Vec<usize> = paths.iter().map(|p| p.depth).collect();
+        assert!(depths.contains(&1));
+        assert!(depths.contains(&2));
+    }
+
+    #[test]
+    fn bfs_trace_edge_filter_skips_unmatched() {
+        // Filter rejects Calls — no edges accepted, no paths emitted.
+        let g = abc_graph();
+        let paths = bfs_trace(&g, &"a".to_string(), 5, |et| *et != EdgeType::Calls, None);
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn bfs_trace_cycle_does_not_revisit_node() {
+        // Add c→a to create a cycle. Sink mode to c must not loop.
+        let mut g = abc_graph();
+        g.add_edge(Edge::new("c", "a", EdgeType::Calls, "proj"));
+        let paths = bfs_trace(&g, &"a".to_string(), 5, |_| true, Some(&"c".to_string()));
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].nodes.len(), 3);
+    }
+}
