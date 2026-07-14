@@ -39,26 +39,26 @@ pub use bootstrap::{build_kit, KitBootstrapConfig};
 // a type mismatch: `AsyncKit::build()` returns `AsyncKit<async_kit::Ready>`.
 // trait-kit 0.3 renamed `KitError` to `TraitKitError` (ProjectNameError
 // convention); alias preserves the CodeNexus-internal `KitError` name.
-pub use trait_kit::TraitKitError as KitError;
 pub use trait_kit::core::meta::{AsyncAutoBuilder, ModuleMeta};
 pub use trait_kit::kit::{AsyncKit, AsyncReady, AsyncUnbuilt};
+pub use trait_kit::TraitKitError as KitError;
 
 // Re-export the 9 module types so call sites can write
 // `use crate::kit::{AsyncKit, StorageModule, TraceModule}` instead of
 // importing each module from its own crate path. This mirrors the
 // historical convenience where `*Key` types lived in `crate::kit`.
+#[cfg(feature = "cache")]
+pub use crate::cache::CacheModule;
+#[cfg(feature = "daemon")]
+pub use crate::daemon::DaemonModule;
+#[cfg(feature = "embed")]
+pub use crate::embed::EmbedModule;
 pub use crate::index::IndexerModule;
 pub use crate::parse::{ExtractorRegistryModule, ParserFactoryModule};
 pub use crate::query::QueryModule;
 pub use crate::resolve::ResolverModule;
 pub use crate::storage::StorageModule;
 pub use crate::trace::TraceModule;
-#[cfg(feature = "daemon")]
-pub use crate::daemon::DaemonModule;
-#[cfg(feature = "embed")]
-pub use crate::embed::EmbedModule;
-#[cfg(feature = "cache")]
-pub use crate::cache::CacheModule;
 
 // ---------------------------------------------------------------------------
 // Tests

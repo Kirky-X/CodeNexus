@@ -480,10 +480,7 @@ mod tests {
             "call inside method should have caller_qn"
         );
         assert!(
-            call.caller_qn
-                .as_ref()
-                .unwrap()
-                .contains("caller"),
+            call.caller_qn.as_ref().unwrap().contains("caller"),
             "caller_qn should contain method name"
         );
     }

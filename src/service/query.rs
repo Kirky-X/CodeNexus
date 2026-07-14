@@ -17,9 +17,9 @@ use crate::service::error::{kit_not_initialized, to_api_error};
 use crate::service::runtime::kit;
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use sdforge::prelude::ApiError;
-#[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::forge;
+#[cfg(any(feature = "cli", feature = "mcp"))]
+use sdforge::prelude::ApiError;
 
 /// Mirrors [`QueryResult`] with `Serialize`/`Deserialize` for JSON transport.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -40,10 +40,7 @@ fn query_output(r: QueryResult) -> QueryOutput {
 
 /// Runs query against an injected Kit (testable core).
 #[cfg(any(feature = "cli", feature = "mcp", test))]
-pub fn run_query(
-    kit: &AsyncKit<AsyncReady>,
-    cypher: &str,
-) -> Result<QueryOutput, CodeNexusError> {
+pub fn run_query(kit: &AsyncKit<AsyncReady>, cypher: &str) -> Result<QueryOutput, CodeNexusError> {
     let q = kit.require::<QueryModule>()?;
     validate_cypher_subset(cypher)?;
     let result = q.cypher(cypher)?;
@@ -109,10 +106,7 @@ mod tests {
         let err = run_query(&kit, "").expect_err("empty query should error");
         match err {
             CodeNexusError::Query(QueryError::InvalidQuery(msg)) => {
-                assert!(
-                    msg.contains("empty"),
-                    "error should mention empty: {msg}"
-                );
+                assert!(msg.contains("empty"), "error should mention empty: {msg}");
             }
             other => panic!("expected QueryError::InvalidQuery, got {other:?}"),
         }
@@ -203,7 +197,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn query_wrapper_succeeds_via_init_kit() {
@@ -215,13 +209,15 @@ mod tests {
         init_kit(kit).expect("init_kit");
 
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let result = rt.block_on(query("MATCH (n:Function) RETURN n.name LIMIT 10".to_string()));
+        let result = rt.block_on(query(
+            "MATCH (n:Function) RETURN n.name LIMIT 10".to_string(),
+        ));
         assert!(result.is_ok(), "wrapper should succeed: {:?}", result.err());
 
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn query_wrapper_fails_when_kit_not_initialized() {

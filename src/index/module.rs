@@ -180,6 +180,7 @@ mod tests {
         assert!(result.duration_ms < u64::MAX, "duration should be recorded");
     }
 
+    #[cfg(feature = "lang-rust")]
     #[test]
     fn capability_index_real_files_creates_nodes() {
         let cap = IndexerModule::build_cap(&IndexConfig::in_memory()).expect("build_cap");

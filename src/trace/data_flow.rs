@@ -509,7 +509,10 @@ mod tests {
         g.add_edge(Edge::new("a", "b", EdgeType::FfiCalls, "proj"));
         let tracer = DataFlowTracer::new(&g);
         let paths = tracer.trace(&"a".to_string(), 3);
-        assert!(paths.is_empty(), "FfiCalls should not be followed by data-flow tracer");
+        assert!(
+            paths.is_empty(),
+            "FfiCalls should not be followed by data-flow tracer"
+        );
     }
 
     #[test]

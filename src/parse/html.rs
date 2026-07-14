@@ -68,10 +68,7 @@ impl Extractor for HtmlExtractor {
                 file_path: file_path.to_string(),
             })?;
         let root = tree.root_node();
-        let ctx = VisitContext {
-            file_path,
-            project,
-        };
+        let ctx = VisitContext { file_path, project };
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
                 visit_node(child, source, &ctx, &mut result);
@@ -318,21 +315,9 @@ mod tests {
     #[test]
     fn extracts_nested_elements() {
         let result = extract("<html><body><p>hi</p></body></html>\n");
-        let names: Vec<_> = result
-            .nodes
-            .iter()
-            .map(|n| n.name.as_str())
-            .collect();
-        assert!(
-            names.contains(&"html"),
-            "should contain html: {:?}",
-            names
-        );
-        assert!(
-            names.contains(&"body"),
-            "should contain body: {:?}",
-            names
-        );
+        let names: Vec<_> = result.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"html"), "should contain html: {:?}", names);
+        assert!(names.contains(&"body"), "should contain body: {:?}", names);
         assert!(names.contains(&"p"), "should contain p: {:?}", names);
         assert_eq!(
             result.nodes.len(),
@@ -427,22 +412,14 @@ mod tests {
     #[test]
     fn qualified_name_uses_file_path_and_tagname() {
         let result = extract("<html></html>\n");
-        let html = result
-            .nodes
-            .iter()
-            .find(|n| n.name == "html")
-            .unwrap();
+        let html = result.nodes.iter().find(|n| n.name == "html").unwrap();
         assert_eq!(html.qualified_name, "proj.test.html.html");
     }
 
     #[test]
     fn duplicate_tag_names_get_disambiguated_fqn() {
         let result = extract("<div></div><div></div>\n");
-        let divs: Vec<_> = result
-            .nodes
-            .iter()
-            .filter(|n| n.name == "div")
-            .collect();
+        let divs: Vec<_> = result.nodes.iter().filter(|n| n.name == "div").collect();
         assert_eq!(divs.len(), 2, "should extract 2 div elements");
         assert_ne!(
             divs[0].qualified_name, divs[1].qualified_name,
@@ -538,7 +515,11 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Property)
             .collect();
-        assert_eq!(elements.len(), 1, "text content should not create extra nodes");
+        assert_eq!(
+            elements.len(),
+            1,
+            "text content should not create extra nodes"
+        );
         assert_eq!(elements[0].name, "p");
     }
 

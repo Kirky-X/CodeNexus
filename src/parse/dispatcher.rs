@@ -8,47 +8,47 @@
 
 use crate::model::Language;
 
+#[cfg(feature = "lang-bash")]
+use super::bash::BashExtractor;
 #[cfg(feature = "lang-c")]
 use super::c::CExtractor;
 #[cfg(feature = "lang-cpp")]
 use super::cpp::CppExtractor;
+#[cfg(feature = "lang-csharp")]
+use super::csharp::CSharpExtractor;
+#[cfg(feature = "lang-css")]
+use super::css::CssExtractor;
 use super::extractor::Extractor;
 #[cfg(feature = "lang-fortran")]
 use super::fortran::FortranExtractor;
 #[cfg(feature = "lang-go")]
 use super::go::GoExtractor;
-#[cfg(feature = "lang-java")]
-use super::java::JavaExtractor;
-#[cfg(feature = "lang-python")]
-use super::python::PythonExtractor;
-#[cfg(feature = "lang-rust")]
-use super::rust_extractor::RustExtractor;
-#[cfg(feature = "lang-typescript")]
-use super::typescript::TypeScriptExtractor;
-#[cfg(feature = "lang-javascript")]
-use super::javascript::JavaScriptExtractor;
-#[cfg(feature = "lang-ruby")]
-use super::ruby::RubyExtractor;
 #[cfg(feature = "lang-haskell")]
 use super::haskell::HaskellExtractor;
-#[cfg(feature = "lang-ocaml")]
-use super::ocaml::OCamlExtractor;
-#[cfg(feature = "lang-scala")]
-use super::scala::ScalaExtractor;
-#[cfg(feature = "lang-php")]
-use super::php::PhpExtractor;
-#[cfg(feature = "lang-csharp")]
-use super::csharp::CSharpExtractor;
-#[cfg(feature = "lang-bash")]
-use super::bash::BashExtractor;
 #[cfg(feature = "lang-html")]
 use super::html::HtmlExtractor;
-#[cfg(feature = "lang-css")]
-use super::css::CssExtractor;
+#[cfg(feature = "lang-java")]
+use super::java::JavaExtractor;
+#[cfg(feature = "lang-javascript")]
+use super::javascript::JavaScriptExtractor;
 #[cfg(feature = "lang-json")]
 use super::json::JsonExtractor;
+#[cfg(feature = "lang-ocaml")]
+use super::ocaml::OCamlExtractor;
+#[cfg(feature = "lang-php")]
+use super::php::PhpExtractor;
+#[cfg(feature = "lang-python")]
+use super::python::PythonExtractor;
 #[cfg(feature = "lang-regex")]
 use super::regex::RegexExtractor;
+#[cfg(feature = "lang-ruby")]
+use super::ruby::RubyExtractor;
+#[cfg(feature = "lang-rust")]
+use super::rust_extractor::RustExtractor;
+#[cfg(feature = "lang-scala")]
+use super::scala::ScalaExtractor;
+#[cfg(feature = "lang-typescript")]
+use super::typescript::TypeScriptExtractor;
 #[cfg(feature = "lang-verilog")]
 use super::verilog::VerilogExtractor;
 
@@ -102,6 +102,11 @@ pub fn get_extractor(language: Language) -> Box<dyn Extractor> {
         Language::Regex => Box::new(RegexExtractor::new()),
         #[cfg(feature = "lang-verilog")]
         Language::Verilog => Box::new(VerilogExtractor::new()),
+        #[allow(unreachable_patterns)]
+        _ => panic!(
+            "no tree-sitter extractor compiled for language '{language}'; \
+             enable the corresponding lang-* Cargo feature"
+        ),
     }
 }
 
@@ -258,7 +263,7 @@ mod tests {
 
     #[test]
     fn get_extractor_returns_correct_language_for_all_variants() {
-        for lang in Language::all() {
+        for lang in Language::compiled() {
             let ext = get_extractor(lang);
             assert_eq!(
                 ext.language(),
@@ -287,7 +292,7 @@ mod tests {
 
     #[test]
     fn get_extractor_can_be_used_in_collection() {
-        let all_langs = Language::all();
+        let all_langs = Language::compiled();
         let extractors: Vec<Box<dyn Extractor>> =
             all_langs.iter().map(|&lang| get_extractor(lang)).collect();
         assert_eq!(extractors.len(), all_langs.len());

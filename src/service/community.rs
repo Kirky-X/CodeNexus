@@ -18,9 +18,9 @@ use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 use crate::service::runtime::kit;
 
 #[cfg(feature = "cli")]
-use sdforge::prelude::ApiError;
-#[cfg(feature = "cli")]
 use sdforge::forge;
+#[cfg(feature = "cli")]
+use sdforge::prelude::ApiError;
 
 /// JSON-serializable community detection output.
 #[cfg(feature = "community")]
@@ -64,14 +64,20 @@ async fn community(project: String, resolution: String) -> Result<(), ApiError> 
     let res = if resolution.is_empty() {
         None
     } else {
-        Some(resolution.parse::<f64>().map_err(|_| ApiError::InvalidInput {
-            message: format!("invalid resolution '{resolution}' (expected a positive number)"),
-            field: Some("resolution".to_string()),
-            value: Some(Value::String(resolution)),
-        })?)
+        Some(
+            resolution
+                .parse::<f64>()
+                .map_err(|_| ApiError::InvalidInput {
+                    message: format!(
+                        "invalid resolution '{resolution}' (expected a positive number)"
+                    ),
+                    field: Some("resolution".to_string()),
+                    value: Some(Value::String(resolution)),
+                })?,
+        )
     };
-    let output = run_community(&kit, &project, res)
-        .map_err(|e| to_api_error(e, "community_error"))?;
+    let output =
+        run_community(&kit, &project, res).map_err(|e| to_api_error(e, "community_error"))?;
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
@@ -142,7 +148,10 @@ mod tests {
         let storage = kit.require::<StorageModule>().expect("require_storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'other', name: 'a', qualifiedName: 'other.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         let output = run_community(&kit, "demo", None).expect("run should succeed");
-        assert!(output.communities.is_empty(), "no communities for absent project");
+        assert!(
+            output.communities.is_empty(),
+            "no communities for absent project"
+        );
     }
 
     #[test]
@@ -220,7 +229,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn community_wrapper_succeeds_with_empty_resolution() {
@@ -238,7 +247,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn community_wrapper_succeeds_with_valid_resolution() {
@@ -256,7 +265,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn community_wrapper_fails_with_invalid_resolution() {
@@ -278,7 +287,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn community_wrapper_fails_when_kit_not_initialized() {

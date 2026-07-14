@@ -16,9 +16,9 @@ use crate::service::runtime::kit;
 use crate::storage::ProjectRecord;
 
 #[cfg(feature = "cli")]
-use sdforge::prelude::ApiError;
-#[cfg(feature = "cli")]
 use sdforge::forge;
+#[cfg(feature = "cli")]
+use sdforge::prelude::ApiError;
 
 /// JSON-serializable view of a project record.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -163,7 +163,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn list_wrapper_succeeds_via_init_kit() {
@@ -181,7 +181,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn list_wrapper_fails_when_kit_not_initialized() {

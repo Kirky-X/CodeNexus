@@ -106,11 +106,7 @@ impl<'a> SearchEngine<'a> {
     ///
     /// Returns [`QueryError::InvalidQuery`] for empty queries, invalid regex,
     /// or `max_distance > MAX_FUZZY_DISTANCE`.
-    pub fn search(
-        &self,
-        project: &str,
-        params: &SearchParams,
-    ) -> Result<Vec<SearchResult>> {
+    pub fn search(&self, project: &str, params: &SearchParams) -> Result<Vec<SearchResult>> {
         let limit = params.clamped_limit();
         let mut results = match params.mode {
             SearchMode::Exact => self.search_exact(project, &params.query, limit)?,
@@ -149,14 +145,11 @@ impl<'a> SearchEngine<'a> {
     }
 
     /// Exact case-insensitive substring search (delegates to storage-level CONTAINS).
-    fn search_exact(
-        &self,
-        project: &str,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<SearchResult>> {
+    fn search_exact(&self, project: &str, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
         if query.trim().is_empty() {
-            return Err(QueryError::InvalidQuery("query must not be empty".to_string()));
+            return Err(QueryError::InvalidQuery(
+                "query must not be empty".to_string(),
+            ));
         }
         let escaped = escape_cypher_string(query);
         let project_esc = escape_cypher_string(project);
@@ -193,11 +186,7 @@ impl<'a> SearchEngine<'a> {
         let re = regex::Regex::new(pattern)
             .map_err(|e| QueryError::InvalidQuery(format!("invalid regex: {e}")))?;
         let project_esc = escape_cypher_string(project);
-        let labels = [
-            NodeLabel::Function,
-            NodeLabel::Method,
-            NodeLabel::Class,
-        ];
+        let labels = [NodeLabel::Function, NodeLabel::Method, NodeLabel::Class];
         let mut results = Vec::new();
         for &label in &labels {
             let table = escape_identifier(label.table_name());
@@ -259,7 +248,9 @@ impl<'a> SearchEngine<'a> {
         max_distance: usize,
     ) -> Result<Vec<SearchResult>> {
         if query.trim().is_empty() {
-            return Err(QueryError::InvalidQuery("fuzzy query must not be empty".to_string()));
+            return Err(QueryError::InvalidQuery(
+                "fuzzy query must not be empty".to_string(),
+            ));
         }
         if max_distance > MAX_FUZZY_DISTANCE {
             return Err(QueryError::InvalidQuery(format!(
@@ -325,17 +316,16 @@ impl<'a> SearchEngine<'a> {
         params: &SearchParams,
     ) -> Result<Vec<SearchResult>> {
         if params.query.trim().is_empty() {
-            return Err(QueryError::InvalidQuery("query must not be empty".to_string()));
+            return Err(QueryError::InvalidQuery(
+                "query must not be empty".to_string(),
+            ));
         }
         let project_esc = escape_cypher_string(project);
         let query = &params.query;
 
         // Determine which labels to search.
         let labels: Vec<NodeLabel> = match &params.label_filter {
-            Some(names) => names
-                .iter()
-                .filter_map(|n| parse_node_label(n))
-                .collect(),
+            Some(names) => names.iter().filter_map(|n| parse_node_label(n)).collect(),
             None => SYMBOL_LABELS.to_vec(),
         };
         if labels.is_empty() {
@@ -363,7 +353,11 @@ impl<'a> SearchEngine<'a> {
                 let Some(name) = row.get(1).and_then(|v| v.as_str()) else {
                     continue;
                 };
-                let node_id = row.first().and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let node_id = row
+                    .first()
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let degree = degree_map.get(&node_id).copied().unwrap_or(0);
                 // Apply degree filter.
                 if let Some((min, max)) = params.degree_filter {
@@ -394,10 +388,7 @@ impl<'a> SearchEngine<'a> {
     }
 
     /// Loads a map of `target_id → incoming CALLS count` for `project`.
-    fn load_calls_indegree(
-        &self,
-        project: &str,
-    ) -> Result<std::collections::HashMap<String, u32>> {
+    fn load_calls_indegree(&self, project: &str) -> Result<std::collections::HashMap<String, u32>> {
         let project_esc = escape_cypher_string(project);
         let cypher = format!(
             "MATCH (e:CodeRelation) WHERE e.type = 'CALLS' AND e.project = '{project_esc}' \
@@ -441,9 +432,7 @@ impl<'a> SearchEngine<'a> {
             .qualified_name
             .as_ref()
             .and_then(|qn| qn_to_id.get(qn))
-            .map_or(0.0, |id| {
-                if tested_ids.contains(id) { 1.0 } else { 0.0 }
-            });
+            .map_or(0.0, |id| if tested_ids.contains(id) { 1.0 } else { 0.0 });
 
         name_relevance * 0.4
             + degree_centrality * 0.3
@@ -787,10 +776,7 @@ fn compute_name_relevance(name: &str, query: &str) -> f64 {
 ///
 /// - `file_pattern` is provided and matches the candidate's `file_path` → 1.0
 /// - Otherwise (no pattern or no match) → 0.5
-fn compute_module_proximity(
-    file_path: &Option<String>,
-    file_pattern: &Option<String>,
-) -> f64 {
+fn compute_module_proximity(file_path: &Option<String>, file_pattern: &Option<String>) -> f64 {
     match (file_path, file_pattern) {
         (Some(path), Some(pattern)) if path.contains(pattern) => 1.0,
         _ => 0.5,
@@ -1408,8 +1394,7 @@ mod tests {
         let json =
             serde_json::to_string(&SearchMode::GraphEnhanced).expect("serialize GraphEnhanced");
         assert_eq!(json, "\"GraphEnhanced\"");
-        let json =
-            serde_json::to_string(&SearchMode::MultiSignal).expect("serialize MultiSignal");
+        let json = serde_json::to_string(&SearchMode::MultiSignal).expect("serialize MultiSignal");
         assert_eq!(json, "\"MultiSignal\"");
     }
 
@@ -1440,7 +1425,10 @@ mod tests {
 
     #[test]
     fn search_params_clamps_limit_to_max_500() {
-        let mut p = SearchParams { limit: 1000, ..Default::default() };
+        let mut p = SearchParams {
+            limit: 1000,
+            ..Default::default()
+        };
         assert_eq!(p.clamped_limit(), MAX_LIMIT);
         p.limit = 10;
         assert_eq!(p.clamped_limit(), 10);
@@ -1472,7 +1460,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
 
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
@@ -1495,7 +1485,9 @@ mod tests {
             mode: SearchMode::Exact,
             ..SearchParams::default()
         };
-        let err = engine.search("demo", &params).expect_err("empty query should error");
+        let err = engine
+            .search("demo", &params)
+            .expect_err("empty query should error");
         assert!(err.is_invalid_query());
     }
 
@@ -1528,7 +1520,9 @@ mod tests {
                 .language(Language::Rust)
                 .build(),
         ];
-        storage.save_nodes(&funcs, NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&funcs, NodeLabel::Function)
+            .expect("save_nodes");
 
         let engine = SearchEngine::new(storage.as_ref());
         // Pattern `get_.*_user` matches "get_first_user" but not "get_user_by_id"
@@ -1540,9 +1534,14 @@ mod tests {
         };
         let results = engine.search("demo", &params).expect("regex search");
         let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
-        assert!(names.contains(&"get_first_user"), "should match get_first_user, got {names:?}");
+        assert!(
+            names.contains(&"get_first_user"),
+            "should match get_first_user, got {names:?}"
+        );
         assert!(!names.contains(&"delete_user"));
-        assert!(results.iter().all(|r| r.match_reason.starts_with("regex match")));
+        assert!(results
+            .iter()
+            .all(|r| r.match_reason.starts_with("regex match")));
 
         // Broader pattern matches both get_* functions.
         let params2 = SearchParams {
@@ -1578,7 +1577,9 @@ mod tests {
                 .language(Language::Rust)
                 .build(),
         ];
-        storage.save_nodes(&classes, NodeLabel::Class).expect("save_nodes");
+        storage
+            .save_nodes(&classes, NodeLabel::Class)
+            .expect("save_nodes");
 
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
@@ -1595,14 +1596,16 @@ mod tests {
     fn search_engine_regex_matches_on_qualified_name() {
         let storage = build_storage();
         let func = Node::builder(NodeLabel::Function, "do_work", "demo.handler.process")
-                .id("f1")
-                .project("demo")
-                .file_path("/a.rs")
-                .start_line(1)
-                .end_line(10)
-                .language(Language::Rust)
-                .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
 
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
@@ -1625,7 +1628,9 @@ mod tests {
             mode: SearchMode::Regex,
             ..SearchParams::default()
         };
-        let err = engine.search("demo", &params).expect_err("invalid regex should error");
+        let err = engine
+            .search("demo", &params)
+            .expect_err("invalid regex should error");
         assert!(err.is_invalid_query());
     }
 
@@ -1633,14 +1638,16 @@ mod tests {
     fn search_engine_regex_returns_empty_when_no_match() {
         let storage = build_storage();
         let func = Node::builder(NodeLabel::Function, "main", "demo.main")
-                .id("f1")
-                .project("demo")
-                .file_path("/a.rs")
-                .start_line(1)
-                .end_line(10)
-                .language(Language::Rust)
-                .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
 
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
@@ -1672,16 +1679,22 @@ mod tests {
                 .end_line(30)
                 .language(Language::Rust)
                 .build(),
-            Node::builder(NodeLabel::Function, "completely_unrelated", "demo.completely_unrelated")
-                .id("f3")
-                .project("demo")
-                .file_path("/a.rs")
-                .start_line(40)
-                .end_line(50)
-                .language(Language::Rust)
-                .build(),
+            Node::builder(
+                NodeLabel::Function,
+                "completely_unrelated",
+                "demo.completely_unrelated",
+            )
+            .id("f3")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(40)
+            .end_line(50)
+            .language(Language::Rust)
+            .build(),
         ];
-        storage.save_nodes(&funcs, NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&funcs, NodeLabel::Function)
+            .expect("save_nodes");
 
         let engine = SearchEngine::new(storage.as_ref());
         // "getuser" vs "get_user" → distance 1 (insert "_")
@@ -1690,8 +1703,14 @@ mod tests {
             .search_fuzzy("demo", "getuser", 2)
             .expect("fuzzy search");
         let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
-        assert!(names.contains(&"get_user"), "should match get_user, got {names:?}");
-        assert!(names.contains(&"getUser"), "should match getUser, got {names:?}");
+        assert!(
+            names.contains(&"get_user"),
+            "should match get_user, got {names:?}"
+        );
+        assert!(
+            names.contains(&"getUser"),
+            "should match getUser, got {names:?}"
+        );
         assert!(!names.contains(&"completely_unrelated"));
         assert!(results.iter().all(|r| r.match_reason.starts_with("fuzzy")));
     }
@@ -1717,7 +1736,9 @@ mod tests {
                 .language(Language::Rust)
                 .build(),
         ];
-        storage.save_nodes(&funcs, NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&funcs, NodeLabel::Function)
+            .expect("save_nodes");
 
         let engine = SearchEngine::new(storage.as_ref());
         // max_distance=0 → exact case-insensitive match only
@@ -1734,21 +1755,26 @@ mod tests {
         let storage = build_storage();
         // "fethc" vs "fetch" → standard Levenshtein distance = 2
         let func = Node::builder(NodeLabel::Function, "fetch", "demo.fetch")
-                .id("f1")
-                .project("demo")
-                .file_path("/a.rs")
-                .start_line(1)
-                .end_line(10)
-                .language(Language::Rust)
-                .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
 
         let engine = SearchEngine::new(storage.as_ref());
         // distance = 2, so max_distance=1 should NOT match
         let results = engine
             .search_fuzzy("demo", "fethc", 1)
             .expect("fuzzy search");
-        assert!(results.is_empty(), "distance 2 should not match max_distance 1");
+        assert!(
+            results.is_empty(),
+            "distance 2 should not match max_distance 1"
+        );
 
         // max_distance=2 should match
         let results = engine
@@ -1796,39 +1822,55 @@ mod tests {
         let storage = build_storage();
         // Create two handler functions: one with 5 incoming CALLS, one with 2.
         let handlers = [
-            Node::builder(NodeLabel::Function, "request_handler", "demo.request_handler")
-                .id("h1")
-                .project("demo")
-                .file_path("/a.rs")
-                .start_line(1)
-                .end_line(10)
-                .language(Language::Rust)
-                .build(),
-            Node::builder(NodeLabel::Function, "response_handler", "demo.response_handler")
-                .id("h2")
-                .project("demo")
-                .file_path("/a.rs")
-                .start_line(20)
-                .end_line(30)
-                .language(Language::Rust)
-                .build(),
+            Node::builder(
+                NodeLabel::Function,
+                "request_handler",
+                "demo.request_handler",
+            )
+            .id("h1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build(),
+            Node::builder(
+                NodeLabel::Function,
+                "response_handler",
+                "demo.response_handler",
+            )
+            .id("h2")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(20)
+            .end_line(30)
+            .language(Language::Rust)
+            .build(),
         ];
-        storage.save_nodes(&handlers, NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&handlers, NodeLabel::Function)
+            .expect("save_nodes");
 
         // Create caller functions to generate CALLS edges.
         let callers: Vec<Node> = (0..7)
             .map(|i| {
-                Node::builder(NodeLabel::Function, format!("caller_{i}"), format!("demo.caller_{i}"))
-                    .id(format!("c{i}"))
-                    .project("demo")
-                    .file_path("/b.rs")
-                    .start_line(i + 1)
-                    .end_line(i + 5)
-                    .language(Language::Rust)
-                    .build()
+                Node::builder(
+                    NodeLabel::Function,
+                    format!("caller_{i}"),
+                    format!("demo.caller_{i}"),
+                )
+                .id(format!("c{i}"))
+                .project("demo")
+                .file_path("/b.rs")
+                .start_line(i + 1)
+                .end_line(i + 5)
+                .language(Language::Rust)
+                .build()
             })
             .collect();
-        storage.save_nodes(&callers, NodeLabel::Function).expect("save callers");
+        storage
+            .save_nodes(&callers, NodeLabel::Function)
+            .expect("save callers");
 
         // 5 callers → h1, 2 callers → h2.
         let edges_to_h1: Vec<Edge> = (0..5)
@@ -1871,23 +1913,27 @@ mod tests {
     fn search_engine_graph_enhanced_filters_by_label() {
         let storage = build_storage();
         let func = Node::builder(NodeLabel::Function, "data_handler", "demo.data_handler")
-                .id("f1")
-                .project("demo")
-                .file_path("/a.rs")
-                .start_line(1)
-                .end_line(10)
-                .language(Language::Rust)
-                .build();
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
         let class = Node::builder(NodeLabel::Class, "EventHandler", "demo.EventHandler")
-                .id("c1")
-                .project("demo")
-                .file_path("/a.rs")
-                .start_line(20)
-                .end_line(50)
-                .language(Language::Rust)
-                .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save func");
-        storage.save_nodes(&[class], NodeLabel::Class).expect("save class");
+            .id("c1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(20)
+            .end_line(50)
+            .language(Language::Rust)
+            .build();
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save func");
+        storage
+            .save_nodes(&[class], NodeLabel::Class)
+            .expect("save class");
 
         let engine = SearchEngine::new(storage.as_ref());
         // label_filter=["Function"] → only Function nodes.
@@ -1919,14 +1965,16 @@ mod tests {
     fn search_engine_graph_enhanced_includes_score() {
         let storage = build_storage();
         let func = Node::builder(NodeLabel::Function, "handler", "demo.handler")
-                .id("f1")
-                .project("demo")
-                .file_path("/a.rs")
-                .start_line(1)
-                .end_line(10)
-                .language(Language::Rust)
-                .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
 
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
@@ -1950,7 +1998,9 @@ mod tests {
             mode: SearchMode::GraphEnhanced,
             ..SearchParams::default()
         };
-        let err = engine.search("demo", &params).expect_err("empty query should error");
+        let err = engine
+            .search("demo", &params)
+            .expect_err("empty query should error");
         assert!(err.is_invalid_query());
     }
 
@@ -1967,7 +2017,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[handler], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[handler], NodeLabel::Function)
+            .expect("save_nodes");
 
         // 100 CALLS edges → degree_centrality = min(100/100, 1.0) = 1.0
         let calls_edges: Vec<Edge> = (0..100)
@@ -2003,15 +2055,21 @@ mod tests {
         // R-search-004: fuzzy match + low degree + different module + no tests
         // → score < 0.5.
         let storage = build_storage();
-        let func = Node::builder(NodeLabel::Function, "request_handler", "demo.request_handler")
-            .id("h2")
-            .project("demo")
-            .file_path("/src/main.rs")
-            .start_line(1)
-            .end_line(10)
-            .language(Language::Rust)
-            .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        let func = Node::builder(
+            NodeLabel::Function,
+            "request_handler",
+            "demo.request_handler",
+        )
+        .id("h2")
+        .project("demo")
+        .file_path("/src/main.rs")
+        .start_line(1)
+        .end_line(10)
+        .language(Language::Rust)
+        .build();
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
 
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
@@ -2044,7 +2102,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
 
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
@@ -2075,7 +2135,9 @@ mod tests {
         storage.save_edges(&edges).expect("save_edges");
 
         let engine = SearchEngine::new(storage.as_ref());
-        let set = engine.load_tested_node_ids("demo").expect("load_tested_node_ids");
+        let set = engine
+            .load_tested_node_ids("demo")
+            .expect("load_tested_node_ids");
         assert_eq!(set.len(), 3, "expected 3 tested targets, got {set:?}");
         for t in &targets {
             assert!(set.contains(*t), "expected {t} in tested set");
@@ -2092,7 +2154,9 @@ mod tests {
         storage.save_edges(&edges).expect("save_edges");
 
         let engine = SearchEngine::new(storage.as_ref());
-        let set = engine.load_tested_node_ids("demo").expect("load_tested_node_ids");
+        let set = engine
+            .load_tested_node_ids("demo")
+            .expect("load_tested_node_ids");
         assert_eq!(set.len(), 1);
         assert!(set.contains("h1"));
         assert!(!set.contains("h2"));
@@ -2108,8 +2172,13 @@ mod tests {
         storage.save_edges(&edges).expect("save_edges");
 
         let engine = SearchEngine::new(storage.as_ref());
-        let set = engine.load_tested_node_ids("demo").expect("load_tested_node_ids");
-        assert!(set.is_empty(), "expected empty set when no TESTS edges, got {set:?}");
+        let set = engine
+            .load_tested_node_ids("demo")
+            .expect("load_tested_node_ids");
+        assert!(
+            set.is_empty(),
+            "expected empty set when no TESTS edges, got {set:?}"
+        );
     }
 
     #[test]
@@ -2117,7 +2186,9 @@ mod tests {
         let storage = build_storage();
         let f1 = sample_function("id_f1", "demo", "foo", "demo.foo", "/a.rs", 1);
         let f2 = sample_function("id_f2", "demo", "bar", "demo.bar", "/a.rs", 10);
-        storage.save_nodes(&[f1, f2], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[f1, f2], NodeLabel::Function)
+            .expect("save_nodes");
 
         let engine = SearchEngine::new(storage.as_ref());
         let map = engine.load_qn_to_node_id_map("demo", &["demo.foo", "demo.bar", "demo.missing"]);
@@ -2139,12 +2210,17 @@ mod tests {
         let storage = build_storage();
         let f1 = sample_function("id_f1", "demo", "foo", "demo.foo", "/a.rs", 1);
         let f2 = sample_function("id_f2", "other", "foo", "other.foo", "/a.rs", 1);
-        storage.save_nodes(&[f1, f2], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[f1, f2], NodeLabel::Function)
+            .expect("save_nodes");
 
         let engine = SearchEngine::new(storage.as_ref());
         let map = engine.load_qn_to_node_id_map("demo", &["demo.foo", "other.foo"]);
         assert!(map.contains_key("demo.foo"));
-        assert!(!map.contains_key("other.foo"), "other project should be filtered");
+        assert!(
+            !map.contains_key("other.foo"),
+            "other project should be filtered"
+        );
     }
 
     #[test]
@@ -2160,7 +2236,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[handler], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[handler], NodeLabel::Function)
+            .expect("save_nodes");
 
         let calls_edges: Vec<Edge> = (0..100)
             .map(|i| Edge::new(format!("caller_{i}"), "h1", EdgeType::Calls, "demo"))
@@ -2202,15 +2280,20 @@ mod tests {
         assert_eq!(compute_name_relevance("anything", ""), 1.0);
     }
 
-
     #[test]
     fn compute_module_proximity_returns_expected_values() {
         assert_eq!(
-            compute_module_proximity(&Some("/src/handlers.rs".to_string()), &Some("/src/handlers.rs".to_string())),
+            compute_module_proximity(
+                &Some("/src/handlers.rs".to_string()),
+                &Some("/src/handlers.rs".to_string())
+            ),
             1.0
         );
         assert_eq!(
-            compute_module_proximity(&Some("/src/main.rs".to_string()), &Some("/src/handlers.rs".to_string())),
+            compute_module_proximity(
+                &Some("/src/main.rs".to_string()),
+                &Some("/src/handlers.rs".to_string())
+            ),
             0.5
         );
         assert_eq!(
@@ -2239,7 +2322,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
         storage.execute("DROP TABLE Class;").expect("drop table");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
@@ -2264,7 +2349,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
         storage.execute("DROP TABLE Class;").expect("drop table");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
@@ -2288,7 +2375,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
         storage.execute("DROP TABLE Class;").expect("drop table");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
@@ -2312,7 +2401,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
         storage.execute("DROP TABLE Class;").expect("drop table");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
@@ -2337,7 +2428,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
             query: "parse".to_string(),
@@ -2355,7 +2448,9 @@ mod tests {
         // when the CodeRelation table is dropped, the CALLS query errors and
         // an empty map is returned (not propagated as an error).
         let storage = build_storage();
-        storage.execute("DROP TABLE CodeRelation;").expect("drop table");
+        storage
+            .execute("DROP TABLE CodeRelation;")
+            .expect("drop table");
         let engine = SearchEngine::new(storage.as_ref());
         let map = engine
             .load_calls_indegree("demo")
@@ -2370,7 +2465,9 @@ mod tests {
         // TESTS query errors and the function returns Err (unlike
         // load_calls_indegree which swallows the error).
         let storage = build_storage();
-        storage.execute("DROP TABLE CodeRelation;").expect("drop table");
+        storage
+            .execute("DROP TABLE CodeRelation;")
+            .expect("drop table");
         let engine = SearchEngine::new(storage.as_ref());
         let result = engine.load_tested_node_ids("demo");
         assert!(
@@ -2490,7 +2587,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
         storage
             .execute("DROP TABLE Class;")
             .expect("drop Class table");
@@ -2518,7 +2617,10 @@ mod tests {
     fn compute_module_proximity_both_some_no_match_returns_half() {
         // Cover `(Some(path), Some(pattern))` where pattern not in path → falls to `_ => 0.5`
         assert_eq!(
-            compute_module_proximity(&Some("/src/main.rs".to_string()), &Some("other".to_string())),
+            compute_module_proximity(
+                &Some("/src/main.rs".to_string()),
+                &Some("other".to_string())
+            ),
             0.5
         );
     }
@@ -2665,7 +2767,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
             query: "foo".to_string(),
@@ -2684,10 +2788,15 @@ mod tests {
         // Cover `Err(e) => return Err(e.into())` (line 477): when the
         // CodeRelation table is dropped, the query errors and propagates.
         let storage = build_storage();
-        storage.execute("DROP TABLE CodeRelation;").expect("drop table");
+        storage
+            .execute("DROP TABLE CodeRelation;")
+            .expect("drop table");
         let engine = SearchEngine::new(storage.as_ref());
         let result = engine.load_tested_node_ids("demo");
-        assert!(result.is_err(), "dropped CodeRelation should propagate error");
+        assert!(
+            result.is_err(),
+            "dropped CodeRelation should propagate error"
+        );
     }
 
     // --- Coverage gap tests: search_graph_enhanced degree filter ---
@@ -2705,7 +2814,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
             query: "foo".to_string(),
@@ -2776,7 +2887,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
             query: "parse".to_string(),
@@ -2804,8 +2917,12 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
-        storage.execute("DROP TABLE CodeRelation;").expect("drop table");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
+        storage
+            .execute("DROP TABLE CodeRelation;")
+            .expect("drop table");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
             query: "handler".to_string(),
@@ -2927,7 +3044,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
             query: "parse".to_string(),
@@ -3001,7 +3120,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
             query: "handler".to_string(),
@@ -3035,7 +3156,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
             query: "handler".to_string(),
@@ -3069,7 +3192,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
             query: "handler".to_string(),
@@ -3107,7 +3232,9 @@ mod tests {
                 .language(Language::Rust)
                 .build(),
         ];
-        storage.save_nodes(&funcs, NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&funcs, NodeLabel::Function)
+            .expect("save_nodes");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
             query: "a".to_string(), // matches both as substring
@@ -3139,7 +3266,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
         storage.execute("DROP TABLE Class;").expect("drop table");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
@@ -3163,7 +3292,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
         storage.execute("DROP TABLE Class;").expect("drop table");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
@@ -3187,7 +3318,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
         storage.execute("DROP TABLE Class;").expect("drop table");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
@@ -3211,7 +3344,9 @@ mod tests {
             .end_line(10)
             .language(Language::Rust)
             .build();
-        storage.save_nodes(&[func], NodeLabel::Function).expect("save_nodes");
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
         storage.execute("DROP TABLE Class;").expect("drop table");
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
@@ -3234,7 +3369,14 @@ mod tests {
         // propagates (unlike search_by_name which uses `continue`).
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function("f1", "demo", "parse", "demo.parse", "/a.rs", 1)],
+            &[sample_function(
+                "f1",
+                "demo",
+                "parse",
+                "demo.parse",
+                "/a.rs",
+                1,
+            )],
             NodeLabel::Function,
         )
         .expect("save_nodes");
@@ -3260,7 +3402,12 @@ mod tests {
         // is filtered out.
         let rows: Vec<Vec<serde_json::Value>> = vec![
             // Row with null name → filtered out.
-            vec![serde_json::Value::Null, serde_json::Value::Null, serde_json::Value::Null, serde_json::Value::Null],
+            vec![
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+            ],
             // Row with valid name → kept.
             vec![
                 serde_json::Value::String("foo".to_string()),
@@ -3270,7 +3417,11 @@ mod tests {
             ],
         ];
         let results = rows_to_search_results(rows, NodeLabel::Function, "foo");
-        assert_eq!(results.len(), 1, "only the row with a valid name should be kept");
+        assert_eq!(
+            results.len(),
+            1,
+            "only the row with a valid name should be kept"
+        );
         assert_eq!(results[0].name, "foo");
     }
 
@@ -3279,14 +3430,12 @@ mod tests {
         // Cover None paths for qualified_name (line 681), file_path (line 682),
         // and start_line (lines 683-686): when these columns are null or
         // missing, the SearchResult should have None/None for optional fields.
-        let rows: Vec<Vec<serde_json::Value>> = vec![
-            vec![
-                serde_json::Value::String("foo".to_string()),
-                serde_json::Value::Null, // qualified_name = None
-                serde_json::Value::Null, // file_path = None
-                serde_json::Value::Null, // start_line = None (not i64)
-            ],
-        ];
+        let rows: Vec<Vec<serde_json::Value>> = vec![vec![
+            serde_json::Value::String("foo".to_string()),
+            serde_json::Value::Null, // qualified_name = None
+            serde_json::Value::Null, // file_path = None
+            serde_json::Value::Null, // start_line = None (not i64)
+        ]];
         let results = rows_to_search_results(rows, NodeLabel::Function, "");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "foo");
@@ -3299,17 +3448,18 @@ mod tests {
     fn rows_to_search_results_handles_negative_start_line() {
         // Cover `u32::try_from(i).ok()` returning None for negative values
         // (line 686): a negative start_line should result in None.
-        let rows: Vec<Vec<serde_json::Value>> = vec![
-            vec![
-                serde_json::Value::String("foo".to_string()),
-                serde_json::Value::Null,
-                serde_json::Value::Null,
-                serde_json::Value::Number(serde_json::Number::from(-5i64)),
-            ],
-        ];
+        let rows: Vec<Vec<serde_json::Value>> = vec![vec![
+            serde_json::Value::String("foo".to_string()),
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+            serde_json::Value::Number(serde_json::Number::from(-5i64)),
+        ]];
         let results = rows_to_search_results(rows, NodeLabel::Function, "");
         assert_eq!(results.len(), 1);
-        assert!(results[0].start_line.is_none(), "negative start_line should be None");
+        assert!(
+            results[0].start_line.is_none(),
+            "negative start_line should be None"
+        );
     }
 
     // ====================================================================

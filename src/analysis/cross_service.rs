@@ -358,7 +358,8 @@ impl<'a> CrossServiceDetector<'a> {
             for literal in &literals {
                 for route in &routes {
                     if let Some(match_type) = match_route(&route.path, literal) {
-                        let confidence = self.score_confidence(&match_type, &ServiceProtocol::HttpRest);
+                        let confidence =
+                            self.score_confidence(&match_type, &ServiceProtocol::HttpRest);
                         matches.push(CrossServiceMatch {
                             caller: caller.id.clone(),
                             callee: route.id.clone(),
@@ -430,7 +431,8 @@ impl<'a> CrossServiceDetector<'a> {
                     callee: op.clone(),
                     protocol: ServiceProtocol::GraphQL,
                     match_type: MatchType::Pattern,
-                    confidence: self.score_confidence(&MatchType::Pattern, &ServiceProtocol::GraphQL),
+                    confidence: self
+                        .score_confidence(&MatchType::Pattern, &ServiceProtocol::GraphQL),
                     reason: format!("GraphQL {op}"),
                 });
             }
@@ -459,7 +461,8 @@ impl<'a> CrossServiceDetector<'a> {
                     callee: callee.clone(),
                     protocol: ServiceProtocol::MessageQueue,
                     match_type: MatchType::Pattern,
-                    confidence: self.score_confidence(&MatchType::Pattern, &ServiceProtocol::MessageQueue),
+                    confidence: self
+                        .score_confidence(&MatchType::Pattern, &ServiceProtocol::MessageQueue),
                     reason: format!("MessageQueue {direction}: {callee}"),
                 });
             }
@@ -488,7 +491,8 @@ impl<'a> CrossServiceDetector<'a> {
                     callee: callee.clone(),
                     protocol: ServiceProtocol::EventBus,
                     match_type: MatchType::Pattern,
-                    confidence: self.score_confidence(&MatchType::Pattern, &ServiceProtocol::EventBus),
+                    confidence: self
+                        .score_confidence(&MatchType::Pattern, &ServiceProtocol::EventBus),
                     reason: format!("EventBus {direction}: {callee}"),
                 });
             }
@@ -752,7 +756,11 @@ fn extract_grpc_client_calls(content: &str) -> Vec<String> {
             .unwrap_or(rest.len());
         if end > 0 {
             let method = &rest[..end];
-            let starts_upper = method.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+            let starts_upper = method
+                .chars()
+                .next()
+                .map(|c| c.is_uppercase())
+                .unwrap_or(false);
             if starts_upper {
                 let after = rest[end..].trim_start();
                 if after.starts_with('(') {
@@ -770,7 +778,11 @@ fn extract_grpc_client_calls(content: &str) -> Vec<String> {
 /// string literals.
 fn extract_graphql_operations(content: &str) -> Vec<String> {
     let mut ops = Vec::new();
-    for (pattern, name) in &[("query {", "query"), ("mutation {", "mutation"), ("subscription {", "subscription")] {
+    for (pattern, name) in &[
+        ("query {", "query"),
+        ("mutation {", "mutation"),
+        ("subscription {", "subscription"),
+    ] {
         if content.contains(pattern) {
             ops.push(name.to_string());
         }
@@ -824,9 +836,7 @@ fn extract_patterns_by_keywords(
             let after_pattern = &content[cursor + idx + pattern.len()..];
             let trimmed = after_pattern.trim_start();
             if let Some(rest) = trimmed.strip_prefix('(') {
-                let end = rest
-                    .find([',', ')'])
-                    .unwrap_or(rest.len());
+                let end = rest.find([',', ')']).unwrap_or(rest.len());
                 let arg = if trim_single_quote {
                     rest[..end].trim().trim_matches(|c| c == '"' || c == '\'')
                 } else {
@@ -891,7 +901,9 @@ mod tests {
             .expect("build_kit")
     }
 
-    fn storage(kit: &AsyncKit<AsyncReady>) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
+    fn storage(
+        kit: &AsyncKit<AsyncReady>,
+    ) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
         kit.require::<StorageModule>().expect("require_storage")
     }
 
@@ -1698,10 +1710,7 @@ mod tests {
         let s = storage(&kit);
         let detector = CrossServiceDetector::new(&*s);
         let matches = detector.detect_grpc("demo").expect("detect_grpc");
-        assert!(
-            matches.is_empty(),
-            "lowercase method should not match gRPC"
-        );
+        assert!(matches.is_empty(), "lowercase method should not match gRPC");
     }
 
     // ====================================================================
@@ -1814,7 +1823,10 @@ mod tests {
         let s = storage(&kit);
         let detector = CrossServiceDetector::new(&*s);
         let matches = detector.detect_graphql("demo").expect("detect_graphql");
-        assert!(matches.is_empty(), "plain function should not match GraphQL");
+        assert!(
+            matches.is_empty(),
+            "plain function should not match GraphQL"
+        );
     }
 
     // ====================================================================
@@ -1974,11 +1986,7 @@ mod tests {
         assert_eq!(matches[0].protocol, ServiceProtocol::EventBus);
         assert_eq!(matches[0].callee, "userJoined");
         assert_eq!(matches[0].match_type, MatchType::Pattern);
-        assert!(
-            matches[0].reason.contains("EMITS"),
-            "{}",
-            matches[0].reason
-        );
+        assert!(matches[0].reason.contains("EMITS"), "{}", matches[0].reason);
     }
 
     #[test]
@@ -2028,11 +2036,7 @@ mod tests {
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].protocol, ServiceProtocol::EventBus);
         assert_eq!(matches[0].callee, "update");
-        assert!(
-            matches[0].reason.contains("EMITS"),
-            "{}",
-            matches[0].reason
-        );
+        assert!(matches[0].reason.contains("EMITS"), "{}", matches[0].reason);
     }
 
     #[test]
@@ -2079,7 +2083,10 @@ mod tests {
         let s = storage(&kit);
         let detector = CrossServiceDetector::new(&*s);
         let matches = detector.detect_event_bus("demo").expect("detect_event_bus");
-        assert!(matches.is_empty(), "plain function should not match EventBus");
+        assert!(
+            matches.is_empty(),
+            "plain function should not match EventBus"
+        );
     }
 
     // ====================================================================
@@ -2335,9 +2342,7 @@ mod tests {
         );
         let s = storage(&kit);
         let detector = CrossServiceDetector::new(&*s);
-        let matches = detector
-            .detect_event_bus("demo")
-            .expect("detect_event_bus");
+        let matches = detector.detect_event_bus("demo").expect("detect_event_bus");
         assert!(matches.is_empty(), "empty-content caller should be skipped");
     }
 

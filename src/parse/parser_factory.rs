@@ -30,51 +30,52 @@ impl ParserFactory {
     /// `tree_sitter_language::LanguageFn`) that is converted to a
     /// [`TsLanguage`] via `.into()` (i.e. [`TsLanguage::new`]).
     pub fn create_language(lang: Language) -> Result<TsLanguage> {
-        let ts_lang = match lang {
+        match lang {
             #[cfg(feature = "lang-c")]
-            Language::C => tree_sitter_c::LANGUAGE.into(),
+            Language::C => Ok(tree_sitter_c::LANGUAGE.into()),
             #[cfg(feature = "lang-rust")]
-            Language::Rust => tree_sitter_rust::LANGUAGE.into(),
+            Language::Rust => Ok(tree_sitter_rust::LANGUAGE.into()),
             #[cfg(feature = "lang-fortran")]
-            Language::Fortran => tree_sitter_fortran::LANGUAGE.into(),
+            Language::Fortran => Ok(tree_sitter_fortran::LANGUAGE.into()),
             #[cfg(feature = "lang-python")]
-            Language::Python => tree_sitter_python::LANGUAGE.into(),
+            Language::Python => Ok(tree_sitter_python::LANGUAGE.into()),
             #[cfg(feature = "lang-typescript")]
-            Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            Language::TypeScript => Ok(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
             #[cfg(feature = "lang-go")]
-            Language::Go => tree_sitter_go::LANGUAGE.into(),
+            Language::Go => Ok(tree_sitter_go::LANGUAGE.into()),
             #[cfg(feature = "lang-java")]
-            Language::Java => tree_sitter_java::LANGUAGE.into(),
+            Language::Java => Ok(tree_sitter_java::LANGUAGE.into()),
             #[cfg(feature = "lang-cpp")]
-            Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
+            Language::Cpp => Ok(tree_sitter_cpp::LANGUAGE.into()),
             #[cfg(feature = "lang-javascript")]
-            Language::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
+            Language::JavaScript => Ok(tree_sitter_javascript::LANGUAGE.into()),
             #[cfg(feature = "lang-ruby")]
-            Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
+            Language::Ruby => Ok(tree_sitter_ruby::LANGUAGE.into()),
             #[cfg(feature = "lang-haskell")]
-            Language::Haskell => tree_sitter_haskell::LANGUAGE.into(),
+            Language::Haskell => Ok(tree_sitter_haskell::LANGUAGE.into()),
             #[cfg(feature = "lang-ocaml")]
-            Language::OCaml => tree_sitter_ocaml::LANGUAGE_OCAML.into(),
+            Language::OCaml => Ok(tree_sitter_ocaml::LANGUAGE_OCAML.into()),
             #[cfg(feature = "lang-scala")]
-            Language::Scala => tree_sitter_scala::LANGUAGE.into(),
+            Language::Scala => Ok(tree_sitter_scala::LANGUAGE.into()),
             #[cfg(feature = "lang-php")]
-            Language::Php => tree_sitter_php::LANGUAGE_PHP.into(),
+            Language::Php => Ok(tree_sitter_php::LANGUAGE_PHP.into()),
             #[cfg(feature = "lang-csharp")]
-            Language::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
+            Language::CSharp => Ok(tree_sitter_c_sharp::LANGUAGE.into()),
             #[cfg(feature = "lang-bash")]
-            Language::Bash => tree_sitter_bash::LANGUAGE.into(),
+            Language::Bash => Ok(tree_sitter_bash::LANGUAGE.into()),
             #[cfg(feature = "lang-html")]
-            Language::Html => tree_sitter_html::LANGUAGE.into(),
+            Language::Html => Ok(tree_sitter_html::LANGUAGE.into()),
             #[cfg(feature = "lang-css")]
-            Language::Css => tree_sitter_css::LANGUAGE.into(),
+            Language::Css => Ok(tree_sitter_css::LANGUAGE.into()),
             #[cfg(feature = "lang-json")]
-            Language::Json => tree_sitter_json::LANGUAGE.into(),
+            Language::Json => Ok(tree_sitter_json::LANGUAGE.into()),
             #[cfg(feature = "lang-regex")]
-            Language::Regex => tree_sitter_regex::LANGUAGE.into(),
+            Language::Regex => Ok(tree_sitter_regex::LANGUAGE.into()),
             #[cfg(feature = "lang-verilog")]
-            Language::Verilog => tree_sitter_verilog::LANGUAGE.into(),
-        };
-        Ok(ts_lang)
+            Language::Verilog => Ok(tree_sitter_verilog::LANGUAGE.into()),
+            #[allow(unreachable_patterns)]
+            _ => Err(ParseError::UnsupportedLanguage(lang.to_string())),
+        }
     }
 
     /// Creates a new [`Parser`] configured for the given language.
@@ -155,7 +156,7 @@ mod tests {
 
     #[test]
     fn create_language_all_variants_succeed() {
-        for lang in Language::all() {
+        for lang in Language::compiled() {
             let result = ParserFactory::create_language(lang);
             assert!(result.is_ok(), "create_language should succeed for {lang}");
         }
@@ -570,7 +571,7 @@ mod tests {
 
     #[test]
     fn create_parser_all_languages_succeed() {
-        for lang in Language::all() {
+        for lang in Language::compiled() {
             let result = ParserFactory::create_parser(lang);
             assert!(result.is_ok(), "create_parser should succeed for {lang}");
         }

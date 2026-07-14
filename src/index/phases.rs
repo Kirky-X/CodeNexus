@@ -420,98 +420,99 @@ fn build_includes_edges(
         // normalized by ScopeResolutionPhase). Used for both source and target
         // File node id lookup.
         let mut file_index: HashMap<String, String> = HashMap::new();
-    for node in graph.nodes_by_label(NodeLabel::File) {
-        if let Some(fp) = &node.file_path {
-            file_index
-                .entry(fp.clone())
-                .or_insert_with(|| node.id.clone());
-        }
-    }
-
-    // All relative file paths — used by resolve_include for suffix matching.
-    // resolve_include matches #include paths as suffixes of these paths.
-    let all_files: Vec<String> = file_index.keys().cloned().collect();
-
-    // Build rel→abs reverse map for IncludesGraph keys. IncludesGraph stores
-    // ABSOLUTE paths (matching SymbolEntry.file_path and CallResolver's
-    // caller_file, both from result.file_path) so that lookup_exported_in_scope
-    // can filter entries by file_path without format conversion.
-    let mut rel_to_abs: HashMap<&String, &String> = HashMap::new();
-    for (abs, rel) in path_to_rel {
-        rel_to_abs.insert(rel, abs);
-    }
-
-    for result in results {
-        // Only C++ #include produces INCLUDES edges (scheme C).
-        // C and other languages are handled by ImportResolver as IMPORTS.
-        if result.language != Language::Cpp {
-            continue;
+        for node in graph.nodes_by_label(NodeLabel::File) {
+            if let Some(fp) = &node.file_path {
+                file_index
+                    .entry(fp.clone())
+                    .or_insert_with(|| node.id.clone());
+            }
         }
 
-        // Convert absolute file_path to relative for File node lookup.
-        // In tests, file_path may already be relative (path_to_rel won't
-        // have it as a key, so fall back to the original).
-        let source_rel = path_to_rel
-            .get(&result.file_path)
-            .cloned()
-            .unwrap_or_else(|| result.file_path.clone());
+        // All relative file paths — used by resolve_include for suffix matching.
+        // resolve_include matches #include paths as suffixes of these paths.
+        let all_files: Vec<String> = file_index.keys().cloned().collect();
 
-        let Some(source_file_id) = file_index.get(&source_rel).cloned() else {
-            warn!(
-                file = %result.file_path,
-                "INCLUDES source File node not found; skipping #include edges for this file"
-            );
-            continue;
-        };
+        // Build rel→abs reverse map for IncludesGraph keys. IncludesGraph stores
+        // ABSOLUTE paths (matching SymbolEntry.file_path and CallResolver's
+        // caller_file, both from result.file_path) so that lookup_exported_in_scope
+        // can filter entries by file_path without format conversion.
+        let mut rel_to_abs: HashMap<&String, &String> = HashMap::new();
+        for (abs, rel) in path_to_rel {
+            rel_to_abs.insert(rel, abs);
+        }
 
-        // IncludesGraph source key: absolute path (result.file_path).
-        // In tests where path_to_rel is empty, result.file_path is already
-        // the "absolute" path (relative path used as-is).
-        let source_abs = &result.file_path;
-
-        for import in &result.imports {
-            if import.source_file.is_empty() {
+        for result in results {
+            // Only C++ #include produces INCLUDES edges (scheme C).
+            // C and other languages are handled by ImportResolver as IMPORTS.
+            if result.language != Language::Cpp {
                 continue;
             }
 
-            // resolve_include does suffix matching on all_files (relative
-            // paths). Returns a relative path that exists in all_files.
-            let Some(target_rel) = resolve_include(&import.source_file, &source_rel, &all_files)
-            else {
-                // System header (<iostream>) or external lib — no match.
-                // Not warned: system headers are common and expected.
+            // Convert absolute file_path to relative for File node lookup.
+            // In tests, file_path may already be relative (path_to_rel won't
+            // have it as a key, so fall back to the original).
+            let source_rel = path_to_rel
+                .get(&result.file_path)
+                .cloned()
+                .unwrap_or_else(|| result.file_path.clone());
+
+            let Some(source_file_id) = file_index.get(&source_rel).cloned() else {
+                warn!(
+                    file = %result.file_path,
+                    "INCLUDES source File node not found; skipping #include edges for this file"
+                );
                 continue;
             };
 
-            // target_rel came from all_files (file_index keys), so this
-            // lookup is guaranteed to succeed. The guard is defensive only.
-            let Some(target_file_id) = file_index.get(&target_rel).cloned() else {
-                continue;
-            };
+            // IncludesGraph source key: absolute path (result.file_path).
+            // In tests where path_to_rel is empty, result.file_path is already
+            // the "absolute" path (relative path used as-is).
+            let source_abs = &result.file_path;
 
-            let edge = Edge::builder(
-                source_file_id.clone(),
-                target_file_id.clone(),
-                EdgeType::Includes,
-                project_id,
-            )
-            .confidence(CONFIDENCE_INCLUDES)
-            .confidence_tier(ConfidenceTier::ImportScoped)
-            .start_line(import.line)
-            .build();
-            graph.add_edge(edge.clone());
-            edges.push(edge);
+            for import in &result.imports {
+                if import.source_file.is_empty() {
+                    continue;
+                }
 
-            // IncludesGraph target key: convert target_rel back to absolute
-            // via rel_to_abs map. In tests (path_to_rel empty), fallback to
-            // target_rel (which is already the "absolute" path in test context).
-            let target_abs = rel_to_abs
-                .get(&target_rel)
-                .map(|s| s.to_string())
-                .unwrap_or(target_rel.clone());
-            includes_graph.add_include(source_abs, &target_abs);
+                // resolve_include does suffix matching on all_files (relative
+                // paths). Returns a relative path that exists in all_files.
+                let Some(target_rel) =
+                    resolve_include(&import.source_file, &source_rel, &all_files)
+                else {
+                    // System header (<iostream>) or external lib — no match.
+                    // Not warned: system headers are common and expected.
+                    continue;
+                };
+
+                // target_rel came from all_files (file_index keys), so this
+                // lookup is guaranteed to succeed. The guard is defensive only.
+                let Some(target_file_id) = file_index.get(&target_rel).cloned() else {
+                    continue;
+                };
+
+                let edge = Edge::builder(
+                    source_file_id.clone(),
+                    target_file_id.clone(),
+                    EdgeType::Includes,
+                    project_id,
+                )
+                .confidence(CONFIDENCE_INCLUDES)
+                .confidence_tier(ConfidenceTier::ImportScoped)
+                .start_line(import.line)
+                .build();
+                graph.add_edge(edge.clone());
+                edges.push(edge);
+
+                // IncludesGraph target key: convert target_rel back to absolute
+                // via rel_to_abs map. In tests (path_to_rel empty), fallback to
+                // target_rel (which is already the "absolute" path in test context).
+                let target_abs = rel_to_abs
+                    .get(&target_rel)
+                    .map(|s| s.to_string())
+                    .unwrap_or(target_rel.clone());
+                includes_graph.add_include(source_abs, &target_abs);
+            }
         }
-    }
     } // end #[cfg(feature = "lang-cpp")]
 
     #[cfg(not(feature = "lang-cpp"))]

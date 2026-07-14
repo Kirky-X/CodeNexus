@@ -141,7 +141,13 @@ fn detect_cpp_header(source: &str) -> bool {
         || source.contains("protected:")
 }
 
-#[cfg(all(test, feature = "lang-c", feature = "lang-cpp", feature = "lang-python", feature = "lang-rust"))]
+#[cfg(all(
+    test,
+    feature = "lang-c",
+    feature = "lang-cpp",
+    feature = "lang-python",
+    feature = "lang-rust"
+))]
 mod tests {
     use super::*;
     use crate::model::{Edge, EdgeType, Node, NodeLabel};

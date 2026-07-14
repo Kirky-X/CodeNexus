@@ -1725,14 +1725,20 @@ mod tests {
     fn resolve_java_class_import_with_slash_returns_none() {
         // Source with '/' is a file path, not a Java package → early None.
         let index = HashMap::new();
-        assert_eq!(resolve_java_class_import("src/Main.java", "src/App.java", &index), None);
+        assert_eq!(
+            resolve_java_class_import("src/Main.java", "src/App.java", &index),
+            None
+        );
     }
 
     #[test]
     fn resolve_java_class_import_without_dot_returns_none() {
         // Source without '.' is not a Java package path → early None.
         let index = HashMap::new();
-        assert_eq!(resolve_java_class_import("react", "src/App.java", &index), None);
+        assert_eq!(
+            resolve_java_class_import("react", "src/App.java", &index),
+            None
+        );
     }
 
     #[test]

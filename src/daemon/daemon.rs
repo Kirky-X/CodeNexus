@@ -460,7 +460,10 @@ mod tests {
             "src/main.rs",
         );
         let result = Daemon::convert_event(&event);
-        assert_eq!(result, Some(DaemonEvent::Modify(PathBuf::from("src/main.rs"))));
+        assert_eq!(
+            result,
+            Some(DaemonEvent::Modify(PathBuf::from("src/main.rs")))
+        );
     }
 
     #[test]
@@ -473,7 +476,10 @@ mod tests {
             "src/main.rs",
         );
         let result = Daemon::convert_event(&event);
-        assert_eq!(result, Some(DaemonEvent::Remove(PathBuf::from("src/main.rs"))));
+        assert_eq!(
+            result,
+            Some(DaemonEvent::Remove(PathBuf::from("src/main.rs")))
+        );
     }
 
     #[test]
@@ -496,7 +502,11 @@ mod tests {
         ];
         daemon.process_debounced_events(&debounced_events);
 
-        assert_eq!(*call_count.lock().unwrap(), 1, "observer should be called once");
+        assert_eq!(
+            *call_count.lock().unwrap(),
+            1,
+            "observer should be called once"
+        );
         let received = events.lock().unwrap();
         assert_eq!(received.len(), 2, "should receive 2 events");
         assert_eq!(received[0], DaemonEvent::Modify(PathBuf::from("main.rs")));

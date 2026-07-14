@@ -1429,11 +1429,8 @@ mod tests {
         )
         .unwrap();
 
-        repo.delete_file_nodes_batch(
-            &["/nonexistent.rs".to_string()],
-            "demo",
-        )
-        .expect("batch delete non-existent paths");
+        repo.delete_file_nodes_batch(&["/nonexistent.rs".to_string()], "demo")
+            .expect("batch delete non-existent paths");
 
         // Original file should still exist.
         let rows = repo
@@ -1528,7 +1525,7 @@ mod tests {
         repo.save_edges(&[Edge::builder("fn1", "fn2", EdgeType::Calls, "demo")
             .start_line(1)
             .build()])
-        .unwrap();
+            .unwrap();
 
         // Sanity: edge exists.
         let rows = repo
@@ -1538,11 +1535,8 @@ mod tests {
         assert_eq!(rows[0][0], serde_json::json!(1));
 
         // Delete both files → orphan_ids should include fn1, fn2 → edge deleted.
-        repo.delete_file_nodes_batch(
-            &["/src/main.rs".to_string()],
-            "demo",
-        )
-        .expect("batch delete");
+        repo.delete_file_nodes_batch(&["/src/main.rs".to_string()], "demo")
+            .expect("batch delete");
 
         // The edge should be gone because the nodes it references were deleted.
         let rows = repo

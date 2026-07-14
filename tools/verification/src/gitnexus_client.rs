@@ -481,6 +481,9 @@ mod tests {
     #[test]
     fn load_reference_returns_err_for_nonexistent() {
         let result = load_reference("_nonexistent_repo_xyz");
-        assert!(result.is_err(), "loading nonexistent reference should error");
+        assert!(
+            result.is_err(),
+            "loading nonexistent reference should error"
+        );
     }
 }

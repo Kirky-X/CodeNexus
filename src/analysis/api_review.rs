@@ -609,7 +609,9 @@ mod tests {
     }
 
     /// Returns the `dyn Storage` capability from `kit`.
-    fn storage(kit: &AsyncKit<AsyncReady>) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
+    fn storage(
+        kit: &AsyncKit<AsyncReady>,
+    ) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
         kit.require::<StorageModule>().expect("require_storage")
     }
 
@@ -699,7 +701,14 @@ mod tests {
     }
 
     /// Creates a Function node.
-    fn create_function(kit: &AsyncKit<AsyncReady>, id: &str, project: &str, name: &str, file: &str, line: u32) {
+    fn create_function(
+        kit: &AsyncKit<AsyncReady>,
+        id: &str,
+        project: &str,
+        name: &str,
+        file: &str,
+        line: u32,
+    ) {
         let storage = storage(kit);
         let end_line = line + 10;
         let cypher = format!(

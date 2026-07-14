@@ -24,10 +24,10 @@ use crate::service::error::{kit_not_initialized, to_api_error};
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::runtime::kit;
 
-#[cfg(any(feature = "cli", feature = "mcp"))]
-use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
 use sdforge::forge;
+#[cfg(any(feature = "cli", feature = "mcp"))]
+use sdforge::prelude::ApiError;
 
 /// Artifact magic bytes — "CNXP" (CodeNexus eXPort).
 pub const ARTIFACT_MAGIC: [u8; 4] = *b"CNXP";
@@ -207,7 +207,10 @@ mod tests {
         let json_with = serde_json::to_string(&with_project).unwrap();
         let json_without = serde_json::to_string(&without_project).unwrap();
         assert!(json_with.contains("\"project\":\"demo\""));
-        assert!(json_without.contains("null"), "None project should serialize to null");
+        assert!(
+            json_without.contains("null"),
+            "None project should serialize to null"
+        );
     }
 
     #[test]
@@ -258,14 +261,24 @@ mod tests {
     fn zstd_compress_succeeds_for_nonempty_input() {
         let data = b"Hello, World! This is a test for zstd compression.";
         let compressed = zstd_compress(data).expect("zstd_compress should succeed");
-        assert!(!compressed.is_empty(), "compressed data should not be empty");
-        assert_ne!(&compressed[..], &data[..], "compressed should differ from original");
+        assert!(
+            !compressed.is_empty(),
+            "compressed data should not be empty"
+        );
+        assert_ne!(
+            &compressed[..],
+            &data[..],
+            "compressed should differ from original"
+        );
     }
 
     #[test]
     fn zstd_compress_succeeds_for_empty_input() {
         let compressed = zstd_compress(b"").expect("zstd_compress should succeed for empty input");
-        assert!(!compressed.is_empty(), "zstd empty frame should be non-empty");
+        assert!(
+            !compressed.is_empty(),
+            "zstd empty frame should be non-empty"
+        );
     }
 
     #[test]
@@ -292,9 +305,7 @@ mod tests {
         // Verify magic bytes.
         let bytes = std::fs::read(&artifact).unwrap();
         assert_eq!(&bytes[0..4], &ARTIFACT_MAGIC);
-        let manifest_len = u32::from_le_bytes([
-            bytes[4], bytes[5], bytes[6], bytes[7],
-        ]);
+        let manifest_len = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
         assert!(manifest_len > 0, "manifest should not be empty");
         assert!(
             bytes.len() >= 8 + manifest_len as usize,
@@ -310,13 +321,11 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let artifact = dir.path().join("empty_project.cnxp");
 
-        let output = run_export(&kit, artifact.to_str().unwrap(), "")
-            .expect("run_export should succeed");
+        let output =
+            run_export(&kit, artifact.to_str().unwrap(), "").expect("run_export should succeed");
         assert!(artifact.exists());
         let bytes = std::fs::read(&artifact).unwrap();
-        let manifest_len = u32::from_le_bytes([
-            bytes[4], bytes[5], bytes[6], bytes[7],
-        ]) as usize;
+        let manifest_len = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
         let manifest: ArtifactManifest =
             serde_json::from_slice(&bytes[8..8 + manifest_len]).unwrap();
         assert!(
@@ -339,10 +348,7 @@ mod tests {
                 // Should be an IO error (File::create fails because parent dir
                 // doesn't exist).
                 let msg = e.to_string();
-                assert!(
-                    !msg.is_empty(),
-                    "error should have a message"
-                );
+                assert!(!msg.is_empty(), "error should have a message");
             }
             Ok(_) => panic!("should fail when output directory doesn't exist"),
         }
@@ -359,9 +365,7 @@ mod tests {
         let output = run_export(&kit, artifact.to_str().unwrap(), "test_project")
             .expect("run_export should succeed");
         let bytes = std::fs::read(&artifact).unwrap();
-        let manifest_len = u32::from_le_bytes([
-            bytes[4], bytes[5], bytes[6], bytes[7],
-        ]) as usize;
+        let manifest_len = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
         let manifest: ArtifactManifest =
             serde_json::from_slice(&bytes[8..8 + manifest_len]).unwrap();
         assert_eq!(manifest.format_version, ARTIFACT_FORMAT_VERSION);
@@ -399,7 +403,7 @@ mod tests {
         }
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn export_wrapper_succeeds_via_init_kit() {
@@ -418,6 +422,7 @@ mod tests {
         assert!(artifact.exists(), "artifact file should be created");
     }
 
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn export_wrapper_fails_when_kit_not_initialized() {
@@ -429,7 +434,7 @@ mod tests {
 
     // Covers the export wrapper failing when DB doesn't exist (line 113-117
     // error path through the #[forge] wrapper → ApiError conversion).
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn export_wrapper_fails_when_db_does_not_exist() {
@@ -454,7 +459,7 @@ mod tests {
 
     // Covers the export wrapper with empty project string (None branch in
     // manifest construction through the wrapper).
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn export_wrapper_succeeds_with_empty_project() {

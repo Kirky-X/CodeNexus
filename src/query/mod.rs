@@ -31,7 +31,9 @@ pub use facade::QueryFacade;
 pub use fulltext::FullTextSearcher;
 pub use module::{QueryConfig, QueryModule};
 pub use structured::StructuredSearcher;
-pub use structured::{SearchEngine, SearchMode, SearchParams, DEFAULT_LIMIT, MAX_FUZZY_DISTANCE, MAX_LIMIT};
+pub use structured::{
+    SearchEngine, SearchMode, SearchParams, DEFAULT_LIMIT, MAX_FUZZY_DISTANCE, MAX_LIMIT,
+};
 pub use tokenizer::{codenexus_tokenize, codenexus_tokenize_join};
 
 /// A single search hit returned by the structured and full-text searchers.

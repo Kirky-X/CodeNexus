@@ -115,7 +115,8 @@ impl AsyncAutoBuilder for EmbedModule {
 
     fn build<'a>(
         kit: &'a AsyncKit,
-    ) -> Pin<Box<dyn Future<Output = std::result::Result<Self::Capability, Self::Error>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<Self::Capability, Self::Error>> + Send + 'a>>
+    {
         Box::pin(async move {
             let config = kit
                 .config::<EmbeddingConfig>()
@@ -206,8 +207,8 @@ mod tests {
 
     #[test]
     fn build_returns_send_sync_capability() {
-        let cap = EmbedModule::build_cap(&EmbeddingConfig::default())
-            .expect("EmbedModule::build_cap");
+        let cap =
+            EmbedModule::build_cap(&EmbeddingConfig::default()).expect("EmbedModule::build_cap");
         // If this compiles, EmbedCapability is Send + Sync (the dyn
         // EmbedClient bound requires it). The Arc<dyn EmbedClient> is also
         // Send + Sync.
@@ -226,8 +227,8 @@ mod tests {
         std::env::remove_var(crate::embed::EMBED_ENDPOINT_ENV);
         std::env::remove_var(crate::embed::EMBED_MODEL_PATH_ENV);
 
-        let cap = EmbedModule::build_cap(&EmbeddingConfig::default())
-            .expect("EmbedModule::build_cap");
+        let cap =
+            EmbedModule::build_cap(&EmbeddingConfig::default()).expect("EmbedModule::build_cap");
 
         let result = cap.embed(&["hello"]);
         assert!(result.is_err(), "should error without model file");

@@ -1308,7 +1308,13 @@ fn add_definition_edges(
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(all(test, feature = "lang-c", feature = "lang-fortran", feature = "lang-python", feature = "lang-rust"))]
+#[cfg(all(
+    test,
+    feature = "lang-c",
+    feature = "lang-fortran",
+    feature = "lang-python",
+    feature = "lang-rust"
+))]
 mod tests {
     use super::*;
     use crate::model::NodeLabel;
@@ -2513,7 +2519,10 @@ impl From<std::io::Error> for SecureNotifyError {
 
     #[test]
     fn combine_scope_only_child() {
-        assert_eq!(combine_scope(None, Some("child")), Some("child".to_string()));
+        assert_eq!(
+            combine_scope(None, Some("child")),
+            Some("child".to_string())
+        );
     }
 
     #[test]
@@ -2781,7 +2790,10 @@ impl From<std::io::Error> for SecureNotifyError {
             None
         }
         if let Some(func) = find_call(root) {
-            assert!(is_field_expression_call(func), "field_expression should return true");
+            assert!(
+                is_field_expression_call(func),
+                "field_expression should return true"
+            );
         }
     }
 
@@ -2839,7 +2851,11 @@ impl From<std::io::Error> for SecureNotifyError {
 
     // --- is_read_position: various parent types ---
 
-    fn find_first_identifier<'a>(node: tree_sitter::Node<'a>, source: &str, target: &str) -> Option<tree_sitter::Node<'a>> {
+    fn find_first_identifier<'a>(
+        node: tree_sitter::Node<'a>,
+        source: &str,
+        target: &str,
+    ) -> Option<tree_sitter::Node<'a>> {
         if node.kind() == "identifier" {
             if let Some(text) = node_text(node, source) {
                 if text == target {
@@ -2861,35 +2877,44 @@ impl From<std::io::Error> for SecureNotifyError {
     fn is_read_position_in_binary_expression_returns_true() {
         let src = "fn main() { let x = a + b; }";
         let tree = parse_source(src);
-        let node = find_first_identifier(tree.root_node(), src, "a")
-            .expect("should find identifier 'a'");
-        assert!(is_read_position(node), "identifier in binary_expression should be a read");
+        let node =
+            find_first_identifier(tree.root_node(), src, "a").expect("should find identifier 'a'");
+        assert!(
+            is_read_position(node),
+            "identifier in binary_expression should be a read"
+        );
     }
 
     #[test]
     fn is_read_position_in_return_expression_returns_true() {
         let src = "fn main() { return x; }";
         let tree = parse_source(src);
-        let node = find_first_identifier(tree.root_node(), src, "x")
-            .expect("should find identifier 'x'");
-        assert!(is_read_position(node), "identifier in return_expression should be a read");
+        let node =
+            find_first_identifier(tree.root_node(), src, "x").expect("should find identifier 'x'");
+        assert!(
+            is_read_position(node),
+            "identifier in return_expression should be a read"
+        );
     }
 
     #[test]
     fn is_read_position_in_arguments_returns_true() {
         let src = "fn foo(a: i32) {} fn main() { foo(y); }";
         let tree = parse_source(src);
-        let node = find_first_identifier(tree.root_node(), src, "y")
-            .expect("should find identifier 'y'");
-        assert!(is_read_position(node), "identifier in arguments should be a read");
+        let node =
+            find_first_identifier(tree.root_node(), src, "y").expect("should find identifier 'y'");
+        assert!(
+            is_read_position(node),
+            "identifier in arguments should be a read"
+        );
     }
 
     #[test]
     fn is_read_position_in_let_pattern_returns_false() {
         let src = "fn main() { let x = 1; }";
         let tree = parse_source(src);
-        let node = find_first_identifier(tree.root_node(), src, "x")
-            .expect("should find identifier 'x'");
+        let node =
+            find_first_identifier(tree.root_node(), src, "x").expect("should find identifier 'x'");
         assert!(
             !is_read_position(node),
             "identifier in let pattern should NOT be a read"
@@ -3209,9 +3234,18 @@ impl Repo {
             .filter(|n| n.label == NodeLabel::Function)
             .map(|n| n.name.as_str())
             .collect();
-        assert!(methods.contains(&"save"), "should extract save: {methods:?}");
-        assert!(methods.contains(&"load"), "should extract load: {methods:?}");
-        assert!(methods.contains(&"delete"), "should extract delete: {methods:?}");
+        assert!(
+            methods.contains(&"save"),
+            "should extract save: {methods:?}"
+        );
+        assert!(
+            methods.contains(&"load"),
+            "should extract load: {methods:?}"
+        );
+        assert!(
+            methods.contains(&"delete"),
+            "should extract delete: {methods:?}"
+        );
     }
 
     #[test]
@@ -3271,7 +3305,10 @@ impl Repo {
 
     // --- tree-walking helper for direct function tests ---
 
-    fn find_first_by_kind<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
+    fn find_first_by_kind<'a>(
+        node: tree_sitter::Node<'a>,
+        kind: &str,
+    ) -> Option<tree_sitter::Node<'a>> {
         if node.kind() == kind {
             return Some(node);
         }
@@ -3296,8 +3333,8 @@ impl Repo {
         let src = "fn main() { let _ = 1; }";
         let tree = parse_source(src);
         let root = tree.root_node();
-        let let_decl = find_first_by_kind(root, "let_declaration")
-            .expect("should find let_declaration");
+        let let_decl =
+            find_first_by_kind(root, "let_declaration").expect("should find let_declaration");
         let pattern = let_decl
             .child_by_field_name("pattern")
             .expect("let_declaration should have pattern field");
@@ -3321,8 +3358,7 @@ impl Repo {
         let src = "use std;";
         let tree = parse_source(src);
         let root = tree.root_node();
-        let ident = find_first_by_kind(root, "identifier")
-            .expect("should find identifier node");
+        let ident = find_first_by_kind(root, "identifier").expect("should find identifier node");
         let names = use_imported_names(ident, src);
         assert!(
             names.contains(&"std".to_string()),
@@ -3340,8 +3376,8 @@ impl Repo {
         let src = "struct Foo;";
         let tree = parse_source(src);
         let root = tree.root_node();
-        let type_ident = find_first_by_kind(root, "type_identifier")
-            .expect("should find type_identifier");
+        let type_ident =
+            find_first_by_kind(root, "type_identifier").expect("should find type_identifier");
         let result = pattern_name(type_ident, src);
         assert_eq!(
             result,
@@ -3361,7 +3397,10 @@ impl Repo {
         let tree = parse_source(src);
         let root = tree.root_node();
         fn walk_and_call(node: tree_sitter::Node, src: &str, results: &mut Vec<Option<String>>) {
-            if matches!(node.kind(), "scoped_use_list" | "scoped_identifier" | "scoped_type_list") {
+            if matches!(
+                node.kind(),
+                "scoped_use_list" | "scoped_identifier" | "scoped_type_list"
+            ) {
                 results.push(use_path(node, src));
             }
             for i in 0..node.named_child_count() as u32 {
@@ -3447,11 +3486,12 @@ impl Repo {
         let src = r#"fn main() { let x = "C"; }"#;
         let tree = parse_source(src);
         let root = tree.root_node();
-        let let_decl = find_first_by_kind(root, "let_declaration")
-            .expect("should find let_declaration");
+        let let_decl =
+            find_first_by_kind(root, "let_declaration").expect("should find let_declaration");
         let lang = extern_language(let_decl, src);
         assert_eq!(
-            lang, Language::C,
+            lang,
+            Language::C,
             "string 'C' should be recognized as Language::C via fallback"
         );
     }
@@ -3461,11 +3501,12 @@ impl Repo {
         let src = r#"fn main() { let x = "Fortran"; }"#;
         let tree = parse_source(src);
         let root = tree.root_node();
-        let let_decl = find_first_by_kind(root, "let_declaration")
-            .expect("should find let_declaration");
+        let let_decl =
+            find_first_by_kind(root, "let_declaration").expect("should find let_declaration");
         let lang = extern_language(let_decl, src);
         assert_eq!(
-            lang, Language::Fortran,
+            lang,
+            Language::Fortran,
             "string 'Fortran' should be recognized as Language::Fortran via fallback"
         );
     }
@@ -3475,11 +3516,12 @@ impl Repo {
         let src = r#"fn main() { let x = "Python"; }"#;
         let tree = parse_source(src);
         let root = tree.root_node();
-        let let_decl = find_first_by_kind(root, "let_declaration")
-            .expect("should find let_declaration");
+        let let_decl =
+            find_first_by_kind(root, "let_declaration").expect("should find let_declaration");
         let lang = extern_language(let_decl, src);
         assert_eq!(
-            lang, Language::Python,
+            lang,
+            Language::Python,
             "string 'Python' should be recognized as Language::Python via fallback"
         );
     }
@@ -3490,12 +3532,13 @@ impl Repo {
         let src = r#"fn main() { let x = "Rust"; }"#;
         let tree = parse_source(src);
         let root = tree.root_node();
-        let let_decl = find_first_by_kind(root, "let_declaration")
-            .expect("should find let_declaration");
+        let let_decl =
+            find_first_by_kind(root, "let_declaration").expect("should find let_declaration");
         let lang = extern_language(let_decl, src);
         // "rust" doesn't match c/fortran/python → returns Language::all()[0]
         assert_eq!(
-            lang, Language::all()[0],
+            lang,
+            Language::all()[0],
             "unknown string should return default language"
         );
     }

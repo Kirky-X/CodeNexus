@@ -109,11 +109,12 @@ impl ParserPool {
         }
 
         let mut parser = self.get_parser(lang)?;
-        let tree = parser.parse(source, None).ok_or_else(|| {
-            super::error::ParseError::ParseFailed {
-                file_path: "<inline source>".to_string(),
-            }
-        })?;
+        let tree =
+            parser
+                .parse(source, None)
+                .ok_or_else(|| super::error::ParseError::ParseFailed {
+                    file_path: "<inline source>".to_string(),
+                })?;
         let sexp = tree.root_node().to_sexp();
 
         if let Some(c) = cache {
@@ -182,7 +183,14 @@ pub fn with_thread_pool<R>(f: impl FnOnce(&ParserPool) -> R) -> R {
     THREAD_POOL.with(f)
 }
 
-#[cfg(all(test, feature = "lang-c", feature = "lang-fortran", feature = "lang-python", feature = "lang-rust", feature = "lang-typescript"))]
+#[cfg(all(
+    test,
+    feature = "lang-c",
+    feature = "lang-fortran",
+    feature = "lang-python",
+    feature = "lang-rust",
+    feature = "lang-typescript"
+))]
 mod tests {
     use super::*;
 
@@ -464,10 +472,7 @@ mod tests {
                 .parse_source_cached("fn main() {}", Language::Rust, None)
                 .expect("parse without cache should succeed");
             assert!(!sexp.is_empty(), "sexp should be non-empty");
-            assert!(
-                sexp.starts_with('('),
-                "sexp should start with '(': {sexp}"
-            );
+            assert!(sexp.starts_with('('), "sexp should start with '(': {sexp}");
         }
 
         #[test]
@@ -518,11 +523,7 @@ mod tests {
                 sentinel,
                 "cache hit should return sentinel, proving tree-sitter was skipped"
             );
-            assert_eq!(
-                cache.len(),
-                1,
-                "cache should not gain a new entry on hit"
-            );
+            assert_eq!(cache.len(), 1, "cache should not gain a new entry on hit");
         }
 
         #[test]

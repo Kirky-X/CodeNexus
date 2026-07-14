@@ -19,9 +19,9 @@ use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 use crate::service::runtime::kit;
 
 #[cfg(feature = "cli")]
-use sdforge::prelude::ApiError;
-#[cfg(feature = "cli")]
 use sdforge::forge;
+#[cfg(feature = "cli")]
+use sdforge::prelude::ApiError;
 
 /// JSON-serializable cross-service link output.
 #[cfg(feature = "cross-service")]
@@ -211,9 +211,15 @@ mod tests {
 
     #[test]
     fn parse_protocol_message_queue_aliases() {
-        assert_eq!(parse_protocol("message_queue"), Some(ServiceProtocol::MessageQueue));
+        assert_eq!(
+            parse_protocol("message_queue"),
+            Some(ServiceProtocol::MessageQueue)
+        );
         assert_eq!(parse_protocol("mq"), Some(ServiceProtocol::MessageQueue));
-        assert_eq!(parse_protocol("message"), Some(ServiceProtocol::MessageQueue));
+        assert_eq!(
+            parse_protocol("message"),
+            Some(ServiceProtocol::MessageQueue)
+        );
     }
 
     #[test]
@@ -245,14 +251,18 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let output = run_cross_service(&kit, "demo", "grpc").expect("run should succeed");
-        assert!(output.matches.is_empty(), "no matches on empty DB even with filter");
+        assert!(
+            output.matches.is_empty(),
+            "no matches on empty DB even with filter"
+        );
     }
 
     #[test]
     fn run_cross_service_with_invalid_protocol_returns_all_matches() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let output = run_cross_service(&kit, "demo", "invalid_protocol").expect("run should succeed");
+        let output =
+            run_cross_service(&kit, "demo", "invalid_protocol").expect("run should succeed");
         // Invalid protocol → None filter → all matches (empty on empty DB)
         assert!(output.matches.is_empty());
     }
@@ -270,7 +280,10 @@ mod tests {
         // With protocol="http", only HttpRest matches should be retained
         let output = run_cross_service(&kit, "demo", "http").expect("run should succeed");
         assert!(
-            output.matches.iter().all(|m| m.protocol == ServiceProtocol::HttpRest),
+            output
+                .matches
+                .iter()
+                .all(|m| m.protocol == ServiceProtocol::HttpRest),
             "filtered matches should all be HttpRest"
         );
     }
@@ -286,7 +299,10 @@ mod tests {
         // With protocol="grpc", HTTP matches should be filtered out
         let output = run_cross_service(&kit, "demo", "grpc").expect("run should succeed");
         assert!(
-            output.matches.iter().all(|m| m.protocol == ServiceProtocol::Grpc),
+            output
+                .matches
+                .iter()
+                .all(|m| m.protocol == ServiceProtocol::Grpc),
             "filtered matches should all be Grpc"
         );
     }
@@ -303,14 +319,17 @@ mod tests {
         let output = run_cross_service(&kit, "demo", "").expect("run should succeed");
         // Should have at least one HTTP match since we created route + caller
         assert!(
-            output.matches.iter().any(|m| m.protocol == ServiceProtocol::HttpRest),
+            output
+                .matches
+                .iter()
+                .any(|m| m.protocol == ServiceProtocol::HttpRest),
             "should have at least one HttpRest match"
         );
     }
 
     // ===== #[forge] wrapper tests via init_kit =====
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn cross_service_wrapper_succeeds_via_init_kit() {
@@ -328,7 +347,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn cross_service_wrapper_fails_when_kit_not_initialized() {

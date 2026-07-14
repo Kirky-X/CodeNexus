@@ -11,9 +11,9 @@ use crate::index::IndexResult;
 
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::kit::{AsyncKit, AsyncReady, IndexerModule};
-#[cfg(any(feature = "cli", feature = "mcp", test))]
+#[cfg(any(feature = "cli", feature = "mcp", feature = "lsp", test))]
 use crate::service::error::CodeNexusError;
-#[cfg(any(feature = "cli", feature = "mcp", test))]
+#[cfg(any(feature = "cli", feature = "mcp", feature = "lsp", test))]
 use crate::storage::{QualityChecker, Repository};
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
@@ -23,12 +23,12 @@ use crate::service::runtime::kit;
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::storage::StorageConfig;
 
-#[cfg(any(feature = "cli", feature = "mcp"))]
-use sdforge::prelude::ApiError;
-#[cfg(feature = "cli")]
-use sdforge::forge;
 #[cfg(feature = "lsp")]
 use crate::lsp::LspProvider;
+#[cfg(feature = "cli")]
+use sdforge::forge;
+#[cfg(any(feature = "cli", feature = "mcp"))]
+use sdforge::prelude::ApiError;
 
 /// JSON-serializable view of [`IndexResult`].
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -57,8 +57,8 @@ impl From<IndexResult> for IndexOutput {
 #[cfg(feature = "lsp")]
 fn build_lsp_providers() -> Vec<(&'static str, Box<dyn LspProvider>)> {
     use crate::lsp::{
-        ClangdClient, FortlsClient, GoplsClient, JdtlsClient, PyrightClient,
-        RustAnalyzerClient, TypeScriptLanguageClient,
+        ClangdClient, FortlsClient, GoplsClient, JdtlsClient, PyrightClient, RustAnalyzerClient,
+        TypeScriptLanguageClient,
     };
 
     vec![
@@ -147,7 +147,11 @@ fn resolve_abs_file_path(workspace: &Path, file_path_str: &str) -> std::path::Pa
 /// Failures degrade gracefully to pure tree-sitter extraction.
 #[cfg(feature = "lsp")]
 #[allow(clippy::result_large_err)]
-fn enhance_with_lsp(workspace: &Path, repo: &Repository, project: &str) -> Result<(), CodeNexusError> {
+fn enhance_with_lsp(
+    workspace: &Path,
+    repo: &Repository,
+    project: &str,
+) -> Result<(), CodeNexusError> {
     use crate::lsp::LspError;
 
     let providers = build_lsp_providers();
@@ -768,7 +772,7 @@ mod tests {
 
     // --- #[forge] index wrapper tests ---
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn index_wrapper_fails_when_kit_not_initialized() {
@@ -788,7 +792,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(all(feature = "cli", feature = "lang-rust"))]
     #[test]
     fn index_wrapper_succeeds_via_init_kit() {
@@ -826,7 +830,7 @@ mod tests {
     }
 
     // Covers the `embed=true` deprecation warning branch (lines 296-301).
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(all(feature = "cli", feature = "lang-rust"))]
     #[test]
     fn index_wrapper_with_embed_true_emits_deprecation_warning() {
@@ -858,7 +862,11 @@ mod tests {
             true,
             false,
         ));
-        assert!(result.is_ok(), "wrapper should succeed even with embed=true: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "wrapper should succeed even with embed=true: {:?}",
+            result.err()
+        );
 
         reset_kit_for_testing();
     }
@@ -920,7 +928,7 @@ mod tests {
     // Covers the `kit.config::<StorageConfig>().map_err(...)` error path
     // (lines 304-306) in the index wrapper. Creates a kit WITHOUT registering
     // StorageModule or setting StorageConfig, then calls the index wrapper.
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn index_wrapper_fails_when_storage_config_not_registered() {
@@ -947,10 +955,7 @@ mod tests {
             false,
             false,
         ));
-        assert!(
-            result.is_err(),
-            "wrapper should fail without StorageConfig"
-        );
+        assert!(result.is_err(), "wrapper should fail without StorageConfig");
         // The error should be an Internal ApiError with a message mentioning
         // storage config (from wrap_kit_error).
         match result.unwrap_err() {

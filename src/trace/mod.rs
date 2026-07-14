@@ -24,7 +24,9 @@ pub use context::{collect_incoming, collect_outgoing, collect_processes, resolve
 pub use data_flow::DataFlowTracer;
 pub use error::{Result, TraceError};
 pub use facade::{apply_path_filter, PathFilter, TraceCycle, TraceEngine, TraceFacade, TraceType};
-pub use impact::{ImpactAnalyzer, ImpactConfig, ImpactNode, ImpactResult, RiskAssessment, RiskFactor, RiskLevel};
+pub use impact::{
+    ImpactAnalyzer, ImpactConfig, ImpactNode, ImpactResult, RiskAssessment, RiskFactor, RiskLevel,
+};
 pub use module::{TraceConfig, TraceModule};
 pub use taint::TaintPathTracer;
 pub use types::{

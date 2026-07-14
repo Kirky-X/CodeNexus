@@ -638,7 +638,9 @@ mod tests {
             .expect("build_kit")
     }
 
-    fn storage(kit: &AsyncKit<AsyncReady>) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
+    fn storage(
+        kit: &AsyncKit<AsyncReady>,
+    ) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
         kit.require::<StorageModule>().expect("require_storage")
     }
 
@@ -656,7 +658,13 @@ mod tests {
         s.execute(&cypher).expect("create function");
     }
 
-    fn create_calls_edge(kit: &AsyncKit<AsyncReady>, id: &str, source: &str, target: &str, project: &str) {
+    fn create_calls_edge(
+        kit: &AsyncKit<AsyncReady>,
+        id: &str,
+        source: &str,
+        target: &str,
+        project: &str,
+    ) {
         let s = storage(kit);
         let cypher = format!(
             "CREATE (:CodeRelation {{id: '{}', source: '{}', target: '{}', type: 'CALLS', \
@@ -1001,10 +1009,7 @@ mod tests {
         let g = UnGraph::<String, f64>::new_undirected();
         let communities: Vec<usize> = Vec::new();
         let q = compute_modularity(&g, &communities, 1.0);
-        assert!(
-            q.abs() < 1e-9,
-            "empty graph → Q = 0, got {q}"
-        );
+        assert!(q.abs() < 1e-9, "empty graph → Q = 0, got {q}");
     }
 
     #[test]
@@ -1027,10 +1032,7 @@ mod tests {
         g.add_node("b".to_string());
         let communities = vec![0, 0];
         let q = compute_modularity(&g, &communities, 1.0);
-        assert!(
-            q.abs() < 1e-9,
-            "no edges → Q = 0, got {q}"
-        );
+        assert!(q.abs() < 1e-9, "no edges → Q = 0, got {q}");
     }
 
     #[test]

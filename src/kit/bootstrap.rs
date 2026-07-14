@@ -44,12 +44,12 @@ use crate::kit::{
 
 // Feature-gated modules are only imported when their feature is on, mirroring
 // the `cfg` on the module types themselves.
+#[cfg(feature = "cache")]
+use crate::kit::CacheModule;
 #[cfg(feature = "daemon")]
 use crate::kit::DaemonModule;
 #[cfg(feature = "embed")]
 use crate::kit::EmbedModule;
-#[cfg(feature = "cache")]
-use crate::kit::CacheModule;
 
 // Configs are still imported from their owning modules.
 use crate::index::IndexConfig;
@@ -270,9 +270,8 @@ pub trait KitExt {
     fn require_storage(&self) -> Result<Arc<dyn crate::storage::capability::Storage>, KitError>;
 
     /// Resolves the Parser capability (`Arc<dyn ParserRegistry>`).
-    fn require_parser(
-        &self,
-    ) -> Result<Arc<dyn crate::parse::capability::ParserRegistry>, KitError>;
+    fn require_parser(&self)
+        -> Result<Arc<dyn crate::parse::capability::ParserRegistry>, KitError>;
 
     /// Resolves the Extractor capability (`Arc<dyn ExtractorRegistry>`).
     fn require_extractor(
@@ -372,7 +371,10 @@ mod tests {
         let kit = build_kit(&config).await.expect("build_kit");
 
         assert!(kit.contains::<StorageModule>(), "StorageModule missing");
-        assert!(kit.contains::<ParserFactoryModule>(), "ParserFactoryModule missing");
+        assert!(
+            kit.contains::<ParserFactoryModule>(),
+            "ParserFactoryModule missing"
+        );
         assert!(
             kit.contains::<ExtractorRegistryModule>(),
             "ExtractorRegistryModule missing"
@@ -570,6 +572,29 @@ mod tests {
     /// `require_resolver` must all return their registered capabilities.
     /// These are the remaining KitExt convenience helpers not exercised by
     /// `build_kit_require_returns_registered_arc`.
+    #[cfg(any(
+        feature = "lang-c",
+        feature = "lang-rust",
+        feature = "lang-fortran",
+        feature = "lang-python",
+        feature = "lang-typescript",
+        feature = "lang-go",
+        feature = "lang-java",
+        feature = "lang-cpp",
+        feature = "lang-javascript",
+        feature = "lang-ruby",
+        feature = "lang-haskell",
+        feature = "lang-ocaml",
+        feature = "lang-scala",
+        feature = "lang-php",
+        feature = "lang-csharp",
+        feature = "lang-bash",
+        feature = "lang-html",
+        feature = "lang-css",
+        feature = "lang-json",
+        feature = "lang-regex",
+        feature = "lang-verilog",
+    ))]
     #[tokio::test]
     async fn convenience_helpers_return_registered_capabilities() {
         let config = KitBootstrapConfig::new(PathBuf::from(":memory:"));
@@ -619,8 +644,9 @@ mod tests {
         assert!(Arc::ptr_eq(&extractor_helper, &extractor_direct));
 
         let indexer_helper = kit.require_indexer().expect("require_indexer");
-        let indexer_direct: Arc<dyn crate::index::capability::Indexer> =
-            kit.require::<IndexerModule>().expect("require::<IndexerModule>");
+        let indexer_direct: Arc<dyn crate::index::capability::Indexer> = kit
+            .require::<IndexerModule>()
+            .expect("require::<IndexerModule>");
         assert!(Arc::ptr_eq(&indexer_helper, &indexer_direct));
 
         let resolver_helper = kit.require_resolver().expect("require_resolver");

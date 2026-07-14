@@ -876,7 +876,7 @@ mod tests {
                     qualified_name: Some(n.to_string()),
                     score: 1.0,
                     match_reason: "test".to_string(),
-                degree: 0,
+                    degree: 0,
                 })
                 .collect()
         };

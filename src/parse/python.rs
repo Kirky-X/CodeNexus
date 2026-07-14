@@ -1562,11 +1562,7 @@ class Foo(metaclass=Meta):
         // read is recorded for `x`.
         let src = "def f():\n    assert x\n";
         let result = extract(src);
-        let reads: Vec<_> = result
-            .reads
-            .iter()
-            .filter(|r| r.var_name == "x")
-            .collect();
+        let reads: Vec<_> = result.reads.iter().filter(|r| r.var_name == "x").collect();
         assert!(
             reads.is_empty(),
             "identifier in assert_statement should not be a read: {:?}",
@@ -1638,7 +1634,10 @@ class Foo(metaclass=Meta):
     #[test]
     fn comment_only_source_returns_empty_result() {
         let result = extract("# just a comment\n");
-        assert!(result.is_empty(), "comment-only file should produce no nodes");
+        assert!(
+            result.is_empty(),
+            "comment-only file should produce no nodes"
+        );
     }
 
     #[test]
@@ -1726,7 +1725,10 @@ class Foo(metaclass=Meta):
         parser.parse(source, None).expect("parse")
     }
 
-    fn find_first_by_kind<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
+    fn find_first_by_kind<'a>(
+        node: tree_sitter::Node<'a>,
+        kind: &str,
+    ) -> Option<tree_sitter::Node<'a>> {
         if node.kind() == kind {
             return Some(node);
         }
@@ -1788,10 +1790,7 @@ class Foo(metaclass=Meta):
             if let Some(left) = assign.child_by_field_name("left") {
                 if left.kind() == "tuple" {
                     let name = assignment_target_name(left, src);
-                    assert!(
-                        name.is_none(),
-                        "empty tuple should return None: {name:?}"
-                    );
+                    assert!(name.is_none(), "empty tuple should return None: {name:?}");
                 }
             }
         }
@@ -1825,7 +1824,10 @@ class Foo(metaclass=Meta):
         // assignment node has no "arguments" field
         if let Some(assign) = find_first_by_kind(root, "assignment") {
             let args = call_arguments(assign, src);
-            assert!(args.is_empty(), "call_arguments on assignment should return empty");
+            assert!(
+                args.is_empty(),
+                "call_arguments on assignment should return empty"
+            );
         }
     }
 

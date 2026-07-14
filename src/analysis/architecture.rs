@@ -518,10 +518,7 @@ impl<'a> ArchitectureAnalyzer<'a> {
                 let file_path = row[1].as_str().unwrap_or_default().to_string();
                 id_to_path.insert(id, file_path.clone());
                 let module_name = module_name_from_path(&file_path);
-                module_files
-                    .entry(module_name)
-                    .or_default()
-                    .push(file_path);
+                module_files.entry(module_name).or_default().push(file_path);
             }
         }
         // Deduplicate file paths within each module.
@@ -538,12 +535,9 @@ impl<'a> ArchitectureAnalyzer<'a> {
         let calls_rows = self.storage.query(&calls_cypher)?;
 
         // (c) Count internal / incoming / outgoing per module.
-        let mut internal: std::collections::HashMap<String, u32> =
-            std::collections::HashMap::new();
-        let mut incoming: std::collections::HashMap<String, u32> =
-            std::collections::HashMap::new();
-        let mut outgoing: std::collections::HashMap<String, u32> =
-            std::collections::HashMap::new();
+        let mut internal: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        let mut incoming: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        let mut outgoing: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         for row in calls_rows {
             if row.len() < 2 {
                 continue;
@@ -601,10 +595,7 @@ impl<'a> ArchitectureAnalyzer<'a> {
     ///
     /// Returns [`crate::storage::error::StorageError`] if any Cypher query
     /// fails.
-    fn analyze_dependency_directions(
-        &self,
-        project: &str,
-    ) -> StorageResult<Vec<DepDirection>> {
+    fn analyze_dependency_directions(&self, project: &str) -> StorageResult<Vec<DepDirection>> {
         let escaped = escape_cypher_string(project);
 
         // (a) Load Function + Method nodes → id → filePath.
@@ -751,8 +742,7 @@ impl<'a> ArchitectureAnalyzer<'a> {
         let calls_rows = self.storage.query(&calls_cypher)?;
         let mut calls_from: std::collections::HashMap<String, std::collections::HashSet<String>> =
             std::collections::HashMap::new();
-        let mut all_calls_ids: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut all_calls_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         for row in calls_rows {
             if row.len() < 2 {
                 continue;
@@ -988,12 +978,20 @@ mod tests {
     }
 
     /// Returns the `dyn Storage` capability from `kit`.
-    fn storage(kit: &AsyncKit<AsyncReady>) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
+    fn storage(
+        kit: &AsyncKit<AsyncReady>,
+    ) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
         kit.require::<StorageModule>().expect("require_storage")
     }
 
     /// Creates a File node.
-    fn create_file(kit: &AsyncKit<AsyncReady>, id: &str, project: &str, file_path: &str, language: &str) {
+    fn create_file(
+        kit: &AsyncKit<AsyncReady>,
+        id: &str,
+        project: &str,
+        file_path: &str,
+        language: &str,
+    ) {
         let storage = storage(kit);
         let cypher = format!(
             "CREATE (:File {{id: '{}', project: '{}', name: '{}', filePath: '{}', \
@@ -1062,7 +1060,9 @@ mod tests {
             end_line,
             escape_cypher_string(content),
         );
-        storage.execute(&cypher).expect("create function with content");
+        storage
+            .execute(&cypher)
+            .expect("create function with content");
     }
 
     /// Creates a Method node.
@@ -1577,7 +1577,10 @@ mod tests {
     fn module_boundary_serializes_all_fields() {
         let mb = ModuleBoundary {
             module_name: "src/api".to_string(),
-            members: vec!["src/api/handler.rs".to_string(), "src/api/route.rs".to_string()],
+            members: vec![
+                "src/api/handler.rs".to_string(),
+                "src/api/route.rs".to_string(),
+            ],
             incoming_deps: 3,
             outgoing_deps: 2,
             cohesion: 0.71,
@@ -1598,7 +1601,10 @@ mod tests {
             is_circular: true,
         };
         let json = serde_json::to_string(&dd).expect("serialize");
-        assert!(json.contains("\"from_module\":\"module_a\""), "json: {json}");
+        assert!(
+            json.contains("\"from_module\":\"module_a\""),
+            "json: {json}"
+        );
         assert!(json.contains("\"to_module\":\"module_b\""), "json: {json}");
         assert!(json.contains("\"is_circular\":true"), "json: {json}");
     }
@@ -1681,7 +1687,10 @@ mod tests {
         let dep = &result.cross_service_deps[0];
         assert_eq!(dep.from_module, "f1", "from_module should be caller id");
         assert_eq!(dep.to_module, "r1", "to_module should be callee (route id)");
-        assert_eq!(dep.protocol, "HTTP", "protocol should be HTTP for REST match");
+        assert_eq!(
+            dep.protocol, "HTTP",
+            "protocol should be HTTP for REST match"
+        );
     }
 
     #[test]
@@ -1793,8 +1802,7 @@ mod tests {
             assert!(
                 dd.is_circular,
                 "edge {}→{} should be circular",
-                dd.from_module,
-                dd.to_module
+                dd.from_module, dd.to_module
             );
         }
     }
@@ -1822,8 +1830,7 @@ mod tests {
             assert!(
                 !dd.is_circular,
                 "edge {}→{} should not be circular",
-                dd.from_module,
-                dd.to_module
+                dd.from_module, dd.to_module
             );
         }
     }
@@ -1937,10 +1944,7 @@ mod tests {
         let mut a_neighbors = std::collections::HashSet::new();
         a_neighbors.insert("b".to_string());
         adj.insert("a".to_string(), a_neighbors);
-        assert!(
-            !can_reach(&adj, "a", "z"),
-            "z is not reachable from a"
-        );
+        assert!(!can_reach(&adj, "a", "z"), "z is not reachable from a");
     }
 
     #[test]
@@ -2177,15 +2181,7 @@ mod tests {
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
         // Plain function with no HANDLES_ROUTE, no CALLS, no FETCHES, no HAS_PROPERTY.
-        create_function(
-            &kit,
-            "f1",
-            "demo",
-            "plain",
-            "demo.plain",
-            "/src/lib.rs",
-            1,
-        );
+        create_function(&kit, "f1", "demo", "plain", "demo.plain", "/src/lib.rs", 1);
 
         let storage = storage(&kit);
         let analyzer = ArchitectureAnalyzer::new(&*storage);
@@ -2249,8 +2245,7 @@ mod tests {
             assert!(
                 !dd.is_circular,
                 "edge {}→{} should not be circular",
-                dd.from_module,
-                dd.to_module
+                dd.from_module, dd.to_module
             );
         }
     }
@@ -2298,7 +2293,11 @@ mod tests {
         let result = analyzer.overview("demo").expect("overview");
         let model_layer = result.layers.iter().find(|l| l.layer == "Model");
         assert!(
-            model_layer.is_none() || !model_layer.unwrap().members.contains(&"demo.ActiveClass".to_string()),
+            model_layer.is_none()
+                || !model_layer
+                    .unwrap()
+                    .members
+                    .contains(&"demo.ActiveClass".to_string()),
             "ActiveClass has CALLS edge → should NOT be in Model layer"
         );
     }
@@ -2349,12 +2348,12 @@ mod tests {
         let analyzer = ArchitectureAnalyzer::new(&*storage);
         let result = analyzer.overview("demo").expect("overview");
         let service = result.layers.iter().find(|l| l.layer == "Service");
+        assert!(service.is_some(), "Service layer should exist");
         assert!(
-            service.is_some(),
-            "Service layer should exist"
-        );
-        assert!(
-            service.unwrap().members.contains(&"demo.fetch_and_load".to_string()),
+            service
+                .unwrap()
+                .members
+                .contains(&"demo.fetch_and_load".to_string()),
             "fetch_and_load should be Service (priority over Repository)"
         );
     }
@@ -2378,11 +2377,23 @@ mod tests {
         let analyzer = ArchitectureAnalyzer::new(&*storage);
         let result = analyzer.overview("demo").expect("overview");
         assert_eq!(result.routes.len(), 3, "should have 3 routes");
-        let r1 = result.routes.iter().find(|r| r.path == "/api/users").expect("r1");
+        let r1 = result
+            .routes
+            .iter()
+            .find(|r| r.path == "/api/users")
+            .expect("r1");
         assert_eq!(r1.handler, "list_users");
-        let r2 = result.routes.iter().find(|r| r.path == "/api/products").expect("r2");
+        let r2 = result
+            .routes
+            .iter()
+            .find(|r| r.path == "/api/products")
+            .expect("r2");
         assert_eq!(r2.handler, "create_product");
-        let r3 = result.routes.iter().find(|r| r.path == "/api/orders").expect("r3");
+        let r3 = result
+            .routes
+            .iter()
+            .find(|r| r.path == "/api/orders")
+            .expect("r3");
         assert_eq!(r3.handler, "", "r3 should have empty handler");
     }
 
@@ -2489,13 +2500,22 @@ mod tests {
         // a→b→c→d→e→target: long transitive path.
         let mut adj: std::collections::HashMap<String, std::collections::HashSet<String>> =
             std::collections::HashMap::new();
-        let edges = [("a", "b"), ("b", "c"), ("c", "d"), ("d", "e"), ("e", "target")];
+        let edges = [
+            ("a", "b"),
+            ("b", "c"),
+            ("c", "d"),
+            ("d", "e"),
+            ("e", "target"),
+        ];
         for (from, to) in &edges {
             adj.entry((*from).to_string())
                 .or_default()
                 .insert((*to).to_string());
         }
-        assert!(can_reach(&adj, "a", "target"), "long path should be reachable");
+        assert!(
+            can_reach(&adj, "a", "target"),
+            "long path should be reachable"
+        );
     }
 
     #[test]
@@ -2519,8 +2539,24 @@ mod tests {
         // Functions named "main_handler", "mainFunc", etc. should NOT match.
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        create_function(&kit, "f1", "demo", "main_helper", "demo.main_helper", "/src/a.rs", 1);
-        create_function(&kit, "f2", "demo", "mainFunc", "demo.mainFunc", "/src/b.rs", 1);
+        create_function(
+            &kit,
+            "f1",
+            "demo",
+            "main_helper",
+            "demo.main_helper",
+            "/src/a.rs",
+            1,
+        );
+        create_function(
+            &kit,
+            "f2",
+            "demo",
+            "mainFunc",
+            "demo.mainFunc",
+            "/src/b.rs",
+            1,
+        );
         create_function(&kit, "f3", "demo", "run", "demo.run", "/src/c.rs", 1);
 
         let storage = storage(&kit);
@@ -2541,7 +2577,15 @@ mod tests {
         // (e.g., a Class) → should not appear in hotspots.
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        create_class(&kit, "cls1", "demo", "MyClass", "demo.MyClass", "/src/cls.rs", 1);
+        create_class(
+            &kit,
+            "cls1",
+            "demo",
+            "MyClass",
+            "demo.MyClass",
+            "/src/cls.rs",
+            1,
+        );
         create_function(&kit, "f1", "demo", "caller", "demo.caller", "/src/a.rs", 1);
         // Edge pointing to a Class (not a Function/Method).
         create_edge(&kit, "e1", "f1", "cls1", "CALLS", "demo");
@@ -2677,9 +2721,33 @@ mod tests {
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
         // Create entry points in non-sorted order.
-        create_function(&kit, "f1", "demo", "main", "demo.zebra.main", "/src/z.rs", 1);
-        create_function(&kit, "f2", "demo", "main", "demo.alpha.main", "/src/a.rs", 1);
-        create_function(&kit, "f3", "demo", "main", "demo.middle.main", "/src/m.rs", 1);
+        create_function(
+            &kit,
+            "f1",
+            "demo",
+            "main",
+            "demo.zebra.main",
+            "/src/z.rs",
+            1,
+        );
+        create_function(
+            &kit,
+            "f2",
+            "demo",
+            "main",
+            "demo.alpha.main",
+            "/src/a.rs",
+            1,
+        );
+        create_function(
+            &kit,
+            "f3",
+            "demo",
+            "main",
+            "demo.middle.main",
+            "/src/m.rs",
+            1,
+        );
 
         let storage = storage(&kit);
         let analyzer = ArchitectureAnalyzer::new(&*storage);
@@ -2698,9 +2766,33 @@ mod tests {
         // Two functions with the same caller_count → sorted by qualified_name.
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        create_function(&kit, "f_zebra", "demo", "zebra", "demo.zebra", "/src/z.rs", 1);
-        create_function(&kit, "f_alpha", "demo", "alpha", "demo.alpha", "/src/a.rs", 1);
-        create_function(&kit, "f_caller", "demo", "caller", "demo.caller", "/src/c.rs", 1);
+        create_function(
+            &kit,
+            "f_zebra",
+            "demo",
+            "zebra",
+            "demo.zebra",
+            "/src/z.rs",
+            1,
+        );
+        create_function(
+            &kit,
+            "f_alpha",
+            "demo",
+            "alpha",
+            "demo.alpha",
+            "/src/a.rs",
+            1,
+        );
+        create_function(
+            &kit,
+            "f_caller",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/c.rs",
+            1,
+        );
         // Both zebra and alpha have 1 caller.
         create_edge(&kit, "e1", "f_caller", "f_zebra", "CALLS", "demo");
         create_edge(&kit, "e2", "f_caller", "f_alpha", "CALLS", "demo");
@@ -2721,12 +2813,36 @@ mod tests {
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
         // Controller.
-        create_function(&kit, "ctrl1", "demo", "list_users", "demo.list_users", "/src/api/handler.rs", 1);
+        create_function(
+            &kit,
+            "ctrl1",
+            "demo",
+            "list_users",
+            "demo.list_users",
+            "/src/api/handler.rs",
+            1,
+        );
         create_route(&kit, "r1", "demo", "/api/users", "GET");
         create_edge(&kit, "e1", "ctrl1", "r1", "HANDLES_ROUTE", "demo");
         // Model.
-        create_class(&kit, "cls1", "demo", "User", "demo.User", "/src/model/user.rs", 1);
-        create_function(&kit, "prop1", "demo", "name_field", "demo.name_field", "/src/model/user.rs", 5);
+        create_class(
+            &kit,
+            "cls1",
+            "demo",
+            "User",
+            "demo.User",
+            "/src/model/user.rs",
+            1,
+        );
+        create_function(
+            &kit,
+            "prop1",
+            "demo",
+            "name_field",
+            "demo.name_field",
+            "/src/model/user.rs",
+            5,
+        );
         create_edge(&kit, "e2", "cls1", "prop1", "HAS_PROPERTY", "demo");
 
         let storage = storage(&kit);

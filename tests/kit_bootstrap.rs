@@ -24,8 +24,8 @@ use codenexus::kit::DaemonModule;
 #[cfg(feature = "embed")]
 use codenexus::kit::EmbedModule;
 use codenexus::kit::{
-    build_kit, ExtractorRegistryModule, IndexerModule, KitBootstrapConfig, ParserFactoryModule, QueryModule, ResolverModule,
-    StorageModule, TraceModule,
+    build_kit, ExtractorRegistryModule, IndexerModule, KitBootstrapConfig, ParserFactoryModule,
+    QueryModule, ResolverModule, StorageModule, TraceModule,
 };
 
 /// In-memory database path — keeps tests hermetic (no on-disk cleanup).
@@ -40,8 +40,10 @@ async fn all_core_capabilities_resolvable_through_kit() {
 
     // 7 core capability keys MUST all resolve under default features.
     kit.require::<StorageModule>().expect("require_storage");
-    kit.require::<ParserFactoryModule>().expect("require_parser");
-    kit.require::<ExtractorRegistryModule>().expect("require_extractor");
+    kit.require::<ParserFactoryModule>()
+        .expect("require_parser");
+    kit.require::<ExtractorRegistryModule>()
+        .expect("require_extractor");
     kit.require::<IndexerModule>().expect("require_indexer");
     kit.require::<ResolverModule>().expect("require_resolver");
     kit.require::<QueryModule>().expect("require_query");

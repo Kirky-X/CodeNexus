@@ -26,26 +26,26 @@
 //! lsp = ["dep:lsp-types", "dep:lsp-server"]
 //! ```
 
+pub mod clangd;
 pub mod client;
 pub mod extract;
-pub mod pyright;
-pub mod clangd;
-pub mod gopls;
-pub mod typescript_ls;
 pub mod fortls;
+pub mod gopls;
 pub mod jdtls;
+pub mod pyright;
 pub(crate) mod session;
 pub mod types;
+pub mod typescript_ls;
 
+pub use clangd::ClangdClient;
 pub use client::RustAnalyzerClient;
 pub use extract::extract_hover_text;
-pub use pyright::PyrightClient;
-pub use clangd::ClangdClient;
-pub use gopls::GoplsClient;
-pub use typescript_ls::TypeScriptLanguageClient;
 pub use fortls::FortlsClient;
+pub use gopls::GoplsClient;
 pub use jdtls::JdtlsClient;
+pub use pyright::PyrightClient;
 pub use types::map_lsp_symbol_kind;
+pub use typescript_ls::TypeScriptLanguageClient;
 
 use std::path::Path;
 

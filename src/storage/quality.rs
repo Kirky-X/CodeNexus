@@ -989,16 +989,12 @@ mod tests {
         );
         assert_eq!(file_violations[0].rule, "DQ-005");
         assert!(
-            file_violations[0]
-                .message
-                .contains("total 2"),
+            file_violations[0].message.contains("total 2"),
             "total should be 2: {}",
             file_violations[0].message
         );
         assert!(
-            file_violations[0]
-                .message
-                .contains("per-project sum 1"),
+            file_violations[0].message.contains("per-project sum 1"),
             "per-project sum should be 1: {}",
             file_violations[0].message
         );
@@ -1040,12 +1036,7 @@ mod tests {
         }
         let ids: Vec<&str> = violations
             .iter()
-            .map(|v| {
-                v.message
-                    .split('\'')
-                    .nth(1)
-                    .unwrap_or("")
-            })
+            .map(|v| v.message.split('\'').nth(1).unwrap_or(""))
             .collect();
         assert!(ids.contains(&"f1"), "should report f1: {ids:?}");
         assert!(ids.contains(&"f2"), "should report f2: {ids:?}");
@@ -1187,15 +1178,17 @@ mod tests {
                 NodeLabel::Function,
             )
             .expect("save_nodes");
-        storage
-            .execute("DROP TABLE Variable;")
-            .expect("drop table");
+        storage.execute("DROP TABLE Variable;").expect("drop table");
 
         let checker = QualityChecker::new(&*storage);
         let violations = checker
             .check_fqn_uniqueness()
             .expect("check_fqn_uniqueness");
-        assert_eq!(violations.len(), 1, "should still detect DQ-002 in Function table");
+        assert_eq!(
+            violations.len(),
+            1,
+            "should still detect DQ-002 in Function table"
+        );
         assert_eq!(violations[0].rule, "DQ-002");
     }
 
@@ -1219,15 +1212,17 @@ mod tests {
             )
             .build()])
             .expect("save_edges");
-        storage
-            .execute("DROP TABLE Variable;")
-            .expect("drop table");
+        storage.execute("DROP TABLE Variable;").expect("drop table");
 
         let checker = QualityChecker::new(&*storage);
         let violations = checker
             .check_edge_integrity()
             .expect("check_edge_integrity");
-        assert_eq!(violations.len(), 1, "should still detect DQ-004 orphan target");
+        assert_eq!(
+            violations.len(),
+            1,
+            "should still detect DQ-004 orphan target"
+        );
         assert_eq!(violations[0].rule, "DQ-004");
         assert!(violations[0].message.contains("missing_target"));
     }
@@ -1253,9 +1248,7 @@ mod tests {
                 NodeLabel::Function,
             )
             .expect("save_nodes ghost");
-        storage
-            .execute("DROP TABLE Variable;")
-            .expect("drop table");
+        storage.execute("DROP TABLE Variable;").expect("drop table");
 
         let checker = QualityChecker::new(&*storage);
         let violations = checker
@@ -1314,9 +1307,7 @@ mod tests {
                 NodeLabel::Function,
             )
             .expect("save_nodes");
-        storage
-            .execute("DROP TABLE File;")
-            .expect("drop File");
+        storage.execute("DROP TABLE File;").expect("drop File");
         let checker = QualityChecker::new(&*storage);
         let report = checker.run_all().expect("run_all");
         assert!(report.is_clean(), "DQ-006 skipped, other checks clean");
@@ -1356,17 +1347,13 @@ mod tests {
         storage
             .save_project(&sample_project("demo", "demo"))
             .expect("save_project");
-        let empty_qn_func = crate::model::Node::builder(
-            NodeLabel::Function,
-            "empty_qn",
-            "",
-        )
-        .id("f1")
-        .project("demo")
-        .file_path("/src/empty.rs")
-        .start_line(1)
-        .end_line(5)
-        .build();
+        let empty_qn_func = crate::model::Node::builder(NodeLabel::Function, "empty_qn", "")
+            .id("f1")
+            .project("demo")
+            .file_path("/src/empty.rs")
+            .start_line(1)
+            .end_line(5)
+            .build();
         storage
             .save_nodes(&[empty_qn_func], NodeLabel::Function)
             .expect("save_nodes");
@@ -1387,17 +1374,14 @@ mod tests {
         // Cover `!project.is_empty() && !qn.is_empty()` false branch when
         // project is empty but qn is non-empty (line 140).
         let storage = fresh_storage();
-        let empty_project_func = crate::model::Node::builder(
-            NodeLabel::Function,
-            "no_proj",
-            "demo.no_proj",
-        )
-        .id("f1")
-        .project("")
-        .file_path("/src/no_proj.rs")
-        .start_line(1)
-        .end_line(5)
-        .build();
+        let empty_project_func =
+            crate::model::Node::builder(NodeLabel::Function, "no_proj", "demo.no_proj")
+                .id("f1")
+                .project("")
+                .file_path("/src/no_proj.rs")
+                .start_line(1)
+                .end_line(5)
+                .build();
         storage
             .save_nodes(&[empty_project_func], NodeLabel::Function)
             .expect("save_nodes");
@@ -1456,17 +1440,13 @@ mod tests {
         // A File node with no hash property at all (null) should be detected
         // as a violation, same as an empty-string hash.
         let storage = fresh_storage();
-        let no_hash_file = crate::model::Node::builder(
-            NodeLabel::File,
-            "/c.rs",
-            "/c.rs",
-        )
-        .id("f1")
-        .project("demo")
-        .file_path("/c.rs")
-        .language(Language::Rust)
-        .properties(serde_json::json!({"lineCount": 50}))
-        .build();
+        let no_hash_file = crate::model::Node::builder(NodeLabel::File, "/c.rs", "/c.rs")
+            .id("f1")
+            .project("demo")
+            .file_path("/c.rs")
+            .language(Language::Rust)
+            .properties(serde_json::json!({"lineCount": 50}))
+            .build();
         storage
             .save_nodes(&[no_hash_file], NodeLabel::File)
             .expect("save_nodes");
@@ -1474,7 +1454,11 @@ mod tests {
         let violations = checker
             .check_hash_integrity()
             .expect("check_hash_integrity");
-        assert_eq!(violations.len(), 1, "null hash should be detected: {violations:?}");
+        assert_eq!(
+            violations.len(),
+            1,
+            "null hash should be detected: {violations:?}"
+        );
         assert_eq!(violations[0].rule, "DQ-006");
         assert!(violations[0].message.contains("f1"));
     }
@@ -1534,9 +1518,7 @@ mod tests {
         // check_hash_integrity uses `?` on the File query (line 301).
         // Dropping the table should cause the method to return Err.
         let storage = fresh_storage();
-        storage
-            .execute("DROP TABLE File;")
-            .expect("drop File");
+        storage.execute("DROP TABLE File;").expect("drop File");
         let checker = QualityChecker::new(&*storage);
         assert!(
             checker.check_hash_integrity().is_err(),
@@ -1683,12 +1665,7 @@ mod tests {
         // Verify sort order: alpha < mid < zebra.
         let targets: Vec<&str> = violations
             .iter()
-            .map(|v| {
-                v.message
-                    .split('\'')
-                    .nth(1)
-                    .unwrap_or("")
-            })
+            .map(|v| v.message.split('\'').nth(1).unwrap_or(""))
             .collect();
         assert_eq!(
             targets,
@@ -1749,7 +1726,10 @@ mod tests {
             )
             .expect("save_nodes function");
         storage
-            .save_nodes(&[sample_file("file1", "alpha", "/a.rs", "hash1")], NodeLabel::File)
+            .save_nodes(
+                &[sample_file("file1", "alpha", "/a.rs", "hash1")],
+                NodeLabel::File,
+            )
             .expect("save_nodes file");
         let checker = QualityChecker::new(&*storage);
         let violations = checker
@@ -1806,14 +1786,8 @@ mod tests {
     #[test]
     fn escape_cypher_combined_backslash_and_single_quote() {
         // String with both backslash and single quote → both escaped.
-        assert_eq!(
-            escape_cypher("it's\\path"),
-            "it\\'s\\\\path"
-        );
-        assert_eq!(
-            escape_cypher("\\'"),
-            "\\\\\\'"
-        );
+        assert_eq!(escape_cypher("it's\\path"), "it\\'s\\\\path");
+        assert_eq!(escape_cypher("\\'"), "\\\\\\'");
     }
 
     // --- NULL value defensive branch tests ---

@@ -396,7 +396,12 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Class)
             .collect();
-        assert_eq!(classes.len(), 1, "should extract 1 class: {:?}", result.nodes);
+        assert_eq!(
+            classes.len(),
+            1,
+            "should extract 1 class: {:?}",
+            result.nodes
+        );
         assert_eq!(classes[0].name, "Foo");
     }
 
@@ -408,7 +413,12 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Class && n.name == "Bar")
             .collect();
-        assert_eq!(objects.len(), 1, "should extract 1 object: {:?}", result.nodes);
+        assert_eq!(
+            objects.len(),
+            1,
+            "should extract 1 object: {:?}",
+            result.nodes
+        );
     }
 
     #[test]
@@ -419,7 +429,12 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Trait)
             .collect();
-        assert_eq!(traits.len(), 1, "should extract 1 trait: {:?}", result.nodes);
+        assert_eq!(
+            traits.len(),
+            1,
+            "should extract 1 trait: {:?}",
+            result.nodes
+        );
         assert_eq!(traits[0].name, "Serializable");
     }
 

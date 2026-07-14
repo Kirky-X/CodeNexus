@@ -467,7 +467,10 @@ mod tests {
         assert_eq!(funcs[0].project, "proj");
         assert_eq!(funcs[0].file_path.as_deref(), Some("test.php"));
         assert!(funcs[0].is_global, "top-level function should be global");
-        assert!(funcs[0].is_exported, "top-level function should be exported");
+        assert!(
+            funcs[0].is_exported,
+            "top-level function should be exported"
+        );
     }
 
     #[test]
@@ -659,7 +662,10 @@ mod tests {
     #[test]
     fn comment_only_source_returns_empty_result() {
         let result = extract("<?php\n// just a comment\n");
-        assert!(result.is_empty(), "comment-only file should produce no nodes");
+        assert!(
+            result.is_empty(),
+            "comment-only file should produce no nodes"
+        );
     }
 
     #[test]
@@ -732,7 +738,11 @@ mod tests {
     fn qualified_function_call_extracts_last_component() {
         let src = "<?php\nfunction main() { \\NS\\foo(); }\n";
         let result = extract(src);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             callees.contains(&"foo"),
             "should extract last component of qualified call: {callees:?}"
@@ -769,7 +779,11 @@ mod tests {
     fn nested_function_calls_extracted() {
         let src = "<?php\nfunction main() { outer(inner()); }\n";
         let result = extract(src);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             callees.contains(&"outer"),
             "should extract outer call: {callees:?}"
@@ -789,7 +803,10 @@ mod tests {
             .iter()
             .find(|c| c.callee_name == "baz")
             .expect("should find call to baz");
-        assert!(call.caller_qn.is_some(), "method call should have caller_qn");
+        assert!(
+            call.caller_qn.is_some(),
+            "method call should have caller_qn"
+        );
         assert!(call.caller_qn.as_deref().unwrap().contains("bar"));
     }
 
@@ -799,7 +816,11 @@ mod tests {
         // (line 374-377): `(foo)()` should extract `foo` as the callee.
         let src = "<?php\nfunction main() { (foo)(); }\n";
         let result = extract(src);
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             callees.contains(&"foo"),
             "should extract callee from parenthesized expression: {callees:?}"
@@ -815,7 +836,11 @@ mod tests {
         let result = extract(src);
         // The outer call's callee should be extracted from the inner
         // function_call_expression.
-        let callees: Vec<_> = result.calls.iter().map(|c| c.callee_name.as_str()).collect();
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
         assert!(
             callees.contains(&"getCallable"),
             "should extract callee from nested function_call_expression: {callees:?}"
@@ -839,7 +864,8 @@ mod tests {
     fn interface_declaration_does_not_break_extraction() {
         // Interface declarations should not crash the extractor (they are
         // not yet promoted to Class nodes, but the visitor should not break).
-        let src = "<?php\ninterface IFoo { public function bar(); }\nclass Foo implements IFoo {}\n";
+        let src =
+            "<?php\ninterface IFoo { public function bar(); }\nclass Foo implements IFoo {}\n";
         let result = extract(src);
         let classes: Vec<_> = result
             .nodes

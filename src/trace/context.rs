@@ -301,11 +301,7 @@ impl<'a> ContextCollector<'a> {
     ///
     /// Returns [`StorageError`] if any underlying Cypher query fails or the
     /// symbol is not found.
-    pub fn collect(
-        &self,
-        project: &str,
-        qualified_name: &str,
-    ) -> StorageResult<SymbolContext> {
+    pub fn collect(&self, project: &str, qualified_name: &str) -> StorageResult<SymbolContext> {
         let symbol = self.collect_symbol_definition(qualified_name)?;
         let callers = self.collect_callers(project, &symbol)?;
         let callees = self.collect_callees(project, &symbol)?;
@@ -324,10 +320,7 @@ impl<'a> ContextCollector<'a> {
         })
     }
 
-    fn collect_symbol_definition(
-        &self,
-        qualified_name: &str,
-    ) -> StorageResult<SymbolDefinition> {
+    fn collect_symbol_definition(&self, qualified_name: &str) -> StorageResult<SymbolDefinition> {
         let escaped = escape_cypher_string(qualified_name);
         // LadybugDB doesn't support `WHERE (n:Function OR n:Method)` label
         // expressions, so we issue two separate queries.
@@ -335,24 +328,54 @@ impl<'a> ContextCollector<'a> {
                     n.signature AS signature, n.docstring AS docstring, \
                     n.content AS content, n.filePath AS file_path, \
                     n.startLine AS start_line, n.endLine AS end_line";
-        let function_cypher = format!(
-            "MATCH (n:Function) WHERE n.qualifiedName = '{escaped}' RETURN {cols};"
-        );
-        let method_cypher = format!(
-            "MATCH (n:Method) WHERE n.qualifiedName = '{escaped}' RETURN {cols};"
-        );
+        let function_cypher =
+            format!("MATCH (n:Function) WHERE n.qualifiedName = '{escaped}' RETURN {cols};");
+        let method_cypher =
+            format!("MATCH (n:Method) WHERE n.qualifiedName = '{escaped}' RETURN {cols};");
         for cypher in [function_cypher, method_cypher] {
             let rows = self.storage.query(&cypher)?;
             if let Some(row) = rows.into_iter().next() {
                 return Ok(SymbolDefinition {
-                    name: row.first().and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    qualified_name: row.get(1).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    signature: row.get(2).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    docstring: row.get(3).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    source: truncate_source(row.get(4).and_then(|v| v.as_str()).unwrap_or_default()),
-                    file_path: row.get(5).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    start_line: row.get(6).and_then(|v| v.as_u64()).map(|v| v as u32).or_else(|| row.get(6).and_then(|v| v.as_i64()).map(|v| v as u32)).unwrap_or(0),
-                    end_line: row.get(7).and_then(|v| v.as_u64()).map(|v| v as u32).or_else(|| row.get(7).and_then(|v| v.as_i64()).map(|v| v as u32)).unwrap_or(0),
+                    name: row
+                        .first()
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    qualified_name: row
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    signature: row
+                        .get(2)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    docstring: row
+                        .get(3)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    source: truncate_source(
+                        row.get(4).and_then(|v| v.as_str()).unwrap_or_default(),
+                    ),
+                    file_path: row
+                        .get(5)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    start_line: row
+                        .get(6)
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as u32)
+                        .or_else(|| row.get(6).and_then(|v| v.as_i64()).map(|v| v as u32))
+                        .unwrap_or(0),
+                    end_line: row
+                        .get(7)
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as u32)
+                        .or_else(|| row.get(7).and_then(|v| v.as_i64()).map(|v| v as u32))
+                        .unwrap_or(0),
                 });
             }
         }
@@ -361,10 +384,7 @@ impl<'a> ContextCollector<'a> {
         )))
     }
 
-    fn collect_type_context(
-        &self,
-        symbol: &SymbolDefinition,
-    ) -> StorageResult<TypeContext> {
+    fn collect_type_context(&self, symbol: &SymbolDefinition) -> StorageResult<TypeContext> {
         let escaped_qn = escape_cypher_string(&symbol.qualified_name);
         // Query Function/Method node for id and returnType.
         let function_cypher = format!(
@@ -441,18 +461,13 @@ impl<'a> ContextCollector<'a> {
         })
     }
 
-    fn collect_test_context(
-        &self,
-        qualified_name: &str,
-    ) -> StorageResult<Vec<TestInfo>> {
+    fn collect_test_context(&self, qualified_name: &str) -> StorageResult<Vec<TestInfo>> {
         let escaped_qn = escape_cypher_string(qualified_name);
         // Find the target symbol's id.
-        let function_cypher = format!(
-            "MATCH (n:Function) WHERE n.qualifiedName = '{escaped_qn}' RETURN n.id AS id;"
-        );
-        let method_cypher = format!(
-            "MATCH (n:Method) WHERE n.qualifiedName = '{escaped_qn}' RETURN n.id AS id;"
-        );
+        let function_cypher =
+            format!("MATCH (n:Function) WHERE n.qualifiedName = '{escaped_qn}' RETURN n.id AS id;");
+        let method_cypher =
+            format!("MATCH (n:Method) WHERE n.qualifiedName = '{escaped_qn}' RETURN n.id AS id;");
         let mut symbol_id = String::new();
         for cypher in [function_cypher, method_cypher] {
             let rows = self.storage.query(&cypher)?;
@@ -486,10 +501,7 @@ impl<'a> ContextCollector<'a> {
         Ok(tests)
     }
 
-    fn collect_data_flow(
-        &self,
-        _symbol: &SymbolDefinition,
-    ) -> StorageResult<DataFlowSummary> {
+    fn collect_data_flow(&self, _symbol: &SymbolDefinition) -> StorageResult<DataFlowSummary> {
         Ok(DataFlowSummary {})
     }
 
@@ -557,9 +569,8 @@ impl<'a> ContextCollector<'a> {
     fn resolve_symbol_id(&self, qualified_name: &str) -> StorageResult<String> {
         let escaped = escape_cypher_string(qualified_name);
         for label in ["Function", "Method"] {
-            let cypher = format!(
-                "MATCH (n:{label}) WHERE n.qualifiedName = '{escaped}' RETURN n.id AS id;"
-            );
+            let cypher =
+                format!("MATCH (n:{label}) WHERE n.qualifiedName = '{escaped}' RETURN n.id AS id;");
             if let Some(row) = self.storage.query(&cypher)?.into_iter().next() {
                 if let Some(id) = row.first().and_then(|v| v.as_str()) {
                     return Ok(id.to_string());
@@ -570,10 +581,7 @@ impl<'a> ContextCollector<'a> {
     }
 
     /// Resolves a call endpoint's name and qualified name by node id.
-    fn resolve_call_endpoint(
-        &self,
-        node_id: &str,
-    ) -> StorageResult<Option<(String, String)>> {
+    fn resolve_call_endpoint(&self, node_id: &str) -> StorageResult<Option<(String, String)>> {
         if node_id.is_empty() {
             return Ok(None);
         }
@@ -666,9 +674,7 @@ impl<'a> ContextCollector<'a> {
             return Ok(String::new());
         }
         let escaped = escape_cypher_string(node_id);
-        let cypher = format!(
-            "MATCH (n) WHERE n.id = '{escaped}' RETURN n.name AS name;"
-        );
+        let cypher = format!("MATCH (n) WHERE n.id = '{escaped}' RETURN n.name AS name;");
         let rows = self.storage.query(&cypher)?;
         for row in rows {
             if let Some(name) = row.first().and_then(|v| v.as_str()) {
@@ -891,10 +897,38 @@ mod tests {
     #[test]
     fn collect_incoming_sorts_by_edge_type_then_name() {
         let mut graph = Graph::new();
-        graph.add_node(make_node("target", "target", "demo.target", NodeLabel::Function, "/t.rs", 1));
-        graph.add_node(make_node("c1", "z_caller", "demo.z_caller", NodeLabel::Function, "/z.rs", 1));
-        graph.add_node(make_node("c2", "a_caller", "demo.a_caller", NodeLabel::Function, "/a.rs", 1));
-        graph.add_node(make_node("c3", "m_caller", "demo.m_caller", NodeLabel::Function, "/m.rs", 1));
+        graph.add_node(make_node(
+            "target",
+            "target",
+            "demo.target",
+            NodeLabel::Function,
+            "/t.rs",
+            1,
+        ));
+        graph.add_node(make_node(
+            "c1",
+            "z_caller",
+            "demo.z_caller",
+            NodeLabel::Function,
+            "/z.rs",
+            1,
+        ));
+        graph.add_node(make_node(
+            "c2",
+            "a_caller",
+            "demo.a_caller",
+            NodeLabel::Function,
+            "/a.rs",
+            1,
+        ));
+        graph.add_node(make_node(
+            "c3",
+            "m_caller",
+            "demo.m_caller",
+            NodeLabel::Function,
+            "/m.rs",
+            1,
+        ));
         graph.add_edge(Edge::new("c1", "target", EdgeType::DataFlows, "demo"));
         graph.add_edge(Edge::new("c2", "target", EdgeType::Calls, "demo"));
         graph.add_edge(Edge::new("c3", "target", EdgeType::Calls, "demo"));
@@ -913,9 +947,30 @@ mod tests {
     #[test]
     fn collect_outgoing_sorts_by_edge_type_then_name() {
         let mut graph = Graph::new();
-        graph.add_node(make_node("src", "src", "demo.src", NodeLabel::Function, "/s.rs", 1));
-        graph.add_node(make_node("d1", "z_callee", "demo.z_callee", NodeLabel::Function, "/z.rs", 1));
-        graph.add_node(make_node("d2", "a_callee", "demo.a_callee", NodeLabel::Function, "/a.rs", 1));
+        graph.add_node(make_node(
+            "src",
+            "src",
+            "demo.src",
+            NodeLabel::Function,
+            "/s.rs",
+            1,
+        ));
+        graph.add_node(make_node(
+            "d1",
+            "z_callee",
+            "demo.z_callee",
+            NodeLabel::Function,
+            "/z.rs",
+            1,
+        ));
+        graph.add_node(make_node(
+            "d2",
+            "a_callee",
+            "demo.a_callee",
+            NodeLabel::Function,
+            "/a.rs",
+            1,
+        ));
         graph.add_edge(Edge::new("src", "d1", EdgeType::DataFlows, "demo"));
         graph.add_edge(Edge::new("src", "d2", EdgeType::Calls, "demo"));
         let outgoing = collect_outgoing(&graph, &"src".to_string());
@@ -930,7 +985,14 @@ mod tests {
     #[test]
     fn collect_processes_finds_start_as_target() {
         let mut graph = Graph::new();
-        graph.add_node(make_node("handler", "handler", "demo.handler", NodeLabel::Function, "/h.rs", 1));
+        graph.add_node(make_node(
+            "handler",
+            "handler",
+            "demo.handler",
+            NodeLabel::Function,
+            "/h.rs",
+            1,
+        ));
         graph.add_node(
             Node::builder(NodeLabel::Process, "checkout", "demo.checkout")
                 .id("p1")
@@ -947,7 +1009,14 @@ mod tests {
     #[test]
     fn collect_processes_sorts_multiple() {
         let mut graph = Graph::new();
-        graph.add_node(make_node("handler", "handler", "demo.handler", NodeLabel::Function, "/h.rs", 1));
+        graph.add_node(make_node(
+            "handler",
+            "handler",
+            "demo.handler",
+            NodeLabel::Function,
+            "/h.rs",
+            1,
+        ));
         graph.add_node(
             Node::builder(NodeLabel::Process, "z_process", "demo.z_process")
                 .id("p1")
@@ -1288,7 +1357,9 @@ mod tests {
         let symbol = collector
             .collect_symbol_definition("demo.foo")
             .expect("symbol");
-        let tc = collector.collect_type_context(&symbol).expect("type context");
+        let tc = collector
+            .collect_type_context(&symbol)
+            .expect("type context");
         assert_eq!(tc.parameters.len(), 2);
         assert_eq!(tc.parameters[0].name, "a");
         assert_eq!(tc.parameters[0].type_name, "i32");
@@ -1310,7 +1381,9 @@ mod tests {
         let symbol = collector
             .collect_symbol_definition("demo.noop")
             .expect("symbol");
-        let tc = collector.collect_type_context(&symbol).expect("type context");
+        let tc = collector
+            .collect_type_context(&symbol)
+            .expect("type context");
         assert!(tc.parameters.is_empty());
         assert_eq!(tc.return_type, "");
     }
@@ -1328,7 +1401,9 @@ mod tests {
         let symbol = collector
             .collect_symbol_definition("demo.bar")
             .expect("symbol");
-        let tc = collector.collect_type_context(&symbol).expect("type context");
+        let tc = collector
+            .collect_type_context(&symbol)
+            .expect("type context");
         assert_eq!(tc.parameters.len(), 1);
         assert_eq!(tc.parameters[0].name, "x");
         assert_eq!(tc.parameters[0].type_name, "u32");
@@ -1535,8 +1610,22 @@ mod tests {
         // An edge between two nodes neither of which is `start_id` should
         // hit the `None` arm (line 176) and be skipped.
         let mut graph = Graph::new();
-        graph.add_node(make_node("a", "a", "demo.a", NodeLabel::Function, "/a.rs", 1));
-        graph.add_node(make_node("b", "b", "demo.b", NodeLabel::Function, "/b.rs", 1));
+        graph.add_node(make_node(
+            "a",
+            "a",
+            "demo.a",
+            NodeLabel::Function,
+            "/a.rs",
+            1,
+        ));
+        graph.add_node(make_node(
+            "b",
+            "b",
+            "demo.b",
+            NodeLabel::Function,
+            "/b.rs",
+            1,
+        ));
         graph.add_node(
             Node::builder(NodeLabel::Process, "checkout", "demo.checkout")
                 .id("p1")
@@ -1545,7 +1634,10 @@ mod tests {
         // Edge between "b" and "p1" — does NOT involve "a".
         graph.add_edge(Edge::new("b", "p1", EdgeType::StepInProcess, "demo"));
         let processes = collect_processes(&graph, &"a".to_string());
-        assert!(processes.is_empty(), "edge not involving start should be skipped");
+        assert!(
+            processes.is_empty(),
+            "edge not involving start should be skipped"
+        );
     }
 
     // ===== ContextCollector::collect full integration =====
@@ -1646,9 +1738,7 @@ mod tests {
         let symbol = collector
             .collect_symbol_definition("demo.func_x")
             .expect("symbol");
-        let callers = collector
-            .collect_callers("demo", &symbol)
-            .expect("callers");
+        let callers = collector.collect_callers("demo", &symbol).expect("callers");
         assert!(callers.is_empty());
     }
 
@@ -1663,9 +1753,7 @@ mod tests {
         let symbol = collector
             .collect_symbol_definition("demo.func_y")
             .expect("symbol");
-        let callees = collector
-            .collect_callees("demo", &symbol)
-            .expect("callees");
+        let callees = collector.collect_callees("demo", &symbol).expect("callees");
         assert!(callees.is_empty());
     }
 
@@ -1684,9 +1772,7 @@ mod tests {
         let symbol = collector
             .collect_symbol_definition("demo.target")
             .expect("symbol");
-        let callers = collector
-            .collect_callers("demo", &symbol)
-            .expect("callers");
+        let callers = collector.collect_callers("demo", &symbol).expect("callers");
         assert_eq!(callers.len(), 2);
         let names: Vec<&str> = callers.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"caller1"));
@@ -1752,9 +1838,7 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let s = storage(&kit);
         let collector = ContextCollector::new(&*s);
-        let name = collector
-            .resolve_node_name("")
-            .expect("should not error");
+        let name = collector.resolve_node_name("").expect("should not error");
         assert!(name.is_empty());
     }
 
@@ -1773,7 +1857,9 @@ mod tests {
         let symbol = collector
             .collect_symbol_definition("demo.bar")
             .expect("symbol");
-        let tc = collector.collect_type_context(&symbol).expect("type context");
+        let tc = collector
+            .collect_type_context(&symbol)
+            .expect("type context");
         assert_eq!(tc.return_type, "i32");
         assert_eq!(tc.parameters.len(), 1);
         assert_eq!(tc.parameters[0].name, "x");
@@ -1889,10 +1975,11 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let s = storage(&kit);
         let collector = ContextCollector::new(&*s);
-        let implements = collector
-            .query_implements("")
-            .expect("should not error");
-        assert!(implements.is_empty(), "empty node_id should return empty vec");
+        let implements = collector.query_implements("").expect("should not error");
+        assert!(
+            implements.is_empty(),
+            "empty node_id should return empty vec"
+        );
     }
 
     #[test]
@@ -1938,7 +2025,9 @@ mod tests {
         let symbol = collector
             .collect_symbol_definition("demo.impl_iface")
             .expect("symbol");
-        let tc = collector.collect_type_context(&symbol).expect("type context");
+        let tc = collector
+            .collect_type_context(&symbol)
+            .expect("type context");
         assert_eq!(tc.implements.len(), 1);
         assert_eq!(tc.implements[0], "Runnable");
     }
@@ -1958,7 +2047,10 @@ mod tests {
         let implements = collector
             .query_implements("f_dangling")
             .expect("should not error");
-        assert!(implements.is_empty(), "dangling IMPLEMENTS target should produce no implements");
+        assert!(
+            implements.is_empty(),
+            "dangling IMPLEMENTS target should produce no implements"
+        );
     }
 
     #[test]

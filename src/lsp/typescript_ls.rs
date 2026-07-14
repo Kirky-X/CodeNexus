@@ -6,9 +6,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use lsp_types::notification::{Exit, Notification as _};
 use lsp_types::request::{GotoDefinition, GotoTypeDefinition, HoverRequest};
 use lsp_types::{GotoDefinitionParams, HoverParams, PartialResultParams, WorkDoneProgressParams};
-use lsp_types::notification::{Exit, Notification as _};
 
 use super::session::{self, Session};
 use super::{LspError, LspProvider};
@@ -47,7 +47,8 @@ impl LspProvider for TypeScriptLanguageClient {
         if guard.is_some() {
             return Ok(());
         }
-        let (child, stdin, stdout) = session::spawn_server(&self.server_path, workspace, &["--stdio"])?;
+        let (child, stdin, stdout) =
+            session::spawn_server(&self.server_path, workspace, &["--stdio"])?;
         let (connection, reader_handle, writer_handle) = session::spawn_transport(stdin, stdout);
         let mut session = Session {
             child,
@@ -61,9 +62,16 @@ impl LspProvider for TypeScriptLanguageClient {
         Ok(())
     }
 
-    fn definition(&self, file: &Path, line: u32, col: u32) -> Result<Option<lsp_types::Location>, LspError> {
+    fn definition(
+        &self,
+        file: &Path,
+        line: u32,
+        col: u32,
+    ) -> Result<Option<lsp_types::Location>, LspError> {
         let mut guard = self.session.lock().expect("session mutex poisoned");
-        let session = guard.as_mut().ok_or_else(|| LspError::Communication("LSP server not started".into()))?;
+        let session = guard
+            .as_mut()
+            .ok_or_else(|| LspError::Communication("LSP server not started".into()))?;
         let params = GotoDefinitionParams {
             text_document_position_params: session::make_position_params(file, line, col)?,
             work_done_progress_params: WorkDoneProgressParams::default(),
@@ -73,9 +81,16 @@ impl LspProvider for TypeScriptLanguageClient {
         Ok(session::extract_first_location(resp))
     }
 
-    fn type_definition(&self, file: &Path, line: u32, col: u32) -> Result<Option<lsp_types::Location>, LspError> {
+    fn type_definition(
+        &self,
+        file: &Path,
+        line: u32,
+        col: u32,
+    ) -> Result<Option<lsp_types::Location>, LspError> {
         let mut guard = self.session.lock().expect("session mutex poisoned");
-        let session = guard.as_mut().ok_or_else(|| LspError::Communication("LSP server not started".into()))?;
+        let session = guard
+            .as_mut()
+            .ok_or_else(|| LspError::Communication("LSP server not started".into()))?;
         let params = GotoDefinitionParams {
             text_document_position_params: session::make_position_params(file, line, col)?,
             work_done_progress_params: WorkDoneProgressParams::default(),
@@ -85,9 +100,16 @@ impl LspProvider for TypeScriptLanguageClient {
         Ok(session::extract_first_location(resp))
     }
 
-    fn hover(&self, file: &Path, line: u32, col: u32) -> Result<Option<lsp_types::Hover>, LspError> {
+    fn hover(
+        &self,
+        file: &Path,
+        line: u32,
+        col: u32,
+    ) -> Result<Option<lsp_types::Hover>, LspError> {
         let mut guard = self.session.lock().expect("session mutex poisoned");
-        let session = guard.as_mut().ok_or_else(|| LspError::Communication("LSP server not started".into()))?;
+        let session = guard
+            .as_mut()
+            .ok_or_else(|| LspError::Communication("LSP server not started".into()))?;
         let params = HoverParams {
             text_document_position_params: session::make_position_params(file, line, col)?,
             work_done_progress_params: WorkDoneProgressParams::default(),
@@ -101,7 +123,8 @@ impl LspProvider for TypeScriptLanguageClient {
             return Ok(());
         };
         session::send_raw_request(&mut session, "shutdown", serde_json::Value::Null);
-        let _ = session::send_notification(&session.connection, Exit::METHOD, &serde_json::Value::Null);
+        let _ =
+            session::send_notification(&session.connection, Exit::METHOD, &serde_json::Value::Null);
         let _ = session.child.wait();
         drop(session);
         Ok(())
@@ -112,17 +135,19 @@ impl LspProvider for TypeScriptLanguageClient {
 mod tests {
     use super::*;
     use crate::lsp::session;
-    use std::path::PathBuf;
     use lsp_server::{Connection, Message, RequestId, Response};
-    use lsp_types::{
-        GotoDefinitionResponse, HoverParams, Position,
-        TextDocumentIdentifier, TextDocumentPositionParams, Url, WorkDoneProgressParams,
-    };
     use lsp_types::request::HoverRequest;
+    use lsp_types::{
+        GotoDefinitionResponse, HoverParams, Position, TextDocumentIdentifier,
+        TextDocumentPositionParams, Url, WorkDoneProgressParams,
+    };
+    use std::path::PathBuf;
 
     #[test]
     fn start_nonexistent_server_returns_error() {
-        let client = TypeScriptLanguageClient::with_server_path(PathBuf::from("/nonexistent/path/to/typescript-language-server"));
+        let client = TypeScriptLanguageClient::with_server_path(PathBuf::from(
+            "/nonexistent/path/to/typescript-language-server",
+        ));
         let result = client.start(&std::env::temp_dir());
         match result {
             Err(LspError::ServerStart(msg)) => assert!(!msg.is_empty()),
@@ -137,7 +162,9 @@ mod tests {
 
     #[test]
     fn shutdown_after_failed_start_returns_ok() {
-        let client = TypeScriptLanguageClient::with_server_path(PathBuf::from("/nonexistent/path/to/typescript-language-server"));
+        let client = TypeScriptLanguageClient::with_server_path(PathBuf::from(
+            "/nonexistent/path/to/typescript-language-server",
+        ));
         let _ = client.start(&std::env::temp_dir());
         assert!(client.shutdown().is_ok());
     }
@@ -145,35 +172,85 @@ mod tests {
     #[test]
     fn query_without_start_returns_communication_error() {
         let client = TypeScriptLanguageClient::new();
-        assert!(matches!(client.definition(Path::new("/tmp/test.ts"), 0, 0), Err(LspError::Communication(_))));
-        assert!(matches!(client.hover(Path::new("/tmp/test.ts"), 0, 0), Err(LspError::Communication(_))));
+        assert!(matches!(
+            client.definition(Path::new("/tmp/test.ts"), 0, 0),
+            Err(LspError::Communication(_))
+        ));
+        assert!(matches!(
+            client.hover(Path::new("/tmp/test.ts"), 0, 0),
+            Err(LspError::Communication(_))
+        ));
     }
 
     #[test]
     fn new_uses_default_server_path() {
-        assert_eq!(TypeScriptLanguageClient::new().server_path, PathBuf::from(DEFAULT_SERVER_PATH));
+        assert_eq!(
+            TypeScriptLanguageClient::new().server_path,
+            PathBuf::from(DEFAULT_SERVER_PATH)
+        );
     }
 
     #[test]
     fn with_server_path_overrides_default() {
         let p = PathBuf::from("/custom/typescript-language-server");
-        assert_eq!(TypeScriptLanguageClient::with_server_path(p.clone()).server_path, p);
+        assert_eq!(
+            TypeScriptLanguageClient::with_server_path(p.clone()).server_path,
+            p
+        );
     }
 
-    fn mock_session() -> (Session, crossbeam_channel::Sender<Message>, crossbeam_channel::Receiver<Message>) {
-        let child = std::process::Command::new("true").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
+    fn mock_session() -> (
+        Session,
+        crossbeam_channel::Sender<Message>,
+        crossbeam_channel::Receiver<Message>,
+    ) {
+        let child = std::process::Command::new("true")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
         let (wt, wr) = crossbeam_channel::bounded(16);
         let (rt, rr) = crossbeam_channel::bounded(16);
-        (Session { child, connection: Connection { sender: wt, receiver: rr }, _reader_handle: std::thread::spawn(|| {}), _writer_handle: std::thread::spawn(|| {}), next_request_id: 1 }, rt, wr)
+        (
+            Session {
+                child,
+                connection: Connection {
+                    sender: wt,
+                    receiver: rr,
+                },
+                _reader_handle: std::thread::spawn(|| {}),
+                _writer_handle: std::thread::spawn(|| {}),
+                next_request_id: 1,
+            },
+            rt,
+            wr,
+        )
     }
 
-    fn hp() -> HoverParams { HoverParams { text_document_position_params: TextDocumentPositionParams { text_document: TextDocumentIdentifier { uri: Url::parse("file:///tmp/x.ts").unwrap() }, position: Position { line: 0, character: 0 } }, work_done_progress_params: WorkDoneProgressParams::default() } }
+    fn hp() -> HoverParams {
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: Url::parse("file:///tmp/x.ts").unwrap(),
+                },
+                position: Position {
+                    line: 0,
+                    character: 0,
+                },
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+        }
+    }
 
     #[test]
     fn send_request_timeout() {
         let (mut s, _rt, _wr) = mock_session();
-        assert!(matches!(session::send_request::<HoverRequest>(&mut s, hp()), Err(LspError::Timeout(_))));
-        let _ = s.child.kill(); let _ = s.child.wait();
+        assert!(matches!(
+            session::send_request::<HoverRequest>(&mut s, hp()),
+            Err(LspError::Timeout(_))
+        ));
+        let _ = s.child.kill();
+        let _ = s.child.wait();
     }
 
     #[test]
@@ -185,15 +262,42 @@ mod tests {
         assert!(c.session.lock().unwrap().is_none());
     }
 
-    fn loc() -> lsp_types::Location { lsp_types::Location { uri: Url::parse("file:///tmp/test.ts").unwrap(), range: lsp_types::Range { start: Position { line: 5, character: 10 }, end: Position { line: 5, character: 20 } } } }
+    fn loc() -> lsp_types::Location {
+        lsp_types::Location {
+            uri: Url::parse("file:///tmp/test.ts").unwrap(),
+            range: lsp_types::Range {
+                start: Position {
+                    line: 5,
+                    character: 10,
+                },
+                end: Position {
+                    line: 5,
+                    character: 20,
+                },
+            },
+        }
+    }
 
     #[test]
     fn definition_with_mock() {
         let (s, rt, _wr) = mock_session();
         let c = TypeScriptLanguageClient::new();
         *c.session.lock().unwrap() = Some(s);
-        rt.send(Message::Response(Response { id: RequestId::from(1), result: Some(serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap()), error: None })).unwrap();
-        assert_eq!(c.definition(Path::new("/tmp/test.ts"), 0, 0).unwrap().unwrap().range.start.line, 5);
+        rt.send(Message::Response(Response {
+            id: RequestId::from(1),
+            result: Some(serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap()),
+            error: None,
+        }))
+        .unwrap();
+        assert_eq!(
+            c.definition(Path::new("/tmp/test.ts"), 0, 0)
+                .unwrap()
+                .unwrap()
+                .range
+                .start
+                .line,
+            5
+        );
         let _ = c.shutdown();
     }
 
@@ -202,8 +306,19 @@ mod tests {
         let (s, rt, _wr) = mock_session();
         let c = TypeScriptLanguageClient::new();
         *c.session.lock().unwrap() = Some(s);
-        let hover = lsp_types::Hover { contents: lsp_types::HoverContents::Markup(lsp_types::MarkupContent { kind: lsp_types::MarkupKind::Markdown, value: "function foo(): string".into() }), range: None };
-        rt.send(Message::Response(Response { id: RequestId::from(1), result: Some(serde_json::to_value(hover).unwrap()), error: None })).unwrap();
+        let hover = lsp_types::Hover {
+            contents: lsp_types::HoverContents::Markup(lsp_types::MarkupContent {
+                kind: lsp_types::MarkupKind::Markdown,
+                value: "function foo(): string".into(),
+            }),
+            range: None,
+        };
+        rt.send(Message::Response(Response {
+            id: RequestId::from(1),
+            result: Some(serde_json::to_value(hover).unwrap()),
+            error: None,
+        }))
+        .unwrap();
         assert!(c.hover(Path::new("/tmp/test.ts"), 0, 0).unwrap().is_some());
         let _ = c.shutdown();
     }
@@ -211,7 +326,15 @@ mod tests {
     #[test]
     #[ignore = "requires typescript-language-server on PATH; run with --ignored"]
     fn integration_start_shutdown() {
-        if std::process::Command::new("typescript-language-server").arg("--version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_err() { return; }
+        if std::process::Command::new("typescript-language-server")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_err()
+        {
+            return;
+        }
         let ws = tempfile::TempDir::new().unwrap();
         std::fs::write(ws.path().join("test.ts"), "const x: number = 1;\n").unwrap();
         let c = TypeScriptLanguageClient::new();

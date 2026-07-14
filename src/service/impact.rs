@@ -12,19 +12,19 @@ use crate::kit::{AsyncKit, AsyncReady, TraceModule};
 use crate::model::EdgeType;
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::service::error::CodeNexusError;
-#[cfg(any(feature = "cli", feature = "mcp", test))]
-use crate::service::trace::find_start_node_id;
-#[cfg(any(feature = "cli", feature = "mcp", test))]
-use crate::trace::{ImpactAnalyzer, ImpactConfig, ImpactNode, RiskAssessment};
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::error::{kit_not_initialized, to_api_error};
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::runtime::kit;
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+use crate::service::trace::find_start_node_id;
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+use crate::trace::{ImpactAnalyzer, ImpactConfig, ImpactNode, RiskAssessment};
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use sdforge::prelude::ApiError;
-#[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::forge;
+#[cfg(any(feature = "cli", feature = "mcp"))]
+use sdforge::prelude::ApiError;
 
 /// JSON-serializable impact analysis result.
 #[cfg(any(feature = "cli", feature = "mcp", test))]
@@ -279,7 +279,8 @@ mod tests {
         storage.execute("CREATE (:Function {id: 'f_other', project: 'demo', name: 'other', qualifiedName: 'demo.other', filePath: '/src/o.rs', startLine: 1, endLine: 3, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create other");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_solo', target: 'f_other', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create edge");
 
-        let output = run_impact(&kit, "demo.solo", 0, "", 0, false).expect("impact depth 0 should succeed");
+        let output =
+            run_impact(&kit, "demo.solo", 0, "", 0, false).expect("impact depth 0 should succeed");
         assert_eq!(output.symbol, "demo.solo");
         assert_eq!(output.depth, 0);
         assert_eq!(output.node_count, 1, "only start node at depth 0");
@@ -300,7 +301,10 @@ mod tests {
     #[test]
     fn build_impact_config_parses_edge_types() {
         let config = build_impact_config("CALLS,IMPLEMENTS", 0, false);
-        assert_eq!(config.edge_types, vec![EdgeType::Calls, EdgeType::Implements]);
+        assert_eq!(
+            config.edge_types,
+            vec![EdgeType::Calls, EdgeType::Implements]
+        );
     }
 
     #[test]
@@ -330,7 +334,10 @@ mod tests {
     #[test]
     fn build_impact_config_trims_edge_type_whitespace() {
         let config = build_impact_config(" CALLS , IMPLEMENTS ", 0, false);
-        assert_eq!(config.edge_types, vec![EdgeType::Calls, EdgeType::Implements]);
+        assert_eq!(
+            config.edge_types,
+            vec![EdgeType::Calls, EdgeType::Implements]
+        );
     }
 
     // ===== T040: find_start_node_id unit tests =====
@@ -338,14 +345,11 @@ mod tests {
     #[test]
     fn find_start_node_id_matches_qualified_name() {
         let mut graph = crate::model::Graph::new();
-        let node = crate::model::Node::builder(
-            crate::model::NodeLabel::Function,
-            "root",
-            "demo.root",
-        )
-        .id("f_a")
-        .project("demo")
-        .build();
+        let node =
+            crate::model::Node::builder(crate::model::NodeLabel::Function, "root", "demo.root")
+                .id("f_a")
+                .project("demo")
+                .build();
         graph.add_node(node);
         let id = find_start_node_id(&graph, "demo.root");
         assert_eq!(id, Some("f_a".to_string()));
@@ -354,14 +358,11 @@ mod tests {
     #[test]
     fn find_start_node_id_matches_name() {
         let mut graph = crate::model::Graph::new();
-        let node = crate::model::Node::builder(
-            crate::model::NodeLabel::Function,
-            "root",
-            "demo.root",
-        )
-        .id("f_a")
-        .project("demo")
-        .build();
+        let node =
+            crate::model::Node::builder(crate::model::NodeLabel::Function, "root", "demo.root")
+                .id("f_a")
+                .project("demo")
+                .build();
         graph.add_node(node);
         let id = find_start_node_id(&graph, "root");
         assert_eq!(id, Some("f_a".to_string()));
@@ -389,7 +390,10 @@ mod tests {
         let output = run_impact(&kit, "demo.target", 3, "CALLS", 5, false)
             .expect("enhanced impact should succeed");
         assert_eq!(output.symbol, "demo.target");
-        assert!(output.risk_assessment.is_some(), "should have risk assessment");
+        assert!(
+            output.risk_assessment.is_some(),
+            "should have risk assessment"
+        );
         assert!(!output.affected.is_empty(), "should have affected nodes");
         let caller = output
             .affected
@@ -417,7 +421,11 @@ mod tests {
         // max_depth=1: only c (direct caller) should be affected
         let output = run_impact(&kit, "demo.target", 3, "CALLS", 1, false)
             .expect("enhanced impact with max_depth=1 should succeed");
-        assert_eq!(output.affected.len(), 1, "only direct caller at max_depth=1");
+        assert_eq!(
+            output.affected.len(),
+            1,
+            "only direct caller at max_depth=1"
+        );
         assert_eq!(output.affected[0].name, "c");
     }
 
@@ -434,7 +442,10 @@ mod tests {
         // Use only USES_TYPE edge type
         let output = run_impact(&kit, "demo.Target", 3, "USES_TYPE", 5, false)
             .expect("enhanced impact with USES_TYPE should succeed");
-        assert!(!output.affected.is_empty(), "should find user via USES_TYPE");
+        assert!(
+            !output.affected.is_empty(),
+            "should find user via USES_TYPE"
+        );
         let user = output
             .affected
             .iter()
@@ -493,10 +504,16 @@ mod tests {
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'leaf', qualifiedName: 'demo.leaf', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create leaf");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create edge");
 
-        let output = run_impact(&kit, "demo.root", 3, "", 0, false)
-            .expect("legacy impact should succeed");
-        assert!(output.risk_assessment.is_none(), "legacy mode has no risk assessment");
-        assert!(output.affected.is_empty(), "legacy mode has no affected list");
+        let output =
+            run_impact(&kit, "demo.root", 3, "", 0, false).expect("legacy impact should succeed");
+        assert!(
+            output.risk_assessment.is_none(),
+            "legacy mode has no risk assessment"
+        );
+        assert!(
+            output.affected.is_empty(),
+            "legacy mode has no affected list"
+        );
     }
 
     // ===== build_impact_config: empty segment filtering =====
@@ -504,7 +521,10 @@ mod tests {
     #[test]
     fn build_impact_config_filters_empty_segments_in_edge_types() {
         let config = build_impact_config(",CALLS,,IMPLEMENTS,", 0, false);
-        assert_eq!(config.edge_types, vec![EdgeType::Calls, EdgeType::Implements]);
+        assert_eq!(
+            config.edge_types,
+            vec![EdgeType::Calls, EdgeType::Implements]
+        );
     }
 
     #[test]
@@ -516,7 +536,10 @@ mod tests {
     #[test]
     fn build_impact_config_mixed_valid_invalid_edge_types() {
         let config = build_impact_config("CALLS,BOGUS,IMPLEMENTS", 0, false);
-        assert_eq!(config.edge_types, vec![EdgeType::Calls, EdgeType::Implements]);
+        assert_eq!(
+            config.edge_types,
+            vec![EdgeType::Calls, EdgeType::Implements]
+        );
     }
 
     // ===== run_impact: include_tests parameter =====
@@ -533,7 +556,10 @@ mod tests {
         let output = run_impact(&kit, "demo.target", 3, "CALLS", 5, true)
             .expect("impact with include_tests should succeed");
         assert_eq!(output.symbol, "demo.target");
-        assert!(output.risk_assessment.is_some(), "enhanced mode should have risk assessment");
+        assert!(
+            output.risk_assessment.is_some(),
+            "enhanced mode should have risk assessment"
+        );
     }
 
     #[test]
@@ -546,7 +572,10 @@ mod tests {
         // max_depth > 0 triggers enhanced mode even without edge_types
         let output = run_impact(&kit, "demo.a", 3, "", 5, false)
             .expect("max_depth > 0 should trigger enhanced mode");
-        assert!(output.risk_assessment.is_some(), "enhanced mode should have risk assessment");
+        assert!(
+            output.risk_assessment.is_some(),
+            "enhanced mode should have risk assessment"
+        );
     }
 
     #[test]
@@ -561,13 +590,19 @@ mod tests {
         // Query for a non-existent symbol in enhanced mode
         let output = run_impact(&kit, "nonexistent.symbol", 3, "CALLS", 5, false)
             .expect("enhanced impact on missing symbol should succeed");
-        assert!(output.affected.is_empty(), "missing start node → empty affected");
-        assert!(output.risk_assessment.is_none(), "missing start node → no risk assessment");
+        assert!(
+            output.affected.is_empty(),
+            "missing start node → empty affected"
+        );
+        assert!(
+            output.risk_assessment.is_none(),
+            "missing start node → no risk assessment"
+        );
     }
 
     // ===== #[forge] wrapper tests via init_kit =====
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     #[cfg(feature = "cli")]
     fn impact_wrapper_succeeds_via_init_kit() {
@@ -579,19 +614,13 @@ mod tests {
         init_kit(kit).expect("init_kit");
 
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let result = rt.block_on(impact(
-            "demo.foo".to_string(),
-            3,
-            "".to_string(),
-            0,
-            false,
-        ));
+        let result = rt.block_on(impact("demo.foo".to_string(), 3, "".to_string(), 0, false));
         assert!(result.is_ok(), "wrapper should succeed: {:?}", result.err());
 
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     #[cfg(feature = "cli")]
     fn impact_wrapper_fails_when_kit_not_initialized() {
@@ -599,13 +628,7 @@ mod tests {
 
         reset_kit_for_testing();
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let result = rt.block_on(impact(
-            "demo.foo".to_string(),
-            3,
-            "".to_string(),
-            0,
-            false,
-        ));
+        let result = rt.block_on(impact("demo.foo".to_string(), 3, "".to_string(), 0, false));
         assert!(result.is_err(), "wrapper should fail without kit");
         reset_kit_for_testing();
     }

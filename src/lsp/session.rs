@@ -16,12 +16,12 @@ use std::time::Duration;
 
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
-use lsp_types::{
-    GotoDefinitionResponse, InitializeParams, InitializedParams, Position,
-    TextDocumentIdentifier, TextDocumentPositionParams, Url, WorkspaceFolder,
-};
 use lsp_types::notification::{Initialized, Notification as _};
 use lsp_types::request::Initialize;
+use lsp_types::{
+    GotoDefinitionResponse, InitializeParams, InitializedParams, Position, TextDocumentIdentifier,
+    TextDocumentPositionParams, Url, WorkspaceFolder,
+};
 
 use super::{LspError, REQUEST_TIMEOUT_MS};
 
@@ -124,7 +124,10 @@ pub(crate) fn initialize_session(session: &mut Session, workspace: &Path) -> Res
 }
 
 /// Send a typed LSP request and await its typed response.
-pub(crate) fn send_request<R>(session: &mut Session, params: R::Params) -> Result<R::Result, LspError>
+pub(crate) fn send_request<R>(
+    session: &mut Session,
+    params: R::Params,
+) -> Result<R::Result, LspError>
 where
     R: lsp_types::request::Request,
     R::Params: serde::Serialize,
@@ -213,14 +216,18 @@ where
 }
 
 /// Convert a [`GotoDefinitionResponse`] into the first [`lsp_types::Location`].
-pub(crate) fn extract_first_location(resp: Option<GotoDefinitionResponse>) -> Option<lsp_types::Location> {
+pub(crate) fn extract_first_location(
+    resp: Option<GotoDefinitionResponse>,
+) -> Option<lsp_types::Location> {
     match resp? {
         GotoDefinitionResponse::Scalar(loc) => Some(loc),
         GotoDefinitionResponse::Array(locs) => locs.into_iter().next(),
-        GotoDefinitionResponse::Link(links) => links.into_iter().next().map(|link| lsp_types::Location {
-            uri: link.target_uri,
-            range: link.target_range,
-        }),
+        GotoDefinitionResponse::Link(links) => {
+            links.into_iter().next().map(|link| lsp_types::Location {
+                uri: link.target_uri,
+                range: link.target_range,
+            })
+        }
     }
 }
 
@@ -432,6 +439,9 @@ mod tests {
         });
         let workspace = std::env::current_dir().expect("cwd");
         let result = initialize_session(&mut session, &workspace);
-        assert!(result.is_ok(), "initialize_session should succeed: {result:?}");
+        assert!(
+            result.is_ok(),
+            "initialize_session should succeed: {result:?}"
+        );
     }
 }

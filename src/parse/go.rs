@@ -167,9 +167,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
 /// (package-private). Used to set `is_exported` on Go nodes so the
 /// `CallResolver` can resolve cross-file calls via `lookup_exported`.
 fn is_exported_name(name: &str) -> bool {
-    name.chars()
-        .next()
-        .is_some_and(|c| c.is_ascii_uppercase())
+    name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
 fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
@@ -1013,6 +1011,9 @@ mod tests {
             .iter()
             .find(|n| n.label == NodeLabel::Struct)
             .expect("should find struct");
-        assert!(!typ.is_exported, "unexported type should have is_exported=false");
+        assert!(
+            !typ.is_exported,
+            "unexported type should have is_exported=false"
+        );
     }
 }

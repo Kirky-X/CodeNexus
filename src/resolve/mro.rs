@@ -99,6 +99,8 @@ pub fn mro_for(lang: Language) -> MroStrategy {
         // Bash has no inheritance semantics → None.
         #[cfg(feature = "lang-bash")]
         Language::Bash => MroStrategy::None,
+        #[allow(unreachable_patterns)]
+        _ => MroStrategy::None,
     }
 }
 
@@ -249,7 +251,17 @@ impl<'a> MroResolver<'a> {
     }
 }
 
-#[cfg(all(test, feature = "lang-c", feature = "lang-cpp", feature = "lang-fortran", feature = "lang-go", feature = "lang-java", feature = "lang-python", feature = "lang-rust", feature = "lang-typescript"))]
+#[cfg(all(
+    test,
+    feature = "lang-c",
+    feature = "lang-cpp",
+    feature = "lang-fortran",
+    feature = "lang-go",
+    feature = "lang-java",
+    feature = "lang-python",
+    feature = "lang-rust",
+    feature = "lang-typescript"
+))]
 mod tests {
     use super::*;
     use crate::model::{Edge, EdgeType, Graph, Node, NodeLabel};

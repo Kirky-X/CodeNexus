@@ -53,12 +53,7 @@ impl<'a> TaintPathTracer<'a> {
     ///
     /// Returns an empty vector if `source` or `sink` is not in the graph, or
     /// no taint path exists within the depth limit.
-    pub fn trace_taint(
-        &self,
-        source: &NodeId,
-        sink: &NodeId,
-        max_depth: usize,
-    ) -> Vec<TracePath> {
+    pub fn trace_taint(&self, source: &NodeId, sink: &NodeId, max_depth: usize) -> Vec<TracePath> {
         bfs_trace(self.graph, source, max_depth, is_taint_edge, Some(sink))
     }
 
@@ -318,9 +313,24 @@ mod tests {
         g.add_node(make_func("ffi_wrapper", "ffi_wrapper"));
         g.add_node(make_func("c_handler", "c_handler"));
         g.add_node(make_var("c_sink", "c_sink"));
-        g.add_edge(Edge::new("rust_source", "ffi_wrapper", EdgeType::DataFlows, "proj"));
-        g.add_edge(Edge::new("ffi_wrapper", "c_handler", EdgeType::FfiCalls, "proj"));
-        g.add_edge(Edge::new("c_handler", "c_sink", EdgeType::DataFlows, "proj"));
+        g.add_edge(Edge::new(
+            "rust_source",
+            "ffi_wrapper",
+            EdgeType::DataFlows,
+            "proj",
+        ));
+        g.add_edge(Edge::new(
+            "ffi_wrapper",
+            "c_handler",
+            EdgeType::FfiCalls,
+            "proj",
+        ));
+        g.add_edge(Edge::new(
+            "c_handler",
+            "c_sink",
+            EdgeType::DataFlows,
+            "proj",
+        ));
         let tracer = TaintPathTracer::new(&g);
         let paths = tracer.trace_taint(&"rust_source".to_string(), &"c_sink".to_string(), 10);
         assert_eq!(paths.len(), 1);

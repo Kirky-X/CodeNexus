@@ -20,9 +20,9 @@ use crate::service::error::{kit_not_initialized, to_api_error};
 use crate::service::runtime::kit;
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use sdforge::prelude::ApiError;
-#[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::forge;
+#[cfg(any(feature = "cli", feature = "mcp"))]
+use sdforge::prelude::ApiError;
 
 /// JSON-serializable search result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -252,7 +252,10 @@ mod tests {
         assert_eq!(v["startLine"], 42);
         assert_eq!(v["qualifiedName"], "demo.foo");
         let score = v["score"].as_f64().expect("score should be a number");
-        assert!((score - 0.8).abs() < 1e-6, "score should be ~0.8, got {score}");
+        assert!(
+            (score - 0.8).abs() < 1e-6,
+            "score should be ~0.8, got {score}"
+        );
     }
 
     #[test]
@@ -303,15 +306,27 @@ mod tests {
     #[test]
     fn parse_search_mode_graph_aliases() {
         assert_eq!(parse_search_mode("graph"), Some(SearchMode::GraphEnhanced));
-        assert_eq!(parse_search_mode("graph_enhanced"), Some(SearchMode::GraphEnhanced));
-        assert_eq!(parse_search_mode("graph-enhanced"), Some(SearchMode::GraphEnhanced));
+        assert_eq!(
+            parse_search_mode("graph_enhanced"),
+            Some(SearchMode::GraphEnhanced)
+        );
+        assert_eq!(
+            parse_search_mode("graph-enhanced"),
+            Some(SearchMode::GraphEnhanced)
+        );
     }
 
     #[test]
     fn parse_search_mode_multi_aliases() {
         assert_eq!(parse_search_mode("multi"), Some(SearchMode::MultiSignal));
-        assert_eq!(parse_search_mode("multi_signal"), Some(SearchMode::MultiSignal));
-        assert_eq!(parse_search_mode("multi-signal"), Some(SearchMode::MultiSignal));
+        assert_eq!(
+            parse_search_mode("multi_signal"),
+            Some(SearchMode::MultiSignal)
+        );
+        assert_eq!(
+            parse_search_mode("multi-signal"),
+            Some(SearchMode::MultiSignal)
+        );
     }
 
     #[test]
@@ -370,8 +385,8 @@ mod tests {
     fn run_search_with_empty_mode_uses_legacy_path() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let output = run_search(&kit, "foo", false, 10, "", "")
-            .expect("empty mode should use legacy path");
+        let output =
+            run_search(&kit, "foo", false, 10, "", "").expect("empty mode should use legacy path");
         assert_eq!(output.count, 0);
     }
 
@@ -396,7 +411,10 @@ mod tests {
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
         let output = run_search(&kit, "do_thing", false, 10, "graph_enhanced", "demo")
             .expect("graph_enhanced alias should succeed");
-        assert!(output.count > 0, "should find do_thing with graph_enhanced alias");
+        assert!(
+            output.count > 0,
+            "should find do_thing with graph_enhanced alias"
+        );
     }
 
     #[test]
@@ -418,7 +436,10 @@ mod tests {
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'do_thing', qualifiedName: 'demo.do_thing', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
         let output = run_search(&kit, "do_thing", false, 10, "multi_signal", "demo")
             .expect("multi_signal alias should succeed");
-        assert!(output.count > 0, "should find do_thing with multi_signal alias");
+        assert!(
+            output.count > 0,
+            "should find do_thing with multi_signal alias"
+        );
     }
 
     #[test]
@@ -481,7 +502,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn search_wrapper_succeeds_via_init_kit() {
@@ -505,7 +526,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn search_wrapper_fails_when_kit_not_initialized() {

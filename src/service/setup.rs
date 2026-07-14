@@ -9,16 +9,16 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::service::error::CodeNexusError;
 #[cfg(feature = "cli")]
 use crate::service::error::to_api_error;
 #[cfg(feature = "cli")]
 use crate::service::error::wrap_error;
+use crate::service::error::CodeNexusError;
 
 #[cfg(feature = "cli")]
-use sdforge::prelude::ApiError;
-#[cfg(feature = "cli")]
 use sdforge::forge;
+#[cfg(feature = "cli")]
+use sdforge::prelude::ApiError;
 
 /// MCP server entry written into agent config files.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

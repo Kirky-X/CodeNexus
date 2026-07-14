@@ -12,20 +12,20 @@ use crate::analysis::complexity::{
     TimeComplexity,
 };
 #[cfg(feature = "complexity")]
-use crate::service::error::CodeNexusError;
-#[cfg(all(feature = "cli", feature = "complexity"))]
-use crate::service::error::to_api_error;
-#[cfg(feature = "complexity")]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cli", feature = "complexity"))]
 use crate::service::error::kit_not_initialized;
 #[cfg(all(feature = "cli", feature = "complexity"))]
+use crate::service::error::to_api_error;
+#[cfg(feature = "complexity")]
+use crate::service::error::CodeNexusError;
+#[cfg(all(feature = "cli", feature = "complexity"))]
 use crate::service::runtime::kit;
 
 #[cfg(all(feature = "cli", feature = "complexity"))]
-use sdforge::prelude::ApiError;
-#[cfg(all(feature = "cli", feature = "complexity"))]
 use sdforge::forge;
+#[cfg(all(feature = "cli", feature = "complexity"))]
+use sdforge::prelude::ApiError;
 
 /// JSON-serializable complexity output.
 #[cfg(feature = "complexity")]
@@ -133,24 +133,24 @@ fn build_thresholds(
         t.maintainability.2 = maintainability_red;
     }
     if !time_complexity_green.is_empty() {
-        t.time_complexity.0 =
-            TimeComplexity::from_str(time_complexity_green).map_err(CodeNexusError::InvalidInput)?;
+        t.time_complexity.0 = TimeComplexity::from_str(time_complexity_green)
+            .map_err(CodeNexusError::InvalidInput)?;
     }
     if !time_complexity_yellow.is_empty() {
-        t.time_complexity.1 =
-            TimeComplexity::from_str(time_complexity_yellow).map_err(CodeNexusError::InvalidInput)?;
+        t.time_complexity.1 = TimeComplexity::from_str(time_complexity_yellow)
+            .map_err(CodeNexusError::InvalidInput)?;
     }
     if !time_complexity_red.is_empty() {
         t.time_complexity.2 =
             TimeComplexity::from_str(time_complexity_red).map_err(CodeNexusError::InvalidInput)?;
     }
     if !space_complexity_yellow.is_empty() {
-        t.space_complexity.0 =
-            SpaceComplexity::from_str(space_complexity_yellow).map_err(CodeNexusError::InvalidInput)?;
+        t.space_complexity.0 = SpaceComplexity::from_str(space_complexity_yellow)
+            .map_err(CodeNexusError::InvalidInput)?;
     }
     if !space_complexity_red.is_empty() {
-        t.space_complexity.1 =
-            SpaceComplexity::from_str(space_complexity_red).map_err(CodeNexusError::InvalidInput)?;
+        t.space_complexity.1 = SpaceComplexity::from_str(space_complexity_red)
+            .map_err(CodeNexusError::InvalidInput)?;
     }
     Ok(t)
 }
@@ -607,7 +607,10 @@ mod tests {
         let result = build_thresholds(
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "", "bogus", "", "", "",
         );
-        assert!(result.is_err(), "invalid time_complexity_yellow should error");
+        assert!(
+            result.is_err(),
+            "invalid time_complexity_yellow should error"
+        );
     }
 
     #[test]
@@ -643,7 +646,10 @@ mod tests {
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "", "", "", "O(1)", "O(n^2)",
         )
         .expect("build_thresholds");
-        assert_eq!(t.space_complexity, (SpaceComplexity::O1, SpaceComplexity::ON2));
+        assert_eq!(
+            t.space_complexity,
+            (SpaceComplexity::O1, SpaceComplexity::ON2)
+        );
     }
 
     // --- compute_summary: all four severities ---
@@ -688,7 +694,16 @@ mod tests {
     #[test]
     fn compute_summary_empty_returns_zeros() {
         let s = compute_summary(&[]);
-        assert_eq!(s, ComplexitySummary { total: 0, green: 0, yellow: 0, red: 0, critical: 0 });
+        assert_eq!(
+            s,
+            ComplexitySummary {
+                total: 0,
+                green: 0,
+                yellow: 0,
+                red: 0,
+                critical: 0
+            }
+        );
     }
 
     // --- complexity_core: red_only and sort_by_severity branches on empty db ---
@@ -701,7 +716,11 @@ mod tests {
             &kit, "demo", true, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
             "", "", "", "",
         );
-        assert!(result.is_ok(), "red_only on empty db should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "red_only on empty db should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -712,7 +731,11 @@ mod tests {
             &kit, "demo", false, true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
             "", "", "", "",
         );
-        assert!(result.is_ok(), "sort_by_severity on empty db should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "sort_by_severity on empty db should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -720,10 +743,14 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let result = complexity_core(
-            &kit, "demo", true, true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
-            "", "", "", "",
+            &kit, "demo", true, true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "", "",
+            "", "", "",
         );
-        assert!(result.is_ok(), "red_only+sort on empty db should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "red_only+sort on empty db should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -732,12 +759,28 @@ mod tests {
             5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "O(n)", "", "", "", "",
         )
         .expect("build_thresholds");
-        assert_eq!(t.cyclomatic.0, 5, "cyclomatic green should be overridden to 5");
+        assert_eq!(
+            t.cyclomatic.0, 5,
+            "cyclomatic green should be overridden to 5"
+        );
         let defaults = ComplexityThresholds::default();
-        assert_eq!(t.cyclomatic.1, defaults.cyclomatic.1, "cyclomatic yellow stays default");
-        assert_eq!(t.cyclomatic.2, defaults.cyclomatic.2, "cyclomatic red stays default");
-        assert_eq!(t.time_complexity.0, TimeComplexity::ON, "time green overridden");
-        assert_eq!(t.time_complexity.1, defaults.time_complexity.1, "time yellow stays default");
+        assert_eq!(
+            t.cyclomatic.1, defaults.cyclomatic.1,
+            "cyclomatic yellow stays default"
+        );
+        assert_eq!(
+            t.cyclomatic.2, defaults.cyclomatic.2,
+            "cyclomatic red stays default"
+        );
+        assert_eq!(
+            t.time_complexity.0,
+            TimeComplexity::ON,
+            "time green overridden"
+        );
+        assert_eq!(
+            t.time_complexity.1, defaults.time_complexity.1,
+            "time yellow stays default"
+        );
     }
 
     // --- complexity_core: red_only + sort_by_severity with real entries ---
@@ -748,17 +791,37 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         create_function_with_content(
-            &kit, "f_simple", "demo", "simple", "demo.simple", "/src/a.rs", 1, 1, "fn simple() {}",
+            &kit,
+            "f_simple",
+            "demo",
+            "simple",
+            "demo.simple",
+            "/src/a.rs",
+            1,
+            1,
+            "fn simple() {}",
         );
         let red_src = "fn red() { if a { if b { if c { if d { if e { if f { if g { if h { if i { if j { if k { if l { if m { if n { if o { if p { if q { if r { if s { if t { if u {} } } } } } } } } } } } } } } } } } } }";
         create_function_with_content(
-            &kit, "f_red", "demo", "red", "demo.red", "/src/b.rs", 1, 50, red_src,
+            &kit,
+            "f_red",
+            "demo",
+            "red",
+            "demo.red",
+            "/src/b.rs",
+            1,
+            50,
+            red_src,
         );
         let result = complexity_core(
             &kit, "demo", true, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
             "", "", "", "",
         );
-        assert!(result.is_ok(), "red_only with entries should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "red_only with entries should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -767,17 +830,37 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         create_function_with_content(
-            &kit, "f_simple", "demo", "simple", "demo.simple", "/src/a.rs", 1, 1, "fn simple() {}",
+            &kit,
+            "f_simple",
+            "demo",
+            "simple",
+            "demo.simple",
+            "/src/a.rs",
+            1,
+            1,
+            "fn simple() {}",
         );
         let red_src = "fn red() { if a { if b { if c { if d { if e { if f { if g { if h { if i { if j { if k { if l { if m { if n { if o { if p { if q { if r { if s { if t { if u {} } } } } } } } } } } } } } } } } } } }";
         create_function_with_content(
-            &kit, "f_red", "demo", "red", "demo.red", "/src/b.rs", 1, 50, red_src,
+            &kit,
+            "f_red",
+            "demo",
+            "red",
+            "demo.red",
+            "/src/b.rs",
+            1,
+            50,
+            red_src,
         );
         let result = complexity_core(
             &kit, "demo", false, true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
             "", "", "", "",
         );
-        assert!(result.is_ok(), "sort_by_severity with entries should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "sort_by_severity with entries should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -786,17 +869,37 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         create_function_with_content(
-            &kit, "f_simple", "demo", "simple", "demo.simple", "/src/a.rs", 1, 1, "fn simple() {}",
+            &kit,
+            "f_simple",
+            "demo",
+            "simple",
+            "demo.simple",
+            "/src/a.rs",
+            1,
+            1,
+            "fn simple() {}",
         );
         let red_src = "fn red() { if a { if b { if c { if d { if e { if f { if g { if h { if i { if j { if k { if l { if m { if n { if o { if p { if q { if r { if s { if t { if u {} } } } } } } } } } } } } } } } } } } } }";
         create_function_with_content(
-            &kit, "f_red", "demo", "red", "demo.red", "/src/b.rs", 1, 50, red_src,
+            &kit,
+            "f_red",
+            "demo",
+            "red",
+            "demo.red",
+            "/src/b.rs",
+            1,
+            50,
+            red_src,
         );
         let result = complexity_core(
-            &kit, "demo", true, true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
-            "", "", "", "",
+            &kit, "demo", true, true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "", "",
+            "", "", "",
         );
-        assert!(result.is_ok(), "red_only+sort with entries should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "red_only+sort with entries should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -806,19 +909,31 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let src = "fn f() { if a {} if b {} if c {} }";
         create_function_with_content(
-            &kit, "f_thresh", "demo", "f", "demo.f", "/src/lib.rs", 1, 1, src,
+            &kit,
+            "f_thresh",
+            "demo",
+            "f",
+            "demo.f",
+            "/src/lib.rs",
+            1,
+            1,
+            src,
         );
         // With very low thresholds (green=1, yellow=2, red=3), cyclomatic=3 → Red
         let result = complexity_core(
             &kit, "demo", true, false, 1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
             "", "", "", "",
         );
-        assert!(result.is_ok(), "custom thresholds + red_only should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "custom thresholds + red_only should succeed: {:?}",
+            result.err()
+        );
     }
 
     // ===== #[forge] wrapper tests via init_kit =====
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     fn complexity_wrapper_succeeds_via_init_kit() {
         use crate::service::runtime::{init_kit, reset_kit_for_testing};
@@ -833,7 +948,24 @@ mod tests {
             "demo".to_string(),
             false,
             false,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
             "".to_string(),
             "".to_string(),
             "".to_string(),
@@ -845,7 +977,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     fn complexity_wrapper_fails_when_kit_not_initialized() {
         use crate::service::runtime::reset_kit_for_testing;
@@ -856,7 +988,24 @@ mod tests {
             "demo".to_string(),
             false,
             false,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
             "".to_string(),
             "".to_string(),
             "".to_string(),

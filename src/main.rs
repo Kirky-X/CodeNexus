@@ -12,8 +12,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use codenexus::service::error::CodeNexusError;
 use codenexus::kit::{build_kit, KitBootstrapConfig};
+use codenexus::service::error::CodeNexusError;
 use codenexus::service::init_kit;
 
 /// Default database path when `--db` is not specified.
@@ -112,9 +112,7 @@ fn run_cli() {
     )
     .parse()
     .unwrap_or_else(|_| {
-        eprintln!(
-            "[warn] Invalid --debounce-ms value, using default ({DEFAULT_DEBOUNCE_MS}ms)"
-        );
+        eprintln!("[warn] Invalid --debounce-ms value, using default ({DEFAULT_DEBOUNCE_MS}ms)");
         DEFAULT_DEBOUNCE_MS
     });
 
@@ -168,7 +166,10 @@ fn extract_global_arg(
 }
 
 /// Extracts subcommand args into a `HashMap<String, String>` for the handler.
-fn extract_args(sub_name: &str, sub_matches: &sdforge::clap::ArgMatches) -> HashMap<String, String> {
+fn extract_args(
+    sub_name: &str,
+    sub_matches: &sdforge::clap::ArgMatches,
+) -> HashMap<String, String> {
     let mut args = HashMap::new();
     for reg in sdforge::inventory::iter::<sdforge::cli::CliCommandRegistration>() {
         if reg.name == sub_name {
@@ -281,15 +282,9 @@ mod tests {
     #[test]
     fn extract_global_arg_returns_sub_value_when_top_absent() {
         let cmd = sdforge::clap::Command::new("codenexus")
-            .arg(
-                sdforge::clap::Arg::new("db")
-                    .long("db")
-                    .global(true),
-            )
+            .arg(sdforge::clap::Arg::new("db").long("db").global(true))
             .subcommand(
-                sdforge::clap::Command::new("index").arg(
-                    sdforge::clap::Arg::new("db").long("db"),
-                ),
+                sdforge::clap::Command::new("index").arg(sdforge::clap::Arg::new("db").long("db")),
             );
         let matches = cmd.get_matches_from(["codenexus", "index", "--db", "/sub/db"]);
         let sub = matches.subcommand_matches("index").unwrap();
@@ -300,7 +295,11 @@ mod tests {
     #[test]
     fn extract_global_arg_returns_fallback_when_neither_present() {
         let cmd = sdforge::clap::Command::new("codenexus")
-            .arg(sdforge::clap::Arg::new("unused").long("unused").global(true))
+            .arg(
+                sdforge::clap::Arg::new("unused")
+                    .long("unused")
+                    .global(true),
+            )
             .subcommand(sdforge::clap::Command::new("index"));
         let matches = cmd.get_matches_from(["codenexus", "index"]);
         let sub = matches.subcommand_matches("index").unwrap();
@@ -317,6 +316,9 @@ mod tests {
         let matches = cmd.get_matches_from(["codenexus", "nonexistent_cmd"]);
         let sub = matches.subcommand_matches("nonexistent_cmd").unwrap();
         let args = extract_args("nonexistent_cmd", sub);
-        assert!(args.is_empty(), "unregistered command should return empty args");
+        assert!(
+            args.is_empty(),
+            "unregistered command should return empty args"
+        );
     }
 }

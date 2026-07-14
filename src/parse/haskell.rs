@@ -256,7 +256,12 @@ fn extract_new_type(node: Node, source: &str, ctx: &VisitContext<'_>, result: &m
     result.push_node(model_node);
 }
 
-fn extract_type_alias(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
+fn extract_type_alias(
+    node: Node,
+    source: &str,
+    ctx: &VisitContext<'_>,
+    result: &mut ExtractResult,
+) {
     let Some(name) = haskell_type_name(node, source) else {
         return;
     };
@@ -627,7 +632,10 @@ mod tests {
     #[test]
     fn comment_only_source_returns_empty_result() {
         let result = extract("-- just a comment\n");
-        assert!(result.is_empty(), "comment-only file should produce no nodes");
+        assert!(
+            result.is_empty(),
+            "comment-only file should produce no nodes"
+        );
     }
 
     #[test]
@@ -662,7 +670,11 @@ mod tests {
         let src = "import Data.List\nimport Data.Maybe\nimport Control.Monad\n";
         let result = extract(src);
         assert_eq!(result.imports.len(), 3, "should extract 3 imports");
-        let sources: Vec<_> = result.imports.iter().map(|i| i.source_file.as_str()).collect();
+        let sources: Vec<_> = result
+            .imports
+            .iter()
+            .map(|i| i.source_file.as_str())
+            .collect();
         assert!(sources.contains(&"Data.List"));
         assert!(sources.contains(&"Data.Maybe"));
         assert!(sources.contains(&"Control.Monad"));
@@ -700,7 +712,10 @@ mod tests {
             .collect();
         assert_eq!(structs.len(), 1);
         assert_eq!(structs[0].name, "Color");
-        assert!(structs[0].signature.is_some(), "data type should have signature");
+        assert!(
+            structs[0].signature.is_some(),
+            "data type should have signature"
+        );
     }
 
     #[test]
@@ -708,7 +723,10 @@ mod tests {
         let src = "import qualified Data.Map as M\n";
         let result = extract(src);
         assert!(
-            result.imports.iter().any(|i| i.source_file.contains("Data.Map")),
+            result
+                .imports
+                .iter()
+                .any(|i| i.source_file.contains("Data.Map")),
             "should extract qualified import: {:?}",
             result.imports
         );
@@ -719,23 +737,38 @@ mod tests {
         let src = "module Stack where\n\nimport Data.List (intercalate)\n\ndata Stack a = Stack [a]\n\npush :: a -> Stack a -> Stack a\npush x (Stack xs) = Stack (x : xs)\n\ntype Item = Int\n";
         let result = extract(src);
         assert!(
-            result.nodes.iter().any(|n| n.label == NodeLabel::Module && n.name == "Stack"),
+            result
+                .nodes
+                .iter()
+                .any(|n| n.label == NodeLabel::Module && n.name == "Stack"),
             "should extract Module node"
         );
         assert!(
-            result.nodes.iter().any(|n| n.label == NodeLabel::Struct && n.name == "Stack"),
+            result
+                .nodes
+                .iter()
+                .any(|n| n.label == NodeLabel::Struct && n.name == "Stack"),
             "should extract Struct node for data Stack"
         );
         assert!(
-            result.nodes.iter().any(|n| n.label == NodeLabel::Function && n.name == "push"),
+            result
+                .nodes
+                .iter()
+                .any(|n| n.label == NodeLabel::Function && n.name == "push"),
             "should extract Function node for push"
         );
         assert!(
-            result.nodes.iter().any(|n| n.label == NodeLabel::TypeAlias && n.name == "push"),
+            result
+                .nodes
+                .iter()
+                .any(|n| n.label == NodeLabel::TypeAlias && n.name == "push"),
             "should extract TypeAlias node for push signature"
         );
         assert!(
-            result.nodes.iter().any(|n| n.label == NodeLabel::TypeAlias && n.name == "Item"),
+            result
+                .nodes
+                .iter()
+                .any(|n| n.label == NodeLabel::TypeAlias && n.name == "Item"),
             "should extract TypeAlias node for type Item"
         );
         assert!(!result.imports.is_empty(), "should extract import");
@@ -782,7 +815,10 @@ mod tests {
         parser.parse(source, None).expect("parse")
     }
 
-    fn find_first_by_kind<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
+    fn find_first_by_kind<'a>(
+        node: tree_sitter::Node<'a>,
+        kind: &str,
+    ) -> Option<tree_sitter::Node<'a>> {
         if node.kind() == kind {
             return Some(node);
         }
@@ -878,7 +914,9 @@ mod tests {
         fn walk_and_call(node: tree_sitter::Node, src: &str, results: &mut Vec<Option<String>>) {
             let has_name = node.child_by_field_name("name").is_some();
             let has_variable_child = (0..node.named_child_count() as u32).any(|i| {
-                node.named_child(i).map(|c| c.kind() == "variable").unwrap_or(false)
+                node.named_child(i)
+                    .map(|c| c.kind() == "variable")
+                    .unwrap_or(false)
             });
             if !has_name && has_variable_child {
                 results.push(function_name(node, src));

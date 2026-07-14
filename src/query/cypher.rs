@@ -132,9 +132,8 @@ impl<'a> CypherExecutor<'a> {
     #[cfg(feature = "cache")]
     fn is_read_query(cypher: &str) -> bool {
         let upper = cypher.trim_start().to_uppercase();
-        let starts_with_read = upper.starts_with("MATCH")
-            || upper.starts_with("RETURN")
-            || upper.starts_with("WITH");
+        let starts_with_read =
+            upper.starts_with("MATCH") || upper.starts_with("RETURN") || upper.starts_with("WITH");
         if !starts_with_read {
             return false;
         }
@@ -343,9 +342,9 @@ mod cached_tests {
     use crate::model::{Language, Node, NodeLabel};
     use crate::storage::Repository;
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Mock `CacheStore` for testing — counts get/set/invalidate calls and
     /// stores entries in an in-memory `HashMap`.
@@ -469,11 +468,7 @@ mod cached_tests {
 
         executor.execute(cypher).expect("second (hit)");
         // sets stays at 1 → second call did NOT go through execute_internal.
-        assert_eq!(
-            cache.sets(),
-            1,
-            "hit must not re-execute or re-store"
-        );
+        assert_eq!(cache.sets(), 1, "hit must not re-execute or re-store");
     }
 
     #[test]
@@ -560,8 +555,7 @@ mod cached_tests {
             key.ends_with(&expected_hash),
             "key suffix should be content hash"
         );
-        let cached: QueryResult =
-            serde_json::from_slice(bytes).expect("deserialize cached result");
+        let cached: QueryResult = serde_json::from_slice(bytes).expect("deserialize cached result");
         assert_eq!(cached.columns, result.columns);
         assert_eq!(cached.rows, result.rows);
     }

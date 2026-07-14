@@ -926,9 +926,7 @@ fn cyclomatic_count(node: Node<'_>, language: Language) -> u32 {
     let is_fortran_logical = language == Language::Fortran && kind == "logical_expression";
     #[cfg(not(feature = "lang-fortran"))]
     let is_fortran_logical = false;
-    let is_binary = kind == "binary_expression"
-        || kind == "boolean_operator"
-        || is_fortran_logical;
+    let is_binary = kind == "binary_expression" || kind == "boolean_operator" || is_fortran_logical;
     let is_match = kind == "match_expression";
     let mut arm_count = 0u32;
 
@@ -970,9 +968,7 @@ fn cognitive_count(node: Node<'_>, language: Language, nesting: u32) -> u32 {
     let is_fortran_logical = language == Language::Fortran && kind == "logical_expression";
     #[cfg(not(feature = "lang-fortran"))]
     let is_fortran_logical = false;
-    let is_binary = kind == "binary_expression"
-        || kind == "boolean_operator"
-        || is_fortran_logical;
+    let is_binary = kind == "binary_expression" || kind == "boolean_operator" || is_fortran_logical;
 
     if is_branch {
         count += 1 + nesting;
@@ -1244,7 +1240,10 @@ mod tests {
     #[test]
     fn severity_uses_custom_thresholds() {
         // Custom thresholds: cyclomatic (green=5, yellow=10, red=12).
-        let custom = ComplexityThresholds { cyclomatic: (5, 10, 12), ..Default::default() };
+        let custom = ComplexityThresholds {
+            cyclomatic: (5, 10, 12),
+            ..Default::default()
+        };
         // value 15 > red(12) → Critical.
         assert_eq!(Severity::from_cyclomatic(15, &custom), Severity::Critical);
         // value 5 <= green(5) → Green.
@@ -1977,7 +1976,9 @@ fn parallel(a: i32) {
     }
 
     /// Returns the `dyn Storage` capability from `kit`.
-    fn storage(kit: &AsyncKit<AsyncReady>) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
+    fn storage(
+        kit: &AsyncKit<AsyncReady>,
+    ) -> std::sync::Arc<dyn crate::storage::capability::Storage> {
         kit.require::<StorageModule>().expect("require_storage")
     }
 
@@ -2047,7 +2048,10 @@ fn parallel(a: i32) {
         );
 
         let storage = storage(&kit);
-        let custom = ComplexityThresholds { cyclomatic: (2, 5, 8), ..Default::default() };
+        let custom = ComplexityThresholds {
+            cyclomatic: (2, 5, 8),
+            ..Default::default()
+        };
         let analyzer = ComplexityAnalyzer::new_with_thresholds(&*storage, custom);
         let result = analyzer.analyze("demo").expect("analyze");
         assert_eq!(result.len(), 1);
@@ -2547,7 +2551,10 @@ fn parallel(a: i32) {
     #[cfg(feature = "lang-typescript")]
     #[test]
     fn halstead_body_kind_typescript() {
-        assert_eq!(halstead_body_kind(Language::TypeScript), Some("statement_block"));
+        assert_eq!(
+            halstead_body_kind(Language::TypeScript),
+            Some("statement_block")
+        );
     }
 
     #[test]
@@ -2586,13 +2593,14 @@ fn parallel(a: i32) {
     fn calc_cyclomatic_match_expression_with_arms() {
         let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
         // Baseline: function with no match.
-        let baseline_tree = parser
-            .parse("fn f(x: i32) { let _ = x; }", None)
-            .unwrap();
+        let baseline_tree = parser.parse("fn f(x: i32) { let _ = x; }", None).unwrap();
         let baseline = calc_cyclomatic(&baseline_tree, Language::Rust);
         // Match with 3 arms adds arm_count - 1 = 2 to cyclomatic complexity.
         let match_tree = parser
-            .parse("fn f(x: i32) { match x { 1 => {}, 2 => {}, _ => {} } }", None)
+            .parse(
+                "fn f(x: i32) { match x { 1 => {}, 2 => {}, _ => {} } }",
+                None,
+            )
             .unwrap();
         let with_match = calc_cyclomatic(&match_tree, Language::Rust);
         assert!(
@@ -2605,9 +2613,14 @@ fn parallel(a: i32) {
     #[test]
     fn calc_cognitive_short_circuit_operators() {
         let mut parser = ParserFactory::create_parser(Language::Rust).unwrap();
-        let tree = parser.parse("fn f(x: bool, y: bool) { if x && y || x { } }", None).unwrap();
+        let tree = parser
+            .parse("fn f(x: bool, y: bool) { if x && y || x { } }", None)
+            .unwrap();
         let result = calc_cognitive(&tree, Language::Rust);
-        assert!(result >= 3, "should count && and || short-circuits: {result}");
+        assert!(
+            result >= 3,
+            "should count && and || short-circuits: {result}"
+        );
     }
 
     // --- Additional coverage tests (targeting uncovered lines) ---
@@ -2878,9 +2891,19 @@ fn f(arr: &[i32], target: i32) -> i32 {
         let storage = storage(&kit);
         let analyzer = ComplexityAnalyzer::new(&*storage);
         let result = analyzer.analyze("demo").expect("analyze");
-        assert_eq!(result.len(), 2, "both Function and Method should be analyzed");
+        assert_eq!(
+            result.len(),
+            2,
+            "both Function and Method should be analyzed"
+        );
         let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
-        assert!(names.contains(&"free_fn"), "Function node should be in results");
-        assert!(names.contains(&"method"), "Method node should be in results");
+        assert!(
+            names.contains(&"free_fn"),
+            "Function node should be in results"
+        );
+        assert!(
+            names.contains(&"method"),
+            "Method node should be in results"
+        );
     }
 }

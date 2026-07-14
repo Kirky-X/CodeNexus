@@ -241,7 +241,12 @@ pub fn parallel_parse_ram_first(
     }
 }
 
-#[cfg(all(test, feature = "lang-c", feature = "lang-python", feature = "lang-rust"))]
+#[cfg(all(
+    test,
+    feature = "lang-c",
+    feature = "lang-python",
+    feature = "lang-rust"
+))]
 mod tests {
     use super::*;
     use crate::model::Language;
@@ -596,8 +601,9 @@ mod tests {
         let metrics = Arc::new(Metrics::new());
 
         // Main thread subscriber
-        let main_layer = LoggerSubscriber::new(console_tx.clone(), async_tx.clone(), metrics.clone())
-            .with_filter(LevelFilter::DEBUG);
+        let main_layer =
+            LoggerSubscriber::new(console_tx.clone(), async_tx.clone(), metrics.clone())
+                .with_filter(LevelFilter::DEBUG);
         let main_registry = tracing_subscriber::registry().with(main_layer);
 
         // Build a custom rayon thread pool that installs an inklog

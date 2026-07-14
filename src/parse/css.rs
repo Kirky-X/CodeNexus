@@ -72,10 +72,7 @@ impl Extractor for CssExtractor {
                 file_path: file_path.to_string(),
             })?;
         let root = tree.root_node();
-        let ctx = VisitContext {
-            file_path,
-            project,
-        };
+        let ctx = VisitContext { file_path, project };
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
                 visit_node(child, source, &ctx, &mut result);
@@ -152,11 +149,7 @@ fn extract_media_statement(
 ) {
     let line = node.start_position().row as u32 + 1;
     let name = format!("media_L{line}");
-    let qn = dedupe_qn(
-        make_qn(ctx.file_path, &name, ctx.project),
-        line,
-        result,
-    );
+    let qn = dedupe_qn(make_qn(ctx.file_path, &name, ctx.project), line, result);
     let model_node = ModelNode::builder(NodeLabel::Namespace, name, qn)
         .file_path(ctx.file_path)
         .start_line(line)
@@ -358,22 +351,14 @@ mod tests {
     #[test]
     fn qualified_name_uses_file_path_and_selector() {
         let result = extract("body { color: red; }\n");
-        let body = result
-            .nodes
-            .iter()
-            .find(|n| n.name == "body")
-            .unwrap();
+        let body = result.nodes.iter().find(|n| n.name == "body").unwrap();
         assert_eq!(body.qualified_name, "proj.test.css.body");
     }
 
     #[test]
     fn duplicate_selectors_get_disambiguated_fqn() {
         let result = extract("body { color: red; }\nbody { color: blue; }\n");
-        let bodies: Vec<_> = result
-            .nodes
-            .iter()
-            .filter(|n| n.name == "body")
-            .collect();
+        let bodies: Vec<_> = result.nodes.iter().filter(|n| n.name == "body").collect();
         assert_eq!(bodies.len(), 2, "should extract 2 body rules");
         assert_ne!(
             bodies[0].qualified_name, bodies[1].qualified_name,

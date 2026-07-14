@@ -15,14 +15,14 @@ use crate::service::error::{kit_not_initialized, to_api_error};
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::runtime::kit;
 use crate::trace::{
-    apply_path_filter, CallGraphTracer, PathFilter, TraceCycle, TraceEdge, TraceNode,
-    TracePath, TraceResult, TraceType,
+    apply_path_filter, CallGraphTracer, PathFilter, TraceCycle, TraceEdge, TraceNode, TracePath,
+    TraceResult, TraceType,
 };
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use sdforge::prelude::ApiError;
-#[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::forge;
+#[cfg(any(feature = "cli", feature = "mcp"))]
+use sdforge::prelude::ApiError;
 
 /// JSON-serializable trace result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -128,10 +128,7 @@ pub(crate) fn find_start_node_id(
 /// start node and the target node. This exposes outbound HTTP dependencies
 /// that the standard `Calls`/`FfiCalls` tracers do not traverse.
 #[cfg(any(feature = "cli", feature = "mcp", test))]
-fn collect_cross_service_paths(
-    graph: &crate::model::Graph,
-    start_id: &str,
-) -> Vec<TracePath> {
+fn collect_cross_service_paths(graph: &crate::model::Graph, start_id: &str) -> Vec<TracePath> {
     use crate::model::EdgeType;
     let node_id: String = start_id.to_string();
     let mut paths = Vec::new();
@@ -319,7 +316,10 @@ mod tests {
             .expect_err("invalid trace_type should error");
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
         let msg = err.to_string();
-        assert!(msg.contains("bogus"), "error should mention bad value: {msg}");
+        assert!(
+            msg.contains("bogus"),
+            "error should mention bad value: {msg}"
+        );
         assert!(
             msg.contains("calls|dataflow|all"),
             "error should hint valid values: {msg}"
@@ -382,7 +382,10 @@ mod tests {
         let v = trace_node_to_json(&node);
         assert_eq!(v["name"], "foo");
         assert!(v["filePath"].is_null(), "missing file_path should be null");
-        assert!(v["startLine"].is_null(), "missing start_line should be null");
+        assert!(
+            v["startLine"].is_null(),
+            "missing start_line should be null"
+        );
     }
 
     #[test]
@@ -395,7 +398,9 @@ mod tests {
         let v = trace_edge_to_json(&edge);
         assert_eq!(v["edgeType"], "Calls");
         assert_eq!(v["reason"], "direct call");
-        let conf = v["confidence"].as_f64().expect("confidence should be a number");
+        let conf = v["confidence"]
+            .as_f64()
+            .expect("confidence should be a number");
         assert!((conf - 0.9).abs() < 1e-6, "confidence ~0.9, got {conf}");
     }
 
@@ -492,7 +497,10 @@ mod tests {
     #[test]
     fn build_path_filter_parses_single_glob() {
         let pf = build_path_filter("/src/*.rs").expect("should parse");
-        assert_eq!(pf.include_files.as_deref(), Some(&["/src/*.rs".to_string()][..]));
+        assert_eq!(
+            pf.include_files.as_deref(),
+            Some(&["/src/*.rs".to_string()][..])
+        );
         assert!(pf.exclude_files.is_none());
         assert!(pf.include_modules.is_none());
         assert!(pf.symbol_pattern.is_none());
@@ -605,8 +613,16 @@ mod tests {
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create edge");
 
         // Filter to nonexistent file → all paths should be dropped
-        let output = run_trace(&kit, "demo.caller", "calls", 3, "/nonexistent.rs", false, false)
-            .expect("trace with path_filter should succeed");
+        let output = run_trace(
+            &kit,
+            "demo.caller",
+            "calls",
+            3,
+            "/nonexistent.rs",
+            false,
+            false,
+        )
+        .expect("trace with path_filter should succeed");
         assert!(
             output.paths.is_empty(),
             "path_filter with no match should drop all paths"
@@ -704,7 +720,10 @@ mod tests {
             .expect("legacy JSON without cycles should deserialize");
         assert_eq!(parsed.symbol, "demo.foo");
         assert!(parsed.paths.is_empty());
-        assert!(parsed.cycles.is_empty(), "missing cycles should default to empty");
+        assert!(
+            parsed.cycles.is_empty(),
+            "missing cycles should default to empty"
+        );
     }
 
     // Covers collect_cross_service_paths early return when start node
@@ -861,7 +880,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     #[cfg(feature = "cli")]
     fn trace_wrapper_succeeds_via_init_kit() {
@@ -888,7 +907,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     #[cfg(feature = "cli")]
     fn trace_wrapper_fails_when_kit_not_initialized() {

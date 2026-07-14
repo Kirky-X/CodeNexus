@@ -286,9 +286,7 @@ fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
     };
     let raw = node_text(source_node, source).unwrap_or("");
     // Strip surrounding quotes (single or double).
-    let cleaned = raw
-        .trim_matches(|c| c == '"' || c == '\'')
-        .to_string();
+    let cleaned = raw.trim_matches(|c| c == '"' || c == '\'').to_string();
     result.imports.push(ImportInfo {
         source_file: cleaned,
         imported_names: Vec::new(),
@@ -454,7 +452,10 @@ mod tests {
         assert_eq!(funcs[0].project, "proj");
         assert_eq!(funcs[0].file_path.as_deref(), Some("test.js"));
         assert!(funcs[0].is_global, "top-level function should be global");
-        assert!(funcs[0].is_exported, "top-level function should be exported");
+        assert!(
+            funcs[0].is_exported,
+            "top-level function should be exported"
+        );
     }
 
     #[test]
@@ -801,7 +802,11 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Variable)
             .collect();
-        assert_eq!(vars.len(), 1, "arrow function assigned to const is a Variable");
+        assert_eq!(
+            vars.len(),
+            1,
+            "arrow function assigned to const is a Variable"
+        );
         assert_eq!(vars[0].name, "fn");
     }
 

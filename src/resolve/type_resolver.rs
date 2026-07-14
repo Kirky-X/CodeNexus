@@ -762,7 +762,9 @@ mod tests {
         }];
         let resolver = TypeResolver::new(&table);
         assert!(
-            resolver.resolve_type("a.py", "MissingType", &imports).is_none(),
+            resolver
+                .resolve_type("a.py", "MissingType", &imports)
+                .is_none(),
             "imported but undefined type should not resolve"
         );
         let _ = &results;
@@ -993,7 +995,9 @@ mod tests {
         }];
         let resolver = TypeResolver::new(&table);
         assert!(
-            resolver.resolve_type("a.py", "ExternalType", &imports).is_none(),
+            resolver
+                .resolve_type("a.py", "ExternalType", &imports)
+                .is_none(),
             "imported type not in symbol table should return None"
         );
         let _ = &results;

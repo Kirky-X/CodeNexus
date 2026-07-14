@@ -6,9 +6,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use lsp_types::notification::{Exit, Notification as _};
 use lsp_types::request::{GotoDefinition, GotoTypeDefinition, HoverRequest};
 use lsp_types::{GotoDefinitionParams, HoverParams, PartialResultParams, WorkDoneProgressParams};
-use lsp_types::notification::{Exit, Notification as _};
 
 use super::session::{self, Session};
 use super::{LspError, LspProvider};
@@ -61,9 +61,16 @@ impl LspProvider for RustAnalyzerClient {
         Ok(())
     }
 
-    fn definition(&self, file: &Path, line: u32, col: u32) -> Result<Option<lsp_types::Location>, LspError> {
+    fn definition(
+        &self,
+        file: &Path,
+        line: u32,
+        col: u32,
+    ) -> Result<Option<lsp_types::Location>, LspError> {
         let mut guard = self.session.lock().expect("session mutex poisoned");
-        let session = guard.as_mut().ok_or_else(|| LspError::Communication("LSP server not started".into()))?;
+        let session = guard
+            .as_mut()
+            .ok_or_else(|| LspError::Communication("LSP server not started".into()))?;
         let params = GotoDefinitionParams {
             text_document_position_params: session::make_position_params(file, line, col)?,
             work_done_progress_params: WorkDoneProgressParams::default(),
@@ -73,9 +80,16 @@ impl LspProvider for RustAnalyzerClient {
         Ok(session::extract_first_location(resp))
     }
 
-    fn type_definition(&self, file: &Path, line: u32, col: u32) -> Result<Option<lsp_types::Location>, LspError> {
+    fn type_definition(
+        &self,
+        file: &Path,
+        line: u32,
+        col: u32,
+    ) -> Result<Option<lsp_types::Location>, LspError> {
         let mut guard = self.session.lock().expect("session mutex poisoned");
-        let session = guard.as_mut().ok_or_else(|| LspError::Communication("LSP server not started".into()))?;
+        let session = guard
+            .as_mut()
+            .ok_or_else(|| LspError::Communication("LSP server not started".into()))?;
         let params = GotoDefinitionParams {
             text_document_position_params: session::make_position_params(file, line, col)?,
             work_done_progress_params: WorkDoneProgressParams::default(),
@@ -85,9 +99,16 @@ impl LspProvider for RustAnalyzerClient {
         Ok(session::extract_first_location(resp))
     }
 
-    fn hover(&self, file: &Path, line: u32, col: u32) -> Result<Option<lsp_types::Hover>, LspError> {
+    fn hover(
+        &self,
+        file: &Path,
+        line: u32,
+        col: u32,
+    ) -> Result<Option<lsp_types::Hover>, LspError> {
         let mut guard = self.session.lock().expect("session mutex poisoned");
-        let session = guard.as_mut().ok_or_else(|| LspError::Communication("LSP server not started".into()))?;
+        let session = guard
+            .as_mut()
+            .ok_or_else(|| LspError::Communication("LSP server not started".into()))?;
         let params = HoverParams {
             text_document_position_params: session::make_position_params(file, line, col)?,
             work_done_progress_params: WorkDoneProgressParams::default(),
@@ -101,7 +122,8 @@ impl LspProvider for RustAnalyzerClient {
             return Ok(());
         };
         session::send_raw_request(&mut session, "shutdown", serde_json::Value::Null);
-        let _ = session::send_notification(&session.connection, Exit::METHOD, &serde_json::Value::Null);
+        let _ =
+            session::send_notification(&session.connection, Exit::METHOD, &serde_json::Value::Null);
         let _ = session.child.wait();
         drop(session);
         Ok(())
@@ -112,18 +134,20 @@ impl LspProvider for RustAnalyzerClient {
 mod tests {
     use super::*;
     use crate::lsp::session;
+    use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
+    use lsp_types::request::{HoverRequest, Initialize};
+    use lsp_types::{
+        GotoDefinitionResponse, HoverParams, Position, TextDocumentIdentifier,
+        TextDocumentPositionParams, Url, WorkDoneProgressParams,
+    };
     use std::path::PathBuf;
     use std::time::Duration;
-    use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
-    use lsp_types::{
-        GotoDefinitionResponse, HoverParams, Position,
-        TextDocumentIdentifier, TextDocumentPositionParams, Url, WorkDoneProgressParams,
-    };
-    use lsp_types::request::{HoverRequest, Initialize};
 
     #[test]
     fn start_nonexistent_server_returns_error() {
-        let client = RustAnalyzerClient::with_server_path(PathBuf::from("/nonexistent/path/to/rust-analyzer"));
+        let client = RustAnalyzerClient::with_server_path(PathBuf::from(
+            "/nonexistent/path/to/rust-analyzer",
+        ));
         let result = client.start(&std::env::temp_dir());
         match result {
             Err(LspError::ServerStart(msg)) => assert!(!msg.is_empty()),
@@ -139,7 +163,9 @@ mod tests {
 
     #[test]
     fn shutdown_after_failed_start_returns_ok() {
-        let client = RustAnalyzerClient::with_server_path(PathBuf::from("/nonexistent/path/to/rust-analyzer"));
+        let client = RustAnalyzerClient::with_server_path(PathBuf::from(
+            "/nonexistent/path/to/rust-analyzer",
+        ));
         let _ = client.start(&std::env::temp_dir());
         assert!(client.shutdown().is_ok());
     }
@@ -147,73 +173,175 @@ mod tests {
     #[test]
     fn query_without_start_returns_communication_error() {
         let client = RustAnalyzerClient::new();
-        assert!(matches!(client.definition(Path::new("/tmp/lib.rs"), 0, 0), Err(LspError::Communication(_))));
-        assert!(matches!(client.type_definition(Path::new("/tmp/lib.rs"), 0, 0), Err(LspError::Communication(_))));
-        assert!(matches!(client.hover(Path::new("/tmp/lib.rs"), 0, 0), Err(LspError::Communication(_))));
+        assert!(matches!(
+            client.definition(Path::new("/tmp/lib.rs"), 0, 0),
+            Err(LspError::Communication(_))
+        ));
+        assert!(matches!(
+            client.type_definition(Path::new("/tmp/lib.rs"), 0, 0),
+            Err(LspError::Communication(_))
+        ));
+        assert!(matches!(
+            client.hover(Path::new("/tmp/lib.rs"), 0, 0),
+            Err(LspError::Communication(_))
+        ));
     }
 
     #[test]
     fn new_uses_default_server_path() {
-        assert_eq!(RustAnalyzerClient::new().server_path, PathBuf::from(DEFAULT_SERVER_PATH));
+        assert_eq!(
+            RustAnalyzerClient::new().server_path,
+            PathBuf::from(DEFAULT_SERVER_PATH)
+        );
     }
 
     #[test]
     fn with_server_path_overrides_default() {
         let p = PathBuf::from("/custom/rust-analyzer");
-        assert_eq!(RustAnalyzerClient::with_server_path(p.clone()).server_path, p);
+        assert_eq!(
+            RustAnalyzerClient::with_server_path(p.clone()).server_path,
+            p
+        );
     }
 
     #[test]
     fn default_impl_matches_new() {
-        assert_eq!(RustAnalyzerClient::new().server_path, RustAnalyzerClient::default().server_path);
+        assert_eq!(
+            RustAnalyzerClient::new().server_path,
+            RustAnalyzerClient::default().server_path
+        );
     }
 
     #[test]
     fn extract_first_location_from_scalar() {
         let uri = Url::parse("file:///tmp/x.rs").unwrap();
-        let loc = lsp_types::Location { uri: uri.clone(), range: lsp_types::Range { start: Position { line: 0, character: 0 }, end: Position { line: 0, character: 5 } } };
-        assert_eq!(session::extract_first_location(Some(GotoDefinitionResponse::Scalar(loc.clone()))), Some(loc));
+        let loc = lsp_types::Location {
+            uri: uri.clone(),
+            range: lsp_types::Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 5,
+                },
+            },
+        };
+        assert_eq!(
+            session::extract_first_location(Some(GotoDefinitionResponse::Scalar(loc.clone()))),
+            Some(loc)
+        );
     }
 
     #[test]
     fn extract_first_location_from_array_returns_first() {
         let uri = Url::parse("file:///tmp/x.rs").unwrap();
-        let mk = |l: u32| lsp_types::Location { uri: uri.clone(), range: lsp_types::Range { start: Position { line: l, character: 0 }, end: Position { line: l, character: 5 } } };
-        assert_eq!(session::extract_first_location(Some(GotoDefinitionResponse::Array(vec![mk(1), mk(2)]))).unwrap().range.start.line, 1);
+        let mk = |l: u32| lsp_types::Location {
+            uri: uri.clone(),
+            range: lsp_types::Range {
+                start: Position {
+                    line: l,
+                    character: 0,
+                },
+                end: Position {
+                    line: l,
+                    character: 5,
+                },
+            },
+        };
+        assert_eq!(
+            session::extract_first_location(Some(GotoDefinitionResponse::Array(vec![
+                mk(1),
+                mk(2)
+            ])))
+            .unwrap()
+            .range
+            .start
+            .line,
+            1
+        );
     }
 
     #[test]
     fn extract_first_location_from_empty_returns_none() {
-        assert_eq!(session::extract_first_location(Some(GotoDefinitionResponse::Array(vec![]))), None);
-        assert_eq!(session::extract_first_location(Some(GotoDefinitionResponse::Link(vec![]))), None);
+        assert_eq!(
+            session::extract_first_location(Some(GotoDefinitionResponse::Array(vec![]))),
+            None
+        );
+        assert_eq!(
+            session::extract_first_location(Some(GotoDefinitionResponse::Link(vec![]))),
+            None
+        );
         assert_eq!(session::extract_first_location(None), None);
     }
 
     #[test]
     fn extract_first_location_from_link() {
         let uri = Url::parse("file:///tmp/t.rs").unwrap();
-        let r = lsp_types::Range { start: Position { line: 10, character: 2 }, end: Position { line: 10, character: 8 } };
-        let link = lsp_types::LocationLink { origin_selection_range: None, target_uri: uri.clone(), target_range: r, target_selection_range: r };
-        let result = session::extract_first_location(Some(GotoDefinitionResponse::Link(vec![link]))).unwrap();
+        let r = lsp_types::Range {
+            start: Position {
+                line: 10,
+                character: 2,
+            },
+            end: Position {
+                line: 10,
+                character: 8,
+            },
+        };
+        let link = lsp_types::LocationLink {
+            origin_selection_range: None,
+            target_uri: uri.clone(),
+            target_range: r,
+            target_selection_range: r,
+        };
+        let result =
+            session::extract_first_location(Some(GotoDefinitionResponse::Link(vec![link])))
+                .unwrap();
         assert_eq!(result.uri, uri);
     }
 
     #[test]
     fn decode_response_server_error() {
-        let resp = Response { id: RequestId::from(1), result: None, error: Some(lsp_server::ResponseError { code: -32603, message: "err".into(), data: None }) };
-        assert!(matches!(session::decode_response::<Initialize>(resp), Err(LspError::Communication(_))));
+        let resp = Response {
+            id: RequestId::from(1),
+            result: None,
+            error: Some(lsp_server::ResponseError {
+                code: -32603,
+                message: "err".into(),
+                data: None,
+            }),
+        };
+        assert!(matches!(
+            session::decode_response::<Initialize>(resp),
+            Err(LspError::Communication(_))
+        ));
     }
 
     #[test]
     fn decode_response_absent_result_as_none() {
-        let resp = Response { id: RequestId::from(1), result: None, error: None };
-        assert_eq!(session::decode_response::<HoverRequest>(resp).unwrap(), None);
+        let resp = Response {
+            id: RequestId::from(1),
+            result: None,
+            error: None,
+        };
+        assert_eq!(
+            session::decode_response::<HoverRequest>(resp).unwrap(),
+            None
+        );
     }
 
     #[test]
     fn decode_response_type_mismatch() {
-        let resp = Response { id: RequestId::from(1), result: Some(serde_json::Value::String("bad".into())), error: None };
-        assert!(matches!(session::decode_response::<Initialize>(resp), Err(LspError::Communication(_))));
+        let resp = Response {
+            id: RequestId::from(1),
+            result: Some(serde_json::Value::String("bad".into())),
+            error: None,
+        };
+        assert!(matches!(
+            session::decode_response::<Initialize>(resp),
+            Err(LspError::Communication(_))
+        ));
     }
 
     #[test]
@@ -222,17 +350,61 @@ mod tests {
         let (s, r) = bounded::<Message>(1);
         drop(r);
         let (_dx, dr) = bounded::<Message>(1);
-        assert!(matches!(session::send_notification(&Connection { sender: s, receiver: dr }, "x", &serde_json::Value::Null), Err(LspError::Communication(_))));
+        assert!(matches!(
+            session::send_notification(
+                &Connection {
+                    sender: s,
+                    receiver: dr
+                },
+                "x",
+                &serde_json::Value::Null
+            ),
+            Err(LspError::Communication(_))
+        ));
     }
 
-    fn mock_session() -> (Session, crossbeam_channel::Sender<Message>, crossbeam_channel::Receiver<Message>) {
-        let child = std::process::Command::new("true").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
+    fn mock_session() -> (
+        Session,
+        crossbeam_channel::Sender<Message>,
+        crossbeam_channel::Receiver<Message>,
+    ) {
+        let child = std::process::Command::new("true")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
         let (wt, wr) = crossbeam_channel::bounded(16);
         let (rt, rr) = crossbeam_channel::bounded(16);
-        (Session { child, connection: Connection { sender: wt, receiver: rr }, _reader_handle: std::thread::spawn(|| {}), _writer_handle: std::thread::spawn(|| {}), next_request_id: 1 }, rt, wr)
+        (
+            Session {
+                child,
+                connection: Connection {
+                    sender: wt,
+                    receiver: rr,
+                },
+                _reader_handle: std::thread::spawn(|| {}),
+                _writer_handle: std::thread::spawn(|| {}),
+                next_request_id: 1,
+            },
+            rt,
+            wr,
+        )
     }
 
-    fn hp() -> HoverParams { HoverParams { text_document_position_params: TextDocumentPositionParams { text_document: TextDocumentIdentifier { uri: Url::parse("file:///tmp/x.rs").unwrap() }, position: Position { line: 0, character: 0 } }, work_done_progress_params: WorkDoneProgressParams::default() } }
+    fn hp() -> HoverParams {
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: Url::parse("file:///tmp/x.rs").unwrap(),
+                },
+                position: Position {
+                    line: 0,
+                    character: 0,
+                },
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+        }
+    }
 
     #[test]
     fn make_position_params() {
@@ -246,8 +418,12 @@ mod tests {
     #[test]
     fn send_request_timeout() {
         let (mut s, _rt, _wr) = mock_session();
-        assert!(matches!(session::send_request::<HoverRequest>(&mut s, hp()), Err(LspError::Timeout(_))));
-        let _ = s.child.kill(); let _ = s.child.wait();
+        assert!(matches!(
+            session::send_request::<HoverRequest>(&mut s, hp()),
+            Err(LspError::Timeout(_))
+        ));
+        let _ = s.child.kill();
+        let _ = s.child.wait();
     }
 
     #[test]
@@ -255,52 +431,104 @@ mod tests {
         let (mut s, rt, _wr) = mock_session();
         drop(rt);
         let r = session::send_request::<HoverRequest>(&mut s, hp());
-        assert!(r.unwrap_err().to_string().contains("server connection closed"));
-        let _ = s.child.kill(); let _ = s.child.wait();
+        assert!(r
+            .unwrap_err()
+            .to_string()
+            .contains("server connection closed"));
+        let _ = s.child.kill();
+        let _ = s.child.wait();
     }
 
     #[test]
     fn send_request_drains_notifications() {
         let (mut s, rt, _wr) = mock_session();
-        rt.send(Message::Notification(Notification { method: "w/log".into(), params: serde_json::json!({}) })).unwrap();
-        rt.send(Message::Response(Response { id: RequestId::from(1), result: Some(serde_json::Value::Null), error: None })).unwrap();
-        assert!(session::send_request::<HoverRequest>(&mut s, hp()).unwrap().is_none());
-        let _ = s.child.kill(); let _ = s.child.wait();
+        rt.send(Message::Notification(Notification {
+            method: "w/log".into(),
+            params: serde_json::json!({}),
+        }))
+        .unwrap();
+        rt.send(Message::Response(Response {
+            id: RequestId::from(1),
+            result: Some(serde_json::Value::Null),
+            error: None,
+        }))
+        .unwrap();
+        assert!(session::send_request::<HoverRequest>(&mut s, hp())
+            .unwrap()
+            .is_none());
+        let _ = s.child.kill();
+        let _ = s.child.wait();
     }
 
     #[test]
     fn send_request_drains_server_requests() {
         let (mut s, rt, _wr) = mock_session();
-        rt.send(Message::Request(Request { id: RequestId::from(99), method: "ws/config".into(), params: serde_json::Value::Null })).unwrap();
-        rt.send(Message::Response(Response { id: RequestId::from(1), result: Some(serde_json::Value::Null), error: None })).unwrap();
+        rt.send(Message::Request(Request {
+            id: RequestId::from(99),
+            method: "ws/config".into(),
+            params: serde_json::Value::Null,
+        }))
+        .unwrap();
+        rt.send(Message::Response(Response {
+            id: RequestId::from(1),
+            result: Some(serde_json::Value::Null),
+            error: None,
+        }))
+        .unwrap();
         assert!(session::send_request::<HoverRequest>(&mut s, hp()).is_ok());
-        let _ = s.child.kill(); let _ = s.child.wait();
+        let _ = s.child.kill();
+        let _ = s.child.wait();
     }
 
     #[test]
     fn send_request_skips_stale() {
         let (mut s, rt, _wr) = mock_session();
-        rt.send(Message::Response(Response { id: RequestId::from(999), result: Some(serde_json::Value::Null), error: None })).unwrap();
-        rt.send(Message::Response(Response { id: RequestId::from(1), result: Some(serde_json::Value::Null), error: None })).unwrap();
+        rt.send(Message::Response(Response {
+            id: RequestId::from(999),
+            result: Some(serde_json::Value::Null),
+            error: None,
+        }))
+        .unwrap();
+        rt.send(Message::Response(Response {
+            id: RequestId::from(1),
+            result: Some(serde_json::Value::Null),
+            error: None,
+        }))
+        .unwrap();
         assert!(session::send_request::<HoverRequest>(&mut s, hp()).is_ok());
-        let _ = s.child.kill(); let _ = s.child.wait();
+        let _ = s.child.kill();
+        let _ = s.child.wait();
     }
 
     #[test]
     fn send_request_writer_disconnect() {
         let (mut s, _rt, wr) = mock_session();
         drop(wr);
-        assert!(session::send_request::<HoverRequest>(&mut s, hp()).unwrap_err().to_string().contains("send request"));
-        let _ = s.child.kill(); let _ = s.child.wait();
+        assert!(session::send_request::<HoverRequest>(&mut s, hp())
+            .unwrap_err()
+            .to_string()
+            .contains("send request"));
+        let _ = s.child.kill();
+        let _ = s.child.wait();
     }
 
     #[test]
     fn send_request_server_error() {
         let (mut s, rt, _wr) = mock_session();
-        rt.send(Message::Response(Response { id: RequestId::from(1), result: None, error: Some(lsp_server::ResponseError { code: -32603, message: "err".into(), data: None }) })).unwrap();
+        rt.send(Message::Response(Response {
+            id: RequestId::from(1),
+            result: None,
+            error: Some(lsp_server::ResponseError {
+                code: -32603,
+                message: "err".into(),
+                data: None,
+            }),
+        }))
+        .unwrap();
         let r = session::send_request::<HoverRequest>(&mut s, hp());
         assert!(r.unwrap_err().to_string().contains("server error"));
-        let _ = s.child.kill(); let _ = s.child.wait();
+        let _ = s.child.kill();
+        let _ = s.child.wait();
     }
 
     #[test]
@@ -308,9 +536,16 @@ mod tests {
         let (mut s, _rt, wr) = mock_session();
         session::send_raw_request(&mut s, "shutdown", serde_json::Value::Null);
         let msg = wr.recv_timeout(Duration::from_secs(1)).unwrap();
-        match msg { Message::Request(req) => { assert_eq!(req.method, "shutdown"); assert_eq!(req.id, RequestId::from(1)); } _ => panic!() }
+        match msg {
+            Message::Request(req) => {
+                assert_eq!(req.method, "shutdown");
+                assert_eq!(req.id, RequestId::from(1));
+            }
+            _ => panic!(),
+        }
         assert_eq!(s.next_request_id, 2);
-        let _ = s.child.kill(); let _ = s.child.wait();
+        let _ = s.child.kill();
+        let _ = s.child.wait();
     }
 
     #[test]
@@ -332,27 +567,63 @@ mod tests {
         let _ = c.shutdown();
     }
 
-    fn client_with_mock() -> (RustAnalyzerClient, crossbeam_channel::Sender<Message>, crossbeam_channel::Receiver<Message>) {
+    fn client_with_mock() -> (
+        RustAnalyzerClient,
+        crossbeam_channel::Sender<Message>,
+        crossbeam_channel::Receiver<Message>,
+    ) {
         let (s, rt, wr) = mock_session();
         let c = RustAnalyzerClient::new();
         *c.session.lock().unwrap() = Some(s);
         (c, rt, wr)
     }
 
-    fn loc() -> lsp_types::Location { lsp_types::Location { uri: Url::parse("file:///tmp/lib.rs").unwrap(), range: lsp_types::Range { start: Position { line: 5, character: 10 }, end: Position { line: 5, character: 20 } } } }
+    fn loc() -> lsp_types::Location {
+        lsp_types::Location {
+            uri: Url::parse("file:///tmp/lib.rs").unwrap(),
+            range: lsp_types::Range {
+                start: Position {
+                    line: 5,
+                    character: 10,
+                },
+                end: Position {
+                    line: 5,
+                    character: 20,
+                },
+            },
+        }
+    }
 
     #[test]
     fn definition_with_mock() {
         let (c, rt, _wr) = client_with_mock();
-        rt.send(Message::Response(Response { id: RequestId::from(1), result: Some(serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap()), error: None })).unwrap();
-        assert_eq!(c.definition(Path::new("/tmp/lib.rs"), 0, 0).unwrap().unwrap().range.start.line, 5);
+        rt.send(Message::Response(Response {
+            id: RequestId::from(1),
+            result: Some(serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap()),
+            error: None,
+        }))
+        .unwrap();
+        assert_eq!(
+            c.definition(Path::new("/tmp/lib.rs"), 0, 0)
+                .unwrap()
+                .unwrap()
+                .range
+                .start
+                .line,
+            5
+        );
         let _ = c.shutdown();
     }
 
     #[test]
     fn type_definition_with_mock() {
         let (c, rt, _wr) = client_with_mock();
-        rt.send(Message::Response(Response { id: RequestId::from(1), result: Some(serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap()), error: None })).unwrap();
+        rt.send(Message::Response(Response {
+            id: RequestId::from(1),
+            result: Some(serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap()),
+            error: None,
+        }))
+        .unwrap();
         let r = c.type_definition(Path::new("/tmp/lib.rs"), 0, 0).unwrap();
         assert!(r.is_some());
         let _ = c.shutdown();
@@ -361,8 +632,19 @@ mod tests {
     #[test]
     fn hover_with_mock() {
         let (c, rt, _wr) = client_with_mock();
-        let hover = lsp_types::Hover { contents: lsp_types::HoverContents::Markup(lsp_types::MarkupContent { kind: lsp_types::MarkupKind::Markdown, value: "fn foo()".into() }), range: None };
-        rt.send(Message::Response(Response { id: RequestId::from(1), result: Some(serde_json::to_value(hover).unwrap()), error: None })).unwrap();
+        let hover = lsp_types::Hover {
+            contents: lsp_types::HoverContents::Markup(lsp_types::MarkupContent {
+                kind: lsp_types::MarkupKind::Markdown,
+                value: "fn foo()".into(),
+            }),
+            range: None,
+        };
+        rt.send(Message::Response(Response {
+            id: RequestId::from(1),
+            result: Some(serde_json::to_value(hover).unwrap()),
+            error: None,
+        }))
+        .unwrap();
         assert!(c.hover(Path::new("/tmp/lib.rs"), 0, 0).unwrap().is_some());
         let _ = c.shutdown();
     }
@@ -370,9 +652,21 @@ mod tests {
     #[test]
     #[ignore = "requires rust-analyzer on PATH; run with --ignored"]
     fn integration_start_shutdown() {
-        if std::process::Command::new("rust-analyzer").arg("--version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_err() { return; }
+        if std::process::Command::new("rust-analyzer")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_err()
+        {
+            return;
+        }
         let ws = tempfile::TempDir::new().unwrap();
-        std::fs::write(ws.path().join("Cargo.toml"), "[package]\nname = \"d\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
+        std::fs::write(
+            ws.path().join("Cargo.toml"),
+            "[package]\nname = \"d\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(ws.path().join("src")).unwrap();
         std::fs::write(ws.path().join("src/main.rs"), "fn main() {}").unwrap();
         let c = RustAnalyzerClient::new();
@@ -383,11 +677,27 @@ mod tests {
     #[test]
     #[ignore = "requires rust-analyzer on PATH; run with --ignored"]
     fn integration_hover() {
-        if std::process::Command::new("rust-analyzer").arg("--version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_err() { return; }
+        if std::process::Command::new("rust-analyzer")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_err()
+        {
+            return;
+        }
         let ws = tempfile::TempDir::new().unwrap();
-        std::fs::write(ws.path().join("Cargo.toml"), "[package]\nname = \"d\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
+        std::fs::write(
+            ws.path().join("Cargo.toml"),
+            "[package]\nname = \"d\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(ws.path().join("src")).unwrap();
-        std::fs::write(ws.path().join("src/main.rs"), "fn add(a: i32, b: i32) -> i32 { a + b }\nfn main() { let _ = add(1, 2); }\n").unwrap();
+        std::fs::write(
+            ws.path().join("src/main.rs"),
+            "fn add(a: i32, b: i32) -> i32 { a + b }\nfn main() { let _ = add(1, 2); }\n",
+        )
+        .unwrap();
         let c = RustAnalyzerClient::new();
         c.start(ws.path()).unwrap();
         assert!(c.hover(&ws.path().join("src/main.rs"), 0, 4).is_ok());

@@ -8,20 +8,20 @@ use serde::Serialize;
 #[cfg(feature = "analysis")]
 use crate::analysis::architecture::{ArchitectureAnalyzer, ArchitectureOverview};
 #[cfg(feature = "analysis")]
-use crate::service::error::CodeNexusError;
-#[cfg(all(feature = "analysis", any(feature = "cli", feature = "mcp")))]
-use crate::service::error::to_api_error;
-#[cfg(feature = "analysis")]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "analysis", any(feature = "cli", feature = "mcp")))]
 use crate::service::error::kit_not_initialized;
 #[cfg(all(feature = "analysis", any(feature = "cli", feature = "mcp")))]
+use crate::service::error::to_api_error;
+#[cfg(feature = "analysis")]
+use crate::service::error::CodeNexusError;
+#[cfg(all(feature = "analysis", any(feature = "cli", feature = "mcp")))]
 use crate::service::runtime::kit;
 
 #[cfg(all(feature = "analysis", any(feature = "cli", feature = "mcp")))]
-use sdforge::prelude::ApiError;
-#[cfg(all(feature = "analysis", any(feature = "cli", feature = "mcp")))]
 use sdforge::forge;
+#[cfg(all(feature = "analysis", any(feature = "cli", feature = "mcp")))]
+use sdforge::prelude::ApiError;
 
 /// JSON-serializable architecture output.
 #[cfg(feature = "analysis")]
@@ -60,8 +60,8 @@ pub fn run_architecture(
 )]
 async fn architecture(project: String) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    let output = run_architecture(&kit, &project)
-        .map_err(|e| to_api_error(e, "architecture_error"))?;
+    let output =
+        run_architecture(&kit, &project).map_err(|e| to_api_error(e, "architecture_error"))?;
     let json = serde_json::to_string(&output)
         .map_err(|e| to_api_error(CodeNexusError::from(e), "architecture_error"))?;
     println!("{json}");
@@ -231,10 +231,7 @@ mod tests {
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_ctrl', target: 'r1', type: 'HANDLES_ROUTE', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create HANDLES_ROUTE edge");
 
         let output = run_architecture(&kit, "demo").expect("run should succeed");
-        assert!(
-            !output.overview.layers.is_empty(),
-            "should detect layers"
-        );
+        assert!(!output.overview.layers.is_empty(), "should detect layers");
         let controller = output
             .overview
             .layers
@@ -253,10 +250,19 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let output = run_architecture(&kit, "demo").expect("run should succeed");
         let json = serde_json::to_string(&output).unwrap();
-        assert!(json.contains("\"module_boundaries\""), "json should contain module_boundaries");
-        assert!(json.contains("\"dependency_directions\""), "json should contain dependency_directions");
+        assert!(
+            json.contains("\"module_boundaries\""),
+            "json should contain module_boundaries"
+        );
+        assert!(
+            json.contains("\"dependency_directions\""),
+            "json should contain dependency_directions"
+        );
         assert!(json.contains("\"layers\""), "json should contain layers");
-        assert!(json.contains("\"cross_service_deps\""), "json should contain cross_service_deps");
+        assert!(
+            json.contains("\"cross_service_deps\""),
+            "json should contain cross_service_deps"
+        );
     }
 
     #[test]
@@ -298,7 +304,10 @@ mod tests {
             .expect("should find module src/a");
         assert_eq!(module_a.incoming_deps, 0);
         assert_eq!(module_a.outgoing_deps, 0);
-        assert!((module_a.cohesion - 1.0).abs() < 0.001, "cohesion should be 1.0 for isolated module");
+        assert!(
+            (module_a.cohesion - 1.0).abs() < 0.001,
+            "cohesion should be 1.0 for isolated module"
+        );
     }
 
     // ===== run_architecture: cross_service_deps via Route + fetch content =====
@@ -350,13 +359,19 @@ mod tests {
         storage.execute("CREATE (:File {id: 'f1', project: 'other', name: 'main.rs', filePath: '/src/main.rs', language: 'rust', hash: '', lineCount: 0});").expect("create file in other project");
 
         let output = run_architecture(&kit, "demo").expect("run should succeed");
-        assert!(output.overview.languages.is_empty(), "no languages for absent project");
-        assert!(output.overview.packages.is_empty(), "no packages for absent project");
+        assert!(
+            output.overview.languages.is_empty(),
+            "no languages for absent project"
+        );
+        assert!(
+            output.overview.packages.is_empty(),
+            "no packages for absent project"
+        );
     }
 
     // ===== #[forge] wrapper tests via init_kit =====
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     fn architecture_wrapper_succeeds_via_init_kit() {
         use crate::service::runtime::{init_kit, reset_kit_for_testing};
@@ -373,7 +388,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     fn architecture_wrapper_fails_when_kit_not_initialized() {
         use crate::service::runtime::reset_kit_for_testing;

@@ -93,7 +93,7 @@ pub fn kit_debug_state() -> String {
 mod tests {
     use super::*;
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[tokio::test]
     async fn init_kit_second_call_returns_error() {
         reset_kit_for_testing();

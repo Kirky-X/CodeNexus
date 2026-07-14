@@ -154,7 +154,14 @@ pub fn should_skip_dir(dir_name: &str) -> bool {
     ALWAYS_SKIP_DIRS.contains(&dir_name)
 }
 
-#[cfg(all(test, feature = "lang-c", feature = "lang-fortran", feature = "lang-python", feature = "lang-rust", feature = "lang-typescript"))]
+#[cfg(all(
+    test,
+    feature = "lang-c",
+    feature = "lang-fortran",
+    feature = "lang-python",
+    feature = "lang-rust",
+    feature = "lang-typescript"
+))]
 mod tests {
     use super::*;
     use std::fs;

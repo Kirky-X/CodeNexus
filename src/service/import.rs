@@ -24,10 +24,10 @@ use crate::service::error::{kit_not_initialized, to_api_error};
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::runtime::kit;
 
-#[cfg(any(feature = "cli", feature = "mcp"))]
-use sdforge::prelude::ApiError;
 #[cfg(feature = "cli")]
 use sdforge::forge;
+#[cfg(any(feature = "cli", feature = "mcp"))]
+use sdforge::prelude::ApiError;
 
 /// JSON-serializable import-command output.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -211,14 +211,10 @@ mod tests {
     #[test]
     fn zstd_decompress_returns_error_for_invalid_input() {
         let garbage = b"this is not valid zstd data at all";
-        let err = zstd_decompress(garbage)
-            .expect_err("decompressing garbage should fail");
+        let err = zstd_decompress(garbage).expect_err("decompressing garbage should fail");
         // zstd library returns io::Error for invalid data, converted to CodeNexusError::Io.
         let msg = err.to_string();
-        assert!(
-            !msg.is_empty(),
-            "error should have a message"
-        );
+        assert!(!msg.is_empty(), "error should have a message");
     }
 
     #[test]
@@ -231,8 +227,7 @@ mod tests {
 
     #[test]
     fn zstd_decompress_returns_error_for_empty_input() {
-        let err = zstd_decompress(b"")
-            .expect_err("empty input should fail decompression");
+        let err = zstd_decompress(b"").expect_err("empty input should fail decompression");
         let msg = err.to_string();
         assert!(!msg.is_empty(), "error should have a message");
     }
@@ -286,10 +281,7 @@ mod tests {
             .expect_err("bad magic should error");
         match err {
             CodeNexusError::InvalidInput(msg) => {
-                assert!(
-                    msg.contains("magic mismatch"),
-                    "unexpected message: {msg}"
-                );
+                assert!(msg.contains("magic mismatch"), "unexpected message: {msg}");
             }
             other => panic!("expected InvalidInput, got {other:?}"),
         }
@@ -394,10 +386,7 @@ mod tests {
             .expect_err("zero manifest_len should error");
         let msg = err.to_string();
         // Empty slice → serde_json EOF error
-        assert!(
-            !msg.is_empty(),
-            "error message should not be empty"
-        );
+        assert!(!msg.is_empty(), "error message should not be empty");
     }
 
     #[test]
@@ -414,7 +403,8 @@ mod tests {
             original_size: 0,
         };
         let manifest_json = serde_json::to_vec(&manifest).unwrap();
-        let compressed = oxiarc_zstd::compress_with_level(&b"fake_db_bytes"[..], 19).expect("zstd encode");
+        let compressed =
+            oxiarc_zstd::compress_with_level(&b"fake_db_bytes"[..], 19).expect("zstd encode");
         let mut data = ARTIFACT_MAGIC.to_vec();
         data.extend(&(manifest_json.len() as u32).to_le_bytes());
         data.extend(&manifest_json);
@@ -448,7 +438,8 @@ mod tests {
             original_size: 0,
         };
         let manifest_json = serde_json::to_vec(&manifest).unwrap();
-        let compressed = oxiarc_zstd::compress_with_level(&b"fake_db_bytes"[..], 19).expect("zstd encode");
+        let compressed =
+            oxiarc_zstd::compress_with_level(&b"fake_db_bytes"[..], 19).expect("zstd encode");
         let mut data = ARTIFACT_MAGIC.to_vec();
         data.extend(&(manifest_json.len() as u32).to_le_bytes());
         data.extend(&manifest_json);
@@ -477,30 +468,27 @@ mod tests {
         let src_kit = build_kit_for_db(&src_db);
         let artifact = src_dir.path().join("roundtrip.cnxp");
 
-        let export_output = crate::service::export::run_export(
-            &src_kit,
-            artifact.to_str().unwrap(),
-            "demo",
-        )
-        .expect("run_export should succeed");
+        let export_output =
+            crate::service::export::run_export(&src_kit, artifact.to_str().unwrap(), "demo")
+                .expect("run_export should succeed");
 
         let (_dst_dir, dst_db) = fresh_db_path();
         let dst_kit = build_kit_for_db(&dst_db);
-        let import_output = run_import(
-            &dst_kit,
-            artifact.to_str().unwrap(),
-            false,
-            "",
-            "",
-        )
-        .expect("import should succeed for valid artifact");
+        let import_output = run_import(&dst_kit, artifact.to_str().unwrap(), false, "", "")
+            .expect("import should succeed for valid artifact");
 
         assert_eq!(import_output.artifact, artifact.to_str().unwrap());
         assert!(import_output.db_size > 0, "db_size should be > 0");
         assert!(!import_output.reindexed);
-        assert_eq!(import_output.manifest.format_version, ARTIFACT_FORMAT_VERSION);
+        assert_eq!(
+            import_output.manifest.format_version,
+            ARTIFACT_FORMAT_VERSION
+        );
         assert_eq!(import_output.manifest.project.as_deref(), Some("demo"));
-        assert_eq!(import_output.manifest.original_size, export_output.original_size);
+        assert_eq!(
+            import_output.manifest.original_size,
+            export_output.original_size
+        );
     }
 
     // Covers run_import reindex success path (lines 146-160).
@@ -532,7 +520,10 @@ mod tests {
         )
         .expect("import with reindex should succeed");
 
-        assert!(import_output.reindexed, "reindex=true → reindexed should be true");
+        assert!(
+            import_output.reindexed,
+            "reindex=true → reindexed should be true"
+        );
         assert!(import_output.db_size > 0);
     }
 
@@ -557,7 +548,7 @@ mod tests {
         }
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn import_wrapper_fails_with_nonexistent_artifact() {
@@ -582,6 +573,7 @@ mod tests {
         );
     }
 
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn import_wrapper_fails_when_kit_not_initialized() {
@@ -599,7 +591,7 @@ mod tests {
     // Covers the import wrapper success path (lines 180-188):
     // kit() resolves, run_export creates artifact, run_import succeeds,
     // serde_json::to_string succeeds, println outputs JSON.
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn import_wrapper_succeeds_via_init_kit() {
@@ -614,12 +606,8 @@ mod tests {
         let artifact = src_dir.path().join("wrapper_roundtrip.cnxp");
 
         // Export to create a valid artifact.
-        crate::service::export::run_export(
-            &src_kit,
-            artifact.to_str().unwrap(),
-            "demo",
-        )
-        .expect("run_export should succeed");
+        crate::service::export::run_export(&src_kit, artifact.to_str().unwrap(), "demo")
+            .expect("run_export should succeed");
 
         // Set up a fresh kit for the import side.
         let (_dst_dir, dst_db) = fresh_db_path();
@@ -644,7 +632,7 @@ mod tests {
 
     // Covers the import wrapper with reindex=false and a nonexistent artifact
     // through the #[forge] wrapper → ApiError conversion path.
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn import_wrapper_with_malformed_artifact_returns_api_error() {

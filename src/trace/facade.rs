@@ -143,10 +143,7 @@ fn matches_regex(value: &str, pattern: &str) -> bool {
 }
 
 /// Checks whether a single [`TraceNode`] passes all filter dimensions.
-fn node_passes_filter(
-    node: &super::TraceNode,
-    filter: &PathFilter,
-) -> bool {
+fn node_passes_filter(node: &super::TraceNode, filter: &PathFilter) -> bool {
     // include_files: if set, node's file_path must match at least one glob.
     if let Some(ref patterns) = filter.include_files {
         let Some(ref file_path) = node.file_path else {
@@ -749,7 +746,12 @@ mod tests {
     #[test]
     fn trace_cycle_serializes_with_edge_types() {
         let cycle = TraceCycle {
-            nodes: vec!["a".to_string(), "b".to_string(), "c".to_string(), "a".to_string()],
+            nodes: vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "a".to_string(),
+            ],
             edge_types: vec![EdgeType::Calls, EdgeType::Calls, EdgeType::Calls],
         };
         let json = serde_json::to_string(&cycle).expect("serialize TraceCycle");
@@ -772,7 +774,10 @@ mod tests {
 
     #[test]
     fn trace_config_clamped_depth_respects_limit() {
-        let mut config = super::TraceConfig { max_depth: 50, ..Default::default() };
+        let mut config = super::TraceConfig {
+            max_depth: 50,
+            ..Default::default()
+        };
         assert_eq!(config.clamped_depth(), 10);
         config.max_depth = 3;
         assert_eq!(config.clamped_depth(), 3);
@@ -1218,7 +1223,9 @@ mod tests {
         // resolve_symbol. Also exercises the TraceType::Calls dispatch arm.
         let g = graph_a_calls_b_and_dataflow();
         let facade = TraceFacade::new(&g);
-        let result = facade.trace_by_id(&"a".to_string(), "label_a", TraceType::Calls, 3).unwrap();
+        let result = facade
+            .trace_by_id(&"a".to_string(), "label_a", TraceType::Calls, 3)
+            .unwrap();
         assert_eq!(result.symbol, "label_a");
         assert_eq!(result.paths.len(), 1);
         assert_eq!(path_node_names(&result.paths[0]), vec!["a", "b"]);

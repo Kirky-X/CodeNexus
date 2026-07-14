@@ -17,9 +17,9 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::service::error::CodeNexusError;
 use crate::kit::{AsyncKit, AsyncReady, StorageModule, TraceModule};
 use crate::model::{Graph, Node, NodeId};
+use crate::service::error::CodeNexusError;
 #[cfg(feature = "cli")]
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error, wrap_kit_error};
 #[cfg(feature = "cli")]
@@ -28,9 +28,9 @@ use crate::storage::schema::{escape_cypher_string, escape_identifier};
 use crate::trace::TraceError;
 
 #[cfg(feature = "cli")]
-use sdforge::prelude::ApiError;
-#[cfg(feature = "cli")]
 use sdforge::forge;
+#[cfg(feature = "cli")]
+use sdforge::prelude::ApiError;
 
 /// Resolves a symbol name to a node id by matching `name` first, then
 /// `qualified_name`.
@@ -927,10 +927,7 @@ mod tests {
                 .build(),
         );
         // Two "foo" by name, but "demo.a" matches by QN → returns id1.
-        assert_eq!(
-            resolve_start_id(&graph, "demo.a").as_deref(),
-            Some("id1")
-        );
+        assert_eq!(resolve_start_id(&graph, "demo.a").as_deref(), Some("id1"));
     }
 
     #[test]
@@ -1192,7 +1189,13 @@ mod tests {
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").unwrap();
 
         // Dry-run: should find 'a' in both a.rs and b.rs (neighbor file)
-        let result = rename_core(&kit, "a", "renamed_a", Some(tmp.path().to_str().unwrap()), false);
+        let result = rename_core(
+            &kit,
+            "a",
+            "renamed_a",
+            Some(tmp.path().to_str().unwrap()),
+            false,
+        );
         assert!(
             result.is_ok(),
             "dry-run with neighbors should succeed: {:?}",
@@ -1202,7 +1205,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn rename_wrapper_fails_with_invalid_identifier() {
@@ -1229,7 +1232,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn rename_wrapper_fails_with_apply_without_path() {
@@ -1256,7 +1259,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn rename_wrapper_fails_when_kit_not_initialized() {
@@ -1274,7 +1277,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn rename_wrapper_succeeds_dry_run() {
@@ -1294,7 +1297,11 @@ mod tests {
             String::new(),
             false,
         ));
-        assert!(result.is_ok(), "dry-run rename should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "dry-run rename should succeed: {:?}",
+            result.err()
+        );
 
         reset_kit_for_testing();
     }
@@ -1304,7 +1311,7 @@ mod tests {
     // Uses an absolute filePath NOT under the root so that
     // collect_candidate_files excludes it → text_edits empty →
     // apply_text_edits is a no-op (same pattern as core_apply_updates_graph_name).
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn rename_wrapper_succeeds_with_apply() {
@@ -1325,7 +1332,11 @@ mod tests {
             tmp.path().to_string_lossy().into_owned(),
             true,
         ));
-        assert!(result.is_ok(), "apply rename should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "apply rename should succeed: {:?}",
+            result.err()
+        );
 
         // Verify the graph was updated.
         let rows = storage
@@ -1343,7 +1354,7 @@ mod tests {
 
     // Covers the wrapper symbol-not-found error path (lines 311-321):
     // load_graph returns SymbolNotFound → ApiError::NotFound.
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn rename_wrapper_fails_with_symbol_not_found() {
@@ -1372,7 +1383,7 @@ mod tests {
 
     // Covers the wrapper dry-run with path (lines 342-349):
     // text_edits are computed but not applied.
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn rename_wrapper_succeeds_dry_run_with_path() {
@@ -1398,11 +1409,18 @@ mod tests {
             tmp.path().to_string_lossy().into_owned(),
             false,
         ));
-        assert!(result.is_ok(), "dry-run with path should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "dry-run with path should succeed: {:?}",
+            result.err()
+        );
 
         // Verify the file was NOT modified (dry run).
         let content = std::fs::read_to_string(&file_a).unwrap();
-        assert!(content.contains("fn a()"), "file should be unchanged in dry run: {content}");
+        assert!(
+            content.contains("fn a()"),
+            "file should be unchanged in dry run: {content}"
+        );
 
         reset_kit_for_testing();
     }

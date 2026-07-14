@@ -18,18 +18,18 @@
 use thiserror::Error;
 use tracing::error;
 
-#[cfg(feature = "daemon")]
-use crate::daemon::DaemonError;
 #[cfg(feature = "cache")]
 use crate::cache::CacheError;
+#[cfg(feature = "daemon")]
+use crate::daemon::DaemonError;
+use crate::discover::DiscoverError;
 #[cfg(feature = "embed")]
 use crate::embed::EmbedError;
+use crate::index::pipeline_dag::PhaseError;
+use crate::index::IndexError;
+use crate::kit::KitError;
 #[cfg(feature = "lsp")]
 use crate::lsp::LspError;
-use crate::discover::DiscoverError;
-use crate::index::IndexError;
-use crate::index::pipeline_dag::PhaseError;
-use crate::kit::KitError;
 use crate::parse::ParseError;
 use crate::query::QueryError;
 use crate::resolve::ResolveError;
@@ -328,7 +328,9 @@ mod tests {
     fn exit_code_kit_build_failed_with_storage_corrupt_is_4() {
         let kit_err = KitError::BuildFailed {
             context: "storage",
-            source: Box::new(StorageError::Corrupt("invalid LadybugDB header".to_string())),
+            source: Box::new(StorageError::Corrupt(
+                "invalid LadybugDB header".to_string(),
+            )),
         };
         let err: CodeNexusError = kit_err.into();
         assert_eq!(err.exit_code(), 4);
@@ -358,8 +360,14 @@ mod tests {
         assert_eq!(cli_err.exit_code(), 1);
         match cli_err {
             CodeNexusError::Internal(msg) => {
-                assert!(msg.contains("error_id"), "should contain error_id, got: {msg}");
-                assert!(msg.contains("err-deadbeef"), "should contain error_id value");
+                assert!(
+                    msg.contains("error_id"),
+                    "should contain error_id, got: {msg}"
+                );
+                assert!(
+                    msg.contains("err-deadbeef"),
+                    "should contain error_id value"
+                );
             }
             other => panic!("expected Internal, got {other:?}"),
         }
@@ -396,7 +404,10 @@ mod tests {
         let err = CodeNexusError::NotFound("project demo".to_string());
         let api_err = to_api_error(err, "test");
         match api_err {
-            ApiError::NotFound { resource, resource_id } => {
+            ApiError::NotFound {
+                resource,
+                resource_id,
+            } => {
                 assert_eq!(resource, "project demo");
                 assert!(resource_id.is_none());
             }
@@ -423,7 +434,9 @@ mod tests {
         let err = CodeNexusError::Internal("boom".to_string());
         let api_err = to_api_error(err, "svc");
         match api_err {
-            ApiError::Internal { message, error_id, .. } => {
+            ApiError::Internal {
+                message, error_id, ..
+            } => {
                 assert_eq!(error_id, "svc");
                 assert!(
                     message.contains("boom"),
@@ -471,11 +484,10 @@ mod tests {
 
     #[test]
     fn exit_code_index_discover_is_1() {
-        let err: CodeNexusError =
-            IndexError::Discover(crate::discover::DiscoverError::from(std::io::Error::other(
-                "x",
-            )))
-            .into();
+        let err: CodeNexusError = IndexError::Discover(crate::discover::DiscoverError::from(
+            std::io::Error::other("x"),
+        ))
+        .into();
         assert_eq!(err.exit_code(), 1);
     }
 
@@ -559,7 +571,8 @@ mod tests {
 
     #[test]
     fn exit_code_storage_query_is_2() {
-        let err: CodeNexusError = crate::storage::StorageError::Query("bad cypher".to_string()).into();
+        let err: CodeNexusError =
+            crate::storage::StorageError::Query("bad cypher".to_string()).into();
         assert_eq!(err.exit_code(), 2);
     }
 
@@ -696,10 +709,8 @@ mod tests {
     #[cfg(feature = "daemon")]
     #[test]
     fn exit_code_daemon_notify_is_1() {
-        let err: CodeNexusError = DaemonError::Notify(
-            notify_debouncer_full::notify::Error::path_not_found(),
-        )
-        .into();
+        let err: CodeNexusError =
+            DaemonError::Notify(notify_debouncer_full::notify::Error::path_not_found()).into();
         assert_eq!(err.exit_code(), 1);
     }
 
@@ -824,7 +835,9 @@ mod tests {
     fn kit_not_initialized_api_error_has_fixed_id() {
         let api_err = kit_not_initialized();
         match api_err {
-            ApiError::Internal { message, error_id, .. } => {
+            ApiError::Internal {
+                message, error_id, ..
+            } => {
                 assert_eq!(error_id, "kit_not_initialized");
                 assert!(message.contains("Kit not initialized"));
             }

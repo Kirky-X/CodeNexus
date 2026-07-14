@@ -70,8 +70,8 @@ pub fn capture_tracing_debug<R>(f: impl FnOnce() -> R) -> String {
     let (console_tx, console_rx) = unbounded::<Arc<LogRecord>>();
     let (async_tx, _async_rx) = unbounded::<Arc<LogRecord>>();
     let metrics = Arc::new(Metrics::new());
-    let layer = LoggerSubscriber::new(console_tx, async_tx, metrics)
-        .with_filter(LevelFilter::DEBUG);
+    let layer =
+        LoggerSubscriber::new(console_tx, async_tx, metrics).with_filter(LevelFilter::DEBUG);
     let registry = tracing_subscriber::registry().with(layer);
     tracing::subscriber::with_default(registry, f);
     drain_to_string(&console_rx)

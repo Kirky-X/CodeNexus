@@ -18,9 +18,9 @@ use crate::service::runtime::kit;
 use crate::storage::ProjectRecord;
 
 #[cfg(feature = "cli")]
-use sdforge::prelude::ApiError;
-#[cfg(feature = "cli")]
 use sdforge::forge;
+#[cfg(feature = "cli")]
+use sdforge::prelude::ApiError;
 
 /// JSON-serializable status output.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -160,7 +160,10 @@ mod tests {
         assert_eq!(p.name, "demo");
         assert_eq!(p.last_commit, "abc123");
         // rootPath is not a git repo, so current_head is empty, stale is false.
-        assert!(p.current_head.is_empty(), "non-git dir should have empty head");
+        assert!(
+            p.current_head.is_empty(),
+            "non-git dir should have empty head"
+        );
         assert!(!p.stale, "should not be stale when current_head is empty");
     }
 
@@ -242,7 +245,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn status_wrapper_succeeds_via_init_kit() {
@@ -260,7 +263,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn status_wrapper_fails_when_kit_not_initialized() {

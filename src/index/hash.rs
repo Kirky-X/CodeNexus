@@ -90,10 +90,7 @@ pub fn compute_file_hash_cached(
 fn build_cache_key(path: &Path) -> Option<String> {
     let metadata = std::fs::metadata(path).ok()?;
     let mtime = metadata.modified().ok()?;
-    let nanos = mtime
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_nanos();
+    let nanos = mtime.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
     let path_hash = compute_content_hash(path.to_string_lossy().as_bytes());
     Some(format!("hash:file:{path_hash}:{nanos}"))
 }
@@ -322,8 +319,7 @@ mod cached_tests {
     /// calls within a single test.
     fn pin_mtime(path: &Path) {
         let file = fs::File::open(path).expect("open for set_modified");
-        file.set_modified(fixed_time())
-            .expect("set_modified");
+        file.set_modified(fixed_time()).expect("set_modified");
     }
 
     #[test]
@@ -397,7 +393,11 @@ mod cached_tests {
         let snap = cache.snapshot();
         assert_eq!(snap.len(), 1, "exactly one entry should be cached");
         let (_key, val) = snap.iter().next().expect("one entry");
-        assert_eq!(val, h.as_bytes(), "cached value should be hash string bytes");
+        assert_eq!(
+            val,
+            h.as_bytes(),
+            "cached value should be hash string bytes"
+        );
         assert_eq!(h, compute_content_hash(b"hello world"));
     }
 }

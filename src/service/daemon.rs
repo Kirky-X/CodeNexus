@@ -7,11 +7,11 @@
 use std::path::Path;
 
 #[cfg(feature = "daemon")]
-use crate::service::error::CodeNexusError;
+use crate::kit::{AsyncKit, AsyncReady, DaemonModule};
 #[cfg(all(feature = "cli", feature = "daemon"))]
 use crate::service::error::to_api_error;
 #[cfg(feature = "daemon")]
-use crate::kit::{DaemonModule, AsyncKit, AsyncReady};
+use crate::service::error::CodeNexusError;
 
 #[cfg(all(feature = "cli", feature = "daemon"))]
 use crate::service::error::kit_not_initialized;
@@ -19,9 +19,9 @@ use crate::service::error::kit_not_initialized;
 use crate::service::runtime::kit;
 
 #[cfg(all(feature = "cli", feature = "daemon"))]
-use sdforge::prelude::ApiError;
-#[cfg(all(feature = "cli", feature = "daemon"))]
 use sdforge::forge;
+#[cfg(all(feature = "cli", feature = "daemon"))]
+use sdforge::prelude::ApiError;
 
 /// Validates the watch path, resolves the DaemonRunner capability, and enters
 /// the blocking event loop.
@@ -193,7 +193,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn daemon_wrapper_succeeds_via_init_kit() {
@@ -229,7 +229,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn daemon_wrapper_fails_when_kit_not_initialized() {

@@ -357,7 +357,10 @@ impl<'a> DeadCodeDetector<'a> {
     /// Currently exercised by unit tests in `mod tests`; reserved for future
     /// single-edge-type diagnostics (e.g. "is this function tested?" via
     /// `EdgeType::Tests`) when `load_referenced_ids` is overkill.
-    #[allow(dead_code, reason = "exercised by unit tests; reserved for future diagnostics")]
+    #[allow(
+        dead_code,
+        reason = "exercised by unit tests; reserved for future diagnostics"
+    )]
     fn has_incoming_edge(&self, func_id: &str, edge_type: EdgeType) -> StorageResult<bool> {
         let escaped_id = escape_cypher_string(func_id);
         let type_str = edge_type.as_db_type();
@@ -1195,9 +1198,33 @@ mod tests {
             "/src/lib.rs",
             10,
         );
-        create_function(&kit, "f_src_a", "demo", "src_a", "demo.src_a", "/src/lib.rs", 20);
-        create_function(&kit, "f_src_b", "demo", "src_b", "demo.src_b", "/src/lib.rs", 25);
-        create_function(&kit, "f_src_c", "demo", "src_c", "demo.src_c", "/src/lib.rs", 30);
+        create_function(
+            &kit,
+            "f_src_a",
+            "demo",
+            "src_a",
+            "demo.src_a",
+            "/src/lib.rs",
+            20,
+        );
+        create_function(
+            &kit,
+            "f_src_b",
+            "demo",
+            "src_b",
+            "demo.src_b",
+            "/src/lib.rs",
+            25,
+        );
+        create_function(
+            &kit,
+            "f_src_c",
+            "demo",
+            "src_c",
+            "demo.src_c",
+            "/src/lib.rs",
+            30,
+        );
         create_edge(&kit, "e1", "f_src_a", "f_tgt_calls", "demo", "CALLS");
         create_edge(&kit, "e2", "f_src_b", "f_tgt_usage", "demo", "USAGE");
         create_edge(&kit, "e3", "f_src_c", "f_tgt_tests", "demo", "TESTS");
@@ -1710,7 +1737,9 @@ mod tests {
         let storage = storage(&kit);
         let detector = DeadCodeDetector::new(&*storage);
         assert!(
-            !detector.is_ffi_entry("nonexistent_id").expect("is_ffi_entry"),
+            !detector
+                .is_ffi_entry("nonexistent_id")
+                .expect("is_ffi_entry"),
             "nonexistent id should return false"
         );
     }
@@ -1789,9 +1818,7 @@ mod tests {
             escape_cypher_string(signature),
             is_exported,
         );
-        storage
-            .execute(&cypher)
-            .expect("create method with flags");
+        storage.execute(&cypher).expect("create method with flags");
     }
 
     #[test]

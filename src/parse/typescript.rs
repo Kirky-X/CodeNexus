@@ -1929,8 +1929,9 @@ function setupSecond() {
     // --- Coverage tests for uncovered branches ---
 
     fn parse_ts(source: &str) -> tree_sitter::Tree {
-        let mut parser = crate::parse::parser_factory::ParserFactory::create_parser(Language::TypeScript)
-            .expect("parser");
+        let mut parser =
+            crate::parse::parser_factory::ParserFactory::create_parser(Language::TypeScript)
+                .expect("parser");
         parser.parse(source, None).expect("parse")
     }
 
@@ -1940,7 +1941,11 @@ function setupSecond() {
         let src = "let x;";
         let result = extract(src);
         let assign = result.assignments.iter().find(|a| a.target_name == "x");
-        assert!(assign.is_some(), "should produce AssignInfo for `let x;`: {:?}", result.assignments);
+        assert!(
+            assign.is_some(),
+            "should produce AssignInfo for `let x;`: {:?}",
+            result.assignments
+        );
         let a = assign.unwrap();
         assert_eq!(a.source_name, "");
         assert!(!a.is_return_assign);
@@ -1951,8 +1956,15 @@ function setupSecond() {
         // Covers lines 888-889: extract_assignment call_expression branch
         let src = "function f() { x = foo(); }";
         let result = extract(src);
-        let assign = result.assignments.iter().find(|a| a.target_name == "x" && a.source_name == "foo");
-        assert!(assign.is_some(), "should find `x = foo()` assignment: {:?}", result.assignments);
+        let assign = result
+            .assignments
+            .iter()
+            .find(|a| a.target_name == "x" && a.source_name == "foo");
+        assert!(
+            assign.is_some(),
+            "should find `x = foo()` assignment: {:?}",
+            result.assignments
+        );
         assert!(assign.unwrap().is_return_assign);
     }
 
@@ -2070,7 +2082,9 @@ function setupSecond() {
         assert_eq!(result.imports.len(), 1, "should extract 1 default import");
         assert_eq!(result.imports[0].source_file, "express");
         assert!(
-            result.imports[0].imported_names.contains(&"express".to_string()),
+            result.imports[0]
+                .imported_names
+                .contains(&"express".to_string()),
             "imported names should contain express: {:?}",
             result.imports[0].imported_names
         );
@@ -2172,7 +2186,10 @@ function setupSecond() {
     #[test]
     fn comment_only_source_returns_empty_result() {
         let result = extract("// just a comment\n");
-        assert!(result.is_empty(), "comment-only file should produce no nodes");
+        assert!(
+            result.is_empty(),
+            "comment-only file should produce no nodes"
+        );
     }
 
     #[test]
@@ -2251,11 +2268,17 @@ function setupSecond() {
         let src = "interface IFoo {} class Foo implements IFoo {}";
         let result = extract(src);
         assert!(
-            result.nodes.iter().any(|n| n.label == NodeLabel::Interface && n.name == "IFoo"),
+            result
+                .nodes
+                .iter()
+                .any(|n| n.label == NodeLabel::Interface && n.name == "IFoo"),
             "should extract IFoo interface"
         );
         assert!(
-            result.nodes.iter().any(|n| n.label == NodeLabel::Class && n.name == "Foo"),
+            result
+                .nodes
+                .iter()
+                .any(|n| n.label == NodeLabel::Class && n.name == "Foo"),
             "should extract Foo class"
         );
     }
@@ -2309,8 +2332,8 @@ function setupSecond() {
         let src = "export default function() {}";
         let tree = parse_ts(src);
         let root = tree.root_node();
-        let export_stmt = find_first_by_kind(root, "export_statement")
-            .expect("should find export_statement");
+        let export_stmt =
+            find_first_by_kind(root, "export_statement").expect("should find export_statement");
         let func_node = export_stmt
             .child_by_field_name("value")
             .expect("export_statement should have a value field");

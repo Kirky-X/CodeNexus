@@ -21,9 +21,9 @@ use crate::service::error::CodeNexusError;
 use crate::service::runtime::kit;
 
 #[cfg(all(feature = "cli", feature = "analysis"))]
-use sdforge::prelude::ApiError;
-#[cfg(all(feature = "cli", feature = "analysis"))]
 use sdforge::forge;
+#[cfg(all(feature = "cli", feature = "analysis"))]
+use sdforge::prelude::ApiError;
 
 /// JSON-serializable dead-code output.
 #[cfg(feature = "analysis")]
@@ -103,8 +103,15 @@ async fn dead_code(
     edge_types: String,
 ) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    let output = run_dead_code(&kit, &project, &entry, check_exported, check_ffi, &edge_types)
-        .map_err(|e| to_api_error(e, "dead_code_error"))?;
+    let output = run_dead_code(
+        &kit,
+        &project,
+        &entry,
+        check_exported,
+        check_ffi,
+        &edge_types,
+    )
+    .map_err(|e| to_api_error(e, "dead_code_error"))?;
     let json = serde_json::to_string(&output)
         .map_err(|e| to_api_error(CodeNexusError::from(e), "dead_code_error"))?;
     println!("{json}");
@@ -204,7 +211,10 @@ mod tests {
             names2.contains(&"pub_fn"),
             "exported fn should be dead with check_exported=false"
         );
-        assert!(names2.contains(&"priv_fn"), "private fn should still be dead");
+        assert!(
+            names2.contains(&"priv_fn"),
+            "private fn should still be dead"
+        );
     }
 
     #[test]
@@ -248,7 +258,8 @@ mod tests {
         );
         assert!(names.contains(&"a"), "a should be dead");
 
-        let output2 = run_dead_code(&kit, "demo", "", true, true, "CALLS").expect("run should succeed");
+        let output2 =
+            run_dead_code(&kit, "demo", "", true, true, "CALLS").expect("run should succeed");
         let names2: Vec<&str> = output2.dead_code.iter().map(|e| e.name.as_str()).collect();
         assert!(
             names2.contains(&"b"),
@@ -263,7 +274,10 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let output = run_dead_code(&kit, "demo", "", true, true, "").expect("run should succeed");
         assert_eq!(output.project, "demo");
-        assert!(output.dead_code.is_empty(), "empty DB should yield empty dead_code");
+        assert!(
+            output.dead_code.is_empty(),
+            "empty DB should yield empty dead_code"
+        );
     }
 
     // ===== T036: build_dead_code_config unit tests =====
@@ -318,7 +332,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     fn dead_code_wrapper_succeeds_via_init_kit() {
         use crate::service::runtime::{init_kit, reset_kit_for_testing};
@@ -341,7 +355,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     fn dead_code_wrapper_fails_when_kit_not_initialized() {
         use crate::service::runtime::reset_kit_for_testing;

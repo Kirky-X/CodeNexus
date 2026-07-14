@@ -71,10 +71,7 @@ impl Extractor for JsonExtractor {
                 file_path: file_path.to_string(),
             })?;
         let root = tree.root_node();
-        let ctx = VisitContext {
-            file_path,
-            project,
-        };
+        let ctx = VisitContext { file_path, project };
         // Only extract top-level pairs (depth 1): walk the document's named
         // children, and for each `object` child, extract its `pair` children
         // without recursing into nested values.
@@ -217,12 +214,7 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Property)
             .collect();
-        assert_eq!(
-            pairs.len(),
-            1,
-            "should extract 1 pair: {:?}",
-            result.nodes
-        );
+        assert_eq!(pairs.len(), 1, "should extract 1 pair: {:?}", result.nodes);
         assert_eq!(pairs[0].name, "name");
         assert_eq!(pairs[0].language, Some(Language::Json));
         assert_eq!(pairs[0].project, "proj");
@@ -306,22 +298,14 @@ mod tests {
     #[test]
     fn qualified_name_uses_file_path_and_key() {
         let result = extract("{\"name\": \"value\"}\n");
-        let pair = result
-            .nodes
-            .iter()
-            .find(|n| n.name == "name")
-            .unwrap();
+        let pair = result.nodes.iter().find(|n| n.name == "name").unwrap();
         assert_eq!(pair.qualified_name, "proj.test.json.name");
     }
 
     #[test]
     fn duplicate_keys_get_disambiguated_fqn() {
         let result = extract("{\"a\": 1, \"a\": 2}\n");
-        let pairs: Vec<_> = result
-            .nodes
-            .iter()
-            .filter(|n| n.name == "a")
-            .collect();
+        let pairs: Vec<_> = result.nodes.iter().filter(|n| n.name == "a").collect();
         assert_eq!(pairs.len(), 2, "should extract 2 pairs with key 'a'");
         assert_ne!(
             pairs[0].qualified_name, pairs[1].qualified_name,

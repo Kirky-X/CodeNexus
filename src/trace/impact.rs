@@ -249,10 +249,7 @@ impl<'a> ImpactAnalyzer<'a> {
                 results.push(ImpactNode {
                     name: predecessor.name.clone(),
                     qualified_name: predecessor.qualified_name.clone(),
-                    file_path: predecessor
-                        .file_path
-                        .clone()
-                        .unwrap_or_default(),
+                    file_path: predecessor.file_path.clone().unwrap_or_default(),
                     impact_path: new_path.clone(),
                     edge_type: edge.edge_type,
                     depth: current_depth + 1,
@@ -1207,7 +1204,10 @@ mod tests {
         };
         let analyzer = ImpactAnalyzer::with_config(&g, config);
         let result = analyzer.analyze_impact(&"b".to_string());
-        assert!(result.affected.is_empty(), "Tests edge not in filter should be skipped");
+        assert!(
+            result.affected.is_empty(),
+            "Tests edge not in filter should be skipped"
+        );
     }
 
     #[test]
@@ -1240,7 +1240,10 @@ mod tests {
         g.add_edge(Edge::new("missing_src", "target", EdgeType::Calls, "proj"));
         let analyzer = ImpactAnalyzer::new(&g);
         let result = analyzer.analyze_impact(&"target".to_string());
-        assert!(result.affected.is_empty(), "missing predecessor should be skipped");
+        assert!(
+            result.affected.is_empty(),
+            "missing predecessor should be skipped"
+        );
     }
 
     #[test]
@@ -1383,7 +1386,11 @@ mod tests {
         }
         for i in 1..=10 {
             let from = format!("c{i}");
-            let to = if i == 1 { "target".to_string() } else { format!("c{}", i - 1) };
+            let to = if i == 1 {
+                "target".to_string()
+            } else {
+                format!("c{}", i - 1)
+            };
             g.add_edge(Edge::new(&from, &to, EdgeType::Calls, "proj"));
         }
         g.add_edge(Edge::new("c11", "c10", EdgeType::Calls, "proj"));
@@ -1481,7 +1488,10 @@ mod tests {
         };
         let analyzer = ImpactAnalyzer::with_config(&g, config);
         let result = analyzer.analyze_impact(&"a".to_string());
-        assert!(result.affected.is_empty(), "max_depth=0 should find nothing");
+        assert!(
+            result.affected.is_empty(),
+            "max_depth=0 should find nothing"
+        );
         assert_eq!(result.risk_assessment.level, RiskLevel::Low);
     }
 
@@ -1542,7 +1552,11 @@ mod tests {
         }
         for i in 1..=10 {
             let from = format!("c{i}");
-            let to = if i == 1 { "target".to_string() } else { format!("c{}", i - 1) };
+            let to = if i == 1 {
+                "target".to_string()
+            } else {
+                format!("c{}", i - 1)
+            };
             g.add_edge(Edge::new(&from, &to, EdgeType::Calls, "proj"));
         }
         let config = ImpactConfig {

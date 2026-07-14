@@ -155,9 +155,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
 /// C#'s PascalCase convention for public members. Used heuristically to set
 /// `is_exported` on nodes so the `CallResolver` can resolve cross-file calls.
 fn is_exported_name(name: &str) -> bool {
-    name.chars()
-        .next()
-        .is_some_and(|c| c.is_ascii_uppercase())
+    name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
 /// Extracts a node that exposes a `name` field (class / interface / struct /
@@ -402,7 +400,10 @@ mod tests {
         assert_eq!(classes[0].project, "proj");
         assert_eq!(classes[0].file_path.as_deref(), Some("test.cs"));
         assert!(classes[0].is_global, "top-level class should be global");
-        assert!(classes[0].is_exported, "PascalCase class should be exported");
+        assert!(
+            classes[0].is_exported,
+            "PascalCase class should be exported"
+        );
     }
 
     #[test]
@@ -447,12 +448,7 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Enum)
             .collect();
-        assert_eq!(
-            enums.len(),
-            1,
-            "should extract 1 enum: {:?}",
-            result.nodes
-        );
+        assert_eq!(enums.len(), 1, "should extract 1 enum: {:?}", result.nodes);
         assert_eq!(enums[0].name, "Color");
     }
 
@@ -472,7 +468,10 @@ mod tests {
         );
         assert_eq!(methods[0].name, "Bar");
         assert!(!methods[0].is_global, "method should not be global");
-        assert!(methods[0].is_exported, "PascalCase method should be exported");
+        assert!(
+            methods[0].is_exported,
+            "PascalCase method should be exported"
+        );
     }
 
     #[test]
@@ -509,7 +508,8 @@ mod tests {
 
     #[test]
     fn extracts_multiple_using_directives() {
-        let result = extract("using System;\nusing System.IO;\nusing System.Collections.Generic;\n");
+        let result =
+            extract("using System;\nusing System.IO;\nusing System.Collections.Generic;\n");
         assert_eq!(
             result.imports.len(),
             3,
@@ -701,7 +701,11 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Class)
             .collect();
-        assert_eq!(classes.len(), 1, "class should still be extracted with property");
+        assert_eq!(
+            classes.len(),
+            1,
+            "class should still be extracted with property"
+        );
         assert_eq!(classes[0].name, "Foo");
     }
 
@@ -714,7 +718,11 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Class)
             .collect();
-        assert_eq!(classes.len(), 1, "class should still be extracted with event");
+        assert_eq!(
+            classes.len(),
+            1,
+            "class should still be extracted with event"
+        );
     }
 
     #[test]
@@ -748,7 +756,10 @@ mod tests {
     #[test]
     fn comment_only_source_returns_empty_result() {
         let result = extract("// just a comment\n");
-        assert!(result.is_empty(), "comment-only file should produce no nodes");
+        assert!(
+            result.is_empty(),
+            "comment-only file should produce no nodes"
+        );
     }
 
     #[test]
@@ -816,7 +827,10 @@ mod tests {
             .iter()
             .find(|n| n.name == "foo")
             .expect("should extract class foo");
-        assert!(!c.is_exported, "lowercase class name should not be exported");
+        assert!(
+            !c.is_exported,
+            "lowercase class name should not be exported"
+        );
     }
 
     // --- parse helper and tree walker for direct function tests ---
@@ -828,7 +842,10 @@ mod tests {
         parser.parse(source, None).expect("parse")
     }
 
-    fn find_first_by_kind<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
+    fn find_first_by_kind<'a>(
+        node: tree_sitter::Node<'a>,
+        kind: &str,
+    ) -> Option<tree_sitter::Node<'a>> {
         if node.kind() == kind {
             return Some(node);
         }
@@ -852,8 +869,7 @@ mod tests {
         let src = "using System.IO;\n";
         let tree = parse_source(src);
         let root = tree.root_node();
-        let qn = find_first_by_kind(root, "qualified_name")
-            .expect("should find qualified_name");
+        let qn = find_first_by_kind(root, "qualified_name").expect("should find qualified_name");
         let name = callee_name(qn, src);
         // If the grammar has right/left fields, returns the rightmost
         // identifier. If right is an identifier, it should be "IO".
@@ -950,8 +966,8 @@ mod tests {
         let src = "class Foo { }\n";
         let tree = parse_source(src);
         let root = tree.root_node();
-        let class_decl = find_first_by_kind(root, "class_declaration")
-            .expect("should find class_declaration");
+        let class_decl =
+            find_first_by_kind(root, "class_declaration").expect("should find class_declaration");
         assert!(
             callee_name(class_decl, src).is_none(),
             "callee_name on class_declaration should return None"
@@ -966,8 +982,8 @@ mod tests {
         let src = "class Foo { }\n";
         let tree = parse_source(src);
         let root = tree.root_node();
-        let class_decl = find_first_by_kind(root, "class_declaration")
-            .expect("should find class_declaration");
+        let class_decl =
+            find_first_by_kind(root, "class_declaration").expect("should find class_declaration");
         let args = call_arguments(class_decl, src);
         assert!(
             args.is_empty(),

@@ -2091,13 +2091,25 @@ mod tests {
         // second candidate has matching signature → returns signature match.
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_func", "proj.a.c_func", NodeLabel::Function, "a.c", "proj")
-                .with_language(Language::C),
+            SymbolEntry::new(
+                "c_func",
+                "proj.a.c_func",
+                NodeLabel::Function,
+                "a.c",
+                "proj",
+            )
+            .with_language(Language::C),
         );
         table.add_symbol(
-            SymbolEntry::new("c_func", "proj.b.c_func", NodeLabel::Function, "b.c", "proj")
-                .with_language(Language::C)
-                .with_signature("int c_func(int, int)"),
+            SymbolEntry::new(
+                "c_func",
+                "proj.b.c_func",
+                NodeLabel::Function,
+                "b.c",
+                "proj",
+            )
+            .with_language(Language::C)
+            .with_signature("int c_func(int, int)"),
         );
 
         let resolver = FfiResolver::new(&table, "proj");
@@ -2119,8 +2131,14 @@ mod tests {
     fn resolve_ffi_mixed_resolvable_and_unresolvable_produces_only_resolvable() {
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(
-            SymbolEntry::new("c_func", "proj.c.c_func", NodeLabel::Function, "c.c", "proj")
-                .with_language(Language::C),
+            SymbolEntry::new(
+                "c_func",
+                "proj.c.c_func",
+                NodeLabel::Function,
+                "c.c",
+                "proj",
+            )
+            .with_language(Language::C),
         );
 
         let mut result = ExtractResult::new("main.rs", Language::Rust);

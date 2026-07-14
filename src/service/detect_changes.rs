@@ -24,9 +24,9 @@ use crate::service::runtime::kit;
 use crate::storage::schema::node_table_columns;
 
 #[cfg(feature = "cli")]
-use sdforge::prelude::ApiError;
-#[cfg(feature = "cli")]
 use sdforge::forge;
+#[cfg(feature = "cli")]
+use sdforge::prelude::ApiError;
 
 /// Git diff mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,12 +230,7 @@ fn find_symbols_in_ranges(
     // Batch query: count incoming edges for all matching symbols in one query
     let ids_clause = matching
         .iter()
-        .map(|m| {
-            format!(
-                "'{}'",
-                crate::storage::schema::escape_cypher_string(&m.id)
-            )
-        })
+        .map(|m| format!("'{}'", crate::storage::schema::escape_cypher_string(&m.id)))
         .collect::<Vec<_>>()
         .join(", ");
     let cypher = format!(
@@ -343,7 +338,8 @@ async fn detect_changes(path: String, mode: String) -> Result<(), ApiError> {
         value: Some(Value::String(mode.clone())),
     })?;
 
-    let diff_output = run_git_diff(repo_root, diff_mode).map_err(|e| to_api_error(e, "detect_changes_error"))?;
+    let diff_output =
+        run_git_diff(repo_root, diff_mode).map_err(|e| to_api_error(e, "detect_changes_error"))?;
     let hunks = parse_unified_diff(&diff_output);
     let files_changed = hunks.len();
 
@@ -353,8 +349,8 @@ async fn detect_changes(path: String, mode: String) -> Result<(), ApiError> {
     let mut affected: Vec<AffectedSymbolOutput> = Vec::new();
     for (rel_path, ranges) in &hunks {
         let abs_path = repo_root.join(rel_path);
-        for sym in
-            find_symbols_in_ranges(&*storage, rel_path, &abs_path, ranges).map_err(|e| to_api_error(e, "detect_changes_error"))?
+        for sym in find_symbols_in_ranges(&*storage, rel_path, &abs_path, ranges)
+            .map_err(|e| to_api_error(e, "detect_changes_error"))?
         {
             affected.push(sym);
         }
@@ -407,7 +403,11 @@ mod tests {
     /// Core logic mirroring the service function, taking explicit params
     /// (no DetectChangesArgs) so tests can exercise error paths without the
     /// `#[forge]` macro wrapper.
-    fn detect_changes_core(kit: &AsyncKit<AsyncReady>, path: &str, mode: &str) -> Result<(), CodeNexusError> {
+    fn detect_changes_core(
+        kit: &AsyncKit<AsyncReady>,
+        path: &str,
+        mode: &str,
+    ) -> Result<(), CodeNexusError> {
         let repo_root = Path::new(path);
         if !repo_root.is_dir() {
             return Err(CodeNexusError::InvalidInput(format!(
@@ -1009,7 +1009,17 @@ diff --git a/bar.rs b/bar.rs
                 .map(|s| s.success())
                 .unwrap_or(false)
         };
-        if !git(&["add", "."]) || !git(&["-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "init"]) {
+        if !git(&["add", "."])
+            || !git(&[
+                "-c",
+                "user.email=t@t.com",
+                "-c",
+                "user.name=T",
+                "commit",
+                "-m",
+                "init",
+            ])
+        {
             eprintln!("skipping test: git add/commit failed");
             return;
         }
@@ -1081,7 +1091,17 @@ diff --git a/bar.rs b/bar.rs
                 .map(|s| s.success())
                 .unwrap_or(false)
         };
-        if !git(&["add", "."]) || !git(&["-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "init"]) {
+        if !git(&["add", "."])
+            || !git(&[
+                "-c",
+                "user.email=t@t.com",
+                "-c",
+                "user.name=T",
+                "commit",
+                "-m",
+                "init",
+            ])
+        {
             eprintln!("skipping test: git add/commit failed");
             return;
         }
@@ -1123,7 +1143,17 @@ diff --git a/bar.rs b/bar.rs
                 .map(|s| s.success())
                 .unwrap_or(false)
         };
-        if !git(&["add", "."]) || !git(&["-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "init"]) {
+        if !git(&["add", "."])
+            || !git(&[
+                "-c",
+                "user.email=t@t.com",
+                "-c",
+                "user.name=T",
+                "commit",
+                "-m",
+                "init",
+            ])
+        {
             eprintln!("skipping test: git add/commit failed");
             return;
         }
@@ -1172,7 +1202,7 @@ diff --git a/bar.rs b/bar.rs
         }
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn detect_changes_wrapper_fails_with_nonexistent_path() {
@@ -1195,7 +1225,7 @@ diff --git a/bar.rs b/bar.rs
         );
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn detect_changes_wrapper_fails_with_invalid_mode() {
@@ -1219,19 +1249,17 @@ diff --git a/bar.rs b/bar.rs
         );
     }
 
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn detect_changes_wrapper_fails_when_kit_not_initialized() {
         let _guard = KitGuard::new();
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let result = rt.block_on(detect_changes(
-            "/tmp".to_string(),
-            "unstaged".to_string(),
-        ));
+        let result = rt.block_on(detect_changes("/tmp".to_string(), "unstaged".to_string()));
         assert!(result.is_err(), "wrapper should fail without kit");
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn detect_changes_wrapper_succeeds_on_real_git_repo() {
@@ -1265,6 +1293,7 @@ diff --git a/bar.rs b/bar.rs
     }
 
     // Covers the wrapper with staged mode on a real git repo.
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn detect_changes_wrapper_succeeds_with_staged_mode() {
@@ -1292,7 +1321,15 @@ diff --git a/bar.rs b/bar.rs
                 .unwrap_or(false)
         };
         if !git(&["add", "."])
-            || !git(&["-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "init"])
+            || !git(&[
+                "-c",
+                "user.email=t@t.com",
+                "-c",
+                "user.name=T",
+                "commit",
+                "-m",
+                "init",
+            ])
         {
             eprintln!("skipping test: git add/commit failed");
             return;
@@ -1321,6 +1358,7 @@ diff --git a/bar.rs b/bar.rs
     }
 
     // Covers the wrapper with head mode on a real git repo.
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn detect_changes_wrapper_succeeds_with_head_mode() {
@@ -1348,7 +1386,15 @@ diff --git a/bar.rs b/bar.rs
                 .unwrap_or(false)
         };
         if !git(&["add", "."])
-            || !git(&["-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "init"])
+            || !git(&[
+                "-c",
+                "user.email=t@t.com",
+                "-c",
+                "user.name=T",
+                "commit",
+                "-m",
+                "init",
+            ])
         {
             eprintln!("skipping test: git add/commit failed");
             return;
@@ -1377,7 +1423,7 @@ diff --git a/bar.rs b/bar.rs
     }
 
     // Covers the wrapper failing when path is a file, not a directory.
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn detect_changes_wrapper_fails_with_file_path() {

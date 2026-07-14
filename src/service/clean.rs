@@ -9,17 +9,17 @@ use serde::Serialize;
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(any(feature = "cli", test))]
 use crate::service::error::CodeNexusError;
-#[cfg(any(feature = "cli", test))]
-use crate::storage::capability::Storage;
 #[cfg(feature = "cli")]
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 #[cfg(feature = "cli")]
 use crate::service::runtime::kit;
+#[cfg(any(feature = "cli", test))]
+use crate::storage::capability::Storage;
 
 #[cfg(feature = "cli")]
-use sdforge::prelude::ApiError;
-#[cfg(feature = "cli")]
 use sdforge::forge;
+#[cfg(feature = "cli")]
+use sdforge::prelude::ApiError;
 
 /// JSON-serializable clean-command output.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -31,10 +31,7 @@ pub struct CleanOutput {
 
 /// Resolves a project identifier (name or id) to the canonical project id.
 #[cfg(any(feature = "cli", test))]
-fn resolve_project_id(
-    storage: &dyn Storage,
-    project: &str,
-) -> Result<String, CodeNexusError> {
+fn resolve_project_id(storage: &dyn Storage, project: &str) -> Result<String, CodeNexusError> {
     let projects = storage.list_projects()?;
     let project_id = projects
         .iter()
@@ -52,10 +49,7 @@ fn resolve_project_id(
 
 /// Runs clean against an injected Kit (testable core).
 #[cfg(any(feature = "cli", test))]
-pub fn run_clean(
-    kit: &AsyncKit<AsyncReady>,
-    project: &str,
-) -> Result<CleanOutput, CodeNexusError> {
+pub fn run_clean(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<CleanOutput, CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
     let project_id = resolve_project_id(&*storage, project)?;
     storage.delete_project(&project_id)?;
@@ -175,7 +169,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     #[cfg(feature = "cli")]
     fn clean_wrapper_succeeds_via_init_kit() {
@@ -195,7 +189,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     #[cfg(feature = "cli")]
     fn clean_wrapper_fails_when_kit_not_initialized() {

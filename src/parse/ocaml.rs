@@ -62,10 +62,7 @@ impl Extractor for OCamlExtractor {
                 file_path: file_path.to_string(),
             })?;
         let root = tree.root_node();
-        let ctx = VisitContext {
-            file_path,
-            project,
-        };
+        let ctx = VisitContext { file_path, project };
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
                 visit_node(child, source, &ctx, &mut result);
@@ -185,7 +182,12 @@ fn extract_value_definition(
     }
 }
 
-fn extract_let_binding(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
+fn extract_let_binding(
+    node: Node,
+    source: &str,
+    ctx: &VisitContext<'_>,
+    result: &mut ExtractResult,
+) {
     // let_binding has a `pattern` field containing the value_name.
     let name = node
         .child_by_field_name("pattern")
@@ -212,7 +214,9 @@ fn extract_let_binding(node: Node, source: &str, ctx: &VisitContext<'_>, result:
         .project(ctx.project)
         .is_global(true)
         .is_exported(true);
-    let signature = node_text(node, source).map(signature_first_line).map(String::from);
+    let signature = node_text(node, source)
+        .map(signature_first_line)
+        .map(String::from);
     if let Some(sig) = signature {
         builder = builder.signature(sig);
     }
@@ -317,7 +321,12 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Variable)
             .collect();
-        assert_eq!(vars.len(), 1, "should extract 1 variable: {:?}", result.nodes);
+        assert_eq!(
+            vars.len(),
+            1,
+            "should extract 1 variable: {:?}",
+            result.nodes
+        );
         assert_eq!(vars[0].name, "x");
     }
 
@@ -346,12 +355,7 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::TypeAlias)
             .collect();
-        assert_eq!(
-            types.len(),
-            1,
-            "should extract 1 type: {:?}",
-            result.nodes
-        );
+        assert_eq!(types.len(), 1, "should extract 1 type: {:?}", result.nodes);
         assert_eq!(types[0].name, "color");
     }
 
@@ -363,7 +367,12 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Module)
             .collect();
-        assert_eq!(modules.len(), 1, "should extract 1 module: {:?}", result.nodes);
+        assert_eq!(
+            modules.len(),
+            1,
+            "should extract 1 module: {:?}",
+            result.nodes
+        );
         assert_eq!(modules[0].name, "Foo");
     }
 
@@ -421,7 +430,10 @@ mod tests {
     fn include_qualified_module_extracts_import() {
         let result = extract("include MyLib.SubModule\n");
         assert!(
-            result.imports.iter().any(|i| i.source_file.contains("SubModule")),
+            result
+                .imports
+                .iter()
+                .any(|i| i.source_file.contains("SubModule")),
             "should extract qualified include: {:?}",
             result.imports
         );
@@ -432,7 +444,10 @@ mod tests {
         let src = "module Foo = struct\n  let bar = 42\nend\n";
         let result = extract(src);
         assert!(
-            result.nodes.iter().any(|n| n.label == NodeLabel::Module && n.name == "Foo"),
+            result
+                .nodes
+                .iter()
+                .any(|n| n.label == NodeLabel::Module && n.name == "Foo"),
             "should extract outer module"
         );
         assert!(

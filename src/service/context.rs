@@ -18,9 +18,9 @@ use crate::trace::context::{
 use crate::trace::types::{ContextOutput, SymbolNodeOutput};
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use sdforge::prelude::ApiError;
-#[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::forge;
+#[cfg(any(feature = "cli", feature = "mcp"))]
+use sdforge::prelude::ApiError;
 
 /// Runs context against an injected Kit (testable core).
 #[cfg(any(feature = "cli", feature = "mcp", test))]
@@ -145,8 +145,8 @@ mod tests {
     fn run_context_returns_invalid_input_for_unknown_symbol() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let err = run_context(&kit, "nonexistent.symbol", 3)
-            .expect_err("unknown symbol should error");
+        let err =
+            run_context(&kit, "nonexistent.symbol", 3).expect_err("unknown symbol should error");
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
         let msg = err.to_string();
         assert!(
@@ -369,7 +369,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     #[cfg(feature = "cli")]
     fn context_wrapper_succeeds_via_init_kit() {
@@ -383,18 +383,13 @@ mod tests {
         init_kit(kit).expect("init_kit");
 
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let result = rt.block_on(context(
-            "demo.f1".to_string(),
-            3,
-            "demo".to_string(),
-            false,
-        ));
+        let result = rt.block_on(context("demo.f1".to_string(), 3, "demo".to_string(), false));
         assert!(result.is_ok(), "wrapper should succeed: {:?}", result.err());
 
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     #[cfg(feature = "cli")]
     fn context_wrapper_fails_when_kit_not_initialized() {
@@ -402,19 +397,14 @@ mod tests {
 
         reset_kit_for_testing();
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let result = rt.block_on(context(
-            "demo.f1".to_string(),
-            3,
-            "demo".to_string(),
-            false,
-        ));
+        let result = rt.block_on(context("demo.f1".to_string(), 3, "demo".to_string(), false));
         assert!(result.is_err(), "wrapper should fail without kit");
         reset_kit_for_testing();
     }
 
     // Covers the enhanced=true branch (lines 88-93) in the wrapper:
     // run_context_enhanced → serde_json::to_string → println.
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     #[cfg(feature = "cli")]
     fn context_wrapper_succeeds_with_enhanced() {
@@ -435,14 +425,18 @@ mod tests {
             "demo".to_string(),
             true, // enhanced=true
         ));
-        assert!(result.is_ok(), "enhanced wrapper should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "enhanced wrapper should succeed: {:?}",
+            result.err()
+        );
 
         reset_kit_for_testing();
     }
 
     // Covers the wrapper failing with an unknown symbol (enhanced=false path,
     // lines 95-96): run_context returns InvalidInput → ApiError.
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     #[cfg(feature = "cli")]
     fn context_wrapper_fails_with_unknown_symbol() {
@@ -471,7 +465,7 @@ mod tests {
 
     // Covers the wrapper failing with an unknown symbol (enhanced=true path,
     // lines 89-90): run_context_enhanced returns Internal error → ApiError.
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     #[cfg(feature = "cli")]
     fn context_wrapper_fails_with_enhanced_unknown_symbol() {
@@ -499,7 +493,7 @@ mod tests {
     }
 
     // Covers the wrapper with depth=0 (line 96 run_context with depth 0).
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     #[cfg(feature = "cli")]
     fn context_wrapper_succeeds_with_depth_zero() {
@@ -519,7 +513,11 @@ mod tests {
             "demo".to_string(),
             false,
         ));
-        assert!(result.is_ok(), "depth=0 wrapper should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "depth=0 wrapper should succeed: {:?}",
+            result.err()
+        );
 
         reset_kit_for_testing();
     }

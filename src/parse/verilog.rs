@@ -68,10 +68,7 @@ impl Extractor for VerilogExtractor {
                 file_path: file_path.to_string(),
             })?;
         let root = tree.root_node();
-        let ctx = VisitContext {
-            file_path,
-            project,
-        };
+        let ctx = VisitContext { file_path, project };
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
                 visit_node(child, source, &ctx, &mut result);

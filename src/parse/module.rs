@@ -85,7 +85,7 @@ impl ParserRegistry for ParserRegistryCapability {
     }
 
     fn supported_languages(&self) -> Vec<Language> {
-        Language::all()
+        Language::compiled()
     }
 }
 
@@ -133,7 +133,7 @@ impl ExtractorRegistry for ExtractorRegistryCapability {
     }
 
     fn supported_languages(&self) -> Vec<Language> {
-        Language::all()
+        Language::compiled()
     }
 }
 
@@ -145,6 +145,29 @@ impl ExtractorRegistry for ExtractorRegistryCapability {
 mod tests {
     use crate::kit::{AsyncKit, ExtractorRegistryModule, ParserFactoryModule};
 
+    #[cfg(any(
+        feature = "lang-c",
+        feature = "lang-rust",
+        feature = "lang-fortran",
+        feature = "lang-python",
+        feature = "lang-typescript",
+        feature = "lang-go",
+        feature = "lang-java",
+        feature = "lang-cpp",
+        feature = "lang-javascript",
+        feature = "lang-ruby",
+        feature = "lang-haskell",
+        feature = "lang-ocaml",
+        feature = "lang-scala",
+        feature = "lang-php",
+        feature = "lang-csharp",
+        feature = "lang-bash",
+        feature = "lang-html",
+        feature = "lang-css",
+        feature = "lang-json",
+        feature = "lang-regex",
+        feature = "lang-verilog",
+    ))]
     #[test]
     fn build_returns_capability() {
         let cap = ParserFactoryModule::build_cap().expect("build_cap");
@@ -165,6 +188,29 @@ mod tests {
     }
 
     /// Verify the full AsyncKit registration flow works end-to-end.
+    #[cfg(any(
+        feature = "lang-c",
+        feature = "lang-rust",
+        feature = "lang-fortran",
+        feature = "lang-python",
+        feature = "lang-typescript",
+        feature = "lang-go",
+        feature = "lang-java",
+        feature = "lang-cpp",
+        feature = "lang-javascript",
+        feature = "lang-ruby",
+        feature = "lang-haskell",
+        feature = "lang-ocaml",
+        feature = "lang-scala",
+        feature = "lang-php",
+        feature = "lang-csharp",
+        feature = "lang-bash",
+        feature = "lang-html",
+        feature = "lang-css",
+        feature = "lang-json",
+        feature = "lang-regex",
+        feature = "lang-verilog",
+    ))]
     #[tokio::test]
     async fn kit_registration_flow() {
         let mut kit = AsyncKit::new();
@@ -182,6 +228,29 @@ mod tests {
 
     // --- ExtractorRegistryModule tests (Task 2.6) ---
 
+    #[cfg(any(
+        feature = "lang-c",
+        feature = "lang-rust",
+        feature = "lang-fortran",
+        feature = "lang-python",
+        feature = "lang-typescript",
+        feature = "lang-go",
+        feature = "lang-java",
+        feature = "lang-cpp",
+        feature = "lang-javascript",
+        feature = "lang-ruby",
+        feature = "lang-haskell",
+        feature = "lang-ocaml",
+        feature = "lang-scala",
+        feature = "lang-php",
+        feature = "lang-csharp",
+        feature = "lang-bash",
+        feature = "lang-html",
+        feature = "lang-css",
+        feature = "lang-json",
+        feature = "lang-regex",
+        feature = "lang-verilog",
+    ))]
     #[test]
     fn extractor_build_returns_capability() {
         let cap = ExtractorRegistryModule::build_cap().expect("build_cap");
@@ -206,6 +275,29 @@ mod tests {
     }
 
     /// Verify the Extractor registry registers end-to-end.
+    #[cfg(any(
+        feature = "lang-c",
+        feature = "lang-rust",
+        feature = "lang-fortran",
+        feature = "lang-python",
+        feature = "lang-typescript",
+        feature = "lang-go",
+        feature = "lang-java",
+        feature = "lang-cpp",
+        feature = "lang-javascript",
+        feature = "lang-ruby",
+        feature = "lang-haskell",
+        feature = "lang-ocaml",
+        feature = "lang-scala",
+        feature = "lang-php",
+        feature = "lang-csharp",
+        feature = "lang-bash",
+        feature = "lang-html",
+        feature = "lang-css",
+        feature = "lang-json",
+        feature = "lang-regex",
+        feature = "lang-verilog",
+    ))]
     #[tokio::test]
     async fn extractor_kit_registration_flow() {
         let mut kit = AsyncKit::new();

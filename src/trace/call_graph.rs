@@ -145,7 +145,13 @@ impl<'a> CallGraphTracer<'a> {
 
         for node_id in node_ids {
             if !colors.contains_key(node_id) {
-                self.dfs_cycles(node_id, &mut colors, &mut stack, &mut stack_edges, &mut cycles);
+                self.dfs_cycles(
+                    node_id,
+                    &mut colors,
+                    &mut stack,
+                    &mut stack_edges,
+                    &mut cycles,
+                );
             }
         }
 
@@ -752,10 +758,7 @@ mod tests {
         let cycles = tracer.detect_cycles();
         assert_eq!(cycles.len(), 1);
         assert_eq!(cycles[0].nodes, vec!["b", "c", "b"]);
-        assert_eq!(
-            cycles[0].edge_types,
-            vec![EdgeType::Calls, EdgeType::Calls]
-        );
+        assert_eq!(cycles[0].edge_types, vec![EdgeType::Calls, EdgeType::Calls]);
     }
 
     #[test]
@@ -969,7 +972,12 @@ mod tests {
             let len_before = names.len();
             names.sort();
             names.dedup();
-            assert_eq!(names.len(), len_before, "path revisits a node: {:?}", p.nodes);
+            assert_eq!(
+                names.len(),
+                len_before,
+                "path revisits a node: {:?}",
+                p.nodes
+            );
         }
         assert!(paths.iter().any(|p| p.depth == 1));
     }
@@ -1000,10 +1008,18 @@ mod tests {
         // (source node not in graph). The reverse loop must skip it (line 308).
         let mut g = Graph::new();
         g.add_node(make_func("a", "a"));
-        g.add_edge(Edge::new("missing_handler", "a", EdgeType::HandlesRoute, "proj"));
+        g.add_edge(Edge::new(
+            "missing_handler",
+            "a",
+            EdgeType::HandlesRoute,
+            "proj",
+        ));
         let tracer = CallGraphTracer::new(&g);
         let paths = tracer.trace_cross_service(&"a".to_string(), 5);
-        assert!(paths.is_empty(), "reverse edge to missing handler should be skipped");
+        assert!(
+            paths.is_empty(),
+            "reverse edge to missing handler should be skipped"
+        );
     }
 
     #[test]
@@ -1024,7 +1040,12 @@ mod tests {
             let len_before = names.len();
             names.sort();
             names.dedup();
-            assert_eq!(names.len(), len_before, "path revisits a node: {:?}", p.nodes);
+            assert_eq!(
+                names.len(),
+                len_before,
+                "path revisits a node: {:?}",
+                p.nodes
+            );
         }
         assert!(paths.iter().any(|p| p.depth == 1));
     }
@@ -1147,7 +1168,9 @@ mod tests {
         let tracer = CallGraphTracer::new(&g);
         let paths = tracer.trace_cross_service(&"a".to_string(), 5);
         // Only A→R1 should be found; R2 has no connection from A.
-        assert!(paths.iter().any(|p| p.depth == 1 && p.nodes[1].name == "/api/r1"));
+        assert!(paths
+            .iter()
+            .any(|p| p.depth == 1 && p.nodes[1].name == "/api/r1"));
         assert!(!paths.iter().any(|p| p.nodes.iter().any(|n| n.name == "b")));
     }
 
@@ -1202,22 +1225,16 @@ mod tests {
         let tracer = CallGraphTracer::new(&g);
         let paths = tracer.trace_cross_service(&"a".to_string(), 5);
         // Should find A→R (HttpCalls forward) and A→B (HandlesRoute reverse).
-        let forward = paths.iter().find(|p| {
-            p.depth == 1 && p.nodes.len() == 2 && p.nodes[1].name == "/api/r"
-        });
+        let forward = paths
+            .iter()
+            .find(|p| p.depth == 1 && p.nodes.len() == 2 && p.nodes[1].name == "/api/r");
         assert!(forward.is_some(), "should find A→R forward path: {paths:?}");
-        assert_eq!(
-            forward.unwrap().edges[0].edge_type,
-            "HTTP_CALLS"
-        );
-        let reverse = paths.iter().find(|p| {
-            p.depth == 1 && p.nodes.len() == 2 && p.nodes[1].name == "b"
-        });
+        assert_eq!(forward.unwrap().edges[0].edge_type, "HTTP_CALLS");
+        let reverse = paths
+            .iter()
+            .find(|p| p.depth == 1 && p.nodes.len() == 2 && p.nodes[1].name == "b");
         assert!(reverse.is_some(), "should find A→B reverse path: {paths:?}");
-        assert_eq!(
-            reverse.unwrap().edges[0].edge_type,
-            "HANDLES_ROUTE"
-        );
+        assert_eq!(reverse.unwrap().edges[0].edge_type, "HANDLES_ROUTE");
     }
 
     // ====================================================================
@@ -1271,7 +1288,9 @@ mod tests {
         let tracer = CallGraphTracer::new(&g);
         let paths = tracer.trace_cross_service(&"a".to_string(), 5);
         assert!(
-            paths.iter().any(|p| p.depth == 1 && p.nodes[1].name == "/api/r"),
+            paths
+                .iter()
+                .any(|p| p.depth == 1 && p.nodes[1].name == "/api/r"),
             "should record A→R prefix: {paths:?}"
         );
     }
@@ -1292,7 +1311,10 @@ mod tests {
         let tracer = CallGraphTracer::new(&g);
         let paths = tracer.trace(&"a".to_string(), 3);
         assert_eq!(paths.len(), 2, "parallel edges should produce 2 paths");
-        let edge_types: Vec<&str> = paths.iter().map(|p| p.edges[0].edge_type.as_str()).collect();
+        let edge_types: Vec<&str> = paths
+            .iter()
+            .map(|p| p.edges[0].edge_type.as_str())
+            .collect();
         assert!(edge_types.contains(&"CALLS"));
         assert!(edge_types.contains(&"FFI_CALLS"));
     }
@@ -1308,7 +1330,10 @@ mod tests {
         g.add_edge(Edge::new("a", "b", EdgeType::FfiCalls, "proj"));
         let tracer = CallGraphTracer::new(&g);
         let cycles = tracer.detect_cycles();
-        assert!(cycles.is_empty(), "parallel edges without back-edge should not create a cycle");
+        assert!(
+            cycles.is_empty(),
+            "parallel edges without back-edge should not create a cycle"
+        );
     }
 
     // ====================================================================
@@ -1327,8 +1352,14 @@ mod tests {
         g.add_edge(Edge::new("b", "r", EdgeType::HandlesRoute, "proj"));
         let tracer = CallGraphTracer::new(&g);
         let paths = tracer.trace_cross_service(&"a".to_string(), 2);
-        assert!(paths.iter().any(|p| p.depth == 1), "should include depth-1 path");
-        assert!(paths.iter().any(|p| p.depth == 2), "should include depth-2 path");
+        assert!(
+            paths.iter().any(|p| p.depth == 1),
+            "should include depth-1 path"
+        );
+        assert!(
+            paths.iter().any(|p| p.depth == 2),
+            "should include depth-2 path"
+        );
     }
 
     // ====================================================================
@@ -1353,7 +1384,12 @@ mod tests {
         assert_eq!(cycles[0].nodes, vec!["a", "b", "c", "d", "a"]);
         assert_eq!(
             cycles[0].edge_types,
-            vec![EdgeType::Calls, EdgeType::FfiCalls, EdgeType::Calls, EdgeType::FfiCalls]
+            vec![
+                EdgeType::Calls,
+                EdgeType::FfiCalls,
+                EdgeType::Calls,
+                EdgeType::FfiCalls
+            ]
         );
     }
 
@@ -1408,10 +1444,7 @@ mod tests {
             vec!["a".to_string(), "a".to_string()],
             "nonexistent B should be filtered out by extract_cycle"
         );
-        assert_eq!(
-            cycles[0].edge_types,
-            vec![EdgeType::Calls, EdgeType::Calls]
-        );
+        assert_eq!(cycles[0].edge_types, vec![EdgeType::Calls, EdgeType::Calls]);
     }
 
     // ====================================================================
@@ -1445,9 +1478,7 @@ mod tests {
         let has_r2 = depth2
             .iter()
             .any(|p| p.nodes.iter().any(|n| n.name == "/api/r2"));
-        let has_b = depth2
-            .iter()
-            .any(|p| p.nodes.iter().any(|n| n.name == "b"));
+        let has_b = depth2.iter().any(|p| p.nodes.iter().any(|n| n.name == "b"));
         assert!(
             has_r2,
             "should reach R2 via forward HttpCalls from mid-path R1: {paths:?}"

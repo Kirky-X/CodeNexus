@@ -186,14 +186,26 @@ fn build_scope(name: String, qn: String, label: NodeLabel, parent: Option<&str>)
 }
 
 /// Computes the FQN for an entity using [`FqnGenerator`].
-fn make_qn(file_path: &str, name: &str, project: &str, language: Language, parent: Option<&str>) -> String {
+fn make_qn(
+    file_path: &str,
+    name: &str,
+    project: &str,
+    language: Language,
+    parent: Option<&str>,
+) -> String {
     FqnGenerator::generate(project, file_path, name, language, parent)
 }
 
 /// Convenience wrapper around [`make_qn`] that extracts fields from a
 /// [`ScopeContext`]. Keeps resolver call sites single-line for coverage.
 fn make_scope_qn(ctx: &ScopeContext, name: &str, language: Language) -> String {
-    make_qn(ctx.file_path, name, ctx.project, language, ctx.current_parent)
+    make_qn(
+        ctx.file_path,
+        name,
+        ctx.project,
+        language,
+        ctx.current_parent,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -256,7 +268,12 @@ impl ScopeResolver for RustScopeResolver {
             "function_item" => {
                 let name = name_field(node, ctx.source)?;
                 let qn = make_scope_qn(ctx, &name, Language::Rust);
-                Some(build_scope(name, qn, NodeLabel::Function, ctx.current_parent))
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Function,
+                    ctx.current_parent,
+                ))
             }
             "struct_item" => {
                 let name = name_field(node, ctx.source)?;
@@ -315,14 +332,22 @@ impl ScopeResolver for CScopeResolver {
             "function_definition" => {
                 // Detect C++ namespace/class/struct blocks misparsed as
                 // function_definition (tree-sitter-c quirk).
-                let type_text = node.child_by_field_name("type").filter(|n| n.kind() == "type_identifier").and_then(|n| node_text(n, ctx.source));
+                let type_text = node
+                    .child_by_field_name("type")
+                    .filter(|n| n.kind() == "type_identifier")
+                    .and_then(|n| node_text(n, ctx.source));
                 match type_text {
                     Some("namespace") => {
                         let name = node
                             .child_by_field_name("declarator")
                             .and_then(|n| node_text(n, ctx.source).map(String::from))?;
                         let qn = make_scope_qn(ctx, &name, Language::C);
-                        Some(build_scope(name, qn, NodeLabel::Namespace, ctx.current_parent))
+                        Some(build_scope(
+                            name,
+                            qn,
+                            NodeLabel::Namespace,
+                            ctx.current_parent,
+                        ))
                     }
                     Some("class") => {
                         let name = node
@@ -342,7 +367,12 @@ impl ScopeResolver for CScopeResolver {
                         // Normal C function.
                         let name = c_function_name(node, ctx.source)?;
                         let qn = make_scope_qn(ctx, &name, Language::C);
-                        Some(build_scope(name, qn, NodeLabel::Function, ctx.current_parent))
+                        Some(build_scope(
+                            name,
+                            qn,
+                            NodeLabel::Function,
+                            ctx.current_parent,
+                        ))
                     }
                 }
             }
@@ -415,17 +445,32 @@ impl ScopeResolver for FortranScopeResolver {
             "subroutine" => {
                 let name = fortran_statement_name(node, "subroutine_statement", ctx.source)?;
                 let qn = make_scope_qn(ctx, &name, Language::Fortran);
-                Some(build_scope(name, qn, NodeLabel::Function, ctx.current_parent))
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Function,
+                    ctx.current_parent,
+                ))
             }
             "function" => {
                 let name = fortran_statement_name(node, "function_statement", ctx.source)?;
                 let qn = make_scope_qn(ctx, &name, Language::Fortran);
-                Some(build_scope(name, qn, NodeLabel::Function, ctx.current_parent))
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Function,
+                    ctx.current_parent,
+                ))
             }
             "program" => {
                 let name = fortran_statement_name(node, "program_statement", ctx.source)?;
                 let qn = make_scope_qn(ctx, &name, Language::Fortran);
-                Some(build_scope(name, qn, NodeLabel::Function, ctx.current_parent))
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Function,
+                    ctx.current_parent,
+                ))
             }
             _ => None,
         }
@@ -483,7 +528,12 @@ impl ScopeResolver for TypeScriptScopeResolver {
             "function_declaration" | "generator_function_declaration" => {
                 let name = name_field(node, ctx.source)?;
                 let qn = make_scope_qn(ctx, &name, Language::TypeScript);
-                Some(build_scope(name, qn, NodeLabel::Function, ctx.current_parent))
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Function,
+                    ctx.current_parent,
+                ))
             }
             "class_declaration" => {
                 let name = name_field(node, ctx.source)?;
@@ -498,7 +548,12 @@ impl ScopeResolver for TypeScriptScopeResolver {
             "interface_declaration" => {
                 let name = name_field(node, ctx.source)?;
                 let qn = make_scope_qn(ctx, &name, Language::TypeScript);
-                Some(build_scope(name, qn, NodeLabel::Interface, ctx.current_parent))
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Interface,
+                    ctx.current_parent,
+                ))
             }
             _ => None,
         }
@@ -526,7 +581,12 @@ impl ScopeResolver for GoScopeResolver {
             "function_declaration" => {
                 let name = name_field(node, ctx.source)?;
                 let qn = make_scope_qn(ctx, &name, Language::Go);
-                Some(build_scope(name, qn, NodeLabel::Function, ctx.current_parent))
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Function,
+                    ctx.current_parent,
+                ))
             }
             "method_declaration" => {
                 let name = name_field(node, ctx.source)?;
@@ -575,7 +635,12 @@ impl ScopeResolver for JavaScopeResolver {
             "interface_declaration" => {
                 let name = name_field(node, ctx.source)?;
                 let qn = make_scope_qn(ctx, &name, Language::Java);
-                Some(build_scope(name, qn, NodeLabel::Interface, ctx.current_parent))
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Interface,
+                    ctx.current_parent,
+                ))
             }
             "enum_declaration" => {
                 let name = name_field(node, ctx.source)?;
@@ -635,7 +700,12 @@ impl ScopeResolver for CppScopeResolver {
             "namespace_definition" => {
                 let name = name_field(node, ctx.source)?;
                 let qn = make_scope_qn(ctx, &name, Language::Cpp);
-                Some(build_scope(name, qn, NodeLabel::Namespace, ctx.current_parent))
+                Some(build_scope(
+                    name,
+                    qn,
+                    NodeLabel::Namespace,
+                    ctx.current_parent,
+                ))
             }
             _ => None,
         }
@@ -766,7 +836,17 @@ impl ScopeResolverRegistry {
     }
 }
 
-#[cfg(all(test, feature = "lang-c", feature = "lang-cpp", feature = "lang-fortran", feature = "lang-go", feature = "lang-java", feature = "lang-python", feature = "lang-rust", feature = "lang-typescript"))]
+#[cfg(all(
+    test,
+    feature = "lang-c",
+    feature = "lang-cpp",
+    feature = "lang-fortran",
+    feature = "lang-go",
+    feature = "lang-java",
+    feature = "lang-python",
+    feature = "lang-rust",
+    feature = "lang-typescript"
+))]
 mod tests {
     use super::*;
 
@@ -1054,7 +1134,13 @@ mod tests {
 
     #[test]
     fn make_qn_python_with_parent() {
-        let qn = make_qn("src/main.py", "MyClass", "proj", Language::Python, Some("proj.src.module"));
+        let qn = make_qn(
+            "src/main.py",
+            "MyClass",
+            "proj",
+            Language::Python,
+            Some("proj.src.module"),
+        );
         assert!(qn.contains("MyClass"));
     }
 
@@ -1069,7 +1155,17 @@ mod tests {
 // ScopeResolver tests (Task 2.6)
 // ---------------------------------------------------------------------------
 
-#[cfg(all(test, feature = "lang-c", feature = "lang-cpp", feature = "lang-fortran", feature = "lang-go", feature = "lang-java", feature = "lang-python", feature = "lang-rust", feature = "lang-typescript"))]
+#[cfg(all(
+    test,
+    feature = "lang-c",
+    feature = "lang-cpp",
+    feature = "lang-fortran",
+    feature = "lang-go",
+    feature = "lang-java",
+    feature = "lang-python",
+    feature = "lang-rust",
+    feature = "lang-typescript"
+))]
 mod resolver_tests {
     use super::*;
     use crate::parse::parser_factory::ParserFactory;
@@ -2040,9 +2136,15 @@ mod resolver_tests {
         fn find_first_unknown<'a>(node: tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
             let known = matches!(
                 node.kind(),
-                "identifier" | "field_identifier" | "function_declarator"
-                | "pointer_declarator" | "reference_declarator" | "array_declarator"
-                | "parenthesized_declarator" | "qualified_identifier" | "operator_name"
+                "identifier"
+                    | "field_identifier"
+                    | "function_declarator"
+                    | "pointer_declarator"
+                    | "reference_declarator"
+                    | "array_declarator"
+                    | "parenthesized_declarator"
+                    | "qualified_identifier"
+                    | "operator_name"
             );
             if !known {
                 return Some(node);

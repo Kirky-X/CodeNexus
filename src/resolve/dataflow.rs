@@ -1554,9 +1554,7 @@ mod tests {
         let edges = resolver.resolve_dataflows(&results, &mut graph);
 
         assert!(
-            edges
-                .iter()
-                .all(|e| e.edge_type != EdgeType::DataFlows),
+            edges.iter().all(|e| e.edge_type != EdgeType::DataFlows),
             "unresolvable callee should not produce DataFlows edge"
         );
         assert_eq!(graph.edge_count(), 0);
@@ -1629,7 +1627,10 @@ mod tests {
             1,
             "only the resolvable return assignment should produce an edge"
         );
-        assert_eq!(dataflow_edges[0].source, fqn("proj", "a.rs", "foo", Language::Rust));
+        assert_eq!(
+            dataflow_edges[0].source,
+            fqn("proj", "a.rs", "foo", Language::Rust)
+        );
     }
 
     #[test]
@@ -1662,11 +1663,7 @@ mod tests {
             "variable assignment should always produce an edge even with fallback"
         );
         // Both source and target should have fallback Variable nodes created.
-        assert!(graph
-            .get_node(&"proj.a.rs.y".to_string())
-            .is_some());
-        assert!(graph
-            .get_node(&"proj.a.rs.x".to_string())
-            .is_some());
+        assert!(graph.get_node(&"proj.a.rs.y".to_string()).is_some());
+        assert!(graph.get_node(&"proj.a.rs.x".to_string()).is_some());
     }
 }

@@ -8,20 +8,20 @@ use serde::Serialize;
 #[cfg(feature = "api-review")]
 use crate::analysis::api_review::{ApiReviewer, ShapeViolation};
 #[cfg(feature = "api-review")]
-use crate::service::error::CodeNexusError;
-#[cfg(all(feature = "cli", feature = "api-review"))]
-use crate::service::error::to_api_error;
-#[cfg(feature = "api-review")]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cli", feature = "api-review"))]
 use crate::service::error::kit_not_initialized;
 #[cfg(all(feature = "cli", feature = "api-review"))]
+use crate::service::error::to_api_error;
+#[cfg(feature = "api-review")]
+use crate::service::error::CodeNexusError;
+#[cfg(all(feature = "cli", feature = "api-review"))]
 use crate::service::runtime::kit;
 
 #[cfg(all(feature = "cli", feature = "api-review"))]
-use sdforge::prelude::ApiError;
-#[cfg(all(feature = "cli", feature = "api-review"))]
 use sdforge::forge;
+#[cfg(all(feature = "cli", feature = "api-review"))]
+use sdforge::prelude::ApiError;
 
 /// JSON-serializable shape-check output.
 #[cfg(feature = "api-review")]
@@ -117,7 +117,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     fn shape_check_wrapper_succeeds_via_init_kit() {
         use crate::service::runtime::{init_kit, reset_kit_for_testing};
@@ -134,7 +134,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[test]
     fn shape_check_wrapper_fails_when_kit_not_initialized() {
         use crate::service::runtime::reset_kit_for_testing;

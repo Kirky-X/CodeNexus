@@ -50,8 +50,8 @@ pub mod storage;
 
 pub use client::{EmbedClient, LocalEmbedClient, MockEmbedClient, OpenAIEmbedClient};
 pub use config::{
-    API_KEY_ENV, DEFAULT_MODEL_PATH, DEFAULT_TOKENIZER_FILENAME, EMBED_ENDPOINT_ENV,
-    EMBED_MODEL_PATH_ENV, EmbeddingConfig, OPENAI_API_KEY_ENV,
+    EmbeddingConfig, API_KEY_ENV, DEFAULT_MODEL_PATH, DEFAULT_TOKENIZER_FILENAME,
+    EMBED_ENDPOINT_ENV, EMBED_MODEL_PATH_ENV, OPENAI_API_KEY_ENV,
 };
 pub use error::{EmbedError, Result};
 pub use module::{EmbedConfig, EmbedModule};

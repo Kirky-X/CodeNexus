@@ -332,7 +332,9 @@ mod tests {
 
         assert!(kit.contains::<QueryModule>());
 
-        let required = kit.require::<QueryModule>().expect("require::<QueryModule>");
+        let required = kit
+            .require::<QueryModule>()
+            .expect("require::<QueryModule>");
         let result = required
             .cypher("MATCH (f:Function) RETURN f.name AS name;")
             .expect("cypher");

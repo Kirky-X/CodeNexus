@@ -8,19 +8,19 @@ use std::io::BufRead;
 
 use serde::{Deserialize, Serialize};
 
-use crate::service::error::CodeNexusError;
-#[cfg(feature = "cli")]
-use crate::service::error::to_api_error;
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(feature = "cli")]
 use crate::service::error::kit_not_initialized;
 #[cfg(feature = "cli")]
+use crate::service::error::to_api_error;
+use crate::service::error::CodeNexusError;
+#[cfg(feature = "cli")]
 use crate::service::runtime::kit;
 
 #[cfg(feature = "cli")]
-use sdforge::prelude::ApiError;
-#[cfg(feature = "cli")]
 use sdforge::forge;
+#[cfg(feature = "cli")]
+use sdforge::prelude::ApiError;
 
 /// JSON-serializable hook decision output.
 ///
@@ -87,7 +87,9 @@ fn build_decision(kit: &AsyncKit<AsyncReady>, raw: &str) -> HookDecision {
 }
 
 /// Queries the database for a rename summary.
-fn summarize_rename(kit: &AsyncKit<AsyncReady>) -> std::result::Result<HookSummary, CodeNexusError> {
+fn summarize_rename(
+    kit: &AsyncKit<AsyncReady>,
+) -> std::result::Result<HookSummary, CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
     let rows = storage.query("MATCH (n:Function) RETURN count(n) AS total")?;
     let total = rows
@@ -106,10 +108,7 @@ fn summarize_rename(kit: &AsyncKit<AsyncReady>) -> std::result::Result<HookSumma
     let mut medium_risk = 0;
     let mut low_risk = 0;
     for row in &rows {
-        let incoming = row
-            .first()
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
+        let incoming = row.first().and_then(|v| v.as_u64()).unwrap_or(0);
         if incoming >= 5 {
             high_risk += 1;
         } else if incoming >= 1 {
@@ -389,7 +388,7 @@ mod tests {
 
     // --- hook() CLI wrapper ---
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn hook_returns_err_when_kit_not_initialized() {
@@ -403,7 +402,7 @@ mod tests {
         crate::service::runtime::reset_kit_for_testing();
     }
 
-    #[serial_test::serial]
+    #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
     #[test]
     fn hook_succeeds_when_kit_initialized_and_stdin_not_tty() {

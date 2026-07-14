@@ -1005,8 +1005,7 @@ mod tests {
         fn cached_embed_miss_then_hit_skips_inner_call() {
             let inner = CountingEmbedClient::new();
             let calls = Arc::clone(&inner.calls);
-            let cached =
-                CachedEmbedClient::new(Box::new(inner), Arc::new(MockCache::new()));
+            let cached = CachedEmbedClient::new(Box::new(inner), Arc::new(MockCache::new()));
 
             let r1 = cached.embed(&["hello"]).expect("first embed");
             let r2 = cached.embed(&["hello"]).expect("second embed (cache hit)");

@@ -14,9 +14,9 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::service::error::CodeNexusError;
 #[cfg(feature = "cli")]
 use crate::service::error::to_api_error;
+use crate::service::error::CodeNexusError;
 
 #[cfg(feature = "lsp")]
 use crate::lsp::{
@@ -27,9 +27,9 @@ use crate::lsp::{
 use crate::service::error::wrap_error;
 
 #[cfg(feature = "cli")]
-use sdforge::prelude::ApiError;
-#[cfg(feature = "cli")]
 use sdforge::forge;
+#[cfg(feature = "cli")]
+use sdforge::prelude::ApiError;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -444,7 +444,12 @@ mod tests {
 
     // --- core functions (mirror service logic, return CodeNexusError) ---
 
-    fn goto_def_core(file: &str, line: u32, col: u32, workspace: &str) -> Result<(), CodeNexusError> {
+    fn goto_def_core(
+        file: &str,
+        line: u32,
+        col: u32,
+        workspace: &str,
+    ) -> Result<(), CodeNexusError> {
         let ws = Path::new(workspace);
         let file_path = resolve_file(file, ws);
 
@@ -576,8 +581,14 @@ mod tests {
         let loc = lsp_types::Location {
             uri: lsp_types::Url::parse("file:///src/lib.rs").unwrap(),
             range: lsp_types::Range {
-                start: lsp_types::Position { line: 5, character: 10 },
-                end: lsp_types::Position { line: 5, character: 20 },
+                start: lsp_types::Position {
+                    line: 5,
+                    character: 10,
+                },
+                end: lsp_types::Position {
+                    line: 5,
+                    character: 20,
+                },
             },
         };
         let out = GotoDefOutput::from(loc);
@@ -599,7 +610,10 @@ mod tests {
             0,
             "/nonexistent/workspace/xyz".to_string(),
         ));
-        assert!(result.is_err(), "wrapper should fail on nonexistent workspace");
+        assert!(
+            result.is_err(),
+            "wrapper should fail on nonexistent workspace"
+        );
     }
 
     #[cfg(feature = "cli")]
@@ -612,7 +626,10 @@ mod tests {
             0,
             "/nonexistent/workspace/xyz".to_string(),
         ));
-        assert!(result.is_err(), "wrapper should fail on nonexistent workspace");
+        assert!(
+            result.is_err(),
+            "wrapper should fail on nonexistent workspace"
+        );
     }
 
     #[cfg(feature = "cli")]
@@ -625,7 +642,10 @@ mod tests {
             0,
             "/nonexistent/workspace/xyz".to_string(),
         ));
-        assert!(result.is_err(), "wrapper should return error for nonexistent file");
+        assert!(
+            result.is_err(),
+            "wrapper should return error for nonexistent file"
+        );
     }
 
     #[cfg(feature = "cli")]
@@ -638,6 +658,9 @@ mod tests {
             0,
             "/nonexistent/workspace/xyz".to_string(),
         ));
-        assert!(result.is_err(), "wrapper should return error for nonexistent file");
+        assert!(
+            result.is_err(),
+            "wrapper should return error for nonexistent file"
+        );
     }
 }

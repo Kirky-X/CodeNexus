@@ -131,9 +131,7 @@ impl AsyncAutoBuilder for DaemonModule {
         Box::pin(async move {
             let config = kit
                 .config::<DaemonConfig>()
-                .map_err(|e| {
-                    DaemonError::Io(std::io::Error::other(e.to_string()))
-                })?;
+                .map_err(|e| DaemonError::Io(std::io::Error::other(e.to_string())))?;
             Self::build_cap(&config)
         })
     }

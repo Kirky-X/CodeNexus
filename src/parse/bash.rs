@@ -69,10 +69,7 @@ impl Extractor for BashExtractor {
                 file_path: file_path.to_string(),
             })?;
         let root = tree.root_node();
-        let ctx = VisitContext {
-            file_path,
-            project,
-        };
+        let ctx = VisitContext { file_path, project };
         for i in 0..root.named_child_count() as u32 {
             if let Some(child) = root.named_child(i) {
                 visit_node(child, source, &ctx, &mut result);
@@ -157,7 +154,12 @@ fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &m
     result.push_node(model_node);
 }
 
-fn extract_global_var(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
+fn extract_global_var(
+    node: Node,
+    source: &str,
+    ctx: &VisitContext<'_>,
+    result: &mut ExtractResult,
+) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
     };
@@ -300,7 +302,10 @@ mod tests {
         assert_eq!(funcs[0].project, "proj");
         assert_eq!(funcs[0].file_path.as_deref(), Some("test.sh"));
         assert!(funcs[0].is_global, "top-level function should be global");
-        assert!(funcs[0].is_exported, "top-level function should be exported");
+        assert!(
+            funcs[0].is_exported,
+            "top-level function should be exported"
+        );
     }
 
     #[test]
@@ -415,7 +420,10 @@ mod tests {
     fn function_has_signature() {
         let result = extract("greet() { echo hi; }\n");
         let greet = result.nodes.iter().find(|n| n.name == "greet").unwrap();
-        assert!(greet.signature.is_some(), "function should have a signature");
+        assert!(
+            greet.signature.is_some(),
+            "function should have a signature"
+        );
         assert!(greet.signature.as_deref().unwrap().contains("greet"));
     }
 
@@ -564,7 +572,8 @@ mod tests {
     fn function_with_case_statement() {
         // Exercises the default `_ => visit_children` branch for `case_statement`
         // nodes inside a function body.
-        let result = extract("dispatch() { case $1 in start) echo start;; stop) echo stop;; esac }\n");
+        let result =
+            extract("dispatch() { case $1 in start) echo start;; stop) echo stop;; esac }\n");
         let funcs: Vec<_> = result
             .nodes
             .iter()
@@ -682,7 +691,9 @@ mod tests {
     #[test]
     fn multiple_global_vars_and_functions_mixed_with_comments() {
         // Comments interspersed with definitions should be skipped.
-        let result = extract("# header comment\nA=1\n# mid comment\nfoo() { echo hi; }\n# tail comment\nB=2\n");
+        let result = extract(
+            "# header comment\nA=1\n# mid comment\nfoo() { echo hi; }\n# tail comment\nB=2\n",
+        );
         let funcs: Vec<_> = result
             .nodes
             .iter()

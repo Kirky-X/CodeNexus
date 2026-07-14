@@ -162,9 +162,7 @@ impl CacheModule {
     ///
     /// Returns [`CacheError::BuildFailed`] if oxcache's `Cache::build()`
     /// fails (e.g., invalid capacity).
-    pub(crate) async fn build_cap(
-        config: &CacheConfig,
-    ) -> Result<Arc<dyn CacheStore>, CacheError> {
+    pub(crate) async fn build_cap(config: &CacheConfig) -> Result<Arc<dyn CacheStore>, CacheError> {
         let cache = oxcache::Cache::builder()
             .capacity(config.capacity)
             .sync_mode(true)
@@ -317,7 +315,9 @@ mod tests {
 
         assert!(kit.contains::<CacheModule>(), "CacheModule missing");
 
-        let cache = kit.require::<CacheModule>().expect("require::<CacheModule>");
+        let cache = kit
+            .require::<CacheModule>()
+            .expect("require::<CacheModule>");
         cache.set("k", b"v".to_vec());
         assert_eq!(cache.get("k"), Some(b"v".to_vec()));
     }
