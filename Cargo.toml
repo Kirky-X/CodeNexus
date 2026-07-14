@@ -162,6 +162,10 @@ name = "daemon_bench"
 harness = false
 required-features = ["daemon"]
 
+[[bench]]
+name = "graph_bench"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = "fat"

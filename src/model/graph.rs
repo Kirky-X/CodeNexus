@@ -9,15 +9,27 @@ use super::{Edge, EdgeType, Node, NodeId, NodeLabel};
 
 /// An in-memory code knowledge graph (ADD §3.4).
 ///
-/// Stores nodes in a hash map keyed by id and edges in a vector. Provides
-/// query helpers for traversal (`neighbors`, `reverse_neighbors`) and
-/// filtering (`nodes_by_label`, `nodes_by_project`).
+/// Stores nodes in a hash map keyed by id and edges in a vector, backed by
+/// adjacency indices for O(deg(n)) traversal. Provides query helpers for
+/// traversal (`neighbors`, `reverse_neighbors`) and filtering
+/// (`nodes_by_label`, `nodes_by_project`).
+///
+/// # Index invariant
+///
+/// `adjacency_out` and `adjacency_in` are maintained automatically by
+/// `add_edge` and `retain_edges`. If caller mutates `edges` directly (the
+/// field is `pub` for backwards compatibility), call `rebuild_index`
+/// before issuing traversal queries.
 #[derive(Debug, Clone, Default)]
 pub struct Graph {
     /// Nodes keyed by id.
     pub nodes: HashMap<NodeId, Node>,
     /// Edges in insertion order.
     pub edges: Vec<Edge>,
+    /// Outgoing edge indices keyed by source node id (MED-002).
+    adjacency_out: HashMap<NodeId, Vec<usize>>,
+    /// Incoming edge indices keyed by target node id (MED-002).
+    adjacency_in: HashMap<NodeId, Vec<usize>>,
 }
 
 impl Graph {
@@ -36,6 +48,15 @@ impl Graph {
 
     /// Appends an edge to the graph. Returns `&mut Self` for chaining.
     pub fn add_edge(&mut self, edge: Edge) -> &mut Self {
+        let idx = self.edges.len();
+        self.adjacency_out
+            .entry(edge.source.clone())
+            .or_default()
+            .push(idx);
+        self.adjacency_in
+            .entry(edge.target.clone())
+            .or_default()
+            .push(idx);
         self.edges.push(edge);
         self
     }
@@ -55,9 +76,11 @@ impl Graph {
     /// filtered by edge type. Nodes are returned in edge insertion order.
     #[must_use]
     pub fn neighbors(&self, id: &NodeId, edge_type: Option<EdgeType>) -> Vec<&Node> {
-        self.edges
-            .iter()
-            .filter(|e| &e.source == id && Self::type_matches(e.edge_type, edge_type))
+        self.adjacency_out
+            .get(id)
+            .into_iter()
+            .flat_map(|indices| indices.iter().map(|&i| &self.edges[i]))
+            .filter(|e| Self::type_matches(e.edge_type, edge_type))
             .filter_map(|e| self.nodes.get(&e.target))
             .collect()
     }
@@ -66,9 +89,11 @@ impl Graph {
     /// filtered by edge type. Nodes are returned in edge insertion order.
     #[must_use]
     pub fn reverse_neighbors(&self, id: &NodeId, edge_type: Option<EdgeType>) -> Vec<&Node> {
-        self.edges
-            .iter()
-            .filter(|e| &e.target == id && Self::type_matches(e.edge_type, edge_type))
+        self.adjacency_in
+            .get(id)
+            .into_iter()
+            .flat_map(|indices| indices.iter().map(|&i| &self.edges[i]))
+            .filter(|e| Self::type_matches(e.edge_type, edge_type))
             .filter_map(|e| self.nodes.get(&e.source))
             .collect()
     }
@@ -104,25 +129,53 @@ impl Graph {
     /// Returns all outgoing edges from `id`, in insertion order.
     #[must_use]
     pub fn edges_from(&self, id: &NodeId) -> Vec<&Edge> {
-        self.edges.iter().filter(|e| &e.source == id).collect()
+        self.adjacency_out
+            .get(id)
+            .map(|indices| indices.iter().map(|&i| &self.edges[i]).collect())
+            .unwrap_or_default()
     }
 
     /// Returns all incoming edges to `id`, in insertion order.
     #[must_use]
     pub fn edges_to(&self, id: &NodeId) -> Vec<&Edge> {
-        self.edges.iter().filter(|e| &e.target == id).collect()
+        self.adjacency_in
+            .get(id)
+            .map(|indices| indices.iter().map(|&i| &self.edges[i]).collect())
+            .unwrap_or_default()
     }
 
     /// Retains only edges for which `f` returns `true`, dropping the rest.
     ///
     /// Nodes are NOT removed — only edges. This is used by the CLI
     /// `--min-confidence` filter to drop low-confidence edges before trace /
-    /// impact analysis (design.md D4).
+    /// impact analysis (design.md D4). The adjacency index is rebuilt
+    /// afterwards to stay consistent.
     pub fn retain_edges<F>(&mut self, f: F)
     where
         F: FnMut(&Edge) -> bool,
     {
         self.edges.retain(f);
+        self.rebuild_index();
+    }
+
+    /// Rebuilds the adjacency index from `edges` (MED-002).
+    ///
+    /// Call this after mutating the `edges` field directly (it is `pub`
+    /// for backwards compatibility). `add_edge` and `retain_edges` already
+    /// keep the index in sync, so the common path never needs this.
+    pub fn rebuild_index(&mut self) {
+        self.adjacency_out.clear();
+        self.adjacency_in.clear();
+        for (idx, edge) in self.edges.iter().enumerate() {
+            self.adjacency_out
+                .entry(edge.source.clone())
+                .or_default()
+                .push(idx);
+            self.adjacency_in
+                .entry(edge.target.clone())
+                .or_default()
+                .push(idx);
+        }
     }
 
     /// Returns `true` if `edge` matches the optional `filter` (or if the
@@ -640,5 +693,162 @@ mod tests {
         g.add_node(make_node("a", NodeLabel::Function, "a", "proj"));
         let debug = format!("{g:?}");
         assert!(debug.contains("Graph"));
+    }
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+
+    #[test]
+    fn add_edge_maintains_adjacency_index() {
+        let mut g = Graph::new();
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("a", "c", EdgeType::Reads, "proj"));
+        g.add_edge(Edge::new("b", "c", EdgeType::Calls, "proj"));
+
+        let from_a = g.edges_from(&"a".to_string());
+        assert_eq!(from_a.len(), 2);
+        assert_eq!(from_a[0].target, "b");
+        assert_eq!(from_a[1].target, "c");
+
+        let to_c = g.edges_to(&"c".to_string());
+        assert_eq!(to_c.len(), 2);
+        assert_eq!(to_c[0].source, "a");
+        assert_eq!(to_c[1].source, "b");
+    }
+
+    #[test]
+    fn edges_from_preserves_insertion_order() {
+        let mut g = Graph::new();
+        for i in 0..10 {
+            g.add_edge(Edge::new(
+                "src",
+                format!("t{i}"),
+                EdgeType::Calls,
+                "proj",
+            ));
+        }
+        let edges = g.edges_from(&"src".to_string());
+        let targets: Vec<&str> = edges.iter().map(|e| e.target.as_str()).collect();
+        assert_eq!(targets, ["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9"]);
+    }
+
+    #[test]
+    fn retain_edges_rebuilds_index() {
+        let mut g = Graph::new();
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("a", "c", EdgeType::Reads, "proj"));
+        g.add_edge(Edge::new("b", "c", EdgeType::Calls, "proj"));
+
+        g.retain_edges(|e| e.edge_type == EdgeType::Calls);
+
+        assert_eq!(g.edge_count(), 2);
+        let from_a = g.edges_from(&"a".to_string());
+        assert_eq!(from_a.len(), 1);
+        assert_eq!(from_a[0].target, "b");
+
+        let to_c = g.edges_to(&"c".to_string());
+        assert_eq!(to_c.len(), 1);
+        assert_eq!(to_c[0].source, "b");
+    }
+
+    #[test]
+    fn rebuild_index_after_direct_mutation() {
+        let mut g = Graph::new();
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        // Directly push to edges (bypassing add_edge, breaking the index)
+        g.edges.push(Edge::new("x", "y", EdgeType::Calls, "proj"));
+
+        // Index is now stale — edges_from("x") returns empty
+        assert!(g.edges_from(&"x".to_string()).is_empty());
+
+        g.rebuild_index();
+        let from_x = g.edges_from(&"x".to_string());
+        assert_eq!(from_x.len(), 1);
+        assert_eq!(from_x[0].target, "y");
+    }
+
+    #[test]
+    fn clone_preserves_index() {
+        let mut g = Graph::new();
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("a", "c", EdgeType::Reads, "proj"));
+
+        let cloned = g.clone();
+        let from_a = cloned.edges_from(&"a".to_string());
+        assert_eq!(from_a.len(), 2);
+    }
+
+    #[test]
+    fn empty_graph_queries_return_empty() {
+        let g = Graph::new();
+        assert!(g.edges_from(&"any".to_string()).is_empty());
+        assert!(g.edges_to(&"any".to_string()).is_empty());
+        assert!(g.neighbors(&"any".to_string(), None).is_empty());
+        assert!(g.reverse_neighbors(&"any".to_string(), None).is_empty());
+    }
+
+    #[test]
+    fn large_graph_index_matches_linear_scan() {
+        let mut g = Graph::new();
+        for i in 0..500 {
+            g.add_edge(Edge::new(
+                format!("n{i}"),
+                format!("n{}", (i + 1) % 500),
+                EdgeType::Calls,
+                "proj",
+            ));
+        }
+
+        for i in 0..500 {
+            let id = format!("n{i}").to_string();
+            let indexed: Vec<&str> = g
+                .edges_from(&id)
+                .iter()
+                .map(|e| e.target.as_str())
+                .collect();
+            let linear: Vec<&str> = g
+                .edges
+                .iter()
+                .filter(|e| e.source == id)
+                .map(|e| e.target.as_str())
+                .collect();
+            assert_eq!(indexed, linear, "mismatch at node {i}");
+        }
+    }
+
+    #[test]
+    fn neighbors_via_index_matches_linear() {
+        let mut g = Graph::new();
+        g.add_node(
+            Node::builder(NodeLabel::Function, "hub", "proj.hub")
+                .id("hub")
+                .project("proj")
+                .build(),
+        );
+        for i in 0..100 {
+            let spoke = format!("spoke{i}");
+            g.add_node(
+                Node::builder(NodeLabel::Function, spoke.clone(), format!("proj.{spoke}"))
+                    .id(spoke.clone())
+                    .project("proj")
+                    .build(),
+            );
+            g.add_edge(Edge::new(
+                "hub",
+                spoke,
+                if i % 2 == 0 { EdgeType::Calls } else { EdgeType::Reads },
+                "proj",
+            ));
+        }
+
+        let indexed = g.neighbors(&"hub".to_string(), Some(EdgeType::Calls));
+        let linear_count = g
+            .edges
+            .iter()
+            .filter(|e| e.source == "hub" && e.edge_type == EdgeType::Calls)
+            .count();
+        assert_eq!(indexed.len(), linear_count);
     }
 }
