@@ -1,0 +1,8 @@
+# cargo-audit 配置 — `cargo audit` 按此校验 RUSTSEC 漏洞。
+# 临时接受 cxx RUSTSEC-2026-0202 (unsound)：
+# lbug v0.17.1 在 crates.io 精确锁定 cxx = "=1.0.138"，无法升级，
+# 待 lbug 上游放开约束后移除并真正升级 cxx。
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0202",
+]

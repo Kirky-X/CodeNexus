@@ -4,6 +4,13 @@
 [advisories]
 db-urls = ["https://github.com/RustSec/advisory-db"]
 yanked = "deny"
+# 临时接受：cxx RUSTSEC-2026-0202 (unsound)。
+# 阻塞原因：lbug v0.17.1 在 crates.io 精确锁定 cxx = "=1.0.138"，
+# 上游未发布放宽松约束的版本，cargo update 无法升级 cxx。
+# 待 lbug 上游放开约束后移除该 ignore 并完成真正的版本升级。
+ignore = [
+    "RUSTSEC-2026-0202",
+]
 
 [licenses]
 # 允许的宽松许可证；新增非宽松许可证需在此放行
