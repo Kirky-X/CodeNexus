@@ -220,6 +220,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn community_wrapper_succeeds_with_empty_resolution() {
@@ -237,6 +238,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn community_wrapper_succeeds_with_valid_resolution() {
@@ -254,6 +256,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn community_wrapper_fails_with_invalid_resolution() {
@@ -275,6 +278,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn community_wrapper_fails_when_kit_not_initialized() {

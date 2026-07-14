@@ -1202,6 +1202,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn rename_wrapper_fails_with_invalid_identifier() {
@@ -1228,6 +1229,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn rename_wrapper_fails_with_apply_without_path() {
@@ -1254,6 +1256,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn rename_wrapper_fails_when_kit_not_initialized() {
@@ -1271,6 +1274,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn rename_wrapper_succeeds_dry_run() {
@@ -1300,6 +1304,7 @@ mod tests {
     // Uses an absolute filePath NOT under the root so that
     // collect_candidate_files excludes it → text_edits empty →
     // apply_text_edits is a no-op (same pattern as core_apply_updates_graph_name).
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn rename_wrapper_succeeds_with_apply() {
@@ -1338,6 +1343,7 @@ mod tests {
 
     // Covers the wrapper symbol-not-found error path (lines 311-321):
     // load_graph returns SymbolNotFound → ApiError::NotFound.
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn rename_wrapper_fails_with_symbol_not_found() {
@@ -1366,6 +1372,7 @@ mod tests {
 
     // Covers the wrapper dry-run with path (lines 342-349):
     // text_edits are computed but not applied.
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn rename_wrapper_succeeds_dry_run_with_path() {

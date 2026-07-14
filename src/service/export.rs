@@ -399,6 +399,7 @@ mod tests {
         }
     }
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn export_wrapper_succeeds_via_init_kit() {
@@ -428,6 +429,7 @@ mod tests {
 
     // Covers the export wrapper failing when DB doesn't exist (line 113-117
     // error path through the #[forge] wrapper → ApiError conversion).
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn export_wrapper_fails_when_db_does_not_exist() {
@@ -452,6 +454,7 @@ mod tests {
 
     // Covers the export wrapper with empty project string (None branch in
     // manifest construction through the wrapper).
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn export_wrapper_succeeds_with_empty_project() {

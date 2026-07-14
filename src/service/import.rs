@@ -557,6 +557,7 @@ mod tests {
         }
     }
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn import_wrapper_fails_with_nonexistent_artifact() {
@@ -598,6 +599,7 @@ mod tests {
     // Covers the import wrapper success path (lines 180-188):
     // kit() resolves, run_export creates artifact, run_import succeeds,
     // serde_json::to_string succeeds, println outputs JSON.
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn import_wrapper_succeeds_via_init_kit() {
@@ -642,6 +644,7 @@ mod tests {
 
     // Covers the import wrapper with reindex=false and a nonexistent artifact
     // through the #[forge] wrapper → ApiError conversion path.
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn import_wrapper_with_malformed_artifact_returns_api_error() {

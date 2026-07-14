@@ -175,6 +175,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
+    #[serial_test::serial]
     #[test]
     #[cfg(feature = "cli")]
     fn clean_wrapper_succeeds_via_init_kit() {
@@ -194,6 +195,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
+    #[serial_test::serial]
     #[test]
     #[cfg(feature = "cli")]
     fn clean_wrapper_fails_when_kit_not_initialized() {

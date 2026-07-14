@@ -389,6 +389,7 @@ mod tests {
 
     // --- hook() CLI wrapper ---
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn hook_returns_err_when_kit_not_initialized() {
@@ -402,6 +403,7 @@ mod tests {
         crate::service::runtime::reset_kit_for_testing();
     }
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn hook_succeeds_when_kit_initialized_and_stdin_not_tty() {

@@ -242,6 +242,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn status_wrapper_succeeds_via_init_kit() {
@@ -259,6 +260,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn status_wrapper_fails_when_kit_not_initialized() {

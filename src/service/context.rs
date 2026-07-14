@@ -369,6 +369,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
+    #[serial_test::serial]
     #[test]
     #[cfg(feature = "cli")]
     fn context_wrapper_succeeds_via_init_kit() {
@@ -393,6 +394,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
+    #[serial_test::serial]
     #[test]
     #[cfg(feature = "cli")]
     fn context_wrapper_fails_when_kit_not_initialized() {
@@ -412,6 +414,7 @@ mod tests {
 
     // Covers the enhanced=true branch (lines 88-93) in the wrapper:
     // run_context_enhanced → serde_json::to_string → println.
+    #[serial_test::serial]
     #[test]
     #[cfg(feature = "cli")]
     fn context_wrapper_succeeds_with_enhanced() {
@@ -439,6 +442,7 @@ mod tests {
 
     // Covers the wrapper failing with an unknown symbol (enhanced=false path,
     // lines 95-96): run_context returns InvalidInput → ApiError.
+    #[serial_test::serial]
     #[test]
     #[cfg(feature = "cli")]
     fn context_wrapper_fails_with_unknown_symbol() {
@@ -467,6 +471,7 @@ mod tests {
 
     // Covers the wrapper failing with an unknown symbol (enhanced=true path,
     // lines 89-90): run_context_enhanced returns Internal error → ApiError.
+    #[serial_test::serial]
     #[test]
     #[cfg(feature = "cli")]
     fn context_wrapper_fails_with_enhanced_unknown_symbol() {
@@ -494,6 +499,7 @@ mod tests {
     }
 
     // Covers the wrapper with depth=0 (line 96 run_context with depth 0).
+    #[serial_test::serial]
     #[test]
     #[cfg(feature = "cli")]
     fn context_wrapper_succeeds_with_depth_zero() {

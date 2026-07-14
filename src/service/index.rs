@@ -768,6 +768,7 @@ mod tests {
 
     // --- #[forge] index wrapper tests ---
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn index_wrapper_fails_when_kit_not_initialized() {
@@ -787,6 +788,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
+    #[serial_test::serial]
     #[cfg(all(feature = "cli", feature = "lang-rust"))]
     #[test]
     fn index_wrapper_succeeds_via_init_kit() {
@@ -824,6 +826,7 @@ mod tests {
     }
 
     // Covers the `embed=true` deprecation warning branch (lines 296-301).
+    #[serial_test::serial]
     #[cfg(all(feature = "cli", feature = "lang-rust"))]
     #[test]
     fn index_wrapper_with_embed_true_emits_deprecation_warning() {
@@ -917,6 +920,7 @@ mod tests {
     // Covers the `kit.config::<StorageConfig>().map_err(...)` error path
     // (lines 304-306) in the index wrapper. Creates a kit WITHOUT registering
     // StorageModule or setting StorageConfig, then calls the index wrapper.
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn index_wrapper_fails_when_storage_config_not_registered() {

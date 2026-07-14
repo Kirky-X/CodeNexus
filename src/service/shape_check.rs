@@ -117,6 +117,7 @@ mod tests {
 
     // ===== #[forge] wrapper tests via init_kit =====
 
+    #[serial_test::serial]
     #[test]
     fn shape_check_wrapper_succeeds_via_init_kit() {
         use crate::service::runtime::{init_kit, reset_kit_for_testing};
@@ -133,6 +134,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
+    #[serial_test::serial]
     #[test]
     fn shape_check_wrapper_fails_when_kit_not_initialized() {
         use crate::service::runtime::reset_kit_for_testing;

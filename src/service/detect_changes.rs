@@ -1172,6 +1172,7 @@ diff --git a/bar.rs b/bar.rs
         }
     }
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn detect_changes_wrapper_fails_with_nonexistent_path() {
@@ -1194,6 +1195,7 @@ diff --git a/bar.rs b/bar.rs
         );
     }
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn detect_changes_wrapper_fails_with_invalid_mode() {
@@ -1229,6 +1231,7 @@ diff --git a/bar.rs b/bar.rs
         assert!(result.is_err(), "wrapper should fail without kit");
     }
 
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn detect_changes_wrapper_succeeds_on_real_git_repo() {
@@ -1374,6 +1377,7 @@ diff --git a/bar.rs b/bar.rs
     }
 
     // Covers the wrapper failing when path is a file, not a directory.
+    #[serial_test::serial]
     #[cfg(feature = "cli")]
     #[test]
     fn detect_changes_wrapper_fails_with_file_path() {
