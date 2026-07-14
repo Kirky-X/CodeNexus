@@ -560,7 +560,7 @@ fn serialize_vec(vec: &[f32]) -> Vec<u8> {
 /// [`chunks_exact`]: slice::chunks_exact
 #[cfg(feature = "cache")]
 fn deserialize_vec(bytes: &[u8]) -> Vec<f32> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Vec::new();
     }
     bytes
