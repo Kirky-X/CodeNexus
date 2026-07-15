@@ -140,11 +140,21 @@ impl Walker {
 
 /// Returns the [`Language`] for a file with a recognized code extension, or
 /// `None` for unrecognized/non-code files.
+///
+/// Only returns languages whose tree-sitter parser is compiled in (i.e.,
+/// whose `lang-*` Cargo feature is enabled). A `.json` file returns `None`
+/// when `lang-json` is not enabled, preventing downstream dispatcher panics.
 #[must_use]
 pub fn is_code_file(path: &Path) -> Option<Language> {
-    path.extension()
+    let lang = path
+        .extension()
         .and_then(|ext| ext.to_str())
-        .and_then(Language::from_extension)
+        .and_then(Language::from_extension)?;
+    if Language::compiled().contains(&lang) {
+        Some(lang)
+    } else {
+        None
+    }
 }
 
 /// Returns `true` if `dir_name` is in the hardcoded [`ALWAYS_SKIP_DIRS`] list

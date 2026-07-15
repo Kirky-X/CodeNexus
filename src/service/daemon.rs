@@ -120,6 +120,7 @@ mod tests {
 
     // --- blocking daemon start ---
 
+    #[serial_test::serial(daemon_core)]
     #[test]
     fn daemon_core_starts_and_runs() {
         let tmp = TempDir::new().unwrap();
@@ -158,6 +159,7 @@ mod tests {
 
     // --- end-to-end: file watching + incremental indexing ---
 
+    #[serial_test::serial(daemon_core)]
     #[test]
     fn daemon_core_triggers_incremental_index_on_code_file_change() {
         let tmp = TempDir::new().unwrap();
@@ -174,6 +176,7 @@ mod tests {
         assert!(!handle.is_finished(), "daemon should still be running");
     }
 
+    #[serial_test::serial(daemon_core)]
     #[test]
     fn daemon_core_ignores_non_code_file_changes() {
         let tmp = TempDir::new().unwrap();
