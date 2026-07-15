@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **chore(deps): major dependency upgrades + root-cause zstd-sys removal** — petgraph 0.6→0.8, reqwest 0.12→0.13 (feature `rustls-tls`→`rustls`), lsp-server 0.8→0.9 (ResponseKind enum), lsp-types 0.95→0.97 (Url→Uri), inklog 0.1.9→0.1.10 (gzip fallback via flate2 when `compression` feature disabled). Added `url` 2.x optional dep for `path_to_uri` conversion. zstd-sys completely eliminated from dependency tree. `cargo install --path . --locked` now succeeds without linker workarounds.
+
 ## [0.3.4] - 2026-07-15
 
 ### Fixed
