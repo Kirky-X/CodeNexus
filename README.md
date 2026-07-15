@@ -4,7 +4,7 @@
 
 **基于 LadybugDB 与 tree-sitter 的多语言代码知识图谱工具**
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) &nbsp; [![Rust Version](https://img.shields.io/badge/rust-1.91%2B-orange.svg)](https://www.rust-lang.org) &nbsp; [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) &nbsp; [![Crates.io](https://img.shields.io/crates/v/codenexus.svg)](https://crates.io/crates/codenexus)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) &nbsp; [![Rust Version](https://img.shields.io/badge/rust-1.94%2B-orange.svg)](https://www.rust-lang.org) &nbsp; [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) &nbsp; [![Crates.io](https://img.shields.io/crates/v/codenexus.svg)](https://crates.io/crates/codenexus)
 
 [English](README_EN.md) | 简体中文
 
@@ -348,24 +348,24 @@ graph TB
     subgraph "用户层"
         CLI["CLI (sdforge CliBuilder)"]
     end
-    
+
     subgraph "核心层"
         IP["Index Pipeline<br/>索引流水线"]
         Q["Query<br/>查询引擎"]
         T["Trace<br/>追踪引擎"]
         D["Daemon<br/>守护进程"]
     end
-    
+
     subgraph "解析层"
         R["Resolve<br/>符号解析 + 数据流"]
         P["Parse<br/>tree-sitter 多语言提取"]
     end
-    
+
     subgraph "存储层"
         S["Storage<br/>LadybugDB"]
         H["Hash<br/>SHA-256 增量"]
     end
-    
+
     CLI --> IP
     CLI --> Q
     CLI --> T
@@ -377,7 +377,7 @@ graph TB
     Q --> S
     T --> S
     D --> IP
-    
+
     style CLI fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
     style IP fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
     style S fill:#ffcdd2,stroke:#c62828,stroke-width:2px

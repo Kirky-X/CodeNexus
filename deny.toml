@@ -4,12 +4,12 @@
 [advisories]
 db-urls = ["https://github.com/RustSec/advisory-db"]
 yanked = "deny"
-# 临时接受：cxx RUSTSEC-2026-0202 (unsound)。
-# 阻塞原因：lbug v0.17.1 在 crates.io 精确锁定 cxx = "=1.0.138"，
-# 上游未发布放宽松约束的版本，cargo update 无法升级 cxx。
-# 待 lbug 上游放开约束后移除该 ignore 并完成真正的版本升级。
+# 临时接受：
+# - cxx RUSTSEC-2026-0202 (unsound)：lbug v0.17.1 精确锁定 cxx = "=1.0.138"，待 lbug 放宽约束后升级。
+# - paste RUSTSEC-2024-0436 (unmaintained)：tokenizers/parquet 的间接依赖，无安全升级路径。
 ignore = [
     "RUSTSEC-2026-0202",
+    "RUSTSEC-2024-0436",
 ]
 
 [licenses]
@@ -19,6 +19,8 @@ allow = [
     "BSD-3-Clause", "BSD-2-Clause", "ISC",
     "Unicode-3.0", "Unicode-DFS-2016",
     "Zlib", "CC0-1.0", "MPL-2.0",
+    # webpki-roots / webpki-root-certs (TLS 根证书库) 使用此数据许可
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 

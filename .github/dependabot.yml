@@ -20,3 +20,7 @@ updates:
         update-types:
           - "minor"
           - "patch"
+      # codeql-action 的 init/autobuild/analyze 必须同步升级，避免 v3/v4 混用导致配置错误
+      codeql-action:
+        patterns:
+          - "github/codeql-action/*"

@@ -14,11 +14,11 @@ jobs:
     name: fmt + clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Install Rust 1.91 with clippy
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install Rust 1.94 with clippy
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: "1.91"
+          toolchain: "1.94"
           components: clippy
       - name: Install nightly toolchain with rustfmt
         uses: dtolnay/rust-toolchain@efcb852328a9f50117170cc43094fb6f09eaf1ae # nightly
@@ -38,9 +38,9 @@ jobs:
       - name: Check formatting
         run: cargo +nightly fmt --all -- --check
       - name: Clippy (full)
-        run: cargo +1.91 clippy -- -D warnings
+        run: cargo +1.94 clippy -- -D warnings
       - name: Clippy (minimal)
-        run: cargo +1.91 clippy --lib --no-default-features --features minimal -- -D warnings
+        run: cargo +1.94 clippy --lib --no-default-features --features minimal -- -D warnings
 
   test:
     name: test (${{ matrix.features }})
@@ -62,11 +62,11 @@ jobs:
           - features: "full,embed"
             cache-key: "full-embed"
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Install Rust 1.91
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install Rust 1.94
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: "1.91"
+          toolchain: "1.94"
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -90,11 +90,11 @@ jobs:
     name: coverage (≥95%)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Install Rust 1.91
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install Rust 1.94
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: "1.91"
+          toolchain: "1.94"
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -123,7 +123,7 @@ jobs:
       security-events: write
       checks: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: cargo-audit (RustSec 漏洞库)
         uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:

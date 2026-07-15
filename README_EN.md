@@ -4,7 +4,7 @@
 
 **A multi-language code knowledge graph tool built on LadybugDB and tree-sitter**
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) &nbsp; [![Rust Version](https://img.shields.io/badge/rust-1.91%2B-orange.svg)](https://www.rust-lang.org) &nbsp; [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) &nbsp; [![Crates.io](https://img.shields.io/crates/v/codenexus.svg)](https://crates.io/crates/codenexus)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) &nbsp; [![Rust Version](https://img.shields.io/badge/rust-1.94%2B-orange.svg)](https://www.rust-lang.org) &nbsp; [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) &nbsp; [![Crates.io](https://img.shields.io/crates/v/codenexus.svg)](https://crates.io/crates/codenexus)
 
 English | [简体中文](README.md)
 
@@ -329,24 +329,24 @@ graph TB
     subgraph "User Layer"
         CLI["CLI (sdforge CliBuilder)"]
     end
-    
+
     subgraph "Core Layer"
         IP["Index Pipeline"]
         Q["Query Engine"]
         T["Trace Engine"]
         D["Daemon"]
     end
-    
+
     subgraph "Parse Layer"
         R["Resolve<br/>Symbol + DataFlow"]
         P["Parse<br/>tree-sitter"]
     end
-    
+
     subgraph "Storage Layer"
         S["Storage<br/>LadybugDB"]
         H["Hash<br/>SHA-256"]
     end
-    
+
     CLI --> IP
     CLI --> Q
     CLI --> T
@@ -358,7 +358,7 @@ graph TB
     Q --> S
     T --> S
     D --> IP
-    
+
     style CLI fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
     style IP fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
     style S fill:#ffcdd2,stroke:#c62828,stroke-width:2px
