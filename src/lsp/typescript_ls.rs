@@ -135,11 +135,11 @@ impl LspProvider for TypeScriptLanguageClient {
 mod tests {
     use super::*;
     use crate::lsp::session;
-    use lsp_server::{Connection, Message, RequestId, Response};
+    use lsp_server::{Connection, Message, RequestId, Response, ResponseKind};
     use lsp_types::request::HoverRequest;
     use lsp_types::{
         GotoDefinitionResponse, HoverParams, Position, TextDocumentIdentifier,
-        TextDocumentPositionParams, Url, WorkDoneProgressParams,
+        TextDocumentPositionParams, Uri, WorkDoneProgressParams,
     };
     use std::path::PathBuf;
 
@@ -231,7 +231,7 @@ mod tests {
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier {
-                    uri: Url::parse("file:///tmp/x.ts").unwrap(),
+                    uri: "file:///tmp/x.ts".parse::<Uri>().unwrap(),
                 },
                 position: Position {
                     line: 0,
@@ -264,7 +264,7 @@ mod tests {
 
     fn loc() -> lsp_types::Location {
         lsp_types::Location {
-            uri: Url::parse("file:///tmp/test.ts").unwrap(),
+            uri: "file:///tmp/test.ts".parse::<Uri>().unwrap(),
             range: lsp_types::Range {
                 start: Position {
                     line: 5,
@@ -285,8 +285,9 @@ mod tests {
         *c.session.lock().unwrap() = Some(s);
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            result: Some(serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap()),
-            error: None,
+            response_kind: ResponseKind::Ok {
+                result: serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap(),
+            },
         }))
         .unwrap();
         assert_eq!(
@@ -315,8 +316,9 @@ mod tests {
         };
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            result: Some(serde_json::to_value(hover).unwrap()),
-            error: None,
+            response_kind: ResponseKind::Ok {
+                result: serde_json::to_value(hover).unwrap(),
+            },
         }))
         .unwrap();
         assert!(c.hover(Path::new("/tmp/test.ts"), 0, 0).unwrap().is_some());

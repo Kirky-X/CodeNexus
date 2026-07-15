@@ -30,7 +30,7 @@ use codenexus::kit::bootstrap::DEFAULT_DEBOUNCE_MS;
 /// Initialize the global `tracing` subscriber using inklog as the sole backend.
 ///
 /// Configures console (colored) + file output with daily rotation, 100 MB max
-/// file size, zstd compression, and 30-day retention. The log level is read
+/// file size, gzip compression, and 30-day retention. The log level is read
 /// from `RUST_LOG` (default: `info`).
 pub fn init_logging() {
     init_inklog();

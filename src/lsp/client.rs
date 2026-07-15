@@ -134,11 +134,13 @@ impl LspProvider for RustAnalyzerClient {
 mod tests {
     use super::*;
     use crate::lsp::session;
-    use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
+    use lsp_server::{
+        Connection, Message, Notification, Request, RequestId, Response, ResponseKind,
+    };
     use lsp_types::request::{HoverRequest, Initialize};
     use lsp_types::{
         GotoDefinitionResponse, HoverParams, Position, TextDocumentIdentifier,
-        TextDocumentPositionParams, Url, WorkDoneProgressParams,
+        TextDocumentPositionParams, Uri, WorkDoneProgressParams,
     };
     use std::path::PathBuf;
     use std::time::Duration;
@@ -214,7 +216,7 @@ mod tests {
 
     #[test]
     fn extract_first_location_from_scalar() {
-        let uri = Url::parse("file:///tmp/x.rs").unwrap();
+        let uri = "file:///tmp/x.rs".parse::<Uri>().unwrap();
         let loc = lsp_types::Location {
             uri: uri.clone(),
             range: lsp_types::Range {
@@ -236,7 +238,7 @@ mod tests {
 
     #[test]
     fn extract_first_location_from_array_returns_first() {
-        let uri = Url::parse("file:///tmp/x.rs").unwrap();
+        let uri = "file:///tmp/x.rs".parse::<Uri>().unwrap();
         let mk = |l: u32| lsp_types::Location {
             uri: uri.clone(),
             range: lsp_types::Range {
@@ -278,7 +280,7 @@ mod tests {
 
     #[test]
     fn extract_first_location_from_link() {
-        let uri = Url::parse("file:///tmp/t.rs").unwrap();
+        let uri = "file:///tmp/t.rs".parse::<Uri>().unwrap();
         let r = lsp_types::Range {
             start: Position {
                 line: 10,
@@ -305,12 +307,13 @@ mod tests {
     fn decode_response_server_error() {
         let resp = Response {
             id: RequestId::from(1),
-            result: None,
-            error: Some(lsp_server::ResponseError {
-                code: -32603,
-                message: "err".into(),
-                data: None,
-            }),
+            response_kind: ResponseKind::Err {
+                error: lsp_server::ResponseError {
+                    code: -32603,
+                    message: "err".into(),
+                    data: None,
+                },
+            },
         };
         assert!(matches!(
             session::decode_response::<Initialize>(resp),
@@ -322,8 +325,9 @@ mod tests {
     fn decode_response_absent_result_as_none() {
         let resp = Response {
             id: RequestId::from(1),
-            result: None,
-            error: None,
+            response_kind: ResponseKind::Ok {
+                result: serde_json::Value::Null,
+            },
         };
         assert_eq!(
             session::decode_response::<HoverRequest>(resp).unwrap(),
@@ -335,8 +339,9 @@ mod tests {
     fn decode_response_type_mismatch() {
         let resp = Response {
             id: RequestId::from(1),
-            result: Some(serde_json::Value::String("bad".into())),
-            error: None,
+            response_kind: ResponseKind::Ok {
+                result: serde_json::Value::String("bad".into()),
+            },
         };
         assert!(matches!(
             session::decode_response::<Initialize>(resp),
@@ -395,7 +400,7 @@ mod tests {
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier {
-                    uri: Url::parse("file:///tmp/x.rs").unwrap(),
+                    uri: "file:///tmp/x.rs".parse::<Uri>().unwrap(),
                 },
                 position: Position {
                     line: 0,
@@ -449,8 +454,9 @@ mod tests {
         .unwrap();
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            result: Some(serde_json::Value::Null),
-            error: None,
+            response_kind: ResponseKind::Ok {
+                result: serde_json::Value::Null,
+            },
         }))
         .unwrap();
         assert!(session::send_request::<HoverRequest>(&mut s, hp())
@@ -471,8 +477,9 @@ mod tests {
         .unwrap();
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            result: Some(serde_json::Value::Null),
-            error: None,
+            response_kind: ResponseKind::Ok {
+                result: serde_json::Value::Null,
+            },
         }))
         .unwrap();
         assert!(session::send_request::<HoverRequest>(&mut s, hp()).is_ok());
@@ -485,14 +492,16 @@ mod tests {
         let (mut s, rt, _wr) = mock_session();
         rt.send(Message::Response(Response {
             id: RequestId::from(999),
-            result: Some(serde_json::Value::Null),
-            error: None,
+            response_kind: ResponseKind::Ok {
+                result: serde_json::Value::Null,
+            },
         }))
         .unwrap();
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            result: Some(serde_json::Value::Null),
-            error: None,
+            response_kind: ResponseKind::Ok {
+                result: serde_json::Value::Null,
+            },
         }))
         .unwrap();
         assert!(session::send_request::<HoverRequest>(&mut s, hp()).is_ok());
@@ -517,12 +526,13 @@ mod tests {
         let (mut s, rt, _wr) = mock_session();
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            result: None,
-            error: Some(lsp_server::ResponseError {
-                code: -32603,
-                message: "err".into(),
-                data: None,
-            }),
+            response_kind: ResponseKind::Err {
+                error: lsp_server::ResponseError {
+                    code: -32603,
+                    message: "err".into(),
+                    data: None,
+                },
+            },
         }))
         .unwrap();
         let r = session::send_request::<HoverRequest>(&mut s, hp());
@@ -580,7 +590,7 @@ mod tests {
 
     fn loc() -> lsp_types::Location {
         lsp_types::Location {
-            uri: Url::parse("file:///tmp/lib.rs").unwrap(),
+            uri: "file:///tmp/lib.rs".parse::<Uri>().unwrap(),
             range: lsp_types::Range {
                 start: Position {
                     line: 5,
@@ -599,8 +609,9 @@ mod tests {
         let (c, rt, _wr) = client_with_mock();
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            result: Some(serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap()),
-            error: None,
+            response_kind: ResponseKind::Ok {
+                result: serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap(),
+            },
         }))
         .unwrap();
         assert_eq!(
@@ -620,8 +631,9 @@ mod tests {
         let (c, rt, _wr) = client_with_mock();
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            result: Some(serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap()),
-            error: None,
+            response_kind: ResponseKind::Ok {
+                result: serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap(),
+            },
         }))
         .unwrap();
         let r = c.type_definition(Path::new("/tmp/lib.rs"), 0, 0).unwrap();
@@ -641,8 +653,9 @@ mod tests {
         };
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            result: Some(serde_json::to_value(hover).unwrap()),
-            error: None,
+            response_kind: ResponseKind::Ok {
+                result: serde_json::to_value(hover).unwrap(),
+            },
         }))
         .unwrap();
         assert!(c.hover(Path::new("/tmp/lib.rs"), 0, 0).unwrap().is_some());

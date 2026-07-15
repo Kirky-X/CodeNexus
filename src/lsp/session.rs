@@ -11,16 +11,17 @@
 use std::io::BufReader;
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::str::FromStr;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
-use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
+use lsp_server::{Connection, Message, Notification, Request, RequestId, Response, ResponseKind};
 use lsp_types::notification::{Initialized, Notification as _};
 use lsp_types::request::Initialize;
 use lsp_types::{
     GotoDefinitionResponse, InitializeParams, InitializedParams, Position, TextDocumentIdentifier,
-    TextDocumentPositionParams, Url, WorkspaceFolder,
+    TextDocumentPositionParams, Uri, WorkspaceFolder,
 };
 
 use super::{LspError, REQUEST_TIMEOUT_MS};
@@ -101,7 +102,7 @@ pub(crate) fn spawn_server(
 
 /// Perform the LSP `initialize` / `initialized` handshake.
 pub(crate) fn initialize_session(session: &mut Session, workspace: &Path) -> Result<(), LspError> {
-    let root_uri = path_to_url(workspace)?;
+    let root_uri = path_to_uri(workspace)?;
     let init_params = InitializeParams {
         process_id: Some(std::process::id()),
         workspace_folders: Some(vec![WorkspaceFolder {
@@ -201,17 +202,13 @@ where
     R: lsp_types::request::Request,
     R::Result: serde::de::DeserializeOwned,
 {
-    if let Some(err) = resp.error {
-        return Err(LspError::Communication(format!(
+    match resp.response_kind {
+        ResponseKind::Err { error } => Err(LspError::Communication(format!(
             "server error {}: {}",
-            err.code, err.message
-        )));
-    }
-    match resp.result {
-        Some(value) => serde_json::from_value::<R::Result>(value)
+            error.code, error.message
+        ))),
+        ResponseKind::Ok { result } => serde_json::from_value::<R::Result>(result)
             .map_err(|e| LspError::Communication(format!("decode response: {e}"))),
-        None => serde_json::from_value::<R::Result>(serde_json::Value::Null)
-            .map_err(|e| LspError::Communication(format!("decode null response: {e}"))),
     }
 }
 
@@ -237,7 +234,7 @@ pub(crate) fn make_position_params(
     line: u32,
     col: u32,
 ) -> Result<TextDocumentPositionParams, LspError> {
-    let uri = path_to_url(file)?;
+    let uri = path_to_uri(file)?;
     Ok(TextDocumentPositionParams {
         text_document: TextDocumentIdentifier { uri },
         position: Position {
@@ -247,14 +244,20 @@ pub(crate) fn make_position_params(
     })
 }
 
-/// Convert a filesystem path to a `file://` [`Url`].
-fn path_to_url(path: &Path) -> Result<Url, LspError> {
-    Url::from_file_path(path).map_err(|_| {
+/// Convert a filesystem path to a `file://` [`Uri`].
+///
+/// Uses [`url::Url::from_file_path`] for correct percent-encoding of
+/// special characters, then re-parses the resulting URI string into
+/// [`lsp_types::Uri`] (the lsp-types 0.97 newtype around `fluent_uri`).
+fn path_to_uri(path: &Path) -> Result<Uri, LspError> {
+    let url = url::Url::from_file_path(path).map_err(|_| {
         LspError::Communication(format!(
             "path is not absolute or cannot be encoded as a file URL: {}",
             path.display()
         ))
-    })
+    })?;
+    Uri::from_str(url.as_str())
+        .map_err(|e| LspError::Communication(format!("failed to parse file URI '{url}': {e}")))
 }
 
 #[cfg(test)]

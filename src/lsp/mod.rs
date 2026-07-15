@@ -23,7 +23,7 @@
 //! The entire module compiles only when the `lsp` cargo feature is enabled:
 //!
 //! ```toml
-//! lsp = ["dep:lsp-types", "dep:lsp-server"]
+//! lsp = ["dep:lsp-types", "dep:lsp-server", "dep:crossbeam-channel", "dep:url"]
 //! ```
 
 pub mod clangd;

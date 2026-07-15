@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn goto_def_output_from_location_serializes_uri() {
         let loc = lsp_types::Location {
-            uri: lsp_types::Url::parse("file:///tmp/x.rs").unwrap(),
+            uri: "file:///tmp/x.rs".parse::<lsp_types::Uri>().unwrap(),
             range: lsp_types::Range {
                 start: lsp_types::Position {
                     line: 1,
@@ -579,7 +579,7 @@ mod tests {
     #[test]
     fn goto_def_output_from_location_includes_range() {
         let loc = lsp_types::Location {
-            uri: lsp_types::Url::parse("file:///src/lib.rs").unwrap(),
+            uri: "file:///src/lib.rs".parse::<lsp_types::Uri>().unwrap(),
             range: lsp_types::Range {
                 start: lsp_types::Position {
                     line: 5,

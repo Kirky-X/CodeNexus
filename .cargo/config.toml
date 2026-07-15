@@ -1,14 +1,11 @@
 # Build configuration for CodeNexus.
 #
-# When the `inklog` feature is enabled, inklog depends on the `zstd` crate
-# (zstd-sys), which statically compiles the zstd C library from source. This
-# conflicts with lbug's bundled zstd, causing duplicate ZSTD_* symbols at link
-# time. Setting ZSTD_SYS_USE_PKG_CONFIG=1 makes zstd-sys use pkg-config to find
-# the system libzstd instead of compiling from source. The libzstd.pc file in
-# build-support/ points to the system runtime libzstd.so.1.
-#
-# These env vars are harmless when inklog is disabled because zstd-sys is not
-# pulled into the dependency graph in that case.
+# inklog 0.1.10+ uses gzip (flate2) fallback when the `compression` feature is
+# not enabled, so zstd-sys is no longer in the dependency tree. The env vars
+# below are retained for future use: if inklog's `compression` feature is ever
+# enabled, ZSTD_SYS_USE_PKG_CONFIG=1 makes zstd-sys use pkg-config to find the
+# system libzstd instead of compiling from source (avoiding duplicate ZSTD_*
+# symbols with lbug's bundled zstd). They are harmless when zstd-sys is absent.
 [env]
 ZSTD_SYS_USE_PKG_CONFIG = "1"
 PKG_CONFIG_PATH = { value = "build-support", relative = true }
