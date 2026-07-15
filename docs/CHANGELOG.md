@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-07-15
+
+### Fixed
+
+- **fix(docs): resolve docs.rs build failure** — `.cargo/config.toml` now provides fallback values for `LBUG_PRECOMPILED_SOURCE` and `LBUG_PRECOMPILED_LIBRARY_DIR`. When docs.rs sets `DOCS_RS=1`, lbug's build.rs skips C++ compilation without emitting `cargo:rustc-env`, causing `env!()` macros to fail. The fallback values are overridden by `cargo:rustc-env` in normal builds (higher precedence), so this change is transparent to local development.
+- **fix(parse): clippy 1.95 `collapsible_match` in fortran extractor** — collapsed nested `if` into match guard for the `"identifier"` arm in `extract_call`.
+- **fix(bench): adapt sysinfo 0.39.5 API** — `refresh_process(pid)` → `refresh_processes(ProcessesToUpdate::Some(&[pid]), false)` in `benches/common/mod.rs` and `benches/memory_bench.rs`.
+
+### Changed
+
+- **chore(deps): upgrade CI Rust 1.94→1.95** — required by sysinfo 0.39.5 MSRV. Updated `ci.yml`, `release.yml`, `Cargo.toml`, `clippy.toml`, `README.md`, `README_EN.md`, `docs/CONTRIBUTING.md`.
+- **chore(deps): notify 6→8, notify-debouncer-full 0.7→0.6** — notify 8.x requires notify-debouncer-full 0.6 (0.7 only compatible with notify 6.x). daemon code accesses notify API via `notify_debouncer_full::notify::*` re-export, no code changes needed.
+- **chore(deps): sysinfo 0.30→0.39** — dependabot PR #24.
+- **chore(deps): lbug 0.17.1→0.18.0** — dependabot PR #23.
+- **chore(deps): lsp-server 0.7→0.8** — dependabot PR #22.
+- **chore(deps): tree-sitter-go 0.23→0.25** — dependabot PR #26.
+- **chore(deps): action-gh-release 2.6.2→3.0.1** — dependabot PR #27.
+
 ## [0.3.3] - 2026-07-15
 
 ### Added

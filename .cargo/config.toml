@@ -12,3 +12,9 @@
 [env]
 ZSTD_SYS_USE_PKG_CONFIG = "1"
 PKG_CONFIG_PATH = { value = "build-support", relative = true }
+# docs.rs sets DOCS_RS=1, which makes lbug's build.rs skip C++ compilation and
+# not emit cargo:rustc-env for LBUG_PRECOMPILED_SOURCE/LBUG_PRECOMPILED_LIBRARY_DIR.
+# Provide fallback values so lbug's env!() macros resolve at compile time.
+# In normal builds, lbug build.rs overrides these via cargo:rustc-env (higher precedence).
+LBUG_PRECOMPILED_SOURCE = "/nonexistent"
+LBUG_PRECOMPILED_LIBRARY_DIR = "/nonexistent"
