@@ -40,7 +40,7 @@ jobs:
       - name: Clippy (full)
         run: cargo +1.91 clippy -- -D warnings
       - name: Clippy (minimal)
-        run: cargo +1.91 clippy --no-default-features --features minimal -- -D warnings
+        run: cargo +1.91 clippy --lib --no-default-features --features minimal -- -D warnings
 
   test:
     name: test (${{ matrix.features }})
@@ -121,6 +121,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      checks: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: cargo-audit (RustSec 漏洞库)

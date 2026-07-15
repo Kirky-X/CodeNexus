@@ -25,7 +25,7 @@ pub mod api_review;
 #[cfg(feature = "community")]
 pub mod community;
 
-#[cfg(feature = "cross-service")]
+#[cfg(feature = "analysis")]
 pub mod cross_service;
 
 #[cfg(feature = "complexity")]
