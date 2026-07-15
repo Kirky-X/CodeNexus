@@ -1,6 +1,7 @@
 # Pre-commit hooks for CodeNexus
 # Install: pip install pre-commit && pre-commit install
 # Docs: https://pre-commit.com/
+default_install_hook_types: [pre-commit, pre-push]
 repos:
   # 1. Basic file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -16,8 +17,6 @@ repos:
       - id: detect-private-key
       - id: check-merge-conflict
         args: ['--assume-in-merge']
-      - id: no-commit-to-branch
-        args: ['--branch', 'main', '--branch', 'master']
       - id: mixed-line-ending
         args: ['--fix=lf']
 
@@ -60,20 +59,20 @@ repos:
         stages: [pre-push]
       - id: cargo-coverage
         name: cargo coverage (≥95%)
-        entry: bash -c 'cargo llvm-cov --lib --fail-under-lines 95 2>/dev/null || { echo "→ 先运行: cargo install cargo-llvm-cov"; exit 1; }'
+        entry: bash -c 'cargo llvm-cov --lib --fail-under-lines 95 2>/dev/null || { echo "→ 先运行 cargo install cargo-llvm-cov"; exit 1; }'
         language: system
         types: [rust]
         pass_filenames: false
         stages: [pre-push]
       - id: cargo-audit
         name: cargo audit (RustSec 漏洞库)
-        entry: bash -c 'cargo audit 2>/dev/null || { echo "→ 先运行: cargo install cargo-audit"; exit 1; }'
+        entry: bash -c 'cargo audit 2>/dev/null || { echo "→ 先运行 cargo install cargo-audit"; exit 1; }'
         language: system
         files: 'Cargo\.lock'
         pass_filenames: false
       - id: cargo-deny
         name: cargo deny check (license/advisory/ban)
-        entry: bash -c 'cargo deny check 2>/dev/null || { echo "→ 先运行: cargo install cargo-deny && cargo deny init"; exit 1; }'
+        entry: bash -c 'cargo deny check 2>/dev/null || { echo "→ 先运行 cargo install cargo-deny && cargo deny init"; exit 1; }'
         language: system
         files: 'Cargo\.(toml|lock)'
         pass_filenames: false

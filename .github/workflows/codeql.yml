@@ -1,3 +1,4 @@
+# CodeQL — static analysis for Rust
 name: CodeQL
 
 on:
@@ -18,7 +19,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@c915c33a16f01166c17e35fe1d4085a2d71adb # v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Initialize CodeQL
         uses: github/codeql-action/init@4d75a1e6c9bf99b24baf856e3d8df0c75350d4f4 # v3
         with:
