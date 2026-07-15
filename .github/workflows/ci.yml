@@ -21,7 +21,7 @@ jobs:
           toolchain: "1.91"
           components: clippy
       - name: Install nightly toolchain with rustfmt
-        uses: dtolnay/rust-toolchain@efcb852328a9f50117170cc43094fb6f09eaf1ae # nightly
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # nightly
         with:
           components: rustfmt
       - name: Install dependencies
