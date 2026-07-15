@@ -688,6 +688,7 @@ mod tests {
 
     // --- IndexFacade / Pipeline: AC-INDEX-001 ---
 
+    #[cfg(all(feature = "lang-c", feature = "lang-fortran"))]
     #[test]
     fn ac_index_001_indexes_c_rust_fortran_files() {
         // AC-INDEX-001: Index a codebase with C/Rust/Fortran files → all

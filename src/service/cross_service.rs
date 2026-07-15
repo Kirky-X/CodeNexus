@@ -9,8 +9,6 @@ use serde::Serialize;
 use crate::analysis::cross_service::{
     CrossServiceDetector, CrossServiceLink, CrossServiceLinker, CrossServiceMatch, ServiceProtocol,
 };
-#[cfg(feature = "cross-service")]
-use std::str::FromStr;
 #[cfg(all(feature = "cross-service", any(feature = "cli", test)))]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(feature = "cross-service", any(feature = "cli", test)))]
@@ -19,6 +17,8 @@ use crate::service::error::CodeNexusError;
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 #[cfg(all(feature = "cli", feature = "cross-service"))]
 use crate::service::runtime::kit;
+#[cfg(feature = "cross-service")]
+use std::str::FromStr;
 
 #[cfg(feature = "cli")]
 use sdforge::forge;
@@ -69,7 +69,7 @@ pub fn run_cross_service(
 #[cfg(all(feature = "cli", feature = "cross-service"))]
 #[forge(
     name = "cross_service",
-    version = "0.3.2",
+    version = "0.3.3",
     description = "Detect cross-service links by matching HTTP route patterns against caller string literals.",
     cli = true
 )]

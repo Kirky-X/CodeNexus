@@ -103,7 +103,7 @@ pub fn run_status(kit: &AsyncKit<AsyncReady>) -> Result<StatusOutput, CodeNexusE
 #[cfg(feature = "cli")]
 #[forge(
     name = "status",
-    version = "0.3.2",
+    version = "0.3.3",
     description = "List all indexed projects and check their staleness.",
     cli = true
 )]

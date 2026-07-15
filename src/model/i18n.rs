@@ -68,12 +68,14 @@ mod tests {
         assert_eq!(fold_case("PARSE"), "parse");
     }
 
+    #[cfg(feature = "i18n")]
     #[test]
     fn fold_case_german_sharp_s() {
-        // ß folds to "ss" under Unicode case folding
+        // ß folds to "ss" under Unicode case folding (requires ICU4X)
         assert_eq!(fold_case("Straße"), "strasse");
     }
 
+    #[cfg(feature = "i18n")]
     #[test]
     fn fold_case_turkish_i_with_dot() {
         // Turkish İ (U+0130) folds to i + combining dot above (U+0307)
@@ -105,10 +107,11 @@ mod tests {
         assert_eq!(normalize_nfc("hello"), "hello");
     }
 
+    #[cfg(feature = "i18n")]
     #[test]
     fn normalize_nfc_decomposed_to_composed() {
         // NFD: 'e' (U+0065) + combining acute (U+0301)
-        // NFC: 'é' (U+00E9)
+        // NFC: 'é' (U+00E9) — requires ICU4X normalizer
         let nfd = "e\u{0301}";
         let nfc = normalize_nfc(nfd);
         assert_eq!(nfc, "\u{00E9}");

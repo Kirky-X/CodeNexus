@@ -8,9 +8,9 @@
 //! overlap any changed range. Each affected symbol is annotated with an
 //! `incoming_edge_count` and a `risk_level` (low / medium / high).
 
+use std::fmt;
 use std::path::Path;
 use std::process::Command;
-use std::fmt;
 use std::str::FromStr;
 
 use serde::Serialize;
@@ -339,7 +339,7 @@ pub struct AffectedSymbolOutput {
 #[cfg(feature = "cli")]
 #[forge(
     name = "detect_changes",
-    version = "0.3.2",
+    version = "0.3.3",
     description = "Detect symbols affected by uncommitted git changes and classify their risk.",
     cli = true
 )]
@@ -522,10 +522,7 @@ mod tests {
             DiffMode::from_str("  unstaged  ").unwrap(),
             DiffMode::Unstaged
         );
-        assert_eq!(
-            DiffMode::from_str("\tstaged\n").unwrap(),
-            DiffMode::Staged
-        );
+        assert_eq!(DiffMode::from_str("\tstaged\n").unwrap(), DiffMode::Staged);
     }
 
     #[test]

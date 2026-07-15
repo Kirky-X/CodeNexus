@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **chore(harness): CI modernization** — `.github/workflows/ci.yml` upgraded to Rust 1.91, split into 4 jobs (lint/test/coverage/security) with a 6-combination feature matrix (minimal/core/full/mixed). Added `.github/dependabot.yml`, `.github/codeql.yml`, `clippy.toml` (msrv=1.91). `release.yml` adds conditional crates.io publish. `.pre-commit-config.yaml` adds coverage gate (≥95% lines). `rustfmt.toml` fixes deprecated `fn_args_layout` → `fn_params_layout`.
+- **chore(deps): sdforge 0.4.1 → 0.4.2** — pulls `cli::GlobalArg`, `CliBuilder::with_global_arg()`, `mcp::serve_stdio()`, and `pub use clap/rmcp` re-exports from sdforge. Adds `rmcp` as optional dependency (gated behind `mcp` feature) for sdforge trait path resolution.
+
+### Fixed
+
+- **fix(test): feature-gate Unicode-specific i18n tests** — `fold_case_german_sharp_s`, `fold_case_turkish_i_with_dot`, and `normalize_nfc_decomposed_to_composed` now require `#[cfg(feature = "i18n")]` since they test ICU4X behavior unavailable in ASCII-only fallback mode.
+- **fix(test): feature-gate `ac_index_001_indexes_c_rust_fortran_files`** — test requires `lang-c` and `lang-fortran` parsers; now gated with `#[cfg(all(feature = "lang-c", feature = "lang-fortran"))]`.
 
 ## [0.3.2] - 2026-07-11
 

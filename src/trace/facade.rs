@@ -1259,27 +1259,42 @@ mod tests {
     #[test]
     fn trace_type_from_str_parses_canonical_forms() {
         assert_eq!(TraceType::from_str("calls").unwrap(), TraceType::Calls);
-        assert_eq!(TraceType::from_str("dataflow").unwrap(), TraceType::DataFlow);
+        assert_eq!(
+            TraceType::from_str("dataflow").unwrap(),
+            TraceType::DataFlow
+        );
         assert_eq!(TraceType::from_str("all").unwrap(), TraceType::All);
     }
 
     #[test]
     fn trace_type_from_str_parses_aliases() {
-        assert_eq!(TraceType::from_str("data_flow").unwrap(), TraceType::DataFlow);
-        assert_eq!(TraceType::from_str("data-flow").unwrap(), TraceType::DataFlow);
+        assert_eq!(
+            TraceType::from_str("data_flow").unwrap(),
+            TraceType::DataFlow
+        );
+        assert_eq!(
+            TraceType::from_str("data-flow").unwrap(),
+            TraceType::DataFlow
+        );
     }
 
     #[test]
     fn trace_type_from_str_is_case_insensitive() {
         assert_eq!(TraceType::from_str("CALLS").unwrap(), TraceType::Calls);
-        assert_eq!(TraceType::from_str("DataFlow").unwrap(), TraceType::DataFlow);
+        assert_eq!(
+            TraceType::from_str("DataFlow").unwrap(),
+            TraceType::DataFlow
+        );
         assert_eq!(TraceType::from_str("ALL").unwrap(), TraceType::All);
     }
 
     #[test]
     fn trace_type_from_str_trims_whitespace() {
         assert_eq!(TraceType::from_str("  calls  ").unwrap(), TraceType::Calls);
-        assert_eq!(TraceType::from_str("\tdataflow\n").unwrap(), TraceType::DataFlow);
+        assert_eq!(
+            TraceType::from_str("\tdataflow\n").unwrap(),
+            TraceType::DataFlow
+        );
     }
 
     #[test]

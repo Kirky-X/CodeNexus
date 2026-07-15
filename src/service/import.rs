@@ -148,7 +148,7 @@ pub fn run_import(
 #[cfg(feature = "cli")]
 #[forge(
     name = "import",
-    version = "0.3.2",
+    version = "0.3.3",
     description = "Import a zstd team artifact into the graph database.",
     cli = true
 )]

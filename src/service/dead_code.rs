@@ -91,7 +91,7 @@ pub fn run_dead_code(
 #[cfg(all(feature = "cli", feature = "analysis"))]
 #[forge(
     name = "dead_code",
-    version = "0.3.2",
+    version = "0.3.3",
     description = "Detect unreferenced (dead) functions in a project.",
     cli = true
 )]

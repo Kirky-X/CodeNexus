@@ -75,7 +75,10 @@ pub fn codenexus_tokenize(name: &str) -> Vec<String> {
         } else if crate::model::i18n::is_cjk(ch) {
             // CJK: flush on non-CJK → CJK boundary
             if !current.is_empty()
-                && !current.chars().last().is_some_and(crate::model::i18n::is_cjk)
+                && !current
+                    .chars()
+                    .last()
+                    .is_some_and(crate::model::i18n::is_cjk)
             {
                 flush(&mut current, &mut tokens);
             }
@@ -225,10 +228,7 @@ mod tests {
     #[test]
     fn tokenize_unicode_case_folding() {
         // ParseStraße → parse | straße → fold_case folds ß to ss
-        assert_eq!(
-            codenexus_tokenize("ParseStraße"),
-            vec!["parse", "strasse"]
-        );
+        assert_eq!(codenexus_tokenize("ParseStraße"), vec!["parse", "strasse"]);
     }
 
     #[test]

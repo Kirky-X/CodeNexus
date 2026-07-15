@@ -3599,12 +3599,18 @@ mod tests {
 
     #[test]
     fn search_mode_from_str_parses_aliases() {
-        assert_eq!("graph".parse::<SearchMode>().unwrap(), SearchMode::GraphEnhanced);
+        assert_eq!(
+            "graph".parse::<SearchMode>().unwrap(),
+            SearchMode::GraphEnhanced
+        );
         assert_eq!(
             "graph-enhanced".parse::<SearchMode>().unwrap(),
             SearchMode::GraphEnhanced
         );
-        assert_eq!("multi".parse::<SearchMode>().unwrap(), SearchMode::MultiSignal);
+        assert_eq!(
+            "multi".parse::<SearchMode>().unwrap(),
+            SearchMode::MultiSignal
+        );
         assert_eq!(
             "multi-signal".parse::<SearchMode>().unwrap(),
             SearchMode::MultiSignal
@@ -3616,13 +3622,22 @@ mod tests {
         assert_eq!("EXACT".parse::<SearchMode>().unwrap(), SearchMode::Exact);
         assert_eq!("Regex".parse::<SearchMode>().unwrap(), SearchMode::Regex);
         assert_eq!("FUZZY".parse::<SearchMode>().unwrap(), SearchMode::Fuzzy);
-        assert_eq!("GRAPH".parse::<SearchMode>().unwrap(), SearchMode::GraphEnhanced);
-        assert_eq!("MULTI".parse::<SearchMode>().unwrap(), SearchMode::MultiSignal);
+        assert_eq!(
+            "GRAPH".parse::<SearchMode>().unwrap(),
+            SearchMode::GraphEnhanced
+        );
+        assert_eq!(
+            "MULTI".parse::<SearchMode>().unwrap(),
+            SearchMode::MultiSignal
+        );
     }
 
     #[test]
     fn search_mode_from_str_trims_whitespace() {
-        assert_eq!("  exact  ".parse::<SearchMode>().unwrap(), SearchMode::Exact);
+        assert_eq!(
+            "  exact  ".parse::<SearchMode>().unwrap(),
+            SearchMode::Exact
+        );
         assert_eq!(" regex ".parse::<SearchMode>().unwrap(), SearchMode::Regex);
     }
 
