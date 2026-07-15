@@ -628,10 +628,8 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
             match child.kind() {
-                "identifier" => {
-                    if callee.is_none() {
-                        callee = node_text(child, source).map(String::from);
-                    }
+                "identifier" if callee.is_none() => {
+                    callee = node_text(child, source).map(String::from);
                 }
                 "argument_list" => {
                     for j in 0..child.named_child_count() as u32 {
