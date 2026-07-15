@@ -97,7 +97,7 @@ notify-debouncer-full = { version = "0.7", optional = true }
 # clap is only used by the codenexus-verify binary's derive macros.
 # The main codenexus binary uses sdforge::clap (re-exported via the cli feature).
 clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
-sha2 = "0.10"
+sha2 = "0.11"
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"], optional = true }
 ort = { version = "2.0.0-rc.12", optional = true }
 tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"], optional = true }
