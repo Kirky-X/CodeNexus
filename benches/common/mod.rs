@@ -32,7 +32,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codenexus::storage::StorageConnection;
-use sysinfo::{Pid, System};
+use sysinfo::{Pid, ProcessesToUpdate, System};
 use tempfile::TempDir;
 
 /// Supported fixture languages, in the order they are cycled through when
@@ -111,7 +111,7 @@ pub fn measure_peak_rss<F: FnOnce()>(f: F) -> u64 {
         let mut sys = System::new();
         let pid: Pid = Pid::from(std::process::id() as usize);
         while !stop_worker.load(Ordering::SeqCst) {
-            sys.refresh_process(pid);
+            sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), false);
             if let Some(proc_info) = sys.process(pid) {
                 // `Process::memory` returns the resident set size in bytes
                 // (physical RAM held by the process).

@@ -4,7 +4,7 @@
 
 **A multi-language code knowledge graph tool built on LadybugDB and tree-sitter**
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) &nbsp; [![Rust Version](https://img.shields.io/badge/rust-1.94%2B-orange.svg)](https://www.rust-lang.org) &nbsp; [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) &nbsp; [![Crates.io](https://img.shields.io/crates/v/codenexus.svg)](https://crates.io/crates/codenexus)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) &nbsp; [![Rust Version](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](https://www.rust-lang.org) &nbsp; [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) &nbsp; [![Crates.io](https://img.shields.io/crates/v/codenexus.svg)](https://crates.io/crates/codenexus)
 
 English | [简体中文](README.md)
 

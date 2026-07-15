@@ -15,10 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Install Rust 1.94 with clippy
+      - name: Install Rust 1.95 with clippy
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: "1.94"
+          toolchain: "1.95"
           components: clippy
       - name: Install nightly toolchain with rustfmt
         uses: dtolnay/rust-toolchain@efcb852328a9f50117170cc43094fb6f09eaf1ae # nightly
@@ -38,9 +38,9 @@ jobs:
       - name: Check formatting
         run: cargo +nightly fmt --all -- --check
       - name: Clippy (full)
-        run: cargo +1.94 clippy -- -D warnings
+        run: cargo +1.95 clippy -- -D warnings
       - name: Clippy (minimal)
-        run: cargo +1.94 clippy --lib --no-default-features --features minimal -- -D warnings
+        run: cargo +1.95 clippy --lib --no-default-features --features minimal -- -D warnings
 
   test:
     name: test (${{ matrix.features }})
@@ -63,10 +63,10 @@ jobs:
             cache-key: "full-embed"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Install Rust 1.94
+      - name: Install Rust 1.95
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: "1.94"
+          toolchain: "1.95"
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -91,10 +91,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Install Rust 1.94
+      - name: Install Rust 1.95
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: "1.94"
+          toolchain: "1.95"
       - name: Install dependencies
         run: |
           sudo apt-get update

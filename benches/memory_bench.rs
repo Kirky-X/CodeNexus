@@ -270,7 +270,7 @@ fn bench_daemon_sustained_10_increments(c: &mut Criterion) {
                         std::thread::sleep(Duration::from_millis(100));
                     }
 
-                    sys.refresh_process(pid);
+                    sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), false);
                     let rss = sys.process(pid).map(|p| p.memory()).unwrap_or(0);
                     let rss_mb = rss / 1024 / 1024;
                     eprintln!(

@@ -8,7 +8,7 @@ Thanks for your interest in contributing to CodeNexus. This document describes h
 
 | Tool | Version | Why |
 |------|---------|-----|
-| Rust toolchain (stable) | 1.94+ | Minimum supported version, pinned in CI and `Cargo.toml` (`rust-version = "1.94"`). |
+| Rust toolchain (stable) | 1.95+ | Minimum supported version, pinned in CI and `Cargo.toml` (`rust-version = "1.95"`). |
 | Rust nightly toolchain | latest | `cargo fmt` uses the nightly-only options `imports_granularity` and `group_imports` (see `rustfmt.toml`). |
 | C/C++ compiler | system default | Required to build the `tree-sitter` grammar crates. |
 | `zstd` CLI | any recent version | Used by `export`/`import` for `.graph.zst` artifacts. |
@@ -17,9 +17,9 @@ Thanks for your interest in contributing to CodeNexus. This document describes h
 Install both Rust toolchains with [rustup](https://rustup.rs/):
 
 ```bash
-rustup toolchain install 1.94
+rustup toolchain install 1.95
 rustup toolchain install nightly
-rustup component add clippy --toolchain 1.94
+rustup component add clippy --toolchain 1.95
 rustup component add rustfmt --toolchain nightly
 ```
 
@@ -83,7 +83,7 @@ feat(parse): add Go language extractor
 fix(storage): prevent orphan edges when parser endpoint IDs desync
 perf(parse): dedupe_qn O(N²) → O(1) HashSet
 docs(readme): add Roadmap and Acknowledgments sections
-chore(ci): pin Rust 1.94 in workflow
+chore(ci): pin Rust 1.95 in workflow
 ```
 
 `BREAKING CHANGE:` in the footer or `feat!:` / `fix!:` (with `!`) flag breaking changes and must include migration notes.
