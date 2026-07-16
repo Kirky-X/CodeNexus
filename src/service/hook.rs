@@ -162,7 +162,7 @@ fn run(kit: &AsyncKit<AsyncReady>) -> Result<(), CodeNexusError> {
 #[cfg(feature = "cli")]
 #[forge(
     name = "hook",
-    version = "0.3.3",
+    version = "0.3.4",
     description = "Read a git hook payload from stdin and emit a JSON decision.",
     cli = true
 )]

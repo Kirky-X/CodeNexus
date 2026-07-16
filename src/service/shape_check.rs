@@ -53,7 +53,7 @@ fn shape_check_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), Cod
 #[cfg(all(feature = "cli", feature = "api-review"))]
 #[forge(
     name = "shape_check",
-    version = "0.3.3",
+    version = "0.3.4",
     description = "Validate API endpoint schema consistency.",
     cli = true
 )]

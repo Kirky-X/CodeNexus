@@ -339,7 +339,7 @@ pub struct AffectedSymbolOutput {
 #[cfg(feature = "cli")]
 #[forge(
     name = "detect_changes",
-    version = "0.3.3",
+    version = "0.3.4",
     description = "Detect symbols affected by uncommitted git changes and classify their risk.",
     cli = true
 )]

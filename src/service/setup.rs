@@ -292,7 +292,7 @@ fn write_pretty(path: &Path, value: &serde_json::Value) -> Result<(), CodeNexusE
 #[cfg(feature = "cli")]
 #[forge(
     name = "setup",
-    version = "0.3.3",
+    version = "0.3.4",
     description = "Auto-detect installed AI coding agents and write MCP server config.",
     cli = true
 )]

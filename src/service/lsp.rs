@@ -205,7 +205,7 @@ impl HoverOutput {
 #[cfg(all(feature = "cli", feature = "lsp"))]
 #[forge(
     name = "lsp_goto_def",
-    version = "0.4.0",
+    version = "0.3.4",
     description = "Query LSP Go-to-Definition (auto-detects language server from file extension).",
     cli = true
 )]
@@ -239,7 +239,7 @@ async fn lsp_goto_def(
 #[cfg(all(feature = "cli", feature = "lsp"))]
 #[forge(
     name = "lsp_hover",
-    version = "0.4.0",
+    version = "0.3.4",
     description = "Query LSP Hover info (auto-detects language server from file extension).",
     cli = true
 )]

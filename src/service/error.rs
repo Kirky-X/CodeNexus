@@ -256,8 +256,8 @@ pub fn kit_not_initialized() -> ApiError {
 
 /// Converts a [`CodeNexusError`] into an [`ApiError`] at the service boundary.
 ///
-/// - `InvalidInput` → `ApiError::InvalidInput`
-/// - `NotFound` / `Trace(SymbolNotFound)` → `ApiError::NotFound`
+/// - `InvalidInput` / `ProjectNotFound` / `Query` → `ApiError::InvalidInput` (exit 2)
+/// - `NotFound` / `Trace(SymbolNotFound)` → `ApiError::NotFound` (exit 4)
 /// - All other variants → `ApiError::Internal` with `tag` as error_id and
 ///   the error's string representation in the message.
 ///
@@ -273,6 +273,16 @@ pub fn to_api_error(e: CodeNexusError, tag: &str) -> ApiError {
     match e {
         CodeNexusError::InvalidInput(msg) => ApiError::InvalidInput {
             message: msg,
+            field: None,
+            value: None,
+        },
+        CodeNexusError::ProjectNotFound(msg) => ApiError::InvalidInput {
+            message: format!("project not found: {msg}"),
+            field: None,
+            value: None,
+        },
+        CodeNexusError::Query(err) => ApiError::InvalidInput {
+            message: err.to_string(),
             field: None,
             value: None,
         },
@@ -405,6 +415,39 @@ mod tests {
         let err = CodeNexusError::InvalidInput("bad".to_string());
         let api_err = to_api_error(err, "test");
         assert!(matches!(api_err, ApiError::InvalidInput { .. }));
+    }
+
+    #[cfg(any(feature = "cli", feature = "mcp"))]
+    #[test]
+    fn to_api_error_project_not_found_maps_to_invalid_input() {
+        let err = CodeNexusError::ProjectNotFound("project demo".to_string());
+        let api_err = to_api_error(err, "test");
+        match api_err {
+            ApiError::InvalidInput { message, .. } => {
+                assert!(
+                    message.contains("project demo"),
+                    "expected ProjectNotFound message preserved, got: {message}"
+                );
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[cfg(any(feature = "cli", feature = "mcp"))]
+    #[test]
+    fn to_api_error_query_maps_to_invalid_input() {
+        let err: CodeNexusError =
+            crate::query::QueryError::InvalidQuery("malformed".to_string()).into();
+        let api_err = to_api_error(err, "test");
+        match api_err {
+            ApiError::InvalidInput { message, .. } => {
+                assert!(
+                    message.contains("malformed"),
+                    "expected QueryError message preserved, got: {message}"
+                );
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
     }
 
     #[cfg(any(feature = "cli", feature = "mcp"))]

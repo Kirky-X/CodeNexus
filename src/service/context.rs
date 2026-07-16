@@ -38,6 +38,12 @@ pub fn run_context(
     let (graph, _truncated) =
         trace_engine.load_graph(symbol, depth as usize, MAX_SUBGRAPH_NODES)?;
     let start_id = resolve_start_id(&graph, symbol)
+        .map_err(|e| match e {
+            crate::trace::TraceError::AmbiguousSymbol { .. } => {
+                CodeNexusError::InvalidInput(e.to_string())
+            }
+            other => CodeNexusError::Trace(other),
+        })?
         .ok_or_else(|| CodeNexusError::InvalidInput(format!("symbol not found: {symbol}")))?;
     let symbol_node = graph.get_node(&start_id).ok_or_else(|| {
         CodeNexusError::Internal(format!("symbol node resolved but not in graph: {symbol}"))
@@ -86,7 +92,7 @@ pub fn run_context_enhanced(
 #[cfg(feature = "cli")]
 #[forge(
     name = "context",
-    version = "0.3.3",
+    version = "0.3.4",
     description = "Show a 360-degree view of a symbol (callers, callees, processes).",
     cli = true
 )]
@@ -128,7 +134,7 @@ async fn context(
 #[cfg(feature = "mcp")]
 #[forge(
     name = "context",
-    version = "0.3.3",
+    version = "0.3.4",
     tool_name = "context",
     description = "Show a 360-degree view of a symbol (callers, callees, processes)."
 )]
@@ -481,8 +487,8 @@ mod tests {
             false,
         ));
         let err = result.expect_err("nonexistent project should error");
-        // ProjectNotFound maps to ApiError::Internal via to_api_error (not a
-        // NotFound mapping). Verify the message contains "project not found".
+        // ProjectNotFound maps to ApiError::InvalidInput (exit 2) via
+        // to_api_error. Verify the message contains "project not found".
         let msg = format!("{err:?}");
         assert!(
             msg.contains("project not found"),

@@ -91,11 +91,21 @@ fn derive_module_path(file_path: &str) -> String {
     full.strip_prefix('/').unwrap_or(&full).replace('/', ".")
 }
 
-pub fn resolve_start_id(graph: &Graph, symbol: &str) -> Option<NodeId> {
+/// Resolves a symbol name to a node id by matching `name` first, then
+/// `qualified_name`.
+///
+/// Returns `Err(TraceError::AmbiguousSymbol)` when more than one node shares
+/// the short `name` and no unique `qualified_name` match disambiguates —
+/// previously this silently picked the first match. Mirrors the behavior of
+/// `crate::service::rename::resolve_start_id`.
+pub fn resolve_start_id(
+    graph: &Graph,
+    symbol: &str,
+) -> Result<Option<NodeId>, crate::trace::TraceError> {
     let by_name: Vec<&crate::model::Node> =
         graph.nodes.values().filter(|n| n.name == symbol).collect();
     if by_name.len() == 1 {
-        return Some(by_name[0].id.clone());
+        return Ok(Some(by_name[0].id.clone()));
     }
     let by_qn: Vec<&crate::model::Node> = graph
         .nodes
@@ -103,9 +113,15 @@ pub fn resolve_start_id(graph: &Graph, symbol: &str) -> Option<NodeId> {
         .filter(|n| n.qualified_name == symbol)
         .collect();
     if by_qn.len() == 1 {
-        return Some(by_qn[0].id.clone());
+        return Ok(Some(by_qn[0].id.clone()));
     }
-    by_name.first().map(|n| n.id.clone())
+    if by_name.len() > 1 {
+        return Err(crate::trace::TraceError::AmbiguousSymbol {
+            symbol: symbol.to_string(),
+            candidates: by_name.iter().map(|n| n.qualified_name.clone()).collect(),
+        });
+    }
+    Ok(by_name.first().map(|n| n.id.clone()))
 }
 
 pub fn collect_incoming(graph: &Graph, start_id: &NodeId) -> Vec<RelatedNodeOutput> {
@@ -781,7 +797,10 @@ mod tests {
             "/x.rs",
             1,
         ));
-        assert_eq!(resolve_start_id(&graph, "foo").as_deref(), Some("id1"));
+        assert_eq!(
+            resolve_start_id(&graph, "foo").unwrap().as_deref(),
+            Some("id1")
+        );
     }
 
     #[test]
@@ -795,13 +814,77 @@ mod tests {
             "/x.rs",
             1,
         ));
-        assert_eq!(resolve_start_id(&graph, "demo.foo").as_deref(), Some("id1"));
+        assert_eq!(
+            resolve_start_id(&graph, "demo.foo").unwrap().as_deref(),
+            Some("id1")
+        );
     }
 
     #[test]
     fn resolve_start_id_missing_returns_none() {
         let graph = Graph::new();
-        assert!(resolve_start_id(&graph, "missing").is_none());
+        assert!(resolve_start_id(&graph, "missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn resolve_start_id_multiple_name_matches_returns_ambiguous_error() {
+        let mut graph = Graph::new();
+        graph.add_node(make_node(
+            "id1",
+            "foo",
+            "demo.foo",
+            NodeLabel::Function,
+            "/a.rs",
+            1,
+        ));
+        graph.add_node(make_node(
+            "id2",
+            "foo",
+            "other.foo",
+            NodeLabel::Function,
+            "/b.rs",
+            1,
+        ));
+        let err = resolve_start_id(&graph, "foo").expect_err("ambiguous should error");
+        match err {
+            crate::trace::TraceError::AmbiguousSymbol { symbol, candidates } => {
+                assert_eq!(symbol, "foo");
+                assert_eq!(
+                    candidates.len(),
+                    2,
+                    "both candidates listed: {candidates:?}"
+                );
+                assert!(candidates.contains(&"demo.foo".to_string()));
+                assert!(candidates.contains(&"other.foo".to_string()));
+            }
+            other => panic!("expected AmbiguousSymbol, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_start_id_multiple_names_but_single_qn_match() {
+        let mut graph = Graph::new();
+        graph.add_node(make_node(
+            "id1",
+            "foo",
+            "demo.foo",
+            NodeLabel::Function,
+            "/a.rs",
+            1,
+        ));
+        graph.add_node(make_node(
+            "id2",
+            "foo",
+            "other.foo",
+            NodeLabel::Function,
+            "/b.rs",
+            1,
+        ));
+        // Querying by FQN disambiguates even when short name collides.
+        assert_eq!(
+            resolve_start_id(&graph, "demo.foo").unwrap().as_deref(),
+            Some("id1")
+        );
     }
 
     #[test]

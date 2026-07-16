@@ -140,7 +140,7 @@ pub fn run_export(
 #[cfg(feature = "cli")]
 #[forge(
     name = "export",
-    version = "0.3.3",
+    version = "0.3.4",
     description = "Export the graph database to a compressed zstd team artifact.",
     cli = true
 )]

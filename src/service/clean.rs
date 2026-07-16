@@ -46,7 +46,7 @@ pub fn run_clean(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<CleanOutpu
 #[cfg(feature = "cli")]
 #[forge(
     name = "clean",
-    version = "0.3.3",
+    version = "0.3.4",
     description = "Remove a project and its index by name or id.",
     cli = true
 )]

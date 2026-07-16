@@ -285,7 +285,7 @@ pub(crate) fn index_core(
 #[cfg(feature = "cli")]
 #[forge(
     name = "index",
-    version = "0.3.3",
+    version = "0.3.4",
     description = "Index a codebase into the knowledge graph.",
     cli = true
 )]

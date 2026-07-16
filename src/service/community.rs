@@ -64,7 +64,7 @@ pub fn run_community(
 #[cfg(all(feature = "cli", feature = "community"))]
 #[forge(
     name = "community",
-    version = "0.3.3",
+    version = "0.3.4",
     description = "Detect communities in the CALLS graph via Louvain modularity optimization.",
     cli = true
 )]

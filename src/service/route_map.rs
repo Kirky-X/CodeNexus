@@ -53,7 +53,7 @@ fn route_map_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CodeN
 #[cfg(all(feature = "cli", feature = "api-review"))]
 #[forge(
     name = "route_map",
-    version = "0.3.3",
+    version = "0.3.4",
     description = "List API routes and their handler functions.",
     cli = true
 )]
