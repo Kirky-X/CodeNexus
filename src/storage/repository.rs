@@ -188,7 +188,22 @@ impl Repository {
     /// Lists all indexed projects.
     pub fn list_projects(&self) -> Result<Vec<ProjectRecord>> {
         let cypher = "MATCH (p:Project) RETURN p.id AS id, p.name AS name, p.rootPath AS rootPath, p.language AS language, p.fileCount AS fileCount, p.indexedAt AS indexedAt, p.lastCommit AS lastCommit ORDER BY p.name;";
-        let rows = self.conn.query(cypher)?;
+        // Empty/uninitialized DB may not have the Project table yet.
+        // Return empty list instead of erroring (consistent with
+        // delete_file_nodes pattern at L217). Rule 12: explicit empty > silent error.
+        let rows = match self.conn.query(cypher) {
+            Ok(rows) => rows,
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("does not exist")
+                    || msg.contains("no such")
+                    || msg.contains("Binder exception")
+                {
+                    return Ok(vec![]);
+                }
+                return Err(e);
+            }
+        };
         Ok(rows.into_iter().map(row_to_project).collect())
     }
 

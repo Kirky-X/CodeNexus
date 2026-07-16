@@ -112,8 +112,10 @@ fn run_cli() {
     let sub_name = match matches.subcommand_name() {
         Some(name) => name,
         None => {
-            eprintln!("Use --help to see available commands");
-            std::process::exit(1);
+            // No subcommand provided — print hint to stdout and exit 0
+            // so callers can detect "no-op" via exit code (rule 12).
+            println!("Use --help to see available commands");
+            std::process::exit(0);
         }
     };
     let sub_matches = matches.subcommand_matches(sub_name).unwrap();

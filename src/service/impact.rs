@@ -143,23 +143,25 @@ pub fn run_impact(
         let (graph, truncated) = trace_engine.load_graph(symbol, load_depth, MAX_SUBGRAPH_NODES)?;
 
         let effective_depth = config.max_depth;
-        let start_id = find_start_node_id(&graph, symbol);
-        let (affected, risk_assessment) = match start_id {
-            Some(id) => {
-                let analyzer = ImpactAnalyzer::with_config(&graph, config);
-                let result = analyzer.analyze_impact(&id);
-                (result.affected, Some(result.risk_assessment))
-            }
-            None => (vec![], None),
-        };
+        // Verify symbol exists to avoid silent empty-result success (rule 12).
+        let start_id = find_start_node_id(&graph, symbol)
+            .ok_or_else(|| CodeNexusError::NotFound(format!("symbol not found: {symbol}")))?;
+        let analyzer = ImpactAnalyzer::with_config(&graph, config);
+        let result = analyzer.analyze_impact(&start_id);
 
         let mut output = impact_output(symbol.to_string(), effective_depth, graph, truncated);
-        output.affected = affected;
-        output.risk_assessment = risk_assessment;
+        output.affected = result.affected;
+        output.risk_assessment = Some(result.risk_assessment);
         Ok(output)
     } else {
         let (graph, truncated) =
             trace_engine.load_graph(symbol, depth as usize, MAX_SUBGRAPH_NODES)?;
+        // Verify symbol exists to avoid silent empty-result success (rule 12).
+        if find_start_node_id(&graph, symbol).is_none() {
+            return Err(CodeNexusError::NotFound(format!(
+                "symbol not found: {symbol}"
+            )));
+        }
         Ok(impact_output(symbol.to_string(), depth, graph, truncated))
     }
 }
@@ -230,16 +232,20 @@ mod tests {
     }
 
     #[test]
-    fn run_impact_succeeds_on_empty_db() {
+    fn run_impact_returns_not_found_on_empty_db() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let output = run_impact(&kit, "demo.foo", 3, "", 0, false).expect("run should succeed");
-        assert_eq!(output.symbol, "demo.foo");
-        assert_eq!(output.depth, 3);
-        assert_eq!(output.node_count, 0);
-        assert_eq!(output.edge_count, 0);
-        assert!(output.risk_assessment.is_none());
-        assert!(output.affected.is_empty());
+        let err = run_impact(&kit, "demo.foo", 3, "", 0, false)
+            .expect_err("unknown symbol on empty DB should error");
+        assert!(
+            matches!(err, CodeNexusError::NotFound(_)),
+            "expected NotFound, got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("demo.foo"),
+            "error should mention symbol: {msg}"
+        );
     }
 
     #[test]
@@ -469,15 +475,20 @@ mod tests {
     }
 
     #[test]
-    fn run_impact_enhanced_on_empty_db_returns_empty() {
+    fn run_impact_enhanced_returns_not_found_on_empty_db() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let output = run_impact(&kit, "demo.missing", 3, "CALLS", 5, false)
-            .expect("enhanced impact on empty DB should succeed");
-        assert_eq!(output.node_count, 0);
-        assert!(output.affected.is_empty());
-        assert!(output.risk_assessment.is_none());
-        assert!(!output.truncated, "empty subgraph must not be truncated");
+        let err = run_impact(&kit, "demo.missing", 3, "CALLS", 5, false)
+            .expect_err("enhanced impact on missing symbol should error");
+        assert!(
+            matches!(err, CodeNexusError::NotFound(_)),
+            "expected NotFound, got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("demo.missing"),
+            "error should mention symbol: {msg}"
+        );
     }
 
     #[test]
@@ -595,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn run_impact_enhanced_missing_start_node_returns_empty_affected() {
+    fn run_impact_enhanced_returns_not_found_for_missing_start_node() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
@@ -604,15 +615,16 @@ mod tests {
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_a', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create self-edge");
 
         // Query for a non-existent symbol in enhanced mode
-        let output = run_impact(&kit, "nonexistent.symbol", 3, "CALLS", 5, false)
-            .expect("enhanced impact on missing symbol should succeed");
+        let err = run_impact(&kit, "nonexistent.symbol", 3, "CALLS", 5, false)
+            .expect_err("enhanced impact on missing symbol should error");
         assert!(
-            output.affected.is_empty(),
-            "missing start node → empty affected"
+            matches!(err, CodeNexusError::NotFound(_)),
+            "expected NotFound, got {err:?}"
         );
+        let msg = err.to_string();
         assert!(
-            output.risk_assessment.is_none(),
-            "missing start node → no risk assessment"
+            msg.contains("nonexistent.symbol"),
+            "error should mention symbol: {msg}"
         );
     }
 
@@ -621,7 +633,7 @@ mod tests {
     #[serial_test::serial(kit_init)]
     #[test]
     #[cfg(feature = "cli")]
-    fn impact_wrapper_succeeds_via_init_kit() {
+    fn impact_wrapper_returns_error_for_unknown_symbol_via_init_kit() {
         use crate::service::runtime::{init_kit, reset_kit_for_testing};
 
         reset_kit_for_testing();
@@ -631,7 +643,11 @@ mod tests {
 
         let rt = tokio::runtime::Runtime::new().expect("runtime");
         let result = rt.block_on(impact("demo.foo".to_string(), 3, "".to_string(), 0, false));
-        assert!(result.is_ok(), "wrapper should succeed: {:?}", result.err());
+        assert!(
+            result.is_err(),
+            "wrapper should fail for unknown symbol: {:?}",
+            result
+        );
 
         reset_kit_for_testing();
     }

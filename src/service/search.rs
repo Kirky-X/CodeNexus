@@ -64,7 +64,23 @@ pub fn run_search(
     mode: &str,
     project: &str,
 ) -> Result<SearchOutput, CodeNexusError> {
-    if let Ok(search_mode) = SearchMode::from_str(mode) {
+    if mode.is_empty() {
+        // Empty mode → legacy path (backward compatible).
+        let q = kit.require::<QueryModule>()?;
+        let results = if fulltext {
+            q.fulltext_search(text, None, limit as usize)
+        } else {
+            q.search(text, None, limit as usize)
+        }?;
+        let results: Vec<Value> = results.iter().map(search_result_to_json).collect();
+        Ok(SearchOutput {
+            count: results.len(),
+            results,
+        })
+    } else {
+        // Non-empty mode: parse strictly, reject unknown values (rule 12).
+        let search_mode = SearchMode::from_str(mode)
+            .map_err(|e| CodeNexusError::InvalidInput(format!("invalid search mode: {e}")))?;
         let storage = kit.require::<StorageModule>()?;
         let project_id = if project.is_empty() {
             project.to_string()
@@ -79,18 +95,6 @@ pub fn run_search(
             ..Default::default()
         };
         let results = engine.search(&project_id, &params)?;
-        let results: Vec<Value> = results.iter().map(search_result_to_json).collect();
-        Ok(SearchOutput {
-            count: results.len(),
-            results,
-        })
-    } else {
-        let q = kit.require::<QueryModule>()?;
-        let results = if fulltext {
-            q.fulltext_search(text, None, limit as usize)
-        } else {
-            q.search(text, None, limit as usize)
-        }?;
         let results: Vec<Value> = results.iter().map(search_result_to_json).collect();
         Ok(SearchOutput {
             count: results.len(),
@@ -311,13 +315,21 @@ mod tests {
     }
 
     #[test]
-    fn run_search_with_invalid_mode_falls_back_to_legacy() {
+    fn run_search_with_invalid_mode_returns_error() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        // Invalid mode → None → legacy path (should succeed on empty DB)
-        let output = run_search(&kit, "foo", false, 10, "invalid_mode", "")
-            .expect("invalid mode should fall back to legacy");
-        assert_eq!(output.count, 0);
+        // Non-empty but invalid mode must error (rule 12: never silently fall back).
+        let err = run_search(&kit, "foo", false, 10, "invalid_mode", "")
+            .expect_err("invalid mode should error");
+        assert!(
+            matches!(err, CodeNexusError::InvalidInput(_)),
+            "expected InvalidInput, got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("invalid_mode"),
+            "error should mention bad mode: {msg}"
+        );
     }
 
     #[test]
