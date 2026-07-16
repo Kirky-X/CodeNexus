@@ -7,6 +7,7 @@
 use std::io::BufRead;
 
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(feature = "cli")]
@@ -54,13 +55,32 @@ struct HookPayload {
 fn build_decision(kit: &AsyncKit<AsyncReady>, raw: &str) -> HookDecision {
     let payload: HookPayload = match serde_json::from_str(raw) {
         Ok(p) => p,
-        Err(_) => {
+        Err(e) => {
+            warn!(
+                error = %e,
+                raw_len = raw.len(),
+                "invalid payload, defaulting to pass"
+            );
             return HookDecision {
                 decision: "pass".to_string(),
                 summary: None,
             };
         }
     };
+
+    // Valid JSON but missing both required fields → treat as invalid for audit.
+    // Hook payloads always carry tool_name and phase; an object without both
+    // is structurally a no-op (e.g. `{"invalid":"payload"}`).
+    if payload.tool_name.is_empty() && payload.phase.is_empty() {
+        warn!(
+            reason = "missing tool_name and phase",
+            "invalid payload, defaulting to pass"
+        );
+        return HookDecision {
+            decision: "pass".to_string(),
+            summary: None,
+        };
+    }
 
     // Never intercept Read.
     if payload.tool_name == "Read" {
@@ -221,6 +241,65 @@ mod tests {
         let (_dir, kit) = fresh_kit();
         let decision = build_decision(&kit, "");
         assert_eq!(decision.decision, "pass");
+    }
+
+    // --- audit visibility: WARN on invalid stdin (fail-open unchanged) ---
+
+    #[test]
+    fn build_decision_logs_warn_on_empty_stdin() {
+        let (_dir, kit) = fresh_kit();
+        let captured = crate::test_log_capture::capture_tracing(|| {
+            let decision = build_decision(&kit, "");
+            assert_eq!(decision.decision, "pass");
+            assert!(decision.summary.is_none());
+        });
+        assert!(
+            captured.contains("invalid payload") && captured.contains("defaulting to pass"),
+            "expected WARN on empty stdin, got: {captured:?}"
+        );
+    }
+
+    #[test]
+    fn build_decision_logs_warn_on_invalid_json() {
+        let (_dir, kit) = fresh_kit();
+        let captured = crate::test_log_capture::capture_tracing(|| {
+            let decision = build_decision(&kit, "not json");
+            assert_eq!(decision.decision, "pass");
+            assert!(decision.summary.is_none());
+        });
+        assert!(
+            captured.contains("invalid payload") && captured.contains("defaulting to pass"),
+            "expected WARN on invalid json, got: {captured:?}"
+        );
+    }
+
+    #[test]
+    fn build_decision_logs_warn_on_invalid_payload() {
+        let (_dir, kit) = fresh_kit();
+        let captured = crate::test_log_capture::capture_tracing(|| {
+            let decision = build_decision(&kit, r#"{"invalid":"payload"}"#);
+            assert_eq!(decision.decision, "pass");
+            assert!(decision.summary.is_none());
+        });
+        assert!(
+            captured.contains("invalid payload") && captured.contains("defaulting to pass"),
+            "expected WARN on payload missing tool_name/phase, got: {captured:?}"
+        );
+    }
+
+    #[test]
+    fn build_decision_does_not_warn_on_valid_payload() {
+        let (_dir, kit) = fresh_kit();
+        let captured = crate::test_log_capture::capture_tracing(|| {
+            let raw = r#"{"tool_name":"Bash","tool_input":{"command":"ls"},"phase":"PreToolUse"}"#;
+            let decision = build_decision(&kit, raw);
+            assert_eq!(decision.decision, "pass");
+            assert!(decision.summary.is_none());
+        });
+        assert!(
+            !captured.contains("invalid payload"),
+            "valid payload must not log invalid-payload WARN, got: {captured:?}"
+        );
     }
 
     // --- PostToolUse rename → summary ---
