@@ -288,6 +288,42 @@ pub struct ContextCollector<'a> {
     storage: &'a dyn Storage,
 }
 
+/// Column projection shared by the exact-FQN path and the short-name fallback
+/// in [`ContextCollector::collect_symbol_definition`]. Column order MUST stay
+/// in sync with [`parse_symbol_definition`].
+const SYMBOL_DEF_COLS: &str = "n.name AS name, n.qualifiedName AS qualified_name, \
+    n.signature AS signature, n.docstring AS docstring, \
+    n.content AS content, n.filePath AS file_path, \
+    n.startLine AS start_line, n.endLine AS end_line";
+
+/// Parses a query row (ordered per [`SYMBOL_DEF_COLS`]) into a
+/// [`SymbolDefinition`]. Shared by both lookup paths so they stay in lockstep.
+fn parse_symbol_definition(row: &[serde_json::Value]) -> SymbolDefinition {
+    let str_at = |idx: usize| {
+        row.get(idx)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let line_at = |idx: usize| {
+        row.get(idx)
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .or_else(|| row.get(idx).and_then(|v| v.as_i64()).map(|v| v as u32))
+            .unwrap_or(0)
+    };
+    SymbolDefinition {
+        name: str_at(0),
+        qualified_name: str_at(1),
+        signature: str_at(2),
+        docstring: str_at(3),
+        source: truncate_source(&str_at(4)),
+        file_path: str_at(5),
+        start_line: line_at(6),
+        end_line: line_at(7),
+    }
+}
+
 impl<'a> ContextCollector<'a> {
     /// Creates a new collector backed by the given storage capability.
     #[must_use]
@@ -302,7 +338,7 @@ impl<'a> ContextCollector<'a> {
     /// Returns [`StorageError`] if any underlying Cypher query fails or the
     /// symbol is not found.
     pub fn collect(&self, project: &str, qualified_name: &str) -> StorageResult<SymbolContext> {
-        let symbol = self.collect_symbol_definition(qualified_name)?;
+        let symbol = self.collect_symbol_definition(project, qualified_name)?;
         let callers = self.collect_callers(project, &symbol)?;
         let callees = self.collect_callees(project, &symbol)?;
         let type_context = self.collect_type_context(&symbol)?;
@@ -320,68 +356,64 @@ impl<'a> ContextCollector<'a> {
         })
     }
 
-    fn collect_symbol_definition(&self, qualified_name: &str) -> StorageResult<SymbolDefinition> {
-        let escaped = escape_cypher_string(qualified_name);
-        // LadybugDB doesn't support `WHERE (n:Function OR n:Method)` label
-        // expressions, so we issue two separate queries.
-        let cols = "n.name AS name, n.qualifiedName AS qualified_name, \
-                    n.signature AS signature, n.docstring AS docstring, \
-                    n.content AS content, n.filePath AS file_path, \
-                    n.startLine AS start_line, n.endLine AS end_line";
-        let function_cypher =
-            format!("MATCH (n:Function) WHERE n.qualifiedName = '{escaped}' RETURN {cols};");
-        let method_cypher =
-            format!("MATCH (n:Method) WHERE n.qualifiedName = '{escaped}' RETURN {cols};");
-        for cypher in [function_cypher, method_cypher] {
-            let rows = self.storage.query(&cypher)?;
-            if let Some(row) = rows.into_iter().next() {
-                return Ok(SymbolDefinition {
-                    name: row
-                        .first()
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    qualified_name: row
-                        .get(1)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    signature: row
-                        .get(2)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    docstring: row
-                        .get(3)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    source: truncate_source(
-                        row.get(4).and_then(|v| v.as_str()).unwrap_or_default(),
-                    ),
-                    file_path: row
-                        .get(5)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    start_line: row
-                        .get(6)
-                        .and_then(|v| v.as_u64())
-                        .map(|v| v as u32)
-                        .or_else(|| row.get(6).and_then(|v| v.as_i64()).map(|v| v as u32))
-                        .unwrap_or(0),
-                    end_line: row
-                        .get(7)
-                        .and_then(|v| v.as_u64())
-                        .map(|v| v as u32)
-                        .or_else(|| row.get(7).and_then(|v| v.as_i64()).map(|v| v as u32))
-                        .unwrap_or(0),
-                });
+    /// Queries Function + Method nodes (LadybugDB can't OR labels in one MATCH)
+    /// where `field` equals `value`, optionally scoped to `project`. Returns
+    /// all matching rows so callers can tell "unique" from "ambiguous".
+    fn query_symbol_rows(
+        &self,
+        field: &str,
+        value: &str,
+        project: Option<&str>,
+    ) -> StorageResult<Vec<Vec<serde_json::Value>>> {
+        let escaped = escape_cypher_string(value);
+        let proj_clause = match project {
+            Some(p) => format!(" AND n.project = '{}'", escape_cypher_string(p)),
+            None => String::new(),
+        };
+        let mut all = Vec::new();
+        for label in ["Function", "Method"] {
+            let cypher = format!(
+                "MATCH (n:{label}) WHERE n.{field} = '{escaped}'{proj_clause} RETURN {SYMBOL_DEF_COLS};"
+            );
+            all.extend(self.storage.query(&cypher)?);
+        }
+        Ok(all)
+    }
+
+    fn collect_symbol_definition(
+        &self,
+        project: &str,
+        qualified_name: &str,
+    ) -> StorageResult<SymbolDefinition> {
+        // 1. Exact qualified_name match first (backward compatible; project is
+        //    ignored so existing FQN lookups keep working untouched).
+        if let Some(row) = self
+            .query_symbol_rows("qualifiedName", qualified_name, None)?
+            .into_iter()
+            .next()
+        {
+            return Ok(parse_symbol_definition(&row));
+        }
+        // 2. Short-name fallback scoped to `project`: collect ALL candidates so
+        //    ambiguity is surfaced instead of silently picking one.
+        let candidates = self.query_symbol_rows("name", qualified_name, Some(project))?;
+        match candidates.as_slice() {
+            [] => Err(crate::storage::error::StorageError::NotFound(format!(
+                "symbol not found: {qualified_name}"
+            ))),
+            [one] => Ok(parse_symbol_definition(one)),
+            many => {
+                let names: Vec<&str> = many
+                    .iter()
+                    .filter_map(|r| r.get(1).and_then(|v| v.as_str()))
+                    .collect();
+                Err(crate::storage::error::StorageError::NotFound(format!(
+                    "ambiguous symbol '{qualified_name}' in project '{project}': {} candidates — [{}]",
+                    many.len(),
+                    names.join(", ")
+                )))
             }
         }
-        Err(crate::storage::error::StorageError::NotFound(format!(
-            "symbol not found: {qualified_name}"
-        )))
     }
 
     fn collect_type_context(&self, symbol: &SymbolDefinition) -> StorageResult<TypeContext> {
@@ -1246,7 +1278,7 @@ mod tests {
 
         let collector = ContextCollector::new(&*s);
         let sym = collector
-            .collect_symbol_definition("demo.foo")
+            .collect_symbol_definition("demo", "demo.foo")
             .expect("collect");
         assert_eq!(sym.name, "foo");
         assert_eq!(sym.qualified_name, "demo.foo");
@@ -1267,7 +1299,7 @@ mod tests {
 
         let collector = ContextCollector::new(&*s);
         let sym = collector
-            .collect_symbol_definition("demo.bar")
+            .collect_symbol_definition("demo", "demo.bar")
             .expect("collect");
         assert_eq!(sym.name, "bar");
         assert_eq!(sym.source, "fn bar(&self) -> bool { true }");
@@ -1281,7 +1313,7 @@ mod tests {
         let s = storage(&kit);
         let collector = ContextCollector::new(&*s);
         let err = collector
-            .collect_symbol_definition("missing.symbol")
+            .collect_symbol_definition("demo", "missing.symbol")
             .expect_err("should error");
         assert!(err.to_string().contains("symbol not found"));
         assert!(err.to_string().contains("missing.symbol"));
@@ -1296,11 +1328,46 @@ mod tests {
 
         let collector = ContextCollector::new(&*s);
         let sym = collector
-            .collect_symbol_definition("demo.empty")
+            .collect_symbol_definition("demo", "demo.empty")
             .expect("collect");
         assert_eq!(sym.signature, "");
         assert_eq!(sym.docstring, "");
         assert_eq!(sym.source, "");
+    }
+
+    #[test]
+    fn collect_symbol_definition_resolves_short_name_when_unique() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'foo', qualifiedName: 'demo.deep.foo', filePath: '/src/foo.rs', startLine: 10, endLine: 20, signature: 'fn foo()', returnType: 'void', isExported: true, docstring: '', content: 'fn foo() {}', parentQn: ''});").expect("create");
+        let collector = ContextCollector::new(&*s);
+        // Short name "foo" — no exact FQN "foo" exists, so the name fallback
+        // scoped to project "demo" resolves the single candidate.
+        let sym = collector
+            .collect_symbol_definition("demo", "foo")
+            .expect("collect");
+        assert_eq!(sym.name, "foo");
+        assert_eq!(sym.qualified_name, "demo.deep.foo");
+    }
+
+    #[test]
+    fn collect_symbol_definition_ambiguous_short_name_errors() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let s = storage(&kit);
+        s.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'foo', qualifiedName: 'demo.a.foo', filePath: '/src/a.rs', startLine: 1, endLine: 2, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        s.execute("CREATE (:Function {id: 'f2', project: 'demo', name: 'foo', qualifiedName: 'demo.b.foo', filePath: '/src/b.rs', startLine: 1, endLine: 2, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
+        let collector = ContextCollector::new(&*s);
+        // Two nodes share short name "foo" in project "demo" → must surface
+        // ambiguity and list both candidate qualified names.
+        let err = collector
+            .collect_symbol_definition("demo", "foo")
+            .expect_err("should error");
+        let msg = err.to_string();
+        assert!(msg.contains("ambiguous"), "expected ambiguous, got: {msg}");
+        assert!(msg.contains("demo.a.foo"), "expected demo.a.foo in: {msg}");
+        assert!(msg.contains("demo.b.foo"), "expected demo.b.foo in: {msg}");
     }
 
     #[test]
@@ -1355,7 +1422,7 @@ mod tests {
 
         let collector = ContextCollector::new(&*s);
         let symbol = collector
-            .collect_symbol_definition("demo.foo")
+            .collect_symbol_definition("demo", "demo.foo")
             .expect("symbol");
         let tc = collector
             .collect_type_context(&symbol)
@@ -1379,7 +1446,7 @@ mod tests {
 
         let collector = ContextCollector::new(&*s);
         let symbol = collector
-            .collect_symbol_definition("demo.noop")
+            .collect_symbol_definition("demo", "demo.noop")
             .expect("symbol");
         let tc = collector
             .collect_type_context(&symbol)
@@ -1399,7 +1466,7 @@ mod tests {
 
         let collector = ContextCollector::new(&*s);
         let symbol = collector
-            .collect_symbol_definition("demo.bar")
+            .collect_symbol_definition("demo", "demo.bar")
             .expect("symbol");
         let tc = collector
             .collect_type_context(&symbol)
@@ -1696,7 +1763,7 @@ mod tests {
 
         let collector = ContextCollector::new(&*s);
         let symbol_b = collector
-            .collect_symbol_definition("demo.func_b")
+            .collect_symbol_definition("demo", "demo.func_b")
             .expect("symbol b");
         let callers = collector
             .collect_callers("demo", &symbol_b)
@@ -1716,7 +1783,7 @@ mod tests {
 
         let collector = ContextCollector::new(&*s);
         let symbol_a = collector
-            .collect_symbol_definition("demo.func_a")
+            .collect_symbol_definition("demo", "demo.func_a")
             .expect("symbol a");
         let callees = collector
             .collect_callees("demo", &symbol_a)
@@ -1736,7 +1803,7 @@ mod tests {
 
         let collector = ContextCollector::new(&*s);
         let symbol = collector
-            .collect_symbol_definition("demo.func_x")
+            .collect_symbol_definition("demo", "demo.func_x")
             .expect("symbol");
         let callers = collector.collect_callers("demo", &symbol).expect("callers");
         assert!(callers.is_empty());
@@ -1751,7 +1818,7 @@ mod tests {
 
         let collector = ContextCollector::new(&*s);
         let symbol = collector
-            .collect_symbol_definition("demo.func_y")
+            .collect_symbol_definition("demo", "demo.func_y")
             .expect("symbol");
         let callees = collector.collect_callees("demo", &symbol).expect("callees");
         assert!(callees.is_empty());
@@ -1770,7 +1837,7 @@ mod tests {
 
         let collector = ContextCollector::new(&*s);
         let symbol = collector
-            .collect_symbol_definition("demo.target")
+            .collect_symbol_definition("demo", "demo.target")
             .expect("symbol");
         let callers = collector.collect_callers("demo", &symbol).expect("callers");
         assert_eq!(callers.len(), 2);
@@ -1855,7 +1922,7 @@ mod tests {
 
         let collector = ContextCollector::new(&*s);
         let symbol = collector
-            .collect_symbol_definition("demo.bar")
+            .collect_symbol_definition("demo", "demo.bar")
             .expect("symbol");
         let tc = collector
             .collect_type_context(&symbol)
@@ -2023,7 +2090,7 @@ mod tests {
 
         let collector = ContextCollector::new(&*s);
         let symbol = collector
-            .collect_symbol_definition("demo.impl_iface")
+            .collect_symbol_definition("demo", "demo.impl_iface")
             .expect("symbol");
         let tc = collector
             .collect_type_context(&symbol)
