@@ -97,6 +97,11 @@ pub struct KitBootstrapConfig {
     /// Only consulted when the `daemon` feature is enabled.
     pub debounce_ms: u64,
 
+    /// Open the DB in read-only mode (concurrent reads; query-only commands).
+    /// When `true`, read commands share the file DB without contending on the
+    /// exclusive write lock. Defaults to `false` (read-write, for `index`).
+    pub read_only: bool,
+
     /// Embedding-service config (endpoint, model, API key). Only consulted
     /// when the `embed` feature is enabled.
     #[cfg(feature = "embed")]
@@ -115,6 +120,7 @@ impl KitBootstrapConfig {
         Self {
             db_path,
             debounce_ms: DEFAULT_DEBOUNCE_MS,
+            read_only: false,
             #[cfg(feature = "embed")]
             embedding_config: EmbeddingConfig::from_env(),
         }
@@ -124,6 +130,15 @@ impl KitBootstrapConfig {
     #[must_use]
     pub fn with_debounce_ms(mut self, debounce_ms: u64) -> Self {
         self.debounce_ms = debounce_ms;
+        self
+    }
+
+    /// Sets read-only mode (query-only commands open the DB read-only so
+    /// multiple processes can read concurrently). Writing commands leave this
+    /// at the default `false`.
+    #[must_use]
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
         self
     }
 
@@ -191,6 +206,7 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
     // 1. Storage — opens Repository, initializes schema (Task 2.4).
     kit.set_config(StorageConfig {
         db_path: config.db_path.clone(),
+        read_only: config.read_only,
     });
     kit.register::<StorageModule>()?;
 

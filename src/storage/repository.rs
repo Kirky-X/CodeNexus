@@ -85,6 +85,18 @@ impl Repository {
         Ok(Self::new(conn))
     }
 
+    /// Opens a LadybugDB database at `path` in **read-only** mode and returns
+    /// a [`Repository`] over it.
+    ///
+    /// Does **not** initialize the schema: read-only mode forbids DDL, and
+    /// read commands target an already-indexed DB whose schema exists. Use
+    /// for query-only commands so multiple processes can read the same file
+    /// DB concurrently (DuckDB shared-read). Fails if `path` does not exist.
+    pub fn open_read_only(path: impl AsRef<std::path::Path>) -> Result<Self> {
+        let conn = StorageConnection::open_read_only(path)?;
+        Ok(Self::new(conn))
+    }
+
     /// Creates an in-memory repository (useful for tests).
     pub fn in_memory() -> Result<Self> {
         let conn = StorageConnection::in_memory()?;
@@ -1408,13 +1420,13 @@ mod tests {
                 "rootPath": "/repo/demo",
                 "fileCount": 5,
                 "indexedAt": 1_700_000_001,
-                "lastCommit": "abc123def",
+                "lastCommit": "main-branch",
             }))
             .build();
         repo.save_project(&node).expect("save_project");
 
         let rec = repo.get_project("p1").unwrap().unwrap();
-        assert_eq!(rec.last_commit, "abc123def");
+        assert_eq!(rec.last_commit, "main-branch");
     }
 
     #[test]

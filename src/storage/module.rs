@@ -47,6 +47,15 @@ pub struct StorageConfig {
     ///
     /// Pass `":memory:"` for an in-memory database (useful for tests).
     pub db_path: PathBuf,
+
+    /// Open the DB in read-only mode.
+    ///
+    /// When `true`, [`StorageModule::build_cap`] opens via
+    /// [`Repository::open_read_only`] (no schema init) so multiple processes
+    /// can read the same file DB concurrently (DuckDB/LadybugDB shared-read).
+    /// Use for query-only commands. Writing commands (`index`/`import`) set
+    /// this to `false` to allow schema init and writes.
+    pub read_only: bool,
 }
 
 impl StorageConfig {
@@ -55,6 +64,7 @@ impl StorageConfig {
     pub fn in_memory() -> Self {
         Self {
             db_path: PathBuf::from(":memory:"),
+            read_only: false,
         }
     }
 }
@@ -110,7 +120,13 @@ impl StorageModule {
     /// Shared between [`AsyncAutoBuilder::build`] and tests so that
     /// capability-level tests can run without an async runtime.
     pub(crate) fn build_cap(config: &StorageConfig) -> Result<Arc<dyn Storage>, StorageError> {
-        let repo = Repository::open(&config.db_path)?;
+        // Read-only: skip schema init (read commands target an already-indexed
+        // DB whose schema exists; DDL would fail under read_only anyway — H2).
+        let repo = if config.read_only {
+            Repository::open_read_only(&config.db_path)?
+        } else {
+            Repository::open(&config.db_path)?
+        };
         Ok(Arc::new(StorageCapability {
             inner: RwLock::new(repo),
         }))
