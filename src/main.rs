@@ -140,6 +140,15 @@ fn run_cli() {
             }
         }
     }
+
+    // Gate read-only commands against a missing DB file. Without this,
+    // `list --db <missing>` would build an empty DB (create-on-open) and
+    // return `[]` with exit 0 — a silent success. Creating commands bypass.
+    if let Err(msg) = validate_db_exists(&db, sub_name) {
+        eprintln!("[error] {msg}");
+        std::process::exit(4);
+    }
+
     let config = KitBootstrapConfig::new(PathBuf::from(&db)).with_debounce_ms(debounce_ms);
     match runtime.block_on(build_kit(&config)) {
         Ok(kit) => {
@@ -234,6 +243,29 @@ fn sanitize_project_name(name: &str) -> String {
         FALLBACK_PROJECT_NAME.to_string()
     } else {
         cleaned
+    }
+}
+
+/// Read-only commands that need an existing database. `index`/`import` create
+/// one (LadybugDB create-on-open); `setup`/`lsp_*`/`hook`/`mcp`/`verify` don't
+/// query the graph. Without this gate, `list --db <missing>` silently builds
+/// an empty DB and returns `[]` with exit 0 — a silent success.
+fn requires_existing_db(sub_name: &str) -> bool {
+    matches!(
+        sub_name,
+        "list" | "search" | "query" | "impact" | "context" | "trace"
+    )
+}
+
+/// Returns `Err(msg)` when a read command targets a DB file that does not yet
+/// exist. The caller exits with code 4 (NotFound). Creating commands bypass.
+fn validate_db_exists(db: &str, sub_name: &str) -> Result<(), String> {
+    if requires_existing_db(sub_name) && !PathBuf::from(db).exists() {
+        Err(format!(
+            "database not found: {db}\n  command '{sub_name}' needs an existing DB; run `codenexus index ...` first"
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -431,6 +463,31 @@ mod tests {
         let m = cmd.get_matches_from(["codenexus", "search"]);
         let sub = m.subcommand_matches("search").unwrap();
         assert_eq!(default_db_path(sub), ".codenexus/codenexus.lbug");
+    }
+
+    // --- requires_existing_db / validate_db_exists ---
+
+    #[test]
+    fn validate_db_exists_errors_for_read_command_when_db_missing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let missing = dir.path().join("nope.lbug");
+        let err = validate_db_exists(missing.to_str().unwrap(), "list").unwrap_err();
+        assert!(err.contains("database not found"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_db_exists_allows_index_to_create_new_db() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let missing = dir.path().join("new.lbug");
+        assert!(validate_db_exists(missing.to_str().unwrap(), "index").is_ok());
+    }
+
+    #[test]
+    fn validate_db_exists_ok_when_db_present() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = dir.path().join("exists.lbug");
+        std::fs::write(&db, b"x").unwrap();
+        assert!(validate_db_exists(db.to_str().unwrap(), "list").is_ok());
     }
 
     #[test]
