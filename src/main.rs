@@ -93,15 +93,21 @@ fn run_cli() {
                 .default_value(DEFAULT_DEBOUNCE_MS.to_string())
                 .help("Daemon debounce interval (ms)"),
         )
-        .build();
+        .build()
+        // Override sdforge CliBuilder's injected version/about (builder.rs
+        // hardcodes 0.4.2 from the sdforge crate). Cargo.toml is the single
+        // source of truth for the codenexus version — clap applies the last
+        // call wins, so this overrides cleanly. See R-cli-002.
+        .version(codenexus::version())
+        .about("CodeNexus — Code Intelligence");
 
     let matches = cmd.get_matches();
 
     let sub_name = match matches.subcommand_name() {
         Some(name) => name,
         None => {
-            println!("Use --help to see available commands");
-            return;
+            eprintln!("Use --help to see available commands");
+            std::process::exit(1);
         }
     };
     let sub_matches = matches.subcommand_matches(sub_name).unwrap();
