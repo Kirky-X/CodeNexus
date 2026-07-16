@@ -53,13 +53,31 @@ use super::pipeline_dag::{Phase, Pipeline as DagPipeline, PipelineCtx};
 /// returned (PRD §4.1.6, exit code 2).
 pub(crate) const DEFAULT_MAX_RETRIES: u32 = 3;
 
+/// Classifies whether an error message is a transient database-lock /
+/// write-transaction conflict that [`with_retry`] should retry on.
+///
+/// Covers two error families:
+/// - classic `"database is locked"` / `"Lock timeout"` (cross-process,
+///   SQLite-style contention)
+/// - lbug 0.18.2 in-process concurrent write: `"Only one write transaction
+///   at a time is allowed in the system"` (verified via
+///   `concurrency_probe_write_write` — 306/400 failures, none matched the
+///   old "locked"/"Lock" patterns). The full characteristic phrase is used
+///   rather than the shorter "write transaction" to avoid matching unrelated
+///   commit/rollback messages.
+fn is_lock_conflict(msg: &str) -> bool {
+    msg.contains("locked")
+        || msg.contains("Lock")
+        || msg.contains("Only one write transaction at a time")
+}
+
 /// Executes a database operation with retry on lock (Task 5).
 ///
 /// Retries up to `max_retries` times with exponential backoff
-/// (100ms, 200ms, 400ms, ...). A failure whose error message contains
-/// "locked" or "Lock" (case-sensitive) is treated as a transient lock and
-/// retried; any other error is propagated immediately. When all attempts are
-/// exhausted on a lock error, [`IndexError::DatabaseLocked`] is returned.
+/// (100ms, 200ms, 400ms, ...). A failure classified by [`is_lock_conflict`]
+/// is treated as a transient lock and retried; any other error is propagated
+/// immediately. When all attempts are exhausted on a lock error,
+/// [`IndexError::DatabaseLocked`] is returned.
 ///
 /// # Arguments
 ///
@@ -82,9 +100,7 @@ where
     for attempt in 0..=max_retries {
         match f() {
             Ok(v) => return Ok(v),
-            Err(IndexError::Storage(StorageError::Query(ref msg)))
-                if msg.contains("locked") || msg.contains("Lock") =>
-            {
+            Err(IndexError::Storage(StorageError::Query(ref msg))) if is_lock_conflict(msg) => {
                 if attempt < max_retries {
                     warn!(
                         attempt = attempt + 1,
@@ -1779,6 +1795,33 @@ mod tests {
         });
         assert_eq!(result.unwrap(), 7);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn with_retry_retries_on_lbug_write_transaction_conflict() {
+        // lbug 0.18.2 进程内多连接并发写的实际错误文案
+        // (concurrency_probe_write_write 探针实测)，不含 "locked"/"Lock"。
+        // 旧 with_retry 不匹配 → 不重试，直接把冲突抛给调用方。
+        let calls = AtomicU32::new(0);
+        let result: Result<u32> = with_retry(3, || {
+            let n = calls.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                Err(IndexError::Storage(StorageError::Query(
+                    "database error: Query execution failed: Cannot start a new \
+                     write transaction in the system. Only one write transaction \
+                     at a time is allowed in the system."
+                        .to_string(),
+                )))
+            } else {
+                Ok(7)
+            }
+        });
+        assert_eq!(result.unwrap(), 7);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "should retry on lbug write-transaction conflict"
+        );
     }
 
     #[test]
