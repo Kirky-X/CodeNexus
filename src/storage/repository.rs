@@ -186,24 +186,16 @@ impl Repository {
     }
 
     /// Lists all indexed projects.
+    ///
+    /// Returns `Err` if the Project table is missing (e.g. fresh/uninitialized
+    /// DB or schema corruption). The strict semantics are required by
+    /// [`QualityChecker::check_project_isolation`](crate::storage::quality::QualityChecker)
+    /// to detect Project-table-drop violations (DQ-005). The CLI service
+    /// layer (`run_list`, `run_status`) converts "table missing" errors into
+    /// empty results so users see a clean `[]` on fresh DBs.
     pub fn list_projects(&self) -> Result<Vec<ProjectRecord>> {
         let cypher = "MATCH (p:Project) RETURN p.id AS id, p.name AS name, p.rootPath AS rootPath, p.language AS language, p.fileCount AS fileCount, p.indexedAt AS indexedAt, p.lastCommit AS lastCommit ORDER BY p.name;";
-        // Empty/uninitialized DB may not have the Project table yet.
-        // Return empty list instead of erroring (consistent with
-        // delete_file_nodes pattern at L217). Rule 12: explicit empty > silent error.
-        let rows = match self.conn.query(cypher) {
-            Ok(rows) => rows,
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("does not exist")
-                    || msg.contains("no such")
-                    || msg.contains("Binder exception")
-                {
-                    return Ok(vec![]);
-                }
-                return Err(e);
-            }
-        };
+        let rows = self.conn.query(cypher)?;
         Ok(rows.into_iter().map(row_to_project).collect())
     }
 

@@ -13,6 +13,8 @@
 
 use std::collections::HashMap;
 
+use rayon::prelude::*;
+
 use crate::discover::FileInfo;
 use crate::index::hash::compute_file_hash;
 
@@ -68,6 +70,17 @@ impl FileDiff {
     }
 }
 
+/// Per-file classification produced by parallel hash diffing.
+///
+/// Used internally by [`diff_files`] to classify each disk file before
+/// bucketing into [`FileDiff`]. Computed in parallel by rayon, then
+/// collected in order to preserve disk traversal order.
+enum FileClass {
+    Changed,
+    Added,
+    Unchanged,
+}
+
 /// Computes the [`FileDiff`] between `disk_files` and `db_hashes`.
 ///
 /// # Arguments
@@ -91,6 +104,15 @@ impl FileDiff {
 /// - BR-INDEX-003: `force=true` → all disk files go to `changed`.
 /// - New file (not in DB) → `added`.
 /// - Hash differs → `changed`.
+///
+/// # Parallelism
+///
+/// Hash computation and per-file classification run in parallel via rayon
+/// (`par_iter`). SHA-256 hashing is I/O-bound (file read) + CPU-bound
+/// (digest), so rayon's thread pool overlaps disk I/O across files. Results
+/// are collected in `disk_files` order to preserve traversal order.
+///
+/// [`FileClass`]: self::FileClass
 pub fn diff_files(
     disk_files: &[FileInfo],
     db_hashes: &[(String, String)],
@@ -102,33 +124,48 @@ pub fn diff_files(
         db_map.insert(path.as_str(), hash.as_str());
     }
 
+    // Parallel hash computation + classification (rayon par_iter).
+    //
+    // SHA-256 hashing is I/O-bound (file read) + CPU-bound (digest), so
+    // rayon's thread pool overlaps disk I/O across files. Each file is
+    // classified independently; results are collected in disk_files order
+    // (rayon preserves source order on `collect`).
+    let classifications: Result<Vec<FileClass>, std::io::Error> = disk_files
+        .par_iter()
+        .map(|file| {
+            let disk_hash = compute_file_hash(&file.path)?;
+            if force {
+                // BR-INDEX-003: --force ignores hashes; every disk file is changed.
+                return Ok(FileClass::Changed);
+            }
+            let class = match db_map.get(file.relative_path.as_str()) {
+                None => FileClass::Added,
+                Some(db_hash) => {
+                    if *db_hash == disk_hash {
+                        // BR-INDEX-001: hash matches → skip.
+                        FileClass::Unchanged
+                    } else {
+                        // Hash differs → re-parse.
+                        FileClass::Changed
+                    }
+                }
+            };
+            Ok(class)
+        })
+        .collect();
+
+    let classifications = classifications?;
+
     let mut diff = FileDiff::new();
     let mut seen_on_disk: HashMap<&str, ()> = HashMap::with_capacity(disk_files.len());
 
-    for file in disk_files {
+    // Bucket files in disk traversal order (preserves pre-parallel behavior).
+    for (file, class) in disk_files.iter().zip(classifications) {
         seen_on_disk.insert(file.relative_path.as_str(), ());
-        let disk_hash = compute_file_hash(&file.path)?;
-
-        if force {
-            // BR-INDEX-003: --force ignores hashes; every disk file is changed.
-            diff.changed.push(file.clone());
-            continue;
-        }
-
-        match db_map.get(file.relative_path.as_str()) {
-            None => {
-                // Not in DB → new file.
-                diff.added.push(file.clone());
-            }
-            Some(db_hash) => {
-                if *db_hash == disk_hash {
-                    // BR-INDEX-001: hash matches → skip.
-                    diff.unchanged.push(file.clone());
-                } else {
-                    // Hash differs → re-parse.
-                    diff.changed.push(file.clone());
-                }
-            }
+        match class {
+            FileClass::Changed => diff.changed.push(file.clone()),
+            FileClass::Added => diff.added.push(file.clone()),
+            FileClass::Unchanged => diff.unchanged.push(file.clone()),
         }
     }
 

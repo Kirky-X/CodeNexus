@@ -13,7 +13,7 @@ use crate::service::error::CodeNexusError;
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 #[cfg(feature = "cli")]
 use crate::service::runtime::kit;
-use crate::storage::ProjectRecord;
+use crate::storage::{is_table_missing_error, ProjectRecord};
 
 #[cfg(feature = "cli")]
 use sdforge::forge;
@@ -47,10 +47,20 @@ impl From<ProjectRecord> for ProjectOutput {
 }
 
 /// Runs list against an injected Kit (testable core).
+///
+/// On a fresh/uninitialized DB (Project table missing), returns an empty
+/// list instead of erroring — the CLI `list` command should exit 0 with a
+/// clean `[]` output. The "table missing" detection lives at the service
+/// layer (not storage) so [`QualityChecker::check_project_isolation`] keeps
+/// strict semantics for DQ-005 violation detection.
 #[cfg(any(feature = "cli", test))]
 pub fn run_list(kit: &AsyncKit<AsyncReady>) -> Result<Vec<ProjectOutput>, CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
-    let projects = storage.list_projects()?;
+    let projects = match storage.list_projects() {
+        Ok(projects) => projects,
+        Err(err) if is_table_missing_error(&err) => return Ok(Vec::new()),
+        Err(err) => return Err(err.into()),
+    };
     Ok(projects.into_iter().map(ProjectOutput::from).collect())
 }
 
@@ -98,6 +108,21 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let output = run_list(&kit).expect("run should succeed");
         assert!(output.is_empty(), "fresh DB has no projects");
+    }
+
+    #[test]
+    fn run_list_returns_empty_when_project_table_dropped() {
+        // Simulates a corrupted/uninitialized DB where Project table is gone.
+        // The service layer converts "table missing" errors into empty list
+        // (Rule 12: explicit empty > silent error) so CLI exits 0 with `[]`.
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("require_storage");
+        storage
+            .execute("DROP TABLE Project;")
+            .expect("drop project table");
+        let output = run_list(&kit).expect("run should succeed with empty list");
+        assert!(output.is_empty(), "dropped Project table should yield []");
     }
 
     #[test]

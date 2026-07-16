@@ -11,6 +11,7 @@
 
 use crate::service::error::CodeNexusError;
 use crate::storage::capability::Storage;
+use crate::storage::is_table_missing_error;
 
 /// Resolves a project identifier (name or id) to the canonical project id.
 ///
@@ -20,9 +21,18 @@ use crate::storage::capability::Storage;
 /// # Errors
 ///
 /// Returns [`CodeNexusError::ProjectNotFound`] if no project matches either
-/// the name or the id.
+/// the name or the id, or if the Project table is missing (uninitialized DB)
+/// — the latter is reported as `ProjectNotFound` rather than a raw storage
+/// error so the user gets an actionable "project not found" message instead
+/// of a confusing "Binder exception".
 pub fn resolve_project_id(storage: &dyn Storage, project: &str) -> Result<String, CodeNexusError> {
-    let projects = storage.list_projects()?;
+    let projects = match storage.list_projects() {
+        Ok(projects) => projects,
+        Err(err) if is_table_missing_error(&err) => {
+            return Err(CodeNexusError::ProjectNotFound(project.to_string()));
+        }
+        Err(err) => return Err(err.into()),
+    };
     let project_id = projects
         .iter()
         .find(|p| p.name == project)
@@ -115,5 +125,23 @@ mod tests {
         let storage = kit.require::<StorageModule>().expect("storage");
         let err = resolve_project_id(&*storage, "anything").expect_err("should error");
         assert!(matches!(err, CodeNexusError::ProjectNotFound(_)));
+    }
+
+    #[test]
+    fn resolve_when_project_table_dropped_returns_project_not_found() {
+        // Simulates uninitialized/corrupted DB where Project table is gone.
+        // Should return ProjectNotFound (not raw StorageError) so the user
+        // gets an actionable message instead of "Binder exception".
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        storage
+            .execute("DROP TABLE Project;")
+            .expect("drop project table");
+        let err = resolve_project_id(&*storage, "anything").expect_err("should error");
+        assert!(
+            matches!(err, CodeNexusError::ProjectNotFound(_)),
+            "expected ProjectNotFound, got: {err:?}"
+        );
     }
 }

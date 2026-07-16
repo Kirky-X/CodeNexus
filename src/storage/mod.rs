@@ -17,7 +17,7 @@ pub mod repository;
 pub mod schema;
 
 pub use connection::{SchemaInitReport, StorageConnection};
-pub use error::{Result, StorageError};
+pub use error::{is_table_missing_error, Result, StorageError};
 pub use loader::CsvLoader;
 pub use module::{StorageConfig, StorageModule};
 pub use quality::{QualityChecker, QualityReport, QualityViolation};

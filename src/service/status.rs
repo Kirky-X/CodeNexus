@@ -15,7 +15,7 @@ use crate::service::error::CodeNexusError;
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 #[cfg(feature = "cli")]
 use crate::service::runtime::kit;
-use crate::storage::ProjectRecord;
+use crate::storage::{is_table_missing_error, ProjectRecord};
 
 #[cfg(feature = "cli")]
 use sdforge::forge;
@@ -23,7 +23,7 @@ use sdforge::forge;
 use sdforge::prelude::ApiError;
 
 /// JSON-serializable status output.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct StatusOutput {
     pub projects: Vec<ProjectOutput>,
 }
@@ -82,10 +82,21 @@ fn is_stale(last_commit: &str, current_head: &str) -> bool {
 }
 
 /// Runs status against an injected Kit (testable core).
+///
+/// On a fresh/uninitialized DB (Project table missing), returns an empty
+/// `StatusOutput` instead of erroring — the CLI `status` command should exit
+/// 0 with a clean `{"projects":[]}` output. The "table missing" detection
+/// lives at the service layer (not storage) so
+/// [`QualityChecker::check_project_isolation`] keeps strict semantics for
+/// DQ-005 violation detection.
 #[cfg(any(feature = "cli", test))]
 pub fn run_status(kit: &AsyncKit<AsyncReady>) -> Result<StatusOutput, CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
-    let projects = storage.list_projects()?;
+    let projects = match storage.list_projects() {
+        Ok(projects) => projects,
+        Err(err) if is_table_missing_error(&err) => return Ok(StatusOutput::default()),
+        Err(err) => return Err(err.into()),
+    };
     let output = StatusOutput {
         projects: projects
             .into_iter()
@@ -143,6 +154,24 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let output = run_status(&kit).expect("run should succeed");
         assert!(output.projects.is_empty());
+    }
+
+    #[test]
+    fn run_status_returns_empty_when_project_table_dropped() {
+        // Simulates a corrupted/uninitialized DB where Project table is gone.
+        // The service layer converts "table missing" errors into empty
+        // StatusOutput so CLI exits 0 with `{"projects":[]}`.
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("require_storage");
+        storage
+            .execute("DROP TABLE Project;")
+            .expect("drop project table");
+        let output = run_status(&kit).expect("run should succeed with empty output");
+        assert!(
+            output.projects.is_empty(),
+            "dropped Project table should yield empty output"
+        );
     }
 
     #[test]

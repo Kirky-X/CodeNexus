@@ -71,6 +71,24 @@ pub enum StorageError {
 /// Convenience alias used throughout the storage layer.
 pub type Result<T> = std::result::Result<T, StorageError>;
 
+/// Returns `true` if the error indicates that a node/edge table is missing
+/// from the schema (e.g. fresh/uninitialized DB or post-`DROP TABLE`).
+///
+/// Used by the service layer (`run_list`, `run_status`) to convert
+/// "table missing" errors into empty results so the CLI exits 0 with a clean
+/// `[]` on uninitialized DBs. The storage layer keeps strict semantics —
+/// [`QualityChecker::check_project_isolation`](crate::storage::quality::QualityChecker)
+/// relies on the error propagating to detect Project-table-drop violations
+/// (DQ-005).
+///
+/// Matches the same substrings as the tolerance logic previously embedded in
+/// `Repository::list_projects` (reverted because it masked DQ-005 violations).
+#[must_use]
+pub fn is_table_missing_error(err: &StorageError) -> bool {
+    let msg = err.to_string();
+    msg.contains("does not exist") || msg.contains("no such") || msg.contains("Binder exception")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,5 +158,41 @@ mod tests {
         let s = format!("{err:?}");
         assert!(s.contains("NotFound"));
         assert!(s.contains("\"x\""));
+    }
+
+    #[test]
+    fn is_table_missing_error_detects_binder_exception() {
+        let err = StorageError::Query("Binder exception: Table PROJECT does not exist.".into());
+        assert!(is_table_missing_error(&err));
+    }
+
+    #[test]
+    fn is_table_missing_error_detects_does_not_exist() {
+        let err = StorageError::Query("Table PROJECT does not exist.".into());
+        assert!(is_table_missing_error(&err));
+    }
+
+    #[test]
+    fn is_table_missing_error_detects_no_such() {
+        let err = StorageError::Query("no such table: PROJECT".into());
+        assert!(is_table_missing_error(&err));
+    }
+
+    #[test]
+    fn is_table_missing_error_returns_false_for_other_errors() {
+        let err = StorageError::Query("syntax error at line 1".into());
+        assert!(!is_table_missing_error(&err));
+    }
+
+    #[test]
+    fn is_table_missing_error_returns_false_for_not_found() {
+        let err = StorageError::NotFound("project foo".into());
+        assert!(!is_table_missing_error(&err));
+    }
+
+    #[test]
+    fn is_table_missing_error_returns_false_for_io() {
+        let err = StorageError::Io(std::io::Error::other("disk failure"));
+        assert!(!is_table_missing_error(&err));
     }
 }
