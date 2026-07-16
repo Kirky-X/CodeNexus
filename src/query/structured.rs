@@ -28,6 +28,15 @@ pub const MAX_LIMIT: usize = 500;
 pub const DEFAULT_LIMIT: usize = 50;
 /// Maximum Levenshtein distance accepted by fuzzy search.
 pub const MAX_FUZZY_DISTANCE: usize = 3;
+/// Maximum byte length of a regex search pattern. Rejects pathological
+/// over-long inputs before compilation; the `regex` crate's Pike VM is
+/// already ReDoS-immune (linear-time) at match time, so this caps the
+/// parse/compile cost rather than backtracking risk.
+pub const MAX_REGEX_PATTERN_LEN: usize = 4_096;
+/// Compiled-NFA byte budget passed to `RegexBuilder`. A bounded pattern
+/// (`MAX_REGEX_PATTERN_LEN`) cannot approach this, so it is defense-in-depth
+/// against any compact pattern that inflates NFA size.
+const MAX_REGEX_NFA_SIZE: usize = 4 * 1024 * 1024;
 
 /// Selects which search algorithm [`SearchEngine::search`] dispatches to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -211,9 +220,19 @@ impl<'a> SearchEngine<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`QueryError::InvalidQuery`] if `pattern` is not a valid regex.
+    /// Returns [`QueryError::InvalidQuery`] if `pattern` is not a valid regex
+    /// or exceeds [`MAX_REGEX_PATTERN_LEN`] bytes.
     fn search_regex(&self, project: &str, pattern: &str) -> Result<Vec<SearchResult>> {
-        let re = regex::Regex::new(pattern)
+        if pattern.len() > MAX_REGEX_PATTERN_LEN {
+            return Err(QueryError::InvalidQuery(format!(
+                "regex pattern too long: {} bytes (limit {MAX_REGEX_PATTERN_LEN})",
+                pattern.len()
+            )));
+        }
+        let re = regex::RegexBuilder::new(pattern)
+            .size_limit(MAX_REGEX_NFA_SIZE)
+            .dfa_size_limit(MAX_REGEX_NFA_SIZE)
+            .build()
             .map_err(|e| QueryError::InvalidQuery(format!("invalid regex: {e}")))?;
         let project_esc = escape_cypher_string(project);
         let labels = [NodeLabel::Function, NodeLabel::Method, NodeLabel::Class];
@@ -3329,6 +3348,73 @@ mod tests {
         let engine = SearchEngine::new(storage.as_ref());
         let params = SearchParams {
             query: r"get_.*".to_string(),
+            mode: SearchMode::Regex,
+            ..SearchParams::default()
+        };
+        let results = engine.search("demo", &params).expect("regex search");
+        assert!(results.iter().any(|r| r.name == "get_user"));
+    }
+
+    #[test]
+    fn search_regex_rejects_oversized_pattern() {
+        // Defense-in-depth: an over-long pattern is rejected before regex
+        // compilation, blocking a pathological-input DoS vector. The `regex`
+        // crate's Pike VM is already ReDoS-immune at match time; this caps the
+        // parse/compile cost of huge inputs.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "foo", "demo.foo")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(2)
+            .language(Language::Rust)
+            .build();
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "a".repeat(MAX_REGEX_PATTERN_LEN + 1),
+            mode: SearchMode::Regex,
+            ..SearchParams::default()
+        };
+        let err = engine.search("demo", &params).unwrap_err();
+        assert!(matches!(err, QueryError::InvalidQuery(_)));
+        assert!(err.to_string().contains("too long"));
+    }
+
+    #[test]
+    fn search_regex_rejects_invalid_syntax() {
+        let storage = build_storage();
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: r"[unclosed".to_string(),
+            mode: SearchMode::Regex,
+            ..SearchParams::default()
+        };
+        let err = engine.search("demo", &params).unwrap_err();
+        assert!(matches!(err, QueryError::InvalidQuery(_)));
+    }
+
+    #[test]
+    fn search_regex_matches_normal_anchored_pattern() {
+        // Regression: hardening must not break legitimate anchored regexes.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "get_user", "demo.get_user")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: r"^get_\w+$".to_string(),
             mode: SearchMode::Regex,
             ..SearchParams::default()
         };
