@@ -17,6 +17,8 @@ use crate::service::error::kit_not_initialized;
 use crate::service::error::to_api_error;
 #[cfg(feature = "analysis")]
 use crate::service::error::CodeNexusError;
+#[cfg(feature = "analysis")]
+use crate::service::project::resolve_project_id;
 #[cfg(all(feature = "cli", feature = "analysis"))]
 use crate::service::runtime::kit;
 
@@ -69,6 +71,7 @@ pub fn run_dead_code(
     edge_types: &str,
 ) -> Result<DeadCodeOutput, CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
+    let project_id = resolve_project_id(&*storage, project)?;
     let config = build_dead_code_config(check_exported, check_ffi, edge_types);
     let detector = DeadCodeDetector::with_config(&*storage, config);
     let mut entry_patterns: Vec<&str> = vec!["main", "Main", "__main__"];
@@ -80,7 +83,7 @@ pub fn run_dead_code(
     for e in &extras {
         entry_patterns.push(e.as_str());
     }
-    let entries = detector.detect(project, &entry_patterns)?;
+    let entries = detector.detect(&project_id, &entry_patterns)?;
     Ok(DeadCodeOutput {
         project: project.to_string(),
         dead_code: entries,
@@ -123,6 +126,7 @@ mod tests {
     use super::*;
     use crate::analysis::dead_code::Confidence;
     use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
+    use crate::storage::capability::Storage;
     use tempfile::TempDir;
 
     fn fresh_db_path() -> (TempDir, std::path::PathBuf) {
@@ -139,10 +143,20 @@ mod tests {
             .expect("build_kit")
     }
 
+    fn seed_project(storage: &dyn Storage, id: &str, name: &str) {
+        storage
+            .execute(&format!(
+                "CREATE (:Project {{id: '{id}', name: '{name}', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'}});"
+            ))
+            .expect("create project");
+    }
+
     #[test]
     fn run_succeeds_on_empty_db() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         let result = run_dead_code(&kit, "demo", "", true, true, "");
         assert!(result.is_ok(), "run should succeed: {:?}", result.err());
     }
@@ -152,6 +166,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
+        seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_foo', project: 'demo', name: 'foo', qualifiedName: 'demo.foo', filePath: '/src/lib.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create foo");
         let result = run_dead_code(&kit, "demo", "", true, true, "");
         assert!(result.is_ok(), "run should succeed: {:?}", result.err());
@@ -162,6 +177,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
+        seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_main', project: 'demo', name: 'main', qualifiedName: 'demo.main', filePath: '/src/main.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create main");
         let result = run_dead_code(&kit, "demo", "custom_entry,other_entry", true, true, "");
         assert!(result.is_ok(), "run should succeed: {:?}", result.err());
@@ -194,6 +210,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
+        seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_pub', project: 'demo', name: 'pub_fn', qualifiedName: 'demo.pub_fn', filePath: '/src/lib.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: true, docstring: '', content: '', parentQn: ''});").expect("create exported");
         storage.execute("CREATE (:Function {id: 'f_priv', project: 'demo', name: 'priv_fn', qualifiedName: 'demo.priv_fn', filePath: '/src/lib.rs', startLine: 6, endLine: 10, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create private");
 
@@ -222,6 +239,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
+        seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_ffi', project: 'demo', name: 'ffi_fn', qualifiedName: 'demo.ffi_fn', filePath: '/src/lib.rs', startLine: 1, endLine: 5, signature: 'extern \"C\" fn ffi_fn()', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create ffi");
         storage.execute("CREATE (:Function {id: 'f_plain', project: 'demo', name: 'plain', qualifiedName: 'demo.plain', filePath: '/src/lib.rs', startLine: 6, endLine: 10, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create plain");
 
@@ -246,6 +264,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
+        seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'USAGE', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create edge");
@@ -272,6 +291,8 @@ mod tests {
     fn run_dead_code_returns_output_struct() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         let output = run_dead_code(&kit, "demo", "", true, true, "").expect("run should succeed");
         assert_eq!(output.project, "demo");
         assert!(
@@ -340,6 +361,8 @@ mod tests {
         reset_kit_for_testing();
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         init_kit(kit).expect("init_kit");
 
         let rt = tokio::runtime::Runtime::new().expect("runtime");

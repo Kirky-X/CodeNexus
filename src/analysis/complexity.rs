@@ -8,7 +8,7 @@
 //! (Green / Yellow / Red / Critical).
 
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
 use tree_sitter::Node;
@@ -1011,6 +1011,62 @@ fn nesting_depth_count(node: Node<'_>, language: Language, current_depth: u32) -
     max_depth
 }
 
+/// Reads the full source file at `root_path/file_path` with path-traversal
+/// protection. Returns `None` if the file cannot be read or the resolved path
+/// escapes `root_path`.
+///
+/// Both `root_path` and the joined target are canonicalized, then the target
+/// must start with the canonical root. This blocks `../` sequences and symlink
+/// escapes. Leading `/` in `file_path` is stripped so stored absolute-looking
+/// filePaths are treated as relative to `root_path`.
+fn read_source_file(root_path: &str, file_path: &str) -> Option<String> {
+    use std::fs;
+    use std::path::Path;
+
+    let canonical_root = Path::new(root_path).canonicalize().ok()?;
+    let relative = file_path.trim_start_matches('/');
+    let canonical_target = canonical_root.join(relative).canonicalize().ok()?;
+    if !canonical_target.starts_with(&canonical_root) {
+        return None;
+    }
+    fs::read_to_string(&canonical_target).ok()
+}
+
+/// Slices `content` by 1-based line range `[start_line, end_line]` (inclusive).
+/// Returns `None` for invalid ranges or `start_line` beyond the file length.
+/// `end_line` is clamped to the actual line count.
+fn slice_lines(content: &str, start_line: u32, end_line: u32) -> Option<String> {
+    if start_line == 0 || end_line == 0 || start_line > end_line {
+        return None;
+    }
+    let lines: Vec<&str> = content.lines().collect();
+    let start = (start_line - 1) as usize;
+    let end = (end_line as usize).min(lines.len());
+    if start >= lines.len() {
+        return None;
+    }
+    Some(lines[start..end].join("\n"))
+}
+
+/// Reads lines `[start_line, end_line]` (1-indexed, inclusive) from the file
+/// at `root_path/file_path`. Returns `None` if the file cannot be read or the
+/// line range is invalid.
+///
+/// Path-traversal protected via [`read_source_file`]; range slicing via
+/// [`slice_lines`]. Convenience wrapper retained for unit tests; production
+/// code (`ComplexityAnalyzer::analyze`) caches full-file reads and calls
+/// [`read_source_file`] + [`slice_lines`] directly.
+#[cfg(test)]
+fn read_source_range(
+    root_path: &str,
+    file_path: &str,
+    start_line: u32,
+    end_line: u32,
+) -> Option<String> {
+    let content = read_source_file(root_path, file_path)?;
+    slice_lines(&content, start_line, end_line)
+}
+
 /// Analyzes per-function complexity metrics over a Storage graph.
 ///
 /// Loads `Function`/`Method` nodes for a project, parses each node's
@@ -1043,7 +1099,19 @@ impl<'a> ComplexityAnalyzer<'a> {
     }
 
     /// Returns complexity entries for every `Function`/`Method` node in
-    /// `project` whose `content` is non-empty and whose language is supported.
+    /// `project` whose `content` is non-empty (or retrievable via disk
+    /// fallback) and whose language is supported.
+    ///
+    /// # Disk fallback
+    ///
+    /// When a node's `content` property is empty (e.g. LadybugDB's COPY
+    /// parser stripped newlines), the analyzer queries the `Project` node's
+    /// `rootPath` and reads the source range `[startLine, endLine]` directly
+    /// from disk via [`read_source_file`] (path-traversal protected) and
+    /// [`slice_lines`]. Full-file reads are cached per `analyze` call so each
+    /// file is read at most once even when many functions share the same
+    /// `filePath`. If the disk read also fails, the node is skipped with a
+    /// warning.
     ///
     /// # Errors
     ///
@@ -1051,6 +1119,19 @@ impl<'a> ComplexityAnalyzer<'a> {
     /// Cypher query fails.
     pub fn analyze(&self, project: &str) -> StorageResult<Vec<ComplexityEntry>> {
         let escaped = escape_cypher_string(project);
+
+        // Query Project rootPath for disk-based content fallback.
+        let project_cypher = format!(
+            "MATCH (p:Project) WHERE p.id = '{escaped}' \
+             RETURN p.rootPath AS root_path;"
+        );
+        let project_rows = self.storage.query(&project_cypher)?;
+        let root_path = project_rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         // LadybugDB's Cypher subset does not support `WHERE (n:Function OR
         // n:Method)` label expressions, so we issue two separate queries and
         // merge the results in Rust (same pattern as DeadCodeDetector).
@@ -1068,6 +1149,10 @@ impl<'a> ComplexityAnalyzer<'a> {
         );
 
         let mut entries = Vec::new();
+        // Per-file cache: avoids re-reading the same file from disk for every
+        // Function/Method node whose DB content was stripped. Keyed by
+        // file_path; value is the full file content (or None if unreadable).
+        let mut file_cache: HashMap<String, Option<String>> = HashMap::new();
         for cypher in [function_cypher, method_cypher] {
             let rows = self.storage.query(&cypher)?;
             for row in rows {
@@ -1087,13 +1172,40 @@ impl<'a> ComplexityAnalyzer<'a> {
                     .map(|v| v as u32)
                     .or_else(|| row[4].as_u64().map(|v| v as u32))
                     .unwrap_or(0);
-                let content = row[5].as_str().unwrap_or_default().to_string();
+                let db_content = row[5].as_str().unwrap_or_default().to_string();
 
-                // Skip nodes with empty content (nothing to parse).
-                if content.is_empty() {
-                    eprintln!("warning: skipping {qualified_name} ({file_path}): empty content");
-                    continue;
-                }
+                // If DB content is empty, try disk fallback via Project rootPath.
+                // The file-level cache ensures each file is read at most once
+                // even when many functions share the same filePath.
+                let content = if db_content.is_empty() {
+                    match root_path.as_deref() {
+                        Some(root) => {
+                            let cached = file_cache
+                                .entry(file_path.clone())
+                                .or_insert_with(|| read_source_file(root, &file_path));
+                            match cached
+                                .as_ref()
+                                .and_then(|full| slice_lines(full, start_line, end_line))
+                            {
+                                Some(disk_content) if !disk_content.is_empty() => disk_content,
+                                _ => {
+                                    eprintln!(
+                                        "warning: skipping {qualified_name} ({file_path}): empty content and disk fallback failed"
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+                        None => {
+                            eprintln!(
+                                "warning: skipping {qualified_name} ({file_path}): empty content (no rootPath for disk fallback)"
+                            );
+                            continue;
+                        }
+                    }
+                } else {
+                    db_content
+                };
 
                 // Resolve language from the file path extension.
                 let language = match detect_language(&file_path) {
@@ -2904,6 +3016,230 @@ fn f(arr: &[i32], target: i32) -> i32 {
         assert!(
             names.contains(&"method"),
             "Method node should be in results"
+        );
+    }
+
+    // --- read_source_range unit tests ---
+
+    #[test]
+    fn read_source_range_returns_lines_from_file() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("lib.rs");
+        std::fs::write(&file_path, "line1\nline2\nline3\nline4\nline5\n").unwrap();
+        let root = dir.path().to_str().unwrap();
+        let content = read_source_range(root, "lib.rs", 2, 4).expect("should read");
+        assert_eq!(content, "line2\nline3\nline4");
+    }
+
+    #[test]
+    fn read_source_range_handles_leading_slash_in_file_path() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("lib.rs");
+        std::fs::write(&file_path, "fn foo() {}\n").unwrap();
+        let root = dir.path().to_str().unwrap();
+        let content = read_source_range(root, "/lib.rs", 1, 1).expect("should read");
+        assert_eq!(content, "fn foo() {}");
+    }
+
+    #[test]
+    fn read_source_range_returns_none_for_missing_file() {
+        let result = read_source_range("/nonexistent/path", "missing.rs", 1, 5);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn read_source_range_returns_none_for_zero_start_line() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("lib.rs");
+        std::fs::write(&file_path, "fn foo() {}\n").unwrap();
+        let root = dir.path().to_str().unwrap();
+        assert!(read_source_range(root, "lib.rs", 0, 1).is_none());
+    }
+
+    #[test]
+    fn read_source_range_returns_none_for_inverted_range() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("lib.rs");
+        std::fs::write(&file_path, "fn foo() {}\n").unwrap();
+        let root = dir.path().to_str().unwrap();
+        assert!(read_source_range(root, "lib.rs", 5, 1).is_none());
+    }
+
+    #[test]
+    fn read_source_range_clamps_end_line_to_file_length() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("lib.rs");
+        std::fs::write(&file_path, "line1\nline2\n").unwrap();
+        let root = dir.path().to_str().unwrap();
+        let content = read_source_range(root, "lib.rs", 1, 10).expect("should read");
+        assert_eq!(content, "line1\nline2");
+    }
+
+    #[test]
+    fn read_source_range_returns_none_for_start_beyond_file() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("lib.rs");
+        std::fs::write(&file_path, "line1\n").unwrap();
+        let root = dir.path().to_str().unwrap();
+        assert!(read_source_range(root, "lib.rs", 100, 200).is_none());
+    }
+
+    // --- read_source_file path-traversal protection tests ---
+
+    #[test]
+    fn read_source_file_returns_content_for_valid_relative_path() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("lib.rs");
+        std::fs::write(&file_path, "fn foo() {}\n").unwrap();
+        let root = dir.path().to_str().unwrap();
+        let content = read_source_file(root, "lib.rs").expect("should read valid file");
+        assert_eq!(content, "fn foo() {}\n");
+    }
+
+    #[test]
+    fn read_source_file_rejects_dotdot_path_traversal() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_str().unwrap();
+        // `..` resolves outside the canonical root; must be rejected whether
+        // or not the target exists.
+        assert!(read_source_file(root, "../").is_none());
+        assert!(read_source_file(root, "../secret.txt").is_none());
+        assert!(read_source_file(root, "../../etc/passwd").is_none());
+    }
+
+    #[test]
+    fn read_source_file_returns_none_for_missing_root() {
+        assert!(read_source_file("/nonexistent/path", "lib.rs").is_none());
+    }
+
+    // --- slice_lines unit tests ---
+
+    #[test]
+    fn slice_lines_returns_expected_range() {
+        let content = "a\nb\nc\nd\ne\n";
+        assert_eq!(slice_lines(content, 2, 4).unwrap(), "b\nc\nd");
+    }
+
+    #[test]
+    fn slice_lines_clamps_end_to_line_count() {
+        let content = "a\nb\n";
+        assert_eq!(slice_lines(content, 1, 10).unwrap(), "a\nb");
+    }
+
+    #[test]
+    fn slice_lines_returns_none_for_invalid_range() {
+        assert!(slice_lines("a\n", 0, 1).is_none());
+        assert!(slice_lines("a\n", 2, 1).is_none());
+        assert!(slice_lines("a\n", 1, 0).is_none());
+    }
+
+    #[test]
+    fn slice_lines_returns_none_for_start_beyond_content() {
+        assert!(slice_lines("a\n", 100, 200).is_none());
+    }
+
+    // --- analyze: disk fallback for empty content ---
+
+    /// Creates a Project node with the given `id`, `name`, and `rootPath`.
+    fn seed_project_with_root(kit: &AsyncKit<AsyncReady>, id: &str, name: &str, root_path: &str) {
+        let storage = storage(kit);
+        let cypher = format!(
+            "CREATE (:Project {{id: '{}', name: '{}', rootPath: '{}', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'}});",
+            escape_cypher_string(id),
+            escape_cypher_string(name),
+            escape_cypher_string(root_path),
+        );
+        storage.execute(&cypher).expect("create project");
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn analyze_disk_fallback_reads_source_when_content_empty() {
+        // Create a temp dir with a real source file.
+        let dir = TempDir::new().unwrap();
+        let src_dir = dir.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let file_path = src_dir.join("lib.rs");
+        std::fs::write(&file_path, "fn simple() {}\n").unwrap();
+
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        seed_project_with_root(&kit, "demo", "demo", dir.path().to_str().unwrap());
+        // Create a Function node with empty content — disk fallback should kick in.
+        create_function_with_content(
+            &kit,
+            "f_simple",
+            "demo",
+            "simple",
+            "demo.simple",
+            "/src/lib.rs",
+            1,
+            1,
+            "",
+        );
+
+        let storage = storage(&kit);
+        let analyzer = ComplexityAnalyzer::new(&*storage);
+        let result = analyzer.analyze("demo").expect("analyze");
+        assert_eq!(
+            result.len(),
+            1,
+            "disk fallback should produce an entry for empty-content function"
+        );
+        assert_eq!(result[0].name, "simple");
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn analyze_skips_function_when_content_empty_and_no_root_path() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // No Project node → no rootPath → skip.
+        create_function_with_content(
+            &kit,
+            "f_empty",
+            "demo",
+            "empty_fn",
+            "demo.empty_fn",
+            "/src/lib.rs",
+            1,
+            1,
+            "",
+        );
+
+        let storage = storage(&kit);
+        let analyzer = ComplexityAnalyzer::new(&*storage);
+        let result = analyzer.analyze("demo").expect("analyze");
+        assert!(
+            result.is_empty(),
+            "empty content with no rootPath should be skipped"
+        );
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn analyze_skips_function_when_disk_file_missing() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        seed_project_with_root(&kit, "demo", "demo", "/nonexistent/root/path");
+        create_function_with_content(
+            &kit,
+            "f_missing",
+            "demo",
+            "missing_fn",
+            "demo.missing_fn",
+            "/src/lib.rs",
+            1,
+            1,
+            "",
+        );
+
+        let storage = storage(&kit);
+        let analyzer = ComplexityAnalyzer::new(&*storage);
+        let result = analyzer.analyze("demo").expect("analyze");
+        assert!(
+            result.is_empty(),
+            "empty content with missing disk file should be skipped"
         );
     }
 }

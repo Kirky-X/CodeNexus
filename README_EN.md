@@ -146,7 +146,7 @@ cargo build --release --features embed
 
 ## Quick Start
 
-> All subcommand flags are **required snake_case long options** (e.g. `--symbol`, `--trace_type`); boolean options take an explicit `true`/`false` value. The database path is the global `--db` option (default `./codenexus.lbug`, placed before the subcommand).
+> All subcommand flags are **required snake_case long options** (e.g. `--symbol`, `--trace_type`); boolean options take an explicit `true`/`false` value. The database path is the global `--db` option (default `.codenexus/<project>.lbug`, placed before the subcommand; `<project>` is taken from `--name`, or falls back to the `--path` directory name).
 
 ```bash
 # 1. Index a codebase into the knowledge graph

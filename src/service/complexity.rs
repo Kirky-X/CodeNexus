@@ -19,6 +19,8 @@ use crate::service::error::kit_not_initialized;
 use crate::service::error::to_api_error;
 #[cfg(feature = "complexity")]
 use crate::service::error::CodeNexusError;
+#[cfg(feature = "complexity")]
+use crate::service::project::resolve_project_id;
 #[cfg(all(feature = "cli", feature = "complexity"))]
 use crate::service::runtime::kit;
 
@@ -212,6 +214,7 @@ fn complexity_core(
     space_complexity_red: &str,
 ) -> Result<(), CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
+    let project_id = resolve_project_id(&*storage, project)?;
     let thresholds = build_thresholds(
         cyclomatic_green,
         cyclomatic_yellow,
@@ -238,7 +241,7 @@ fn complexity_core(
         space_complexity_red,
     )?;
     let analyzer = ComplexityAnalyzer::new_with_thresholds(&*storage, thresholds);
-    let entries = analyzer.analyze(project)?;
+    let entries = analyzer.analyze(&project_id)?;
     let summary = compute_summary(&entries);
     let mut filtered = entries;
     if red_only {
@@ -335,6 +338,7 @@ mod tests {
     use super::*;
     use crate::analysis::complexity::HalsteadMetrics;
     use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
+    use crate::storage::capability::Storage;
     use crate::storage::schema::escape_cypher_string;
     use tempfile::TempDir;
 
@@ -350,6 +354,14 @@ mod tests {
             .unwrap()
             .block_on(build_kit(&config))
             .expect("build_kit")
+    }
+
+    fn seed_project(storage: &dyn Storage, id: &str, name: &str) {
+        storage
+            .execute(&format!(
+                "CREATE (:Project {{id: '{id}', name: '{name}', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'}});"
+            ))
+            .expect("create project");
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -385,6 +397,8 @@ mod tests {
     fn core_succeeds_on_empty_db() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         let result = complexity_core(
             &kit, "demo", false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
             "", "", "", "",
@@ -397,6 +411,8 @@ mod tests {
     fn core_returns_correct_summary() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         create_function_with_content(
             &kit,
             "f_simple",
@@ -469,6 +485,8 @@ mod tests {
     fn core_red_only_filters_correctly() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         create_function_with_content(
             &kit,
             "f_simple",
@@ -556,6 +574,8 @@ mod tests {
     fn core_uses_custom_thresholds() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         let src = "fn f() { if a {} if b {} if c {} if d {} if e {} \
                    if f {} if g {} if h {} if i {} }";
         create_function_with_content(
@@ -712,6 +732,8 @@ mod tests {
     fn core_red_only_on_empty_db_succeeds() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         let result = complexity_core(
             &kit, "demo", true, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
             "", "", "", "",
@@ -727,6 +749,8 @@ mod tests {
     fn core_sort_by_severity_on_empty_db_succeeds() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         let result = complexity_core(
             &kit, "demo", false, true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "",
             "", "", "", "",
@@ -742,6 +766,8 @@ mod tests {
     fn core_red_only_and_sort_on_empty_db_succeeds() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         let result = complexity_core(
             &kit, "demo", true, true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "", "",
             "", "", "",
@@ -790,6 +816,8 @@ mod tests {
     fn core_red_only_with_entries_exercises_retain_closure() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         create_function_with_content(
             &kit,
             "f_simple",
@@ -829,6 +857,8 @@ mod tests {
     fn core_sort_by_severity_with_entries_exercises_sort() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         create_function_with_content(
             &kit,
             "f_simple",
@@ -868,6 +898,8 @@ mod tests {
     fn core_red_only_and_sort_with_entries_exercises_both_branches() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         create_function_with_content(
             &kit,
             "f_simple",
@@ -907,6 +939,8 @@ mod tests {
     fn core_with_custom_thresholds_and_red_only_filters_correctly() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         let src = "fn f() { if a {} if b {} if c {} }";
         create_function_with_content(
             &kit,
@@ -941,6 +975,8 @@ mod tests {
         reset_kit_for_testing();
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         init_kit(kit).expect("init_kit");
 
         let rt = tokio::runtime::Runtime::new().expect("runtime");

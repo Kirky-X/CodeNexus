@@ -14,6 +14,8 @@ use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 use crate::service::error::CodeNexusError;
 #[cfg(all(feature = "cli", feature = "community"))]
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
+#[cfg(all(feature = "community", any(feature = "cli", test)))]
+use crate::service::project::resolve_project_id;
 #[cfg(all(feature = "cli", feature = "community"))]
 use crate::service::runtime::kit;
 
@@ -39,7 +41,8 @@ pub fn run_community(
     resolution: Option<f64>,
 ) -> Result<CommunityOutput, CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
-    let mut detector = CommunityDetector::new(&*storage, project);
+    let project_id = resolve_project_id(&*storage, project)?;
+    let mut detector = CommunityDetector::new(&*storage, &project_id);
     if let Some(res) = resolution {
         detector = detector.with_resolution(res);
     }
@@ -88,6 +91,7 @@ async fn community(project: String, resolution: String) -> Result<(), ApiError> 
 mod tests {
     use super::*;
     use crate::kit::{build_kit, KitBootstrapConfig};
+    use crate::storage::capability::Storage;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -105,10 +109,20 @@ mod tests {
             .expect("build_kit")
     }
 
+    fn seed_project(storage: &dyn Storage, id: &str, name: &str) {
+        storage
+            .execute(&format!(
+                "CREATE (:Project {{id: '{id}', name: '{name}', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'}});"
+            ))
+            .expect("create project");
+    }
+
     #[test]
     fn run_community_succeeds_on_empty_db() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         let output = run_community(&kit, "demo", None).expect("run should succeed");
         assert_eq!(output.project, "demo");
         assert!(output.communities.is_empty(), "no communities on empty DB");
@@ -119,6 +133,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
+        seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
         storage.execute("CREATE (:Function {id: 'f_c', project: 'demo', name: 'c', qualifiedName: 'demo.c', filePath: '/src/c.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create c");
@@ -133,6 +148,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
+        seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create edge");
@@ -147,11 +163,8 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'other', name: 'a', qualifiedName: 'other.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
-        let output = run_community(&kit, "demo", None).expect("run should succeed");
-        assert!(
-            output.communities.is_empty(),
-            "no communities for absent project"
-        );
+        let err = run_community(&kit, "demo", None).expect_err("unknown project should error");
+        assert!(matches!(err, CodeNexusError::ProjectNotFound(_)));
     }
 
     #[test]
@@ -180,6 +193,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
+        seed_project(&*storage, "demo", "demo");
         // Cluster A: a1 → a2 → a3
         storage.execute("CREATE (:Function {id: 'f_a1', project: 'demo', name: 'a1', qualifiedName: 'demo.a1', filePath: '/src/a1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a1");
         storage.execute("CREATE (:Function {id: 'f_a2', project: 'demo', name: 'a2', qualifiedName: 'demo.a2', filePath: '/src/a2.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a2");
@@ -203,6 +217,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
+        seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create edge");
@@ -216,6 +231,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
+        seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create edge");
@@ -238,6 +254,8 @@ mod tests {
         reset_kit_for_testing();
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         init_kit(kit).expect("init_kit");
 
         let rt = tokio::runtime::Runtime::new().expect("runtime");
@@ -256,6 +274,8 @@ mod tests {
         reset_kit_for_testing();
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         init_kit(kit).expect("init_kit");
 
         let rt = tokio::runtime::Runtime::new().expect("runtime");

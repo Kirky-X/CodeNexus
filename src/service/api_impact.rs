@@ -15,6 +15,8 @@ use crate::service::error::kit_not_initialized;
 use crate::service::error::to_api_error;
 #[cfg(feature = "api-review")]
 use crate::service::error::CodeNexusError;
+#[cfg(feature = "api-review")]
+use crate::service::project::resolve_project_id;
 #[cfg(all(feature = "cli", feature = "api-review"))]
 use crate::service::runtime::kit;
 
@@ -40,8 +42,9 @@ fn api_impact_core(
     endpoint: &str,
 ) -> Result<(), CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
+    let project_id = resolve_project_id(&*storage, project)?;
     let reviewer = ApiReviewer::new(&*storage);
-    let impact: Vec<ImpactEntry> = reviewer.api_impact(project, endpoint)?;
+    let impact: Vec<ImpactEntry> = reviewer.api_impact(&project_id, endpoint)?;
     let output = ApiImpactOutput {
         project: project.to_string(),
         endpoint: endpoint.to_string(),
@@ -70,6 +73,7 @@ async fn api_impact(project: String, endpoint: String) -> Result<(), ApiError> {
 mod tests {
     use super::*;
     use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
+    use crate::storage::capability::Storage;
     use tempfile::TempDir;
 
     fn fresh_db_path() -> (TempDir, std::path::PathBuf) {
@@ -86,10 +90,20 @@ mod tests {
             .expect("build_kit")
     }
 
+    fn seed_project(storage: &dyn Storage, id: &str, name: &str) {
+        storage
+            .execute(&format!(
+                "CREATE (:Project {{id: '{id}', name: '{name}', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'}});"
+            ))
+            .expect("create project");
+    }
+
     #[test]
     fn core_succeeds_on_empty_db() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         let result = api_impact_core(&kit, "demo", "/api/users");
         assert!(result.is_ok(), "core should succeed: {:?}", result.err());
     }
@@ -99,6 +113,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
+        seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Endpoint {id: 'e1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', expectedSchema: '', parentQn: ''});").expect("create endpoint");
         storage.execute("CREATE (:Handler {id: 'h1', project: 'demo', name: 'list_users', qualifiedName: 'list_users', filePath: '', startLine: 0, endLine: 0, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create handler");
         storage.execute("CREATE (:CodeRelation {id: 'he1', source: 'h1', target: 'e1', type: 'HANDLES', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create handles edge");
@@ -135,6 +150,8 @@ mod tests {
         reset_kit_for_testing();
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         init_kit(kit).expect("init_kit");
 
         let rt = tokio::runtime::Runtime::new().expect("runtime");

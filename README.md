@@ -137,7 +137,7 @@ cargo build --release --features embed
 
 ## 快速开始
 
-> 所有子命令参数均为 **必填的 snake_case 长选项**（例如 `--symbol`、`--trace_type`）。布尔选项需显式传值（`true`/`false`）。数据库路径通过全局 `--db` 选项指定（默认值 `./codenexus.lbug`，需置于子命令之前）。
+> 所有子命令参数均为 **必填的 snake_case 长选项**（例如 `--symbol`、`--trace_type`）。布尔选项需显式传值（`true`/`false`）。数据库路径通过全局 `--db` 选项指定（默认值 `.codenexus/<项目名称>.lbug`，需置于子命令之前；`<项目名称>` 取 `--name`，缺失时取 `--path` 所在目录名）。
 
 ```bash
 # 1. 索引一个代码仓库

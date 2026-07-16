@@ -30,6 +30,7 @@ pub mod import;
 pub mod index;
 pub mod list;
 pub mod lsp;
+pub mod project;
 pub mod query;
 pub mod rename;
 pub mod route_map;

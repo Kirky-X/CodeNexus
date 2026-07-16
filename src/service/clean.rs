@@ -11,10 +11,10 @@ use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 use crate::service::error::CodeNexusError;
 #[cfg(feature = "cli")]
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
+#[cfg(any(feature = "cli", test))]
+use crate::service::project::resolve_project_id;
 #[cfg(feature = "cli")]
 use crate::service::runtime::kit;
-#[cfg(any(feature = "cli", test))]
-use crate::storage::capability::Storage;
 
 #[cfg(feature = "cli")]
 use sdforge::forge;
@@ -27,24 +27,6 @@ pub struct CleanOutput {
     pub project: String,
     pub project_id: String,
     pub deleted: usize,
-}
-
-/// Resolves a project identifier (name or id) to the canonical project id.
-#[cfg(any(feature = "cli", test))]
-fn resolve_project_id(storage: &dyn Storage, project: &str) -> Result<String, CodeNexusError> {
-    let projects = storage.list_projects()?;
-    let project_id = projects
-        .iter()
-        .find(|p| p.name == project)
-        .map(|p| p.id.clone())
-        .or_else(|| {
-            if projects.iter().any(|p| p.id == project) {
-                Some(project.to_string())
-            } else {
-                None
-            }
-        });
-    project_id.ok_or_else(|| CodeNexusError::ProjectNotFound(project.to_string()))
 }
 
 /// Runs clean against an injected Kit (testable core).
@@ -81,6 +63,7 @@ async fn clean(project: String) -> Result<(), ApiError> {
 mod tests {
     use super::*;
     use crate::kit::{build_kit, KitBootstrapConfig};
+    use crate::storage::capability::Storage;
     use std::path::PathBuf;
     use tempfile::TempDir;
 

@@ -15,6 +15,8 @@ use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 use crate::service::error::CodeNexusError;
 #[cfg(all(feature = "cli", feature = "cross-service"))]
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
+#[cfg(all(feature = "cross-service", any(feature = "cli", test)))]
+use crate::service::project::resolve_project_id;
 #[cfg(all(feature = "cli", feature = "cross-service"))]
 use crate::service::runtime::kit;
 #[cfg(feature = "cross-service")]
@@ -51,10 +53,11 @@ pub fn run_cross_service(
     protocol: &str,
 ) -> Result<CrossServiceOutput, CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
-    let linker = CrossServiceLinker::new(&*storage, project);
+    let project_id = resolve_project_id(&*storage, project)?;
+    let linker = CrossServiceLinker::new(&*storage, &project_id);
     let links = linker.link()?;
     let detector = CrossServiceDetector::new(&*storage);
-    let mut matches = detector.detect_all(project)?;
+    let mut matches = detector.detect_all(&project_id)?;
     if let Ok(filter) = ServiceProtocol::from_str(protocol) {
         matches.retain(|m| m.protocol == filter);
     }
@@ -87,6 +90,7 @@ async fn cross_service(project: String, protocol: String) -> Result<(), ApiError
 mod tests {
     use super::*;
     use crate::kit::{build_kit, KitBootstrapConfig};
+    use crate::storage::capability::Storage;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -104,10 +108,20 @@ mod tests {
             .expect("build_kit")
     }
 
+    fn seed_project(storage: &dyn Storage, id: &str, name: &str) {
+        storage
+            .execute(&format!(
+                "CREATE (:Project {{id: '{id}', name: '{name}', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'}});"
+            ))
+            .expect("create project");
+    }
+
     #[test]
     fn run_cross_service_succeeds_on_empty_db() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         let output = run_cross_service(&kit, "demo", "").expect("run should succeed");
         assert_eq!(output.project, "demo");
         assert!(output.links.is_empty(), "no links on empty DB");
@@ -119,6 +133,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
+        seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/caller.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fetch(\"/api/users\");', parentQn: ''});").expect("create function");
         let output = run_cross_service(&kit, "demo", "").expect("run should succeed");
@@ -131,9 +146,8 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
         storage.execute("CREATE (:Route {id: 'r1', project: 'other', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
-        let output = run_cross_service(&kit, "demo", "").expect("run should succeed");
-        assert!(output.links.is_empty(), "no links for absent project");
-        assert!(output.matches.is_empty(), "no matches for absent project");
+        let err = run_cross_service(&kit, "demo", "").expect_err("unknown project should error");
+        assert!(matches!(err, CodeNexusError::ProjectNotFound(_)));
     }
 
     #[test]
@@ -164,6 +178,8 @@ mod tests {
     fn run_cross_service_with_empty_protocol_returns_all_matches() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         let output = run_cross_service(&kit, "demo", "").expect("run should succeed");
         // Empty DB → no matches, but field should exist
         assert!(output.matches.is_empty());
@@ -173,6 +189,8 @@ mod tests {
     fn run_cross_service_with_protocol_filter_on_empty_db() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         let output = run_cross_service(&kit, "demo", "grpc").expect("run should succeed");
         assert!(
             output.matches.is_empty(),
@@ -184,6 +202,8 @@ mod tests {
     fn run_cross_service_with_invalid_protocol_returns_all_matches() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         let output =
             run_cross_service(&kit, "demo", "invalid_protocol").expect("run should succeed");
         // Invalid protocol → None filter → all matches (empty on empty DB)
@@ -197,6 +217,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
+        seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/caller.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fetch(\"/api/users\");', parentQn: ''});").expect("create function");
 
@@ -216,6 +237,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
+        seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/caller.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fetch(\"/api/users\");', parentQn: ''});").expect("create function");
 
@@ -235,6 +257,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
+        seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/caller.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fetch(\"/api/users\");', parentQn: ''});").expect("create function");
 
@@ -261,6 +284,8 @@ mod tests {
         reset_kit_for_testing();
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         init_kit(kit).expect("init_kit");
 
         let rt = tokio::runtime::Runtime::new().expect("runtime");

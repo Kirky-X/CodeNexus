@@ -16,8 +16,12 @@ use codenexus::kit::{build_kit, KitBootstrapConfig};
 use codenexus::service::error::CodeNexusError;
 use codenexus::service::init_kit;
 
-/// Default database path when `--db` is not specified.
-const DEFAULT_DB_PATH: &str = "./codenexus.lbug";
+/// Default directory (relative to CWD) that holds per-project database files.
+const DEFAULT_DB_DIR: &str = ".codenexus";
+
+/// Fallback project name used when no command-specific `name`/`path` arg is
+/// available to derive one (e.g. non-indexing subcommands).
+const FALLBACK_PROJECT_NAME: &str = "codenexus";
 
 // `DEFAULT_DEBOUNCE_MS` is sourced from the daemon module when the `daemon`
 // feature is enabled, or from the kit bootstrap fallback otherwise — avoiding
@@ -81,8 +85,7 @@ fn run_cli() {
         .with_global_arg(
             sdforge::cli::GlobalArg::new("db")
                 .long("db")
-                .default_value(DEFAULT_DB_PATH)
-                .help("Database path"),
+                .help("Database path (default: .codenexus/<project>.lbug)"),
         )
         .with_global_arg(
             sdforge::cli::GlobalArg::new("debounce-ms")
@@ -103,7 +106,7 @@ fn run_cli() {
     };
     let sub_matches = matches.subcommand_matches(sub_name).unwrap();
 
-    let db = extract_global_arg(&matches, sub_matches, "db", DEFAULT_DB_PATH);
+    let db = extract_global_arg(&matches, sub_matches, "db", &default_db_path(sub_matches));
     let debounce_ms = extract_global_arg(
         &matches,
         sub_matches,
@@ -121,6 +124,16 @@ fn run_cli() {
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     // Build and init Kit. Non-fatal: setup/lsp commands don't need Kit.
+    //
+    // Ensure the default DB directory exists so `Database::new` can create the
+    // file (it does not create parent directories itself).
+    if let Some(parent) = PathBuf::from(&db).parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!("[warn] Failed to create DB directory {parent:?}: {e}");
+            }
+        }
+    }
     let config = KitBootstrapConfig::new(PathBuf::from(&db)).with_debounce_ms(debounce_ms);
     match runtime.block_on(build_kit(&config)) {
         Ok(kit) => {
@@ -165,6 +178,54 @@ fn extract_global_arg(
         .unwrap_or_else(|| fallback.to_string())
 }
 
+/// Computes the default database path when `--db` is not specified.
+///
+/// Resolves to `.codenexus/<project>.lbug`, where `<project>` is derived from
+/// the subcommand's `name` arg when present, otherwise the directory name of
+/// its `path` arg, otherwise [`FALLBACK_PROJECT_NAME`]. The project component
+/// is sanitized so it is safe to use as a single filesystem path segment.
+fn default_db_path(sub: &sdforge::clap::ArgMatches) -> String {
+    let raw_project = sub
+        .get_one::<String>("name")
+        .cloned()
+        .or_else(|| {
+            sub.get_one::<String>("path").map(|p| {
+                std::path::Path::new(p)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(FALLBACK_PROJECT_NAME)
+                    .to_string()
+            })
+        })
+        .unwrap_or_else(|| FALLBACK_PROJECT_NAME.to_string());
+
+    let project = sanitize_project_name(&raw_project);
+    format!("{DEFAULT_DB_DIR}/{project}.lbug")
+}
+
+/// Reduces `name` to a safe single path segment: trims whitespace, replaces
+/// path separators and control characters, collapses runs, and falls back to
+/// [`FALLBACK_PROJECT_NAME`] when empty.
+fn sanitize_project_name(name: &str) -> String {
+    let cleaned: String = name
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_whitespace() || c == '/' || c == '\\' {
+                '_'
+            } else {
+                c
+            }
+        })
+        .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
+        .collect();
+    if cleaned.is_empty() {
+        FALLBACK_PROJECT_NAME.to_string()
+    } else {
+        cleaned
+    }
+}
+
 /// Extracts subcommand args into a `HashMap<String, String>` for the handler.
 fn extract_args(
     sub_name: &str,
@@ -193,7 +254,7 @@ fn run_mcp_server() {
         .chunks(2)
         .find(|chunk| chunk.len() == 2 && chunk[0] == "--db")
         .map(|chunk| chunk[1].clone())
-        .unwrap_or_else(|| DEFAULT_DB_PATH.to_string());
+        .unwrap_or_else(|| format!("{DEFAULT_DB_DIR}/{FALLBACK_PROJECT_NAME}.lbug"));
 
     // Create the tokio runtime early — build_kit is async (AsyncKit migration)
     // and the same runtime is reused for MCP serve below.
@@ -265,7 +326,7 @@ mod tests {
                 sdforge::clap::Arg::new("db")
                     .long("db")
                     .global(true)
-                    .default_value(DEFAULT_DB_PATH),
+                    .default_value("./codenexus.lbug"),
             )
             .subcommand(sdforge::clap::Command::new("index"))
     }
@@ -305,6 +366,54 @@ mod tests {
         let sub = matches.subcommand_matches("index").unwrap();
         let result = extract_global_arg(&matches, sub, "unused", "fallback_value");
         assert_eq!(result, "fallback_value");
+    }
+
+    // --- default_db_path / sanitize_project_name ---
+
+    fn index_sub_with(name: Option<&str>, path: Option<&str>) -> sdforge::clap::Command {
+        let mut sub = sdforge::clap::Command::new("index")
+            .arg(sdforge::clap::Arg::new("name").long("name"))
+            .arg(sdforge::clap::Arg::new("path").long("path"));
+        if let Some(n) = name {
+            let v = n.to_string();
+            sub = sub.mut_arg("name", move |a| a.default_value(v));
+        }
+        if let Some(p) = path {
+            let v = p.to_string();
+            sub = sub.mut_arg("path", move |a| a.default_value(v));
+        }
+        sdforge::clap::Command::new("codenexus").subcommand(sub)
+    }
+
+    #[test]
+    fn default_db_path_uses_name_arg() {
+        let cmd = index_sub_with(Some("my-project"), None);
+        let m = cmd.get_matches_from(["codenexus", "index", "--name", "my-project"]);
+        let sub = m.subcommand_matches("index").unwrap();
+        assert_eq!(default_db_path(sub), ".codenexus/my-project.lbug");
+    }
+
+    #[test]
+    fn default_db_path_falls_back_to_path_dirname() {
+        let cmd = index_sub_with(None, Some("/home/user/CodeNexus"));
+        let m = cmd.get_matches_from(["codenexus", "index", "--path", "/home/user/CodeNexus"]);
+        let sub = m.subcommand_matches("index").unwrap();
+        assert_eq!(default_db_path(sub), ".codenexus/CodeNexus.lbug");
+    }
+
+    #[test]
+    fn default_db_path_falls_back_when_no_args() {
+        let cmd = index_sub_with(None, None);
+        let m = cmd.get_matches_from(["codenexus", "index"]);
+        let sub = m.subcommand_matches("index").unwrap();
+        assert_eq!(default_db_path(sub), ".codenexus/codenexus.lbug");
+    }
+
+    #[test]
+    fn sanitize_project_name_strips_path_separators() {
+        assert_eq!(sanitize_project_name("a/b\\c"), "a_b_c");
+        assert_eq!(sanitize_project_name("  "), "codenexus");
+        assert_eq!(sanitize_project_name("weird*name!"), "weirdname");
     }
 
     // --- extract_args ---
