@@ -92,3 +92,4 @@ __pycache__/
 
 # Tool lock files
 .mimocode/
+strix_runs/
