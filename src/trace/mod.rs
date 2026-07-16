@@ -24,6 +24,7 @@ pub use context::{collect_incoming, collect_outgoing, collect_processes, resolve
 pub use data_flow::DataFlowTracer;
 pub use error::{Result, TraceError};
 pub use facade::{apply_path_filter, PathFilter, TraceCycle, TraceEngine, TraceFacade, TraceType};
+pub use graph_loader::MAX_SUBGRAPH_NODES;
 pub use impact::{
     ImpactAnalyzer, ImpactConfig, ImpactNode, ImpactResult, RiskAssessment, RiskFactor, RiskLevel,
 };

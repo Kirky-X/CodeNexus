@@ -23,6 +23,12 @@ use crate::model::{Edge, EdgeType, Graph, Node, NodeLabel};
 use crate::storage::schema::{escape_cypher_string, escape_identifier};
 use crate::storage::{Repository, StorageError};
 
+/// Maximum number of nodes a single subgraph may contain before BFS expansion
+/// is truncated. Caps the N×M-label query cost on high-fanin symbols (the ~77s
+/// `impact` regression root cause). Aligned with `MAX_NODES_LIMIT`
+/// (`trace_upstream` analysis-layer cap); the two caps are independent.
+pub const MAX_SUBGRAPH_NODES: usize = 1000;
+
 /// Loads the subgraph reachable from `symbol` (within `depth` hops) from the
 /// database into an in-memory [`Graph`].
 ///
@@ -44,14 +50,19 @@ pub fn load_graph_for_symbol(
     db_path: &Path,
     symbol: &str,
     depth: usize,
-) -> Result<Graph, StorageError> {
+    max_nodes: usize,
+) -> Result<(Graph, bool), StorageError> {
     let repo = Repository::open(db_path)?;
     // Phase 1: find start node ids matching the symbol.
     let start_ids = find_symbol_node_ids(&repo, symbol)?;
     if start_ids.is_empty() {
         // Return an empty graph; the trace facade will surface SymbolNotFound.
-        return Ok(Graph::new());
+        return Ok((Graph::new(), false));
     }
+    // `truncated` is set true only when BFS hits the `max_nodes` cap; callers
+    // surface it so a capped subgraph is never mistaken for a complete one
+    // (rule 12: failures must be explicit, not hidden behind a default).
+    let mut truncated = false;
 
     // Phase 2: BFS-expand to collect reachable node ids within `depth` hops.
     //
@@ -73,7 +84,7 @@ pub fn load_graph_for_symbol(
     if start_ids.len() == 1 {
         let mut frontier: Vec<String> = start_ids.clone();
         let mut seen_edges: HashSet<(String, String, EdgeType)> = HashSet::new();
-        for _ in 0..depth {
+        'bfs: for _ in 0..depth {
             if frontier.is_empty() {
                 break;
             }
@@ -83,10 +94,20 @@ pub fn load_graph_for_symbol(
                 let outgoing = fetch_edges_for_node(&repo, node_id, EdgeDirection::Either)?;
                 for edge in outgoing {
                     if !visited.contains(&edge.target) {
+                        if visited.len() >= max_nodes {
+                            // Cap reached: stop before inserting so visited
+                            // never exceeds max_nodes; remaining neighbors dropped.
+                            truncated = true;
+                            break 'bfs;
+                        }
                         visited.insert(edge.target.clone());
                         next_frontier.push(edge.target.clone());
                     }
                     if !visited.contains(&edge.source) {
+                        if visited.len() >= max_nodes {
+                            truncated = true;
+                            break 'bfs;
+                        }
                         visited.insert(edge.source.clone());
                         next_frontier.push(edge.source.clone());
                     }
@@ -100,17 +121,19 @@ pub fn load_graph_for_symbol(
         }
     }
 
-    // Phase 3: materialize nodes for every visited id.
+    // Phase 3: batch-materialize nodes for every visited id with one
+    // `WHERE n.id IN [...]` query per label. Replaces the per-id
+    // `fetch_node_by_id` N+1 (N × |NodeLabel::all()| round-trips — the ~77s
+    // `impact` regression root cause on a 5034-node subgraph).
     let mut graph = Graph::new();
-    for id in &visited {
-        if let Some(node) = fetch_node_by_id(&repo, id)? {
-            graph.add_node(node);
-        }
+    let visited_ids: Vec<String> = visited.iter().cloned().collect();
+    for node in fetch_nodes_by_ids(&repo, &visited_ids)? {
+        graph.add_node(node);
     }
     for edge in edges {
         graph.add_edge(edge);
     }
-    Ok(graph)
+    Ok((graph, truncated))
 }
 
 /// Direction filter for edge fetching.
@@ -149,12 +172,23 @@ fn find_symbol_node_ids(repo: &Repository, symbol: &str) -> Result<Vec<String>, 
     Ok(ids)
 }
 
-/// Fetches a single node by id, trying every node label.
-fn fetch_node_by_id(repo: &Repository, id: &str) -> Result<Option<Node>, StorageError> {
-    let escaped = escape_cypher_string(id);
+/// Batch-fetches nodes by id, issuing one `WHERE n.id IN [...]` query per node
+/// label. Replaces the per-id `fetch_node_by_id` N+1: a 5034-node subgraph
+/// previously cost 5034 × |NodeLabel::all()| round-trips; now it costs
+/// |NodeLabel::all()| (~17), independent of the id count.
+fn fetch_nodes_by_ids(repo: &Repository, ids: &[String]) -> Result<Vec<Node>, StorageError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let id_list = ids
+        .iter()
+        .map(|id| format!("'{}'", escape_cypher_string(id)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut nodes = Vec::new();
     for label in NodeLabel::all() {
         let table = escape_identifier(label.table_name());
-        let cypher = format!("MATCH (n:{table}) WHERE n.id = '{escaped}' RETURN n.*;");
+        let cypher = format!("MATCH (n:{table}) WHERE n.id IN [{id_list}] RETURN n.*;");
         if let Ok((raw_columns, rows)) = repo.connection().query_with_columns(&cypher) {
             // `RETURN n.*` yields column names prefixed with `n.` (e.g. `n.id`);
             // strip the prefix so `row_to_node` can look up fields by bare name.
@@ -162,14 +196,14 @@ fn fetch_node_by_id(repo: &Repository, id: &str) -> Result<Option<Node>, Storage
                 .iter()
                 .map(|c| c.strip_prefix("n.").unwrap_or(c).to_string())
                 .collect();
-            if let Some(row) = rows.into_iter().next() {
+            for row in rows {
                 if let Some(node) = row_to_node(&columns, &row, label) {
-                    return Ok(Some(node));
+                    nodes.push(node);
                 }
             }
         }
     }
-    Ok(None)
+    Ok(nodes)
 }
 
 /// Fetches all edges where `node_id` is the source or target.
@@ -443,7 +477,8 @@ mod tests {
     fn load_graph_for_symbol_finds_node() {
         let db = fresh_db_path();
         seed_call_graph(&db);
-        let graph = load_graph_for_symbol(&db, "a", 3).expect("load");
+        let (graph, _truncated) =
+            load_graph_for_symbol(&db, "a", 3, MAX_SUBGRAPH_NODES).expect("load");
         // Should have loaded at least the start node and its neighbor.
         assert!(graph.node_count() >= 1, "graph should have nodes");
     }
@@ -452,7 +487,8 @@ mod tests {
     fn load_graph_for_symbol_missing_returns_empty() {
         let db = fresh_db_path();
         seed_call_graph(&db);
-        let graph = load_graph_for_symbol(&db, "nonexistent", 3).expect("load");
+        let (graph, _truncated) =
+            load_graph_for_symbol(&db, "nonexistent", 3, MAX_SUBGRAPH_NODES).expect("load");
         assert_eq!(graph.node_count(), 0, "missing symbol → empty graph");
     }
 
@@ -460,7 +496,8 @@ mod tests {
     fn load_graph_for_symbol_zero_depth_loads_start_node_only() {
         let db = fresh_db_path();
         seed_call_graph(&db);
-        let graph = load_graph_for_symbol(&db, "a", 0).expect("load");
+        let (graph, _truncated) =
+            load_graph_for_symbol(&db, "a", 0, MAX_SUBGRAPH_NODES).expect("load");
         // depth 0 → only the start node, no edges expanded.
         assert!(graph.node_count() >= 1);
     }
@@ -469,7 +506,8 @@ mod tests {
     fn load_graph_for_symbol_loads_edges() {
         let db = fresh_db_path();
         seed_call_graph(&db);
-        let graph = load_graph_for_symbol(&db, "a", 3).expect("load");
+        let (graph, _truncated) =
+            load_graph_for_symbol(&db, "a", 3, MAX_SUBGRAPH_NODES).expect("load");
         // Should have at least one edge (a -> b).
         assert!(graph.edge_count() >= 1, "graph should have edges");
         // The edge should be a CALLS edge.
@@ -490,7 +528,8 @@ mod tests {
     fn load_graph_for_symbol_deduplicates_edges() {
         let db = fresh_db_path();
         seed_call_graph(&db);
-        let graph = load_graph_for_symbol(&db, "a", 3).expect("load");
+        let (graph, _truncated) =
+            load_graph_for_symbol(&db, "a", 3, MAX_SUBGRAPH_NODES).expect("load");
         // Count CALLS edges between f_a and f_b — must be exactly 1.
         let dup_count = graph
             .edges
@@ -532,13 +571,57 @@ mod tests {
     }
 
     #[test]
-    fn fetch_node_by_id_returns_none_for_missing_id() {
-        // Covers the `Ok(None)` fall-through in fetch_node_by_id (line 164).
+    fn fetch_nodes_by_ids_hits_multiple_labels() {
+        // Single batch call returns nodes across multiple labels (Function +
+        // Struct), proving the N+1 per-id loop is gone (one query per label).
+        let db = fresh_db_path();
+        let conn = StorageConnection::open(&db).expect("open");
+        conn.init_schema().expect("init_schema");
+        conn.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create f_a");
+        conn.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create f_b");
+        conn.execute("CREATE (:Struct {id: 's_x', project: 'demo', name: 'X', qualifiedName: 'demo.X', filePath: '/src/x.rs', startLine: 1, endLine: 10, isExported: false, docstring: '', content: '', parentQn: ''});").expect("create s_x");
+        let repo = Repository::open(&db).expect("open");
+        let nodes =
+            fetch_nodes_by_ids(&repo, &["f_a".into(), "f_b".into(), "s_x".into()]).expect("fetch");
+        let ids: HashSet<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains("f_a"), "f_a (Function) hit in batch");
+        assert!(ids.contains("f_b"), "f_b (Function) hit in batch");
+        assert!(ids.contains("s_x"), "s_x (Struct) hit in same batch call");
+        assert_eq!(nodes.len(), 3, "3 nodes from 2 labels in one call");
+    }
+
+    #[test]
+    fn fetch_nodes_by_ids_empty_input_returns_empty() {
         let db = fresh_db_path();
         seed_call_graph(&db);
         let repo = Repository::open(&db).expect("open");
-        let node = fetch_node_by_id(&repo, "nonexistent_id").expect("fetch");
-        assert!(node.is_none(), "should return None for missing id");
+        let nodes = fetch_nodes_by_ids(&repo, &[]).expect("fetch");
+        assert!(nodes.is_empty(), "empty id slice → no query, no nodes");
+    }
+
+    #[test]
+    fn load_graph_caps_visited_at_max_nodes() {
+        // Linear chain a -> b -> c. With max_nodes=2, BFS must stop after a,b
+        // and never materialize c; `truncated` must be true.
+        let db = fresh_db_path();
+        let conn = StorageConnection::open(&db).expect("open");
+        conn.init_schema().expect("init_schema");
+        conn.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'a', qualifiedName: 'demo.a', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        conn.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
+        conn.execute("CREATE (:Function {id: 'f_c', project: 'demo', name: 'c', qualifiedName: 'demo.c', filePath: '/src/c.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create c");
+        conn.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, reason: '', startLine: 2, project: 'demo'});").expect("edge a->b");
+        conn.execute("CREATE (:CodeRelation {id: 'e2', source: 'f_b', target: 'f_c', type: 'CALLS', confidence: 1.0, reason: '', startLine: 2, project: 'demo'});").expect("edge b->c");
+        let (graph, truncated) = load_graph_for_symbol(&db, "a", 3, 2).expect("load");
+        assert!(truncated, "BFS must report truncation at max_nodes=2");
+        assert!(
+            graph.node_count() <= 2,
+            "visited capped at max_nodes, got {}",
+            graph.node_count()
+        );
+        assert!(
+            !graph.nodes.values().any(|n| n.id == "f_c"),
+            "f_c beyond the cap must not be materialized"
+        );
     }
 
     /// Regression: an ambiguous short name (multiple start nodes) must NOT
@@ -559,7 +642,8 @@ mod tests {
         conn.execute("CREATE (:CodeRelation {id: 'e_a', source: 'dup_a', target: 'nb_a', type: 'CALLS', confidence: 1.0, reason: '', startLine: 2, project: 'demo'});").expect("create edge a");
         conn.execute("CREATE (:CodeRelation {id: 'e_b', source: 'dup_b', target: 'nb_b', type: 'CALLS', confidence: 1.0, reason: '', startLine: 2, project: 'demo'});").expect("create edge b");
 
-        let graph = load_graph_for_symbol(&db, "dup", 3).expect("load");
+        let (graph, _truncated) =
+            load_graph_for_symbol(&db, "dup", 3, MAX_SUBGRAPH_NODES).expect("load");
         // Both ambiguous start nodes materialized.
         let dup_count = graph.nodes.values().filter(|n| n.name == "dup").count();
         assert_eq!(

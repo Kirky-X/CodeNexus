@@ -14,6 +14,8 @@ use crate::service::error::CodeNexusError;
 use crate::service::error::{kit_not_initialized, to_api_error};
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::runtime::kit;
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+use crate::trace::MAX_SUBGRAPH_NODES;
 use crate::trace::{
     apply_path_filter, CallGraphTracer, PathFilter, TraceCycle, TraceEdge, TraceNode, TracePath,
     TraceResult, TraceType,
@@ -183,7 +185,9 @@ pub fn run_trace(
 
     let needs_graph = detect_cycles || cross_service;
     let graph = if needs_graph {
-        Some(trace_engine.load_graph(symbol, depth as usize)?)
+        let (g, _truncated) =
+            trace_engine.load_graph(symbol, depth as usize, MAX_SUBGRAPH_NODES)?;
+        Some(g)
     } else {
         None
     };

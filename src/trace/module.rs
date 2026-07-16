@@ -47,7 +47,7 @@ use crate::storage::StorageError;
 use super::capability::TraceEngine;
 use super::error::TraceError;
 use super::facade::{PathFilter, TraceFacade, TraceType};
-use super::graph_loader::load_graph_for_symbol;
+use super::graph_loader::{load_graph_for_symbol, MAX_SUBGRAPH_NODES};
 use super::TraceResult;
 
 use serde::{Deserialize, Serialize};
@@ -208,7 +208,8 @@ impl TraceEngine for TraceCapability {
     ) -> std::result::Result<TraceResult, TraceError> {
         // Load the subgraph reachable from `symbol` within `depth` hops.
         // StorageError → TraceError::Storage via the `From` impl in error.rs.
-        let graph = load_graph_for_symbol(&self.db_path, symbol, depth)?;
+        let (graph, _truncated) =
+            load_graph_for_symbol(&self.db_path, symbol, depth, MAX_SUBGRAPH_NODES)?;
         let facade = TraceFacade::new(&graph);
         facade.trace(symbol, trace_type, depth)
     }
@@ -217,13 +218,20 @@ impl TraceEngine for TraceCapability {
         &self,
         symbol: &str,
         depth: usize,
-    ) -> std::result::Result<crate::model::Graph, TraceError> {
+        max_nodes: usize,
+    ) -> std::result::Result<(crate::model::Graph, bool), TraceError> {
         // Delegate to the shared graph loader (Task 2.10 graph_loader.rs).
         // `impact_cmd::run` uses this to obtain the raw Graph for
         // ImpactAnalyzer, which cannot be expressed via `trace()` (that
-        // returns a TraceResult, not the graph itself).
+        // returns a TraceResult, not the graph itself). The returned `bool` is
+        // the `max_nodes` truncation flag surfaced to the impact output.
         // StorageError → TraceError::Storage via the `From` impl in error.rs.
-        Ok(load_graph_for_symbol(&self.db_path, symbol, depth)?)
+        Ok(load_graph_for_symbol(
+            &self.db_path,
+            symbol,
+            depth,
+            max_nodes,
+        )?)
     }
 }
 

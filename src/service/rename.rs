@@ -28,6 +28,9 @@ use crate::storage::schema::{escape_cypher_string, escape_identifier};
 use crate::trace::TraceError;
 
 #[cfg(feature = "cli")]
+use crate::trace::MAX_SUBGRAPH_NODES;
+
+#[cfg(feature = "cli")]
 use sdforge::forge;
 #[cfg(feature = "cli")]
 use sdforge::prelude::ApiError;
@@ -342,13 +345,16 @@ async fn rename(from: String, to: String, path: String, apply: bool) -> Result<(
     let trace = kit
         .require::<TraceModule>()
         .map_err(|e| wrap_kit_error("Failed to resolve trace capability", e))?;
-    let graph = trace.load_graph(&from, 2).map_err(|e| match e {
-        TraceError::SymbolNotFound(s) => ApiError::NotFound {
-            resource: "symbol".to_string(),
-            resource_id: Some(s),
-        },
-        other => wrap_error("Failed to load graph", other),
-    })?;
+    let (graph, _truncated) =
+        trace
+            .load_graph(&from, 2, MAX_SUBGRAPH_NODES)
+            .map_err(|e| match e {
+                TraceError::SymbolNotFound(s) => ApiError::NotFound {
+                    resource: "symbol".to_string(),
+                    resource_id: Some(s),
+                },
+                other => wrap_error("Failed to load graph", other),
+            })?;
     let start_id = resolve_start_id(&graph, &from)
         .map_err(|e| match e {
             amb @ TraceError::AmbiguousSymbol { .. } => ApiError::InvalidInput {
@@ -453,7 +459,7 @@ mod tests {
         }
 
         let trace = kit.require::<TraceModule>()?;
-        let graph = trace.load_graph(from, 2)?;
+        let (graph, _truncated) = trace.load_graph(from, 2, MAX_SUBGRAPH_NODES)?;
         let start_id = resolve_start_id(&graph, from)?
             .ok_or_else(|| TraceError::SymbolNotFound(from.to_string()))?;
         let symbol_node = graph

@@ -19,6 +19,9 @@ use crate::trace::context::{
 };
 use crate::trace::types::{ContextOutput, SymbolNodeOutput};
 
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+use crate::trace::MAX_SUBGRAPH_NODES;
+
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::forge;
 #[cfg(any(feature = "cli", feature = "mcp"))]
@@ -32,7 +35,8 @@ pub fn run_context(
     depth: u32,
 ) -> Result<ContextOutput, CodeNexusError> {
     let trace_engine = kit.require::<TraceModule>()?;
-    let graph = trace_engine.load_graph(symbol, depth as usize)?;
+    let (graph, _truncated) =
+        trace_engine.load_graph(symbol, depth as usize, MAX_SUBGRAPH_NODES)?;
     let start_id = resolve_start_id(&graph, symbol)
         .ok_or_else(|| CodeNexusError::InvalidInput(format!("symbol not found: {symbol}")))?;
     let symbol_node = graph.get_node(&start_id).ok_or_else(|| {

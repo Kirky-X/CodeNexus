@@ -19,7 +19,7 @@ use crate::service::runtime::kit;
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::service::trace::find_start_node_id;
 #[cfg(any(feature = "cli", feature = "mcp", test))]
-use crate::trace::{ImpactAnalyzer, ImpactConfig, ImpactNode, RiskAssessment};
+use crate::trace::{ImpactAnalyzer, ImpactConfig, ImpactNode, RiskAssessment, MAX_SUBGRAPH_NODES};
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::forge;
@@ -40,10 +40,19 @@ pub struct ImpactOutput {
     pub risk_assessment: Option<RiskAssessment>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub affected: Vec<ImpactNode>,
+    /// True when `load_graph` hit the `MAX_SUBGRAPH_NODES` cap and returned a
+    /// truncated subgraph. Always serialized (no skip) so incompleteness is
+    /// explicit — rule 12: never hide a degraded result behind a default.
+    pub truncated: bool,
 }
 
 #[cfg(any(feature = "cli", feature = "mcp", test))]
-fn impact_output(symbol: String, depth: u32, graph: crate::model::Graph) -> ImpactOutput {
+fn impact_output(
+    symbol: String,
+    depth: u32,
+    graph: crate::model::Graph,
+    truncated: bool,
+) -> ImpactOutput {
     let nodes: Vec<Value> = graph
         .nodes
         .values()
@@ -63,6 +72,7 @@ fn impact_output(symbol: String, depth: u32, graph: crate::model::Graph) -> Impa
         depth,
         risk_assessment: None,
         affected: vec![],
+        truncated,
     }
 }
 
@@ -130,7 +140,7 @@ pub fn run_impact(
     if enhanced {
         let config = build_impact_config(edge_types, max_depth, include_tests);
         let load_depth = depth.max(config.max_depth) as usize;
-        let graph = trace_engine.load_graph(symbol, load_depth)?;
+        let (graph, truncated) = trace_engine.load_graph(symbol, load_depth, MAX_SUBGRAPH_NODES)?;
 
         let effective_depth = config.max_depth;
         let start_id = find_start_node_id(&graph, symbol);
@@ -143,13 +153,14 @@ pub fn run_impact(
             None => (vec![], None),
         };
 
-        let mut output = impact_output(symbol.to_string(), effective_depth, graph);
+        let mut output = impact_output(symbol.to_string(), effective_depth, graph, truncated);
         output.affected = affected;
         output.risk_assessment = risk_assessment;
         Ok(output)
     } else {
-        let graph = trace_engine.load_graph(symbol, depth as usize)?;
-        Ok(impact_output(symbol.to_string(), depth, graph))
+        let (graph, truncated) =
+            trace_engine.load_graph(symbol, depth as usize, MAX_SUBGRAPH_NODES)?;
+        Ok(impact_output(symbol.to_string(), depth, graph, truncated))
     }
 }
 
@@ -242,6 +253,7 @@ mod tests {
             edges: vec![],
             risk_assessment: None,
             affected: vec![],
+            truncated: false,
         };
         let json = serde_json::to_string(&output).unwrap();
         assert!(json.contains("\"symbol\":\"demo.foo\""));
@@ -250,6 +262,8 @@ mod tests {
         assert!(json.contains("\"edge_count\":0"));
         assert!(!json.contains("risk_assessment"));
         assert!(!json.contains("affected"));
+        // truncated is always serialized (no skip), even when false.
+        assert!(json.contains("\"truncated\":false"));
     }
 
     #[test]
@@ -463,6 +477,7 @@ mod tests {
         assert_eq!(output.node_count, 0);
         assert!(output.affected.is_empty());
         assert!(output.risk_assessment.is_none());
+        assert!(!output.truncated, "empty subgraph must not be truncated");
     }
 
     #[test]
@@ -487,6 +502,7 @@ mod tests {
                 edge_type: EdgeType::Calls,
                 depth: 1,
             }],
+            truncated: true,
         };
         let json = serde_json::to_string(&output).unwrap();
         assert!(json.contains("\"risk_assessment\""));
