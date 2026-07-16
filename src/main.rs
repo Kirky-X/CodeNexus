@@ -191,11 +191,16 @@ fn extract_global_arg(
 /// its `path` arg, otherwise [`FALLBACK_PROJECT_NAME`]. The project component
 /// is sanitized so it is safe to use as a single filesystem path segment.
 fn default_db_path(sub: &sdforge::clap::ArgMatches) -> String {
+    // try_get_one (not get_one): commands like `search`/`impact`/`context` do
+    // not define a `name`/`path` arg, and clap's get_one panics on an
+    // undefined arg id. Fall back gracefully instead.
     let raw_project = sub
-        .get_one::<String>("name")
+        .try_get_one::<String>("name")
+        .ok()
+        .flatten()
         .cloned()
         .or_else(|| {
-            sub.get_one::<String>("path").map(|p| {
+            sub.try_get_one::<String>("path").ok().flatten().map(|p| {
                 std::path::Path::new(p)
                     .file_name()
                     .and_then(|n| n.to_str())
@@ -412,6 +417,19 @@ mod tests {
         let cmd = index_sub_with(None, None);
         let m = cmd.get_matches_from(["codenexus", "index"]);
         let sub = m.subcommand_matches("index").unwrap();
+        assert_eq!(default_db_path(sub), ".codenexus/codenexus.lbug");
+    }
+
+    #[test]
+    fn default_db_path_does_not_panic_when_subcommand_has_no_name_arg() {
+        // Real commands like `search`/`impact`/`context` do not define a `name`
+        // or `path` arg. default_db_path must fall back to the fallback project
+        // name instead of panicking. Regression: clap `get_one` panics on an
+        // arg id that the Command never defined.
+        let sub_cmd = sdforge::clap::Command::new("search");
+        let cmd = sdforge::clap::Command::new("codenexus").subcommand(sub_cmd);
+        let m = cmd.get_matches_from(["codenexus", "search"]);
+        let sub = m.subcommand_matches("search").unwrap();
         assert_eq!(default_db_path(sub), ".codenexus/codenexus.lbug");
     }
 
