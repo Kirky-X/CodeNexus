@@ -18,6 +18,17 @@ use tracing::warn;
 use super::error::{Result, StorageError};
 use super::schema::all_init_ddl;
 
+// Pin the upstream `Send + Sync` bound on `lbug::Database`. `StorageCapability`
+// lends out shared `&StorageConnection` (→ `&Database`) across threads via an
+// `RwLock`; if a future lbug release drops the `Sync` impl, this fails to
+// compile instead of silently introducing a data race at runtime.
+const _: () = {
+    fn _assert_database_send_sync<T: Send + Sync>() {}
+    fn _check() {
+        _assert_database_send_sync::<Database>();
+    }
+};
+
 /// Report of schema initialization outcome.
 ///
 /// Returned by [`StorageConnection::init_schema`] to make skipped DDL
@@ -839,5 +850,186 @@ mod tests {
         let json = value_to_json(val);
         let obj = json.as_object().expect("should be object");
         assert_eq!(obj.get("42"), Some(&serde_json::json!(100)));
+    }
+
+    // -------------------------------------------------------------------------
+    // 并发引擎能力探针（ladybug-concurrency-analysis §4 步骤 1）
+    // -------------------------------------------------------------------------
+    // 目的：实证 lbug 0.18.2 在 codenexus 现有「Arc/共享 &StorageConnection +
+    // 每操作新建短连接」模式下的真实并发行为，为「去掉 Mutex<Repository> 全局
+    // 锁」的改造提供确定性依据（Rule 5：别猜）。三个探针分别回答：
+    //   1. 读读并发是否安全（去锁的收益前提）
+    //   2. 写写并发报错文案是什么（验证 with_retry 的 "locked"/"Lock" 匹配
+    //      在 0.18.2 是否仍成立 —— 潜在 bug）
+    //   3. 读写混合是否互斥（MVCC：读不阻塞写、写不阻塞读）
+    // 全部 #[ignore]，手动跑：
+    //   cargo test --lib concurrency_probe -- --ignored --nocapture
+    // -------------------------------------------------------------------------
+
+    /// 探针 1：N 线程并发只读查询，验证多连接共享同一 Database 读并发是否安全。
+    #[test]
+    #[ignore = "并发探针：cargo test --lib concurrency_probe_read_read -- --ignored --nocapture"]
+    fn concurrency_probe_read_read() {
+        let conn = fresh_conn();
+        conn.init_schema().expect("init_schema");
+        conn.execute("CREATE (:Project {id: 'p1', name: 'demo', rootPath: '/', language: 'rust', fileCount: 0, indexedAt: 0});")
+            .expect("seed");
+
+        const THREADS: usize = 8;
+        const ITERS: usize = 100;
+        let errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+        std::thread::scope(|s| {
+            let conn = &conn;
+            for tid in 0..THREADS {
+                let errors = &errors;
+                s.spawn(move || {
+                    for i in 0..ITERS {
+                        if let Err(e) = conn.query("MATCH (p:Project) RETURN p.name AS name;") {
+                            errors.lock().unwrap().push(format!("t{tid} i{i}: {e}"));
+                        }
+                    }
+                });
+            }
+        });
+
+        let errs = errors.into_inner().unwrap();
+        println!(
+            "[探针1 读读] {} 线程 × {} 次 = {} 次读, {} 次错误",
+            THREADS,
+            ITERS,
+            THREADS * ITERS,
+            errs.len()
+        );
+        for e in errs.iter().take(10) {
+            println!("    {e}");
+        }
+        assert!(
+            errs.is_empty(),
+            "并发读读不应报错；若报错说明 Database 共享短连接在多线程下不安全"
+        );
+    }
+
+    /// 探针 2：N 线程并发写（CREATE），验证并发写是否报错、报错文案是否仍能被
+    /// `with_retry` 的 "locked"/"Lock" 匹配命中。
+    #[test]
+    #[ignore = "并发探针：cargo test --lib concurrency_probe_write_write -- --ignored --nocapture"]
+    fn concurrency_probe_write_write() {
+        let conn = fresh_conn();
+        conn.init_schema().expect("init_schema");
+
+        const THREADS: usize = 8;
+        const ITERS: usize = 50;
+        let errors: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        let ok = std::sync::atomic::AtomicUsize::new(0);
+
+        std::thread::scope(|s| {
+            let conn = &conn;
+            for tid in 0..THREADS {
+                let errors = &errors;
+                let ok = &ok;
+                s.spawn(move || {
+                    for i in 0..ITERS {
+                        let q = format!(
+                            "CREATE (:Project {{id: 't{tid}_{i}', name: 'n', rootPath: '/', language: 'rust', fileCount: 0, indexedAt: 0}});"
+                        );
+                        match conn.execute(&q) {
+                            Ok(()) => {
+                                ok.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            Err(e) => errors.lock().unwrap().push(e.to_string()),
+                        }
+                    }
+                });
+            }
+        });
+
+        let errs = errors.into_inner().unwrap();
+        let ok_n = ok.load(std::sync::atomic::Ordering::Relaxed);
+        // 按「是否被 with_retry 文案匹配」分类错误，暴露潜在 bug。
+        let mut matched = 0usize;
+        let mut unmatched: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for e in &errs {
+            let low = e.to_lowercase();
+            if low.contains("locked") || e.contains("Lock") {
+                matched += 1;
+            } else {
+                *unmatched.entry(e.clone()).or_default() += 1;
+            }
+        }
+        println!(
+            "[探针2 写写] {} 线程 × {} 次 = {} 次写 → {} 成功, {} 失败",
+            THREADS,
+            ITERS,
+            THREADS * ITERS,
+            ok_n,
+            errs.len()
+        );
+        println!(
+            "    失败中: {matched} 条命中 with_retry (locked/Lock), {} 条未命中",
+            unmatched.values().sum::<usize>()
+        );
+        for (k, v) in &unmatched {
+            println!("    [未命中 {v}x] {k}");
+        }
+        // 此探针只观察，不断言 —— 并发写报错是 lbug 的预期行为（写串行）。
+    }
+
+    /// 探针 3：1 写线程 + N 读线程并发，验证 MVCC（读写是否互斥）。
+    #[test]
+    #[ignore = "并发探针：cargo test --lib concurrency_probe_read_write -- --ignored --nocapture"]
+    fn concurrency_probe_read_write() {
+        let conn = fresh_conn();
+        conn.init_schema().expect("init_schema");
+        conn.execute("CREATE (:Project {id: 'p1', name: 'demo', rootPath: '/', language: 'rust', fileCount: 0, indexedAt: 0});")
+            .expect("seed");
+
+        let read_errs: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        let write_errs: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+        std::thread::scope(|s| {
+            // 1 写线程持续写。
+            s.spawn(|| {
+                for i in 0..200u32 {
+                    let q = format!(
+                        "CREATE (:Project {{id: 'w{i}', name: 'n', rootPath: '/', language: 'rust', fileCount: 0, indexedAt: 0}});"
+                    );
+                    if let Err(e) = conn.execute(&q) {
+                        write_errs.lock().unwrap().push(e.to_string());
+                    }
+                }
+            });
+            // 7 读线程持续读。
+            for _ in 0..7 {
+                let read_errs = &read_errs;
+                s.spawn(|| {
+                    for _ in 0..200 {
+                        if let Err(e) = conn.query("MATCH (p:Project) RETURN p.name AS name;") {
+                            read_errs.lock().unwrap().push(e.to_string());
+                        }
+                    }
+                });
+            }
+        });
+
+        let r = read_errs.into_inner().unwrap();
+        let w = write_errs.into_inner().unwrap();
+        println!(
+            "[探针3 读写混合] 1 写(200) + 7 读(200) → 读错误 {}, 写错误 {}",
+            r.len(),
+            w.len()
+        );
+        for e in r.iter().take(5) {
+            println!("    读错误: {e}");
+        }
+        for e in w.iter().take(5) {
+            println!("    写错误: {e}");
+        }
+        // 断言：读不应被写阻塞（MVCC）。写报错可接受（探针2 已观察）。
+        assert!(
+            r.is_empty(),
+            "读不应被写阻塞；若读报错说明 lbug 读写互斥，去锁收益受限"
+        );
     }
 }

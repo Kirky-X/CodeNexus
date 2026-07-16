@@ -11,11 +11,15 @@
 //! # Why operations, not a connection borrow
 //!
 //! [`StorageConnection`] is intentionally `!Clone` and owns the underlying
-//! LadybugDB [`Database`](lbug::Database). A DB handle is not guaranteed to be
-//! `Sync`, so the capability exposes **operations** (each taking `&self`)
-//! rather than a `&StorageConnection` borrow. This lets the concrete impl use
-//! interior mutability (e.g. `Mutex<StorageConnection>`) to satisfy
-//! `Send + Sync` without constraining the storage layer's thread-safety.
+//! LadybugDB [`Database`](lbug::Database). The capability exposes
+//! **operations** (each taking `&self`) rather than a `&StorageConnection`
+//! borrow so the concrete impl can layer its own synchronization on top. The
+//! current impl ([`StorageCapability`](super::module)) wraps the repository in
+//! an [`RwLock`](std::sync::RwLock): reads take a shared guard (concurrent
+//! reads no longer serialize), writes take an exclusive guard. This relies on
+//! `lbug::Database: Send + Sync` (verified empirically — see
+//! `temp/ladybug-concurrency-optimization.md`); a compile-time assertion in
+//! `connection.rs` pins that bound so an upstream regression fails to build.
 //!
 //! [`StorageConnection`]: super::StorageConnection
 //! [`Repository`]: super::Repository

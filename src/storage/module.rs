@@ -9,20 +9,22 @@
 //! into the unified Kit registry as `Arc<dyn Storage>` under
 //! [`StorageModule`](crate::kit::StorageModule).
 //!
-//! # Interior mutability
+//! # Concurrency
 //!
-//! [`Repository`] owns a [`StorageConnection`] which is intentionally
-//! `!Clone` and whose underlying [`lbug::Database`] is not guaranteed to be
-//! `Sync`. To satisfy the `Send + Sync` bound on [`dyn Storage`], the
-//! concrete impl ([`StorageCapability`]) wraps the repository in a
-//! [`Mutex`] — every operation locks, delegates, and unlocks. This is the
-//! design documented in [`capability.rs`](super::capability).
+//! [`Repository`] owns a [`StorageConnection`] whose underlying
+//! [`lbug::Database`] is `Send + Sync` (verified empirically: 8 threads × 100
+//! concurrent reads return zero errors; lbug 0.18.2 serializes writes at the
+//! engine level — "Only one write transaction at a time is allowed").
+//! [`StorageCapability`] wraps the repository in an [`RwLock`]: read methods
+//! take a shared `.read()` guard so concurrent queries no longer serialize,
+//! write methods take an exclusive `.write()` guard. Probe data in
+//! `temp/ladybug-concurrency-analysis.md`.
 
 use std::any::TypeId;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use crate::kit::{AsyncAutoBuilder, AsyncKit, ModuleMeta};
 
@@ -110,7 +112,7 @@ impl StorageModule {
     pub(crate) fn build_cap(config: &StorageConfig) -> Result<Arc<dyn Storage>, StorageError> {
         let repo = Repository::open(&config.db_path)?;
         Ok(Arc::new(StorageCapability {
-            inner: Mutex::new(repo),
+            inner: RwLock::new(repo),
         }))
     }
 }
@@ -120,43 +122,46 @@ impl StorageModule {
 // ---------------------------------------------------------------------------
 
 /// Concrete implementation of [`dyn Storage`] wrapping a [`Repository`] behind
-/// a [`Mutex`].
+/// an [`RwLock`].
 ///
-/// The mutex provides the interior mutability needed to satisfy `Send + Sync`
-/// regardless of `lbug::Database`'s thread-safety (see
-/// [`capability.rs`](super::capability) design note).
+/// Reads (`query`, `get_*`, `list_*`, `query_functions`) take a shared
+/// `.read()` guard so concurrent reads no longer serialize. Writes
+/// (`save_*`, `delete_*`, `init_schema`, `execute`) take an exclusive
+/// `.write()` guard. `execute` is classified as a write because its Cypher is
+/// opaque — two concurrent executes that both issue writes would hit lbug's
+/// single-writer constraint.
 struct StorageCapability {
-    inner: Mutex<Repository>,
+    inner: RwLock<Repository>,
 }
 
 impl Storage for StorageCapability {
     fn init_schema(&self) -> Result<SchemaInitReport, StorageError> {
         self.inner
-            .lock()
-            .expect("storage lock poisoned")
+            .write()
+            .expect("storage write lock poisoned")
             .init_schema()
     }
 
     fn execute(&self, cypher: &str) -> Result<(), StorageError> {
         self.inner
-            .lock()
-            .expect("storage lock poisoned")
+            .write()
+            .expect("storage write lock poisoned")
             .connection()
             .execute(cypher)
     }
 
     fn query(&self, cypher: &str) -> Result<Vec<Vec<serde_json::Value>>, StorageError> {
         self.inner
-            .lock()
-            .expect("storage lock poisoned")
+            .read()
+            .expect("storage read lock poisoned")
             .connection()
             .query(cypher)
     }
 
     fn save_project(&self, node: &crate::model::Node) -> Result<(), StorageError> {
         self.inner
-            .lock()
-            .expect("storage lock poisoned")
+            .write()
+            .expect("storage write lock poisoned")
             .save_project(node)
     }
 
@@ -166,36 +171,36 @@ impl Storage for StorageCapability {
         label: crate::model::NodeLabel,
     ) -> Result<(), StorageError> {
         self.inner
-            .lock()
-            .expect("storage lock poisoned")
+            .write()
+            .expect("storage write lock poisoned")
             .save_nodes(nodes, label)
     }
 
     fn save_edges(&self, edges: &[crate::model::Edge]) -> Result<(), StorageError> {
         self.inner
-            .lock()
-            .expect("storage lock poisoned")
+            .write()
+            .expect("storage write lock poisoned")
             .save_edges(edges)
     }
 
     fn get_project(&self, id: &str) -> Result<Option<ProjectRecord>, StorageError> {
         self.inner
-            .lock()
-            .expect("storage lock poisoned")
+            .read()
+            .expect("storage read lock poisoned")
             .get_project(id)
     }
 
     fn list_projects(&self) -> Result<Vec<ProjectRecord>, StorageError> {
         self.inner
-            .lock()
-            .expect("storage lock poisoned")
+            .read()
+            .expect("storage read lock poisoned")
             .list_projects()
     }
 
     fn query_functions(&self, project: &str) -> Result<Vec<FunctionRecord>, StorageError> {
         self.inner
-            .lock()
-            .expect("storage lock poisoned")
+            .read()
+            .expect("storage read lock poisoned")
             .query_functions(project)
     }
 
@@ -205,29 +210,29 @@ impl Storage for StorageCapability {
         project: &str,
     ) -> Result<Option<String>, StorageError> {
         self.inner
-            .lock()
-            .expect("storage lock poisoned")
+            .read()
+            .expect("storage read lock poisoned")
             .get_file_hash(file_path, project)
     }
 
     fn get_all_file_hashes(&self, project: &str) -> Result<Vec<(String, String)>, StorageError> {
         self.inner
-            .lock()
-            .expect("storage lock poisoned")
+            .read()
+            .expect("storage read lock poisoned")
             .get_all_file_hashes(project)
     }
 
     fn delete_project(&self, project_id: &str) -> Result<(), StorageError> {
         self.inner
-            .lock()
-            .expect("storage lock poisoned")
+            .write()
+            .expect("storage write lock poisoned")
             .delete_project(project_id)
     }
 
     fn delete_file_nodes(&self, file_path: &str, project: &str) -> Result<(), StorageError> {
         self.inner
-            .lock()
-            .expect("storage lock poisoned")
+            .write()
+            .expect("storage write lock poisoned")
             .delete_file_nodes(file_path, project)
     }
 }
@@ -410,6 +415,55 @@ mod tests {
             .expect("query");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0][0], serde_json::json!("x"));
+    }
+
+    #[test]
+    fn capability_concurrent_reads_succeed() {
+        // 验证 RwLock 去锁后 capability 层并发读安全：探针1 在裸
+        // StorageConnection 层已证 lbug 读并发零错误，这里在 capability 层
+        // (Repository + RwLock 端到端) 重放。
+        use std::thread;
+
+        let cap = build_storage();
+        let node = Node::builder(NodeLabel::Project, "demo", "demo")
+            .id("p1")
+            .language(Language::Rust)
+            .properties(serde_json::json!({"rootPath": "/", "fileCount": 0, "indexedAt": 0}))
+            .build();
+        cap.save_project(&node).expect("save_project");
+        let func = Node::builder(NodeLabel::Function, "main", "demo.main")
+            .id("f1")
+            .project("demo")
+            .file_path("/src/main.rs")
+            .start_line(1)
+            .end_line(10)
+            .signature("fn main()")
+            .build();
+        cap.save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
+
+        const THREADS: usize = 8;
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let cap = cap.clone();
+                thread::spawn(move || {
+                    for _ in 0..50 {
+                        assert_eq!(cap.list_projects().expect("list_projects").len(), 1);
+                        assert_eq!(
+                            cap.query_functions("demo").expect("query_functions").len(),
+                            1
+                        );
+                        assert_eq!(
+                            cap.get_project("p1").expect("get_project").unwrap().id,
+                            "p1"
+                        );
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("reader thread panicked");
+        }
     }
 
     /// Verify the full AsyncKit registration flow works end-to-end.
