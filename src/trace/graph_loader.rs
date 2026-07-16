@@ -55,6 +55,12 @@ pub fn load_graph_for_symbol(
 
     // Phase 2: BFS-expand to collect reachable node ids within `depth` hops.
     //
+    // ponytail: when `symbol` is ambiguous (multiple start nodes), skip the
+    // depth-N BFS entirely and fall through to Phase 3 with only the start
+    // nodes. Callers (resolve_start_id) surface `AmbiguousSymbol` from those
+    // start nodes; running BFS from every duplicate (e.g. `new` × 99) blows up
+    // to N×BFS and times out before the ambiguity can be reported.
+    //
     // `seen_edges` deduplicates edges by `(source, target, edge_type)` because
     // `fetch_edges_for_node(_, Either)` returns the same edge from both
     // endpoints — without dedup, BFS would push `a→b CALLS` twice (once when
@@ -63,33 +69,35 @@ pub fn load_graph_for_symbol(
     for id in &start_ids {
         visited.insert(id.clone());
     }
-    let mut frontier: Vec<String> = start_ids.clone();
     let mut edges: Vec<Edge> = Vec::new();
-    let mut seen_edges: HashSet<(String, String, EdgeType)> = HashSet::new();
-    for _ in 0..depth {
-        if frontier.is_empty() {
-            break;
-        }
-        let mut next_frontier: Vec<String> = Vec::new();
-        for node_id in &frontier {
-            // Outgoing edges from this node.
-            let outgoing = fetch_edges_for_node(&repo, node_id, EdgeDirection::Either)?;
-            for edge in outgoing {
-                if !visited.contains(&edge.target) {
-                    visited.insert(edge.target.clone());
-                    next_frontier.push(edge.target.clone());
-                }
-                if !visited.contains(&edge.source) {
-                    visited.insert(edge.source.clone());
-                    next_frontier.push(edge.source.clone());
-                }
-                let key = (edge.source.clone(), edge.target.clone(), edge.edge_type);
-                if seen_edges.insert(key) {
-                    edges.push(edge);
+    if start_ids.len() == 1 {
+        let mut frontier: Vec<String> = start_ids.clone();
+        let mut seen_edges: HashSet<(String, String, EdgeType)> = HashSet::new();
+        for _ in 0..depth {
+            if frontier.is_empty() {
+                break;
+            }
+            let mut next_frontier: Vec<String> = Vec::new();
+            for node_id in &frontier {
+                // Outgoing edges from this node.
+                let outgoing = fetch_edges_for_node(&repo, node_id, EdgeDirection::Either)?;
+                for edge in outgoing {
+                    if !visited.contains(&edge.target) {
+                        visited.insert(edge.target.clone());
+                        next_frontier.push(edge.target.clone());
+                    }
+                    if !visited.contains(&edge.source) {
+                        visited.insert(edge.source.clone());
+                        next_frontier.push(edge.source.clone());
+                    }
+                    let key = (edge.source.clone(), edge.target.clone(), edge.edge_type);
+                    if seen_edges.insert(key) {
+                        edges.push(edge);
+                    }
                 }
             }
+            frontier = next_frontier;
         }
-        frontier = next_frontier;
     }
 
     // Phase 3: materialize nodes for every visited id.
@@ -531,5 +539,45 @@ mod tests {
         let repo = Repository::open(&db).expect("open");
         let node = fetch_node_by_id(&repo, "nonexistent_id").expect("fetch");
         assert!(node.is_none(), "should return None for missing id");
+    }
+
+    /// Regression: an ambiguous short name (multiple start nodes) must NOT
+    /// trigger depth-N BFS from every start node. High-fanin duplicate names
+    /// (e.g. `new` × 99) caused N×BFS blowup → timeout before the caller could
+    /// surface `AmbiguousSymbol`. The loader returns only the start nodes.
+    #[test]
+    fn load_graph_for_symbol_ambiguous_skips_bfs_returns_start_nodes() {
+        let db = fresh_db_path();
+        let conn = StorageConnection::open(&db).expect("open");
+        conn.init_schema().expect("init_schema");
+        // Two functions share short name "dup" (ambiguous).
+        conn.execute("CREATE (:Function {id: 'dup_a', project: 'demo', name: 'dup', qualifiedName: 'demo.a.dup', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create dup_a");
+        conn.execute("CREATE (:Function {id: 'dup_b', project: 'demo', name: 'dup', qualifiedName: 'demo.b.dup', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create dup_b");
+        // Each dup has a distinct neighbor reachable within depth.
+        conn.execute("CREATE (:Function {id: 'nb_a', project: 'demo', name: 'nb_a', qualifiedName: 'demo.a.nb_a', filePath: '/src/a.rs', startLine: 1, endLine: 2, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create nb_a");
+        conn.execute("CREATE (:Function {id: 'nb_b', project: 'demo', name: 'nb_b', qualifiedName: 'demo.b.nb_b', filePath: '/src/b.rs', startLine: 1, endLine: 2, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create nb_b");
+        conn.execute("CREATE (:CodeRelation {id: 'e_a', source: 'dup_a', target: 'nb_a', type: 'CALLS', confidence: 1.0, reason: '', startLine: 2, project: 'demo'});").expect("create edge a");
+        conn.execute("CREATE (:CodeRelation {id: 'e_b', source: 'dup_b', target: 'nb_b', type: 'CALLS', confidence: 1.0, reason: '', startLine: 2, project: 'demo'});").expect("create edge b");
+
+        let graph = load_graph_for_symbol(&db, "dup", 3).expect("load");
+        // Both ambiguous start nodes materialized.
+        let dup_count = graph.nodes.values().filter(|n| n.name == "dup").count();
+        assert_eq!(
+            dup_count, 2,
+            "both ambiguous 'dup' start nodes should be loaded, got {dup_count}"
+        );
+        // BFS skipped → neighbors absent, no edges.
+        assert!(
+            graph
+                .nodes
+                .values()
+                .all(|n| n.name != "nb_a" && n.name != "nb_b"),
+            "neighbors must be absent when ambiguous symbol skips BFS"
+        );
+        assert_eq!(
+            graph.edge_count(),
+            0,
+            "no edges when ambiguous symbol skips BFS"
+        );
     }
 }
