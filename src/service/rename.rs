@@ -34,10 +34,14 @@ use sdforge::prelude::ApiError;
 
 /// Resolves a symbol name to a node id by matching `name` first, then
 /// `qualified_name`.
-fn resolve_start_id(graph: &Graph, symbol: &str) -> Option<NodeId> {
+///
+/// Returns `Err(TraceError::AmbiguousSymbol)` when more than one node shares
+/// the short `name` and no unique `qualified_name` match disambiguates —
+/// previously this silently picked the first match. R-rename-002.
+fn resolve_start_id(graph: &Graph, symbol: &str) -> Result<Option<NodeId>, TraceError> {
     let by_name: Vec<&Node> = graph.nodes.values().filter(|n| n.name == symbol).collect();
     if by_name.len() == 1 {
-        return Some(by_name[0].id.clone());
+        return Ok(Some(by_name[0].id.clone()));
     }
     let by_qn: Vec<&Node> = graph
         .nodes
@@ -45,9 +49,15 @@ fn resolve_start_id(graph: &Graph, symbol: &str) -> Option<NodeId> {
         .filter(|n| n.qualified_name == symbol)
         .collect();
     if by_qn.len() == 1 {
-        return Some(by_qn[0].id.clone());
+        return Ok(Some(by_qn[0].id.clone()));
     }
-    by_name.first().map(|n| n.id.clone())
+    if by_name.len() > 1 {
+        return Err(TraceError::AmbiguousSymbol {
+            symbol: symbol.to_string(),
+            candidates: by_name.iter().map(|n| n.qualified_name.clone()).collect(),
+        });
+    }
+    Ok(by_name.first().map(|n| n.id.clone()))
 }
 
 /// Computes the new qualified name by replacing the last segment equal to
@@ -339,10 +349,19 @@ async fn rename(from: String, to: String, path: String, apply: bool) -> Result<(
         },
         other => wrap_error("Failed to load graph", other),
     })?;
-    let start_id = resolve_start_id(&graph, &from).ok_or_else(|| ApiError::NotFound {
-        resource: "symbol".to_string(),
-        resource_id: Some(from.clone()),
-    })?;
+    let start_id = resolve_start_id(&graph, &from)
+        .map_err(|e| match e {
+            amb @ TraceError::AmbiguousSymbol { .. } => ApiError::InvalidInput {
+                message: amb.to_string(),
+                field: Some("from".to_string()),
+                value: None,
+            },
+            other => wrap_error("rename: resolve start symbol", other),
+        })?
+        .ok_or_else(|| ApiError::NotFound {
+            resource: "symbol".to_string(),
+            resource_id: Some(from.clone()),
+        })?;
     let symbol_node = graph
         .get_node(&start_id)
         .ok_or_else(|| ApiError::NotFound {
@@ -435,7 +454,7 @@ mod tests {
 
         let trace = kit.require::<TraceModule>()?;
         let graph = trace.load_graph(from, 2)?;
-        let start_id = resolve_start_id(&graph, from)
+        let start_id = resolve_start_id(&graph, from)?
             .ok_or_else(|| TraceError::SymbolNotFound(from.to_string()))?;
         let symbol_node = graph
             .get_node(&start_id)
@@ -684,7 +703,10 @@ mod tests {
                 .id("id1")
                 .build(),
         );
-        assert_eq!(resolve_start_id(&graph, "foo").as_deref(), Some("id1"));
+        assert_eq!(
+            resolve_start_id(&graph, "foo").unwrap().as_deref(),
+            Some("id1")
+        );
     }
 
     #[test]
@@ -695,7 +717,10 @@ mod tests {
                 .id("id1")
                 .build(),
         );
-        assert_eq!(resolve_start_id(&graph, "demo.foo").as_deref(), Some("id1"));
+        assert_eq!(
+            resolve_start_id(&graph, "demo.foo").unwrap().as_deref(),
+            Some("id1")
+        );
     }
 
     // --- collect_candidate_files ---
@@ -941,7 +966,7 @@ mod tests {
     // --- resolve_start_id: multiple matches ---
 
     #[test]
-    fn resolve_start_id_multiple_name_matches_falls_back_to_a_match() {
+    fn resolve_start_id_multiple_name_matches_returns_ambiguous_error() {
         let mut graph = Graph::new();
         graph.add_node(
             Node::builder(NodeLabel::Function, "foo", "demo.a.foo")
@@ -953,14 +978,17 @@ mod tests {
                 .id("id2")
                 .build(),
         );
-        // Two nodes named "foo"; no QN match → falls back to some node with
-        // this name. HashMap iteration order is non-deterministic, so we only
-        // assert that one of the two matching ids is returned.
+        // Two nodes share the short name "foo" with no unique QN match → must
+        // surface AmbiguousSymbol listing both candidates rather than silently
+        // picking one (R-rename-002).
         let result = resolve_start_id(&graph, "foo");
-        assert!(
-            matches!(result.as_deref(), Some("id1") | Some("id2")),
-            "expected Some(\"id1\") or Some(\"id2\"), got {result:?}"
-        );
+        let candidates = match result {
+            Err(TraceError::AmbiguousSymbol { candidates, .. }) => candidates,
+            other => panic!("expected AmbiguousSymbol, got {other:?}"),
+        };
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates.contains(&"demo.a.foo".to_string()));
+        assert!(candidates.contains(&"demo.b.foo".to_string()));
     }
 
     #[test]
@@ -977,7 +1005,10 @@ mod tests {
                 .build(),
         );
         // Two "foo" by name, but "demo.a" matches by QN → returns id1.
-        assert_eq!(resolve_start_id(&graph, "demo.a").as_deref(), Some("id1"));
+        assert_eq!(
+            resolve_start_id(&graph, "demo.a").unwrap().as_deref(),
+            Some("id1")
+        );
     }
 
     #[test]
@@ -988,7 +1019,7 @@ mod tests {
                 .id("id1")
                 .build(),
         );
-        assert!(resolve_start_id(&graph, "bar").is_none());
+        assert!(resolve_start_id(&graph, "bar").unwrap().is_none());
     }
 
     // --- collect_candidate_files: edge cases ---
