@@ -161,7 +161,7 @@ fn run_cli() {
     // concurrently (DuckDB/LadybugDB shared-read); writing commands keep RW.
     let config = KitBootstrapConfig::new(PathBuf::from(&db))
         .with_debounce_ms(debounce_ms)
-        .with_read_only(requires_existing_db(sub_name));
+        .with_read_only(opens_read_only(sub_name));
     match runtime.block_on(build_kit(&config)) {
         Ok(kit) => {
             if let Err(e) = init_kit(kit) {
@@ -266,14 +266,45 @@ fn sanitize_project_name(name: &str) -> String {
     }
 }
 
-/// Read-only commands that need an existing database. `index`/`import` create
-/// one (LadybugDB create-on-open); `setup`/`lsp_*`/`hook`/`mcp`/`verify` don't
-/// query the graph. Without this gate, `list --db <missing>` silently builds
-/// an empty DB and returns `[]` with exit 0 — a silent success.
+/// Commands that require an existing database file. `index`/`import` create
+/// one (LadybugDB create-on-open); `setup`/`lsp_*`/`hook`/`mcp` don't query
+/// the graph. Without this gate, `list --db <missing>` silently builds an
+/// empty DB and returns `[]` with exit 0 — a silent success (Rule 12).
+///
+/// Includes both read-only commands (see [`opens_read_only`]) and read-write
+/// commands that operate on an existing DB (`clean`, `rename`, `daemon`,
+/// `detect_changes`, `export`).
 fn requires_existing_db(sub_name: &str) -> bool {
+    opens_read_only(sub_name)
+        || matches!(
+            sub_name,
+            "clean" | "rename" | "daemon" | "detect_changes" | "export"
+        )
+}
+
+/// Read-only commands that open the DB in shared-read mode (concurrent-safe).
+/// These commands never write to the DB, so they can share a read lock with
+/// other processes. Writing commands (`index`/`import`/`clean`/`rename`/
+/// `daemon`) keep read-write mode.
+fn opens_read_only(sub_name: &str) -> bool {
     matches!(
         sub_name,
-        "list" | "search" | "query" | "impact" | "context" | "trace"
+        "list"
+            | "status"
+            | "search"
+            | "query"
+            | "impact"
+            | "context"
+            | "trace"
+            | "dead_code"
+            | "community"
+            | "architecture"
+            | "complexity"
+            | "cross_service"
+            | "route_map"
+            | "tool_map"
+            | "shape_check"
+            | "api_impact"
     )
 }
 
@@ -576,7 +607,7 @@ mod tests {
         assert_eq!(default_db_path(sub), ".codenexus/codenexus.lbug");
     }
 
-    // --- requires_existing_db / validate_db_exists ---
+    // --- requires_existing_db / opens_read_only / validate_db_exists ---
 
     #[test]
     fn validate_db_exists_errors_for_read_command_when_db_missing() {
@@ -599,6 +630,101 @@ mod tests {
         let db = dir.path().join("exists.lbug");
         std::fs::write(&db, b"x").unwrap();
         assert!(validate_db_exists(db.to_str().unwrap(), "list").is_ok());
+    }
+
+    #[test]
+    fn validate_db_exists_errors_for_status_when_db_missing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let missing = dir.path().join("nope.lbug");
+        let err = validate_db_exists(missing.to_str().unwrap(), "status").unwrap_err();
+        assert!(err.contains("database not found"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_db_exists_errors_for_analysis_cmds_when_db_missing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let missing = dir.path().join("nope.lbug");
+        for cmd in [
+            "dead_code",
+            "community",
+            "architecture",
+            "complexity",
+            "cross_service",
+            "route_map",
+            "tool_map",
+            "shape_check",
+            "api_impact",
+        ] {
+            let err = validate_db_exists(missing.to_str().unwrap(), cmd).unwrap_err();
+            assert!(err.contains("database not found"), "{cmd}: got {err}");
+        }
+    }
+
+    #[test]
+    fn validate_db_exists_errors_for_clean_rename_daemon_when_db_missing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let missing = dir.path().join("nope.lbug");
+        for cmd in ["clean", "rename", "daemon", "detect_changes", "export"] {
+            let err = validate_db_exists(missing.to_str().unwrap(), cmd).unwrap_err();
+            assert!(err.contains("database not found"), "{cmd}: got {err}");
+        }
+    }
+
+    #[test]
+    fn validate_db_exists_allows_import_to_create_new_db() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let missing = dir.path().join("new.lbug");
+        assert!(validate_db_exists(missing.to_str().unwrap(), "import").is_ok());
+    }
+
+    #[test]
+    fn validate_db_exists_allows_setup_hook_lsp_mcp_without_db() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let missing = dir.path().join("nope.lbug");
+        for cmd in ["setup", "hook", "lsp_hover", "lsp_goto_def", "mcp"] {
+            assert!(
+                validate_db_exists(missing.to_str().unwrap(), cmd).is_ok(),
+                "{cmd} should not require existing DB"
+            );
+        }
+    }
+
+    #[test]
+    fn opens_read_only_returns_true_for_read_only_commands() {
+        for cmd in [
+            "list",
+            "status",
+            "search",
+            "query",
+            "impact",
+            "context",
+            "trace",
+            "dead_code",
+            "community",
+            "architecture",
+            "complexity",
+            "cross_service",
+            "route_map",
+            "tool_map",
+            "shape_check",
+            "api_impact",
+        ] {
+            assert!(opens_read_only(cmd), "{cmd} should be read-only");
+        }
+    }
+
+    #[test]
+    fn opens_read_only_returns_false_for_writing_commands() {
+        for cmd in ["index", "import", "clean", "rename", "daemon"] {
+            assert!(!opens_read_only(cmd), "{cmd} should NOT be read-only");
+        }
+    }
+
+    #[test]
+    fn opens_read_only_returns_false_for_non_db_commands() {
+        for cmd in ["setup", "hook", "lsp_hover", "lsp_goto_def", "mcp"] {
+            assert!(!opens_read_only(cmd), "{cmd} should NOT be read-only");
+        }
     }
 
     #[test]

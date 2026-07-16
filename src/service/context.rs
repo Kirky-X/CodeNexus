@@ -78,6 +78,11 @@ pub fn run_context_enhanced(
 /// When `enhanced=true`, uses [`ContextCollector`] to return [`SymbolContext`]
 /// JSON with type/module/test context and data flow. Otherwise uses the
 /// original BFS-based [`run_context`].
+///
+/// When `project` is non-empty, validates the project exists (name or id)
+/// before running — returns `ProjectNotFound` (exit 2) if not found. This
+/// catches typos and non-existent projects early instead of silently
+/// returning results from a different project (Rule 12).
 #[cfg(feature = "cli")]
 #[forge(
     name = "context",
@@ -99,6 +104,17 @@ async fn context(
             .map_err(|e| to_api_error(CodeNexusError::from(e), "context_error"))?;
         println!("{json}");
     } else {
+        // Validate project when explicitly provided (non-empty), so a typo
+        // surfaces as ProjectNotFound instead of silently returning data
+        // from an unrelated project. run_context_enhanced already calls
+        // resolve_project_id internally.
+        if !project.trim().is_empty() {
+            let storage = kit
+                .require::<StorageModule>()
+                .map_err(|e| to_api_error(CodeNexusError::from(e), "context_error"))?;
+            resolve_project_id(&*storage, &project)
+                .map_err(|e| to_api_error(e, "context_error"))?;
+        }
         let result =
             run_context(&kit, &symbol, depth).map_err(|e| to_api_error(e, "context_error"))?;
         let json = serde_json::to_string(&result)
@@ -415,6 +431,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});").expect("create project");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'f1', qualifiedName: 'demo.f1', filePath: '/src/f1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create f1");
         init_kit(kit).expect("init_kit");
 
@@ -435,6 +452,70 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().expect("runtime");
         let result = rt.block_on(context("demo.f1".to_string(), 3, "demo".to_string(), false));
         assert!(result.is_err(), "wrapper should fail without kit");
+        reset_kit_for_testing();
+    }
+
+    // Verifies the project-validation gate (non-enhanced mode): when --project
+    // names a non-existent project, returns ProjectNotFound before even
+    // loading the graph. Rule 12: fail loud, don't silently return data from
+    // an unrelated project.
+    #[serial_test::serial(kit_init)]
+    #[test]
+    #[cfg(feature = "cli")]
+    fn context_wrapper_fails_with_nonexistent_project() {
+        use crate::service::runtime::{init_kit, reset_kit_for_testing};
+
+        reset_kit_for_testing();
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});").expect("create project");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'f1', qualifiedName: 'demo.f1', filePath: '/src/f1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create f1");
+        init_kit(kit).expect("init_kit");
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let result = rt.block_on(context(
+            "demo.f1".to_string(),
+            3,
+            "NonExistentProject".to_string(),
+            false,
+        ));
+        let err = result.expect_err("nonexistent project should error");
+        // ProjectNotFound maps to ApiError::Internal via to_api_error (not a
+        // NotFound mapping). Verify the message contains "project not found".
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("project not found"),
+            "expected project not found error, got: {msg}"
+        );
+
+        reset_kit_for_testing();
+    }
+
+    // Verifies that an empty --project string skips validation (backward
+    // compatible: allows `context` without --project).
+    #[serial_test::serial(kit_init)]
+    #[test]
+    #[cfg(feature = "cli")]
+    fn context_wrapper_succeeds_with_empty_project() {
+        use crate::service::runtime::{init_kit, reset_kit_for_testing};
+
+        reset_kit_for_testing();
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'f1', qualifiedName: 'demo.f1', filePath: '/src/f1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create f1");
+        init_kit(kit).expect("init_kit");
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        // Empty project string → skip validation → proceed to load_graph
+        let result = rt.block_on(context("demo.f1".to_string(), 3, "".to_string(), false));
+        assert!(
+            result.is_ok(),
+            "empty project should skip validation: {:?}",
+            result.err()
+        );
+
         reset_kit_for_testing();
     }
 
@@ -482,6 +563,8 @@ mod tests {
         reset_kit_for_testing();
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});").expect("create project");
         init_kit(kit).expect("init_kit");
 
         let rt = tokio::runtime::Runtime::new().expect("runtime");
@@ -542,6 +625,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});").expect("create project");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'solo', qualifiedName: 'demo.solo', filePath: '/src/s.rs', startLine: 1, endLine: 3, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create solo");
         init_kit(kit).expect("init_kit");
 
