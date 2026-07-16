@@ -44,6 +44,26 @@ pub struct SchemaInitReport {
     pub skipped_reasons: Vec<String>,
 }
 
+/// Returns `true` if the error message indicates a **database lock conflict**
+/// at open time (Rule 12: fail loud).
+///
+/// LadybugDB/DuckDB reports an open-time lock failure when another process
+/// holds the exclusive write lock on the same file DB. Recognized patterns
+/// (stable DuckDB error strings):
+/// - `Could not set lock on file ... Lock is held by PID` (open-time)
+/// - `database is locked` (generic)
+///
+/// This is distinct from query-time transient locks (`is_corruption_error`
+/// already excludes "locked"); here we positively detect it so the upper layer
+/// can surface `StorageError::DatabaseLocked` (exit 2) instead of hiding the
+/// failure behind a generic `kit_not_initialized` (exit 1).
+fn is_db_locked(e: &StorageError) -> bool {
+    let msg = e.to_string().to_lowercase();
+    msg.contains("could not set lock")
+        || msg.contains("lock is held")
+        || msg.contains("database is locked")
+}
+
 /// Returns `true` if the error message indicates database corruption.
 ///
 /// Detects LadybugDB / SQLite corruption patterns (spec
@@ -90,6 +110,29 @@ impl StorageConnection {
     /// [`StorageError::Corrupt`] so the upper layer's `From<StorageError>`
     /// impl maps it to [`IndexError::DatabaseCorrupt`] (exit code 4).
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Self::open_with(path, false)
+    }
+
+    /// Opens a LadybugDB database at `path` in **read-only** mode.
+    ///
+    /// Multiple processes may open the same DB file read-only concurrently
+    /// (LadybugDB/DuckDB shared-read semantics). Use this for query-only
+    /// commands (`query`/`impact`/`trace`/`context`/`search`/`list`) so that
+    /// concurrent reads do not contend on the exclusive write lock held by
+    /// writing commands (`index`/`import`, which use [`Self::open`]). Fails
+    /// (does not create) if `path` does not exist.
+    pub fn open_read_only<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Self::open_with(path, true)
+    }
+
+    /// Shared open implementation parameterized by read-only mode.
+    ///
+    /// On `Database::new` failure, a lock conflict is mapped to
+    /// [`StorageError::DatabaseLocked`] (exit 2, Rule 12 — must not hide behind
+    /// a generic exit-1 error), a corruption pattern to
+    /// [`StorageError::Corrupt`] (exit 4), otherwise the raw
+    /// [`StorageError::Database`] is returned.
+    fn open_with<P: AsRef<Path>>(path: P, read_only: bool) -> Result<Self> {
         // Test builds run many StorageConnection instances in parallel under
         // `cargo test`. LadybugDB's default `buffer_pool_size = 0` lets DuckDB
         // auto-detect the buffer pool, which resolves to ~8 TiB and triggers
@@ -118,14 +161,19 @@ impl StorageConnection {
             SystemConfig::default()
                 .buffer_pool_size(256 * 1024 * 1024)
                 .max_db_size(1024 * 1024 * 1024)
+                .read_only(read_only)
         } else {
-            SystemConfig::default()
+            SystemConfig::default().read_only(read_only)
         };
         match Database::new(path, config) {
             Ok(db) => Ok(Self { db }),
             Err(e) => {
                 let storage_err = StorageError::Database(e);
-                if is_corruption_error(&storage_err) {
+                if is_db_locked(&storage_err) {
+                    Err(StorageError::DatabaseLocked {
+                        holder_hint: storage_err.to_string(),
+                    })
+                } else if is_corruption_error(&storage_err) {
                     Err(StorageError::Corrupt(storage_err.to_string()))
                 } else {
                     Err(storage_err)
@@ -837,6 +885,39 @@ mod tests {
             !is_corruption_error(&locked_err),
             "database is locked 不应被检测为损坏"
         );
+    }
+
+    /// `is_db_locked` must detect LadybugDB/DuckDB open-time lock messages —
+    /// the stable error strings DuckDB emits when another process holds the
+    /// exclusive write lock on the same file DB (Rule 12: surface as
+    /// DatabaseLocked/exit 2, not a generic exit 1).
+    #[test]
+    fn is_db_locked_detects_open_time_lock_messages() {
+        let cases = [
+            "Could not set lock on file \"/x/db.lbug\": Lock is held by PID 12345",
+            "Could not set lock: Lock is held by PID 42",
+            "database is locked",
+            "Database is LOCKED by another process",
+        ];
+        for msg in cases {
+            let err = StorageError::Query(msg.to_string());
+            assert!(is_db_locked(&err), "应识别为锁冲突：{msg}");
+        }
+    }
+
+    /// `is_db_locked` must NOT match unrelated errors (io, corruption, binder).
+    #[test]
+    fn is_db_locked_ignores_unrelated_errors() {
+        let cases = [
+            "io error: permission denied",
+            "database disk image is malformed",
+            "binder exception: cannot find property qualifiedName",
+            "not a valid database file",
+        ];
+        for msg in cases {
+            let err = StorageError::Query(msg.to_string());
+            assert!(!is_db_locked(&err), "不应识别为锁冲突：{msg}");
+        }
     }
 
     #[test]

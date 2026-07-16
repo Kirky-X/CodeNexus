@@ -54,6 +54,18 @@ pub enum StorageError {
     /// `From<StorageError> for IndexError` impl.
     #[error("database corrupt: {0}")]
     Corrupt(String),
+
+    /// The database file is locked by another process (open-time lock failure).
+    ///
+    /// Detected by [`super::connection::is_db_locked`] during
+    /// `StorageConnection::open`/`open_read_only` when LadybugDB cannot acquire
+    /// its file lock — another codenexus process holds the exclusive write
+    /// lock. Distinct from transient query-time locks (handled by retry): this
+    /// is a hard open failure. Maps to exit code 2 with a clear message
+    /// (Rule 12: fail loud — must not be hidden behind a generic `Kit`/exit-1
+    /// error).
+    #[error("database is locked by another process: {holder_hint}")]
+    DatabaseLocked { holder_hint: String },
 }
 
 /// Convenience alias used throughout the storage layer.
@@ -85,6 +97,17 @@ mod tests {
     fn invalid_data_variant_displays_message() {
         let err = StorageError::InvalidData("missing id".to_string());
         assert_eq!(err.to_string(), "invalid data: missing id");
+    }
+
+    #[test]
+    fn database_locked_displays_holder_hint() {
+        let err = StorageError::DatabaseLocked {
+            holder_hint: "Lock is held by PID 1234".to_string(),
+        };
+        let s = err.to_string();
+        assert!(s.contains("database is locked"), "消息：{s}");
+        assert!(s.contains("PID 1234"), "应含 holder_hint：{s}");
+        assert!(s.contains("another process"), "应提示另一进程：{s}");
     }
 
     #[test]
