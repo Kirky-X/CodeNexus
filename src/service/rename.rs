@@ -50,14 +50,38 @@ fn resolve_start_id(graph: &Graph, symbol: &str) -> Option<NodeId> {
     by_name.first().map(|n| n.id.clone())
 }
 
-/// Computes the new qualified name by replacing the trailing old name segment.
+/// Computes the new qualified name by replacing the last segment equal to
+/// `old_name`, where segments are delimited by `.` (path) or `#` (member or
+/// method — `rust_extractor` emits FQNs like `<container>#<member>`).
+///
+/// A segment-boundary match is required so `old_name = "bar"` does not match
+/// inside `"foobar"`. The last matching segment wins, so a `#`-suffixed member
+/// name is replaced correctly even when the container path also contains
+/// `old_name`.
 fn compute_new_qn(old_qn: &str, old_name: &str, new_name: &str) -> String {
-    if let Some(stripped) = old_qn.strip_suffix(old_name) {
-        if stripped.is_empty() || stripped.ends_with('.') {
-            return format!("{stripped}{new_name}");
+    let bytes = old_qn.as_bytes();
+    let mut best: Option<usize> = None;
+    let mut start = 0;
+    while let Some(rel) = old_qn[start..].find(old_name) {
+        let abs = start + rel;
+        let after = abs + old_name.len();
+        let left_ok = abs == 0 || matches!(bytes[abs - 1], b'.' | b'#');
+        let right_ok = after == old_qn.len() || matches!(bytes[after], b'.' | b'#');
+        if left_ok && right_ok {
+            best = Some(abs);
         }
+        start = abs + 1;
     }
-    old_qn.to_string()
+    match best {
+        Some(abs) => {
+            let mut out = String::with_capacity(old_qn.len() + new_name.len());
+            out.push_str(&old_qn[..abs]);
+            out.push_str(new_name);
+            out.push_str(&old_qn[abs + old_name.len()..]);
+            out
+        }
+        None => old_qn.to_string(),
+    }
 }
 
 /// Returns `true` if `s` is a valid identifier `[A-Za-z_][A-Za-z0-9_]*`.
@@ -505,6 +529,32 @@ mod tests {
     #[test]
     fn compute_new_qn_does_not_replace_substring() {
         assert_eq!(compute_new_qn("demo.foobar", "bar", "baz"), "demo.foobar");
+    }
+
+    // --- compute_new_qn: `#` member separator (R-rename-001) ---
+
+    #[test]
+    fn compute_new_qn_replaces_segment_before_hash() {
+        // `#` separates a member/method from its container (rust_extractor
+        // emits FQNs like `<container>#<member>`). Replacing an intermediate
+        // `.`-segment must preserve the trailing `#Member`.
+        assert_eq!(
+            compute_new_qn("proj.x.types.rs.parse#CalcError", "parse", "parse_expr"),
+            "proj.x.types.rs.parse_expr#CalcError"
+        );
+    }
+
+    #[test]
+    fn compute_new_qn_replaces_member_segment_after_hash() {
+        // Renaming the member itself (the `#`-suffixed trailing segment).
+        assert_eq!(
+            compute_new_qn(
+                "proj.x.types.rs.parse#CalcError",
+                "CalcError",
+                "CalcErrorV2"
+            ),
+            "proj.x.types.rs.parse#CalcErrorV2"
+        );
     }
 
     // --- find_word_occurrences ---
