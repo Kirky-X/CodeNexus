@@ -1,10 +1,10 @@
 # Typical Workflows
 
-> Nine end-to-end workflows using the verified 0.4.2 flag syntax. Part of the CodeNexus skill — see [SKILL.md](../SKILL.md) for the overview.
+> Nine end-to-end workflows using the verified 0.3.4 flag syntax. Part of the CodeNexus skill — see [SKILL.md](../SKILL.md) for the overview.
 
 ## Typical Workflows
 
-> Every command below uses the **verified 0.4.2 flag syntax** (no positional args, mandatory flags supplied, booleans value-styled). `--project` accepts either name or id.
+> Every command below uses the **verified 0.3.4 flag syntax** (no positional args, mandatory flags supplied, booleans value-styled). `--project` accepts either name or id.
 
 ### Workflow 1: Index and explore a new codebase
 

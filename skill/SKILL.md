@@ -5,7 +5,7 @@ description: "Code knowledge graph indexer and query tool. Use when indexing cod
 
 # CodeNexus CLI Skill
 
-> **Verified against `codenexus 0.4.2`.** The CLI is **strictly flag-based**: there are **no positional arguments**, and almost every function parameter is a **mandatory flag** (plain `String`/`u32`/`bool` types in the source map to required flags — only `--db <DB_PATH>` and `--debounce-ms <MS>` are global options with defaults). Booleans are pass-by-value (e.g. `--force true`, `--apply true`, `--cross_service false`).
+> **Verified against `codenexus 0.3.4`.** The CLI is **strictly flag-based**: there are **no positional arguments**, and almost every function parameter is a **mandatory flag** (plain `String`/`u32`/`bool` types in the source map to required flags — only `--db <DB_PATH>` and `--debounce-ms <MS>` are global options with defaults). Booleans are pass-by-value (e.g. `--force true`, `--apply true`, `--cross_service false`).
 
 ## Description
 
@@ -63,7 +63,7 @@ CodeNexus has **28 subcommands** grouped into eight functional areas. **All requ
 | `search` | Query | Symbol search (exact/regex/fuzzy/graph/multi) or BM25 full-text. ⚠️ See Known Issues — `query` is the reliable path. |
 | `trace` | Tracing | Trace a symbol's call/dataflow paths with optional cycle detection and cross-service traversal. |
 | `impact` | Tracing | Reverse BFS to find all symbols that depend on a target. Narrow `--edge_types` + `--max_depth` on large graphs. |
-| `context` | Tracing | 360° view of a symbol: callers/callees/processes/routes/endpoints. `--enhanced false` is stable in 0.4.2. |
+| `context` | Tracing | 360° view of a symbol: callers/callees/processes/routes/endpoints. `--enhanced true` resolves `--project <name\|id>` and fails fast on ambiguous symbols (verified 0.3.4). |
 | `dead_code` | Analysis | Detect unreferenced `Function`/`Method` nodes with confidence levels (High/Medium/Low). |
 | `architecture` | Analysis | High-level overview: module boundaries, dependency directions, layers, entry points, hotspots. |
 | `complexity` | Analysis | AST-based per-function complexity (cyclomatic/cognitive/nesting/length/Halstead/MI/time/space). 26 threshold flags required. |
@@ -83,17 +83,14 @@ CodeNexus has **28 subcommands** grouped into eight functional areas. **All requ
 | `hook` | MCP | Emit PreToolUse/PostToolUse hook JSON. Always exits 0; never blocks. Long-running (reads stdin). |
 | `mcp` | MCP | Serve MCP tools (`query`/`trace`/`impact`/`search`/`context`) over stdio. Long-running. Requires `mcp` feature. |
 
-## Critical Known Issues (0.4.2)
+## Critical Known Issues (0.3.4)
 
-The full list with severities is in [`references/appendix.md`](references/appendix.md#known-issues-in-042). The ones most likely to bite during normal use:
+The full list with severities is in [`references/appendix.md`](references/appendix.md#known-issues). The ones most likely to bite during normal use:
 
-- **`search` returns `{"count":0,"results":[]}` against default indexes** — name-search tables are not populated by the default indexing flow. Use `query` (e.g. `MATCH (f:Function) WHERE f.name CONTAINS 'parse' RETURN ...`) as the reliable symbol lookup path.
-- **`context --enhanced true` may raise a generic error** against some projects. Use `--enhanced false` until fixed.
-- **`rename` dry-run `graph_edit.new_qualified_name` may still show the old name**, and ambiguous same-named symbols are silently resolved to one match. Verify proposed edits carefully before `--apply true`.
-- **`export` manifest hardcodes `"codenexus_version":"0.3.4"`** regardless of binary version (cosmetic only).
-- **Some failure paths exit 0** (e.g. `lsp_*` when no language server is running, `list --db <missing>` returns `[]`). CI scripts must inspect the JSON payload, not rely solely on the exit code.
 - **Rust call graph is a lower bound** — trait-object `dyn` dispatch and many cross-module calls are not captured by tree-sitter. Treat `dead_code`/`trace`/`impact` results for Rust as a triage list, not ground truth.
-- **`impact` on large graphs can exceed the 120s tool timeout** with broad `--edge_types`/`--max_depth` and a high-degree target. Narrow edge types, lower `--max_depth`, and pick a leaf target.
+- **`impact` on very large graphs** — `trace_upstream` is capped at `MAX_NODES_LIMIT=1000` nodes and `max_depth≤10`, so the analysis loop itself cannot run away; the remaining theoretical cost is `load_graph` pre-loading the subgraph (Cypher has no `LIMIT`). Verified 2026-07-16: `impact --symbol analyze --depth 10 --max_depth 10 --edge_types "CALLS,IMPLEMENTS,USES_TYPE"` on a self-indexed CodeNexus graph (9232 symbols) returns in **4.5s**, well under the 120s tool timeout. If you hit a pathological case, narrow `--edge_types` / lower `--max_depth` / pick a leaf target.
+
+> Fixed in 0.3.4 (no longer listed above): `--project` accepts name or id on **all** commands including `context --enhanced true`; `rename` dry-run recomputes the qualified name for `.` and `#` separators; ambiguous symbols fail fast in both `context` and `rename`; the `export` manifest version is read from `Cargo.toml` via `env!("CARGO_PKG_VERSION")` and matches the binary; **`search` now returns real hits** (the empty-`project` filter that dropped all rows, and the silent per-table `Err(_) => continue` that swallowed storage errors, were fixed — verified `search --text parse` returns `count:3`); **`list --db <missing>` now exits 4** (NotFound) with a clear message instead of returning `[]` with exit 0; **`lsp_*` with no server exits 2** (verified: `lsp_goto_def`/`lsp_hover` on a `.go` file with no `gopls` → `failed to start LSP server`, exit 2 — the earlier "exit 0" diagnosis was a greenhouse assumption, not observed behavior). See the per-command notes in [`references/commands.md`](references/commands.md) and the table in [`references/appendix.md`](references/appendix.md#known-issues).
 
 ## References
 

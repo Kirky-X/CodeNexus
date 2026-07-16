@@ -110,7 +110,7 @@ codenexus query --cypher "MATCH (r:CodeRelation) WHERE r.type='CALLS' RETURN r.s
 
 #### search — Search for symbols
 
-> ⚠️ **Known caveat (verified on `codenexus.lbug` built for 0.4.2):** `search` currently **returns `{"count":0,"results":[]}` for all queries** against an index built by the default `index` run — both `exact`/`regex`/`fuzzy`/`graph` name modes and `--fulltext true` BM25. The name-search tables are not populated by the default indexing flow; semantic search additionally requires the `embed` feature. Until this is fixed, **use `query`** (e.g. `MATCH (f:Function) WHERE f.name CONTAINS 'parse' RETURN ...`) as the reliable symbol lookup path.
+> ✅ **Fixed in 0.3.4:** `search` now returns real hits. The original `{"count":0}` was caused by (a) an empty-`project` filter that appended `AND n.project = ''` and dropped every row, and (b) a silent per-table `Err(_) => continue` that swallowed storage errors — **not** by unpopulated tables. Both are fixed in `src/query/structured.rs`; verified `search --text parse` returns `count:3` (ParseOutput/ParsePhase/ParserFactory). Semantic/embedding search still requires the `embed` feature. `query` (e.g. `MATCH (f:Function) WHERE f.name CONTAINS 'parse' RETURN ...`) remains available as a Cypher escape hatch.
 
 ```bash
 codenexus search --text <TEXT> --fulltext <BOOL> --limit <N> --mode <MODE> --project <NAME_OR_ID> [--db <DB_PATH>]
@@ -190,7 +190,7 @@ All of `--symbol`, `--depth`, `--project`, `--enhanced` are **required**.
 
 **Output (JSON):** `{symbol, node, incoming[], outgoing[], processes[], routes[], endpoints[]}` (legacy) or the enhanced `SymbolContext`.
 
-> ⚠️ **Known issue (Problem F):** `context --enhanced true` currently raises `CodeNexus error occurred` against some projects. The enhanced mode is unstable in 0.4.2; prefer `--enhanced false` until fixed.
+> ✅ **Fixed in 0.3.4 (Problem F + A):** `context --enhanced true` now resolves `--project <name|id>` via `resolve_project_id` (previously it matched the raw value against `Function.project`, which stores the id, so name lookups failed with a generic error). Ambiguous symbols now fail fast — `context --symbol new --enhanced true --project CodeNexus` returns `ambiguous symbol 'new': 99 candidates` in ~0.3s (exit 1) instead of timing out. Verified: a unique short name returns a full `SymbolContext` (exit 0).
 
 ### Code analysis
 
@@ -268,7 +268,7 @@ All 26 parameters are **required** (no defaults). Pass `0` for numeric threshold
 
 **Output (JSON):** `project`, `complexity[]` (each entry has function identity + per-metric severity + raw values), `summary` (totals by severity)
 
-> Note: With all threshold flags set to `0`/`""`, the analyzer uses its in-memory defaults. The flags are required by the CLI even when you want defaults — this is a UX trade-off in 0.4.2. Requires the `complexity` feature.
+> Note: With all threshold flags set to `0`/`""`, the analyzer uses its in-memory defaults. The flags are required by the CLI even when you want defaults — this is a UX trade-off in 0.3.4. Requires the `complexity` feature.
 
 #### community — Louvain community detection
 
@@ -403,7 +403,7 @@ All of `--from`, `--to`, `--path`, `--apply` are **required**.
 
 **Output (JSON):** `graph_edit` (with `new_qualified_name`, `edges[]`), `text_edits[]`
 
-> ⚠️ **Known issue (Problem C):** In 0.4.2 the dry-run `graph_edit.new_qualified_name` may still show the **old** qualified name (suffix not updated). When the project has multiple same-named symbols (e.g. `parser::parse` vs `CalcError::parse`), `rename` only matches one of them with no ambiguity prompt. Verify the proposed edits carefully before `--apply true`.
+> ✅ **Fixed in 0.3.4 (Problem C):** the dry-run `graph_edit.new_qualified_name` now recomputes the suffix for both `.` and `#` member separators (e.g. `...graph.rs.add_vertex#Graph`). Ambiguous same-named symbols now fail fast — `rename --from new` returns `ambiguous symbol 'new': 99 candidates` in ~0.9s (exit 2) instead of silently resolving to one match or timing out. Still verify proposed edits before `--apply true`.
 
 ### LSP integration
 
@@ -426,7 +426,7 @@ All of `--file`, `--line`, `--col`, `--workspace` are **required**.
 
 **Output (JSON):** `{found, location}` where `location` is `{file, line, col}` when found. Requires the `lsp` feature and a running language server for the file's language.
 
-> Note: When no language server is available, the command prints an Error to stderr but may still exit 0 (see Problem E in `temp/problem.md`). Scripts cannot rely on the exit code alone to detect LSP failures — inspect the JSON `found` field.
+> Note: When no language server is available (e.g. `gopls`/`jdtls` not installed for the file's language), the command prints an Error to stderr and **exits 2** (`failed to start LSP server`). Verified 2026-07-16: `lsp_goto_def`/`lsp_hover` on a `.go` file with no `gopls` → exit 2. (The earlier "may still exit 0" note in `temp/problem.md` was a greenhouse assumption; the actual exit code is 2.) Scripts can rely on the exit code.
 
 #### lsp_hover — Query LSP Hover info
 
@@ -464,7 +464,7 @@ Dumps the LadybugDB database to a zstd-compressed artifact with a JSON manifest 
 - `--project <NAME_OR_ID>` — Project name or id to include in the manifest (required)
 - `--db <DB_PATH>` — Database path to export (default: `.codenexus/<project>.lbug`; see Conventions)
 
-> ⚠️ **Known issue (Problem D):** In 0.4.2 the export manifest writes `"codenexus_version":"0.3.4"` regardless of the actual binary version. Imported artifacts carry this forward. This is cosmetic (does not affect graph data) but will be fixed in a future release.
+> ✅ **Fixed in 0.3.4 (Problem D):** the export manifest now reads the version from `env!("CARGO_PKG_VERSION")` (`src/service/export.rs`), so `"codenexus_version"` matches the binary. The earlier confusion came from `--version` being polluted by the `sdforge` dependency (which reports its own `0.4.2`); `src/main.rs` now reads `Cargo.toml` as the single source of truth, so both `--version` and the manifest report `0.3.4`.
 
 #### import — Import a team artifact (H7)
 
@@ -472,7 +472,7 @@ Dumps the LadybugDB database to a zstd-compressed artifact with a JSON manifest 
 codenexus import --input <PATH> --reindex <BOOL> --path <PATH> --name <NAME> [--db <DB_PATH>]
 ```
 
-All of `--input`, `--reindex`, `--path`, `--name` are **required** (in 0.4.2 the CLI marks them mandatory even when `--reindex false`).
+All of `--input`, `--reindex`, `--path`, `--name` are **required** (the CLI marks them mandatory even when `--reindex false`).
 
 Decompresses a team artifact and loads it into a LadybugDB database. Optionally triggers an incremental reindex of the local diff when `--reindex true`.
 
