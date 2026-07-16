@@ -12,9 +12,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use codenexus::kit::{build_kit, KitBootstrapConfig};
+use codenexus::kit::{build_kit, KitBootstrapConfig, KitError};
 use codenexus::service::error::CodeNexusError;
 use codenexus::service::init_kit;
+use codenexus::storage::StorageError;
 
 /// Default directory (relative to CWD) that holds per-project database files.
 const DEFAULT_DB_DIR: &str = ".codenexus";
@@ -149,7 +150,11 @@ fn run_cli() {
         std::process::exit(4);
     }
 
-    let config = KitBootstrapConfig::new(PathBuf::from(&db)).with_debounce_ms(debounce_ms);
+    // Read-only commands open the DB read-only so multiple processes can read
+    // concurrently (DuckDB/LadybugDB shared-read); writing commands keep RW.
+    let config = KitBootstrapConfig::new(PathBuf::from(&db))
+        .with_debounce_ms(debounce_ms)
+        .with_read_only(requires_existing_db(sub_name));
     match runtime.block_on(build_kit(&config)) {
         Ok(kit) => {
             if let Err(e) = init_kit(kit) {
@@ -157,6 +162,14 @@ fn run_cli() {
             }
         }
         Err(e) => {
+            // Rule 12: a DB lock conflict must surface as exit 2 with a clear
+            // message, not hide behind the generic kit_not_initialized exit 1.
+            if let Some(hint) = extract_db_locked_hint(&e) {
+                eprintln!("[error] 数据库被锁定，无法打开：{hint}");
+                eprintln!("  另一个 codenexus 进程可能正在写入（index/import 会独占 DB）。");
+                eprintln!("  请关闭其他 codenexus 进程后重试，或等待其完成。");
+                std::process::exit(2);
+            }
             eprintln!("[warn] Failed to build Kit (commands requiring Kit will fail): {e}");
         }
     }
@@ -255,6 +268,23 @@ fn requires_existing_db(sub_name: &str) -> bool {
         sub_name,
         "list" | "search" | "query" | "impact" | "context" | "trace"
     )
+}
+
+/// Walks the [`KitError`] source chain for [`StorageError::DatabaseLocked`]
+/// (Rule 12). Returns the holder hint so the CLI can exit 2 with a clear
+/// message instead of falling through to the generic `kit_not_initialized`
+/// exit 1 when another process holds the DB write lock.
+fn extract_db_locked_hint(e: &KitError) -> Option<String> {
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(err) = current {
+        if let Some(StorageError::DatabaseLocked { holder_hint }) =
+            err.downcast_ref::<StorageError>()
+        {
+            return Some(holder_hint.clone());
+        }
+        current = err.source();
+    }
+    None
 }
 
 /// Returns `Err(msg)` when a read command targets a DB file that does not yet

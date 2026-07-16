@@ -168,6 +168,9 @@ fn kit_exit_code(e: &KitError) -> i32 {
             if matches!(storage_err, StorageError::Corrupt(_)) {
                 return 4;
             }
+            if matches!(storage_err, StorageError::DatabaseLocked { .. }) {
+                return 2;
+            }
         }
         current = err.source();
     }
@@ -334,6 +337,20 @@ mod tests {
         };
         let err: CodeNexusError = kit_err.into();
         assert_eq!(err.exit_code(), 4);
+    }
+
+    #[test]
+    fn exit_code_kit_build_failed_with_storage_locked_is_2() {
+        // Rule 12: a DB lock conflict surfaced via Kit must exit 2 (not the
+        // generic Kit exit 1), so CI/users can tell lock from internal error.
+        let kit_err = KitError::BuildFailed {
+            context: "storage",
+            source: Box::new(StorageError::DatabaseLocked {
+                holder_hint: "Lock is held by PID 1234".to_string(),
+            }),
+        };
+        let err: CodeNexusError = kit_err.into();
+        assert_eq!(err.exit_code(), 2);
     }
 
     #[test]
