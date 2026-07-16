@@ -228,6 +228,7 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
     // 6. Query — QueryFacade with db_path (Task 2.9).
     kit.set_config(QueryConfig {
         db_path: config.db_path.clone(),
+        read_only: config.read_only,
     });
     kit.register::<QueryModule>()?;
 

@@ -41,6 +41,16 @@ impl QueryFacade {
         Ok(Self { conn })
     }
 
+    /// Opens the database at `db_path` in **read-only** mode.
+    ///
+    /// Does **not** initialize the schema (read-only forbids DDL; the target DB
+    /// is already indexed). Use for query-only commands so multiple processes
+    /// can read the same file DB concurrently. Fails if `db_path` does not exist.
+    pub fn new_read_only(db_path: &Path) -> Result<Self> {
+        let conn = StorageConnection::open_read_only(db_path)?;
+        Ok(Self::with_connection(conn))
+    }
+
     /// Creates a facade over an already-open [`StorageConnection`].
     ///
     /// The caller is responsible for ensuring the schema is initialized.

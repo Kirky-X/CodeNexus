@@ -38,6 +38,12 @@ pub struct QueryConfig {
     ///
     /// Pass `":memory:"` for an in-memory database (useful for tests).
     pub db_path: PathBuf,
+
+    /// Open the DB read-only so multiple processes can read concurrently
+    /// (DuckDB/LadybugDB shared-read). Query-only CLI commands set this;
+    /// skips schema init (the DB is already indexed). Mirrors
+    /// [`StorageConfig::read_only`](crate::storage::StorageConfig).
+    pub read_only: bool,
 }
 
 impl QueryConfig {
@@ -46,6 +52,7 @@ impl QueryConfig {
     pub fn in_memory() -> Self {
         Self {
             db_path: PathBuf::from(":memory:"),
+            read_only: false,
         }
     }
 }
@@ -99,7 +106,11 @@ impl QueryModule {
     ///
     /// Shared between [`AsyncAutoBuilder::build`] and tests.
     pub(crate) fn build_cap(config: &QueryConfig) -> Result<Arc<dyn QueryEngine>, QueryError> {
-        let facade = QueryFacade::new(&config.db_path)?;
+        let facade = if config.read_only {
+            QueryFacade::new_read_only(&config.db_path)?
+        } else {
+            QueryFacade::new(&config.db_path)?
+        };
         Ok(Arc::new(QueryCapability {
             inner: Mutex::new(facade),
         }))
