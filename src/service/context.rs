@@ -9,6 +9,8 @@ use crate::kit::{AsyncKit, AsyncReady, StorageModule, TraceModule};
 use crate::service::error::CodeNexusError;
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::error::{kit_not_initialized, to_api_error};
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+use crate::service::project::resolve_project_id;
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::runtime::kit;
 use crate::trace::context::{
@@ -60,9 +62,10 @@ pub fn run_context_enhanced(
     symbol: &str,
 ) -> Result<SymbolContext, CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
+    let project_id = resolve_project_id(&*storage, project)?;
     let collector = ContextCollector::new(&*storage);
     collector
-        .collect(project, symbol)
+        .collect(&project_id, symbol)
         .map_err(|e| CodeNexusError::Internal(format!("context collect failed: {e}")))
 }
 
@@ -260,6 +263,8 @@ mod tests {
     fn run_context_enhanced_fails_on_unknown_symbol() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});").expect("create project");
         let err = run_context_enhanced(&kit, "demo", "nonexistent.symbol")
             .expect_err("unknown symbol should error");
         let msg = err.to_string();
@@ -274,6 +279,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});").expect("create project");
         // File node required by collect_module_context
         storage.execute("CREATE (:File {id: 'file1', project: 'demo', filePath: '/src/target.rs', language: 'rust'});").expect("create file");
         // Target function
@@ -299,6 +305,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});").expect("create project");
         storage.execute("CREATE (:File {id: 'file1', project: 'demo', filePath: '/src/mod.rs', language: 'rust'});").expect("create file");
         storage.execute("CREATE (:Function {id: 'f_mod', project: 'demo', name: 'mod_fn', qualifiedName: 'demo.mod_fn', filePath: '/src/mod.rs', startLine: 1, endLine: 5, signature: 'fn mod_fn()', returnType: '()', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create function");
 
@@ -313,6 +320,31 @@ mod tests {
         assert!(json.contains("\"data_flow\""));
         assert!(json.contains("\"callers\""));
         assert!(json.contains("\"callees\""));
+    }
+
+    // ===== T012: enhanced context resolves project name → id =====
+
+    #[test]
+    fn run_context_enhanced_resolves_project_name_to_id() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        // Project: name "demo" → id "proj_x". Functions store project = ID.
+        storage.execute("CREATE (:Project {id: 'proj_x', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});").expect("create project");
+        storage.execute("CREATE (:File {id: 'file1', project: 'proj_x', filePath: '/src/target.rs', language: 'rust'});").expect("create file");
+        // qualifiedName is a full path; the caller queries by SHORT name below so
+        // the exact-FQN path (which ignores project) misses and the short-name
+        // fallback — the only path scoped by `project` — is exercised.
+        storage.execute("CREATE (:Function {id: 'f_target', project: 'proj_x', name: 'do_thing', qualifiedName: 'demo.deep.do_thing', filePath: '/src/target.rs', startLine: 10, endLine: 20, signature: 'fn do_thing()', returnType: 'void', isExported: true, docstring: '', content: '', parentQn: ''});").expect("create target");
+
+        // Caller passes project by NAME "demo" and symbol by SHORT name.
+        // Pre-fix: collect("demo","do_thing") → fallback WHERE n.project='demo'
+        //   but Function.project='proj_x' → NotFound → Err.
+        // Post-fix: resolve "demo"→"proj_x", fallback WHERE n.project='proj_x' → Ok.
+        let ctx = run_context_enhanced(&kit, "demo", "do_thing")
+            .expect("enhanced context should resolve name→id");
+        assert_eq!(ctx.symbol.name, "do_thing");
+        assert_eq!(ctx.symbol.qualified_name, "demo.deep.do_thing");
     }
 
     // ===== run_context: process edges via HANDLES_ROUTE =====
@@ -414,6 +446,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});").expect("create project");
         storage.execute("CREATE (:File {id: 'file1', project: 'demo', filePath: '/src/f1.rs', language: 'rust'});").expect("create file");
         storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'f1', qualifiedName: 'demo.f1', filePath: '/src/f1.rs', startLine: 1, endLine: 5, signature: 'fn f1()', returnType: '()', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create f1");
         init_kit(kit).expect("init_kit");
@@ -474,6 +507,8 @@ mod tests {
         reset_kit_for_testing();
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});").expect("create project");
         init_kit(kit).expect("init_kit");
 
         let rt = tokio::runtime::Runtime::new().expect("runtime");
