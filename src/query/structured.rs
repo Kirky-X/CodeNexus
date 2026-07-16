@@ -191,13 +191,12 @@ impl<'a> SearchEngine<'a> {
             ));
         }
         let escaped = escape_cypher_string(query);
-        let project_esc = escape_cypher_string(project);
+        let project_clause = and_project_clause(project);
         let mut results = Vec::new();
         for &label in SYMBOL_LABELS {
             let table = escape_identifier(label.table_name());
             let cypher = format!(
-                "MATCH (n:{table}) WHERE toLower(n.name) CONTAINS toLower('{escaped}') \
-                 AND n.project = '{project_esc}' \
+                "MATCH (n:{table}) WHERE toLower(n.name) CONTAINS toLower('{escaped}'){project_clause} \
                  RETURN n.name AS name, n.qualifiedName AS qn, n.filePath AS filePath, \
                  n.startLine AS line;"
             );
@@ -234,16 +233,24 @@ impl<'a> SearchEngine<'a> {
             .dfa_size_limit(MAX_REGEX_NFA_SIZE)
             .build()
             .map_err(|e| QueryError::InvalidQuery(format!("invalid regex: {e}")))?;
-        let project_esc = escape_cypher_string(project);
         let labels = [NodeLabel::Function, NodeLabel::Method, NodeLabel::Class];
         let mut results = Vec::new();
         for &label in &labels {
             let table = escape_identifier(label.table_name());
-            let cypher = format!(
-                "MATCH (n:{table}) WHERE n.project = '{project_esc}' \
-                 RETURN n.name AS name, n.qualifiedName AS qn, n.filePath AS filePath, \
-                 n.startLine AS line;"
-            );
+            let cypher = if project.is_empty() {
+                format!(
+                    "MATCH (n:{table}) \
+                     RETURN n.name AS name, n.qualifiedName AS qn, n.filePath AS filePath, \
+                     n.startLine AS line;"
+                )
+            } else {
+                format!(
+                    "MATCH (n:{table}) WHERE n.project = '{}' \
+                     RETURN n.name AS name, n.qualifiedName AS qn, n.filePath AS filePath, \
+                     n.startLine AS line;",
+                    escape_cypher_string(project),
+                )
+            };
             let rows = match self.storage.query(&cypher) {
                 Ok(rows) => rows,
                 Err(_) => continue,
@@ -307,15 +314,23 @@ impl<'a> SearchEngine<'a> {
             )));
         }
         let query_lower = query.to_ascii_lowercase();
-        let project_esc = escape_cypher_string(project);
         let mut results = Vec::new();
         for &label in SYMBOL_LABELS {
             let table = escape_identifier(label.table_name());
-            let cypher = format!(
-                "MATCH (n:{table}) WHERE n.project = '{project_esc}' \
-                 RETURN n.name AS name, n.qualifiedName AS qn, n.filePath AS filePath, \
-                 n.startLine AS line;"
-            );
+            let cypher = if project.is_empty() {
+                format!(
+                    "MATCH (n:{table}) \
+                     RETURN n.name AS name, n.qualifiedName AS qn, n.filePath AS filePath, \
+                     n.startLine AS line;"
+                )
+            } else {
+                format!(
+                    "MATCH (n:{table}) WHERE n.project = '{}' \
+                     RETURN n.name AS name, n.qualifiedName AS qn, n.filePath AS filePath, \
+                     n.startLine AS line;",
+                    escape_cypher_string(project),
+                )
+            };
             let rows = match self.storage.query(&cypher) {
                 Ok(rows) => rows,
                 Err(_) => continue,
@@ -369,7 +384,7 @@ impl<'a> SearchEngine<'a> {
                 "query must not be empty".to_string(),
             ));
         }
-        let project_esc = escape_cypher_string(project);
+        let project_clause = and_project_clause(project);
         let query = &params.query;
 
         // Determine which labels to search.
@@ -388,8 +403,7 @@ impl<'a> SearchEngine<'a> {
         for &label in &labels {
             let table = escape_identifier(label.table_name());
             let cypher = format!(
-                "MATCH (n:{table}) WHERE toLower(n.name) CONTAINS toLower('{escaped_q}') \
-                 AND n.project = '{project_esc}' \
+                "MATCH (n:{table}) WHERE toLower(n.name) CONTAINS toLower('{escaped_q}'){project_clause} \
                  RETURN n.id AS id, n.name AS name, n.qualifiedName AS qn, \
                  n.filePath AS filePath, n.startLine AS line;",
                 escaped_q = escape_cypher_string(query),
@@ -799,6 +813,22 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
 /// [`NodeLabel`]. Returns `None` for unknown labels.
 fn parse_node_label(name: &str) -> Option<NodeLabel> {
     name.parse::<NodeLabel>().ok()
+}
+
+/// Builds the project-filter fragment appended to a Cypher `WHERE` clause
+/// that already has at least one predicate (e.g. name CONTAINS).
+///
+/// Returns `" AND n.project = '<escaped>'"` when `project` is non-empty, or
+/// an empty `String` when `project` is empty — meaning "search across all
+/// projects" rather than filtering every real node out via `n.project = ''`
+/// (R-search-001). Mirrors the `Option<&str>` None branch of
+/// [`StructuredSearcher::search_by_name`].
+fn and_project_clause(project: &str) -> String {
+    if project.is_empty() {
+        String::new()
+    } else {
+        format!(" AND n.project = '{}'", escape_cypher_string(project))
+    }
 }
 
 /// Computes name relevance for multi-signal scoring (R-search-004).
@@ -1538,6 +1568,39 @@ mod tests {
             .search("demo", &params)
             .expect_err("empty query should error");
         assert!(err.is_invalid_query());
+    }
+
+    #[test]
+    fn search_engine_exact_returns_results_when_project_filter_empty() {
+        // R-search-001 (T001): project 空字符串不得过滤光真实符号。
+        // 真实 CLI 场景：codenexus search "parse"（不传 --project）→
+        // run_search 把 project_id 置为 ""。旧行为 search_exact 构造
+        // `AND n.project = ''`，过滤掉所有 project 非空的节点 → 返回空。
+        // 新行为：project 空时省略 project 过滤（等同 None 语义），返回符号。
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "parse_file", "demo.parse_file")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "parse".to_string(),
+            mode: SearchMode::Exact,
+            ..SearchParams::default()
+        };
+        let results = engine.search("", &params).expect("exact search");
+        assert!(
+            !results.is_empty(),
+            "空 project 不应过滤光真实符号，got {results:?}"
+        );
+        assert!(results.iter().any(|r| r.name == "parse_file"));
     }
 
     #[test]
