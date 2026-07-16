@@ -102,6 +102,11 @@ fn run_cli() {
         .version(codenexus::version())
         .about("CodeNexus — Code Intelligence");
 
+    // Inject sentinel default_values so users can omit optional parameters
+    // on the command line (sdforge 0.4.2 marks all non-Option Body params
+    // required=true with no default attribute). See `apply_sentinel_defaults`.
+    let cmd = apply_sentinel_defaults(cmd);
+
     let matches = cmd.get_matches();
 
     let sub_name = match matches.subcommand_name() {
@@ -316,6 +321,80 @@ fn extract_args(
         }
     }
     args
+}
+
+/// Sentinel default values for optional CLI parameters.
+///
+/// sdforge 0.4.2's `#[forge]` macro marks all non-`Option` Body parameters
+/// as `required = true` and does not expose a `default` attribute (the macro
+/// always passes `default = None` to `CliArgInfo::new`). This table applies
+/// clap `default_value`s post-build so users can omit these parameters on
+/// the command line; the service-layer wrappers treat the sentinel values
+/// ("0" for u32, "" for String, "false" for bool) as "use built-in default".
+///
+/// This is a workaround for sdforge 0.4.2's lack of `Option<T>` CLI support
+/// (the macro generates `s.parse::<Option<T>>()` which fails because
+/// `Option<T>: FromStr` is not implemented). When sdforge fixes the
+/// `Option<T>` parse bug, these parameters can become `Option<T>` directly
+/// and this table can be removed.
+const SENTINEL_DEFAULTS: &[(&str, &str, &str)] = &[
+    // (command, arg, default_value)
+    // — complexity: 25 threshold/flag params (project is Path, always required)
+    ("complexity", "red_only", "false"),
+    ("complexity", "sort_by_severity", "false"),
+    ("complexity", "cyclomatic_green", "0"),
+    ("complexity", "cyclomatic_yellow", "0"),
+    ("complexity", "cyclomatic_red", "0"),
+    ("complexity", "cognitive_green", "0"),
+    ("complexity", "cognitive_yellow", "0"),
+    ("complexity", "cognitive_red", "0"),
+    ("complexity", "nesting_green", "0"),
+    ("complexity", "nesting_yellow", "0"),
+    ("complexity", "nesting_red", "0"),
+    ("complexity", "func_length_green", "0"),
+    ("complexity", "func_length_yellow", "0"),
+    ("complexity", "func_length_red", "0"),
+    ("complexity", "halstead_volume_green", "0"),
+    ("complexity", "halstead_volume_yellow", "0"),
+    ("complexity", "halstead_volume_red", "0"),
+    ("complexity", "maintainability_green", "0"),
+    ("complexity", "maintainability_yellow", "0"),
+    ("complexity", "maintainability_red", "0"),
+    ("complexity", "time_complexity_green", ""),
+    ("complexity", "time_complexity_yellow", ""),
+    ("complexity", "time_complexity_red", ""),
+    ("complexity", "space_complexity_yellow", ""),
+    ("complexity", "space_complexity_red", ""),
+    // — community: resolution (empty = default 0.5)
+    ("community", "resolution", ""),
+    // — cross_service: protocol (empty = all protocols)
+    ("cross_service", "protocol", ""),
+    // — api_impact: endpoint (empty = all endpoints)
+    ("api_impact", "endpoint", ""),
+];
+
+/// Applies sentinel `default_value`s to CLI parameters listed in
+/// [`SENTINEL_DEFAULTS`].
+///
+/// For each `(command, arg, default)` entry, finds the matching subcommand
+/// and uses clap's `mut_arg` to set `required(false)` + `default_value`.
+/// This lets users omit the parameter on the command line; the service
+/// wrapper then receives the sentinel value and applies built-in defaults.
+fn apply_sentinel_defaults(mut cmd: sdforge::clap::Command) -> sdforge::clap::Command {
+    for sub in cmd.get_subcommands_mut() {
+        let name = sub.get_name().to_string();
+        for (cmd_name, arg_name, default) in SENTINEL_DEFAULTS {
+            if &name != cmd_name {
+                continue;
+            }
+            let arg_name = *arg_name;
+            let default = *default;
+            // mut_arg consumes self; take the subcommand out, modify, put back.
+            let taken = std::mem::take(sub);
+            *sub = taken.mut_arg(arg_name, |a| a.required(false).default_value(default));
+        }
+    }
+    cmd
 }
 
 /// MCP mode: build Kit, serve sdforge MCP server over stdio.

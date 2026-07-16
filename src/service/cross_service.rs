@@ -69,6 +69,11 @@ pub fn run_cross_service(
 }
 
 /// CLI wrapper — prints result to stdout as JSON.
+///
+/// `protocol` is a `String` (not `Option<String>`) because sdforge 0.4.2's
+/// `#[forge]` macro cannot parse `Option<T>` CLI args. An empty string `""`
+/// is the sentinel for "all protocols"; `main.rs` injects `""` via clap
+/// `default_value` (see `SENTINEL_DEFAULTS`) when the user omits `--protocol`.
 #[cfg(all(feature = "cli", feature = "cross-service"))]
 #[forge(
     name = "cross_service",

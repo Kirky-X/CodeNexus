@@ -200,7 +200,7 @@ codenexus dead_code --project myproject --entry "" --check_exported true --check
 codenexus dead_code --project myproject --edge_types "CALLS,FFI_CALLS,IMPLEMENTS,USAGE,TESTS"
 
 # 16. 跨服务调用链检测（HTTP REST / gRPC / GraphQL / 消息队列 / 事件总线）
-codenexus cross_service --project myproject --protocol ""
+codenexus cross_service --project myproject                    # 省略 --protocol = 所有协议
 codenexus cross_service --project myproject --protocol grpc
 
 # 17. 架构概览（模块边界 + 依赖方向 + 分层 + 跨服务依赖）
@@ -233,10 +233,10 @@ codenexus architecture --project myproject
 | `complexity` | AST 复杂度分析（8 项指标 + 可配置阈值，`complexity` feature） |
 | `route_map` | HTTP 路由映射（API 端点清单，`api-review` feature） |
 | `shape_check` | API 形状检查（请求/响应结构验证，`api-review` feature） |
-| `api_impact` | API 变更影响分析（`api-review` feature） |
+| `api_impact` | API 变更影响分析（`--endpoint` 可选，省略=分析所有端点；`api-review` feature） |
 | `tool_map` | 工具映射（MCP 工具清单，`api-review` feature） |
-| `community` | 社区检测（Louvain 模块度优化，`community` feature） |
-| `cross_service` | 跨服务调用链检测（HTTP REST/gRPC/GraphQL/消息队列/事件总线，`cross-service` feature） |
+| `community` | 社区检测（`--resolution` 可选，省略=默认 0.5；Louvain 模块度优化，`community` feature） |
+| `cross_service` | 跨服务调用链检测（`--protocol` 可选，省略=所有协议；HTTP REST/gRPC/GraphQL/消息队列/事件总线，`cross-service` feature） |
 | `lsp_goto_def` | LSP 定义跳转（rust-analyzer 集成，`lsp` feature） |
 | `lsp_hover` | LSP 悬停信息（rust-analyzer 集成，`lsp` feature） |
 
@@ -295,7 +295,7 @@ codenexus setup
 | `--time_complexity_green <O(...)>` / `--time_complexity_yellow <O(...)>` / `--time_complexity_red <O(...)>` | 时间复杂度阈值 |
 | `--space_complexity_yellow <O(...)>` / `--space_complexity_red <O(...)>` | 空间复杂度阈值（3 级，无 Critical） |
 
-`<O(...)>` 取值：时间 `O(1)` / `O(log n)` / `O(n)` / `O(n log n)` / `O(n^2)` / `O(n^3)` / `O(2^n)`，空间 `O(1)` / `O(n)` / `O(n^2)`。未设置的参数走默认值。
+`<O(...)>` 取值：时间 `O(1)` / `O(log n)` / `O(n)` / `O(n log n)` / `O(n^2)` / `O(n^3)` / `O(2^n)`，空间 `O(1)` / `O(n)` / `O(n^2)`。所有阈值与标志参数（含 `--red_only`/`--sort_by_severity`）均可省略；省略时 `u32` 阈值与 `O(...)` 字符串阈值走默认值（见下表），`bool` 标志默认 `false`。
 
 ### 默认阈值
 

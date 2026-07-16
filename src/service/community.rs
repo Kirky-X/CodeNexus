@@ -55,6 +55,12 @@ pub fn run_community(
 }
 
 /// CLI wrapper — prints result to stdout as JSON.
+///
+/// `resolution` is a `String` (not `Option<f64>`) because sdforge 0.4.2's
+/// `#[forge]` macro cannot parse `Option<T>` CLI args. An empty string `""`
+/// is the sentinel for "use default resolution (0.5)"; `main.rs` injects
+/// `""` via clap `default_value` (see `SENTINEL_DEFAULTS`) when the user
+/// omits `--resolution`.
 #[cfg(all(feature = "cli", feature = "community"))]
 #[forge(
     name = "community",

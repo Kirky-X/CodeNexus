@@ -263,6 +263,12 @@ fn complexity_core(
 }
 
 /// CLI wrapper — prints result to stdout as JSON.
+///
+/// All threshold/flag params use sentinel values (0 for u32, "" for String,
+/// "false" for bool) because sdforge 0.4.2's `#[forge]` macro cannot parse
+/// `Option<T>` CLI args. `main.rs` injects these sentinel values via clap
+/// `default_value` (see `SENTINEL_DEFAULTS`) so users can omit them on the
+/// command line; `build_thresholds` then treats sentinels as "use default".
 #[cfg(all(feature = "cli", feature = "complexity"))]
 #[allow(clippy::too_many_arguments)]
 #[forge(
