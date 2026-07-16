@@ -44,6 +44,7 @@ Originally recorded in `temp/problem.md` against a `--version` polluted by the `
 | E | P3 (fixed) | `lsp_*`, `list`, `complexity` | No-subcommand / not-found / ambiguous exit non-zero. `lsp_*` (no server) exits 2 (`failed to start LSP server`); `list --db <missing>` exits 4 (NotFound). Verified 2026-07-16. |
 | F | P3 (fixed) | `context --enhanced true` | Resolves `--project <name\|id>`; ambiguous symbols fail fast (exit 1, ~0.3s) instead of raising a generic error or timing out. |
 | Search | P2 (fixed) | `search` | The empty-`project` filter (appended `AND n.project = ''`, dropping every row) and the silent per-table `Err(_) => continue` (swallowing storage errors) were fixed in `src/query/structured.rs`. Verified: `search --text parse` returns `count:3`. |
+| Impact large graph | P1 (fixed) | `impact` | The ~77s N+1 regression on large subgraphs (per-id × per-label traversal in phase-3 node materialization, ~85k DB round-trips) is fixed in 0.3.4: `load_graph` BFS now caps at `MAX_SUBGRAPH_NODES=1000` and sets `truncated:true` on the cap; node materialization is batched (one `WHERE id IN [...]` per label, ~17 round-trips). Verified 2026-07-17 (6289 functions): `sanitize_project_name --depth 3` → `node_count=1000, truncated:true, ~5s` (was ~77s / 5034 nodes). |
 | Rust call graph | P1 (open) | `dead_code`, `trace`, `impact` (Rust) | Trait `dyn` dispatch and cross-module calls are not captured; treat results as a lower bound. |
 
 ## Examples

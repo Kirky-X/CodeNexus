@@ -153,7 +153,7 @@ All of `--symbol`, `--trace_type`, `--depth`, `--path_filter`, `--detect_cycles`
 
 Performs reverse traversal to find all symbols that depend on the target.
 
-> ⚠️ **Performance:** On large graphs (the bundled `codenexus.lbug` has ~928k nodes), `impact` with broad `--edge_types`/`--max_depth` and a high-degree target **exceeds the 120s tool timeout** (e.g. `run_index --depth 3 --edge_types "" --max_depth 5` timed out). Keep it tractable: narrow `--edge_types` to a few types, lower `--max_depth`, and pick a small/leaf target. A scoped run (`--edge_types "CALLS" --max_depth 3`) on a leaf function completes in seconds and still returns thousands of dependent nodes.
+> ⚠️ **Performance:** The subgraph load is capped at `MAX_SUBGRAPH_NODES=1000` (BFS stops early; `truncated:true` in the output flags a capped result) and node materialization is batched, so `impact` no longer hits the 120s tool timeout that broad `--edge_types`/high `--max_depth`/high-degree targets used to trigger. Narrowing `--edge_types` and lowering `--max_depth` still keeps results focused (fewer irrelevant edges). A scoped run (`--edge_types "CALLS" --max_depth 3`) completes in seconds.
 
 ```bash
 codenexus impact --symbol <SYMBOL> --depth <N> --edge_types <LIST> --max_depth <N> --include_tests <BOOL> [--db <DB_PATH>]
@@ -169,7 +169,7 @@ All of `--symbol`, `--depth`, `--edge_types`, `--max_depth`, `--include_tests` a
 - `--include_tests <BOOL>` — `true` includes `TESTS` edges in the reverse BFS; default `false` (required)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
-**Output (JSON):** `symbol`, `depth`, `node_count`, `edge_count`, `nodes[]`, `edges[]`, `risk_assessment` (when enhanced), `affected[]` (when enhanced, each `ImpactNode` has `id`, `name`, `qualified_name`, `edge_type`, `depth`, `path`)
+**Output (JSON):** `symbol`, `depth`, `node_count`, `edge_count`, `truncated` (bool; `true` when the loaded subgraph hit the `MAX_SUBGRAPH_NODES=1000` cap), `nodes[]`, `edges[]`, `risk_assessment` (when enhanced), `affected[]` (when enhanced, each `ImpactNode` has `id`, `name`, `qualified_name`, `edge_type`, `depth`, `path`)
 
 #### context — Show a 360° view of a symbol (H8)
 
