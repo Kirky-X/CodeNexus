@@ -51,8 +51,17 @@ pub fn load_graph_for_symbol(
     symbol: &str,
     depth: usize,
     max_nodes: usize,
+    read_only: bool,
 ) -> Result<(Graph, bool), StorageError> {
-    let repo = Repository::open(db_path)?;
+    // Open read-only when the caller is a query-only command so concurrent
+    // readers don't contend on the write lock (mirrors StorageModule /
+    // QueryModule read_only propagation). Read-only skips schema init — the
+    // target DB is already indexed.
+    let repo = if read_only {
+        Repository::open_read_only(db_path)
+    } else {
+        Repository::open(db_path)
+    }?;
     // Phase 1: find start node ids matching the symbol.
     let start_ids = find_symbol_node_ids(&repo, symbol)?;
     if start_ids.is_empty() {
@@ -478,7 +487,7 @@ mod tests {
         let db = fresh_db_path();
         seed_call_graph(&db);
         let (graph, _truncated) =
-            load_graph_for_symbol(&db, "a", 3, MAX_SUBGRAPH_NODES).expect("load");
+            load_graph_for_symbol(&db, "a", 3, MAX_SUBGRAPH_NODES, false).expect("load");
         // Should have loaded at least the start node and its neighbor.
         assert!(graph.node_count() >= 1, "graph should have nodes");
     }
@@ -488,7 +497,7 @@ mod tests {
         let db = fresh_db_path();
         seed_call_graph(&db);
         let (graph, _truncated) =
-            load_graph_for_symbol(&db, "nonexistent", 3, MAX_SUBGRAPH_NODES).expect("load");
+            load_graph_for_symbol(&db, "nonexistent", 3, MAX_SUBGRAPH_NODES, false).expect("load");
         assert_eq!(graph.node_count(), 0, "missing symbol → empty graph");
     }
 
@@ -497,7 +506,7 @@ mod tests {
         let db = fresh_db_path();
         seed_call_graph(&db);
         let (graph, _truncated) =
-            load_graph_for_symbol(&db, "a", 0, MAX_SUBGRAPH_NODES).expect("load");
+            load_graph_for_symbol(&db, "a", 0, MAX_SUBGRAPH_NODES, false).expect("load");
         // depth 0 → only the start node, no edges expanded.
         assert!(graph.node_count() >= 1);
     }
@@ -507,7 +516,7 @@ mod tests {
         let db = fresh_db_path();
         seed_call_graph(&db);
         let (graph, _truncated) =
-            load_graph_for_symbol(&db, "a", 3, MAX_SUBGRAPH_NODES).expect("load");
+            load_graph_for_symbol(&db, "a", 3, MAX_SUBGRAPH_NODES, false).expect("load");
         // Should have at least one edge (a -> b).
         assert!(graph.edge_count() >= 1, "graph should have edges");
         // The edge should be a CALLS edge.
@@ -529,7 +538,7 @@ mod tests {
         let db = fresh_db_path();
         seed_call_graph(&db);
         let (graph, _truncated) =
-            load_graph_for_symbol(&db, "a", 3, MAX_SUBGRAPH_NODES).expect("load");
+            load_graph_for_symbol(&db, "a", 3, MAX_SUBGRAPH_NODES, false).expect("load");
         // Count CALLS edges between f_a and f_b — must be exactly 1.
         let dup_count = graph
             .edges
@@ -611,7 +620,7 @@ mod tests {
         conn.execute("CREATE (:Function {id: 'f_c', project: 'demo', name: 'c', qualifiedName: 'demo.c', filePath: '/src/c.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create c");
         conn.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'CALLS', confidence: 1.0, reason: '', startLine: 2, project: 'demo'});").expect("edge a->b");
         conn.execute("CREATE (:CodeRelation {id: 'e2', source: 'f_b', target: 'f_c', type: 'CALLS', confidence: 1.0, reason: '', startLine: 2, project: 'demo'});").expect("edge b->c");
-        let (graph, truncated) = load_graph_for_symbol(&db, "a", 3, 2).expect("load");
+        let (graph, truncated) = load_graph_for_symbol(&db, "a", 3, 2, false).expect("load");
         assert!(truncated, "BFS must report truncation at max_nodes=2");
         assert!(
             graph.node_count() <= 2,
@@ -643,7 +652,7 @@ mod tests {
         conn.execute("CREATE (:CodeRelation {id: 'e_b', source: 'dup_b', target: 'nb_b', type: 'CALLS', confidence: 1.0, reason: '', startLine: 2, project: 'demo'});").expect("create edge b");
 
         let (graph, _truncated) =
-            load_graph_for_symbol(&db, "dup", 3, MAX_SUBGRAPH_NODES).expect("load");
+            load_graph_for_symbol(&db, "dup", 3, MAX_SUBGRAPH_NODES, false).expect("load");
         // Both ambiguous start nodes materialized.
         let dup_count = graph.nodes.values().filter(|n| n.name == "dup").count();
         assert_eq!(

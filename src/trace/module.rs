@@ -86,6 +86,11 @@ pub struct TraceConfig {
     /// Whether to traverse `HttpCalls` edges for cross-service tracing
     /// (default `false`).
     pub cross_service: bool,
+    /// Open the DB read-only so multiple processes can read concurrently
+    /// (DuckDB/LadybugDB shared-read). Trace-only CLI commands set this;
+    /// skips schema init (the DB is already indexed). Mirrors
+    /// [`StorageConfig::read_only`](crate::storage::StorageConfig).
+    pub read_only: bool,
 }
 
 /// Maximum allowed depth (spec constraint: max_depth ≤ 10).
@@ -100,6 +105,7 @@ impl Default for TraceConfig {
             path_filter: None,
             detect_cycles: false,
             cross_service: false,
+            read_only: false,
         }
     }
 }
@@ -172,6 +178,7 @@ impl TraceModule {
     pub(crate) fn build_cap(config: &TraceConfig) -> Result<Arc<dyn TraceEngine>, TraceError> {
         Ok(Arc::new(TraceCapability {
             db_path: config.db_path.clone(),
+            read_only: config.read_only,
         }))
     }
 }
@@ -197,6 +204,8 @@ impl TraceModule {
 struct TraceCapability {
     /// Database path used to load subgraphs.
     db_path: PathBuf,
+    /// Whether subgraph loads open the DB read-only (concurrent-safe reads).
+    read_only: bool,
 }
 
 impl TraceEngine for TraceCapability {
@@ -208,8 +217,13 @@ impl TraceEngine for TraceCapability {
     ) -> std::result::Result<TraceResult, TraceError> {
         // Load the subgraph reachable from `symbol` within `depth` hops.
         // StorageError → TraceError::Storage via the `From` impl in error.rs.
-        let (graph, _truncated) =
-            load_graph_for_symbol(&self.db_path, symbol, depth, MAX_SUBGRAPH_NODES)?;
+        let (graph, _truncated) = load_graph_for_symbol(
+            &self.db_path,
+            symbol,
+            depth,
+            MAX_SUBGRAPH_NODES,
+            self.read_only,
+        )?;
         let facade = TraceFacade::new(&graph);
         facade.trace(symbol, trace_type, depth)
     }
@@ -231,6 +245,7 @@ impl TraceEngine for TraceCapability {
             symbol,
             depth,
             max_nodes,
+            self.read_only,
         )?)
     }
 }

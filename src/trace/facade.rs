@@ -811,6 +811,7 @@ mod tests {
             }),
             detect_cycles: true,
             cross_service: true,
+            read_only: false,
         };
         let json = serde_json::to_string(&config).expect("serialize TraceConfig");
         assert!(json.contains("\"max_depth\":7"));
@@ -838,6 +839,7 @@ mod tests {
             path_filter: None,
             detect_cycles: true,
             cross_service: true,
+            read_only: false,
         };
         let engine = TraceEngine::with_config(storage.as_ref(), config);
         assert_eq!(engine.config().max_depth, 10);
