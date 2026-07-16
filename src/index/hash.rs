@@ -136,7 +136,7 @@ mod tests {
         let hash = compute_content_hash(b"hello world");
         assert_eq!(
             hash,
-            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9" // pragma: allowlist secret
         );
     }
 
@@ -146,7 +146,7 @@ mod tests {
         let hash = compute_content_hash(b"");
         assert_eq!(
             hash,
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" // pragma: allowlist secret
         );
         assert_eq!(hash.len(), 64);
     }
@@ -238,7 +238,7 @@ mod tests {
         let hash = compute_file_hash(tmp.path()).unwrap();
         assert_eq!(
             hash,
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" // pragma: allowlist secret
         );
     }
 }

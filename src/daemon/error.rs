@@ -15,6 +15,10 @@ pub enum DaemonError {
     /// I/O 错误。
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// 信号注册错误（SIGTERM/SIGINT handler 安装失败）。
+    #[error("signal registration failed: {0}")]
+    Signal(String),
 }
 
 #[cfg(test)]

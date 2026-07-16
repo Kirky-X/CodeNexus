@@ -14,6 +14,8 @@ use std::time::{Duration, Instant};
 
 use notify_debouncer_full::notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent};
+use signal_hook::consts::{SIGINT, SIGTERM};
+use signal_hook::flag;
 use tracing::{info, warn};
 
 use crate::daemon::error::DaemonError;
@@ -102,12 +104,31 @@ impl Daemon {
         &self.db_path
     }
 
+    /// 注册 SIGTERM/SIGINT 信号处理器，收到信号时设置 `stop` 标志。
+    ///
+    /// 使用 `signal_hook::flag::register` 将信号映射到 `self.stop` 的
+    /// `store(true, SeqCst)` 操作。收到信号后，`run()` 的循环会在下一
+    /// 次 tick（≤500ms）检测到 `stop=true` 并优雅退出。
+    ///
+    /// # Errors
+    ///
+    /// 返回 [`DaemonError::Signal`] 如果信号处理器注册失败。
+    fn register_signal_handlers(&self) -> Result<(), DaemonError> {
+        flag::register(SIGTERM, Arc::clone(&self.stop))
+            .map_err(|e| DaemonError::Signal(e.to_string()))?;
+        flag::register(SIGINT, Arc::clone(&self.stop))
+            .map_err(|e| DaemonError::Signal(e.to_string()))?;
+        info!(signals = "SIGTERM,SIGINT", "信号处理器已注册");
+        Ok(())
+    }
+
     /// 启动阻塞事件循环，直到调用 `stop_handle().store(true)` 或通道断开。
     ///
     /// # Errors
     ///
     /// 返回 [`DaemonError::Notify`] 如果无法创建防抖器或开始监视。
     pub fn run(&mut self) -> Result<(), DaemonError> {
+        self.register_signal_handlers()?;
         let (tx, rx) = mpsc::channel::<DebounceEventResult>();
         let mut debouncer = new_debouncer(Duration::from_millis(self.debounce_ms), None, tx)?;
         debouncer.watch(&self.watch_path, RecursiveMode::Recursive)?;
@@ -148,6 +169,7 @@ impl Daemon {
     ///
     /// 返回 [`DaemonError::Notify`] 如果无法创建防抖器或开始监视。
     pub fn run_for_duration(&mut self, duration: Duration) -> Result<(), DaemonError> {
+        self.register_signal_handlers()?;
         let (tx, rx) = mpsc::channel::<DebounceEventResult>();
         let mut debouncer = new_debouncer(Duration::from_millis(self.debounce_ms), None, tx)?;
         debouncer.watch(&self.watch_path, RecursiveMode::Recursive)?;
@@ -933,5 +955,45 @@ mod tests {
             captured.contains("remove"),
             "daemon_event 应携带 change_type=remove"
         );
+    }
+
+    // --- 信号处理测试 (BUG-002) ---
+
+    #[test]
+    fn register_signal_handlers_returns_ok() {
+        let daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
+        let result = daemon.register_signal_handlers();
+        assert!(result.is_ok(), "信号处理器注册应成功: {result:?}");
+    }
+
+    #[test]
+    fn signal_sets_stop_flag_via_signal_hook() {
+        // 用 SIGUSR1（安全测试信号）验证 signal_hook → stop 标志的映射。
+        // SIGUSR1 不会导致进程退出，适合在测试中 raise。
+        use signal_hook::consts::SIGUSR1;
+        use std::sync::atomic::Ordering;
+
+        let daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
+        let stop = daemon.stop_handle();
+
+        assert!(!stop.load(Ordering::SeqCst), "初始状态 stop 应为 false");
+
+        flag::register(SIGUSR1, Arc::clone(&stop)).expect("register SIGUSR1");
+        // raise SIGUSR1 → signal_hook 设置 stop=true
+        unsafe { libc_raise(SIGUSR1) };
+
+        // signal_hook 的 flag handler 是同步的，raise 返回后 stop 应已设置。
+        assert!(stop.load(Ordering::SeqCst), "收到信号后 stop 应为 true");
+    }
+
+    // libc raise 的 thin wrapper（避免引入 libc crate 依赖）。
+    // signal_hook 已依赖 libc，此处直接声明 extern。
+    extern "C" {
+        fn raise(sig: i32) -> i32;
+    }
+
+    /// 调用 libc raise(SIGUSR1)。
+    unsafe fn libc_raise(sig: i32) {
+        let _ = raise(sig);
     }
 }

@@ -53,7 +53,7 @@ lang-json = ["dep:tree-sitter-json"]
 lang-regex = ["dep:tree-sitter-regex"]
 lang-verilog = ["dep:tree-sitter-verilog"]
 embed = ["dep:reqwest", "dep:ort", "dep:tokenizers", "dep:ndarray"]
-daemon = ["dep:notify", "dep:notify-debouncer-full"]
+daemon = ["dep:notify", "dep:notify-debouncer-full", "dep:signal-hook"]
 analysis = []
 api-review = ["analysis"]
 community = ["analysis", "dep:petgraph"]
@@ -94,6 +94,7 @@ rayon = "1"
 ignore = "0.4"
 notify = { version = "8", optional = true }
 notify-debouncer-full = { version = "0.7", optional = true }
+signal-hook = { version = "0.3", optional = true }
 # clap is only used by the codenexus-verify binary's derive macros.
 # The main codenexus binary uses sdforge::clap (re-exported via the cli feature).
 clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
