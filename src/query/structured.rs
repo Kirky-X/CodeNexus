@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
+use tracing::warn;
 
 /// Maximum value accepted for [`SearchParams::limit`].
 pub const MAX_LIMIT: usize = 500;
@@ -202,7 +203,10 @@ impl<'a> SearchEngine<'a> {
             );
             match self.storage.query(&cypher) {
                 Ok(rows) => results.extend(rows_to_search_results(rows, label, query)),
-                Err(_) => continue,
+                Err(e) => {
+                    warn!(table = %table, error = %e, "search query failed");
+                    continue;
+                }
             }
         }
         if limit < results.len() {
@@ -253,7 +257,10 @@ impl<'a> SearchEngine<'a> {
             };
             let rows = match self.storage.query(&cypher) {
                 Ok(rows) => rows,
-                Err(_) => continue,
+                Err(e) => {
+                    warn!(table = %table, error = %e, "search query failed");
+                    continue;
+                }
             };
             for row in rows {
                 let Some(name) = row.first().and_then(|v| v.as_str()) else {
@@ -333,7 +340,10 @@ impl<'a> SearchEngine<'a> {
             };
             let rows = match self.storage.query(&cypher) {
                 Ok(rows) => rows,
-                Err(_) => continue,
+                Err(e) => {
+                    warn!(table = %table, error = %e, "search query failed");
+                    continue;
+                }
             };
             for row in rows {
                 let Some(name) = row.first().and_then(|v| v.as_str()) else {
@@ -410,7 +420,10 @@ impl<'a> SearchEngine<'a> {
             );
             let rows = match self.storage.query(&cypher) {
                 Ok(rows) => rows,
-                Err(_) => continue,
+                Err(e) => {
+                    warn!(table = %table, error = %e, "search query failed");
+                    continue;
+                }
             };
             for row in rows {
                 let Some(name) = row.get(1).and_then(|v| v.as_str()) else {
@@ -636,7 +649,10 @@ impl<'a> StructuredSearcher<'a> {
             // toLower() may be unsupported; skip those gracefully.
             match self.conn.query(&cypher) {
                 Ok(rows) => results.extend(rows_to_search_results(rows, label, name)),
-                Err(_) => continue,
+                Err(e) => {
+                    warn!(table = %table, error = %e, "search query failed");
+                    continue;
+                }
             }
         }
         sort_and_truncate(&mut results, limit);
@@ -693,7 +709,10 @@ impl<'a> StructuredSearcher<'a> {
             };
             match self.conn.query(&cypher) {
                 Ok(rows) => results.extend(rows_to_search_results(rows, label, "")),
-                Err(_) => continue,
+                Err(e) => {
+                    warn!(table = %table, error = %e, "search query failed");
+                    continue;
+                }
             }
         }
         // Sort by start line for deterministic file-order output.
@@ -3390,6 +3409,39 @@ mod tests {
         };
         let results = engine.search("demo", &params).expect("exact search");
         assert!(results.iter().any(|r| r.name == "parse"));
+    }
+
+    #[test]
+    fn search_exact_logs_warning_on_per_table_query_error() {
+        // T002: a failed per-table query must be logged (warn), not silently
+        // swallowed. Reuses the DROP TABLE Class fixture from the continue test.
+        let storage = build_storage();
+        let func = Node::builder(NodeLabel::Function, "parse", "demo.parse")
+            .id("f1")
+            .project("demo")
+            .file_path("/a.rs")
+            .start_line(1)
+            .end_line(10)
+            .language(Language::Rust)
+            .build();
+        storage
+            .save_nodes(&[func], NodeLabel::Function)
+            .expect("save_nodes");
+        storage.execute("DROP TABLE Class;").expect("drop table");
+        let engine = SearchEngine::new(storage.as_ref());
+        let params = SearchParams {
+            query: "parse".to_string(),
+            mode: SearchMode::Exact,
+            ..SearchParams::default()
+        };
+        let captured = crate::test_log_capture::capture_tracing(|| {
+            let results = engine.search("demo", &params).expect("exact search");
+            assert!(results.iter().any(|r| r.name == "parse"));
+        });
+        assert!(
+            captured.contains("search query failed"),
+            "expected a warn log for the failed Class query, got: {captured:?}"
+        );
     }
 
     #[test]
