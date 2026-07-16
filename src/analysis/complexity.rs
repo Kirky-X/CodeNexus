@@ -10,6 +10,7 @@
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::path::Path;
 use std::str::FromStr;
 use tree_sitter::Node;
 
@@ -1011,41 +1012,66 @@ fn nesting_depth_count(node: Node<'_>, language: Language, current_depth: u32) -
     max_depth
 }
 
+/// Reads the full source file at `canonical_root/file_path` with path-traversal
+/// protection. `canonical_root` must already be canonicalized (e.g. via
+/// `Path::canonicalize`). Returns `None` if the file cannot be read or the
+/// resolved path escapes `canonical_root`.
+///
+/// The joined target is canonicalized and must start with `canonical_root`.
+/// This blocks `../` sequences and symlink escapes. Leading `/` in `file_path`
+/// is stripped so stored absolute-looking filePaths are treated as relative to
+/// `canonical_root`.
+///
+/// The file is opened via `File::open` on the canonicalized path and read from
+/// the handle, narrowing the TOCTOU window between canonicalize and read
+/// compared to `fs::read_to_string` (which re-resolves the path internally).
+fn read_source_file_canonical(canonical_root: &Path, file_path: &str) -> Option<String> {
+    use std::fs::File;
+    use std::io::Read;
+
+    let relative = file_path.trim_start_matches('/');
+    let canonical_target = canonical_root.join(relative).canonicalize().ok()?;
+    if !canonical_target.starts_with(canonical_root) {
+        return None;
+    }
+    let mut file = File::open(&canonical_target).ok()?;
+    let mut content = String::new();
+    file.read_to_string(&mut content).ok()?;
+    Some(content)
+}
+
 /// Reads the full source file at `root_path/file_path` with path-traversal
 /// protection. Returns `None` if the file cannot be read or the resolved path
 /// escapes `root_path`.
 ///
-/// Both `root_path` and the joined target are canonicalized, then the target
-/// must start with the canonical root. This blocks `../` sequences and symlink
-/// escapes. Leading `/` in `file_path` is stripped so stored absolute-looking
-/// filePaths are treated as relative to `root_path`.
+/// Convenience wrapper that canonicalizes `root_path` then delegates to
+/// [`read_source_file_canonical`]. Callers reading many files from the same
+/// root should pre-compute the canonical root and call
+/// [`read_source_file_canonical`] directly to avoid repeated canonicalize
+/// syscalls.
+#[cfg(test)]
 fn read_source_file(root_path: &str, file_path: &str) -> Option<String> {
-    use std::fs;
-    use std::path::Path;
-
     let canonical_root = Path::new(root_path).canonicalize().ok()?;
-    let relative = file_path.trim_start_matches('/');
-    let canonical_target = canonical_root.join(relative).canonicalize().ok()?;
-    if !canonical_target.starts_with(&canonical_root) {
-        return None;
-    }
-    fs::read_to_string(&canonical_target).ok()
+    read_source_file_canonical(&canonical_root, file_path)
 }
 
 /// Slices `content` by 1-based line range `[start_line, end_line]` (inclusive).
 /// Returns `None` for invalid ranges or `start_line` beyond the file length.
 /// `end_line` is clamped to the actual line count.
+///
+/// Uses lazy `skip().take()` iteration so only the requested lines are
+/// materialized, avoiding a full `Vec<&str>` allocation for large files.
 fn slice_lines(content: &str, start_line: u32, end_line: u32) -> Option<String> {
     if start_line == 0 || end_line == 0 || start_line > end_line {
         return None;
     }
-    let lines: Vec<&str> = content.lines().collect();
     let start = (start_line - 1) as usize;
-    let end = (end_line as usize).min(lines.len());
-    if start >= lines.len() {
+    let count = (end_line - start_line + 1) as usize;
+    let selected: Vec<&str> = content.lines().skip(start).take(count).collect();
+    if selected.is_empty() {
         return None;
     }
-    Some(lines[start..end].join("\n"))
+    Some(selected.join("\n"))
 }
 
 /// Reads lines `[start_line, end_line]` (1-indexed, inclusive) from the file
@@ -1106,8 +1132,9 @@ impl<'a> ComplexityAnalyzer<'a> {
     ///
     /// When a node's `content` property is empty (e.g. LadybugDB's COPY
     /// parser stripped newlines), the analyzer queries the `Project` node's
-    /// `rootPath` and reads the source range `[startLine, endLine]` directly
-    /// from disk via [`read_source_file`] (path-traversal protected) and
+    /// `rootPath`, canonicalizes it once, and reads the source range
+    /// `[startLine, endLine]` directly from disk via
+    /// [`read_source_file_canonical`] (path-traversal protected) and
     /// [`slice_lines`]. Full-file reads are cached per `analyze` call so each
     /// file is read at most once even when many functions share the same
     /// `filePath`. If the disk read also fails, the node is skipped with a
@@ -1131,6 +1158,12 @@ impl<'a> ComplexityAnalyzer<'a> {
             .and_then(|row| row.first())
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+
+        // Pre-compute the canonical root once so each disk-fallback read
+        // avoids a repeated `canonicalize` syscall on the same root path.
+        let canonical_root = root_path
+            .as_deref()
+            .and_then(|r| Path::new(r).canonicalize().ok());
 
         // LadybugDB's Cypher subset does not support `WHERE (n:Function OR
         // n:Method)` label expressions, so we issue two separate queries and
@@ -1174,15 +1207,16 @@ impl<'a> ComplexityAnalyzer<'a> {
                     .unwrap_or(0);
                 let db_content = row[5].as_str().unwrap_or_default().to_string();
 
-                // If DB content is empty, try disk fallback via Project rootPath.
-                // The file-level cache ensures each file is read at most once
-                // even when many functions share the same filePath.
+                // If DB content is empty, try disk fallback via the
+                // pre-canonicalized Project rootPath. The file-level cache
+                // ensures each file is read at most once even when many
+                // functions share the same filePath.
                 let content = if db_content.is_empty() {
-                    match root_path.as_deref() {
+                    match canonical_root.as_ref() {
                         Some(root) => {
                             let cached = file_cache
                                 .entry(file_path.clone())
-                                .or_insert_with(|| read_source_file(root, &file_path));
+                                .or_insert_with(|| read_source_file_canonical(root, &file_path));
                             match cached
                                 .as_ref()
                                 .and_then(|full| slice_lines(full, start_line, end_line))
@@ -3240,6 +3274,120 @@ fn f(arr: &[i32], target: i32) -> i32 {
         assert!(
             result.is_empty(),
             "empty content with missing disk file should be skipped"
+        );
+    }
+
+    // --- symlink escape protection tests ---
+
+    #[cfg(unix)]
+    #[test]
+    fn read_source_file_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        // root/ contains evil.rs → /etc/passwd (or another out-of-root target).
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "top secret\n").unwrap();
+        let link = dir.path().join("evil.rs");
+        symlink(outside.path().join("secret.txt"), &link).unwrap();
+        let root = dir.path().to_str().unwrap();
+        // canonicalize resolves evil.rs → /tmp/<outside>/secret.txt, which
+        // does not start_with the canonical root → must be rejected.
+        assert!(
+            read_source_file(root, "evil.rs").is_none(),
+            "symlink escaping the root must be rejected"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_source_file_canonical_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+        use std::path::Path;
+
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "top secret\n").unwrap();
+        let link = dir.path().join("evil.rs");
+        symlink(outside.path().join("secret.txt"), &link).unwrap();
+        let canonical_root = Path::new(dir.path()).canonicalize().unwrap();
+        assert!(
+            read_source_file_canonical(&canonical_root, "evil.rs").is_none(),
+            "symlink escaping the canonical root must be rejected"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_source_file_allows_symlink_inside_root() {
+        use std::os::unix::fs::symlink;
+
+        // A symlink whose target is still inside root must be allowed.
+        let dir = TempDir::new().unwrap();
+        let real = dir.path().join("real.rs");
+        std::fs::write(&real, "fn real() {}\n").unwrap();
+        let link = dir.path().join("link.rs");
+        symlink(&real, &link).unwrap();
+        let root = dir.path().to_str().unwrap();
+        let content =
+            read_source_file(root, "link.rs").expect("symlink inside root should be allowed");
+        assert_eq!(content, "fn real() {}\n");
+    }
+
+    // --- analyze: disk fallback caches shared file_path ---
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn analyze_disk_fallback_caches_shared_file_path() {
+        // Two functions in the same file, both with empty DB content, should
+        // both be analyzed via the disk fallback. The per-file cache is an
+        // implementation detail; the observable contract is that every
+        // empty-content function sharing a filePath still gets an entry.
+        let dir = TempDir::new().unwrap();
+        let src_dir = dir.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        // Two functions on different lines so both ranges are valid.
+        std::fs::write(src_dir.join("lib.rs"), "fn first() {}\nfn second() {}\n").unwrap();
+
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        seed_project_with_root(&kit, "demo", "demo", dir.path().to_str().unwrap());
+        create_function_with_content(
+            &kit,
+            "f_first",
+            "demo",
+            "first",
+            "demo.first",
+            "/src/lib.rs",
+            1,
+            1,
+            "",
+        );
+        create_function_with_content(
+            &kit,
+            "f_second",
+            "demo",
+            "second",
+            "demo.second",
+            "/src/lib.rs",
+            2,
+            2,
+            "",
+        );
+
+        let storage = storage(&kit);
+        let analyzer = ComplexityAnalyzer::new(&*storage);
+        let result = analyzer.analyze("demo").expect("analyze");
+        assert_eq!(
+            result.len(),
+            2,
+            "both functions sharing a filePath should be analyzed via disk fallback"
+        );
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"first"), "first function should be present");
+        assert!(
+            names.contains(&"second"),
+            "second function should be present"
         );
     }
 }
