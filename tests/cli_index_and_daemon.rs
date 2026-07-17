@@ -98,21 +98,26 @@ fn build_rust_repo(dir: &Path) {
     );
 }
 
-/// Index args for a fresh build (force=false, no LSP/embed, no ram_first).
-fn index_args(repo: &Path, db: &Path) -> Vec<String> {
+/// Index args builder with explicit `force` flag (unifies arg construction).
+fn index_args_with(repo: &Path, db: &Path, force: bool) -> Vec<String> {
     vec![
         "index".to_string(),
         "--path".to_string(),
         repo.to_string_lossy().to_string(),
         "--name".to_string(),
         "demo".to_string(),
-        "--force=false".to_string(),
+        format!("--force={force}"),
         "--lsp=false".to_string(),
         "--embed=false".to_string(),
         "--ram_first=false".to_string(),
         "--db".to_string(),
         db.to_string_lossy().to_string(),
     ]
+}
+
+/// Index args for a fresh build (force=false, no LSP/embed, no ram_first).
+fn index_args(repo: &Path, db: &Path) -> Vec<String> {
+    index_args_with(repo, db, false)
 }
 
 /// Creates a fresh temp repo + indexes it. Returns (TempDir, db_path).
@@ -159,23 +164,16 @@ fn index_builds_rust_repo_succeeds() {
 }
 
 #[test]
-fn index_nonexistent_path_exits_2() {
+fn index_nonexistent_path_fails() {
     let tmp = TempDir::new().unwrap();
     let db = tmp.path().join("test.lbug");
-    let args: &[&str] = &[
-        "index",
-        "--path",
-        "/nonexistent/path/does_not_exist_xyz",
-        "--name",
-        "demo",
-        "--force=false",
-        "--lsp=false",
-        "--embed=false",
-        "--ram_first=false",
-        "--db",
-        db.to_str().unwrap(),
-    ];
-    let (code, _stdout, _stderr) = run(args);
+    let args = index_args_with(
+        Path::new("/nonexistent/path/does_not_exist_xyz"),
+        &db,
+        false,
+    );
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let (code, _stdout, _stderr) = run(&arg_refs);
     // index service does not pre-validate path existence; it fails during
     // IndexFacade::index with an IOError → Internal (exit 1). Accept either
     // exit 1 (current) or exit 2 (if a pre-validation guard is added later).
@@ -188,20 +186,9 @@ fn index_force_rebuild_exits_0() {
     let repo = tmp.path().join("repo");
 
     // Second index with force=true → full rebuild.
-    let args: &[&str] = &[
-        "index",
-        "--path",
-        repo.to_str().unwrap(),
-        "--name",
-        "demo",
-        "--force=true",
-        "--lsp=false",
-        "--embed=false",
-        "--ram_first=false",
-        "--db",
-        db.to_str().unwrap(),
-    ];
-    let (code, stdout, stderr) = run(args);
+    let args = index_args_with(&repo, &db, true);
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let (code, stdout, stderr) = run(&arg_refs);
     assert_eq!(code, 0, "force rebuild should exit 0, stderr: {stderr}");
     assert!(
         stdout.contains("\"files_indexed\""),
@@ -215,20 +202,9 @@ fn index_incremental_skips_unchanged() {
     let repo = tmp.path().join("repo");
 
     // Second index with force=false → incremental, all files unchanged → skipped.
-    let args: &[&str] = &[
-        "index",
-        "--path",
-        repo.to_str().unwrap(),
-        "--name",
-        "demo",
-        "--force=false",
-        "--lsp=false",
-        "--embed=false",
-        "--ram_first=false",
-        "--db",
-        db.to_str().unwrap(),
-    ];
-    let (code, stdout, stderr) = run(args);
+    let args = index_args_with(&repo, &db, false);
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let (code, stdout, stderr) = run(&arg_refs);
     assert_eq!(code, 0, "incremental index should exit 0, stderr: {stderr}");
     assert!(
         stdout.contains("\"files_skipped\""),
@@ -246,7 +222,8 @@ mod daemon_hot_update {
     use super::*;
 
     /// Spawns `codenexus daemon --path <repo> --name demo --db <db>` as a
-    /// child process. Returns the `Child` handle.
+    /// child process. Returns the `Child` handle. The caller is responsible
+    /// for sending SIGTERM via `send_sigterm` and reaping via `wait_for_exit`.
     fn spawn_daemon(repo: &Path, db: &Path, debounce_ms: u64) -> std::process::Child {
         let mut cmd = Command::new(binary());
         cmd.args([
@@ -266,18 +243,21 @@ mod daemon_hot_update {
         cmd.spawn().unwrap_or_else(|e| panic!("spawn daemon: {e}"))
     }
 
-    /// Sends SIGTERM to the child process via `kill -TERM <pid>`.
+    /// Sends SIGTERM to the child process via `/bin/kill` (absolute path to
+    /// avoid PATH lookup, which is a security/reproducibility concern).
     fn send_sigterm(child: &std::process::Child) {
         let pid = child.id();
-        let exit = Command::new("kill")
+        let exit = Command::new("/bin/kill")
             .args(["-TERM", &pid.to_string()])
             .status()
-            .expect("kill -TERM");
+            .expect("/bin/kill -TERM");
         assert!(exit.success(), "kill -TERM should succeed for pid {pid}");
     }
 
     /// Waits up to `timeout` for `child` to exit. Returns the exit code, or
-    /// panics if the child did not exit in time.
+    /// panics if the child did not exit in time. On timeout, the child is
+    /// killed AND waited on to reap the zombie (fixes LOW finding: previously
+    /// only kill was called, leaking the process entry).
     fn wait_for_exit(child: &mut std::process::Child, timeout: Duration) -> i32 {
         let deadline = std::time::Instant::now() + timeout;
         loop {
@@ -286,6 +266,7 @@ mod daemon_hot_update {
                 Ok(None) => {
                     if std::time::Instant::now() >= deadline {
                         let _ = child.kill();
+                        let _ = child.wait();
                         panic!("daemon did not exit within {timeout:?}");
                     }
                     thread::sleep(Duration::from_millis(100));
@@ -327,19 +308,10 @@ mod daemon_hot_update {
 
     #[test]
     fn daemon_hot_update_detects_new_file() {
-        let tmp = TempDir::new().unwrap();
+        let (tmp, db) = index_fresh_repo();
         let repo = tmp.path().join("repo");
-        fs::create_dir_all(&repo).unwrap();
-        build_rust_repo(&repo);
-        let db = tmp.path().join("test.lbug");
 
-        // Step 1: Initial index via CLI.
-        let args = index_args(&repo, &db);
-        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let (code, _, stderr) = run(&arg_refs);
-        assert_eq!(code, 0, "initial index should exit 0, stderr: {stderr}");
-
-        // Step 2: Verify initial state — "helper" is indexed.
+        // Step 1: Verify initial state — "helper" is indexed, "new_func" is not.
         let before = query_function_names(&db);
         assert!(
             before.contains("helper"),
@@ -350,28 +322,29 @@ mod daemon_hot_update {
             "new_func should NOT exist before daemon hot update: {before}"
         );
 
-        // Step 3: Spawn daemon with short debounce.
+        // Step 2: Spawn daemon with short debounce.
         let mut daemon = spawn_daemon(&repo, &db, 300);
 
-        // Step 4: Wait for daemon to start watching.
-        thread::sleep(Duration::from_millis(600));
+        // Step 3: Wait for daemon to start watching (fixed sleep — concurrent
+        // DB reads during daemon's incremental index can cause failures).
+        thread::sleep(Duration::from_millis(1000));
 
-        // Step 5: Add a new .rs file with a new function.
+        // Step 4: Add a new .rs file with a new function.
         write_file(
             &repo,
             "src/new_func.rs",
             "fn new_func() {\n    helper();\n}\n",
         );
 
-        // Step 6: Wait for debounce (300ms) + index (~500ms) + tick (500ms).
-        thread::sleep(Duration::from_millis(2500));
+        // Step 5: Wait for debounce (300ms) + index (~500ms) + tick (500ms).
+        thread::sleep(Duration::from_millis(4000));
 
-        // Step 7: Send SIGTERM → graceful shutdown.
+        // Step 6: Send SIGTERM → graceful shutdown.
         send_sigterm(&daemon);
         let exit = wait_for_exit(&mut daemon, Duration::from_secs(3));
         assert_eq!(exit, 0, "daemon should exit 0 after SIGTERM, got {exit}");
 
-        // Step 8: Verify hot update — new_func now indexed.
+        // Step 7: Verify hot update persisted — new_func + helper both present.
         let after = query_function_names(&db);
         assert!(
             after.contains("new_func"),
@@ -387,16 +360,8 @@ mod daemon_hot_update {
 
     #[test]
     fn daemon_hot_update_detects_modified_file() {
-        let tmp = TempDir::new().unwrap();
+        let (tmp, db) = index_fresh_repo();
         let repo = tmp.path().join("repo");
-        fs::create_dir_all(&repo).unwrap();
-        build_rust_repo(&repo);
-        let db = tmp.path().join("test.lbug");
-
-        let args = index_args(&repo, &db);
-        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let (code, _, _) = run(&arg_refs);
-        assert_eq!(code, 0, "initial index should exit 0");
 
         let before = query_function_names(&db);
         assert!(
@@ -409,7 +374,7 @@ mod daemon_hot_update {
         );
 
         let mut daemon = spawn_daemon(&repo, &db, 300);
-        thread::sleep(Duration::from_millis(600));
+        thread::sleep(Duration::from_millis(1000));
 
         // Modify main.rs: add a new function.
         write_file(
@@ -418,11 +383,12 @@ mod daemon_hot_update {
             "fn main() {\n    helper();\n}\n\nfn helper() {\n    println!(\"hello\");\n}\n\nfn extra_fn() {\n    helper();\n}\n",
         );
 
-        thread::sleep(Duration::from_millis(2500));
+        // Wait for debounce (300ms) + index (~500ms) + tick (500ms).
+        thread::sleep(Duration::from_millis(4000));
 
         send_sigterm(&daemon);
         let exit = wait_for_exit(&mut daemon, Duration::from_secs(3));
-        assert_eq!(exit, 0, "daemon should exit 0 after SIGTERM");
+        assert_eq!(exit, 0, "daemon should exit 0 after SIGTERM, got {exit}");
 
         let after = query_function_names(&db);
         assert!(
@@ -435,16 +401,8 @@ mod daemon_hot_update {
 
     #[test]
     fn daemon_hot_update_ignores_non_code_file() {
-        let tmp = TempDir::new().unwrap();
+        let (tmp, db) = index_fresh_repo();
         let repo = tmp.path().join("repo");
-        fs::create_dir_all(&repo).unwrap();
-        build_rust_repo(&repo);
-        let db = tmp.path().join("test.lbug");
-
-        let args = index_args(&repo, &db);
-        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let (code, _, _) = run(&arg_refs);
-        assert_eq!(code, 0, "initial index should exit 0");
 
         let before = query_function_names(&db);
 
@@ -456,11 +414,14 @@ mod daemon_hot_update {
         // of `full`), so use .txt and .md which are never code files.
         write_file(&repo, "notes.txt", "hello world\n");
         write_file(&repo, "README.md", "# readme\n");
-        thread::sleep(Duration::from_millis(2500));
+
+        // Wait for debounce + any index tick. Non-code files should NOT
+        // trigger re-index, so we wait the full debounce window + margin.
+        thread::sleep(Duration::from_millis(1500));
 
         send_sigterm(&daemon);
         let exit = wait_for_exit(&mut daemon, Duration::from_secs(3));
-        assert_eq!(exit, 0, "daemon should exit 0 after SIGTERM");
+        assert_eq!(exit, 0, "daemon should exit 0 after SIGTERM, got {exit}");
 
         let after = query_function_names(&db);
         // Non-code files must NOT trigger re-index. Verify function set is
@@ -511,7 +472,9 @@ mod daemon_hot_update {
             code, 2,
             "daemon with nonexistent path should exit 2 (InvalidInput), got {code}"
         );
-        let _ = tmp; // keep DB alive
+        // Keep DB alive for the duration of the assertion. `let _ =` would
+        // drop immediately; bind to `_tmp` to extend the lifetime.
+        let _tmp = tmp;
     }
 }
 
@@ -683,7 +646,7 @@ mod post_index {
         ];
         let (code, stdout, stderr) = run(args);
         assert_eq!(code, 0, "trace should exit 0, stderr: {stderr}");
-        // trace returns paths JSON — just verify non-empty output.
+        // trace returns paths JSON — verify non-empty output.
         assert!(
             !stdout.trim().is_empty(),
             "trace should produce output: stderr={stderr}"
@@ -694,8 +657,12 @@ mod post_index {
     fn route_map_exits_0() {
         let (_tmp, db) = index_fresh_repo();
         let args: &[&str] = &["route_map", "--project=demo", "--db", db.to_str().unwrap()];
-        let (code, _stdout, stderr) = run(args);
+        let (code, stdout, stderr) = run(args);
         assert_eq!(code, 0, "route_map should exit 0, stderr: {stderr}");
+        assert!(
+            !stdout.trim().is_empty(),
+            "route_map should produce output: {stdout}"
+        );
     }
 
     #[test]
@@ -711,8 +678,12 @@ mod post_index {
             "--db",
             db.to_str().unwrap(),
         ];
-        let (code, _stdout, stderr) = run(args);
+        let (code, stdout, stderr) = run(args);
         assert_eq!(code, 0, "dead_code should exit 0, stderr: {stderr}");
+        assert!(
+            !stdout.trim().is_empty(),
+            "dead_code should produce output: {stdout}"
+        );
     }
 
     #[test]
@@ -724,16 +695,24 @@ mod post_index {
             "--db",
             db.to_str().unwrap(),
         ];
-        let (code, _stdout, stderr) = run(args);
+        let (code, stdout, stderr) = run(args);
         assert_eq!(code, 0, "architecture should exit 0, stderr: {stderr}");
+        assert!(
+            !stdout.trim().is_empty(),
+            "architecture should produce output: {stdout}"
+        );
     }
 
     #[test]
     fn complexity_exits_0() {
         let (_tmp, db) = index_fresh_repo();
         let args: &[&str] = &["complexity", "--project=demo", "--db", db.to_str().unwrap()];
-        let (code, _stdout, stderr) = run(args);
+        let (code, stdout, stderr) = run(args);
         assert_eq!(code, 0, "complexity should exit 0, stderr: {stderr}");
+        assert!(
+            !stdout.trim().is_empty(),
+            "complexity should produce output: {stdout}"
+        );
     }
 
     #[test]
@@ -745,14 +724,18 @@ mod post_index {
             "--db",
             db.to_str().unwrap(),
         ];
-        let (code, _stdout, stderr) = run(args);
+        let (code, stdout, stderr) = run(args);
         assert_eq!(code, 0, "cross_service should exit 0, stderr: {stderr}");
+        assert!(
+            !stdout.trim().is_empty(),
+            "cross_service should produce output: {stdout}"
+        );
     }
 
     #[test]
     fn detect_changes_on_non_git_repo_exits_gracefully() {
-        let (_tmp, db) = index_fresh_repo();
-        let repo = _tmp.path().join("repo");
+        let (tmp, db) = index_fresh_repo();
+        let repo = tmp.path().join("repo");
         // detect_changes requires --path and --mode. A non-git repo may
         // return empty results (exit 0) or error (exit 2); both are
         // acceptable as long as it doesn't crash (exit 1 or signal).
@@ -773,8 +756,8 @@ mod post_index {
 
     #[test]
     fn rename_dry_run_exits_0() {
-        let (_tmp, db) = index_fresh_repo();
-        let repo = _tmp.path().join("repo");
+        let (tmp, db) = index_fresh_repo();
+        let repo = tmp.path().join("repo");
         let args: &[&str] = &[
             "rename",
             "--from=helper",
@@ -785,16 +768,24 @@ mod post_index {
             "--db",
             db.to_str().unwrap(),
         ];
-        let (code, _stdout, stderr) = run(args);
+        let (code, stdout, stderr) = run(args);
         assert_eq!(code, 0, "rename dry-run should exit 0, stderr: {stderr}");
+        assert!(
+            !stdout.trim().is_empty(),
+            "rename should produce output: {stdout}"
+        );
     }
 
     #[test]
     fn api_impact_exits_0() {
         let (_tmp, db) = index_fresh_repo();
         let args: &[&str] = &["api_impact", "--project=demo", "--db", db.to_str().unwrap()];
-        let (code, _stdout, stderr) = run(args);
+        let (code, stdout, stderr) = run(args);
         assert_eq!(code, 0, "api_impact should exit 0, stderr: {stderr}");
+        assert!(
+            !stdout.trim().is_empty(),
+            "api_impact should produce output: {stdout}"
+        );
     }
 
     #[test]
@@ -806,24 +797,36 @@ mod post_index {
             "--db",
             db.to_str().unwrap(),
         ];
-        let (code, _stdout, stderr) = run(args);
+        let (code, stdout, stderr) = run(args);
         assert_eq!(code, 0, "shape_check should exit 0, stderr: {stderr}");
+        assert!(
+            !stdout.trim().is_empty(),
+            "shape_check should produce output: {stdout}"
+        );
     }
 
     #[test]
     fn community_exits_0() {
         let (_tmp, db) = index_fresh_repo();
         let args: &[&str] = &["community", "--project=demo", "--db", db.to_str().unwrap()];
-        let (code, _stdout, stderr) = run(args);
+        let (code, stdout, stderr) = run(args);
         assert_eq!(code, 0, "community should exit 0, stderr: {stderr}");
+        assert!(
+            !stdout.trim().is_empty(),
+            "community should produce output: {stdout}"
+        );
     }
 
     #[test]
     fn tool_map_exits_0() {
         let (_tmp, db) = index_fresh_repo();
         let args: &[&str] = &["tool_map", "--project=demo", "--db", db.to_str().unwrap()];
-        let (code, _stdout, stderr) = run(args);
+        let (code, stdout, stderr) = run(args);
         assert_eq!(code, 0, "tool_map should exit 0, stderr: {stderr}");
+        assert!(
+            !stdout.trim().is_empty(),
+            "tool_map should produce output: {stdout}"
+        );
     }
 
     // --- Mutation commands (separate index to avoid polluting other tests) ---
@@ -915,8 +918,8 @@ mod post_index {
 
     #[test]
     fn lsp_goto_def_without_server_exits_gracefully() {
-        let (_tmp, db) = index_fresh_repo();
-        let repo = _tmp.path().join("repo");
+        let (tmp, db) = index_fresh_repo();
+        let repo = tmp.path().join("repo");
         let file = repo.join("src/main.rs");
         let args: &[&str] = &[
             "lsp_goto_def",
@@ -940,8 +943,8 @@ mod post_index {
 
     #[test]
     fn lsp_hover_without_server_exits_gracefully() {
-        let (_tmp, db) = index_fresh_repo();
-        let repo = _tmp.path().join("repo");
+        let (tmp, db) = index_fresh_repo();
+        let repo = tmp.path().join("repo");
         let file = repo.join("src/main.rs");
         let args: &[&str] = &[
             "lsp_hover",
