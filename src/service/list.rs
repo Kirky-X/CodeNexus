@@ -68,7 +68,7 @@ pub fn run_list(kit: &AsyncKit<AsyncReady>) -> Result<Vec<ProjectOutput>, CodeNe
 #[cfg(feature = "cli")]
 #[forge(
     name = "list",
-    version = "0.3.4",
+    version = "0.3.5",
     description = "List all indexed projects in the database.",
     cli = true
 )]

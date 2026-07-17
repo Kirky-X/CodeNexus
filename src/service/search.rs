@@ -107,7 +107,7 @@ pub fn run_search(
 #[cfg(feature = "cli")]
 #[forge(
     name = "search",
-    version = "0.3.4",
+    version = "0.3.5",
     description = "Search for symbols by name (structured) or content (BM25 full-text).",
     cli = true
 )]
@@ -131,7 +131,7 @@ async fn search(
 #[cfg(feature = "mcp")]
 #[forge(
     name = "search",
-    version = "0.3.4",
+    version = "0.3.5",
     tool_name = "search",
     description = "Search for symbols by name (structured) or content (BM25 full-text)."
 )]

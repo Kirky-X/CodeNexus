@@ -219,7 +219,7 @@ pub fn run_trace(
 #[cfg(feature = "cli")]
 #[forge(
     name = "trace",
-    version = "0.3.4",
+    version = "0.3.5",
     description = "Trace a symbol's call and/or data-flow paths.",
     cli = true
 )]
@@ -252,7 +252,7 @@ async fn trace(
 #[cfg(feature = "mcp")]
 #[forge(
     name = "trace",
-    version = "0.3.4",
+    version = "0.3.5",
     tool_name = "trace",
     description = "Trace a symbol's call and/or data-flow paths."
 )]

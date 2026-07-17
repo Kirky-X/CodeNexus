@@ -313,7 +313,7 @@ pub struct TextEdit {
 #[cfg(feature = "cli")]
 #[forge(
     name = "rename",
-    version = "0.3.4",
+    version = "0.3.5",
     description = "Propose graph + text edits for renaming a symbol.",
     cli = true
 )]

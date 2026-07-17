@@ -45,7 +45,7 @@ fn daemon_core(kit: &AsyncKit<AsyncReady>, path: &str, name: &str) -> Result<(),
 #[cfg(all(feature = "cli", feature = "daemon"))]
 #[forge(
     name = "daemon",
-    version = "0.3.4",
+    version = "0.3.5",
     description = "Run the file-watcher daemon for incremental indexing.",
     cli = true
 )]

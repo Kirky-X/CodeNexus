@@ -81,7 +81,7 @@ fn api_impact_core(
 #[cfg(all(feature = "cli", feature = "api-review"))]
 #[forge(
     name = "api_impact",
-    version = "0.3.4",
+    version = "0.3.5",
     description = "Trace callers affected by changing an API endpoint.",
     cli = true
 )]

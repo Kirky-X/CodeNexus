@@ -57,7 +57,7 @@ pub fn run_architecture(
 #[cfg(all(feature = "cli", feature = "analysis"))]
 #[forge(
     name = "architecture",
-    version = "0.3.4",
+    version = "0.3.5",
     description = "Show high-level architecture overview of a project.",
     cli = true
 )]
@@ -75,7 +75,7 @@ async fn architecture(project: String) -> Result<(), ApiError> {
 #[cfg(all(feature = "mcp", feature = "analysis"))]
 #[forge(
     name = "architecture",
-    version = "0.3.4",
+    version = "0.3.5",
     tool_name = "architecture",
     description = "Show high-level architecture overview of a project."
 )]

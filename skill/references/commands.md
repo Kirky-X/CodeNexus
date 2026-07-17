@@ -268,7 +268,7 @@ All 26 parameters are **required** (no defaults). Pass `0` for numeric threshold
 
 **Output (JSON):** `project`, `complexity[]` (each entry has function identity + per-metric severity + raw values), `summary` (totals by severity)
 
-> Note: With all threshold flags set to `0`/`""`, the analyzer uses its in-memory defaults. The flags are required by the CLI even when you want defaults — this is a UX trade-off in 0.3.4. Requires the `complexity` feature.
+> Note: With all threshold flags set to `0`/`""`, the analyzer uses its in-memory defaults. The flags are required by the CLI even when you want defaults — this is a UX trade-off in 0.3.5. Requires the `complexity` feature.
 
 #### community — Louvain community detection
 

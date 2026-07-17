@@ -53,7 +53,7 @@ fn tool_map_core(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<(), CodeNe
 #[cfg(all(feature = "cli", feature = "api-review"))]
 #[forge(
     name = "tool_map",
-    version = "0.3.4",
+    version = "0.3.5",
     description = "List MCP tools and their handler functions.",
     cli = true
 )]

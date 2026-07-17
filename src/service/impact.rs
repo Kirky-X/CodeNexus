@@ -170,7 +170,7 @@ pub fn run_impact(
 #[cfg(feature = "cli")]
 #[forge(
     name = "impact",
-    version = "0.3.4",
+    version = "0.3.5",
     description = "Analyze the blast radius (upstream callers) of changing a symbol.",
     cli = true
 )]
@@ -194,7 +194,7 @@ async fn impact(
 #[cfg(feature = "mcp")]
 #[forge(
     name = "impact",
-    version = "0.3.4",
+    version = "0.3.5",
     tool_name = "impact",
     description = "Analyze the blast radius (upstream callers) of changing a symbol."
 )]

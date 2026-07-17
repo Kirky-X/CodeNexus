@@ -273,7 +273,7 @@ fn complexity_core(
 #[allow(clippy::too_many_arguments)]
 #[forge(
     name = "complexity",
-    version = "0.3.4",
+    version = "0.3.5",
     description = "Analyze AST-based complexity metrics for all functions in a project.",
     cli = true
 )]

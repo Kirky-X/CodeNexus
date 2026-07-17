@@ -92,7 +92,7 @@ pub fn run_context_enhanced(
 #[cfg(feature = "cli")]
 #[forge(
     name = "context",
-    version = "0.3.4",
+    version = "0.3.5",
     description = "Show a 360-degree view of a symbol (callers, callees, processes).",
     cli = true
 )]
@@ -134,7 +134,7 @@ async fn context(
 #[cfg(feature = "mcp")]
 #[forge(
     name = "context",
-    version = "0.3.4",
+    version = "0.3.5",
     tool_name = "context",
     description = "Show a 360-degree view of a symbol (callers, callees, processes)."
 )]

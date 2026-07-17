@@ -77,7 +77,7 @@ pub fn run_cross_service(
 #[cfg(all(feature = "cli", feature = "cross-service"))]
 #[forge(
     name = "cross_service",
-    version = "0.3.4",
+    version = "0.3.5",
     description = "Detect cross-service links by matching HTTP route patterns against caller string literals.",
     cli = true
 )]

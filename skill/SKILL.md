@@ -5,7 +5,7 @@ description: "Code knowledge graph indexer and query tool. Use when indexing cod
 
 # CodeNexus CLI Skill
 
-> **Verified against `codenexus 0.3.4`.** The CLI is **strictly flag-based**: there are **no positional arguments**, and almost every function parameter is a **mandatory flag** (plain `String`/`u32`/`bool` types in the source map to required flags — only `--db <DB_PATH>` and `--debounce-ms <MS>` are global options with defaults). Booleans are pass-by-value (e.g. `--force true`, `--apply true`, `--cross_service false`).
+> **Verified against `codenexus 0.3.5`.** The CLI is **strictly flag-based**: there are **no positional arguments**, and almost every function parameter is a **mandatory flag** (plain `String`/`u32`/`bool` types in the source map to required flags — only `--db <DB_PATH>` and `--debounce-ms <MS>` are global options with defaults). Booleans are pass-by-value (e.g. `--force true`, `--apply true`, `--cross_service false`).
 
 ## Description
 
@@ -63,7 +63,7 @@ CodeNexus has **28 subcommands** grouped into eight functional areas. **All requ
 | `search` | Query | Symbol search (exact/regex/fuzzy/graph/multi) or BM25 full-text. ⚠️ See Known Issues — `query` is the reliable path. |
 | `trace` | Tracing | Trace a symbol's call/dataflow paths with optional cycle detection and cross-service traversal. |
 | `impact` | Tracing | Reverse BFS to find all symbols that depend on a target. Narrow `--edge_types` + `--max_depth` on large graphs. |
-| `context` | Tracing | 360° view of a symbol: callers/callees/processes/routes/endpoints. `--enhanced true` resolves `--project <name\|id>` and fails fast on ambiguous symbols (verified 0.3.4). |
+| `context` | Tracing | 360° view of a symbol: callers/callees/processes/routes/endpoints. `--enhanced true` resolves `--project <name\|id>` and fails fast on ambiguous symbols (verified 0.3.5). |
 | `dead_code` | Analysis | Detect unreferenced `Function`/`Method` nodes with confidence levels (High/Medium/Low). |
 | `architecture` | Analysis | High-level overview: module boundaries, dependency directions, layers, entry points, hotspots. |
 | `complexity` | Analysis | AST-based per-function complexity (cyclomatic/cognitive/nesting/length/Halstead/MI/time/space). 26 threshold flags required. |
@@ -83,12 +83,12 @@ CodeNexus has **28 subcommands** grouped into eight functional areas. **All requ
 | `hook` | MCP | Emit PreToolUse/PostToolUse hook JSON. Always exits 0; never blocks. Long-running (reads stdin). |
 | `mcp` | MCP | Serve MCP tools (`query`/`trace`/`impact`/`search`/`context`) over stdio. Long-running. Requires `mcp` feature. |
 
-## Critical Known Issues (0.3.4)
+## Critical Known Issues (0.3.5)
 
 The full list with severities is in [`references/appendix.md`](references/appendix.md#known-issues). The ones most likely to bite during normal use:
 
 - **Rust call graph is a lower bound** — trait-object `dyn` dispatch and many cross-module calls are not captured by tree-sitter. Treat `dead_code`/`trace`/`impact` results for Rust as a triage list, not ground truth.
-- **`impact` on very large graphs** — two node sets: `affected` (true blast-radius, capped by `trace_upstream` at `MAX_NODES_LIMIT=1000` + `max_depth≤10`) and the loaded subgraph (`nodes`/`edges`/`node_count`). As of 0.3.4 the subgraph load is **also capped**: BFS stops at `MAX_SUBGRAPH_NODES=1000` and sets `truncated:true` on the cap (node materialization is batched — one `WHERE id IN [...]` per label — killing the ~77s N+1 regression). Verified 2026-07-17 (6289 functions): `sanitize_project_name --depth 3` → `node_count=1000, truncated:true, ~5s` (was ~77s / 5034 nodes); leaf `analyze --depth 10` → ~4.5s unchanged. `truncated:true` ⇒ subgraph was capped; widen `--depth`/`--edge_types` only if you accept that.
+- **`impact` on very large graphs** — two node sets: `affected` (true blast-radius, capped by `trace_upstream` at `MAX_NODES_LIMIT=1000` + `max_depth≤10`) and the loaded subgraph (`nodes`/`edges`/`node_count`). As of 0.3.5 the subgraph load is **also capped**: BFS stops at `MAX_SUBGRAPH_NODES=1000` and sets `truncated:true` on the cap (node materialization is batched — one `WHERE id IN [...]` per label — killing the ~77s N+1 regression). Verified 2026-07-17 (6289 functions): `sanitize_project_name --depth 3` → `node_count=1000, truncated:true, ~5s` (was ~77s / 5034 nodes); leaf `analyze --depth 10` → ~4.5s unchanged. `truncated:true` ⇒ subgraph was capped; widen `--depth`/`--edge_types` only if you accept that.
 
 > Fixed in 0.3.4 (no longer listed above): `--project` accepts name or id on **all** commands including `context --enhanced true`; `rename` dry-run recomputes the qualified name for `.` and `#` separators; ambiguous symbols fail fast in both `context` and `rename`; the `export` manifest version is read from `Cargo.toml` via `env!("CARGO_PKG_VERSION")` and matches the binary; **`search` now returns real hits** (the empty-`project` filter that dropped all rows, and the silent per-table `Err(_) => continue` that swallowed storage errors, were fixed — verified `search --text parse` returns `count:3`); **`list --db <missing>` now exits 4** (NotFound) with a clear message instead of returning `[]` with exit 0; **`lsp_*` with no server exits 2** (verified: `lsp_goto_def`/`lsp_hover` on a `.go` file with no `gopls` → `failed to start LSP server`, exit 2 — the earlier "exit 0" diagnosis was a greenhouse assumption, not observed behavior). See the per-command notes in [`references/commands.md`](references/commands.md) and the table in [`references/appendix.md`](references/appendix.md#known-issues).
 

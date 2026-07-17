@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **chore(deps): major dependency upgrades + root-cause zstd-sys removal** — petgraph 0.6→0.8, reqwest 0.12→0.13 (feature `rustls-tls`→`rustls`), lsp-server 0.8→0.9 (ResponseKind enum), lsp-types 0.95→0.97 (Url→Uri), inklog 0.1.9→0.1.10 (gzip fallback via flate2 when `compression` feature disabled). Added `url` 2.x optional dep for `path_to_uri` conversion. zstd-sys completely eliminated from dependency tree. `cargo install --path . --locked` now succeeds without linker workarounds.
 
+## [0.3.5] - 2026-07-17
+
+### Added
+
+- **test(cli): comprehensive CLI integration tests** — `tests/cli_index_and_daemon.rs` adds 35 tests covering: (1) `index` CLI (build, force rebuild, incremental, nonexistent path), (2) `daemon` CLI hot update (new file, modified file, SIGTERM graceful shutdown, exit code), (3) all 27 post-index subcommands exercised via the binary child process (route_map, shape_check, api_impact, tool_map, architecture, community, complexity, dead_code, cross_service, context, trace, impact, search, query, detect_changes, rename, export/import, setup, hook, mcp, list, status, clean, lsp_goto_def, lsp_hover). Tests spawn the compiled `codenexus` binary as a child process to verify the full CLI path: argument parsing → service dispatch → storage → output formatting.
+
+### Fixed
+
+- **fix(error): correct exit code classification + resolve_start_id ambiguity detection** — `resolve_start_id` now fails fast on ambiguous symbols instead of silently resolving to one match; exit code mapping corrected (0=success, 1=internal error, 2=invalid input/ProjectNotFound/Query, 4=NotFound/DatabaseCorrupt). Verified: `context --symbol new --enhanced true --project CodeNexus` returns `ambiguous symbol 'new': 99 candidates` in ~0.3s (exit 1) instead of timing out.
+- **fix(daemon): SIGTERM/SIGINT signal handlers for graceful shutdown (BUG-002)** — daemon now installs `signal_hook` handlers for SIGTERM and SIGINT, draining the event loop cleanly before exit (exit 0). Previously, signals could interrupt in-flight incremental indexing, leaving the DB in an inconsistent state.
+- **fix(cli): gate all read commands against missing DB + validate `context --project`** — read commands (`query`/`list`/`search`/`impact`/`context`/`trace`) now check DB existence before opening, exiting 4 (NotFound) with a clear message instead of a stack-traced `StorageError`. `context --enhanced true --project <name|id>` resolves name→id via `resolve_project_id` (previously matched the raw value against `Function.project`, which stores the id, so name lookups failed).
+- **fix(test): test hardening from 3-dimension review** — `/bin/kill` absolute path (security MEDIUM, avoids PATH lookup); `index_args_with` builder unifies arg construction (architecture MEDIUM); `wait_for_exit` timeout branch now reaps the zombie via `wait()` (LOW); `let _tmp = tmp` extends DB lifetime for assertions (LOW); post-index read tests assert non-empty stdout + exit 0 (LOW).
+
+### Changed
+
+- **perf(index): parallelize hash diffing + fix quality test regression** — `src/index/phases.rs` adds `parallel_parse` and `parallel_parse_ram_first` functions using rayon to parallelize SHA-256 file hash diffing across cores during incremental indexing. Hash diff is now a parallel pre-pass before the (already-parallel) parse phase, eliminating the sequential single-threaded hash stage that dominated incremental reindex on multi-core machines.
+
 ## [0.3.4] - 2026-07-15
 
 ### Fixed

@@ -51,7 +51,7 @@ pub fn run_query(kit: &AsyncKit<AsyncReady>, cypher: &str) -> Result<QueryOutput
 #[cfg(feature = "cli")]
 #[forge(
     name = "query",
-    version = "0.3.4",
+    version = "0.3.5",
     description = "Execute a Cypher query against the CodeNexus knowledge graph.",
     cli = true
 )]
@@ -68,7 +68,7 @@ async fn query(cypher: String) -> Result<(), ApiError> {
 #[cfg(feature = "mcp")]
 #[forge(
     name = "query",
-    version = "0.3.4",
+    version = "0.3.5",
     tool_name = "query",
     description = "Execute a Cypher query against the CodeNexus knowledge graph."
 )]

@@ -33,7 +33,7 @@ Exit codes are produced by `CodeNexusError::exit_code()` in `src/service/error.r
 
 ## Known Issues
 
-Originally recorded in `temp/problem.md` against a `--version` polluted by the `sdforge` dependency (it reported `0.4.2`); the binary is in fact `0.3.4` per `Cargo.toml`. Current status (verified 2026-07-16 on a self-indexed CodeNexus graph):
+Originally recorded in `temp/problem.md` against a `--version` polluted by the `sdforge` dependency (it reported `0.4.2`); the binary is in fact `0.3.5` per `Cargo.toml`. Current status (verified 2026-07-16 on a self-indexed CodeNexus graph):
 
 | ID | Severity | Command(s) affected | Summary |
 |----|----------|---------------------|---------|
