@@ -18,6 +18,27 @@ pub struct ImportInfo {
     pub imported_names: Vec<String>,
     /// The 1-based line number of the import statement.
     pub line: u32,
+    /// B7: `true` when the statement is a re-export (Rust `pub use foo::bar;`,
+    /// TypeScript `export { foo } from './mod'`). Re-exported symbols are
+    /// treated as live entry points by dead-code analysis (the symbol is
+    /// reachable from outside the current crate/module via the re-export).
+    /// Default `false` for ordinary imports.
+    pub is_reexport: bool,
+}
+
+impl Default for ImportInfo {
+    /// B7 review (arch-review LOW-4): provides `Default` so future field
+    /// additions don't force a shotgun-surgery update of every construction
+    /// site. Existing callers still spell out all fields explicitly (Rule 24
+    /// — business-scene coverage), but new fields can use `..Default::default()`.
+    fn default() -> Self {
+        Self {
+            source_file: String::new(),
+            imported_names: Vec::new(),
+            line: 0,
+            is_reexport: false,
+        }
+    }
 }
 
 /// Information about a function or method call extracted from source.

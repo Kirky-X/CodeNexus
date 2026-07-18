@@ -39,6 +39,18 @@ use crate::model::{ConfidenceTier, Edge, EdgeType, Graph, Language, NodeLabel};
 /// Matches the lower bound of `EdgeType::Imports::confidence_range()` = (0.95, 1.0).
 const CONFIDENCE_IMPORTS: f32 = 0.95;
 
+/// Confidence for a REEXPORTS edge (B7). Structural, explicit in syntax —
+/// matches the lower bound of `EdgeType::Reexports::confidence_range()` = (0.95, 1.0).
+const CONFIDENCE_REEXPORTS: f32 = 0.95;
+
+/// B7 review (arch-review MEDIUM-2 + security LOW-3): when a wildcard
+/// re-export (`pub use foo::*` / `export * from './mod'`) targets more
+/// than this many functions, log a `warn!` so barrel-style modules with
+/// 1000+ re-exports are surfaced. The threshold is advisory — edges are
+/// still created for all targets; the warning just makes the cost visible
+/// for diagnosis.
+const WILDCARD_REEXPORT_WARN_THRESHOLD: usize = 100;
+
 /// Extensions tried when resolving extensionless relative imports.
 /// Ordered by approximate frequency in polyglot projects.
 const EXTENSION_PROBES: &[&str] = &[
@@ -82,11 +94,19 @@ impl<'a> ImportResolver<'a> {
     /// A vector of all resolved IMPORTS edges (also added to `graph`).
     pub fn resolve_imports(&self, results: &[ExtractResult], graph: &mut Graph) -> Vec<Edge> {
         let file_index = build_file_index(graph);
+        // B7: Build (file_id, function_name) → function_id index for REEXPORTS
+        // edge creation. Re-exports target specific Function nodes (not File
+        // nodes), so we need to resolve `imported_names` to their Function ids.
+        let func_index = build_function_index(graph, &file_index);
 
         let mut edges = Vec::new();
         // Deduplicate by (source_file_id, target_file_id) — one IMPORTS edge
         // per file pair, regardless of how many symbols are imported.
         let mut seen_pairs: HashSet<(String, String)> = HashSet::new();
+        // B7: Separate dedup set for REEXPORTS edges keyed by
+        // (source_file_id, function_id) — a single file may re-export
+        // multiple functions, each producing its own REEXPORTS edge.
+        let mut seen_reexport_pairs: HashSet<(String, String)> = HashSet::new();
 
         for result in results {
             // Scheme C (v0.3.0): C++ #include edges are handled by ResolvePhase
@@ -130,25 +150,55 @@ impl<'a> ImportResolver<'a> {
                     }
                 };
 
+                // IMPORTS edge: one per (source, target) file pair.
                 let pair_key = (source_file_id.clone(), target_file_id.clone());
                 // Single-line for coverage: tarpaulin attribute continuation
-                if !seen_pairs.insert(pair_key) {
-                    continue;
+                if seen_pairs.insert(pair_key) {
+                    let edge = Edge::builder(
+                        source_file_id.clone(),
+                        target_file_id.clone(),
+                        EdgeType::Imports,
+                        self.project,
+                    )
+                    .confidence(CONFIDENCE_IMPORTS)
+                    .confidence_tier(ConfidenceTier::ImportScoped)
+                    .start_line(import.line)
+                    .build();
+                    graph.add_edge(edge.clone());
+                    edges.push(edge);
                 }
 
-                // Single-line for coverage: tarpaulin attribute continuation
-                let edge = Edge::builder(
-                    source_file_id.clone(),
-                    target_file_id,
-                    EdgeType::Imports,
-                    self.project,
-                )
-                .confidence(CONFIDENCE_IMPORTS)
-                .confidence_tier(ConfidenceTier::ImportScoped)
-                .start_line(import.line)
-                .build();
-                graph.add_edge(edge.clone());
-                edges.push(edge);
+                // B7: REEXPORTS edge for `pub use` / `export ... from`.
+                // Targets are Function nodes in the resolved file. When
+                // `imported_names` is non-empty, only those named functions
+                // are re-exported; when empty (wildcard `pub use foo::*`),
+                // every function in the target file is re-exported.
+                if import.is_reexport {
+                    let target_func_ids = resolve_reexport_targets(
+                        &target_file_id,
+                        &import.imported_names,
+                        &func_index,
+                    );
+                    for func_id in target_func_ids {
+                        let reexport_key = (source_file_id.clone(), func_id.clone());
+                        // Single-line for coverage: tarpaulin attribute continuation
+                        if !seen_reexport_pairs.insert(reexport_key) {
+                            continue;
+                        }
+                        let edge = Edge::builder(
+                            source_file_id.clone(),
+                            func_id,
+                            EdgeType::Reexports,
+                            self.project,
+                        )
+                        .confidence(CONFIDENCE_REEXPORTS)
+                        .confidence_tier(ConfidenceTier::ImportScoped)
+                        .start_line(import.line)
+                        .build();
+                        graph.add_edge(edge.clone());
+                        edges.push(edge);
+                    }
+                }
             }
         }
 
@@ -171,6 +221,157 @@ fn build_file_index(graph: &Graph) -> HashMap<String, String> {
             .or_insert_with(|| node.id.clone());
     }
     index
+}
+
+/// B7: Builds a lookup map from `file_id` → (`function_name` → `function_id`).
+///
+/// Used by [`resolve_reexport_targets`] to resolve `pub use foo::bar`'s
+/// `bar` to its Function node id. `file_id` is the File node id that owns
+/// the function (looked up via `file_index` + `Function.file_path`).
+///
+/// Both `Function` and `Method` labels are indexed — `pub use` can re-export
+/// either. When multiple functions share the same name in the same file
+/// (e.g. overloaded methods, generics), the first one encountered wins;
+/// a `warn!` is emitted so the ambiguity is visible (arch-review LOW-3).
+///
+/// # Performance (perf-review MEDIUM-1 + MEDIUM-2 + MEDIUM-3)
+///
+/// - Nested `HashMap<String, HashMap<String, String>>` (was a flat
+///   `HashMap<(String, String), String>`) so wildcard lookups are
+///   O(target_file_function_count) instead of O(total_functions), and
+///   named lookups avoid constructing a `(String, String)` tuple key.
+/// - `file_index` keys are pre-normalised (`\` → `/`) once at entry
+///   instead of inside the per-function loop, avoiding O(N·F) repeated
+///   `String::replace` allocations.
+fn build_function_index(
+    graph: &Graph,
+    file_index: &HashMap<String, String>,
+) -> HashMap<String, HashMap<String, String>> {
+    use std::collections::hash_map::Entry;
+    // perf-review MEDIUM-2: pre-normalise file_index keys once so the
+    // per-function suffix match doesn't re-allocate for every key.
+    let normalised_index: HashMap<String, String> = file_index
+        .iter()
+        .map(|(k, v)| (k.replace('\\', "/"), v.clone()))
+        .collect();
+    let mut index: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for label in [NodeLabel::Function, NodeLabel::Method] {
+        for node in graph.nodes_by_label(label) {
+            let Some(fp) = &node.file_path else {
+                continue;
+            };
+            // Resolve Function.file_path → owning File node id. Try direct
+            // match first, then suffix match via the shared helper
+            // (arch-review MEDIUM-1: DRY with find_file_in_index).
+            let file_id = file_index.get(fp).cloned().or_else(|| {
+                find_best_suffix_match(&normalised_index, fp).map(|(_, id)| id.clone())
+            });
+            let Some(file_id) = file_id else { continue };
+            // arch-review LOW-3: log duplicate function names so the
+            // "first wins" ambiguity is visible (dead-code may false-negative
+            // on the shadowed method).
+            match index.entry(file_id).or_default().entry(node.name.clone()) {
+                Entry::Occupied(_) => {
+                    warn!(file = %fp, name = %node.name, "duplicate function name in file; first wins (dead-code may false-negative)");
+                }
+                Entry::Vacant(v) => {
+                    v.insert(node.id.clone());
+                }
+            }
+        }
+    }
+    index
+}
+
+/// B7: Resolves the Function ids that a re-export statement targets.
+///
+/// - When `imported_names` is non-empty (e.g. `pub use foo::bar`), returns
+///   the Function ids matching those names in `target_file_id`.
+/// - When `imported_names` is empty (wildcard `pub use foo::*`), returns
+///   every Function id owned by `target_file_id`.
+///
+/// Names that don't match any function in the target file are silently
+/// skipped (the target may be a struct/enum/trait/const, which are not
+/// tracked by the function index — dead-code analysis only cares about
+/// Function/Method reachability).
+///
+/// # Performance (perf-review MEDIUM-1 + MEDIUM-3)
+///
+/// Nested `HashMap<String, HashMap<String, String>>` enables O(1) file
+/// lookup + O(K) name lookup (K = `imported_names.len()`), with zero
+/// temporary `(String, String)` tuple allocations. Wildcard lookups are
+/// O(target_file_function_count) instead of O(total_functions).
+fn resolve_reexport_targets(
+    target_file_id: &str,
+    imported_names: &[String],
+    func_index: &HashMap<String, HashMap<String, String>>,
+) -> Vec<String> {
+    let Some(by_file) = func_index.get(target_file_id) else {
+        return Vec::new();
+    };
+    if imported_names.is_empty() {
+        // Wildcard re-export: every function in the target file.
+        // arch-review MEDIUM-2 + security LOW-3: warn on barrel-scale
+        // re-exports so the cost is visible (advisory — edges still created).
+        let count = by_file.len();
+        if count > WILDCARD_REEXPORT_WARN_THRESHOLD {
+            warn!(
+                target = target_file_id,
+                count,
+                threshold = WILDCARD_REEXPORT_WARN_THRESHOLD,
+                "wildcard re-export targets exceed threshold; dead-code may over-approximate liveness"
+            );
+        }
+        by_file.values().cloned().collect()
+    } else {
+        imported_names
+            .iter()
+            .filter_map(|name| by_file.get(name).cloned())
+            .collect()
+    }
+}
+
+/// Finds the longest suffix-matching key in `file_index` for `path`, with
+/// path-boundary check (Rule 5 determinism).
+///
+/// B7 review (arch-review MEDIUM-1): extracted as a shared helper so
+/// [`find_file_in_index`] and [`build_function_index`] no longer duplicate
+/// the suffix-matching algorithm. Both callers need to bridge the absolute
+/// (production `file_path`) vs relative (`file_index` keys) gap, and both
+/// must pick the LONGEST suffix match for determinism (HashMap iteration
+/// order is non-deterministic).
+///
+/// # Key normalisation (audit LOW-2 + LOW-4)
+///
+/// `file_index` keys may or may not be pre-normalised — this function
+/// defensively normalises each key with `rel.replace('\\', "/")` inside
+/// the loop. [`build_function_index`] passes a pre-normalised index (so
+/// the `replace` is a no-op allocation there); [`find_file_in_index`]
+/// passes the raw `file_index` (so the `replace` is required there).
+/// Pre-normalising at every caller would cost O(N) per call for
+/// `find_file_in_index` (invoked per ExtractResult), so the defensive
+/// in-loop normalisation is kept as the cheaper trade-off. `path` is
+/// normalised once at entry.
+fn find_best_suffix_match<'a>(
+    file_index: &'a HashMap<String, String>,
+    path: &str,
+) -> Option<(&'a String, &'a String)> {
+    let path_norm = path.replace('\\', "/");
+    let mut best: Option<(&String, &String)> = None;
+    for (rel, id) in file_index {
+        // Defensive normalisation: required for find_file_in_index callers
+        // (raw file_index), no-op for build_function_index callers
+        // (pre-normalised index). See function docstring.
+        let rel_norm = rel.replace('\\', "/");
+        if path_norm.ends_with(rel_norm.as_str()) {
+            let prefix_len = path_norm.len() - rel_norm.len();
+            let boundary_ok = prefix_len == 0 || path_norm.as_bytes()[prefix_len - 1] == b'/';
+            if boundary_ok && best.as_ref().is_none_or(|(r, _)| rel.len() > r.len()) {
+                best = Some((rel, id));
+            }
+        }
+    }
+    best
 }
 
 /// Finds a File node id and its relative path in the index.
@@ -202,20 +403,10 @@ fn find_file_in_index(
     // suffix-match the same path (e.g. "index.ts" and "src/index.ts" both
     // match "/proj/src/index.ts").
     // Boundary check accepts both `/` and `\` for cross-platform support.
-    let path_norm = path.replace('\\', "/");
-    let mut best: Option<(&String, &String)> = None;
-    for (rel, id) in file_index {
-        let rel_norm = rel.replace('\\', "/");
-        if path_norm.ends_with(rel_norm.as_str()) {
-            let prefix_len = path_norm.len() - rel_norm.len();
-            if (prefix_len == 0 || path_norm.as_bytes()[prefix_len - 1] == b'/')
-                && best.as_ref().is_none_or(|(r, _)| rel.len() > r.len())
-            {
-                best = Some((rel, id));
-            }
-        }
-    }
-    best.map(|(rel, id)| (id.clone(), rel.clone()))
+    //
+    // B7 review (arch-review MEDIUM-1): delegates to find_best_suffix_match
+    // to share the algorithm with build_function_index (DRY).
+    find_best_suffix_match(file_index, path).map(|(rel, id)| (id.clone(), rel.clone()))
 }
 
 /// Resolves an `ImportInfo::source_file` to a target File node id.
@@ -572,6 +763,7 @@ mod tests {
             source_file: "./b.ts".to_string(),
             imported_names: vec!["foo".to_string()],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![a_result];
 
@@ -628,6 +820,7 @@ mod tests {
             source_file: "react".to_string(),
             imported_names: vec!["useState".to_string()],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![a_result];
 
@@ -650,6 +843,7 @@ mod tests {
             source_file: "./b.ts".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![a_result];
 
@@ -669,6 +863,7 @@ mod tests {
             source_file: String::new(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![a_result];
 
@@ -690,11 +885,13 @@ mod tests {
             source_file: "./b.ts".to_string(),
             imported_names: vec!["foo".to_string()],
             line: 1,
+            is_reexport: false,
         });
         a_result.imports.push(crate::ir::ImportInfo {
             source_file: "./b.ts".to_string(),
             imported_names: vec!["bar".to_string()],
             line: 2,
+            is_reexport: false,
         });
         let results = vec![a_result];
 
@@ -719,6 +916,7 @@ mod tests {
             source_file: "./utils".to_string(),
             imported_names: vec!["helper".to_string()],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![a_result];
 
@@ -741,6 +939,7 @@ mod tests {
             source_file: "./helpers/b".to_string(),
             imported_names: vec!["foo".to_string()],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![a_result];
 
@@ -764,6 +963,7 @@ mod tests {
             source_file: "../b".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![a_result];
 
@@ -786,6 +986,7 @@ mod tests {
             source_file: "./utils".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![a_result];
 
@@ -810,12 +1011,14 @@ mod tests {
             source_file: "./b.ts".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let mut c_result = make_result("c.ts");
         c_result.imports.push(crate::ir::ImportInfo {
             source_file: "./d.ts".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![a_result, c_result];
 
@@ -841,6 +1044,7 @@ mod tests {
             source_file: "./b.ts".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![a_result];
 
@@ -894,6 +1098,7 @@ mod tests {
             source_file: "b.ts".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![a_result];
 
@@ -919,6 +1124,7 @@ mod tests {
             source_file: "./nonexistent".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![a_result];
 
@@ -943,6 +1149,7 @@ mod tests {
             source_file: "./b.ts".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![orphan_result];
 
@@ -966,6 +1173,7 @@ mod tests {
             source_file: "crate::model".to_string(),
             imported_names: vec!["Node".to_string()],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![lib_result];
 
@@ -993,6 +1201,7 @@ mod tests {
             source_file: "crate::model::Node".to_string(),
             imported_names: vec!["Node".to_string()],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![lib_result];
 
@@ -1019,6 +1228,7 @@ mod tests {
             source_file: "crate::model".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![lib_result];
 
@@ -1045,6 +1255,7 @@ mod tests {
             source_file: "crate::parse::parser".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![lib_result];
 
@@ -1069,6 +1280,7 @@ mod tests {
             source_file: "self::model".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![lib_result];
 
@@ -1091,6 +1303,7 @@ mod tests {
             source_file: "super::model".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![sub_result];
 
@@ -1113,6 +1326,7 @@ mod tests {
             source_file: "super::model::Node".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![sub_result];
 
@@ -1141,6 +1355,7 @@ mod tests {
             source_file: "std::io".to_string(),
             imported_names: vec!["Read".to_string()],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![lib_result];
 
@@ -1316,6 +1531,7 @@ mod tests {
             source_file: "crate::model".to_string(),
             imported_names: vec!["Node".to_string()],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![lib_result];
 
@@ -1343,6 +1559,7 @@ mod tests {
             source_file: "./b.ts".to_string(),
             imported_names: vec!["foo".to_string()],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![a_result];
 
@@ -1373,6 +1590,7 @@ mod tests {
             source_file: "./types/api.js".to_string(),
             imported_names: vec!["ClientOptions".to_string()],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![client_result];
 
@@ -1399,6 +1617,7 @@ mod tests {
             source_file: "./Button.jsx".to_string(),
             imported_names: vec!["Button".to_string()],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![app_result];
 
@@ -1425,6 +1644,7 @@ mod tests {
             source_file: "./config.mjs".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![a_result];
 
@@ -1450,6 +1670,7 @@ mod tests {
             source_file: "./config.cjs".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![a_result];
 
@@ -1484,6 +1705,7 @@ mod tests {
             source_file: "format.h".to_string(),
             imported_names: vec![],
             line: 11,
+            is_reexport: false,
         });
         let results = vec![std_result];
 
@@ -1509,6 +1731,7 @@ mod tests {
             source_file: "fmt/format.h".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![top_result];
 
@@ -1534,6 +1757,7 @@ mod tests {
             source_file: "iostream".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![main_result];
 
@@ -1559,6 +1783,7 @@ mod tests {
             source_file: "foo.h".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![main_result];
 
@@ -1587,6 +1812,7 @@ mod tests {
             source_file: "com.google.gson.Gson".to_string(),
             imported_names: vec!["Gson".to_string()],
             line: 3,
+            is_reexport: false,
         });
         let results = vec![importer_result];
 
@@ -1618,6 +1844,7 @@ mod tests {
             source_file: "com.google.gson.JsonElement".to_string(),
             imported_names: vec!["JsonElement".to_string()],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![importer_result];
 
@@ -1653,6 +1880,7 @@ mod tests {
             source_file: "java.util.List".to_string(),
             imported_names: vec!["List".to_string()],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![importer_result];
 
@@ -1679,6 +1907,7 @@ mod tests {
             source_file: "com.google.gson.Gson.fromJson".to_string(),
             imported_names: vec!["fromJson".to_string()],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![importer_result];
 
@@ -1810,5 +2039,258 @@ mod tests {
         assert_eq!(strip_js_style_extension("src/a.jsx"), "src/a");
         assert_eq!(strip_js_style_extension("src/a.mjs"), "src/a");
         assert_eq!(strip_js_style_extension("src/a.cjs"), "src/a");
+    }
+
+    // --- B7 review (arch-review HIGH-2): REEXPORTS edge unit tests ---
+
+    /// Builds a Function node with the given id, name, and file_path.
+    fn make_function_node(id: &str, name: &str, file_path: &str, project: &str) -> Node {
+        Node::builder(NodeLabel::Function, name, format!("proj.{name}"))
+            .id(id)
+            .project(project)
+            .file_path(file_path)
+            .language(Language::TypeScript)
+            .build()
+    }
+
+    /// B7 review: `pub use foo::bar` (is_reexport=true, imported_names=["bar"])
+    /// creates exactly one File→Function REEXPORTS edge targeting `bar`'s
+    /// Function node id. No REEXPORTS edge for non-reexport imports.
+    #[test]
+    fn pub_use_creates_reexports_edge_to_function() {
+        let mut a_result = make_result("a.ts");
+        a_result.imports.push(crate::ir::ImportInfo {
+            source_file: "./b.ts".to_string(),
+            imported_names: vec!["bar".to_string()],
+            line: 1,
+            is_reexport: true,
+        });
+        let results = vec![a_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("a.ts", "proj"));
+        graph.add_node(make_file_node("b.ts", "proj"));
+        graph.add_node(make_function_node("fn-bar", "bar", "b.ts", "proj"));
+        graph.add_node(make_function_node("fn-baz", "baz", "b.ts", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        // 1 IMPORTS edge (a.ts → b.ts) + 1 REEXPORTS edge (a.ts → fn-bar).
+        let reexports: Vec<_> = edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Reexports)
+            .collect();
+        assert_eq!(reexports.len(), 1, "should create 1 REEXPORTS edge");
+        assert_eq!(reexports[0].source, "a.ts");
+        assert_eq!(
+            reexports[0].target, "fn-bar",
+            "should target bar's Function id"
+        );
+        assert!((reexports[0].confidence - 0.95).abs() < 1e-6);
+        assert_eq!(reexports[0].confidence_tier, ConfidenceTier::ImportScoped);
+    }
+
+    /// B7 review: `pub use foo::*` (is_reexport=true, imported_names=[])
+    /// creates one REEXPORTS edge per Function in the target file.
+    #[test]
+    fn wildcard_pub_use_creates_reexports_edges_to_all_functions() {
+        let mut a_result = make_result("a.ts");
+        a_result.imports.push(crate::ir::ImportInfo {
+            source_file: "./b.ts".to_string(),
+            imported_names: vec![], // wildcard
+            line: 1,
+            is_reexport: true,
+        });
+        let results = vec![a_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("a.ts", "proj"));
+        graph.add_node(make_file_node("b.ts", "proj"));
+        graph.add_node(make_function_node("fn-bar", "bar", "b.ts", "proj"));
+        graph.add_node(make_function_node("fn-baz", "baz", "b.ts", "proj"));
+        graph.add_node(make_function_node("fn-qux", "qux", "b.ts", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        let reexports: Vec<_> = edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Reexports)
+            .collect();
+        assert_eq!(
+            reexports.len(),
+            3,
+            "wildcard should create 3 REEXPORTS edges (one per function)"
+        );
+        let targets: std::collections::HashSet<&str> =
+            reexports.iter().map(|e| e.target.as_str()).collect();
+        assert!(targets.contains("fn-bar"));
+        assert!(targets.contains("fn-baz"));
+        assert!(targets.contains("fn-qux"));
+    }
+
+    /// B7 review: ordinary `use foo::bar` (is_reexport=false) does NOT
+    /// create any REEXPORTS edge — only IMPORTS.
+    #[test]
+    fn plain_use_does_not_create_reexports_edge() {
+        let mut a_result = make_result("a.ts");
+        a_result.imports.push(crate::ir::ImportInfo {
+            source_file: "./b.ts".to_string(),
+            imported_names: vec!["bar".to_string()],
+            line: 1,
+            is_reexport: false, // ordinary import
+        });
+        let results = vec![a_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("a.ts", "proj"));
+        graph.add_node(make_file_node("b.ts", "proj"));
+        graph.add_node(make_function_node("fn-bar", "bar", "b.ts", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        let reexports: Vec<_> = edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Reexports)
+            .collect();
+        assert!(
+            reexports.is_empty(),
+            "plain use must not create REEXPORTS edges"
+        );
+        assert_eq!(edges.len(), 1, "should still create 1 IMPORTS edge");
+    }
+
+    /// B7 review: duplicate `pub use foo::bar` (same source file, same target
+    /// function) creates only ONE REEXPORTS edge (dedup via seen_reexport_pairs).
+    #[test]
+    fn duplicate_pub_use_dedups_reexports_edges() {
+        let mut a_result = make_result("a.ts");
+        a_result.imports.push(crate::ir::ImportInfo {
+            source_file: "./b.ts".to_string(),
+            imported_names: vec!["bar".to_string()],
+            line: 1,
+            is_reexport: true,
+        });
+        a_result.imports.push(crate::ir::ImportInfo {
+            source_file: "./b.ts".to_string(),
+            imported_names: vec!["bar".to_string()],
+            line: 2,
+            is_reexport: true, // duplicate re-export of bar
+        });
+        let results = vec![a_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("a.ts", "proj"));
+        graph.add_node(make_file_node("b.ts", "proj"));
+        graph.add_node(make_function_node("fn-bar", "bar", "b.ts", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        let reexports: Vec<_> = edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Reexports)
+            .collect();
+        assert_eq!(
+            reexports.len(),
+            1,
+            "duplicate pub use should dedup to 1 REEXPORTS edge"
+        );
+    }
+
+    /// B7 review (perf-review MEDIUM-1+MEDIUM-3 + arch-review MEDIUM-1):
+    /// `build_function_index` returns a nested `HashMap<file_id, HashMap<name, func_id>>`.
+    /// Direct unit test: absolute file_path resolves to relative file_index
+    /// key via `find_best_suffix_match`, and the function is indexed under
+    /// the resolved file_id.
+    #[test]
+    fn build_function_index_handles_absolute_and_relative_paths() {
+        let mut graph = Graph::new();
+        // File node uses relative path (production scope phase output).
+        graph.add_node(make_file_node("src/lib.rs", "proj"));
+        // Function node uses absolute path (production extractor output).
+        graph.add_node(make_function_node(
+            "fn-bar",
+            "bar",
+            "/home/dev/proj/src/lib.rs",
+            "proj",
+        ));
+
+        let file_index = build_file_index(&graph);
+        let func_index = build_function_index(&graph, &file_index);
+
+        // Function should be indexed under the File node's id ("src/lib.rs"),
+        // not under the absolute path.
+        let lib_id = file_index
+            .get("src/lib.rs")
+            .expect("file_index has src/lib.rs");
+        let by_file = func_index
+            .get(lib_id)
+            .expect("func_index has the lib file entry");
+        assert_eq!(by_file.get("bar"), Some(&"fn-bar".to_string()));
+    }
+
+    /// B7 review: `resolve_reexport_targets` with empty `imported_names`
+    /// (wildcard) returns all Function ids under `target_file_id`. With
+    /// non-empty `imported_names`, returns only the named Function ids.
+    #[test]
+    fn resolve_reexport_targets_wildcard_and_named() {
+        let mut func_index: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let mut by_file = HashMap::new();
+        by_file.insert("bar".to_string(), "fn-bar".to_string());
+        by_file.insert("baz".to_string(), "fn-baz".to_string());
+        by_file.insert("qux".to_string(), "fn-qux".to_string());
+        func_index.insert("file-b".to_string(), by_file);
+
+        // Wildcard: empty imported_names → all 3 functions.
+        let wildcard = resolve_reexport_targets("file-b", &[], &func_index);
+        assert_eq!(wildcard.len(), 3, "wildcard should return all 3 functions");
+
+        // Named: only bar and qux.
+        let named = resolve_reexport_targets(
+            "file-b",
+            &["bar".to_string(), "qux".to_string()],
+            &func_index,
+        );
+        assert_eq!(named.len(), 2, "named should return 2 functions");
+        assert!(named.contains(&"fn-bar".to_string()));
+        assert!(named.contains(&"fn-qux".to_string()));
+
+        // Non-existent file → empty.
+        let missing = resolve_reexport_targets("file-x", &[], &func_index);
+        assert!(missing.is_empty(), "non-existent file should return empty");
+
+        // Non-existent name → empty.
+        let missing_name = resolve_reexport_targets("file-b", &["nope".to_string()], &func_index);
+        assert!(
+            missing_name.is_empty(),
+            "non-existent name should return empty"
+        );
+    }
+
+    /// B7 review (arch-review MEDIUM-1): `find_best_suffix_match` is the
+    /// shared helper used by both `find_file_in_index` and
+    /// `build_function_index`. Direct unit test verifies the longest-match
+    /// determinism and boundary check.
+    #[test]
+    fn find_best_suffix_match_picks_longest_with_boundary() {
+        let mut index = HashMap::new();
+        index.insert("index.ts".to_string(), "id-root".to_string());
+        index.insert("src/index.ts".to_string(), "id-src".to_string());
+
+        // Longest match wins (determinism — Rule 5).
+        let best = find_best_suffix_match(&index, "/home/dev/proj/src/index.ts");
+        assert_eq!(best.map(|(_, id)| id.as_str()), Some("id-src"));
+
+        // Boundary check: "xsrc/lib.rs" must NOT suffix-match "src/lib.rs".
+        let mut index2 = HashMap::new();
+        index2.insert("xsrc/lib.rs".to_string(), "id-xlib".to_string());
+        let best2 = find_best_suffix_match(&index2, "/home/dev/proj/src/lib.rs");
+        assert!(
+            best2.is_none(),
+            "xsrc/lib.rs must not boundary-match src/lib.rs"
+        );
     }
 }

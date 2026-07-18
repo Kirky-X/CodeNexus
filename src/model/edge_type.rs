@@ -1,15 +1,16 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Edge type enum representing the 30 relation types in the CodeNexus graph (DDD §7.2).
+//! Edge type enum representing the 31 relation types in the CodeNexus graph (DDD §7.2).
 
 use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// The 30 edge type variants defined in DDD §7.2 (14 original + 10 added in
-/// T9 H1 unified graph schema + 6 added for analysis).
+/// The 31 edge type variants defined in DDD §7.2 (14 original + 10 added in
+/// T9 H1 unified graph schema + 6 added for analysis + 1 added in B7 for
+/// re-exports).
 ///
 /// Each variant maps to an UPPERCASE DDL type string used in the LadybugDB
 /// `CodeRelation` table.
@@ -63,12 +64,18 @@ pub enum EdgeType {
     Emits,
     /// Function listens on an event/message (inferred).
     ListensOn,
+    // --- B7: re-export edge for dead-code reachability ---
+    /// File re-exports a symbol from another file (Rust `pub use`,
+    /// TypeScript `export ... from`). The target is the re-exported
+    /// Function/Method node; the source is the importing File node.
+    /// Treated as a live seed by dead-code analysis.
+    Reexports,
 }
 
 impl EdgeType {
     /// Returns all variants in declaration order.
     #[must_use]
-    pub const fn all() -> [EdgeType; 30] {
+    pub const fn all() -> [EdgeType; 31] {
         [
             EdgeType::Contains,
             EdgeType::Defines,
@@ -100,6 +107,7 @@ impl EdgeType {
             EdgeType::AsyncCalls,
             EdgeType::Emits,
             EdgeType::ListensOn,
+            EdgeType::Reexports,
         ]
     }
 
@@ -138,6 +146,7 @@ impl EdgeType {
             EdgeType::AsyncCalls => "ASYNC_CALLS",
             EdgeType::Emits => "EMITS",
             EdgeType::ListensOn => "LISTENS_ON",
+            EdgeType::Reexports => "REEXPORTS",
         }
     }
 
@@ -201,6 +210,8 @@ impl EdgeType {
             EdgeType::Emits => (0.75, 0.85),
             // Event subscription — inferred from call patterns.
             EdgeType::ListensOn => (0.75, 0.85),
+            // B7: Re-export — structural, explicit in syntax (like Imports).
+            EdgeType::Reexports => (0.95, 1.0),
         }
     }
 }
@@ -246,6 +257,7 @@ impl FromStr for EdgeType {
             "ASYNC_CALLS" => Ok(EdgeType::AsyncCalls),
             "EMITS" => Ok(EdgeType::Emits),
             "LISTENS_ON" => Ok(EdgeType::ListensOn),
+            "REEXPORTS" => Ok(EdgeType::Reexports),
             other => Err(format!("unknown EdgeType: {other}")),
         }
     }
@@ -288,8 +300,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn has_thirty_variants() {
-        assert_eq!(EdgeType::all().len(), 30);
+    fn has_thirty_one_variants() {
+        assert_eq!(EdgeType::all().len(), 31);
+    }
+
+    #[test]
+    fn reexports_variant_maps_correctly() {
+        assert_eq!(EdgeType::Reexports.as_db_type(), "REEXPORTS");
+        assert_eq!(EdgeType::Reexports.to_string(), "REEXPORTS");
+        let parsed: EdgeType = "REEXPORTS".parse().unwrap();
+        assert_eq!(parsed, EdgeType::Reexports);
+        let (lo, hi) = EdgeType::Reexports.confidence_range();
+        assert!(
+            lo >= 0.95 && hi <= 1.0,
+            "Reexports confidence range should be structural: ({lo}, {hi})"
+        );
     }
 
     #[test]

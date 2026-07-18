@@ -974,6 +974,7 @@ mod tests {
             source_file: "foo.h".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![main_result];
 
@@ -1009,6 +1010,7 @@ mod tests {
             source_file: "./utils.ts".to_string(),
             imported_names: vec!["foo".to_string()],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![ts_result];
 
@@ -1038,6 +1040,7 @@ mod tests {
             source_file: "iostream".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![main_result];
 
@@ -1067,12 +1070,14 @@ mod tests {
             source_file: "foo.h".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let mut foo_result = ExtractResult::new("src/foo.h", Language::Cpp);
         foo_result.imports.push(crate::ir::ImportInfo {
             source_file: "bar.h".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![main_result, foo_result];
 
@@ -1106,6 +1111,7 @@ mod tests {
             source_file: "foo.h".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![main_result];
 
@@ -1152,6 +1158,7 @@ mod tests {
             source_file: "fmt/format.h".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![main_result];
 
@@ -1180,6 +1187,7 @@ mod tests {
             source_file: "foo.h".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![main_result];
 

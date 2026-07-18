@@ -510,10 +510,23 @@ fn extract_use(node: Node, source: &str, result: &mut ExtractResult) {
     };
     let path = use_path(arg, source).unwrap_or_default();
     let names = use_imported_names(arg, source);
+    // B7: `pub use foo::bar` is an external re-export — the symbol is
+    // reachable from outside the current crate via the re-export, so it
+    // is a live entry point for dead-code analysis.
+    //
+    // B7 review (security LOW-2): `pub(crate) use` / `pub(super) use` /
+    // `pub(in path) use` are NOT external re-exports — they only widen
+    // visibility within the crate/module, and crate-internal reachability
+    // is already covered by CALLS edges. Treating them as external
+    // re-exports over-approximated liveness (false negative on dead code).
+    // `is_external_pub` returns true only for `pub` without a `(...)`
+    // restriction.
+    let is_reexport = is_external_pub(node);
     result.imports.push(ImportInfo {
         source_file: path,
         imported_names: names,
         line: node.start_position().row as u32 + 1,
+        is_reexport,
     });
 }
 
@@ -1307,6 +1320,44 @@ fn is_pub(node: Node) -> bool {
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
             if child.kind() == "visibility_modifier" {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// B7 review (security LOW-2): Returns true only for `pub` visibility
+/// without a `(...) ` restriction.
+///
+/// - `pub fn foo()` → true (external — visible outside the crate)
+/// - `pub(crate) fn foo()` → false (crate-internal only)
+/// - `pub(super) fn foo()` → false (parent module only)
+/// - `pub(in path) fn foo()` → false (specific path only)
+/// - `fn foo()` → false (private)
+///
+/// Used by `extract_use` to distinguish `pub use` (external re-export,
+/// creates REEXPORTS edge) from `pub(crate) use` (crate-internal, no
+/// REEXPORTS edge — crate reachability is already covered by CALLS edges).
+///
+/// tree-sitter-rust exposes the restriction as a `(` token child of
+/// `visibility_modifier` (e.g. `pub(crate)` → visibility_modifier with
+/// children: `pub`, `(`, `crate`, `)`). We check for the `(` token's
+/// presence to detect any restriction.
+fn is_external_pub(node: Node) -> bool {
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(child) = node.named_child(i) {
+            if child.kind() == "visibility_modifier" {
+                // visibility_modifier's children include the `pub` token,
+                // followed by optional `(`, restriction path, `)`. If any
+                // `(` token is present, there's a restriction.
+                for j in 0..child.child_count() as u32 {
+                    if let Some(token) = child.child(j) {
+                        if token.kind() == "(" {
+                            return false;
+                        }
+                    }
+                }
                 return true;
             }
         }
@@ -3686,6 +3737,81 @@ impl Repo {
         let src = "use std::io;\nuse std::fs;\nuse std::collections::HashMap;\n";
         let result = extract(src);
         assert_eq!(result.imports.len(), 3, "should extract 3 use declarations");
+    }
+
+    // B7 T070: `pub use` must record `is_reexport=true` so the dead-code
+    // analyzer can treat re-exported symbols as live entry points.
+    #[test]
+    fn pub_use_marked_as_reexport() {
+        let src = "pub use crate::network::fetch;";
+        let result = extract(src);
+        assert_eq!(result.imports.len(), 1, "should extract 1 pub use");
+        assert!(
+            result.imports[0].is_reexport,
+            "pub use must set is_reexport=true: {:?}",
+            result.imports[0]
+        );
+    }
+
+    // B7 T070: ordinary `use` must keep `is_reexport=false` (default).
+    #[test]
+    fn plain_use_not_marked_as_reexport() {
+        let src = "use crate::network::fetch;";
+        let result = extract(src);
+        assert_eq!(result.imports.len(), 1, "should extract 1 use");
+        assert!(
+            !result.imports[0].is_reexport,
+            "plain use must keep is_reexport=false: {:?}",
+            result.imports[0]
+        );
+    }
+
+    // B7 review (security LOW-2): `pub(crate) use` is NOT an external
+    // re-export — it only widens visibility within the current crate, and
+    // crate-internal reachability is already covered by CALLS edges.
+    // Treating it as an external re-export over-approximated liveness
+    // (false negative on dead code). Only `pub use` (no restriction)
+    // creates a REEXPORTS edge.
+    #[test]
+    fn pub_crate_use_not_marked_as_external_reexport() {
+        let src = "pub(crate) use crate::network::fetch;";
+        let result = extract(src);
+        assert_eq!(result.imports.len(), 1, "should extract 1 pub(crate) use");
+        assert!(
+            !result.imports[0].is_reexport,
+            "pub(crate) use must keep is_reexport=false (not external): {:?}",
+            result.imports[0]
+        );
+    }
+
+    // B7 review (security LOW-2): `pub(super) use` is also not an external
+    // re-export (restriction to parent module).
+    #[test]
+    fn pub_super_use_not_marked_as_external_reexport() {
+        let src = "pub(super) use crate::network::fetch;";
+        let result = extract(src);
+        assert_eq!(result.imports.len(), 1, "should extract 1 pub(super) use");
+        assert!(
+            !result.imports[0].is_reexport,
+            "pub(super) use must keep is_reexport=false (not external): {:?}",
+            result.imports[0]
+        );
+    }
+
+    // B7-review audit LOW-3: `pub(in path) use` is also not an external
+    // re-export (restriction to a specific ancestor module). is_external_pub
+    // detects any `(` token in visibility_modifier, so pub(in path) is
+    // correctly treated as restricted (not external).
+    #[test]
+    fn pub_in_path_use_not_marked_as_external_reexport() {
+        let src = "pub(in crate::network) use crate::network::fetch;";
+        let result = extract(src);
+        assert_eq!(result.imports.len(), 1, "should extract 1 pub(in path) use");
+        assert!(
+            !result.imports[0].is_reexport,
+            "pub(in path) use must keep is_reexport=false (not external): {:?}",
+            result.imports[0]
+        );
     }
 
     #[test]

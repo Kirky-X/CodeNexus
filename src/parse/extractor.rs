@@ -160,6 +160,7 @@ mod tests {
             source_file: "stdio.h".to_string(),
             imported_names: vec!["printf".to_string(), "scanf".to_string()],
             line: 1,
+            is_reexport: false,
         };
         assert_eq!(info.source_file, "stdio.h");
         assert_eq!(info.imported_names.len(), 2);
@@ -172,6 +173,7 @@ mod tests {
             source_file: "std::io".to_string(),
             imported_names: vec![],
             line: 5,
+            is_reexport: false,
         };
         assert!(info.imported_names.is_empty());
     }
@@ -182,6 +184,7 @@ mod tests {
             source_file: "os".to_string(),
             imported_names: vec!["path".to_string()],
             line: 3,
+            is_reexport: false,
         };
         let cloned = info.clone();
         assert_eq!(info, cloned);
@@ -409,6 +412,7 @@ mod tests {
                 source_file: "std::io".to_string(),
                 imported_names: vec!["println".to_string()],
                 line: 1,
+                is_reexport: false,
             }],
             calls: vec![CallInfo {
                 caller_qn: Some("main".to_string()),
@@ -464,6 +468,7 @@ mod tests {
             source_file: "os".to_string(),
             imported_names: vec![],
             line: 1,
+            is_reexport: false,
         });
         assert!(
             !result2.is_empty(),

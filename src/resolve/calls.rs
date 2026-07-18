@@ -383,6 +383,7 @@ mod tests {
             source_file: "b.rs".to_string(),
             imported_names: vec!["bar".to_string()],
             line: 1,
+            is_reexport: false,
         });
 
         let results = vec![bar_result, a_result];
@@ -409,6 +410,7 @@ mod tests {
             source_file: "b.rs".to_string(),
             imported_names: vec!["bar".to_string()],
             line: 1,
+            is_reexport: false,
         });
 
         let results = vec![bar_result, a_result];
@@ -980,6 +982,7 @@ mod tests {
             source_file: "b.rs".to_string(),
             imported_names: vec!["bar".to_string()],
             line: 1,
+            is_reexport: false,
         });
         let results = vec![a_result];
         let table = build_symbol_table(&results, "proj");
@@ -1271,6 +1274,7 @@ mod tests {
             source_file: "b.rs".to_string(),
             imported_names: vec!["bar".to_string()],
             line: 1,
+            is_reexport: false,
         });
         a_result.calls.push(CallInfo {
             caller_qn: Some(a_qn.clone()),

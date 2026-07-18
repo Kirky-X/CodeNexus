@@ -394,6 +394,7 @@ fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
             source_file: p,
             imported_names,
             line,
+            is_reexport: false,
         });
     }
 }

@@ -304,6 +304,7 @@ fn push_import(spec: Node, source: &str, line: u32, result: &mut ExtractResult) 
             source_file: path,
             imported_names: Vec::new(),
             line,
+            is_reexport: false,
         });
     }
 }

@@ -432,6 +432,7 @@ mod tests {
             source_file: "std::io".to_string(),
             imported_names: vec!["println".to_string()],
             line: 1,
+            is_reexport: false,
         });
         result.calls.push(CallInfo {
             caller_qn: Some("foo".to_string()),

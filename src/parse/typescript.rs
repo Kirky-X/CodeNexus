@@ -223,15 +223,29 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             // literal) is present only for re-exports, not for local exports.
             // Produce an ImportInfo so IMPORTS edges are created (same as
             // `import { foo } from './mod'`).
+            //
+            // B7: `is_reexport=true` marks these as live entry points for
+            // dead-code analysis (the symbol is reachable from outside the
+            // current module via the re-export).
+            //
+            // B7 review (security LOW-1): parse `export_clause` to extract
+            // named export specifiers. For `export { foo, bar } from './mod'`,
+            // only `foo` and `bar` are re-exported (precise). For
+            // `export * from './mod'`, `imported_names` stays empty and the
+            // resolver treats it as a wildcard (over-approximate). Previously
+            // all re-exports were treated as wildcards, which over-approximated
+            // liveness for named re-exports.
             if let Some(source_node) = node.child_by_field_name("source") {
                 let source_file = node_text(source_node, source)
                     .map(|s| s.trim_matches('\'').trim_matches('"').to_string())
                     .unwrap_or_default();
                 if !source_file.is_empty() {
+                    let imported_names = extract_ts_export_specifiers(node, source);
                     result.imports.push(ImportInfo {
                         source_file,
-                        imported_names: Vec::new(),
+                        imported_names,
                         line: node.start_position().row as u32 + 1,
+                        is_reexport: true,
                     });
                 }
             }
@@ -617,6 +631,7 @@ fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
         source_file,
         imported_names,
         line: node.start_position().row as u32 + 1,
+        is_reexport: false,
     });
 }
 
@@ -671,6 +686,77 @@ fn collect_imported_names(node: Node, source: &str, names: &mut Vec<String>) {
             for i in 0..node.named_child_count() as u32 {
                 if let Some(child) = node.named_child(i) {
                     collect_imported_names(child, source, names);
+                }
+            }
+        }
+    }
+}
+
+/// B7 review (security LOW-1): Extracts named export specifiers from a
+/// TypeScript `export_statement`'s `export_clause` child.
+///
+/// - `export { foo, bar } from './mod'` → `["foo", "bar"]`
+/// - `export * from './mod'` → `[]` (wildcard — resolver treats empty
+///   `imported_names` as "all functions in target file")
+/// - `export type { Foo } from './mod'` → `["Foo"]` (type-only re-export
+///   still has an `export_clause`; the name is returned as-is. Type names
+///   are filtered out downstream by `resolve_reexport_targets` because
+///   `build_function_index` only indexes `Function`/`Method` nodes, not
+///   types — so type-only re-exports effectively become no-ops for
+///   dead-code liveness propagation.)
+///
+/// This makes named re-exports precise instead of over-approximating to
+/// wildcard semantics. The previous implementation always passed
+/// `imported_names: Vec::new()`, which caused `resolve_reexport_targets`
+/// to return every Function in the target file as a live seed — a false
+/// negative for dead-code analysis on barrel-style modules.
+fn extract_ts_export_specifiers(node: Node, source: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    // export_statement may have an export_clause child for named exports.
+    // export_clause contains export_specifier children (`foo`, `bar` in
+    // `{ foo, bar }`). Wildcard exports (`export * from './mod'`) have no
+    // export_clause, so we return empty (wildcard semantics).
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(child) = node.named_child(i) {
+            if child.kind() == "export_clause" {
+                collect_export_specifier_names(child, source, &mut names);
+            }
+        }
+    }
+    names
+}
+
+/// Recursively collects `export_specifier` names from an `export_clause`
+/// subtree. Mirrors [`collect_imported_names`] but for the export grammar.
+fn collect_export_specifier_names(node: Node, source: &str, names: &mut Vec<String>) {
+    match node.kind() {
+        "export_specifier" => {
+            // export_specifier has a `name` field (e.g. `foo` in `{ foo }`)
+            // and an optional `alias` field (e.g. `foo as bar`). The
+            // re-exported symbol is `name`, not `alias` — the alias only
+            // renames the local binding.
+            if let Some(name_node) = node.child_by_field_name("name") {
+                if let Some(name) = node_text(name_node, source).map(String::from) {
+                    names.push(name);
+                    return;
+                }
+            }
+            // Fallback: identifier child (defensive — grammar versions vary).
+            for i in 0..node.named_child_count() as u32 {
+                if let Some(child) = node.named_child(i) {
+                    if child.kind() == "identifier" {
+                        if let Some(name) = node_text(child, source).map(String::from) {
+                            names.push(name);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        _ => {
+            for i in 0..node.named_child_count() as u32 {
+                if let Some(child) = node.named_child(i) {
+                    collect_export_specifier_names(child, source, names);
                 }
             }
         }
@@ -1862,6 +1948,9 @@ function setupSecond() {
     fn extracts_export_named_from_reexport() {
         // `export { foo } from './mod'` should produce an ImportInfo with
         // source_file="./mod" (same File→File IMPORTS edge as `import`).
+        // B7-review audit MEDIUM: also assert imported_names content so
+        // extract_ts_export_specifiers is verified at parser layer (not
+        // just resolver layer).
         let src = "export { foo } from './mod';\n";
         let result = extract(src);
         let reexports: Vec<_> = result
@@ -1875,11 +1964,22 @@ function setupSecond() {
             "export {{...}} from should produce 1 ImportInfo: {:?}",
             result.imports
         );
+        assert_eq!(
+            reexports[0].imported_names,
+            vec!["foo".to_string()],
+            "named re-export should capture 'foo' in imported_names"
+        );
+        assert!(
+            reexports[0].is_reexport,
+            "export {{...}} from must set is_reexport=true"
+        );
     }
 
     #[test]
     fn extracts_export_star_from_reexport() {
-        // `export * from './mod'` should produce an ImportInfo.
+        // `export * from './mod'` should produce an ImportInfo with empty
+        // imported_names (wildcard semantics — resolver treats empty as
+        // "all functions in target file").
         let src = "export * from './mod';\n";
         let result = extract(src);
         let reexports: Vec<_> = result
@@ -1893,11 +1993,23 @@ function setupSecond() {
             "export * from should produce 1 ImportInfo: {:?}",
             result.imports
         );
+        assert!(
+            reexports[0].imported_names.is_empty(),
+            "wildcard re-export must have empty imported_names"
+        );
+        assert!(
+            reexports[0].is_reexport,
+            "export * from must set is_reexport=true"
+        );
     }
 
     #[test]
     fn extracts_export_type_from_reexport() {
-        // `export type { Foo } from './mod'` should produce an ImportInfo.
+        // `export type { Foo } from './mod'` should produce an ImportInfo
+        // with imported_names=["Foo"] (type-only re-export still has an
+        // export_clause; type names are filtered out downstream by
+        // resolve_reexport_targets because build_function_index only
+        // indexes Function/Method nodes).
         let src = "export type { Foo } from './mod';\n";
         let result = extract(src);
         let reexports: Vec<_> = result
@@ -1910,6 +2022,15 @@ function setupSecond() {
             1,
             "export type {{...}} from should produce 1 ImportInfo: {:?}",
             result.imports
+        );
+        assert_eq!(
+            reexports[0].imported_names,
+            vec!["Foo".to_string()],
+            "type-only re-export should still capture 'Foo' in imported_names"
+        );
+        assert!(
+            reexports[0].is_reexport,
+            "export type {{...}} from must set is_reexport=true"
         );
     }
 

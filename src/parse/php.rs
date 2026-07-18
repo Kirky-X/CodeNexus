@@ -285,6 +285,7 @@ fn extract_use(node: Node, source: &str, result: &mut ExtractResult) {
                         source_file: path,
                         imported_names: Vec::new(),
                         line,
+                        is_reexport: false,
                     });
                 }
             }

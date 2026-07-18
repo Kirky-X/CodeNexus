@@ -429,6 +429,7 @@ fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
                         source_file: name,
                         imported_names: Vec::new(),
                         line: node.start_position().row as u32 + 1,
+                        is_reexport: false,
                     });
                 }
             }
@@ -467,6 +468,7 @@ fn extract_import_from(node: Node, source: &str, result: &mut ExtractResult) {
         source_file: source_module,
         imported_names: names,
         line: node.start_position().row as u32 + 1,
+        is_reexport: false,
     });
 }
 

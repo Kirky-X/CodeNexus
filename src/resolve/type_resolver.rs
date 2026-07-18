@@ -340,6 +340,7 @@ mod tests {
             source_file: "a".to_string(),
             imported_names: vec!["A".to_string()],
             line: 1,
+            is_reexport: false,
         }];
         let resolver = TypeResolver::new(&table);
         let (qn, conf, tier) = resolver
@@ -400,6 +401,7 @@ mod tests {
                     source_file: "a".to_string(),
                     imported_names: vec!["A".to_string()],
                     line: 1,
+                    is_reexport: false,
                 });
             }
         }
@@ -476,6 +478,7 @@ mod tests {
                     source_file: "a".to_string(),
                     imported_names: vec!["MyTrait".to_string()],
                     line: 1,
+                    is_reexport: false,
                 });
             }
         }
@@ -613,6 +616,7 @@ mod tests {
                     source_file: "a".to_string(),
                     imported_names: vec!["A".to_string()],
                     line: 1,
+                    is_reexport: false,
                 });
                 r
             },
@@ -759,6 +763,7 @@ mod tests {
             source_file: "missing".to_string(),
             imported_names: vec!["MissingType".to_string()],
             line: 1,
+            is_reexport: false,
         }];
         let resolver = TypeResolver::new(&table);
         assert!(
@@ -792,6 +797,7 @@ mod tests {
                     source_file: "a".to_string(),
                     imported_names: vec!["A".to_string()],
                     line: 1,
+                    is_reexport: false,
                 });
                 r
             },
@@ -992,6 +998,7 @@ mod tests {
             source_file: "external".to_string(),
             imported_names: vec!["ExternalType".to_string()],
             line: 1,
+            is_reexport: false,
         }];
         let resolver = TypeResolver::new(&table);
         assert!(
@@ -1044,6 +1051,7 @@ mod tests {
             source_file: "a".to_string(),
             imported_names: vec!["A".to_string()],
             line: 1,
+            is_reexport: false,
         }];
         let resolver = TypeResolver::new(&table);
         // A is in the symbol table, so lookup should find it via import path.

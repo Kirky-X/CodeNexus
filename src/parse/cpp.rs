@@ -411,6 +411,7 @@ fn extract_include(node: Node, source: &str, result: &mut ExtractResult) {
                 source_file: cleaned.to_string(),
                 imported_names: Vec::new(),
                 line,
+                is_reexport: false,
             });
         }
     }

@@ -316,6 +316,7 @@ fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
             source_file: module,
             imported_names: Vec::new(),
             line,
+            is_reexport: false,
         });
     }
 }
