@@ -905,4 +905,85 @@ mod tests {
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].edge_type, EdgeType::Extends);
     }
+
+    /// Verifies CALLS edge creation for trait impl method calling free function,
+    /// using absolute path to mirror production extraction (where result.file_path is abs).
+    /// Reproduces CalNexus scientific.rs `supports -> contains_scientific` issue.
+    #[test]
+    fn resolves_calls_edge_for_trait_impl_with_absolute_path() {
+        use crate::model::NodeLabel;
+        use crate::parse::extract_from_source;
+        let src = r#"pub trait CalculationDomain {
+    fn supports(&self, ast: &AstNode) -> bool;
+}
+
+pub struct ScientificDomain;
+
+impl CalculationDomain for ScientificDomain {
+    fn supports(&self, ast: &AstNode) -> bool {
+        contains_scientific(ast)
+    }
+}
+
+fn contains_scientific(ast: &AstNode) -> bool { true }
+"#;
+        // Use absolute path to mirror production. Note: extract_from_source's
+        // signature is (file_path_str, source, language, project).
+        // Cross-platform: use temp_dir() instead of hardcoding /home/kirky/...
+        // (rule 31: no platform-specific paths).
+        let file_path_buf = std::env::temp_dir().join("scientific.rs");
+        let file_path = file_path_buf.to_string_lossy();
+        let project = "proj_test";
+        let result = extract_from_source(&file_path, src, crate::model::Language::Rust, project)
+            .expect("extract failed");
+
+        // Build symbol table
+        let results = vec![result.clone()];
+        let table = build_symbol_table(&results, project);
+
+        // Verify lookup_in_file works with absolute path
+        let entries = table.lookup_in_file(&result.file_path, "contains_scientific");
+        assert!(
+            !entries.is_empty(),
+            "lookup_in_file should find contains_scientific with absolute path"
+        );
+
+        // Build graph (mirror ScopeResolutionPhase: set node.id = qualified_name)
+        let mut graph = Graph::new();
+        for n in &result.nodes {
+            let mut g = n.clone();
+            if !matches!(
+                g.label,
+                NodeLabel::Project | NodeLabel::File | NodeLabel::Folder
+            ) {
+                g.id = n.qualified_name.clone();
+            }
+            graph.add_node(g);
+        }
+
+        // Resolve calls
+        let edges = resolve_all(
+            &[result],
+            &table,
+            project,
+            &mut graph,
+            &IncludesGraph::new(),
+        );
+
+        let calls_edges: Vec<_> = edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Calls)
+            .collect();
+
+        // There must be a CALLS edge from supports#ScientificDomain to contains_scientific
+        let supports_to_contains: Vec<_> = calls_edges
+            .iter()
+            .filter(|e| e.source.contains("supports") && e.target.contains("contains_scientific"))
+            .collect();
+        assert!(
+            !supports_to_contains.is_empty(),
+            "expected CALLS edge supports -> contains_scientific, got {:?}",
+            calls_edges
+        );
+    }
 }

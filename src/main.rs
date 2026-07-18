@@ -404,6 +404,10 @@ const SENTINEL_DEFAULTS: &[(&str, &str, &str)] = &[
     ("cross_service", "protocol", ""),
     // — api_impact: endpoint (empty = all endpoints)
     ("api_impact", "endpoint", ""),
+    // — dead_code: B3.5 — check_dynamic_dispatch defaults to true so trait
+    // impl methods (e.g. `fmt#Display`) are excluded by default. Users can
+    // opt out via `--check_dynamic_dispatch false` for adversarial testing.
+    ("dead_code", "check_dynamic_dispatch", "true"),
 ];
 
 /// Applies sentinel `default_value`s to CLI parameters listed in

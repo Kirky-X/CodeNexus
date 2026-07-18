@@ -240,6 +240,23 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             extract_extern_block(node, source, result);
             visit_children(node, source, ctx, result);
         }
+        "macro_invocation" => {
+            // B1 fix: tree-sitter-rust parses macro arguments (`println!(...)`,
+            // `format!(...)`, `json!(...)`) as `token_tree` nodes, which
+            // contain raw tokens that are NOT parsed as `call_expression`.
+            // This means function calls inside macro arguments (e.g.
+            // `println!("{}", helper())`) are invisible to the standard
+            // `call_expression` visitor. On CalNexus, this caused 3/4
+            // remaining dead-code false positives (format_json_output,
+            // dmatrix_to_json, error_kind_prefix — all called inside macros).
+            // The fix scans the `token_tree` for `identifier` + `token_tree`
+            // pairs (the macro-argument form of `fn()`) and extracts them as
+            // CallInfo. Method calls (`obj.method()`) are not handled here —
+            // they require field_expression parsing which token_tree doesn't
+            // expose. See tools/verification/results/triage.md §B1.
+            extract_calls_from_macro(node, source, ctx, result);
+            visit_children(node, source, ctx, result);
+        }
         "mod_item" => {
             // 模块名纳入 current_parent 以区分同名 impl（P0-1），并创建 Module 节点（P2-1）。
             extract_named_item(node, NodeLabel::Module, source, ctx, result);
@@ -518,11 +535,239 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
         .current_func
         .map(|name| make_qn(ctx.file_path, name, ctx.project, ctx.current_parent));
     result.calls.push(CallInfo {
-        caller_qn,
+        caller_qn: caller_qn.clone(),
         callee_name: callee,
         line: node.start_position().row as u32 + 1,
         args,
     });
+    // B1b fix: function-reference arguments (e.g. `eval_unary(..., erf)`).
+    // tree-sitter parses a function name passed as an argument as a bare
+    // `identifier` inside `arguments`. Without this, `erf` only generates a
+    // ReadInfo (variable read), so dead_code analysis reports it as dead
+    // (zero incoming CALLS edges). The resolver drops CallInfo records whose
+    // callee_name doesn't match a function in the symbol table, so variables
+    // passed as arguments (e.g. `foo(x)`) are silently filtered.
+    extract_function_ref_args(node, source, &caller_qn, result);
+}
+
+/// B1b: extracts bare-identifier arguments as CallInfo records.
+///
+/// When a function name is passed as an argument (e.g.
+/// `self.eval_unary(name, args, ctx, erf)` in CalNexus scientific.rs),
+/// tree-sitter-rust parses `erf` as a bare `identifier` child of `arguments`.
+/// The standard `call_expression` visitor only extracts the callee
+/// (`eval_unary`), not identifier arguments. Without this fix, `erf` generates
+/// only a ReadInfo (variable read), and dead_code analysis reports it as dead
+/// because it has zero incoming CALLS edges.
+///
+/// This function scans the `arguments` child of a `call_expression` for bare
+/// `identifier` nodes and pushes a CallInfo for each, using the identifier as
+/// `callee_name`. The resolve phase (`CallResolver`) only creates a CALLS edge
+/// if the identifier matches a function in the symbol table, so variables
+/// passed as arguments (e.g. `foo(x)` where `x` is a local) are silently
+/// dropped — no false-positive CALLS edges.
+///
+/// Trade-off: if a project has a function and a variable with the same simple
+/// name in the same file, and the variable is passed as an argument, the
+/// function will be marked as reachable (false negative for dead_code). This
+/// is rare and conservative (better to miss some dead code than to flag live
+/// code as dead).
+fn extract_function_ref_args(
+    node: Node,
+    source: &str,
+    caller_qn: &Option<String>,
+    result: &mut ExtractResult,
+) {
+    let Some(args_node) = node.child_by_field_name("arguments") else {
+        return;
+    };
+    for i in 0..args_node.named_child_count() as u32 {
+        let Some(arg) = args_node.named_child(i) else {
+            continue;
+        };
+        // Only bare identifiers are potential function references. Field
+        // expressions (`obj.method`), path expressions (`mod::fn`), closures
+        // (`|x| x + 1`), and call expressions (`bar()`) are handled by their
+        // own visitors.
+        if arg.kind() != "identifier" {
+            continue;
+        }
+        let Some(name) = node_text(arg, source).map(String::from) else {
+            continue;
+        };
+        result.calls.push(CallInfo {
+            caller_qn: caller_qn.clone(),
+            callee_name: name,
+            line: arg.start_position().row as u32 + 1,
+            args: Vec::new(),
+        });
+    }
+}
+
+/// B1 fix: extracts function calls from inside macro arguments.
+///
+/// tree-sitter-rust parses macro arguments (`println!(...)`, `format!(...)`,
+/// `json!(...)`) as `token_tree` nodes. Inside `token_tree`, a function call
+/// like `helper(42)` is parsed as two adjacent named children:
+///   - `identifier` "helper"
+///   - `token_tree` "(42)"
+///
+/// This function scans the macro's `token_tree` for this pattern and creates
+/// [`CallInfo`] records for each match. Method calls (`obj.method()`) are
+/// NOT handled here because `token_tree` doesn't expose `field_expression`
+/// structure — they would appear as `identifier` "." `identifier` `token_tree`,
+/// and we can't reliably distinguish them from other token sequences.
+///
+/// Limitations:
+/// - Only simple `fn(args)` calls are recognized (not `Path::fn(args)` or
+///   `obj.method(args)`).
+/// - The callee_name is the simple identifier; resolution to a fully
+///   qualified name happens in the resolve phase via `lookup_in_file`.
+fn extract_calls_from_macro(
+    node: Node,
+    source: &str,
+    ctx: &VisitContext<'_>,
+    result: &mut ExtractResult,
+) {
+    // A macro_invocation has two named children: the macro name (identifier)
+    // and the token_tree containing the arguments.
+    let mut token_tree_opt: Option<Node> = None;
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(child) = node.named_child(i) {
+            if child.kind() == "token_tree" {
+                token_tree_opt = Some(child);
+                break;
+            }
+        }
+    }
+    let Some(token_tree) = token_tree_opt else {
+        return;
+    };
+    // Scan the token_tree's named children for `identifier` + `token_tree`
+    // pairs (the macro-argument form of a function call).
+    let child_count = token_tree.named_child_count() as u32;
+    let mut i = 0u32;
+    while i < child_count {
+        let Some(curr) = token_tree.named_child(i) else {
+            i += 1;
+            continue;
+        };
+        if curr.kind() == "identifier" {
+            // Check if the next named child is a token_tree (the call args).
+            if i + 1 < child_count {
+                if let Some(next) = token_tree.named_child(i + 1) {
+                    if next.kind() == "token_tree" {
+                        // Found a function call: identifier + token_tree.
+                        if let Some(callee) = node_text(curr, source).map(String::from) {
+                            // Skip stdlib method names that might appear in
+                            // macro arguments (e.g. `vec.push(x)` inside
+                            // `println!`). Without field_expression context,
+                            // we can't filter method calls, so we filter by
+                            // name against the stdlib list.
+                            if !STDLIB_METHOD_NAMES.contains(&callee.as_str()) {
+                                let caller_qn = ctx.current_func.map(|name| {
+                                    make_qn(ctx.file_path, name, ctx.project, ctx.current_parent)
+                                });
+                                let args = macro_call_arguments(next, source);
+                                result.calls.push(CallInfo {
+                                    caller_qn,
+                                    callee_name: callee,
+                                    line: curr.start_position().row as u32 + 1,
+                                    args,
+                                });
+                            }
+                        }
+                        // Skip the token_tree (consume both children).
+                        i += 2;
+                        continue;
+                    }
+                }
+            }
+        }
+        // Also recurse into nested token_tree to handle nested macros and
+        // complex expressions (e.g. `println!("{}", json!({ "k": helper() }))`).
+        if curr.kind() == "token_tree" {
+            extract_calls_from_token_tree(curr, source, ctx, result);
+        }
+        i += 1;
+    }
+}
+
+/// Recursively extracts function calls from a `token_tree` node (B1 fix).
+///
+/// This handles nested macros and complex expressions inside macro arguments.
+fn extract_calls_from_token_tree(
+    token_tree: Node,
+    source: &str,
+    ctx: &VisitContext<'_>,
+    result: &mut ExtractResult,
+) {
+    let child_count = token_tree.named_child_count() as u32;
+    let mut i = 0u32;
+    while i < child_count {
+        let Some(curr) = token_tree.named_child(i) else {
+            i += 1;
+            continue;
+        };
+        if curr.kind() == "identifier" && i + 1 < child_count {
+            if let Some(next) = token_tree.named_child(i + 1) {
+                if next.kind() == "token_tree" {
+                    if let Some(callee) = node_text(curr, source).map(String::from) {
+                        if !STDLIB_METHOD_NAMES.contains(&callee.as_str()) {
+                            let caller_qn = ctx.current_func.map(|name| {
+                                make_qn(ctx.file_path, name, ctx.project, ctx.current_parent)
+                            });
+                            let args = macro_call_arguments(next, source);
+                            result.calls.push(CallInfo {
+                                caller_qn,
+                                callee_name: callee,
+                                line: curr.start_position().row as u32 + 1,
+                                args,
+                            });
+                        }
+                    }
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+        // Recurse into nested token_tree.
+        if curr.kind() == "token_tree" {
+            extract_calls_from_token_tree(curr, source, ctx, result);
+        }
+        i += 1;
+    }
+}
+
+/// Extracts argument count from a macro call's `token_tree` (B1 fix).
+///
+/// Since `token_tree` doesn't parse arguments as expressions, we count
+/// top-level commas to estimate the argument count. This is a best-effort
+/// heuristic for confidence scoring; the actual argument values are not
+/// captured.
+fn macro_call_arguments(token_tree: Node, source: &str) -> Vec<String> {
+    let Some(text) = node_text(token_tree, source) else {
+        return Vec::new();
+    };
+    // Strip outer parens/brackets/braces.
+    let inner = text
+        .trim_start_matches(['(', '[', '{'])
+        .trim_end_matches([')', ']', '}']);
+    if inner.trim().is_empty() {
+        return Vec::new();
+    }
+    // Count top-level commas (depth 0). This is a rough heuristic.
+    let mut depth = 0i32;
+    let mut count = 1usize;
+    for ch in inner.chars() {
+        match ch {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => count += 1,
+            _ => {}
+        }
+    }
+    vec![String::new(); count]
 }
 
 /// Stdlib method names that should not generate CallInfo records when invoked
@@ -1341,6 +1586,87 @@ fn main() {
             .expect("extraction should succeed")
     }
 
+    /// Verifies CallInfo extraction for trait impl method calling free function.
+    /// Mirrors CalNexus scientific.rs structure: `impl CalculationDomain for ScientificDomain`.
+    #[test]
+    fn extracts_call_in_trait_impl_method() {
+        let src = r#"
+pub trait CalculationDomain {
+    fn supports(&self, ast: &AstNode) -> bool;
+}
+
+pub struct ScientificDomain;
+
+impl CalculationDomain for ScientificDomain {
+    fn supports(&self, ast: &AstNode) -> bool {
+        contains_scientific(ast)
+    }
+}
+
+fn contains_scientific(ast: &AstNode) -> bool { true }
+"#;
+        let result = extract(src);
+        // The call to contains_scientific inside supports() should be extracted.
+        let contains_calls: Vec<_> = result
+            .calls
+            .iter()
+            .filter(|c| c.callee_name == "contains_scientific")
+            .collect();
+        assert!(
+            !contains_calls.is_empty(),
+            "expected contains_scientific call to be extracted, got {:?}",
+            result.calls
+        );
+    }
+
+    /// B1b: Verifies CallInfo extraction for function-reference arguments.
+    ///
+    /// Mirrors CalNexus scientific.rs: `self.eval_unary(name, args, ctx, erf)`
+    /// where `erf` is a free function passed as `impl Fn(f64) -> f64`. Without
+    /// this fix, `erf` only generates a ReadInfo (variable read), causing
+    /// dead_code analysis to report it as dead (zero incoming CALLS edges).
+    #[test]
+    fn extracts_function_reference_argument() {
+        let src = r#"
+fn eval_unary(name: &str, f: impl Fn(f64) -> f64) -> f64 { f(1.0) }
+fn erf(x: f64) -> f64 { x }
+fn caller(name: &str) {
+    eval_unary(name, erf);
+}
+"#;
+        let result = extract(src);
+        // `erf` passed as a function-reference argument must be extracted as
+        // a CallInfo so the resolver can create a CALLS edge to it.
+        let erf_calls: Vec<_> = result
+            .calls
+            .iter()
+            .filter(|c| c.callee_name == "erf")
+            .collect();
+        assert!(
+            !erf_calls.is_empty(),
+            "expected erf (passed as function reference) to be extracted as CallInfo, got {:?}",
+            result.calls
+        );
+        // `name` is a parameter (variable), not a function. It should NOT
+        // generate a CallInfo — the resolver would drop it anyway since no
+        // function named "name" exists in the symbol table, but we verify
+        // the extractor still generates it (conservative: let the resolver
+        // decide). The key assertion is that `erf` is extracted.
+        let name_calls: Vec<_> = result
+            .calls
+            .iter()
+            .filter(|c| c.callee_name == "name")
+            .collect();
+        // `name` is a bare identifier argument, so it WILL generate a
+        // CallInfo. The resolver will drop it because no function "name"
+        // exists. This is the expected conservative behavior.
+        assert!(
+            !name_calls.is_empty(),
+            "expected name (bare identifier argument) to also be extracted as CallInfo (resolver will filter), got {:?}",
+            result.calls
+        );
+    }
+
     #[test]
     fn language_returns_rust() {
         assert_eq!(RustExtractor::new().language(), Language::Rust);
@@ -1635,6 +1961,99 @@ fn main() {
                 "stdlib method {stdlib_method} should be filtered: {callees:?}"
             );
         }
+    }
+
+    // ===== B1: function calls inside macro arguments =====
+
+    #[test]
+    fn b1_extracts_function_call_inside_println_macro() {
+        // B1 fix: function calls inside `println!` macro arguments must be
+        // extracted as CallInfo. tree-sitter-rust parses macro arguments as
+        // `token_tree` nodes, which contain raw tokens that are NOT parsed as
+        // `call_expression`. This test verifies that the extractor descends
+        // into `token_tree` and extracts function calls.
+        let src = r#"fn helper() -> i32 { 42 }
+fn main() {
+    println!("{}", helper());
+}"#;
+        let result = extract(src);
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
+        assert!(
+            callees.contains(&"helper"),
+            "B1: function call inside println! should be extracted: {callees:?}"
+        );
+    }
+
+    #[test]
+    fn b1_extracts_function_call_inside_format_macro() {
+        // B1 fix: function calls inside `format!` macro arguments must be
+        // extracted. This was the root cause of `error_kind_prefix` being
+        // flagged as dead code in CalNexus (called inside `format!(...)`).
+        let src = r#"fn prefix(kind: &str) -> &'static str { kind }
+fn main() {
+    let s = format!("{}: {}", prefix("err"), "msg");
+}"#;
+        let result = extract(src);
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
+        assert!(
+            callees.contains(&"prefix"),
+            "B1: function call inside format! should be extracted: {callees:?}"
+        );
+    }
+
+    #[test]
+    fn b1_extracts_function_call_inside_json_macro() {
+        // B1 fix: function calls inside `json!` (serde_json::json!) macro
+        // arguments must be extracted. This was the root cause of
+        // `dmatrix_to_json` being flagged as dead code in CalNexus.
+        let src = r#"fn to_json(x: i32) -> i32 { x }
+fn main() {
+    let _v = json!({ "key": to_json(42) });
+}"#;
+        let result = extract(src);
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
+        assert!(
+            callees.contains(&"to_json"),
+            "B1: function call inside json! should be extracted: {callees:?}"
+        );
+    }
+
+    #[test]
+    fn b1_extracts_function_call_inside_nested_macro() {
+        // B1 fix: function calls inside nested macros (e.g. `println!` inside
+        // another macro) must also be extracted.
+        let src = r#"fn helper() -> i32 { 42 }
+macro_rules! debug_print {
+    ($x:expr) => { println!("{}", $x) };
+}
+fn main() {
+    debug_print!(helper());
+}"#;
+        let result = extract(src);
+        let callees: Vec<_> = result
+            .calls
+            .iter()
+            .map(|c| c.callee_name.as_str())
+            .collect();
+        // Note: macro_rules! arguments may not parse as call_expression, but
+        // if they do, the call should be extracted. This test documents the
+        // expected behavior.
+        assert!(
+            callees.contains(&"helper"),
+            "B1: function call inside nested macro should be extracted: {callees:?}"
+        );
     }
 
     #[test]
