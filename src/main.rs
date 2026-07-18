@@ -193,7 +193,7 @@ fn run_cli() {
         }
     };
 
-    if let Err(api_error) = runtime.block_on((handler.handler)(args)) {
+    if let Err(api_error) = runtime.block_on((handler.handler)(args, None)) {
         let cli_error = CodeNexusError::from(api_error);
         eprintln!("Error: {cli_error}");
         std::process::exit(cli_error.exit_code());

@@ -134,9 +134,7 @@ impl LspProvider for RustAnalyzerClient {
 mod tests {
     use super::*;
     use crate::lsp::session;
-    use lsp_server::{
-        Connection, Message, Notification, Request, RequestId, Response, ResponseKind,
-    };
+    use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
     use lsp_types::request::{HoverRequest, Initialize};
     use lsp_types::{
         GotoDefinitionResponse, HoverParams, Position, TextDocumentIdentifier,
@@ -307,13 +305,11 @@ mod tests {
     fn decode_response_server_error() {
         let resp = Response {
             id: RequestId::from(1),
-            response_kind: ResponseKind::Err {
-                error: lsp_server::ResponseError {
-                    code: -32603,
-                    message: "err".into(),
-                    data: None,
-                },
-            },
+            response_result: Err(lsp_server::ResponseError {
+                code: -32603,
+                message: "err".into(),
+                data: None,
+            }),
         };
         assert!(matches!(
             session::decode_response::<Initialize>(resp),
@@ -325,9 +321,7 @@ mod tests {
     fn decode_response_absent_result_as_none() {
         let resp = Response {
             id: RequestId::from(1),
-            response_kind: ResponseKind::Ok {
-                result: serde_json::Value::Null,
-            },
+            response_result: Ok(serde_json::Value::Null),
         };
         assert_eq!(
             session::decode_response::<HoverRequest>(resp).unwrap(),
@@ -339,9 +333,7 @@ mod tests {
     fn decode_response_type_mismatch() {
         let resp = Response {
             id: RequestId::from(1),
-            response_kind: ResponseKind::Ok {
-                result: serde_json::Value::String("bad".into()),
-            },
+            response_result: Ok(serde_json::Value::String("bad".into())),
         };
         assert!(matches!(
             session::decode_response::<Initialize>(resp),
@@ -454,9 +446,7 @@ mod tests {
         .unwrap();
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            response_kind: ResponseKind::Ok {
-                result: serde_json::Value::Null,
-            },
+            response_result: Ok(serde_json::Value::Null),
         }))
         .unwrap();
         assert!(session::send_request::<HoverRequest>(&mut s, hp())
@@ -477,9 +467,7 @@ mod tests {
         .unwrap();
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            response_kind: ResponseKind::Ok {
-                result: serde_json::Value::Null,
-            },
+            response_result: Ok(serde_json::Value::Null),
         }))
         .unwrap();
         assert!(session::send_request::<HoverRequest>(&mut s, hp()).is_ok());
@@ -492,16 +480,12 @@ mod tests {
         let (mut s, rt, _wr) = mock_session();
         rt.send(Message::Response(Response {
             id: RequestId::from(999),
-            response_kind: ResponseKind::Ok {
-                result: serde_json::Value::Null,
-            },
+            response_result: Ok(serde_json::Value::Null),
         }))
         .unwrap();
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            response_kind: ResponseKind::Ok {
-                result: serde_json::Value::Null,
-            },
+            response_result: Ok(serde_json::Value::Null),
         }))
         .unwrap();
         assert!(session::send_request::<HoverRequest>(&mut s, hp()).is_ok());
@@ -526,13 +510,11 @@ mod tests {
         let (mut s, rt, _wr) = mock_session();
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            response_kind: ResponseKind::Err {
-                error: lsp_server::ResponseError {
-                    code: -32603,
-                    message: "err".into(),
-                    data: None,
-                },
-            },
+            response_result: Err(lsp_server::ResponseError {
+                code: -32603,
+                message: "err".into(),
+                data: None,
+            }),
         }))
         .unwrap();
         let r = session::send_request::<HoverRequest>(&mut s, hp());
@@ -609,9 +591,9 @@ mod tests {
         let (c, rt, _wr) = client_with_mock();
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            response_kind: ResponseKind::Ok {
-                result: serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap(),
-            },
+            response_result: Ok(
+                serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap()
+            ),
         }))
         .unwrap();
         assert_eq!(
@@ -631,9 +613,9 @@ mod tests {
         let (c, rt, _wr) = client_with_mock();
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            response_kind: ResponseKind::Ok {
-                result: serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap(),
-            },
+            response_result: Ok(
+                serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap()
+            ),
         }))
         .unwrap();
         let r = c.type_definition(Path::new("/tmp/lib.rs"), 0, 0).unwrap();
@@ -653,9 +635,7 @@ mod tests {
         };
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            response_kind: ResponseKind::Ok {
-                result: serde_json::to_value(hover).unwrap(),
-            },
+            response_result: Ok(serde_json::to_value(hover).unwrap()),
         }))
         .unwrap();
         assert!(c.hover(Path::new("/tmp/lib.rs"), 0, 0).unwrap().is_some());

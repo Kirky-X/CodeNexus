@@ -135,7 +135,7 @@ impl LspProvider for TypeScriptLanguageClient {
 mod tests {
     use super::*;
     use crate::lsp::session;
-    use lsp_server::{Connection, Message, RequestId, Response, ResponseKind};
+    use lsp_server::{Connection, Message, RequestId, Response};
     use lsp_types::request::HoverRequest;
     use lsp_types::{
         GotoDefinitionResponse, HoverParams, Position, TextDocumentIdentifier,
@@ -285,9 +285,9 @@ mod tests {
         *c.session.lock().unwrap() = Some(s);
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            response_kind: ResponseKind::Ok {
-                result: serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap(),
-            },
+            response_result: Ok(
+                serde_json::to_value(GotoDefinitionResponse::Scalar(loc())).unwrap()
+            ),
         }))
         .unwrap();
         assert_eq!(
@@ -316,9 +316,7 @@ mod tests {
         };
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            response_kind: ResponseKind::Ok {
-                result: serde_json::to_value(hover).unwrap(),
-            },
+            response_result: Ok(serde_json::to_value(hover).unwrap()),
         }))
         .unwrap();
         assert!(c.hover(Path::new("/tmp/test.ts"), 0, 0).unwrap().is_some());

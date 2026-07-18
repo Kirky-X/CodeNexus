@@ -16,7 +16,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
-use lsp_server::{Connection, Message, Notification, Request, RequestId, Response, ResponseKind};
+use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::{Initialized, Notification as _};
 use lsp_types::request::Initialize;
 use lsp_types::{
@@ -202,12 +202,12 @@ where
     R: lsp_types::request::Request,
     R::Result: serde::de::DeserializeOwned,
 {
-    match resp.response_kind {
-        ResponseKind::Err { error } => Err(LspError::Communication(format!(
+    match resp.response_result {
+        Err(error) => Err(LspError::Communication(format!(
             "server error {}: {}",
             error.code, error.message
         ))),
-        ResponseKind::Ok { result } => serde_json::from_value::<R::Result>(result)
+        Ok(result) => serde_json::from_value::<R::Result>(result)
             .map_err(|e| LspError::Communication(format!("decode response: {e}"))),
     }
 }
