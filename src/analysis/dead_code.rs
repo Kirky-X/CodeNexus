@@ -138,6 +138,218 @@ pub struct DeadCodeEntry {
     pub confidence: Confidence,
 }
 
+/// Batch-prefetched metadata for dead-code analysis (perf-1 + arch-1).
+///
+/// Replaces the previous N+1 per-function Cypher query pattern with a
+/// single bulk query that is shared by [`ReachabilityAnalyzer`] and
+/// [`DeadCodeDetector::detect`]:
+///
+/// - `outgoing_edges` — all `CodeRelation` edges of configured types,
+///   grouped by `source` id (`HashMap<String, HashSet<String>>`).
+///
+/// `exported_ids` and `ffi_entry_ids` are derived in Rust from the already
+/// loaded `FunctionRow` list (no extra Cypher round-trips).
+///
+/// # Performance
+///
+/// Before: `collect_seeds` issued 2 Cypher queries per function
+/// (`is_exported` × 2 labels + `is_ffi_entry` × 2 labels = 4N worst case),
+/// `propagate` issued 1 query per worklist pop (V queries), and `detect`
+/// re-queried `is_exported`/`is_ffi_entry` for each dead candidate (2N
+/// more). Total: ~4N + 2N + V = 6N+V round-trips.
+///
+/// After (perf-1 + perf-review MEDIUM-1/2): `load_all_functions` issues 2
+/// Cypher queries (Function + Method labels — LadybugDB's Cypher subset
+/// does not support `OR` label expressions) and returns `isExported` /
+/// `signature` alongside the existing fields. `BatchPrefetch::load` then
+/// issues 1 Cypher query for `outgoing_edges`. Total: 3 round-trips,
+/// independent of project size. Previously this scaled as 6N+V; for
+/// CalNexus (N=247, V=21990) this is a ~1500× reduction.
+///
+/// # DRY
+///
+/// Previously `is_exported`/`is_ffi_entry`/`load_functions` were
+/// duplicated byte-for-byte across `ReachabilityAnalyzer` and
+/// `DeadCodeDetector`. The shared `BatchPrefetch` + `load_all_functions`
+/// eliminate the duplication. Field access is mediated by `is_exported`
+/// / `is_ffi_entry` / `outgoing_edges` methods so the internal
+/// `HashSet`/`HashMap` choice is not leaked to callers (arch-review
+/// MEDIUM-3).
+pub(crate) struct BatchPrefetch {
+    /// Ids of `Function`/`Method` nodes with `isExported=true`.
+    exported_ids: std::collections::HashSet<String>,
+    /// Ids of `Function`/`Method` nodes whose `signature` contains FFI
+    /// markers (`extern "C"` or `#[no_mangle]`).
+    ffi_entry_ids: std::collections::HashSet<String>,
+    /// Outgoing edges grouped by source id. Targets are deduplicated
+    /// (`HashSet`) so a multi-edge (e.g. CALLS + USAGE) source→target
+    /// pair only propagates once (perf-review MEDIUM-6).
+    outgoing_edges: std::collections::HashMap<String, std::collections::HashSet<String>>,
+}
+
+impl BatchPrefetch {
+    /// Builds the prefetch cache from an already-loaded `functions` list
+    /// plus one Cypher round-trip for `outgoing_edges`.
+    ///
+    /// `exported_ids` and `ffi_entry_ids` are derived in Rust from
+    /// `functions` (no extra Cypher) — this collapses the previous
+    /// 5 round-trips (load_exported_ids × 2 + load_ffi_entry_ids × 2 +
+    /// load_outgoing_edges × 1) into 1 (perf-review MEDIUM-1).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError`] if the `outgoing_edges` query fails.
+    pub(crate) fn load(
+        storage: &dyn Storage,
+        project: &str,
+        config: &DeadCodeConfig,
+        functions: &[FunctionRow],
+    ) -> StorageResult<Self> {
+        let mut exported_ids = std::collections::HashSet::new();
+        let mut ffi_entry_ids = std::collections::HashSet::new();
+        for func in functions {
+            if func.is_exported {
+                exported_ids.insert(func.id.clone());
+            }
+            if func.signature.contains(r#"extern "C""#) || func.signature.contains("#[no_mangle]") {
+                ffi_entry_ids.insert(func.id.clone());
+            }
+        }
+        let outgoing_edges = load_outgoing_edges(storage, project, &config.edge_types)?;
+        Ok(Self {
+            exported_ids,
+            ffi_entry_ids,
+            outgoing_edges,
+        })
+    }
+
+    /// Returns `true` if `id` is a `Function`/`Method` with `isExported=true`.
+    #[must_use]
+    pub(crate) fn is_exported(&self, id: &str) -> bool {
+        self.exported_ids.contains(id)
+    }
+
+    /// Returns `true` if `id` has an FFI marker in its `signature`
+    /// (`extern "C"` or `#[no_mangle]`).
+    #[must_use]
+    pub(crate) fn is_ffi_entry(&self, id: &str) -> bool {
+        self.ffi_entry_ids.contains(id)
+    }
+
+    /// Returns the number of exported ids in the cache (test/diagnostic).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn exported_ids_len(&self) -> usize {
+        self.exported_ids.len()
+    }
+
+    /// Returns the number of FFI entry ids in the cache (test/diagnostic).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn ffi_entry_ids_len(&self) -> usize {
+        self.ffi_entry_ids.len()
+    }
+
+    /// Returns the deduplicated set of outgoing-edge targets for `id`, or
+    /// `None` if `id` has no outgoing edges.
+    #[must_use]
+    pub(crate) fn outgoing_edges(&self, id: &str) -> Option<&std::collections::HashSet<String>> {
+        self.outgoing_edges.get(id)
+    }
+}
+
+/// Loads all `CodeRelation` edges of `edge_types` for `project`, grouped by
+/// source id with deduplicated targets.
+///
+/// Used by [`ReachabilityAnalyzer::propagate`] for O(1) HashMap lookup per
+/// worklist pop (vs the previous O(1) Cypher round-trip per pop). Targets
+/// are stored in a `HashSet` so a multi-edge source→target pair (e.g.
+/// CALLS + USAGE) only appears once (perf-review MEDIUM-6).
+fn load_outgoing_edges(
+    storage: &dyn Storage,
+    project: &str,
+    edge_types: &[EdgeType],
+) -> StorageResult<std::collections::HashMap<String, std::collections::HashSet<String>>> {
+    if edge_types.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let escaped = escape_cypher_string(project);
+    let in_list = edge_types
+        .iter()
+        .map(|t| format!("'{}'", t.as_db_type()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let cypher = format!(
+        "MATCH (e:CodeRelation) WHERE e.type IN [{in_list}] AND e.project = '{escaped}' \
+         RETURN e.source AS source, e.target AS target;"
+    );
+    let rows = storage.query(&cypher)?;
+    let mut map: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::with_capacity(rows.len());
+    for row in rows {
+        if row.len() < 2 {
+            continue;
+        }
+        let source = row[0].as_str().unwrap_or_default().to_string();
+        let target = row[1].as_str().unwrap_or_default().to_string();
+        map.entry(source).or_default().insert(target);
+    }
+    Ok(map)
+}
+
+/// Loads all `Function` and `Method` nodes for `project`, including the
+/// `isExported` flag and `signature` text needed to derive
+/// [`BatchPrefetch`] `exported_ids` / `ffi_entry_ids` without additional
+/// Cypher round-trips (perf-review MEDIUM-1).
+///
+/// Two Cypher queries (one per label) because LadybugDB's Cypher subset
+/// does not support `OR` label expressions.
+fn load_all_functions(storage: &dyn Storage, project: &str) -> StorageResult<Vec<FunctionRow>> {
+    let escaped = escape_cypher_string(project);
+    let function_cypher = format!(
+        "MATCH (n:Function) WHERE n.project = '{escaped}' \
+         RETURN n.id AS id, n.name AS name, n.qualifiedName AS qualified_name, \
+         n.filePath AS file_path, n.startLine AS start_line, \
+         n.isExported AS is_exported, n.signature AS signature;"
+    );
+    let method_cypher = format!(
+        "MATCH (n:Method) WHERE n.project = '{escaped}' \
+         RETURN n.id AS id, n.name AS name, n.qualifiedName AS qualified_name, \
+         n.filePath AS file_path, n.startLine AS start_line, \
+         n.isExported AS is_exported, n.signature AS signature;"
+    );
+    let mut out = Vec::new();
+    for cypher in [function_cypher, method_cypher] {
+        let rows = storage.query(&cypher)?;
+        for row in rows {
+            if row.len() < 7 {
+                continue;
+            }
+            let id = row[0].as_str().unwrap_or_default().to_string();
+            let name = row[1].as_str().unwrap_or_default().to_string();
+            let qualified_name = row[2].as_str().unwrap_or_default().to_string();
+            let file_path = row[3].as_str().unwrap_or_default().to_string();
+            let start_line = row[4]
+                .as_i64()
+                .map(|v| v as u32)
+                .or_else(|| row[4].as_u64().map(|v| v as u32))
+                .unwrap_or(0);
+            let is_exported = row[5].as_bool().unwrap_or(false);
+            let signature = row[6].as_str().unwrap_or_default().to_string();
+            out.push(FunctionRow {
+                id,
+                name,
+                qualified_name,
+                file_path,
+                start_line,
+                is_exported,
+                signature,
+            });
+        }
+    }
+    Ok(out)
+}
+
 /// Worklist-based reachability analyzer (B5).
 ///
 /// Replaces the single-layer `referenced_ids` check with a proper
@@ -162,10 +374,12 @@ pub struct DeadCodeEntry {
 /// Average O(V+E) where V = function count, E = edge count. Worst case
 /// O(V²) on pathological graphs, but far better than the previous
 /// per-function full-table scan in practice.
-pub struct ReachabilityAnalyzer<'a> {
-    storage: &'a dyn Storage,
-    project_id: String,
+pub(crate) struct ReachabilityAnalyzer<'a> {
+    /// Batch-prefetched exported/FFI ids and outgoing edges (perf-1).
+    prefetch: &'a BatchPrefetch,
     config: &'a DeadCodeConfig,
+    /// All functions/methods for the project (borrowed from detector).
+    functions: &'a [FunctionRow],
     /// Worklist: ids pending propagation.
     worklist: std::collections::VecDeque<String>,
     /// Live set: ids confirmed reachable from any seed.
@@ -173,13 +387,24 @@ pub struct ReachabilityAnalyzer<'a> {
 }
 
 impl<'a> ReachabilityAnalyzer<'a> {
-    /// Creates a new analyzer for `project_id` using `config`.
+    /// Creates a new analyzer bound to a [`BatchPrefetch`] cache and a
+    /// function list (both produced by the caller, typically
+    /// [`DeadCodeDetector::detect`]).
+    ///
+    /// The analyzer never queries the storage directly — all Cypher
+    /// round-trips happen once during `BatchPrefetch::load`, and
+    /// `collect_seeds`/`propagate` work entirely on in-memory data
+    /// structures.
     #[must_use]
-    pub fn new(storage: &'a dyn Storage, project_id: &str, config: &'a DeadCodeConfig) -> Self {
+    pub(crate) fn new(
+        prefetch: &'a BatchPrefetch,
+        config: &'a DeadCodeConfig,
+        functions: &'a [FunctionRow],
+    ) -> Self {
         Self {
-            storage,
-            project_id: project_id.to_string(),
+            prefetch,
             config,
+            functions,
             worklist: std::collections::VecDeque::new(),
             live_set: std::collections::HashSet::new(),
         }
@@ -201,11 +426,9 @@ impl<'a> ReachabilityAnalyzer<'a> {
     /// - Functions inside `mod tests` blocks (`#tests` disambiguator)
     /// - Functions in integration test directories (`tests/`, `test/`, `src/test/`)
     ///
-    /// # Errors
-    ///
-    /// Returns [`StorageError`] if any Cypher query fails.
-    pub fn collect_seeds(&mut self, entry_patterns: &[&str]) -> StorageResult<()> {
-        let functions = self.load_all_functions()?;
+    /// Fully in-memory after [`BatchPrefetch::load`] — no Cypher round-trips
+    /// (arch-review MEDIUM-2: removed the dead `StorageResult` return).
+    pub(crate) fn collect_seeds(&mut self, entry_patterns: &[&str]) {
         let config_entry_patterns: Vec<&str> = self
             .config
             .entry_patterns
@@ -219,195 +442,103 @@ impl<'a> ReachabilityAnalyzer<'a> {
             .map(|s| s.as_str())
             .collect();
 
-        for func in &functions {
-            let is_seed = self.is_seed_function(
+        for func in self.functions {
+            if self.is_seed_function(
                 func,
                 entry_patterns,
                 &config_entry_patterns,
                 &config_test_patterns,
-            )?;
-            if is_seed {
+            ) {
                 self.worklist.push_back(func.id.clone());
             }
         }
-        Ok(())
     }
 
     /// Returns `true` if `func` matches any seed category.
+    ///
+    /// All checks are O(1) HashSet lookups against the prefetched caches —
+    /// no Cypher round-trips.
     fn is_seed_function(
         &self,
         func: &FunctionRow,
         entry_patterns: &[&str],
         config_entry_patterns: &[&str],
         config_test_patterns: &[&str],
-    ) -> StorageResult<bool> {
+    ) -> bool {
         // 1. Entry functions (name-based)
         if matches_any_pattern(&func.name, entry_patterns)
             || matches_any_pattern(&func.name, config_entry_patterns)
             || matches_any_pattern(&func.name, DEFAULT_ENTRY_PATTERNS)
         {
-            return Ok(true);
+            return true;
         }
         // 4. Test functions (name-based)
         if matches_any_pattern(&func.name, DEFAULT_TEST_PATTERNS)
             || matches_any_pattern(&func.name, config_test_patterns)
         {
-            return Ok(true);
+            return true;
         }
         // B0: test module function (`#tests` disambiguator)
         if is_test_module_function(&func.qualified_name) {
-            return Ok(true);
+            return true;
         }
         // B4: integration test file
         if is_integration_test_file(&func.file_path) {
-            return Ok(true);
+            return true;
         }
         // 7. Trait impl method (B3)
         if self.config.check_dynamic_dispatch && is_trait_impl_method(&func.qualified_name) {
-            return Ok(true);
+            return true;
         }
-        // 2. Exported functions
-        if self.config.check_exported && self.is_exported(&func.id)? {
-            return Ok(true);
+        // 2. Exported functions (batch-prefetched)
+        if self.config.check_exported && self.prefetch.is_exported(&func.id) {
+            return true;
         }
-        // 3. FFI entries
-        if self.config.check_ffi && self.is_ffi_entry(&func.id)? {
-            return Ok(true);
+        // 3. FFI entries (batch-prefetched)
+        if self.config.check_ffi && self.prefetch.is_ffi_entry(&func.id) {
+            return true;
         }
-        Ok(false)
+        false
     }
 
     /// Propagates reachability from the worklist to a fixed point.
     ///
-    /// Pops each id, inserts it into `live_set` (skipping if already present),
-    /// queries outgoing edges of configured types, and pushes any unreachable
-    /// targets back onto the worklist.
+    /// Pops each id, inserts it into `live_set` (skipping if already
+    /// present), looks up outgoing edges from the prefetched
+    /// [`BatchPrefetch::outgoing_edges`] map, and pushes any
+    /// unreachable targets back onto the worklist.
     ///
-    /// # Errors
+    /// # Performance
     ///
-    /// Returns [`StorageError`] if any Cypher query fails.
-    pub fn propagate(&mut self) -> StorageResult<()> {
-        if self.config.edge_types.is_empty() {
-            // No edges to propagate along; just drain worklist into live_set.
-            while let Some(id) = self.worklist.pop_front() {
-                self.live_set.insert(id);
-            }
-            return Ok(());
-        }
-        let in_list = self
-            .config
-            .edge_types
-            .iter()
-            .map(|t| format!("'{}'", t.as_db_type()))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let escaped_project = escape_cypher_string(&self.project_id);
+    /// O(V + E) total — each worklist pop is an O(1) HashMap lookup, vs
+    /// the previous O(1) Cypher round-trip per pop (which is O(1) in
+    /// query count but ~1ms in wall time, so V pops = V ms on CalNexus).
+    pub(crate) fn propagate(&mut self) {
         while let Some(id) = self.worklist.pop_front() {
-            if !self.live_set.insert(id.clone()) {
-                continue; // already live, no re-propagation needed
+            // Skip if already live (perf-review LOW-1: avoid `id.clone()`
+            // by checking containment before inserting).
+            if self.live_set.contains(&id) {
+                continue;
             }
-            // Query outgoing edges from this id.
-            let escaped_id = escape_cypher_string(&id);
-            let cypher = format!(
-                "MATCH (e:CodeRelation) WHERE e.type IN [{in_list}]                  AND e.project = '{escaped_project}' AND e.source = '{escaped_id}'                  RETURN e.target AS target;"
-            );
-            let rows = self.storage.query(&cypher)?;
-            for row in rows {
-                if let Some(target) = row.first().and_then(|v| v.as_str()) {
+            // O(1) HashMap lookup vs O(1) Cypher round-trip per pop.
+            if let Some(targets) = self.prefetch.outgoing_edges(&id) {
+                for target in targets {
                     if !self.live_set.contains(target) {
-                        self.worklist.push_back(target.to_string());
+                        self.worklist.push_back(target.clone());
                     }
                 }
             }
+            // Move `id` into live_set without cloning.
+            self.live_set.insert(id);
         }
-        Ok(())
     }
 
-    /// Returns the live set (ids reachable from any seed).
+    /// Consumes the analyzer and returns ownership of the live set,
+    /// avoiding a full `HashSet::clone` in the caller (perf-review
+    /// MEDIUM-3).
     #[must_use]
-    pub fn live_set(&self) -> &std::collections::HashSet<String> {
-        &self.live_set
-    }
-
-    /// Returns `true` if `id` is reachable from any seed.
-    #[must_use]
-    pub fn is_live(&self, id: &str) -> bool {
-        self.live_set.contains(id)
-    }
-
-    /// Loads all Function and Method nodes for the project (mirrors
-    /// `DeadCodeDetector::load_functions`).
-    fn load_all_functions(&self) -> StorageResult<Vec<FunctionRow>> {
-        let escaped = escape_cypher_string(&self.project_id);
-        let function_cypher = format!(
-            "MATCH (n:Function) WHERE n.project = '{escaped}'              RETURN n.id AS id, n.name AS name, n.qualifiedName AS qualified_name,              n.filePath AS file_path, n.startLine AS start_line;"
-        );
-        let method_cypher = format!(
-            "MATCH (n:Method) WHERE n.project = '{escaped}'              RETURN n.id AS id, n.name AS name, n.qualifiedName AS qualified_name,              n.filePath AS file_path, n.startLine AS start_line;"
-        );
-        let mut out = Vec::new();
-        for cypher in [function_cypher, method_cypher] {
-            let rows = self.storage.query(&cypher)?;
-            for row in rows {
-                if row.len() < 5 {
-                    continue;
-                }
-                let id = row[0].as_str().unwrap_or_default().to_string();
-                let name = row[1].as_str().unwrap_or_default().to_string();
-                let qualified_name = row[2].as_str().unwrap_or_default().to_string();
-                let file_path = row[3].as_str().unwrap_or_default().to_string();
-                let start_line = row[4]
-                    .as_i64()
-                    .map(|v| v as u32)
-                    .or_else(|| row[4].as_u64().map(|v| v as u32))
-                    .unwrap_or(0);
-                out.push(FunctionRow {
-                    id,
-                    name,
-                    qualified_name,
-                    file_path,
-                    start_line,
-                });
-            }
-        }
-        Ok(out)
-    }
-
-    /// Returns `true` if the node with `func_id` has `isExported = true`.
-    fn is_exported(&self, func_id: &str) -> StorageResult<bool> {
-        let escaped_id = escape_cypher_string(func_id);
-        for label in ["Function", "Method"] {
-            let cypher = format!(
-                "MATCH (n:{label}) WHERE n.id = '{escaped_id}'                  RETURN n.isExported AS is_exported LIMIT 1;"
-            );
-            let rows = self.storage.query(&cypher)?;
-            if let Some(row) = rows.into_iter().next() {
-                if let Some(val) = row.first() {
-                    return Ok(val.as_bool().unwrap_or(false));
-                }
-            }
-        }
-        Ok(false)
-    }
-
-    /// Returns `true` if the node's `signature` contains FFI markers.
-    fn is_ffi_entry(&self, func_id: &str) -> StorageResult<bool> {
-        let escaped_id = escape_cypher_string(func_id);
-        for label in ["Function", "Method"] {
-            let cypher = format!(
-                "MATCH (n:{label}) WHERE n.id = '{escaped_id}'                  RETURN n.signature AS signature LIMIT 1;"
-            );
-            let rows = self.storage.query(&cypher)?;
-            if let Some(row) = rows.into_iter().next() {
-                if let Some(sig) = row.first().and_then(|v| v.as_str()) {
-                    if sig.contains(r#"extern "C""#) || sig.contains("#[no_mangle]") {
-                        return Ok(true);
-                    }
-                    return Ok(false);
-                }
-            }
-        }
-        Ok(false)
+    pub(crate) fn into_live_set(self) -> std::collections::HashSet<String> {
+        self.live_set
     }
 }
 
@@ -438,6 +569,20 @@ impl<'a> DeadCodeDetector<'a> {
     /// incoming CALLS edges (e.g. `"main"`, `"__main__"`). Test-function
     /// patterns (`test_*`, `*_test`, `*_spec`) are always excluded.
     ///
+    /// # Performance (perf-1 + perf-review MEDIUM-1)
+    ///
+    /// All Cypher round-trips are batched:
+    ///
+    /// - `load_all_functions` (2 queries: Function + Method labels) —
+    ///   also returns `isExported` / `signature` so `exported_ids` /
+    ///   `ffi_entry_ids` are derived in Rust without extra queries.
+    /// - `BatchPrefetch::load` (1 query: outgoing_edges).
+    /// - `load_edge_targets_by_category` (1 query: confidence scoring).
+    /// - `load_file_languages` (1 query: language resolution).
+    ///
+    /// Total: 5 Cypher round-trips, independent of project size.
+    /// Previously this scaled as 6N+V (N=function count, V=edge count).
+    ///
     /// # Errors
     ///
     /// Returns [`StorageError`] if any Cypher query fails.
@@ -446,26 +591,39 @@ impl<'a> DeadCodeDetector<'a> {
         project: &str,
         entry_patterns: &[&str],
     ) -> StorageResult<Vec<DeadCodeEntry>> {
-        // (a) Load all Function/Method nodes for the project.
-        let functions = self.load_functions(project)?;
+        // (a) Load all Function/Method nodes for the project (2 Cypher
+        // round-trips). Includes isExported + signature so the prefetch
+        // cache can derive exported_ids / ffi_entry_ids in Rust.
+        let functions = load_all_functions(self.storage, project)?;
 
-        // (b) B5: Worklist reachability propagation from seeds.
+        // (b) Batch-prefetch outgoing_edges in 1 Cypher query; derive
+        // exported_ids / ffi_entry_ids from `functions` (perf-review
+        // MEDIUM-1: collapses 4 Cypher round-trips into 0 by reusing
+        // the already-loaded rows). Shared between ReachabilityAnalyzer
+        // and the filter loop below — eliminates the DRY violation where
+        // is_exported / is_ffi_entry / load_functions were duplicated
+        // across the two structs.
+        let prefetch = BatchPrefetch::load(self.storage, project, &self.config, &functions)?;
+
+        // (c) B5: Worklist reachability propagation from seeds.
         // Replaces single-layer `referenced_ids` check with proper BFS
         // propagation aligned with rustc's `MarkSymbolVisitor`. Functions
         // not in `live_set` are dead (subject to additional B0-B4 filters
         // below as defense-in-depth).
-        let mut analyzer = ReachabilityAnalyzer::new(self.storage, project, &self.config);
-        analyzer.collect_seeds(entry_patterns)?;
-        analyzer.propagate()?;
-        let live_set = analyzer.live_set().clone();
+        let mut analyzer = ReachabilityAnalyzer::new(&prefetch, &self.config, &functions);
+        analyzer.collect_seeds(entry_patterns);
+        analyzer.propagate();
+        // perf-review MEDIUM-3: consume the analyzer instead of cloning
+        // the live_set (avoids one O(V) HashSet allocation + copy).
+        let live_set = analyzer.into_live_set();
 
-        // (c) Load all edge targets split by CALLS vs non-CALLS for confidence.
+        // (d) Load all edge targets split by CALLS vs non-CALLS for confidence.
         let (calls_targets, non_calls_targets) = self.load_edge_targets_by_category(project)?;
 
-        // (d) Build a filePath -> language map from the File table.
+        // (e) Build a filePath -> language map from the File table.
         let file_languages = self.load_file_languages(project)?;
 
-        // (e) Filter: zero-indegree + not an entry point + not a test function.
+        // (f) Filter: zero-indegree + not an entry point + not a test function.
         let config_entry_patterns: Vec<&str> = self
             .config
             .entry_patterns
@@ -514,10 +672,12 @@ impl<'a> DeadCodeDetector<'a> {
             if is_integration_test_file(&func.file_path) {
                 continue;
             }
-            if self.config.check_exported && self.is_exported(&func.id)? {
+            // Use batch-prefetched sets instead of per-function Cypher
+            // queries (perf-1: was 2N Cypher round-trips, now 0).
+            if self.config.check_exported && prefetch.is_exported(&func.id) {
                 continue;
             }
-            if self.config.check_ffi && self.is_ffi_entry(&func.id)? {
+            if self.config.check_ffi && prefetch.is_ffi_entry(&func.id) {
                 continue;
             }
             // B3 fix: Trait impl methods (e.g. `fmt#Display`, `complete#ReplHelper`)
@@ -551,51 +711,6 @@ impl<'a> DeadCodeDetector<'a> {
         // Stable order by qualified name for deterministic output.
         entries.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
         Ok(entries)
-    }
-
-    /// Loads all `Function` and `Method` nodes for `project`.
-    ///
-    /// LadybugDB's Cypher subset does not support `WHERE (n:Function OR
-    /// n:Method)` label expressions, so we issue two separate queries (one
-    /// per label) and merge the results in Rust.
-    fn load_functions(&self, project: &str) -> StorageResult<Vec<FunctionRow>> {
-        let escaped = escape_cypher_string(project);
-        let function_cypher = format!(
-            "MATCH (n:Function) WHERE n.project = '{escaped}' \
-             RETURN n.id AS id, n.name AS name, n.qualifiedName AS qualified_name, \
-             n.filePath AS file_path, n.startLine AS start_line;"
-        );
-        let method_cypher = format!(
-            "MATCH (n:Method) WHERE n.project = '{escaped}' \
-             RETURN n.id AS id, n.name AS name, n.qualifiedName AS qualified_name, \
-             n.filePath AS file_path, n.startLine AS start_line;"
-        );
-        let mut out = Vec::new();
-        for cypher in [function_cypher, method_cypher] {
-            let rows = self.storage.query(&cypher)?;
-            for row in rows {
-                if row.len() < 5 {
-                    continue;
-                }
-                let id = row[0].as_str().unwrap_or_default().to_string();
-                let name = row[1].as_str().unwrap_or_default().to_string();
-                let qualified_name = row[2].as_str().unwrap_or_default().to_string();
-                let file_path = row[3].as_str().unwrap_or_default().to_string();
-                let start_line = row[4]
-                    .as_i64()
-                    .map(|v| v as u32)
-                    .or_else(|| row[4].as_u64().map(|v| v as u32))
-                    .unwrap_or(0);
-                out.push(FunctionRow {
-                    id,
-                    name,
-                    qualified_name,
-                    file_path,
-                    start_line,
-                });
-            }
-        }
-        Ok(out)
     }
 
     /// Loads the set of node ids that are targets of any edge type listed in
@@ -703,49 +818,6 @@ impl<'a> DeadCodeDetector<'a> {
         Ok(!self.storage.query(&cypher)?.is_empty())
     }
 
-    /// Returns `true` if the node with `func_id` has `isExported = true`.
-    ///
-    /// Queries both `Function` and `Method` labels since LadybugDB does not
-    /// support `OR` label expressions.
-    fn is_exported(&self, func_id: &str) -> StorageResult<bool> {
-        let escaped_id = escape_cypher_string(func_id);
-        for label in ["Function", "Method"] {
-            let cypher = format!(
-                "MATCH (n:{label}) WHERE n.id = '{escaped_id}' \
-                 RETURN n.isExported AS is_exported LIMIT 1;"
-            );
-            let rows = self.storage.query(&cypher)?;
-            if let Some(row) = rows.into_iter().next() {
-                if let Some(val) = row.first() {
-                    return Ok(val.as_bool().unwrap_or(false));
-                }
-            }
-        }
-        Ok(false)
-    }
-
-    /// Returns `true` if the node's `signature` contains FFI markers
-    /// (`extern "C"` or `#[no_mangle]`), marking it as an FFI entry point.
-    fn is_ffi_entry(&self, func_id: &str) -> StorageResult<bool> {
-        let escaped_id = escape_cypher_string(func_id);
-        for label in ["Function", "Method"] {
-            let cypher = format!(
-                "MATCH (n:{label}) WHERE n.id = '{escaped_id}' \
-                 RETURN n.signature AS signature LIMIT 1;"
-            );
-            let rows = self.storage.query(&cypher)?;
-            if let Some(row) = rows.into_iter().next() {
-                if let Some(sig) = row.first().and_then(|v| v.as_str()) {
-                    if sig.contains(r#"extern "C""#) || sig.contains("#[no_mangle]") {
-                        return Ok(true);
-                    }
-                    return Ok(false);
-                }
-            }
-        }
-        Ok(false)
-    }
-
     /// Builds a `filePath -> language` map from the `File` table for `project`.
     fn load_file_languages(
         &self,
@@ -771,12 +843,18 @@ impl<'a> DeadCodeDetector<'a> {
 }
 
 /// Internal row representation for a Function/Method node.
-struct FunctionRow {
+///
+/// `is_exported` and `signature` are loaded alongside the identity fields
+/// so [`BatchPrefetch`] can derive `exported_ids` / `ffi_entry_ids` in
+/// Rust without additional Cypher round-trips (perf-review MEDIUM-1).
+pub(crate) struct FunctionRow {
     id: String,
     name: String,
     qualified_name: String,
     file_path: String,
     start_line: u32,
+    is_exported: bool,
+    signature: String,
 }
 
 /// Returns `true` if `name` matches any of the glob `patterns`.
@@ -843,8 +921,13 @@ fn is_trait_impl_method(qualified_name: &str) -> bool {
 /// - `src/test/java/FooTest.java` → `true` (Java test)
 /// - `tests/helpers/mod.rs` → `true` (Rust test helper module)
 fn is_integration_test_file(file_path: &str) -> bool {
-    // Normalize path separators for cross-platform compatibility.
-    let normalized = file_path.replace('\\', "/");
+    // perf-review LOW-2: short-circuit the `replace` allocation when the
+    // path contains no backslashes (the common case on Linux/macOS).
+    let normalized: std::borrow::Cow<'_, str> = if file_path.contains('\\') {
+        std::borrow::Cow::Owned(file_path.replace('\\', "/"))
+    } else {
+        std::borrow::Cow::Borrowed(file_path)
+    };
     // Rust: top-level `tests/` directory (integration tests).
     // Python: `tests/` or `test/` directory.
     // Java/JVM: `src/test/` directory.
@@ -1757,7 +1840,11 @@ mod tests {
     }
 
     #[test]
-    fn is_exported_returns_correct_value() {
+    fn batch_prefetch_exported_ids_distinguishes_pub_from_priv() {
+        // Replaces `is_exported_returns_correct_value` (arch-1): the detector
+        // no longer exposes a per-function `is_exported` method. `BatchPrefetch`
+        // bulk-loads all exported ids in two Cypher round-trips; callers
+        // check liveness via `HashSet::contains`.
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
         create_function_with_flags(
@@ -1782,13 +1869,13 @@ mod tests {
         );
 
         let storage = storage(&kit);
-        let detector = DeadCodeDetector::new(&*storage);
+        let config = DeadCodeConfig::default();
+        let functions = load_all_functions(&*storage, "demo").expect("functions");
+        let prefetch =
+            BatchPrefetch::load(&*storage, "demo", &config, &functions).expect("prefetch");
+        assert!(prefetch.is_exported("f_pub"), "f_pub should be exported");
         assert!(
-            detector.is_exported("f_pub").expect("is_exported"),
-            "f_pub should be exported"
-        );
-        assert!(
-            !detector.is_exported("f_priv").expect("is_exported"),
+            !prefetch.is_exported("f_priv"),
             "f_priv should NOT be exported"
         );
     }
@@ -1891,7 +1978,10 @@ mod tests {
     }
 
     #[test]
-    fn is_ffi_entry_distinguishes_ffi_from_plain() {
+    fn batch_prefetch_distinguishes_ffi_from_plain() {
+        // Replaces the old `is_ffi_entry_distinguishes_ffi_from_plain` test
+        // (arch-1: `is_ffi_entry` was removed; FFI detection now goes
+        // through `BatchPrefetch::load`).
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
         create_function_with_flags(
@@ -1916,13 +2006,16 @@ mod tests {
         );
 
         let storage = storage(&kit);
-        let detector = DeadCodeDetector::new(&*storage);
+        let config = DeadCodeConfig::default();
+        let functions = load_all_functions(&*storage, "demo").expect("functions");
+        let prefetch =
+            BatchPrefetch::load(&*storage, "demo", &config, &functions).expect("prefetch");
         assert!(
-            detector.is_ffi_entry("f_ffi").expect("is_ffi_entry"),
+            prefetch.ffi_entry_ids.contains("f_ffi"),
             "f_ffi should be FFI entry"
         );
         assert!(
-            !detector.is_ffi_entry("f_plain").expect("is_ffi_entry"),
+            !prefetch.ffi_entry_ids.contains("f_plain"),
             "f_plain should NOT be FFI entry"
         );
     }
@@ -2146,34 +2239,47 @@ mod tests {
     // --- Additional coverage tests (targeting uncovered lines) ---
 
     #[test]
-    fn is_exported_returns_false_for_nonexistent_id() {
-        // Line 389: `Ok(false)` when function id doesn't exist in either
-        // Function or Method table.
+    fn batch_prefetch_exported_ids_empty_for_nonexistent_id() {
+        // Replaces `is_exported_returns_false_for_nonexistent_id` (arch-1).
+        // `BatchPrefetch::load` only returns ids that actually exist in the
+        // Function/Method tables — nonexistent ids are simply absent from
+        // the returned HashSet.
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
 
         let storage = storage(&kit);
-        let detector = DeadCodeDetector::new(&*storage);
+        let config = DeadCodeConfig::default();
+        let functions = load_all_functions(&*storage, "demo").expect("functions");
+        let prefetch =
+            BatchPrefetch::load(&*storage, "demo", &config, &functions).expect("prefetch");
         assert!(
-            !detector.is_exported("nonexistent_id").expect("is_exported"),
-            "nonexistent id should return false"
+            !prefetch.is_exported("nonexistent_id"),
+            "nonexistent id should not be in exported_ids"
+        );
+        assert!(
+            prefetch.exported_ids_len() == 0,
+            "empty db → empty exported_ids"
         );
     }
 
     #[test]
-    fn is_ffi_entry_returns_false_for_nonexistent_id() {
-        // Line 411: `Ok(false)` when function id doesn't exist in either
-        // Function or Method table.
+    fn batch_prefetch_ffi_entry_ids_empty_for_nonexistent_id() {
+        // Replaces `is_ffi_entry_returns_false_for_nonexistent_id` (arch-1).
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
 
         let storage = storage(&kit);
-        let detector = DeadCodeDetector::new(&*storage);
+        let config = DeadCodeConfig::default();
+        let functions = load_all_functions(&*storage, "demo").expect("functions");
+        let prefetch =
+            BatchPrefetch::load(&*storage, "demo", &config, &functions).expect("prefetch");
         assert!(
-            !detector
-                .is_ffi_entry("nonexistent_id")
-                .expect("is_ffi_entry"),
-            "nonexistent id should return false"
+            !prefetch.ffi_entry_ids.contains("nonexistent_id"),
+            "nonexistent id should not be in ffi_entry_ids"
+        );
+        assert!(
+            prefetch.ffi_entry_ids_len() == 0,
+            "empty db → empty ffi_entry_ids"
         );
     }
 
@@ -2255,10 +2361,10 @@ mod tests {
     }
 
     #[test]
-    fn is_exported_checks_method_label() {
-        // Lines 377-388: `is_exported` loops over ["Function", "Method"].
-        // When the id is a Method (not a Function), the Method branch must
-        // find it and return its `isExported` value.
+    fn batch_prefetch_exported_ids_includes_method_label() {
+        // Replaces `is_exported_checks_method_label` (arch-1). Verifies
+        // `BatchPrefetch::load` picks up exported Method nodes, not just
+        // Function nodes.
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
         create_method_with_flags(
@@ -2283,22 +2389,23 @@ mod tests {
         );
 
         let storage = storage(&kit);
-        let detector = DeadCodeDetector::new(&*storage);
+        let config = DeadCodeConfig::default();
+        let functions = load_all_functions(&*storage, "demo").expect("functions");
+        let prefetch =
+            BatchPrefetch::load(&*storage, "demo", &config, &functions).expect("prefetch");
         assert!(
-            detector.is_exported("m_pub").expect("is_exported"),
+            prefetch.is_exported("m_pub"),
             "m_pub should be exported (Method label)"
         );
         assert!(
-            !detector.is_exported("m_priv").expect("is_exported"),
+            !prefetch.is_exported("m_priv"),
             "m_priv should NOT be exported (Method label)"
         );
     }
 
     #[test]
-    fn is_ffi_entry_checks_method_label() {
-        // Lines 396-410: `is_ffi_entry` loops over ["Function", "Method"].
-        // When the id is a Method with FFI markers, the Method branch must
-        // find it and return true.
+    fn batch_prefetch_ffi_entry_ids_includes_method_label() {
+        // Replaces `is_ffi_entry_checks_method_label` (arch-1).
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
         create_method_with_flags(
@@ -2323,13 +2430,16 @@ mod tests {
         );
 
         let storage = storage(&kit);
-        let detector = DeadCodeDetector::new(&*storage);
+        let config = DeadCodeConfig::default();
+        let functions = load_all_functions(&*storage, "demo").expect("functions");
+        let prefetch =
+            BatchPrefetch::load(&*storage, "demo", &config, &functions).expect("prefetch");
         assert!(
-            detector.is_ffi_entry("m_ffi").expect("is_ffi_entry"),
+            prefetch.ffi_entry_ids.contains("m_ffi"),
             "m_ffi should be FFI entry (Method label)"
         );
         assert!(
-            !detector.is_ffi_entry("m_plain").expect("is_ffi_entry"),
+            !prefetch.ffi_entry_ids.contains("m_plain"),
             "m_plain should NOT be FFI entry (Method label)"
         );
     }
@@ -2597,8 +2707,10 @@ mod tests {
         );
 
         let storage = storage(&kit);
-        let mut config = DeadCodeConfig::default();
-        config.check_dynamic_dispatch = true;
+        let config = DeadCodeConfig {
+            check_dynamic_dispatch: true,
+            ..DeadCodeConfig::default()
+        };
         let detector = DeadCodeDetector::with_config(&*storage, config);
         let result = detector.detect("demo", &["main"]).expect("detect");
         let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
@@ -2634,8 +2746,10 @@ mod tests {
         );
 
         let storage = storage(&kit);
-        let mut config = DeadCodeConfig::default();
-        config.check_dynamic_dispatch = false;
+        let config = DeadCodeConfig {
+            check_dynamic_dispatch: false,
+            ..DeadCodeConfig::default()
+        };
         let detector = DeadCodeDetector::with_config(&*storage, config);
         let result = detector.detect("demo", &["main"]).expect("detect");
         let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
@@ -2896,6 +3010,275 @@ mod tests {
             !names.contains(&"main"),
             "B5: main is entry seed, NOT dead: {:?}",
             names
+        );
+    }
+
+    // ===== perf-1 + arch-1: BatchPrefetch + DRY consolidation =====
+
+    /// perf-1: `BatchPrefetch::load` returns ALL exported function ids in
+    /// a single Cypher query (vs the previous 2N pattern where
+    /// `is_exported` was called per function with 2 label queries each).
+    #[test]
+    fn batch_prefetch_loads_all_exported_ids_in_one_query() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Create 5 functions, 3 of them marked isExported=true.
+        create_function_with_flags(
+            &kit,
+            "f1",
+            "demo",
+            "f1",
+            "demo.f1",
+            "/src/lib.rs",
+            1,
+            true,
+            "",
+        );
+        create_function_with_flags(
+            &kit,
+            "f2",
+            "demo",
+            "f2",
+            "demo.f2",
+            "/src/lib.rs",
+            5,
+            true,
+            "",
+        );
+        create_function_with_flags(
+            &kit,
+            "f3",
+            "demo",
+            "f3",
+            "demo.f3",
+            "/src/lib.rs",
+            10,
+            true,
+            "",
+        );
+        create_function_with_flags(
+            &kit,
+            "f4",
+            "demo",
+            "f4",
+            "demo.f4",
+            "/src/lib.rs",
+            15,
+            false,
+            "",
+        );
+        create_function_with_flags(
+            &kit,
+            "f5",
+            "demo",
+            "f5",
+            "demo.f5",
+            "/src/lib.rs",
+            20,
+            false,
+            "",
+        );
+        let storage = storage(&kit);
+        let config = DeadCodeConfig::default();
+        let functions = load_all_functions(&*storage, "demo").expect("functions");
+        let prefetch =
+            BatchPrefetch::load(&*storage, "demo", &config, &functions).expect("prefetch");
+        assert!(prefetch.is_exported("f1"));
+        assert!(prefetch.is_exported("f2"));
+        assert!(prefetch.is_exported("f3"));
+        assert!(!prefetch.is_exported("f4"), "f4 is not exported");
+        assert!(!prefetch.is_exported("f5"), "f5 is not exported");
+        assert_eq!(prefetch.exported_ids.len(), 3);
+    }
+
+    /// perf-1: `BatchPrefetch::load` returns ALL FFI entry ids in a single
+    /// Cypher query (vs the previous 2N pattern).
+    #[test]
+    fn batch_prefetch_loads_all_ffi_entries_in_one_query() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // 3 FFI entries with different FFI markers.
+        create_function_with_flags(
+            &kit,
+            "f1",
+            "demo",
+            "f1",
+            "demo.f1",
+            "/src/lib.rs",
+            1,
+            false,
+            r#"pub extern "C" fn f1(x: i32) -> i32"#,
+        );
+        create_function_with_flags(
+            &kit,
+            "f2",
+            "demo",
+            "f2",
+            "demo.f2",
+            "/src/lib.rs",
+            5,
+            false,
+            "#[no_mangle]\npub fn f2() -> i32",
+        );
+        create_function_with_flags(
+            &kit,
+            "f3",
+            "demo",
+            "f3",
+            "demo.f3",
+            "/src/lib.rs",
+            10,
+            false,
+            r#"extern "C" { fn f3(); }"#,
+        );
+        // 1 non-FFI function as control.
+        create_function_with_flags(
+            &kit,
+            "f4",
+            "demo",
+            "f4",
+            "demo.f4",
+            "/src/lib.rs",
+            15,
+            false,
+            "pub fn f4() {}",
+        );
+        let storage = storage(&kit);
+        let config = DeadCodeConfig::default();
+        let functions = load_all_functions(&*storage, "demo").expect("functions");
+        let prefetch =
+            BatchPrefetch::load(&*storage, "demo", &config, &functions).expect("prefetch");
+        assert!(prefetch.ffi_entry_ids.contains("f1"), "f1 has extern \"C\"");
+        assert!(prefetch.ffi_entry_ids.contains("f2"), "f2 has #[no_mangle]");
+        assert!(prefetch.ffi_entry_ids.contains("f3"), "f3 has extern \"C\"");
+        assert!(!prefetch.ffi_entry_ids.contains("f4"), "f4 is not FFI");
+        assert_eq!(prefetch.ffi_entry_ids.len(), 3);
+    }
+
+    /// perf-1: `BatchPrefetch::load` returns ALL outgoing edges grouped by
+    /// source id, so `propagate()` can do an O(1) HashMap lookup per pop
+    /// instead of an O(1) Cypher round-trip per pop.
+    #[test]
+    fn batch_prefetch_loads_outgoing_edges_grouped_by_source() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f_a", "demo", "a", "demo.a", "/src/lib.rs", 1);
+        create_function(&kit, "f_b", "demo", "b", "demo.b", "/src/lib.rs", 5);
+        create_function(&kit, "f_c", "demo", "c", "demo.c", "/src/lib.rs", 10);
+        // f_a calls f_b and f_c (2 outgoing edges from f_a).
+        create_calls_edge(&kit, "e1", "f_a", "f_b", "demo");
+        create_calls_edge(&kit, "e2", "f_a", "f_c", "demo");
+        // f_b calls f_c (1 outgoing edge from f_b).
+        create_calls_edge(&kit, "e3", "f_b", "f_c", "demo");
+        let storage = storage(&kit);
+        let config = DeadCodeConfig::default();
+        let functions = load_all_functions(&*storage, "demo").expect("functions");
+        let prefetch =
+            BatchPrefetch::load(&*storage, "demo", &config, &functions).expect("prefetch");
+        let a_targets = prefetch
+            .outgoing_edges("f_a")
+            .expect("f_a has outgoing edges");
+        assert_eq!(a_targets.len(), 2, "f_a calls f_b and f_c");
+        assert!(a_targets.contains(&"f_b".to_string()));
+        assert!(a_targets.contains(&"f_c".to_string()));
+        let b_targets = prefetch
+            .outgoing_edges("f_b")
+            .expect("f_b has outgoing edges");
+        assert_eq!(b_targets.len(), 1, "f_b calls f_c");
+        assert!(b_targets.contains(&"f_c".to_string()));
+        assert!(
+            prefetch.outgoing_edges("f_c").is_none(),
+            "f_c has no outgoing edges"
+        );
+    }
+
+    /// perf-1 + arch-1 regression: `detect()` returns correct results after
+    /// batch prefetch refactor. Re-verifies B5 reachability propagation
+    /// with batch-prefetched edges (3-query pattern instead of 4N+V).
+    ///
+    /// Graph:
+    /// ```text
+    /// entry -> a -> b -> c   (reachable chain from entry seed)
+    /// d                       (unreachable: no incoming edges, not a seed)
+    /// ```
+    #[test]
+    fn detect_uses_batch_prefetch_for_reachability_propagation() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(
+            &kit,
+            "f_entry",
+            "demo",
+            "entry",
+            "demo.entry",
+            "/src/main.rs",
+            1,
+        );
+        create_function(&kit, "f_a", "demo", "a", "demo.a", "/src/lib.rs", 1);
+        create_function(&kit, "f_b", "demo", "b", "demo.b", "/src/lib.rs", 10);
+        create_function(&kit, "f_c", "demo", "c", "demo.c", "/src/lib.rs", 20);
+        // d is unreachable (no incoming edges, not a seed).
+        create_function(&kit, "f_d", "demo", "d", "demo.d", "/src/lib.rs", 30);
+        create_file(&kit, "file1", "demo", "/src/main.rs", "rust");
+        create_file(&kit, "file2", "demo", "/src/lib.rs", "rust");
+        create_calls_edge(&kit, "e1", "f_entry", "f_a", "demo");
+        create_calls_edge(&kit, "e2", "f_a", "f_b", "demo");
+        create_calls_edge(&kit, "e3", "f_b", "f_c", "demo");
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &["entry"]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(!names.contains(&"entry"), "entry is seed");
+        assert!(!names.contains(&"a"), "a reachable from entry");
+        assert!(!names.contains(&"b"), "b reachable via a");
+        assert!(!names.contains(&"c"), "c reachable via b");
+        assert!(names.contains(&"d"), "d is unreachable (dead)");
+    }
+
+    /// perf-1 + arch-1 regression: `detect()` correctly identifies
+    /// exported functions as live when they have no incoming edges
+    /// (using batch-prefetched `exported_ids`).
+    #[test]
+    fn detect_uses_batch_prefetch_for_exported_function_liveness() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // `pub_exported` is marked isExported=true and has no incoming
+        // CALLS edges. With `check_exported=true` (default), it should be
+        // treated as a seed and not flagged as dead.
+        create_function_with_flags(
+            &kit,
+            "f_pub",
+            "demo",
+            "pub_exported",
+            "demo.pub_exported",
+            "/src/lib.rs",
+            1,
+            true,
+            "",
+        );
+        // `unused_private` is not exported, has no incoming edges, is not
+        // a test/entry/trait-impl — IS dead.
+        create_function(
+            &kit,
+            "f_priv",
+            "demo",
+            "unused_private",
+            "demo.unused_private",
+            "/src/lib.rs",
+            10,
+        );
+        create_file(&kit, "file1", "demo", "/src/lib.rs", "rust");
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            !names.contains(&"pub_exported"),
+            "exported function is a seed (live)"
+        );
+        assert!(
+            names.contains(&"unused_private"),
+            "non-exported function with no incoming edges IS dead"
         );
     }
 }

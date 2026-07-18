@@ -60,7 +60,7 @@ impl ProjectOutput {
 
 /// Returns the current `HEAD` commit hash of the git repo at `root`, or an
 /// empty string if `root` is not a git repo (or git is unavailable).
-#[cfg(any(feature = "cli", test))]
+#[cfg(any(feature = "cli", feature = "analysis", test))]
 pub(crate) fn git_head_commit(root: &Path) -> String {
     std::process::Command::new("git")
         .arg("-C")
@@ -76,8 +76,8 @@ pub(crate) fn git_head_commit(root: &Path) -> String {
 }
 
 /// Computes staleness: true if both commits are non-empty and differ.
-#[cfg(any(feature = "cli", test))]
-fn is_stale(last_commit: &str, current_head: &str) -> bool {
+#[cfg(any(feature = "cli", feature = "analysis", test))]
+pub(crate) fn is_stale(last_commit: &str, current_head: &str) -> bool {
     !last_commit.is_empty() && !current_head.is_empty() && last_commit != current_head
 }
 

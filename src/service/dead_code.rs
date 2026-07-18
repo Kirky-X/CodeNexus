@@ -21,6 +21,10 @@ use crate::service::error::CodeNexusError;
 use crate::service::project::resolve_project_id;
 #[cfg(all(feature = "cli", feature = "analysis"))]
 use crate::service::runtime::kit;
+#[cfg(feature = "analysis")]
+use crate::service::status::{git_head_commit, is_stale};
+#[cfg(feature = "analysis")]
+use std::path::Path;
 
 #[cfg(all(feature = "cli", feature = "analysis"))]
 use sdforge::forge;
@@ -33,6 +37,14 @@ use sdforge::prelude::ApiError;
 pub struct DeadCodeOutput {
     pub project: String,
     pub dead_code: Vec<DeadCodeEntry>,
+    /// Git commit hash captured at index time (Project.lastCommit).
+    /// Empty when the project was indexed from a non-git root.
+    pub indexed_commit: String,
+    /// Current `HEAD` of the project root at query time (empty if not a git
+    /// repo or git is unavailable).
+    pub current_head: String,
+    /// `true` iff both commits are non-empty and differ.
+    pub is_stale: bool,
 }
 
 /// Builds a [`DeadCodeConfig`] from CLI parameters.
@@ -75,6 +87,18 @@ pub fn run_dead_code(
 ) -> Result<DeadCodeOutput, CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
     let project_id = resolve_project_id(&*storage, project)?;
+    // B6: fetch the full Project record to read `lastCommit` (indexed_commit)
+    // and `rootPath` (for `git rev-parse HEAD` at query time). Use the O(1)
+    // `get_project` lookup instead of `list_projects + find` (arch-review
+    // HIGH-1: previous code triggered a second full scan even though
+    // `resolve_project_id` already did one internally).
+    let project_record = storage
+        .get_project(&project_id)
+        .map_err(CodeNexusError::from)?
+        .ok_or_else(|| CodeNexusError::ProjectNotFound(project.to_string()))?;
+    let indexed_commit = project_record.last_commit.clone();
+    let current_head = git_head_commit(Path::new(&project_record.root_path));
+    let stale = is_stale(&indexed_commit, &current_head);
     let config = build_dead_code_config(
         check_exported,
         check_ffi,
@@ -95,6 +119,9 @@ pub fn run_dead_code(
     Ok(DeadCodeOutput {
         project: project.to_string(),
         dead_code: entries,
+        indexed_commit,
+        current_head,
+        is_stale: stale,
     })
 }
 
@@ -214,11 +241,17 @@ mod tests {
                 reason: "zero incoming CALLS edges".into(),
                 confidence: Confidence::High,
             }],
+            indexed_commit: "abc123".into(),
+            current_head: "def456".into(),
+            is_stale: true,
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(json.contains("\"project\":\"demo\""));
         assert!(json.contains("\"dead_code\""));
         assert!(json.contains("\"foo\""));
+        assert!(json.contains("\"indexed_commit\":\"abc123\""));
+        assert!(json.contains("\"current_head\":\"def456\""));
+        assert!(json.contains("\"is_stale\":true"));
     }
 
     // ===== T036: run_dead_code with config parameters =====
@@ -480,5 +513,160 @@ mod tests {
         ));
         assert!(result.is_err(), "wrapper should fail without kit");
         reset_kit_for_testing();
+    }
+
+    // --- B6: index freshness (indexed_commit / current_head / is_stale) ---
+
+    /// Helper: create a project row with custom `rootPath` and `lastCommit`.
+    fn seed_project_with(
+        storage: &dyn Storage,
+        id: &str,
+        name: &str,
+        root_path: &str,
+        last_commit: &str,
+    ) {
+        use crate::storage::schema::escape_cypher_string;
+        storage
+            .execute(&format!(
+                "CREATE (:Project {{id: '{}', name: '{}', rootPath: '{}', language: 'rust', fileCount: 0, indexedAt: 1000, lastCommit: '{}'}});",
+                escape_cypher_string(id),
+                escape_cypher_string(name),
+                escape_cypher_string(root_path),
+                escape_cypher_string(last_commit),
+            ))
+            .expect("create project");
+    }
+
+    #[test]
+    fn test_dead_code_output_includes_indexed_commit_when_set() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        // rootPath points to a non-git directory → current_head empty.
+        seed_project_with(&*storage, "demo", "demo", "/nonexistent/path", "abc123");
+        let output = run_dead_code(&kit, "demo", "", true, true, true, "").expect("run");
+        assert_eq!(output.indexed_commit, "abc123");
+        assert_eq!(output.current_head, "", "non-git root → empty current_head");
+        assert!(!output.is_stale, "current_head empty → not stale");
+    }
+
+    #[test]
+    fn test_is_stale_true_when_commit_differs() {
+        let tmp = TempDir::new().unwrap();
+        let status = std::process::Command::new("git")
+            .arg("init")
+            .arg(tmp.path())
+            .status();
+        if status.is_err() || !status.unwrap().success() {
+            eprintln!("skipping test: git init failed");
+            return;
+        }
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(tmp.path())
+                .args(args)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+        std::fs::write(tmp.path().join("README.md"), "init\n").unwrap();
+        if !git(&["add", "."])
+            || !git(&[
+                "-c",
+                "user.email=t@t.com",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-m",
+                "init",
+            ])
+        {
+            eprintln!("skipping test: git commit failed");
+            return;
+        }
+        let head = std::process::Command::new("git")
+            .arg("-C")
+            .arg(tmp.path())
+            .arg("rev-parse")
+            .arg("HEAD")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        if head.is_empty() {
+            eprintln!("skipping test: could not determine HEAD");
+            return;
+        }
+
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        let root = tmp.path().to_string_lossy().into_owned();
+        // indexed_commit deliberately differs from current HEAD.
+        seed_project_with(&*storage, "demo", "demo", &root, "abc123");
+        let output = run_dead_code(&kit, "demo", "", true, true, true, "").expect("run");
+        assert_eq!(output.indexed_commit, "abc123");
+        assert_eq!(output.current_head, head);
+        assert!(output.is_stale, "commits differ → stale");
+    }
+
+    #[test]
+    fn test_is_stale_false_when_commits_match() {
+        let tmp = TempDir::new().unwrap();
+        let status = std::process::Command::new("git")
+            .arg("init")
+            .arg(tmp.path())
+            .status();
+        if status.is_err() || !status.unwrap().success() {
+            eprintln!("skipping test: git init failed");
+            return;
+        }
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(tmp.path())
+                .args(args)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+        std::fs::write(tmp.path().join("README.md"), "init\n").unwrap();
+        if !git(&["add", "."])
+            || !git(&[
+                "-c",
+                "user.email=t@t.com",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-m",
+                "init",
+            ])
+        {
+            eprintln!("skipping test: git commit failed");
+            return;
+        }
+        let head = std::process::Command::new("git")
+            .arg("-C")
+            .arg(tmp.path())
+            .arg("rev-parse")
+            .arg("HEAD")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        if head.is_empty() {
+            eprintln!("skipping test: could not determine HEAD");
+            return;
+        }
+
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        let root = tmp.path().to_string_lossy().into_owned();
+        // indexed_commit == current HEAD → fresh.
+        seed_project_with(&*storage, "demo", "demo", &root, &head);
+        let output = run_dead_code(&kit, "demo", "", true, true, true, "").expect("run");
+        assert_eq!(output.indexed_commit, head);
+        assert_eq!(output.current_head, head);
+        assert!(!output.is_stale, "commits match → fresh");
     }
 }
