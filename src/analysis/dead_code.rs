@@ -162,9 +162,12 @@ pub struct DeadCodeEntry {
 /// Cypher queries (Function + Method labels — LadybugDB's Cypher subset
 /// does not support `OR` label expressions) and returns `isExported` /
 /// `signature` alongside the existing fields. `BatchPrefetch::load` then
-/// issues 1 Cypher query for `outgoing_edges`. Total: 3 round-trips,
-/// independent of project size. Previously this scaled as 6N+V; for
-/// CalNexus (N=247, V=21990) this is a ~1500× reduction.
+/// issues 1 Cypher query for `outgoing_edges`. BatchPrefetch therefore
+/// contributes 3 of the 5 total round-trips in [`DeadCodeDetector::detect`]
+/// (the other 2 are `load_edge_targets_by_category` for confidence
+/// scoring and `load_file_languages` for language resolution).
+/// Previously this scaled as 6N+V; for CalNexus (N=247, V=21990) this is
+/// a ~1500× reduction.
 ///
 /// # DRY
 ///
@@ -192,9 +195,12 @@ impl BatchPrefetch {
     /// plus one Cypher round-trip for `outgoing_edges`.
     ///
     /// `exported_ids` and `ffi_entry_ids` are derived in Rust from
-    /// `functions` (no extra Cypher) — this collapses the previous
-    /// 5 round-trips (load_exported_ids × 2 + load_ffi_entry_ids × 2 +
-    /// load_outgoing_edges × 1) into 1 (perf-review MEDIUM-1).
+    /// `functions` (no extra Cypher) — this collapses the previous 5
+    /// prefetch-related round-trips (load_exported_ids × 2 +
+    /// load_ffi_entry_ids × 2 + load_outgoing_edges × 1) into 1
+    /// (perf-review MEDIUM-1). At the `detect` level the overall
+    /// reduction is 7 → 5 round-trips (the other 2 are
+    /// `load_all_functions` × 2, which remain unchanged).
     ///
     /// # Errors
     ///
