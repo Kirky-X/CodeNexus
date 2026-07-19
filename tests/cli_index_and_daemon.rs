@@ -304,6 +304,57 @@ mod daemon_hot_update {
         stdout
     }
 
+    /// Polling-based synchronization: queries the DB every `poll_interval` and
+    /// returns once `predicate(query_output)` is satisfied, or panics after
+    /// `timeout`. Replaces fixed `thread::sleep(4000ms)` synchronization that
+    /// was flaky under high load (daemon incremental index can exceed 4s when
+    /// the host is saturated).
+    ///
+    /// Query failures (non-zero exit) are tolerated and retried within the
+    /// timeout window — the daemon may be mid-transaction during the polling
+    /// query, transiently rejecting concurrent readers. We only panic on
+    /// timeout so that genuine slowness surfaces a clear failure message.
+    ///
+    /// Defaults: 150ms poll interval (fine-grained enough to detect sub-second
+    /// index completion), 30s total timeout (far exceeds the typical 4s index
+    /// time, but bounded to avoid hanging CI).
+    fn wait_for_indexed<F>(db: &Path, predicate: F, timeout: Duration, what: &str)
+    where
+        F: Fn(&str) -> bool,
+    {
+        let poll_interval = Duration::from_millis(150);
+        let deadline = std::time::Instant::now() + timeout;
+        let mut last_success = String::new();
+        let mut last_err = String::new();
+        let args: &[&str] = &[
+            "query",
+            "--cypher",
+            "MATCH (n:Function) RETURN n.name AS name",
+            "--db",
+            db.to_str().unwrap(),
+        ];
+        loop {
+            let (code, stdout, stderr) = run(args);
+            if code == 0 {
+                last_success = stdout.clone();
+                last_err.clear();
+                if predicate(&stdout) {
+                    return;
+                }
+            } else {
+                last_err = format!("exit={code}, stderr={stderr}");
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!(
+                    "wait_for_indexed ({what}) not satisfied within {timeout:?}; \
+                     last successful query: {last_success}; \
+                     last query error: {last_err:?}"
+                );
+            }
+            thread::sleep(poll_interval);
+        }
+    }
+
     // --- BR-DAEMON-003: hot update detects new code file ---
 
     #[test]
@@ -336,8 +387,16 @@ mod daemon_hot_update {
             "fn new_func() {\n    helper();\n}\n",
         );
 
-        // Step 5: Wait for debounce (300ms) + index (~500ms) + tick (500ms).
-        thread::sleep(Duration::from_millis(4000));
+        // Step 5: Poll DB until `new_func` appears (daemon debounce + index
+        // completion). Replaces a fixed 4s sleep that was flaky under high
+        // load. 30s timeout is far above the typical ~1s index time but
+        // bounded to avoid hanging CI.
+        wait_for_indexed(
+            &db,
+            |names| names.contains("new_func"),
+            Duration::from_secs(30),
+            "new_func appears after daemon hot update",
+        );
 
         // Step 6: Send SIGTERM → graceful shutdown.
         send_sigterm(&daemon);
@@ -383,8 +442,17 @@ mod daemon_hot_update {
             "fn main() {\n    helper();\n}\n\nfn helper() {\n    println!(\"hello\");\n}\n\nfn extra_fn() {\n    helper();\n}\n",
         );
 
-        // Wait for debounce (300ms) + index (~500ms) + tick (500ms).
-        thread::sleep(Duration::from_millis(4000));
+        // Poll DB until `extra_fn` appears (daemon debounce + index
+        // completion). Replaces a fixed 4s sleep that was flaky under high
+        // load — under saturation the daemon's incremental index can exceed
+        // the hardcoded 4s window, causing `extra_fn should appear after
+        // modify` assertion failures (12 runs → 1 failure observed).
+        wait_for_indexed(
+            &db,
+            |names| names.contains("extra_fn"),
+            Duration::from_secs(30),
+            "extra_fn appears after modify",
+        );
 
         send_sigterm(&daemon);
         let exit = wait_for_exit(&mut daemon, Duration::from_secs(3));
