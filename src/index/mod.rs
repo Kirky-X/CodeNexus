@@ -29,7 +29,9 @@ pub mod pipeline;
 pub mod pipeline_dag;
 
 pub use error::{IndexError, Result};
-pub use hash::{compute_content_hash, compute_file_hash};
+pub use hash::{
+    chunked_hash, compute_content_hash, compute_file_hash, compute_file_hash_incremental,
+};
 pub use incremental::{diff_files, FileDiff};
 pub use module::{IndexConfig, IndexerModule};
 pub use pipeline::{IndexFacade, IndexResult, Pipeline};
