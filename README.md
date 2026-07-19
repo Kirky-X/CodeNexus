@@ -109,7 +109,7 @@ cargo build --release --features mcp
 | `analysis` | 启用 | 死代码检测 + 架构概览（纯 Cypher 聚合） |
 | `complexity` | 启用 | AST 复杂度分析（圈/认知/嵌套/长度/Halstead/可维护性/时间/空间复杂度，依赖 `analysis`） |
 | `api-review` | 启用 | API 审查工具包（route_map/shape_check/api_impact/tool_map） |
-| `community` | 启用 | 社区检测（Louvain 模块度优化，依赖 petgraph） |
+| `community` | 启用 | 社区检测（Leiden 模块度优化，依赖 petgraph） |
 | `cross-service` | 启用 | 跨服务调用链检测（HTTP 路由模式匹配） |
 | `mcp` | 启用 | MCP 服务器（sdforge `mcp` stdio 传输） |
 | `cli` | 启用 | CLI 二进制（sdforge `cli` 传输，二进制必需） |
@@ -235,7 +235,7 @@ codenexus architecture --project myproject
 | `shape_check` | API 形状检查（请求/响应结构验证，`api-review` feature） |
 | `api_impact` | API 变更影响分析（`--endpoint` 可选，省略=分析所有端点；`api-review` feature） |
 | `tool_map` | 工具映射（MCP 工具清单，`api-review` feature） |
-| `community` | 社区检测（`--resolution` 可选，省略=默认 0.5；Louvain 模块度优化，`community` feature） |
+| `community` | 社区检测（`--resolution` 可选，省略=默认 0.5；Leiden 模块度优化，`community` feature） |
 | `cross_service` | 跨服务调用链检测（`--protocol` 可选，省略=所有协议；HTTP REST/gRPC/GraphQL/消息队列/事件总线，`cross-service` feature） |
 | `lsp_goto_def` | LSP 定义跳转（rust-analyzer 集成，`lsp` feature） |
 | `lsp_hover` | LSP 悬停信息（rust-analyzer 集成，`lsp` feature） |

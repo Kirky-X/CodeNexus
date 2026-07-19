@@ -67,7 +67,7 @@ CodeNexus has **28 subcommands** grouped into eight functional areas. **All requ
 | `dead_code` | Analysis | Detect unreferenced `Function`/`Method` nodes with confidence levels (High/Medium/Low). |
 | `architecture` | Analysis | High-level overview: module boundaries, dependency directions, layers, entry points, hotspots. |
 | `complexity` | Analysis | AST-based per-function complexity (cyclomatic/cognitive/nesting/length/Halstead/MI/time/space). 26 threshold flags required. |
-| `community` | Analysis | Louvain community detection on the call graph. |
+| `community` | Analysis | Leiden community detection on the call graph (guarantees internally connected communities; C3 upgrade from Louvain). |
 | `cross_service` | Analysis | Detect cross-service call links (HTTP REST, gRPC, GraphQL, message queue, event bus). |
 | `route_map` | Analysis | List HTTP API routes and their handler functions. |
 | `tool_map` | Analysis | List MCP tool definitions and their handler functions. |

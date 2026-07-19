@@ -118,7 +118,7 @@ cargo build --release --features mcp
 | `analysis` | enabled | Dead code detection + architecture overview (pure Cypher aggregation) |
 | `complexity` | enabled | AST complexity analysis (cyclomatic/cognitive/nesting/length/Halstead/maintainability/time/space, depends on `analysis`) |
 | `api-review` | enabled | API review toolkit (route_map/shape_check/api_impact/tool_map) |
-| `community` | enabled | Community detection (Louvain modularity optimization, depends on petgraph) |
+| `community` | enabled | Community detection (Leiden modularity optimization, depends on petgraph) |
 | `cross-service` | enabled | Cross-service call chain detection (HTTP route pattern matching) |
 | `mcp` | enabled | MCP server via sdforge `mcp` stdio transport |
 | `cli` | enabled | CLI binary (sdforge `cli` transport; required by the binary) |
@@ -242,7 +242,7 @@ codenexus architecture --project myproject
 | `shape_check` | API shape check (request/response structure validation, `api-review` feature) |
 | `api_impact` | API change impact analysis (`api-review` feature) |
 | `tool_map` | Tool mapping (MCP tool inventory, `api-review` feature) |
-| `community` | Community detection (Louvain modularity optimization, `community` feature) |
+| `community` | Community detection (Leiden modularity optimization, `community` feature) |
 | `cross_service` | Cross-service call chain detection (HTTP REST/gRPC/GraphQL/message queue/event bus, `cross-service` feature) |
 | `lsp_goto_def` | LSP go-to-definition (rust-analyzer integration, `lsp` feature) |
 | `lsp_hover` | LSP hover info (rust-analyzer integration, `lsp` feature) |

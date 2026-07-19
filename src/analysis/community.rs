@@ -1,29 +1,39 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Community detection via the Louvain algorithm.
+//! Community detection via the Leiden algorithm.
 //!
-//! Identifies functional modules in the call graph by running Louvain
+//! Identifies functional modules in the call graph by running Leiden
 //! modularity optimization on the `CALLS` edge-induced subgraph. Each
 //! detected community is returned as a [`Community`] with its member
 //! symbols (FQN list), modularity contribution, and size.
 //!
 //! # Algorithm
 //!
-//! Louvain is a greedy multi-level modularity optimizer:
+//! Leiden (Traag et al., 2019) improves on Louvain by adding a refinement
+//! phase that guarantees the connectivity invariant — every community is
+//! internally connected. The three-phase multi-level optimiser is:
 //! 1. **Local optimisation phase**: each node starts in its own community;
 //!    nodes are iteratively moved into neighbouring communities when doing
 //!    so yields the largest positive modularity gain. The phase ends when
 //!    no node can be moved.
-//! 2. **Aggregation phase**: nodes in the same community are merged into
+//! 2. **Refinement phase** (Leiden addition): each community is split into
+//!    its internally connected sub-communities via DFS over the induced
+//!    subgraph. The first connected component retains the original
+//!    community id; subsequent components receive new ids. This eliminates
+//!    the "disconnected community" pathology of plain Louvain.
+//! 3. **Aggregation phase**: nodes in the same community are merged into
 //!    a single super-node; intra-community edge weights become self-loops,
 //!    inter-community weights become weighted edges. Loop weights accumulate.
-//! 3. Repeat phase 1 on the aggregate graph until the modularity stops
+//! 4. Repeat phases 1–3 on the aggregate graph until the modularity stops
 //!    improving.
 //!
 //! The implementation uses [`petgraph::graph::UnGraph`] as the in-memory
-//! weighted undirected graph and self-implements the Louvain loop (≈150
-//! lines) per design decision D7 — no external Louvain crate is introduced.
+//! weighted undirected graph and self-implements the Leiden loop (≈200
+//! lines) per design decision D7 — no external Leiden crate is introduced.
+//! [`modularity_core`] is shared by both Leiden ([`RefineMode::RefineConnected`])
+//! and the legacy [`louvain`] entry point ([`RefineMode::Plain`], kept for
+//! quality comparison against [`leiden`] in tests).
 //!
 //! # Storage integration
 //!
@@ -41,21 +51,21 @@ use petgraph::visit::EdgeRef;
 use serde::Serialize;
 use std::cell::RefCell;
 
-/// Default resolution parameter (γ) for the Louvain modularity gain
+/// Default resolution parameter (γ) for the Leiden modularity gain
 /// calculation. `γ = 1.0` recovers the standard Newman modularity; higher
 /// values favour smaller communities, lower values favour larger ones
 /// (R-analysis-004: resolution affects community count).
 const DEFAULT_RESOLUTION: f64 = 1.0;
 
-/// Maximum number of Louvain outer iterations (aggregation rounds) before
-/// the algorithm gives up. Louvain typically converges in 2–5 rounds on
-/// real code graphs; this bound prevents pathological loops.
-const MAX_LOUVAIN_ROUNDS: usize = 20;
+/// Maximum number of Leiden/Louvain outer iterations (aggregation rounds)
+/// before the algorithm gives up. Leiden typically converges in 2–5 rounds
+/// on real code graphs; this bound prevents pathological loops.
+const MAX_ROUNDS: usize = 20;
 
 /// A detected community of symbols.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Community {
-    /// 0-based community id (assigned after Louvain converges).
+    /// 0-based community id (assigned after Leiden converges).
     pub id: usize,
     /// Member symbol FQNs (or node ids when FQN is unavailable).
     pub members: Vec<String>,
@@ -65,7 +75,7 @@ pub struct Community {
     pub size: usize,
 }
 
-/// Detects communities in the project's `CALLS` graph using Louvain.
+/// Detects communities in the project's `CALLS` graph using Leiden.
 ///
 /// Backed by a `&'a dyn Storage` capability (same pattern as
 /// [`crate::analysis::architecture::ArchitectureAnalyzer`]). The `project`
@@ -79,10 +89,18 @@ pub struct CommunityDetector<'a> {
     storage: &'a dyn Storage,
     /// Project name used for `WHERE e.project = $project` filtering.
     project: String,
-    /// Louvain resolution (γ). Higher → more, smaller communities.
+    /// Leiden resolution (γ). Higher → more, smaller communities.
     resolution: f64,
     /// Cache of the most recent `detect_communities` result, so
     /// `community_members` can answer without recomputing.
+    ///
+    /// `Vec<Community>` (not `Arc<Vec<Community>>`) is intentional: the
+    /// public `detect_communities()` API returns `Vec<Community>` by value,
+    /// so an `Arc` would still require a clone on return (Arc::try_unwrap
+    /// fails because the cache holds a strong ref). `community_members()`
+    /// also returns `Vec<String>` by value, so per-member cloning is
+    /// unavoidable regardless of the cache container (MED-003 evaluation:
+    /// Arc has no performance benefit without breaking the public API).
     cache: RefCell<Option<Vec<Community>>>,
 }
 
@@ -103,7 +121,7 @@ impl<'a> CommunityDetector<'a> {
         }
     }
 
-    /// Builder for the Louvain resolution parameter (γ). Higher values
+    /// Builder for the Leiden resolution parameter (γ). Higher values
     /// produce more, smaller communities; lower values produce fewer,
     /// larger communities. Default is `1.0` (standard modularity).
     #[must_use]
@@ -116,13 +134,20 @@ impl<'a> CommunityDetector<'a> {
         self
     }
 
-    /// Returns the current Louvain resolution (γ).
+    /// Returns the current Leiden resolution (γ).
     #[must_use]
     pub fn resolution(&self) -> f64 {
         self.resolution
     }
 
-    /// Runs the Louvain algorithm and returns the detected communities.
+    /// Runs the Leiden algorithm and returns the detected communities.
+    ///
+    /// Leiden improves on Louvain by adding a refinement phase that
+    /// splits each community into its internally connected sub-communities
+    /// between the local-moving and aggregation phases (Traag et al.,
+    /// 2019). This guarantees the connectivity invariant — every
+    /// community is internally connected — which plain Louvain may
+    /// violate (C3: Louvain→Leiden upgrade).
     ///
     /// The result is also cached so subsequent calls to
     /// [`community_members`](Self::community_members) can answer in O(1).
@@ -133,7 +158,7 @@ impl<'a> CommunityDetector<'a> {
     /// Cypher query for `CALLS` edges fails.
     pub fn detect_communities(&self) -> StorageResult<Vec<Community>> {
         let graph = self.load_calls_graph()?;
-        let communities = louvain(&graph, self.resolution);
+        let communities = leiden(&graph, self.resolution);
         let result = build_community_list(&graph, &communities);
         *self.cache.borrow_mut() = Some(result.clone());
         Ok(result)
@@ -186,9 +211,15 @@ impl<'a> CommunityDetector<'a> {
         // directed, but Louvain needs an undirected graph, so we merge
         // (a,b) and (b,a) into the same edge. Use a canonical (min,max)
         // key so both directions hit the same entry.
-        use std::collections::HashMap;
+        use std::collections::{BTreeSet, HashMap};
         let mut weights: HashMap<(String, String), f64> = HashMap::new();
-        let mut node_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // BTreeSet keeps node names in sorted order at insertion time, so
+        // `into_iter()` below yields them deterministically without a
+        // separate `.sort()` call (LOW-003: replaces HashSet + Vec::sort).
+        // Deterministic node ordering is required in *production* too — not
+        // just tests — so that repeated runs on the same DB produce the
+        // same community ids.
+        let mut node_set: BTreeSet<String> = BTreeSet::new();
         for row in rows {
             if row.len() < 2 {
                 continue;
@@ -206,11 +237,8 @@ impl<'a> CommunityDetector<'a> {
 
         let mut graph = UnGraph::<String, f64>::new_undirected();
         let mut idx: HashMap<String, NodeIndex> = HashMap::new();
-        // Insert nodes in a deterministic order (sorted) so test snapshots
-        // are reproducible.
-        let mut nodes: Vec<String> = node_set.into_iter().collect();
-        nodes.sort();
-        for name in &nodes {
+        // BTreeSet iteration is already sorted — no `.sort()` needed.
+        for name in &node_set {
             idx.insert(name.clone(), graph.add_node(name.clone()));
         }
         for ((a, b), w) in &weights {
@@ -223,13 +251,100 @@ impl<'a> CommunityDetector<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// Louvain algorithm + modularity (real implementation, design.md D7)
+// Leiden / Louvain algorithm + modularity (real implementation, design.md D7)
 // ---------------------------------------------------------------------------
+
+/// Runs Leiden on `graph` with the given `resolution` (γ). Returns a vector
+/// mapping each node index to its community id (0-based, contiguous).
+///
+/// Leiden improves on Louvain by adding a refinement phase between the local
+/// moving and aggregation phases. After local moving produces a partition,
+/// the refinement phase splits each community into its internally connected
+/// sub-communities, guaranteeing that every community is internally
+/// connected (C3: Louvain→Leiden upgrade).
+///
+/// On connected graphs Leiden produces the same result as Louvain; on
+/// disconnected or weakly-linked graphs Leiden guarantees the connectivity
+/// invariant that Louvain may violate.
+fn leiden(graph: &UnGraph<String, f64>, resolution: f64) -> Vec<usize> {
+    modularity_core(graph, resolution, RefineMode::RefineConnected)
+}
+
+/// Returns `true` if the subgraph induced by `nodes` is connected.
+///
+/// Uses iterative DFS over `graph` restricted to `nodes` (no recursion →
+/// no stack-overflow risk). An empty node set is considered connected by
+/// convention. Uses `Vec<bool>` scratch buffers indexed by node id for
+/// O(1) membership tests (LOW-001/LOW-004: previously used HashSet with
+/// hashing overhead).
+#[cfg(test)]
+fn is_connected_subgraph(graph: &UnGraph<String, f64>, nodes: &[NodeIndex]) -> bool {
+    if nodes.is_empty() {
+        return true;
+    }
+    let n = graph.node_count();
+    let mut in_set: Vec<bool> = vec![false; n];
+    for &node in nodes {
+        in_set[node.index()] = true;
+    }
+    let mut visited: Vec<bool> = vec![false; n];
+    let mut stack: Vec<NodeIndex> = Vec::with_capacity(nodes.len());
+    stack.push(nodes[0]);
+    let mut visited_count = 0usize;
+    while let Some(node) = stack.pop() {
+        if visited[node.index()] {
+            continue;
+        }
+        visited[node.index()] = true;
+        visited_count += 1;
+        for edge in graph.edges(node) {
+            let other = if edge.source() == node {
+                edge.target()
+            } else {
+                edge.source()
+            };
+            if in_set[other.index()] && !visited[other.index()] {
+                stack.push(other);
+            }
+        }
+    }
+    visited_count == nodes.len()
+}
 
 /// Runs Louvain on `graph` with the given `resolution` (γ). Returns a
 /// vector mapping each node index to its community id (0-based, contiguous).
 ///
-/// Implements the standard two-phase multi-level Louvain:
+/// Thin wrapper around [`modularity_core`] in [`RefineMode::Plain`] mode
+/// (no Leiden refinement phase). Test-only entry point used for quality
+/// comparison against [`leiden`] on benchmark graphs (Karate Club, K5
+/// cliques).
+#[cfg(test)]
+fn louvain(graph: &UnGraph<String, f64>, resolution: f64) -> Vec<usize> {
+    modularity_core(graph, resolution, RefineMode::Plain)
+}
+
+/// Selects whether [`modularity_core`] runs the Leiden refinement phase
+/// between the local-moving and aggregation phases (M-9: replaces the
+/// previous `refine: bool` flag argument per Clean Code "Flag Argument").
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RefineMode {
+    /// Plain Louvain: local moving → aggregation, no connectivity guarantee.
+    ///
+    /// Test-only: used by [`louvain`] for quality comparison against
+    /// [`leiden`]. The variant is gated so that lib builds do not flag it
+    /// as dead code (only `RefineConnected` is used in production).
+    #[cfg(test)]
+    Plain,
+    /// Leiden: local moving → **refinement** → aggregation. The refinement
+    /// phase splits each community into its internally connected
+    /// sub-communities, guaranteeing the connectivity invariant (Traag
+    /// et al., 2019).
+    RefineConnected,
+}
+
+/// Core multi-level modularity optimizer shared by Louvain and Leiden.
+///
+/// Implements the standard two-phase multi-level algorithm:
 /// 1. **Local optimisation**: each node starts in its own community; nodes
 ///    are iteratively moved into a neighbouring community when the move
 ///    maximises the modularity gain ΔQ. Repeat until no node moves.
@@ -237,10 +352,16 @@ impl<'a> CommunityDetector<'a> {
 ///    super-node; intra-community edges become self-loops (weight sums),
 ///    inter-community edges become weighted edges. Go back to phase 1.
 ///
+/// When `mode` is [`RefineMode::RefineConnected`] (Leiden), a refinement
+/// phase is inserted between phases 1 and 2: each community is split into
+/// its internally connected sub-communities via
+/// [`refine_partition_connected`], guaranteeing the connectivity invariant
+/// that Louvain may violate (C3).
+///
 /// The function tracks the original-node → community mapping across
 /// aggregation rounds and returns the final assignment on the *original*
 /// node indices.
-fn louvain(graph: &UnGraph<String, f64>, resolution: f64) -> Vec<usize> {
+fn modularity_core(graph: &UnGraph<String, f64>, resolution: f64, mode: RefineMode) -> Vec<usize> {
     let n = graph.node_count();
     if n == 0 {
         return Vec::new();
@@ -273,7 +394,7 @@ fn louvain(graph: &UnGraph<String, f64>, resolution: f64) -> Vec<usize> {
     // `node_to_comm[v]` = community id of working-graph node v.
     let mut node_to_comm: Vec<usize> = (0..work.node_count()).collect();
 
-    for _round in 0..MAX_LOUVAIN_ROUNDS {
+    for round in 0..MAX_ROUNDS {
         // Phase 1: local optimisation on `work`.
         // `m` = total edge weight (each edge counted once, including
         // self-loops). `2m` = sum of all node degrees.
@@ -282,29 +403,50 @@ fn louvain(graph: &UnGraph<String, f64>, resolution: f64) -> Vec<usize> {
         if m2 <= 0.0 {
             break; // no edges → every node is its own community
         }
+        let num_work_nodes = work.node_count();
         // Degree of each node, with self-loops counted twice (standard
-        // convention). `work.edges(ni)` already includes self-loops once,
-        // so we add `edges_connecting(ni, ni)` to count them a second time.
-        let degrees: Vec<f64> = (0..work.node_count())
+        // convention). Single iteration over `edges(ni)`: self-loops are
+        // counted twice in-place (LOW-002: previously iterated
+        // `edges_connecting(ni, ni)` separately).
+        let degrees: Vec<f64> = (0..num_work_nodes)
             .map(|i| {
                 let ni = NodeIndex::new(i);
-                work.edges(ni).map(|e| *e.weight()).sum::<f64>()
-                    + work
-                        .edges_connecting(ni, ni)
-                        .map(|e| *e.weight())
-                        .sum::<f64>()
+                work.edges(ni)
+                    .map(|e| {
+                        let w = *e.weight();
+                        if e.source() == e.target() {
+                            w * 2.0
+                        } else {
+                            w
+                        }
+                    })
+                    .sum::<f64>()
             })
             .collect();
+
+        // Σ_tot per community (sum of member degrees, including self-loop
+        // double-counting). Maintained incrementally as nodes move between
+        // communities (HIGH-001: previously rebuilt O(N) per node → O(N²)
+        // per pass; now O(1) update per move).
+        // Community ids in `node_to_comm` are always < `num_work_nodes`
+        // (initially each node is its own community; moves only target
+        // existing neighbour communities), so Vec<f64> indexing is safe.
+        let mut comm_tot: Vec<f64> = vec![0.0; num_work_nodes];
+        for (idx, &c) in node_to_comm.iter().enumerate() {
+            comm_tot[c] += degrees[idx];
+        }
 
         let mut improved = true;
         while improved {
             improved = false;
-            for v_idx in 0..work.node_count() {
+            for v_idx in 0..num_work_nodes {
                 let v = NodeIndex::new(v_idx);
                 let v_comm = node_to_comm[v_idx];
 
                 // Sum of weights from v to each neighbouring community
                 // (excluding v's own self-loop, which is intra-community).
+                // `comm_weights` is small (≤ degree of v), HashMap acceptable
+                // here — only `comm_tot` was the O(N) bottleneck (MED-002).
                 use std::collections::HashMap;
                 let mut comm_weights: HashMap<usize, f64> = HashMap::new();
                 for edge in work.edges(v) {
@@ -320,13 +462,7 @@ fn louvain(graph: &UnGraph<String, f64>, resolution: f64) -> Vec<usize> {
                     *comm_weights.entry(c).or_insert(0.0) += *edge.weight();
                 }
 
-                // Σ_tot per community (sum of member degrees, including
-                // self-loop double-counting).
-                let mut comm_tot: HashMap<usize, f64> = HashMap::new();
-                for (idx, &c) in node_to_comm.iter().enumerate() {
-                    *comm_tot.entry(c).or_insert(0.0) += degrees[idx];
-                }
-                let cur_comm_tot = comm_tot.get(&v_comm).copied().unwrap_or(0.0);
+                let cur_comm_tot = comm_tot[v_comm];
                 let k_v = degrees[v_idx];
                 // Weight from v to its current community (intra, excluding
                 // v's self-loop).
@@ -345,7 +481,7 @@ fn louvain(graph: &UnGraph<String, f64>, resolution: f64) -> Vec<usize> {
                     if c == v_comm {
                         continue; // Already computed as the "stay" gain.
                     }
-                    let c_tot = comm_tot.get(&c).copied().unwrap_or(0.0);
+                    let c_tot = comm_tot[c];
                     let gain = k_vc - resolution * k_v * c_tot / m2;
                     if gain > best_gain + f64::EPSILON {
                         best_gain = gain;
@@ -354,10 +490,22 @@ fn louvain(graph: &UnGraph<String, f64>, resolution: f64) -> Vec<usize> {
                 }
 
                 if best_comm != v_comm {
+                    // Incremental Σ_tot update (HIGH-001): O(1) per move
+                    // instead of O(N) rebuild on the next iteration.
+                    comm_tot[v_comm] -= k_v;
+                    comm_tot[best_comm] += k_v;
                     node_to_comm[v_idx] = best_comm;
                     improved = true;
                 }
             }
+        }
+
+        // Phase 1.5 (Leiden refinement, C3): split each community into its
+        // internally connected sub-communities. This guarantees the
+        // connectivity invariant that plain Louvain may violate. Skipped
+        // in [`RefineMode::Plain`] (pure Louvain mode).
+        if mode == RefineMode::RefineConnected {
+            node_to_comm = refine_partition_connected(&work, node_to_comm);
         }
 
         // Renumber communities contiguously on the working graph.
@@ -370,7 +518,7 @@ fn louvain(graph: &UnGraph<String, f64>, resolution: f64) -> Vec<usize> {
         // partition[i] = work_comm[i]. After round 1+, work node j is a
         // super-node aggregating multiple original nodes; we update
         // partition by mapping orig → work_node → work_comm.
-        if _round == 0 {
+        if round == 0 {
             partition[..n].copy_from_slice(&work_comm[..n]);
         } else {
             // partition[i] currently holds the *super-node id* from the
@@ -384,7 +532,12 @@ fn louvain(graph: &UnGraph<String, f64>, resolution: f64) -> Vec<usize> {
         // Phase 2: aggregate `work` into a new graph where each community
         // becomes a single node. If the number of communities equals the
         // number of working nodes, no further aggregation is possible → done.
-        let num_comms = work_comm.iter().copied().max().unwrap_or(0) + 1;
+        let num_comms = work_comm
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
         if num_comms >= work.node_count() {
             break;
         }
@@ -428,6 +581,113 @@ fn louvain(graph: &UnGraph<String, f64>, resolution: f64) -> Vec<usize> {
 
     // Final contiguous renumbering on the original partition.
     renumber_communities(&partition)
+}
+
+/// Leiden refinement phase: splits each community into its internally
+/// connected sub-communities, guaranteeing the connectivity invariant.
+///
+/// For each community in `partition`, finds the connected components of the
+/// subgraph induced by its member nodes (restricted to edges in `graph`).
+/// The first connected component retains the original community id; each
+/// subsequent component receives a new (higher) id. The returned partition
+/// is then renumbered contiguously by the caller via
+/// [`renumber_communities`].
+///
+/// This is the key Leiden improvement over Louvain (Traag et al., 2019):
+/// it guarantees that every community is internally connected, eliminating
+/// the "disconnected community" pathology of plain Louvain.
+///
+/// # Performance
+///
+/// Takes ownership of `partition` (MED-004: avoids the previous
+/// `partition.to_vec()` clone). Uses reusable `Vec<bool>` scratch buffers
+/// instead of per-community `HashSet` allocation (MED-001), and `BTreeMap`
+/// for deterministic community iteration order (LOW-5).
+fn refine_partition_connected(
+    graph: &petgraph::Graph<(), f64, petgraph::Undirected>,
+    mut partition: Vec<usize>,
+) -> Vec<usize> {
+    let n = graph.node_count();
+    if n == 0 || partition.len() != n {
+        return partition;
+    }
+    // Group nodes by community. BTreeMap for deterministic iteration order
+    // (LOW-5: HashMap iteration order is non-deterministic across runs due
+    // to random seeding, which could affect which component retains the
+    // original community id).
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<usize, Vec<NodeIndex>> = BTreeMap::new();
+    for (idx, &c) in partition.iter().enumerate() {
+        groups.entry(c).or_default().push(NodeIndex::new(idx));
+    }
+    let mut next_comm = partition
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    // Reusable scratch buffers (MED-001): Vec<bool> indexed by node index,
+    // reset per community. Eliminates per-community HashSet allocation and
+    // hashing overhead; for 10⁵-node graphs this saves thousands of heap
+    // allocations per Leiden round.
+    let mut in_current_comm: Vec<bool> = vec![false; n];
+    let mut visited: Vec<bool> = vec![false; n];
+    let mut stack: Vec<NodeIndex> = Vec::with_capacity(n);
+    for (_orig_comm, members) in groups {
+        if members.len() <= 1 {
+            continue;
+        }
+        // Mark current community members.
+        for &m in &members {
+            in_current_comm[m.index()] = true;
+        }
+        // Find connected components within this community (DFS restricted
+        // to community members).
+        let mut components: Vec<Vec<NodeIndex>> = Vec::new();
+        for &start in &members {
+            if visited[start.index()] {
+                continue;
+            }
+            let mut comp: Vec<NodeIndex> = Vec::new();
+            stack.clear();
+            stack.push(start);
+            while let Some(node) = stack.pop() {
+                if visited[node.index()] {
+                    continue;
+                }
+                visited[node.index()] = true;
+                comp.push(node);
+                for edge in graph.edges(node) {
+                    let other = if edge.source() == node {
+                        edge.target()
+                    } else {
+                        edge.source()
+                    };
+                    if in_current_comm[other.index()] && !visited[other.index()] {
+                        stack.push(other);
+                    }
+                }
+            }
+            components.push(comp);
+        }
+        // First component keeps the original community id; others get new
+        // ids so the caller's `renumber_communities` makes them contiguous.
+        for (i, comp) in components.iter().enumerate() {
+            if i == 0 {
+                continue;
+            }
+            for &node in comp {
+                partition[node.index()] = next_comm;
+            }
+            next_comm = next_comm.saturating_add(1);
+        }
+        // Reset scratch buffers for the next community.
+        for &m in &members {
+            in_current_comm[m.index()] = false;
+            visited[m.index()] = false;
+        }
+    }
+    partition
 }
 
 /// Renumbers community ids in `partition` to be contiguous 0..k.
@@ -519,7 +779,7 @@ fn compute_modularity(graph: &UnGraph<String, f64>, communities: &[usize], resol
     q
 }
 
-/// Builds the public `Vec<Community>` from a Louvain community assignment.
+/// Builds the public `Vec<Community>` from a Leiden/Louvain community assignment.
 ///
 /// Communities are sorted by size descending so the largest module appears
 /// first; ties broken by lexicographic member order for determinism.
@@ -778,7 +1038,7 @@ mod tests {
     }
 
     // ====================================================================
-    // R-analysis-004: Louvain algorithm tests
+    // R-analysis-004: Louvain baseline tests (C3 comparison reference)
     // ====================================================================
 
     #[test]
@@ -1110,7 +1370,7 @@ mod tests {
         );
     }
 
-    // --- louvain with self-loop (line 314: self-loop continue) ---
+    // --- louvain with self-loop (self-loop continue in phase 1) ---
 
     #[test]
     fn louvain_handles_graph_with_self_loops() {
@@ -1130,5 +1390,428 @@ mod tests {
         // All 4 nodes should be assigned.
         let total: usize = list.iter().map(|c| c.size).sum();
         assert_eq!(total, 4, "all 4 nodes should be assigned");
+    }
+
+    // ====================================================================
+    // C3: Leiden refinement phase tests (T110)
+    // ====================================================================
+
+    #[test]
+    fn test_leiden_refinement_phase_produces_connected_communities() {
+        // C3 (Louvain→Leiden): Leiden guarantees every community is
+        // internally connected (Traag et al., 2019). Construct a graph
+        // with two K5 cliques bridged via a hub node — the classic
+        // structure where plain Louvain may merge the two cliques into
+        // one disconnected community. Leiden's refinement phase splits
+        // any disconnected community into its connected components.
+        let mut edges: Vec<(usize, usize)> = Vec::new();
+        // Clique A: nodes 0..5 (K5).
+        for i in 0..5 {
+            for j in (i + 1)..5 {
+                edges.push((i, j));
+            }
+        }
+        // Clique B: nodes 5..10 (K5).
+        for i in 5..10 {
+            for j in (i + 1)..10 {
+                edges.push((i, j));
+            }
+        }
+        // Bridge: hub node 10 connects to one node in each clique.
+        edges.push((2, 10));
+        edges.push((10, 7));
+        let g = graph_from_edges(&edges);
+
+        // Run Leiden with the refinement phase enabled.
+        let assignment = leiden(&g, 1.0);
+
+        // Group node indices by community id.
+        use std::collections::HashMap;
+        let mut groups: HashMap<usize, Vec<NodeIndex>> = HashMap::new();
+        for (idx, &c) in assignment.iter().enumerate() {
+            groups.entry(c).or_default().push(NodeIndex::new(idx));
+        }
+
+        // Leiden invariant: every community must be internally connected.
+        assert!(
+            !groups.is_empty(),
+            "Leiden should produce at least one community"
+        );
+        for (comm, members) in &groups {
+            assert!(
+                is_connected_subgraph(&g, members),
+                "Leiden produced disconnected community {comm} with members {members:?} — \
+                 refinement phase should guarantee connectivity (C3)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_leiden_preserves_louvain_quality_on_karate_club() {
+        // C3: On a well-connected graph (Karate Club) where Louvain's
+        // connectivity invariant already holds, Leiden should produce
+        // roughly the same community count. The refinement phase only
+        // splits disconnected communities, so it should not dramatically
+        // over-split a connected graph.
+        let g = karate_club_graph();
+        let louvain_assignment = louvain(&g, 1.0);
+        let leiden_assignment = leiden(&g, 1.0);
+        let louvain_count = build_community_list(&g, &louvain_assignment).len();
+        let leiden_count = build_community_list(&g, &leiden_assignment).len();
+        // Leiden may produce slightly more communities (refinement can
+        // split weakly-connected subgraphs), but not dramatically more.
+        assert!(
+            leiden_count >= louvain_count,
+            "Leiden should produce >= Louvain communities (L={louvain_count}, Ld={leiden_count})"
+        );
+        assert!(
+            leiden_count <= louvain_count + 2,
+            "Leiden should not over-split Karate Club (L={louvain_count}, Ld={leiden_count})"
+        );
+
+        // All Leiden communities must also satisfy the connectivity invariant.
+        use std::collections::HashMap;
+        let mut groups: HashMap<usize, Vec<NodeIndex>> = HashMap::new();
+        for (idx, &c) in leiden_assignment.iter().enumerate() {
+            groups.entry(c).or_default().push(NodeIndex::new(idx));
+        }
+        for (comm, members) in &groups {
+            assert!(
+                is_connected_subgraph(&g, members),
+                "Leiden produced disconnected community {comm} on Karate Club (C3)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_refine_partition_connected_splits_disconnected_community() {
+        // C3: Direct unit test for refine_partition_connected. Construct
+        // a working graph with two disjoint triangles {0,1,2} and {3,4,5}.
+        // Pass a partition that puts all 6 nodes in community 0 (clearly
+        // disconnected). Refinement should split into 2 communities.
+        let mut work: petgraph::Graph<(), f64, petgraph::Undirected> =
+            petgraph::Graph::new_undirected();
+        let n0 = work.add_node(());
+        let n1 = work.add_node(());
+        let n2 = work.add_node(());
+        let n3 = work.add_node(());
+        let n4 = work.add_node(());
+        let n5 = work.add_node(());
+        work.update_edge(n0, n1, 1.0);
+        work.update_edge(n1, n2, 1.0);
+        work.update_edge(n0, n2, 1.0);
+        work.update_edge(n3, n4, 1.0);
+        work.update_edge(n4, n5, 1.0);
+        work.update_edge(n3, n5, 1.0);
+        // Partition: all 6 nodes in community 0 (disconnected).
+        let partition = vec![0; 6];
+        let refined = refine_partition_connected(&work, partition);
+        // Should now have 2 distinct community ids.
+        let unique: std::collections::HashSet<usize> = refined.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            2,
+            "disconnected community should be split into 2, got {refined:?}"
+        );
+        // First triangle stays in original comm; second triangle gets new id.
+        assert_eq!(refined[0], refined[1]);
+        assert_eq!(refined[1], refined[2]);
+        assert_eq!(refined[3], refined[4]);
+        assert_eq!(refined[4], refined[5]);
+        assert_ne!(refined[0], refined[3]);
+    }
+
+    #[test]
+    fn test_refine_partition_connected_preserves_connected_community() {
+        // C3: If a community is already internally connected, refinement
+        // should be a no-op (single community id retained).
+        let mut work: petgraph::Graph<(), f64, petgraph::Undirected> =
+            petgraph::Graph::new_undirected();
+        let n0 = work.add_node(());
+        let n1 = work.add_node(());
+        let n2 = work.add_node(());
+        work.update_edge(n0, n1, 1.0);
+        work.update_edge(n1, n2, 1.0);
+        // All in community 0 (connected via path 0-1-2).
+        let partition = vec![0; 3];
+        let refined = refine_partition_connected(&work, partition);
+        let unique: std::collections::HashSet<usize> = refined.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            1,
+            "connected community should not be split, got {refined:?}"
+        );
+    }
+
+    #[test]
+    fn test_refine_partition_connected_empty_and_singletons() {
+        // C3: Edge cases — empty graph and single-node communities should
+        // be handled without panic.
+        let empty: petgraph::Graph<(), f64, petgraph::Undirected> =
+            petgraph::Graph::new_undirected();
+        let refined = refine_partition_connected(&empty, Vec::new());
+        assert!(refined.is_empty(), "empty graph → empty partition");
+
+        let mut work: petgraph::Graph<(), f64, petgraph::Undirected> =
+            petgraph::Graph::new_undirected();
+        let _n0 = work.add_node(());
+        let refined = refine_partition_connected(&work, vec![0]);
+        assert_eq!(refined, vec![0], "singleton community unchanged");
+    }
+
+    // ====================================================================
+    // Round 4 — M-6/M-7/M-8 supplementary tests (review follow-up)
+    // ====================================================================
+
+    // ---- M-6: leiden() basic scenarios (mirror the louvain() ones) ----
+
+    #[test]
+    fn test_leiden_empty_graph_returns_no_communities() {
+        // M-6: Leiden on an empty graph must return an empty assignment
+        // without panic. Mirrors `detect_empty_graph_returns_zero_communities`.
+        let g = UnGraph::<String, f64>::new_undirected();
+        let assignment = leiden(&g, 1.0);
+        assert!(assignment.is_empty(), "empty graph → empty assignment");
+        assert!(build_community_list(&g, &assignment).is_empty());
+    }
+
+    #[test]
+    fn test_leiden_single_node_returns_one_community() {
+        // M-6: A single-node graph has exactly one community (the node
+        // itself). Leiden's refinement phase is a no-op on singletons.
+        let mut g = UnGraph::<String, f64>::new_undirected();
+        g.add_node("solo".to_string());
+        let assignment = leiden(&g, 1.0);
+        let list = build_community_list(&g, &assignment);
+        assert_eq!(list.len(), 1, "single node → 1 community");
+        assert_eq!(list[0].size, 1);
+    }
+
+    #[test]
+    fn test_leiden_fully_connected_returns_one_community() {
+        // M-6: K4 (complete graph on 4 nodes) is maximally connected —
+        // Leiden must produce a single community of size 4. The refinement
+        // phase has nothing to split here.
+        let g = graph_from_edges(&[(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]);
+        let assignment = leiden(&g, 1.0);
+        let list = build_community_list(&g, &assignment);
+        assert_eq!(list.len(), 1, "fully connected → 1 community");
+        assert_eq!(list[0].size, 4);
+    }
+
+    #[test]
+    fn test_leiden_handles_graph_with_self_loops() {
+        // M-6: Self-loops (intra-community edges after aggregation) must
+        // not crash Leiden and must be counted toward a node's degree.
+        // Mirrors `louvain_handles_graph_with_self_loops`.
+        let mut g = UnGraph::<String, f64>::new_undirected();
+        let a = g.add_node("a".to_string());
+        let b = g.add_node("b".to_string());
+        let c = g.add_node("c".to_string());
+        g.update_edge(a, b, 1.0);
+        g.update_edge(b, c, 1.0);
+        g.update_edge(a, a, 2.0); // self-loop on a
+        let assignment = leiden(&g, 1.0);
+        let list = build_community_list(&g, &assignment);
+        let total: usize = list.iter().map(|c| c.size).sum();
+        assert_eq!(total, 3, "all 3 nodes should be assigned");
+    }
+
+    #[test]
+    fn test_leiden_resolution_affects_community_count() {
+        // M-6: Higher resolution γ → more, smaller communities. Construct
+        // two K4 cliques bridged by a single edge. At γ=1.0 the bridge may
+        // or may not merge them; at γ=10.0 the cliques must split.
+        let mut edges: Vec<(usize, usize)> = Vec::new();
+        // Clique A: 0..4
+        for i in 0..4 {
+            for j in (i + 1)..4 {
+                edges.push((i, j));
+            }
+        }
+        // Clique B: 4..8
+        for i in 4..8 {
+            for j in (i + 1)..8 {
+                edges.push((i, j));
+            }
+        }
+        // Single weak bridge.
+        edges.push((0, 4));
+        let g = graph_from_edges(&edges);
+
+        let low = build_community_list(&g, &leiden(&g, 1.0)).len();
+        let high = build_community_list(&g, &leiden(&g, 10.0)).len();
+        assert!(
+            high >= low,
+            "higher resolution should produce >= communities (low={low}, high={high})"
+        );
+        assert!(high >= 2, "at high resolution the two cliques should split");
+    }
+
+    // ---- M-8: refine_partition_connected with mixed input ----
+
+    #[test]
+    fn test_refine_partition_connected_mixed_input() {
+        // M-8: Mixed input — three communities where some are connected
+        // and some are disconnected. Refinement must split only the
+        // disconnected ones, leaving the connected ones unchanged.
+        //
+        // Layout (8 nodes):
+        //   comm 0: {0,1,2} — connected triangle (no split)
+        //   comm 1: {3,4,5,6} — two disjoint edges {3-4} and {5-6} (split into 2)
+        //   comm 2: {7} — singleton (no split)
+        // Expected: 4 distinct community ids after refinement.
+        let mut work: petgraph::Graph<(), f64, petgraph::Undirected> =
+            petgraph::Graph::new_undirected();
+        for _ in 0..8 {
+            work.add_node(());
+        }
+        // comm 0: triangle 0-1-2 (connected)
+        work.update_edge(NodeIndex::new(0), NodeIndex::new(1), 1.0);
+        work.update_edge(NodeIndex::new(1), NodeIndex::new(2), 1.0);
+        work.update_edge(NodeIndex::new(0), NodeIndex::new(2), 1.0);
+        // comm 1: two disjoint edges 3-4 and 5-6 (disconnected)
+        work.update_edge(NodeIndex::new(3), NodeIndex::new(4), 1.0);
+        work.update_edge(NodeIndex::new(5), NodeIndex::new(6), 1.0);
+        // comm 2: singleton 7 (no edges)
+        let partition = vec![0, 0, 0, 1, 1, 1, 1, 2];
+        let refined = refine_partition_connected(&work, partition);
+
+        // Comm 0 (triangle) should retain its id (0) unchanged.
+        assert_eq!(refined[0], 0, "comm 0 first node keeps id");
+        assert_eq!(refined[1], 0, "comm 0 second node keeps id");
+        assert_eq!(refined[2], 0, "comm 0 third node keeps id");
+        // Comm 1 (disconnected) should be split: {3,4} keep id 1, {5,6} get new id.
+        assert_eq!(refined[3], 1, "comm 1 first component keeps id");
+        assert_eq!(refined[4], 1, "comm 1 first component keeps id");
+        assert_eq!(
+            refined[5], refined[6],
+            "comm 1 second component shares new id"
+        );
+        assert_ne!(refined[5], 1, "comm 1 second component gets a new id");
+        assert_ne!(refined[5], 0, "new id must not collide with comm 0");
+        // Comm 2 (singleton) should retain its id (2) unchanged.
+        assert_eq!(refined[7], 2, "comm 2 singleton keeps id");
+
+        // Total distinct ids: {0, 1, refined[5], 2} = 4.
+        let unique: std::collections::HashSet<usize> = refined.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            4,
+            "expected 4 communities after mixed refinement, got {refined:?}"
+        );
+    }
+
+    // ---- M-7: public API Leiden connectivity invariant (integration) ----
+
+    #[test]
+    fn test_detect_communities_leiden_connectivity_invariant() {
+        // M-7: End-to-end integration test — drive Leiden through the
+        // public `CommunityDetector::detect_communities()` API against a
+        // Storage-backed graph designed to stress the refinement phase.
+        //
+        // Topology: two K5 cliques (A: f_a0..f_a4, B: f_b0..f_b4) bridged
+        // via a hub node f_hub connected to one node in each clique. This
+        // is the classic structure where plain Louvain may produce a
+        // disconnected community (the two cliques merged through the hub);
+        // Leiden's refinement phase must guarantee every community is
+        // internally connected.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Clique A.
+        for i in 0..5 {
+            create_function(
+                &kit,
+                &format!("f_a{i}"),
+                "demo",
+                &format!("a{i}"),
+                &format!("demo.a{i}"),
+            );
+        }
+        // Clique B.
+        for i in 0..5 {
+            create_function(
+                &kit,
+                &format!("f_b{i}"),
+                "demo",
+                &format!("b{i}"),
+                &format!("demo.b{i}"),
+            );
+        }
+        // Hub.
+        create_function(&kit, "f_hub", "demo", "hub", "demo.hub");
+        // Intra-clique A edges (K5: 10 edges).
+        let mut edge_idx = 0;
+        for i in 0..5 {
+            for j in (i + 1)..5 {
+                create_calls_edge(
+                    &kit,
+                    &format!("e_a{edge_idx}"),
+                    &format!("f_a{i}"),
+                    &format!("f_a{j}"),
+                    "demo",
+                );
+                edge_idx += 1;
+            }
+        }
+        // Intra-clique B edges (K5: 10 edges).
+        edge_idx = 0;
+        for i in 0..5 {
+            for j in (i + 1)..5 {
+                create_calls_edge(
+                    &kit,
+                    &format!("e_b{edge_idx}"),
+                    &format!("f_b{i}"),
+                    &format!("f_b{j}"),
+                    "demo",
+                );
+                edge_idx += 1;
+            }
+        }
+        // Bridge edges: hub → one node in each clique.
+        create_calls_edge(&kit, "e_hub_a", "f_hub", "f_a0", "demo");
+        create_calls_edge(&kit, "e_hub_b", "f_hub", "f_b0", "demo");
+
+        let s = storage(&kit);
+        let detector = CommunityDetector::new(&*s, "demo");
+        let communities = detector.detect_communities().expect("detect");
+        assert!(
+            !communities.is_empty(),
+            "Leiden should produce at least one community"
+        );
+
+        // Reload the graph (private helper, accessible in-module) to verify
+        // the connectivity invariant via `is_connected_subgraph`.
+        let graph = detector.load_calls_graph().expect("load graph");
+        // Build FQN → NodeIndex map for membership lookup.
+        use std::collections::HashMap;
+        let mut fqn_to_idx: HashMap<String, NodeIndex> = HashMap::new();
+        for idx in graph.node_indices() {
+            if let Some(name) = graph.node_weight(idx) {
+                fqn_to_idx.insert(name.clone(), idx);
+            }
+        }
+        // Invariant: every community returned by detect_communities() must
+        // be internally connected (C3 Leiden guarantee).
+        for c in &communities {
+            let members: Vec<NodeIndex> = c
+                .members
+                .iter()
+                .filter_map(|fqn| fqn_to_idx.get(fqn).copied())
+                .collect();
+            assert!(
+                !members.is_empty(),
+                "community {} has no resolvable members: {:?}",
+                c.id,
+                c.members
+            );
+            assert!(
+                is_connected_subgraph(&graph, &members),
+                "Leiden produced disconnected community {} with members {:?} — \
+                 refinement phase should guarantee connectivity (C3, M-7)",
+                c.id,
+                c.members
+            );
+        }
     }
 }

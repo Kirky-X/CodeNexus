@@ -270,9 +270,9 @@ All 26 parameters are **required** (no defaults). Pass `0` for numeric threshold
 
 > Note: With all threshold flags set to `0`/`""`, the analyzer uses its in-memory defaults. The flags are required by the CLI even when you want defaults — this is a UX trade-off in 0.3.5. Requires the `complexity` feature.
 
-#### community — Louvain community detection
+#### community — Leiden community detection
 
-Detects communities (clusters) in the call graph using Louvain modularity optimization.
+Detects communities (clusters) in the call graph using Leiden modularity optimization. Leiden improves on Louvain by adding a refinement phase that guarantees every community is internally connected (Traag et al., 2019, C3 upgrade).
 
 ```bash
 codenexus community --project <NAME_OR_ID> --resolution <RESOLUTION> [--db <DB_PATH>]
@@ -282,7 +282,7 @@ Both `--project` and `--resolution` are **required**.
 
 **Options:**
 - `--project <NAME_OR_ID>` — Project name or id (required)
-- `--resolution <RESOLUTION>` — Louvain resolution parameter (required; pass empty string `""` for default, or a float like `"1.5"`)
+- `--resolution <RESOLUTION>` — Leiden resolution parameter γ (required; pass empty string `""` for default, or a float like `"1.5"`; higher γ → more, smaller communities)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
 **Output (JSON):** `project`, `resolution`, `communities[]` (each entry has community id + member nodes)

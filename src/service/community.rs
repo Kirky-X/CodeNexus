@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! `community` service: detect communities in the CALLS graph via Louvain.
+//! `community` service: detect communities in the CALLS graph via Leiden.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -65,7 +65,7 @@ pub fn run_community(
 #[forge(
     name = "community",
     version = "0.3.5",
-    description = "Detect communities in the CALLS graph via Louvain modularity optimization.",
+    description = "Detect communities in the CALLS graph via Leiden modularity optimization.",
     cli = true
 )]
 async fn community(project: String, resolution: String) -> Result<(), ApiError> {
