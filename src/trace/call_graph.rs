@@ -9,9 +9,11 @@
 //! the nodes and edges visited along the way.
 
 use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 
 use crate::model::{EdgeType, Graph, NodeId};
 
+use super::bfs::{bfs_trace, WorkItem};
 use super::{TraceCycle, TraceEdge, TraceNode, TracePath};
 
 /// BFS tracer over `Calls` / `FfiCalls` edges (PRD §4.2, AC-TRACE-001/003/004).
@@ -22,14 +24,6 @@ use super::{TraceCycle, TraceEdge, TraceNode, TracePath};
 /// [`trace`]: CallGraphTracer::trace
 pub struct CallGraphTracer<'a> {
     graph: &'a Graph,
-}
-
-/// Internal BFS work item: tracks the chain of visited node ids alongside the
-/// in-progress [`TracePath`] so cycles can be detected without storing an
-/// `id` field on [`TraceNode`] itself.
-struct WorkPath {
-    visited_ids: Vec<NodeId>,
-    path: TracePath,
 }
 
 impl<'a> CallGraphTracer<'a> {
@@ -49,79 +43,22 @@ impl<'a> CallGraphTracer<'a> {
     ///
     /// Returns an empty vector if `start_id` is not in the graph or has no
     /// outgoing call edges.
+    ///
+    /// # Implementation (C2)
+    ///
+    /// Delegates to [`bfs_trace`] so call-graph traversal shares the same
+    /// O(1) cycle-detection (`Rc<HashSet<NodeId>>` path_set) and O(1)
+    /// child-expansion (`Rc` parent chain) data structures as the data-flow
+    /// and taint engines. Eliminates the previous `Vec<NodeId>::contains`
+    /// O(depth) scan and per-step `visited_ids.clone()` O(depth) allocation.
     pub fn trace(&self, start_id: &NodeId, depth: usize) -> Vec<TracePath> {
-        let Some(start_node) = self.graph.get_node(start_id) else {
-            return Vec::new();
-        };
-        let mut queue: VecDeque<WorkPath> = VecDeque::new();
-        queue.push_back(WorkPath {
-            visited_ids: vec![start_id.clone()],
-            // Single-line for coverage: tarpaulin attribute continuation
-            path: TracePath {
-                nodes: vec![TraceNode::from(start_node)],
-                edges: Vec::new(),
-                depth: 0,
-            },
-        });
-
-        let mut results = Vec::new();
-
-        while let Some(work) = queue.pop_front() {
-            let has_edges = !work.path.edges.is_empty();
-            let can_extend = work.path.depth < depth;
-
-            if !can_extend {
-                // Depth limit reached: record this path if it has edges.
-                // Single-line for coverage: tarpaulin attribute continuation
-                if has_edges {
-                    results.push(work.path);
-                }
-                continue;
-            }
-
-            // Single-line for coverage: tarpaulin attribute continuation
-            let current_id = work
-                .visited_ids
-                .last()
-                .expect("work path always has at least one visited id")
-                .clone();
-            for edge in self.graph.edges_from(&current_id) {
-                // Single-line for coverage: tarpaulin attribute continuation
-                if !matches!(edge.edge_type, EdgeType::Calls | EdgeType::FfiCalls) {
-                    continue;
-                }
-                // Single-line for coverage: tarpaulin attribute continuation
-                let Some(target_node) = self.graph.get_node(&edge.target) else {
-                    continue;
-                };
-                // Cycle prevention: skip targets already on this path.
-                // Single-line for coverage: tarpaulin attribute continuation
-                if work.visited_ids.contains(&edge.target) {
-                    continue;
-                }
-                let mut new_visited = work.visited_ids.clone();
-                new_visited.push(edge.target.clone());
-                let mut new_path = work.path.clone();
-                new_path.nodes.push(TraceNode::from(target_node));
-                new_path.edges.push(TraceEdge {
-                    edge_type: edge.edge_type.to_string(),
-                    reason: edge.reason.clone(),
-                    confidence: edge.confidence,
-                });
-                new_path.depth = work.path.depth + 1;
-                queue.push_back(WorkPath {
-                    visited_ids: new_visited,
-                    path: new_path,
-                });
-            }
-
-            // Record the current path itself (every prefix is a valid path).
-            if has_edges {
-                results.push(work.path);
-            }
-        }
-
-        results
+        bfs_trace(
+            self.graph,
+            start_id,
+            depth,
+            |et| matches!(et, EdgeType::Calls | EdgeType::FfiCalls),
+            None,
+        )
     }
 
     /// Detects cycles in the call graph using DFS white/gray/black coloring
@@ -242,38 +179,36 @@ impl<'a> CallGraphTracer<'a> {
     /// HTTP. Cycles are handled by tracking visited nodes per-path.
     ///
     /// Returns an empty vector if `start_id` is not in the graph.
+    ///
+    /// # Implementation (C2)
+    ///
+    /// Reuses [`WorkItem`] from [`super::bfs`] so cross-service traversal
+    /// shares the same O(1) cycle-detection and O(1) child-expansion data
+    /// structures as [`trace`](Self::trace) and the data-flow / taint engines.
+    /// Cannot delegate to [`bfs_trace`] directly because the reverse
+    /// `HandlesRoute` edge traversal is specific to cross-service tracing.
     pub fn trace_cross_service(&self, start_id: &NodeId, depth: usize) -> Vec<TracePath> {
         let Some(start_node) = self.graph.get_node(start_id) else {
             return Vec::new();
         };
-        let mut queue: VecDeque<WorkPath> = VecDeque::new();
-        queue.push_back(WorkPath {
-            visited_ids: vec![start_id.clone()],
-            path: TracePath {
-                nodes: vec![TraceNode::from(start_node)],
-                edges: Vec::new(),
-                depth: 0,
-            },
-        });
+        let mut queue: VecDeque<Rc<WorkItem>> = VecDeque::new();
+        queue.push_back(Rc::new(WorkItem::new_root(
+            start_id.clone(),
+            TraceNode::from(start_node),
+        )));
 
         let mut results = Vec::new();
 
         while let Some(work) = queue.pop_front() {
-            let has_edges = !work.path.edges.is_empty();
-            let can_extend = work.path.depth < depth;
+            let has_parent_edge = work.has_parent_edge();
+            let current_id = work.node_id.clone();
 
-            if !can_extend {
-                if has_edges {
-                    results.push(work.path);
+            if work.depth >= depth {
+                if has_parent_edge {
+                    results.push(work.build_path());
                 }
                 continue;
             }
-
-            let current_id = work
-                .visited_ids
-                .last()
-                .expect("work path always has at least one visited id")
-                .clone();
 
             // Forward edges: Calls, FfiCalls, HttpCalls
             for edge in self.graph.edges_from(&current_id) {
@@ -286,23 +221,16 @@ impl<'a> CallGraphTracer<'a> {
                 let Some(target_node) = self.graph.get_node(&edge.target) else {
                     continue;
                 };
-                if work.visited_ids.contains(&edge.target) {
+                if work.path_contains(&edge.target) {
                     continue;
                 }
-                let mut new_visited = work.visited_ids.clone();
-                new_visited.push(edge.target.clone());
-                let mut new_path = work.path.clone();
-                new_path.nodes.push(TraceNode::from(target_node));
-                new_path.edges.push(TraceEdge {
-                    edge_type: edge.edge_type.to_string(),
-                    reason: edge.reason.clone(),
-                    confidence: edge.confidence,
-                });
-                new_path.depth = work.path.depth + 1;
-                queue.push_back(WorkPath {
-                    visited_ids: new_visited,
-                    path: new_path,
-                });
+                let child = WorkItem::child(
+                    &work,
+                    edge.target.clone(),
+                    TraceNode::from(target_node),
+                    TraceEdge::from(edge),
+                );
+                queue.push_back(Rc::new(child));
             }
 
             // Reverse HandlesRoute edges: Route → handler Function
@@ -313,27 +241,20 @@ impl<'a> CallGraphTracer<'a> {
                 let Some(handler_node) = self.graph.get_node(&edge.source) else {
                     continue;
                 };
-                if work.visited_ids.contains(&edge.source) {
+                if work.path_contains(&edge.source) {
                     continue;
                 }
-                let mut new_visited = work.visited_ids.clone();
-                new_visited.push(edge.source.clone());
-                let mut new_path = work.path.clone();
-                new_path.nodes.push(TraceNode::from(handler_node));
-                new_path.edges.push(TraceEdge {
-                    edge_type: edge.edge_type.to_string(),
-                    reason: edge.reason.clone(),
-                    confidence: edge.confidence,
-                });
-                new_path.depth = work.path.depth + 1;
-                queue.push_back(WorkPath {
-                    visited_ids: new_visited,
-                    path: new_path,
-                });
+                let child = WorkItem::child(
+                    &work,
+                    edge.source.clone(),
+                    TraceNode::from(handler_node),
+                    TraceEdge::from(edge),
+                );
+                queue.push_back(Rc::new(child));
             }
 
-            if has_edges {
-                results.push(work.path);
+            if has_parent_edge {
+                results.push(work.build_path());
             }
         }
 
@@ -1487,5 +1408,103 @@ mod tests {
             has_b,
             "should reach B via reverse HandlesRoute from mid-path R1: {paths:?}"
         );
+    }
+
+    // ====================================================================
+    // C2: trace 共享 path_set — 等价性表征测试
+    // ====================================================================
+
+    /// Builds a linear call chain `n0 -> n1 -> ... -> n{size-1}` with `size`
+    /// function nodes. Used by C2 equivalence tests to compare call_graph
+    /// against bfs_trace at scale.
+    fn build_linear_chain(size: usize) -> Graph {
+        let mut g = Graph::new();
+        for i in 0..size {
+            g.add_node(make_func(&format!("n{i}"), &format!("n{i}")));
+        }
+        for i in 0..size.saturating_sub(1) {
+            g.add_edge(Edge::new(
+                format!("n{i}"),
+                format!("n{}", i + 1),
+                EdgeType::Calls,
+                "proj",
+            ));
+        }
+        g
+    }
+
+    /// Builds a diamond graph: `n0 -> n1, n0 -> n2, n1 -> n3, n2 -> n3`.
+    /// Two distinct paths reach n3, exercising branching + merge.
+    fn build_diamond_graph() -> Graph {
+        let mut g = Graph::new();
+        for i in 0..4 {
+            g.add_node(make_func(&format!("n{i}"), &format!("n{i}")));
+        }
+        g.add_edge(Edge::new("n0", "n1", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("n0", "n2", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("n1", "n3", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("n2", "n3", EdgeType::Calls, "proj"));
+        g
+    }
+
+    #[test]
+    fn test_call_graph_shares_path_set_with_bfs_linear_1000() {
+        // C2 T100: 1000-node linear chain. call_graph.trace and bfs_trace
+        // (with Calls|FfiCalls filter) must return equivalent path sets:
+        // same count, same depth multiset, no duplicate nodes per path.
+        use crate::trace::bfs::bfs_trace;
+        let g = build_linear_chain(1000);
+        let tracer = CallGraphTracer::new(&g);
+        let cg_paths = tracer.trace(&"n0".to_string(), 999);
+        let bfs_paths = bfs_trace(
+            &g,
+            &"n0".to_string(),
+            999,
+            |et| matches!(et, EdgeType::Calls | EdgeType::FfiCalls),
+            None,
+        );
+        assert_eq!(
+            cg_paths.len(),
+            bfs_paths.len(),
+            "path count mismatch: call_graph={} bfs={}",
+            cg_paths.len(),
+            bfs_paths.len()
+        );
+        let mut cg_depths: Vec<usize> = cg_paths.iter().map(|p| p.depth).collect();
+        let mut bfs_depths: Vec<usize> = bfs_paths.iter().map(|p| p.depth).collect();
+        cg_depths.sort_unstable();
+        bfs_depths.sort_unstable();
+        assert_eq!(cg_depths, bfs_depths, "depth multiset mismatch");
+        // Cycle detection invariant: no path revisits a node.
+        for p in &cg_paths {
+            let mut names: Vec<&str> = p.nodes.iter().map(|n| n.name.as_str()).collect();
+            let len_before = names.len();
+            names.sort_unstable();
+            names.dedup();
+            assert_eq!(names.len(), len_before, "path revisits node: {:?}", p.nodes);
+        }
+    }
+
+    #[test]
+    fn test_call_graph_shares_path_set_with_bfs_diamond() {
+        // C2 T100: diamond graph exercises branching + merge. call_graph
+        // and bfs_trace must agree on path count and depth multiset.
+        use crate::trace::bfs::bfs_trace;
+        let g = build_diamond_graph();
+        let tracer = CallGraphTracer::new(&g);
+        let cg_paths = tracer.trace(&"n0".to_string(), 5);
+        let bfs_paths = bfs_trace(
+            &g,
+            &"n0".to_string(),
+            5,
+            |et| matches!(et, EdgeType::Calls | EdgeType::FfiCalls),
+            None,
+        );
+        assert_eq!(cg_paths.len(), bfs_paths.len());
+        let mut cg_depths: Vec<usize> = cg_paths.iter().map(|p| p.depth).collect();
+        let mut bfs_depths: Vec<usize> = bfs_paths.iter().map(|p| p.depth).collect();
+        cg_depths.sort_unstable();
+        bfs_depths.sort_unstable();
+        assert_eq!(cg_depths, bfs_depths);
     }
 }

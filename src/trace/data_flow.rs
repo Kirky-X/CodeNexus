@@ -426,10 +426,10 @@ mod tests {
 
     #[test]
     fn trace_initial_path_depth_is_zero() {
-        // Verifies line 64: the initial WorkPath has depth: 0. By tracing a
+        // Verifies bfs_trace's initial WorkItem has depth: 0. By tracing a
         // node with no outgoing dataflow edges, the initial path (depth 0, no
-        // edges) is popped but not recorded (has_edges=false), confirming the
-        // initial depth field is set to 0.
+        // edges) is popped but not recorded (has_parent_edge=false), confirming
+        // the initial depth field is set to 0.
         let mut g = Graph::new();
         g.add_node(make_var("solo", "solo"));
         let tracer = DataFlowTracer::new(&g);

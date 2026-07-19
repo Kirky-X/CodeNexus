@@ -3,7 +3,7 @@
 
 //! Trace and context output types.
 
-use crate::model::Node;
+use crate::model::{Edge, Node};
 use serde::{Deserialize, Serialize};
 
 use super::facade::TraceCycle;
@@ -46,6 +46,22 @@ pub struct TraceEdge {
     pub edge_type: String,
     pub reason: Option<String>,
     pub confidence: f32,
+}
+
+impl From<&Edge> for TraceEdge {
+    /// Builds a [`TraceEdge`] from a graph [`Edge`], using the canonical
+    /// database type string (e.g. `"CALLS"`, `"FFI_CALLS"`) for `edge_type`.
+    ///
+    /// Shared by all trace engines (bfs, call_graph, data_flow, taint) and
+    /// service-layer trace callers so the edge-type string formatting lives
+    /// in exactly one place (C2 LOW-1).
+    fn from(e: &Edge) -> Self {
+        Self {
+            edge_type: e.edge_type.as_db_type().to_string(),
+            reason: e.reason.clone(),
+            confidence: e.confidence,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

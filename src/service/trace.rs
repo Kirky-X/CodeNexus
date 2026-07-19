@@ -147,11 +147,7 @@ fn collect_cross_service_paths(graph: &crate::model::Graph, start_id: &str) -> V
         };
         paths.push(TracePath {
             nodes: vec![start_trace_node.clone(), TraceNode::from(target_node)],
-            edges: vec![TraceEdge {
-                edge_type: edge.edge_type.to_string(),
-                reason: edge.reason.clone(),
-                confidence: edge.confidence,
-            }],
+            edges: vec![TraceEdge::from(edge)],
             depth: 1,
         });
     }
@@ -395,12 +391,12 @@ mod tests {
     #[test]
     fn trace_edge_to_json_produces_expected_shape() {
         let edge = TraceEdge {
-            edge_type: "Calls".into(),
+            edge_type: "CALLS".into(),
             reason: Some("direct call".into()),
             confidence: 0.9,
         };
         let v = trace_edge_to_json(&edge);
-        assert_eq!(v["edgeType"], "Calls");
+        assert_eq!(v["edgeType"], "CALLS");
         assert_eq!(v["reason"], "direct call");
         let conf = v["confidence"]
             .as_f64()
@@ -411,7 +407,7 @@ mod tests {
     #[test]
     fn trace_edge_to_json_handles_null_reason() {
         let edge = TraceEdge {
-            edge_type: "Calls".into(),
+            edge_type: "CALLS".into(),
             reason: None,
             confidence: 0.5,
         };

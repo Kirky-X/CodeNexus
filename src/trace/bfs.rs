@@ -12,10 +12,12 @@
 //! # Path sharing (MED-003)
 //!
 //! Each [`WorkItem`] holds an `Rc` reference to its parent, forming a
-//! persistent linked list. Expanding a child is O(1) — just `Rc::clone` —
-//! instead of cloning the entire `visited_ids` and `TracePath` (O(depth)).
-//! The full [`TracePath`] is materialized via [`WorkItem::build_path`] only
-//! when a result is recorded.
+//! persistent linked list. Expanding a child shares the parent chain via
+//! `Rc::clone` (O(1)) and clones only the per-path `HashSet<NodeId>` cycle
+//! set (O(path_len)), avoiding the O(depth) deep-clone of the full
+//! `TracePath` (with its String-heavy `TraceNode` fields) that the previous
+//! `WorkPath` design required. The full [`TracePath`] is materialized via
+//! [`WorkItem::build_path`] only when a result is recorded.
 //!
 //! # Cycle detection (MED-002)
 //!
@@ -35,11 +37,16 @@ use super::{TraceEdge, TraceNode, TracePath};
 
 /// Internal BFS work item: holds the current node/edge and a shared
 /// reference to the parent, forming a persistent path chain (MED-003).
+///
+/// Reused by [`call_graph::CallGraphTracer`] (C2) so both trace engines share
+/// the same O(1) cycle-detection and O(1) child-expansion data structures.
+///
+/// [`call_graph::CallGraphTracer`]: super::call_graph::CallGraphTracer
 pub(crate) struct WorkItem {
-    node_id: NodeId,
+    pub(crate) node_id: NodeId,
     node: TraceNode,
     edge: Option<TraceEdge>,
-    depth: usize,
+    pub(crate) depth: usize,
     parent: Option<Rc<WorkItem>>,
     /// O(1) membership set for cycle detection (MED-002). Each child clones
     /// the parent set and inserts its own id so [`path_contains`](Self::path_contains)
@@ -48,7 +55,7 @@ pub(crate) struct WorkItem {
 }
 
 impl WorkItem {
-    fn new_root(node_id: NodeId, node: TraceNode) -> Self {
+    pub(crate) fn new_root(node_id: NodeId, node: TraceNode) -> Self {
         Self {
             path_set: Rc::new(HashSet::from([node_id.clone()])),
             node_id,
@@ -59,7 +66,12 @@ impl WorkItem {
         }
     }
 
-    fn child(parent: &Rc<WorkItem>, node_id: NodeId, node: TraceNode, edge: TraceEdge) -> Self {
+    pub(crate) fn child(
+        parent: &Rc<WorkItem>,
+        node_id: NodeId,
+        node: TraceNode,
+        edge: TraceEdge,
+    ) -> Self {
         let mut path_set = (*parent.path_set).clone();
         path_set.insert(node_id.clone());
         Self {
@@ -72,17 +84,17 @@ impl WorkItem {
         }
     }
 
-    fn has_parent_edge(&self) -> bool {
+    pub(crate) fn has_parent_edge(&self) -> bool {
         self.edge.is_some()
     }
 
     /// Returns true if `id` is on this path (O(1) HashSet lookup, MED-002).
-    fn path_contains(&self, id: &NodeId) -> bool {
+    pub(crate) fn path_contains(&self, id: &NodeId) -> bool {
         self.path_set.contains(id)
     }
 
     /// Reconstructs the full [`TracePath`] by walking the parent chain.
-    fn build_path(&self) -> TracePath {
+    pub(crate) fn build_path(&self) -> TracePath {
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
         let mut current: &WorkItem = self;
@@ -175,11 +187,7 @@ pub(crate) fn bfs_trace(
                 &work_rc,
                 edge.target.clone(),
                 TraceNode::from(target_node),
-                TraceEdge {
-                    edge_type: edge.edge_type.as_db_type().to_string(),
-                    reason: edge.reason.clone(),
-                    confidence: edge.confidence,
-                },
+                TraceEdge::from(edge),
             );
             queue.push_back(child);
         }
@@ -226,7 +234,7 @@ mod tests {
 
     fn trace_edge() -> TraceEdge {
         TraceEdge {
-            edge_type: "Calls".to_string(),
+            edge_type: "CALLS".to_string(),
             reason: None,
             confidence: 1.0,
         }
@@ -275,8 +283,8 @@ mod tests {
         assert_eq!(path.nodes[1].name, "b");
         assert_eq!(path.nodes[2].name, "c");
         assert_eq!(path.edges.len(), 2);
-        assert_eq!(path.edges[0].edge_type, "Calls");
-        assert_eq!(path.edges[1].edge_type, "Calls");
+        assert_eq!(path.edges[0].edge_type, "CALLS");
+        assert_eq!(path.edges[1].edge_type, "CALLS");
     }
 
     #[test]
