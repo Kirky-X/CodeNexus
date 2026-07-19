@@ -129,7 +129,7 @@ impl CacheKey {
 /// # Examples
 ///
 /// ```
-/// use codenexus::lsp::references_cache::{CacheKey, ReferencesCache};
+/// use codenexus::lsp::{CacheKey, ReferencesCache};
 /// use lsp_types::{Location, Position, Range, Uri};
 /// use std::str::FromStr;
 ///
