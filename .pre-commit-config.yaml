@@ -66,7 +66,7 @@ repos:
         stages: [pre-push]
       - id: cargo-audit
         name: cargo audit (RustSec 漏洞库)
-        entry: bash -c 'cargo audit 2>/dev/null || { echo "→ 先运行 cargo install cargo-audit"; exit 1; }'
+        entry: bash -c 'cargo audit 2>/dev/null || cargo audit --no-fetch 2>/dev/null || { echo "→ 先运行 cargo install cargo-audit"; exit 1; }'
         language: system
         files: 'Cargo\.lock'
         pass_filenames: false
