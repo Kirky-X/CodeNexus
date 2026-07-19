@@ -24,7 +24,7 @@
 //! Compiles only under the `lsp` cargo feature (same as the rest of
 //! `crate::lsp`).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -39,6 +39,16 @@ pub const DEFAULT_CAPACITY: usize = 1_000;
 /// Abstract time source so tests can fast-forward without sleeping.
 ///
 /// Production code uses [`SystemClock`]; tests inject [`MockClock`].
+///
+/// # Implementor safety contract (T202 security-review LOW-4)
+///
+/// `now()` is invoked while [`ReferencesCache`] holds its internal `Mutex`
+/// guard. Implementations **must not** acquire any lock that could be held
+/// by code path that itself waits on the cache mutex — doing so would
+/// deadlock. The shipped [`SystemClock`] (calls `Instant::now`, lock-free)
+/// and [`MockClock`] (independent `Mutex<Instant>`, never re-enters the
+/// cache) satisfy this contract. Custom `Clock` implementations must
+/// document their locking behavior.
 pub trait Clock: Send + Sync {
     /// Returns the current instant.
     fn now(&self) -> Instant;
@@ -157,6 +167,14 @@ struct CacheInner {
     entries: HashMap<CacheKey, (Instant, Vec<Location>)>,
     /// LRU ordering: front = most recently used, back = least recently used.
     lru: VecDeque<CacheKey>,
+    /// Reverse index: `uri → set of keys with that uri`.
+    ///
+    /// T202 perf-review LOW-2: `invalidate_uri` was previously O(N) over all
+    /// entries (filter + clone each matching key). With this reverse index
+    /// it is O(K) where K is the number of entries for that uri (typically
+    /// 1-10 for a single file). Maintained in lock-step with `entries` and
+    /// `lru` on every insert / evict / lazy-expire.
+    by_uri: HashMap<String, HashSet<CacheKey>>,
 }
 
 impl ReferencesCache {
@@ -191,6 +209,7 @@ impl ReferencesCache {
             inner: Mutex::new(CacheInner {
                 entries: HashMap::with_capacity(cap_hint),
                 lru: VecDeque::with_capacity(cap_hint),
+                by_uri: HashMap::with_capacity(cap_hint),
             }),
             clock,
             ttl,
@@ -212,9 +231,10 @@ impl ReferencesCache {
         };
 
         if now.duration_since(stored_at) > ttl {
-            // Lazy expiration: evict on read.
+            // Lazy expiration: evict on read. Keep `by_uri` in sync.
             guard.entries.remove(key);
             guard.lru.retain(|k| k != key);
+            remove_from_by_uri(&mut guard.by_uri, key);
             return None;
         }
 
@@ -234,30 +254,41 @@ impl ReferencesCache {
 
         if guard.entries.contains_key(&key) {
             // Refresh: remove from LRU, will re-push front below.
+            // `by_uri` already contains this key (inserted on first insert),
+            // so no reverse-index update needed here.
             guard.lru.retain(|k| k != &key);
         } else if guard.entries.len() >= self.capacity {
-            // Evict LRU (back of deque).
+            // Evict LRU (back of deque). Keep `by_uri` in sync.
             if let Some(evicted) = guard.lru.pop_back() {
+                remove_from_by_uri(&mut guard.by_uri, &evicted);
                 guard.entries.remove(&evicted);
             }
         }
 
+        // Update reverse index: uri → set of keys.
+        guard
+            .by_uri
+            .entry(key.uri.clone())
+            .or_default()
+            .insert(key.clone());
         guard.entries.insert(key.clone(), (now, locations));
         guard.lru.push_front(key);
     }
 
     /// Invalidates all entries for `uri` (called when `textDocument/didChange`
     /// fires for that file). Returns the number of entries evicted.
+    ///
+    /// T202 perf-review LOW-2: O(K) where K is the number of entries for
+    /// `uri` (typically 1-10 for a single file), instead of O(N) over the
+    /// entire cache. Backed by the `by_uri` reverse index.
     pub fn invalidate_uri(&self, uri: &str) -> usize {
         let mut guard = self.inner.lock().expect("cache mutex poisoned");
-        let to_remove: Vec<CacheKey> = guard
-            .entries
-            .keys()
-            .filter(|k| k.uri == uri)
-            .cloned()
-            .collect();
-        let count = to_remove.len();
-        for key in to_remove {
+        let keys = match guard.by_uri.remove(uri) {
+            Some(set) => set,
+            None => return 0,
+        };
+        let count = keys.len();
+        for key in keys {
             guard.entries.remove(&key);
             guard.lru.retain(|k| k != &key);
         }
@@ -293,6 +324,25 @@ impl ReferencesCache {
 impl Default for ReferencesCache {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Removes `key` from the `by_uri` reverse index. If the uri's key-set
+/// becomes empty, the uri entry itself is removed to keep `by_uri` compact.
+///
+/// This is a free function (not a method on `ReferencesCache`) because it
+/// operates on the `CacheInner`'s `by_uri` field directly, which is only
+/// accessible while holding the inner `Mutex` guard. Keeping it out of the
+/// `impl` block makes it clear that no locking is performed here — the
+/// caller must already hold the guard.
+fn remove_from_by_uri(by_uri: &mut HashMap<String, HashSet<CacheKey>>, key: &CacheKey) {
+    let mut empty = false;
+    if let Some(set) = by_uri.get_mut(&key.uri) {
+        set.remove(key);
+        empty = set.is_empty();
+    }
+    if empty {
+        by_uri.remove(&key.uri);
     }
 }
 
@@ -422,6 +472,53 @@ mod tests {
         c.insert(CacheKey::new("file:///tmp/x.rs".into(), 1, 1), vec![loc(1)]);
         assert_eq!(c.invalidate_uri("file:///tmp/other.rs"), 0);
         assert_eq!(c.len(), 1);
+    }
+
+    #[test]
+    fn invalidate_uri_after_lru_evict_does_not_count_evicted_keys() {
+        // T202 perf-review LOW-2: when an entry is LRU-evicted, it must be
+        // removed from the `by_uri` reverse index so that a later
+        // `invalidate_uri` for that uri does not double-count it.
+        let clock = Arc::new(MockClock::new());
+        let c = ReferencesCache::with_clock(clock, Duration::from_secs(600), 2);
+        // Two keys for the same uri; capacity=2 so both fit.
+        let k1 = CacheKey::new("file:///tmp/x.rs".into(), 1, 1);
+        let k2 = CacheKey::new("file:///tmp/x.rs".into(), 2, 2);
+        c.insert(k1.clone(), vec![loc(1)]);
+        c.insert(k2.clone(), vec![loc(2)]);
+        // Insert a third key for a different uri → evicts k1 (LRU).
+        let k3 = CacheKey::new("file:///tmp/y.rs".into(), 3, 3);
+        c.insert(k3.clone(), vec![loc(3)]);
+        assert!(c.get(&k1).is_none(), "k1 should have been LRU-evicted");
+
+        // invalidate_uri for x.rs should now evict only k2 (k1 was already
+        // evicted and must not be counted).
+        let evicted = c.invalidate_uri("file:///tmp/x.rs");
+        assert_eq!(evicted, 1, "only k2 should be evicted (k1 already gone)");
+        assert_eq!(c.len(), 1, "y.rs entry must survive");
+    }
+
+    #[test]
+    fn invalidate_uri_after_lazy_expiration_does_not_count_expired_keys() {
+        // T202 perf-review LOW-2: when an entry is lazily expired on read,
+        // it must be removed from `by_uri` so that a later `invalidate_uri`
+        // for that uri does not count the expired key.
+        let clock = Arc::new(MockClock::new());
+        let c = ReferencesCache::with_clock(clock.clone(), Duration::from_secs(60), 100);
+        let k1 = CacheKey::new("file:///tmp/x.rs".into(), 1, 1);
+        let k2 = CacheKey::new("file:///tmp/x.rs".into(), 2, 2);
+        c.insert(k1.clone(), vec![loc(1)]);
+        c.insert(k2.clone(), vec![loc(2)]);
+        // Advance past TTL → both entries expire.
+        clock.advance(Duration::from_secs(61));
+        // Touch k1 to trigger lazy expiration.
+        assert!(c.get(&k1).is_none(), "k1 should be expired");
+
+        // invalidate_uri for x.rs should evict only k2 (k1 was already
+        // lazily expired and must not be counted).
+        let evicted = c.invalidate_uri("file:///tmp/x.rs");
+        assert_eq!(evicted, 1, "only k2 should be evicted (k1 already expired)");
+        assert_eq!(c.len(), 0);
     }
 
     #[test]
