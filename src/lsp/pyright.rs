@@ -10,6 +10,7 @@ use lsp_types::notification::{Exit, Notification as _};
 use lsp_types::request::{GotoDefinition, GotoTypeDefinition, HoverRequest};
 use lsp_types::{GotoDefinitionParams, HoverParams, PartialResultParams, WorkDoneProgressParams};
 
+use super::references_cache::ReferencesCache;
 use super::session::{self, Session};
 use super::{LspError, LspProvider};
 
@@ -18,6 +19,7 @@ const DEFAULT_SERVER_PATH: &str = "pyright-langserver";
 pub struct PyrightClient {
     server_path: PathBuf,
     session: Mutex<Option<Session>>,
+    references_cache: ReferencesCache,
 }
 
 impl PyrightClient {
@@ -31,6 +33,19 @@ impl PyrightClient {
         Self {
             server_path,
             session: Mutex::new(None),
+            references_cache: ReferencesCache::new(),
+        }
+    }
+
+    /// Creates a client with a custom [`ReferencesCache`] — used by tests
+    /// to inject a [`MockClock`](super::references_cache::MockClock)-backed
+    /// cache for deterministic TTL verification.
+    #[must_use]
+    pub fn with_references_cache(server_path: PathBuf, references_cache: ReferencesCache) -> Self {
+        Self {
+            server_path,
+            session: Mutex::new(None),
+            references_cache,
         }
     }
 }
@@ -114,6 +129,15 @@ impl LspProvider for PyrightClient {
             work_done_progress_params: WorkDoneProgressParams::default(),
         };
         session::send_request::<HoverRequest>(session, params)
+    }
+
+    fn references(
+        &self,
+        file: &Path,
+        line: u32,
+        col: u32,
+    ) -> Result<Vec<lsp_types::Location>, LspError> {
+        session::references_impl(&self.session, &self.references_cache, file, line, col)
     }
 
     fn shutdown(&self) -> Result<(), LspError> {

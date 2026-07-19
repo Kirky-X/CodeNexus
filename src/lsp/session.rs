@@ -12,18 +12,21 @@ use std::io::BufReader;
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::str::FromStr;
+use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::{Initialized, Notification as _};
-use lsp_types::request::Initialize;
+use lsp_types::request::{Initialize, References};
 use lsp_types::{
-    GotoDefinitionResponse, InitializeParams, InitializedParams, Position, TextDocumentIdentifier,
-    TextDocumentPositionParams, Uri, WorkspaceFolder,
+    GotoDefinitionResponse, InitializeParams, InitializedParams, PartialResultParams, Position,
+    ReferenceContext, ReferenceParams, TextDocumentIdentifier, TextDocumentPositionParams, Uri,
+    WorkDoneProgressParams, WorkspaceFolder,
 };
 
+use super::references_cache::{CacheKey, ReferencesCache};
 use super::{LspError, REQUEST_TIMEOUT_MS};
 
 /// Active LSP session — populated by `start`, drained by `shutdown`.
@@ -226,6 +229,76 @@ pub(crate) fn extract_first_location(
             })
         }
     }
+}
+
+/// Send `textDocument/references` and return every location the server
+/// reports. `include_declaration` is `false` (C9 R-lsp-003: callers want
+/// impl/call sites, not the declaration itself).
+///
+/// Returns `Ok(Vec::new())` when the server responds with `null` (no
+/// references) — matches the LSP spec where `Option<Vec<Location>>`
+/// semantically maps to an empty vec for callers that don't care about
+/// the "server responded but had nothing" vs "server timed out"
+/// distinction.
+pub(crate) fn send_references_request(
+    session: &mut Session,
+    pos_params: TextDocumentPositionParams,
+) -> Result<Vec<lsp_types::Location>, LspError> {
+    let params = ReferenceParams {
+        text_document_position: pos_params,
+        context: ReferenceContext {
+            include_declaration: false,
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+        partial_result_params: PartialResultParams::default(),
+    };
+    let resp = send_request::<References>(session, params)?;
+    Ok(resp.unwrap_or_default())
+}
+
+/// Shared `textDocument/references` implementation with cache lookup.
+///
+/// Encapsulates the cache-check → dispatch → cache-populate sequence used
+/// by `RustAnalyzerClient`, `PyrightClient`, `ClangdClient` (C9 R-lsp-002).
+/// Extracted to avoid triplicating the same ~22 lines across three client
+/// structs — `definition`/`hover`/`type_definition` still duplicate per
+/// client (pre-existing pattern, out of C9 scope to refactor).
+///
+/// # Flow
+///
+/// 1. Build [`TextDocumentPositionParams`] from `(file, line, col)`.
+/// 2. Build [`CacheKey`] from the resulting URI.
+/// 3. Check `cache` — return immediately on hit (within 5-min TTL).
+/// 4. On miss, lock `session`, dispatch `textDocument/references`.
+/// 5. Insert result into `cache` for subsequent calls.
+///
+/// # Errors
+///
+/// - [`LspError::Communication`] if the session is `None` (server not started).
+/// - Propagates any [`LspError`] from [`send_references_request`].
+pub(crate) fn references_impl(
+    session: &Mutex<Option<Session>>,
+    cache: &ReferencesCache,
+    file: &Path,
+    line: u32,
+    col: u32,
+) -> Result<Vec<lsp_types::Location>, LspError> {
+    let pos_params = make_position_params(file, line, col)?;
+    let cache_key = CacheKey::new(pos_params.text_document.uri.as_str().to_owned(), line, col);
+
+    if let Some(cached) = cache.get(&cache_key) {
+        return Ok(cached);
+    }
+
+    let mut guard = session.lock().expect("session mutex poisoned");
+    let session = guard
+        .as_mut()
+        .ok_or_else(|| LspError::Communication("LSP server not started".into()))?;
+    let locations = send_references_request(session, pos_params)?;
+
+    cache.insert(cache_key, locations.clone());
+
+    Ok(locations)
 }
 
 /// Build [`TextDocumentPositionParams`] from a file path + 0-based line/col.

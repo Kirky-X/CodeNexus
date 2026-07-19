@@ -207,6 +207,11 @@ fn enhance_with_lsp(
             Err(LspError::ServerStart(_)) => {
                 skipped += 1;
             }
+            Err(LspError::NotImplemented(_)) => {
+                // `hover` is implemented on all current clients; defensive
+                // skip for future opt-outs (C9 R-lsp-002 pattern).
+                skipped += 1;
+            }
         }
     }
 

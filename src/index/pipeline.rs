@@ -606,6 +606,10 @@ pub(crate) fn enhance_with_lsp(
             Err(LspError::ServerStart(_)) => {
                 // Shouldn't happen after a successful start; skip defensively.
             }
+            Err(LspError::NotImplemented(_)) => {
+                // `hover` is implemented on all clients; treat as skip if a
+                // future client opts out (defensive — see C9 R-lsp-002).
+            }
         }
     }
 

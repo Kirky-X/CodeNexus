@@ -5,18 +5,22 @@
 //!
 //! Integrates external Language Server Protocol servers (e.g. `rust-analyzer`
 //! for Rust) to provide IDE-grade semantic queries — Go-to-Definition,
-//! Type-Definition, Hover — over a JSON-RPC subprocess channel. The resolved
-//! semantic types are mapped back onto CodeNexus [`crate::model::NodeLabel`]
-//! variants via [`map_lsp_symbol_kind`].
+//! Type-Definition, Hover, References — over a JSON-RPC subprocess channel.
+//! The resolved semantic types are mapped back onto CodeNexus
+//! [`crate::model::NodeLabel`] variants via [`map_lsp_symbol_kind`].
 //!
-//! # Scope (v0.2.0)
+//! # Scope
 //!
 //! Seven languages are wired up: Rust (`RustAnalyzerClient`), Python
 //! (`PyrightClient`), C/C++ (`ClangdClient`), Go (`GoplsClient`),
 //! TypeScript/JavaScript (`TypeScriptLanguageClient`), Fortran
-//! (`FortlsClient`), and Java (`JdtlsClient`). `textDocument/references`
-//! is intentionally out of scope — the existing `trace --type calls`
-//! traversal already covers callers.
+//! (`FortlsClient`), and Java (`JdtlsClient`).
+//!
+//! `textDocument/references` (C9) is implemented for
+//! `RustAnalyzerClient` / `PyrightClient` / `ClangdClient` only; the
+//! remaining clients inherit the trait default which returns
+//! [`LspError::NotImplemented`]. Results are cached for 5 minutes keyed
+//! by `(uri, line, column)` — see [`references_cache::ReferencesCache`].
 //!
 //! # Feature gating
 //!
@@ -33,6 +37,7 @@ pub mod fortls;
 pub mod gopls;
 pub mod jdtls;
 pub mod pyright;
+pub(crate) mod references_cache;
 pub(crate) mod session;
 pub mod types;
 pub mod typescript_ls;
@@ -44,6 +49,7 @@ pub use fortls::FortlsClient;
 pub use gopls::GoplsClient;
 pub use jdtls::JdtlsClient;
 pub use pyright::PyrightClient;
+pub use references_cache::{CacheKey, Clock, MockClock, ReferencesCache, SystemClock};
 pub use types::map_lsp_symbol_kind;
 pub use typescript_ls::TypeScriptLanguageClient;
 
@@ -72,6 +78,18 @@ pub enum LspError {
     /// policies specifically for transient overload.
     #[error("LSP request timed out after {0} ms")]
     Timeout(u64),
+
+    /// The LSP method is not implemented for this client. Used as the
+    /// default return value for [`LspProvider::references`] on clients
+    /// that have not yet wired up the method (e.g. `GoplsClient`,
+    /// `JdtlsClient`, `FortlsClient`, `TypeScriptLanguageClient` for
+    /// `textDocument/references` — see C9 spec R-lsp-002).
+    ///
+    /// The string identifies the client + method (e.g.
+    /// `"gopls: textDocument/references not implemented"`) so callers
+    /// can surface a precise hint in diagnostics.
+    #[error("LSP method not implemented: {0}")]
+    NotImplemented(String),
 }
 
 /// JSON-RPC round-trip timeout (specmark spec.md §Constraints: 5 seconds).
@@ -132,6 +150,43 @@ pub trait LspProvider: Send + Sync {
     /// server has nothing to show.
     fn hover(&self, file: &Path, line: u32, col: u32)
         -> Result<Option<lsp_types::Hover>, LspError>;
+
+    /// `textDocument/references` — resolve all reference sites of the symbol
+    /// at `(file, line, col)`. Returns `Ok(Vec::new())` when the server
+    /// reports no references (e.g. unused symbol, built-in primitive).
+    ///
+    /// # C9 scope (R-lsp-002)
+    ///
+    /// Only `RustAnalyzerClient` / `PyrightClient` / `ClangdClient`
+    /// override this default. All other clients return
+    /// [`LspError::NotImplemented`]; the default message embeds the
+    /// client name so callers can route to a fallback (e.g. tree-sitter
+    /// CALLS edge traversal) without re-querying.
+    ///
+    /// # Caching (R-lsp-004)
+    ///
+    /// Implementations MUST consult their [`ReferencesCache`] before
+    /// dispatching the LSP request, and store the result on miss. Cache
+    /// key is `(file_uri, line, col)`; TTL is 5 minutes; capacity is
+    /// 1000 entries (LRU). File changes arriving via
+    /// `textDocument/didChange` must invalidate the corresponding URI.
+    ///
+    /// # Line/column convention
+    ///
+    /// Same as [`definition`](LspProvider::definition): 0-based, matching
+    /// the LSP `Position.line` / `Position.character` convention.
+    fn references(
+        &self,
+        file: &Path,
+        line: u32,
+        col: u32,
+    ) -> Result<Vec<lsp_types::Location>, LspError> {
+        let _ = (file, line, col);
+        Err(LspError::NotImplemented(format!(
+            "{}: textDocument/references not implemented",
+            std::any::type_name::<Self>()
+        )))
+    }
 
     /// Send `shutdown` + `exit` to the server and reap the subprocess.
     ///

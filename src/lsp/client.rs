@@ -10,6 +10,7 @@ use lsp_types::notification::{Exit, Notification as _};
 use lsp_types::request::{GotoDefinition, GotoTypeDefinition, HoverRequest};
 use lsp_types::{GotoDefinitionParams, HoverParams, PartialResultParams, WorkDoneProgressParams};
 
+use super::references_cache::ReferencesCache;
 use super::session::{self, Session};
 use super::{LspError, LspProvider};
 
@@ -18,6 +19,7 @@ const DEFAULT_SERVER_PATH: &str = "rust-analyzer";
 pub struct RustAnalyzerClient {
     server_path: PathBuf,
     session: Mutex<Option<Session>>,
+    references_cache: ReferencesCache,
 }
 
 impl RustAnalyzerClient {
@@ -31,6 +33,19 @@ impl RustAnalyzerClient {
         Self {
             server_path,
             session: Mutex::new(None),
+            references_cache: ReferencesCache::new(),
+        }
+    }
+
+    /// Creates a client with a custom [`ReferencesCache`] — used by tests
+    /// to inject a [`MockClock`](super::references_cache::MockClock)-backed
+    /// cache for deterministic TTL verification.
+    #[must_use]
+    pub fn with_references_cache(server_path: PathBuf, references_cache: ReferencesCache) -> Self {
+        Self {
+            server_path,
+            session: Mutex::new(None),
+            references_cache,
         }
     }
 }
@@ -114,6 +129,15 @@ impl LspProvider for RustAnalyzerClient {
             work_done_progress_params: WorkDoneProgressParams::default(),
         };
         session::send_request::<HoverRequest>(session, params)
+    }
+
+    fn references(
+        &self,
+        file: &Path,
+        line: u32,
+        col: u32,
+    ) -> Result<Vec<lsp_types::Location>, LspError> {
+        session::references_impl(&self.session, &self.references_cache, file, line, col)
     }
 
     fn shutdown(&self) -> Result<(), LspError> {
@@ -570,6 +594,23 @@ mod tests {
         (c, rt, wr)
     }
 
+    /// Like [`client_with_mock`] but injects a custom [`ReferencesCache`]
+    /// (typically backed by [`MockClock`](crate::lsp::references_cache::MockClock))
+    /// so the 5-minute TTL can be fast-forwarded in tests.
+    fn client_with_mock_and_cache(
+        cache: crate::lsp::references_cache::ReferencesCache,
+    ) -> (
+        RustAnalyzerClient,
+        crossbeam_channel::Sender<Message>,
+        crossbeam_channel::Receiver<Message>,
+    ) {
+        let (s, rt, wr) = mock_session();
+        let c =
+            RustAnalyzerClient::with_references_cache(PathBuf::from(DEFAULT_SERVER_PATH), cache);
+        *c.session.lock().unwrap() = Some(s);
+        (c, rt, wr)
+    }
+
     fn loc() -> lsp_types::Location {
         lsp_types::Location {
             uri: "file:///tmp/lib.rs".parse::<Uri>().unwrap(),
@@ -695,5 +736,163 @@ mod tests {
         c.start(ws.path()).unwrap();
         assert!(c.hover(&ws.path().join("src/main.rs"), 0, 4).is_ok());
         c.shutdown().unwrap();
+    }
+
+    // ---- C9: references method (T170 / T171a) ----
+
+    /// T170 — `references` must return every impl-site location the
+    /// `rust-analyzer` server reports for a trait method.
+    ///
+    /// Scenario: user invokes references on `fmt` declared in
+    /// `trait Display { fn fmt(&self, ...) }`. rust-analyzer responds with
+    /// three `impl Display for X` locations (Foo/Bar/Baz). The call must
+    /// surface all three without filtering or truncation.
+    #[test]
+    fn test_rust_analyzer_references_returns_trait_implementations() {
+        let (c, rt, _wr) = client_with_mock();
+
+        // Simulate rust-analyzer responding to `textDocument/references`
+        // for `fmt` on `trait Display` — return three impl sites.
+        let uri = "file:///tmp/display.rs".parse::<Uri>().unwrap();
+        let mk_loc = |line: u32| lsp_types::Location {
+            uri: uri.clone(),
+            range: lsp_types::Range {
+                start: Position { line, character: 0 },
+                end: Position {
+                    line,
+                    character: 10,
+                },
+            },
+        };
+        let impl_sites = vec![mk_loc(10), mk_loc(20), mk_loc(30)];
+        rt.send(Message::Response(Response {
+            id: RequestId::from(1),
+            response_result: Ok(serde_json::to_value(&impl_sites).unwrap()),
+        }))
+        .unwrap();
+
+        // `fmt` is declared at line 5 (0-based), col 7 — position is irrelevant
+        // for the mock, but realistic values keep the test readable.
+        let result = c
+            .references(Path::new("/tmp/display.rs"), 5, 7)
+            .expect("references should return Ok when the server responds with a location array");
+
+        assert_eq!(
+            result.len(),
+            3,
+            "must return all three impl Display for X fmt sites, got {result:?}"
+        );
+        assert_eq!(result[0].range.start.line, 10, "Foo impl at line 10");
+        assert_eq!(result[1].range.start.line, 20, "Bar impl at line 20");
+        assert_eq!(result[2].range.start.line, 30, "Baz impl at line 30");
+
+        let _ = c.shutdown();
+    }
+
+    /// T171a — `references` results must be cached for 5 minutes keyed by
+    /// `(uri, line, column)`. Second call within the TTL window must not
+    /// hit the LSP server; after the TTL elapses the cache must invalidate
+    /// and the next call must dispatch a fresh request.
+    ///
+    /// Uses `MockClock` injection (no real `thread::sleep`) so the test
+    /// runs in milliseconds rather than 5 wall-clock minutes.
+    #[test]
+    fn test_references_result_cached_for_5_minutes() {
+        use crate::lsp::references_cache::{MockClock, ReferencesCache};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let mock_clock = Arc::new(MockClock::new());
+        let cache = ReferencesCache::with_clock(
+            mock_clock.clone(),
+            Duration::from_secs(300),
+            ReferencesCache::DEFAULT_CAPACITY,
+        );
+        let (c, rt, _wr) = client_with_mock_and_cache(cache);
+
+        let uri = "file:///tmp/lib.rs".parse::<Uri>().unwrap();
+        let loc_one = lsp_types::Location {
+            uri,
+            range: lsp_types::Range {
+                start: Position {
+                    line: 5,
+                    character: 10,
+                },
+                end: Position {
+                    line: 5,
+                    character: 20,
+                },
+            },
+        };
+
+        // First call: cold cache, server must be hit. Pre-stage the response.
+        rt.send(Message::Response(Response {
+            id: RequestId::from(1),
+            response_result: Ok(serde_json::to_value(&vec![loc_one.clone()]).unwrap()),
+        }))
+        .unwrap();
+        let r1 = c
+            .references(Path::new("/tmp/lib.rs"), 5, 10)
+            .expect("first call must succeed");
+        assert_eq!(r1.len(), 1, "first call returns the single cached loc");
+        let id_after_first = {
+            let guard = c.session.lock().expect("session mutex poisoned");
+            guard
+                .as_ref()
+                .expect("session present after first call")
+                .next_request_id
+        };
+        assert_eq!(
+            id_after_first, 2,
+            "exactly one LSP request dispatched on first call (id 1->2)"
+        );
+
+        // Second call: identical (uri, line, col), within TTL. Cache must hit;
+        // no LSP request dispatched. We do NOT pre-stage a response — if the
+        // client hits the server, `recv_timeout` would block until timeout.
+        let r2 = c
+            .references(Path::new("/tmp/lib.rs"), 5, 10)
+            .expect("second call within TTL must succeed via cache");
+        assert_eq!(r2.len(), 1, "cached call returns the same single loc");
+        let id_after_second = {
+            let guard = c.session.lock().expect("session mutex poisoned");
+            guard
+                .as_ref()
+                .expect("session still present")
+                .next_request_id
+        };
+        assert_eq!(
+            id_after_second, 2,
+            "no new LSP request dispatched on cached call (id still 2)"
+        );
+
+        // Advance the mock clock past the 5-minute TTL.
+        mock_clock.advance(Duration::from_secs(301));
+
+        // Third call: cache expired, server must be hit again. Pre-stage the
+        // response with the next request id (the client will dispatch id=2,
+        // so the server response id must be 2).
+        rt.send(Message::Response(Response {
+            id: RequestId::from(2),
+            response_result: Ok(serde_json::to_value(&vec![loc_one]).unwrap()),
+        }))
+        .unwrap();
+        let r3 = c
+            .references(Path::new("/tmp/lib.rs"), 5, 10)
+            .expect("third call after TTL expiry must succeed via fresh request");
+        assert_eq!(r3.len(), 1, "post-expiry call returns the fresh loc");
+        let id_after_third = {
+            let guard = c.session.lock().expect("session mutex poisoned");
+            guard
+                .as_ref()
+                .expect("session still present after third call")
+                .next_request_id
+        };
+        assert_eq!(
+            id_after_third, 3,
+            "exactly one new LSP request dispatched on post-expiry call (id 2->3)"
+        );
+
+        let _ = c.shutdown();
     }
 }
