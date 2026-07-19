@@ -92,6 +92,39 @@ impl ParserFactory {
             })?;
         Ok(parser)
     }
+
+    /// Creates a [`Parser`] intended for incremental parsing (C1, T091).
+    ///
+    /// # Specification vs tree-sitter API reality
+    ///
+    /// The C1 spec specifies a signature
+    /// `create_incremental_parser(language, old_tree)` that "passes `old_tree`
+    /// through to `parser.parse(source, old_tree)` callers". In tree-sitter
+    /// 0.26, `old_tree` is **not** consumed at `Parser` construction time —
+    /// it is passed at `parse()` time. This method therefore:
+    ///
+    /// 1. Accepts `old_tree` for API symmetry with the spec and to make the
+    ///    incremental intent explicit at the call site.
+    /// 2. Returns a `Parser` configured exactly like
+    ///    [`create_parser`](Self::create_parser).
+    /// 3. Expects the caller to pass the same `old_tree` to
+    ///    `parser.parse(source, Some(&old_tree))`.
+    ///
+    /// The `old_tree` parameter is intentionally unused at construction time;
+    /// accepting it here keeps the call site self-documenting and reserves a
+    /// slot for future pre-warming if tree-sitter adds such an API.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError::LanguageSet`] if the parser cannot be configured
+    /// for `language`, or [`ParseError::UnsupportedLanguage`] if the language
+    /// is not built into this binary.
+    pub fn create_incremental_parser(
+        language: Language,
+        _old_tree: Option<&tree_sitter::Tree>,
+    ) -> Result<Parser> {
+        Self::create_parser(language)
+    }
 }
 
 #[cfg(test)]
@@ -729,5 +762,128 @@ mod tests {
         // should parse without error.
         assert!(!t1.root_node().has_error());
         assert!(!t2.root_node().has_error());
+    }
+
+    // --- C1: tree-sitter incremental parsing support (T090/T091) ---
+
+    /// Counts every node in a tree (recursive walk) for cross-parse comparison.
+    ///
+    /// Uses index-based child access (`child_count` + `child(i)`) instead of a
+    /// shared `TreeCursor`, because a single cursor cannot be borrowed across
+    /// recursive frames.
+    fn count_tree_nodes(node: &tree_sitter::Node) -> usize {
+        let mut count = 1usize;
+        let n = node.child_count();
+        for i in 0..n {
+            // tree-sitter 0.26: `child_count` returns usize but `child` takes u32.
+            let Ok(i32_idx) = u32::try_from(i) else {
+                // Trees with >u32::MAX children are not realistic; bail out
+                // by stopping the walk (count is still valid up to this point).
+                break;
+            };
+            if let Some(child) = node.child(i32_idx) {
+                count += count_tree_nodes(&child);
+            }
+        }
+        count
+    }
+
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn test_create_incremental_parser_returns_parser_with_old_tree_support() {
+        // T090: `create_incremental_parser` returns a `Parser` that, when fed
+        // `parser.parse(new_source, Some(&edited_old_tree))`, produces a `Tree`
+        // whose node count equals a full re-parse of the same source.
+        //
+        // Spec deviation (rule 7 conflict): the C1 spec literally says
+        // `parser.parse(new_source, Some(&old_tree))` without a `Tree::edit`
+        // step. tree-sitter 0.26 docs say: "If the text of the document has
+        // changed since `old_tree` was created, then you **must** edit
+        // `old_tree` to match the new text using `Tree::edit`." Without the
+        // edit, bytes beyond the old tree's range are ignored, so the
+        // incremental tree omits appended nodes. This test uses `Tree::edit`
+        // (the correct API) and documents the deviation in the impl notes.
+        let mut full_parser = ParserFactory::create_parser(Language::Rust).expect("create_parser");
+        let original_source = "fn main() {}\nfn helper() {}\n";
+        let old_tree = full_parser
+            .parse(original_source, None)
+            .expect("parse original source");
+
+        // Create an incremental parser, passing the old tree (T091 entry point).
+        let mut inc_parser =
+            ParserFactory::create_incremental_parser(Language::Rust, Some(&old_tree))
+                .expect("create_incremental_parser");
+
+        // Small append at the end — optimal case for incremental parsing
+        // (only the new function is re-parsed; existing nodes are reused).
+        let appended = "fn added() {}\n";
+        let new_source = format!("{original_source}{appended}");
+
+        // Build an `InputEdit` describing a pure end-of-file insertion:
+        //   - start_byte = old_end_byte = original_source.len() (insertion point)
+        //   - new_end_byte = new_source.len() (inserted bytes)
+        //   - start_position = old_end_position = end of old source
+        //   - new_end_position = end of new source
+        let old_end_byte = original_source.len();
+        let new_end_byte = new_source.len();
+        let old_end_point = end_point(original_source);
+        let new_end_point = end_point(&new_source);
+        let edit = tree_sitter::InputEdit {
+            start_byte: old_end_byte,
+            old_end_byte,
+            new_end_byte,
+            start_position: old_end_point,
+            old_end_position: old_end_point,
+            new_end_position: new_end_point,
+        };
+
+        // `Tree::edit` is `&mut self`; clone the old tree so we keep an
+        // unmodified reference for later sanity assertions if needed.
+        let mut edited_old_tree = old_tree.clone();
+        edited_old_tree.edit(&edit);
+
+        let inc_tree = inc_parser
+            .parse(&new_source, Some(&edited_old_tree))
+            .expect("incremental parse must succeed");
+        let full_tree = full_parser
+            .parse(&*new_source, None)
+            .expect("full parse must succeed");
+
+        let inc_count = count_tree_nodes(&inc_tree.root_node());
+        let full_count = count_tree_nodes(&full_tree.root_node());
+        assert_eq!(
+            inc_count,
+            full_count,
+            "incremental tree node count ({inc_count}) must equal full parse ({full_count}); \
+             inc sexp: {} | full sexp: {}",
+            inc_tree.root_node().to_sexp(),
+            full_tree.root_node().to_sexp()
+        );
+        assert!(
+            !inc_tree.root_node().has_error(),
+            "incremental tree must have no parse errors; sexp: {}",
+            inc_tree.root_node().to_sexp()
+        );
+        assert!(
+            !full_tree.root_node().has_error(),
+            "full tree must have no parse errors"
+        );
+    }
+
+    /// Returns the (row, column) `Point` at the end of `source` (i.e. the
+    /// position immediately after the last byte). Used to build `InputEdit`s
+    /// for end-of-file insertions in incremental parsing tests.
+    fn end_point(source: &str) -> tree_sitter::Point {
+        let mut row: usize = 0;
+        let mut col: usize = 0;
+        for ch in source.chars() {
+            if ch == '\n' {
+                row += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        tree_sitter::Point { row, column: col }
     }
 }
