@@ -50,10 +50,28 @@ impl Scope {
 /// A chain of nested scopes used for name resolution.
 ///
 /// Scopes are pushed/popped as the resolver enters/leaves definitions.
-/// [`ScopeChain::resolve_name`] searches from the innermost scope outward.
+/// [`ScopeChain::resolve_name`] returns the innermost scope whose `name`
+/// matches in O(1) average time via a HashMap index.
+///
+/// # Index invariant
+///
+/// `name_positions` maps each `name` to a non-empty stack of positions in
+/// `scopes` (outermost first, innermost last). For every name `n`:
+/// - `name_positions[n]` is non-empty whenever any scope named `n` is on the chain.
+/// - `name_positions[n].last()` is the position of the innermost occurrence of `n`.
+/// - When the innermost occurrence is popped, its position is popped from
+///   `name_positions[n]`; if the stack becomes empty, the entry is removed.
+///
+/// Shadowing (the same `name` in multiple nested scopes) is therefore handled
+/// naturally: each `push` appends a position, each `pop` removes the topmost,
+/// and `resolve_name` always reads the topmost — which is the innermost.
 #[derive(Debug, Clone, Default)]
 pub struct ScopeChain {
     scopes: Vec<Scope>,
+    /// `name` → stack of positions in `scopes` (top of stack = innermost).
+    /// Maintained in lock-step with `scopes` by `push`/`pop`. See the
+    /// "Index invariant" section on the struct for the full contract.
+    name_positions: HashMap<String, Vec<usize>>,
 }
 
 impl ScopeChain {
@@ -63,16 +81,45 @@ impl ScopeChain {
         Self::default()
     }
 
-    /// Pushes a new scope onto the chain.
+    /// Pushes a new scope onto the chain and updates the name index.
     pub fn push(&mut self, scope: Scope) {
+        let pos = self.scopes.len();
+        self.name_positions
+            .entry(scope.name.clone())
+            .or_default()
+            .push(pos);
         self.scopes.push(scope);
     }
 
-    /// Pops the innermost scope from the chain.
+    /// Pops the innermost scope from the chain and updates the name index.
     ///
     /// Does nothing if the chain is empty.
     pub fn pop(&mut self) {
-        self.scopes.pop();
+        if let Some(scope) = self.scopes.pop() {
+            // The popped scope's name must have its topmost position removed
+            // from the index. If the stack becomes empty, drop the entry so
+            // `resolve_name` correctly returns `None` for that name.
+            //
+            // Invariant: every name on `scopes` has a non-empty entry in
+            // `name_positions`. A missing entry here would indicate a
+            // bug in `push` (or unsafe external mutation) — debug_assert
+            // surfaces it during testing without imposing a runtime cost in
+            // release builds. The defensive `if let Some` keeps `pop` safe
+            // even if the invariant is violated.
+            debug_assert!(
+                self.name_positions.contains_key(&scope.name),
+                "name_positions missing entry for popped scope name `{}` — \
+                 invariant violation (push did not index this name, or the \
+                 chain was mutated outside push/pop)",
+                scope.name
+            );
+            if let Some(positions) = self.name_positions.get_mut(&scope.name) {
+                positions.pop();
+                if positions.is_empty() {
+                    self.name_positions.remove(&scope.name);
+                }
+            }
+        }
     }
 
     /// Returns the innermost (current) scope, or `None` if the chain is empty.
@@ -93,18 +140,17 @@ impl ScopeChain {
         self.scopes.len()
     }
 
-    /// Resolves a simple name to a qualified name by searching from the
-    /// innermost scope outward.
+    /// Resolves a simple name to a qualified name in O(1) average time.
     ///
-    /// Returns the qualified name of the first scope whose `name` matches,
-    /// or `None` if no match is found.
+    /// Returns the qualified name of the innermost scope whose `name` matches,
+    /// or `None` if no match is found. Shadowing is honoured: when the same
+    /// `name` appears in multiple nested scopes, the innermost occurrence wins.
     #[must_use]
     pub fn resolve_name(&self, name: &str) -> Option<String> {
-        self.scopes
-            .iter()
-            .rev()
-            .find(|s| s.name == name)
-            .map(|s| s.qn.clone())
+        let positions = self.name_positions.get(name)?;
+        // Top of the position stack is the innermost occurrence.
+        let &pos = positions.last()?;
+        self.scopes.get(pos).map(|s| s.qn.clone())
     }
 
     /// Returns an iterator over the scopes (outermost to innermost).
@@ -1148,6 +1194,206 @@ mod tests {
     fn make_qn_c_without_parent() {
         let qn = make_qn("src/main.c", "main", "proj", Language::C, None);
         assert!(qn.contains("main"));
+    }
+
+    // --- C8: ScopeChain HashMap index (T160-T162) ---
+    //
+    // The following tests verify the O(1) HashMap index added to ScopeChain.
+    // `push`/`pop` must keep the index in sync with the Vec so that
+    // `resolve_name` returns the correct (innermost) match in O(1) time.
+
+    /// Builds a chain of `n` scopes, each with a unique name `name_{i}` and
+    /// qualified name `proj.name_{i}`. Used by the O(1) benchmark.
+    fn build_chain_of_n(n: usize) -> ScopeChain {
+        let mut chain = ScopeChain::new();
+        for i in 0..n {
+            chain.push(Scope::new(
+                format!("name_{i}"),
+                format!("proj.name_{i}"),
+                NodeLabel::Function,
+            ));
+        }
+        chain
+    }
+
+    #[test]
+    fn test_scope_chain_lookup_with_hashmap_index_is_o1() {
+        // Construct a 1000-level scope chain, each level pushing a unique name.
+        // All 1000 lookups must succeed and return the correct QN.
+        let chain = build_chain_of_n(1000);
+
+        // Warm up: a first lookup may pay HashMap setup / cache-miss costs.
+        let _ = chain.resolve_name("name_0");
+
+        // Functional correctness: every lookup returns the expected QN.
+        for i in 0..1000u32 {
+            let expected = format!("proj.name_{i}");
+            let resolved = chain.resolve_name(&format!("name_{i}"));
+            assert_eq!(
+                resolved.as_deref(),
+                Some(expected.as_str()),
+                "lookup(name_{i}) returned wrong QN"
+            );
+        }
+
+        // Performance: O(1) means lookup time should NOT grow with N.
+        // We compare N=1000 vs N=10 total lookup time. O(n) would yield a
+        // ~100x ratio (1000/10); O(1) yields ~1x. Allow 10x slack for
+        // environment noise (opt-level=0 in test profile, allocator jitter,
+        // CPU frequency scaling). Anything above 10x indicates the index is
+        // not being used (i.e. linear scan regression).
+        use std::time::Instant;
+        fn bench_avg_lookup(n: usize) -> std::time::Duration {
+            let chain = build_chain_of_n(n);
+            // Warm up to stabilise caches.
+            let _ = chain.resolve_name("name_0");
+            let mut total = std::time::Duration::ZERO;
+            for i in 0..n {
+                let name = format!("name_{i}");
+                let start = Instant::now();
+                let _ = chain.resolve_name(&name);
+                total += start.elapsed();
+            }
+            total / (n as u32).max(1)
+        }
+
+        let small = bench_avg_lookup(10);
+        let large = bench_avg_lookup(1000);
+        let ratio = large.as_nanos() as f64 / small.as_nanos().max(1) as f64;
+        // O(1) implies ratio ≈ 1; we accept up to 10x for noise.
+        // A linear scan would produce ratio ≈ 100 (1000/10), failing this.
+        assert!(
+            ratio < 10.0,
+            "lookup time grew from {small:?} (N=10) to {large:?} (N=1000), \
+             ratio={ratio:.2}x — expected O(1) (ratio < 10x), got O(n)-like growth"
+        );
+    }
+
+    #[test]
+    fn test_scope_chain_push_updates_index() {
+        // After pushing a scope, resolve_name must immediately find it.
+        let mut chain = ScopeChain::new();
+        chain.push(Scope::new("foo", "proj.foo", NodeLabel::Function));
+        assert_eq!(chain.resolve_name("foo").as_deref(), Some("proj.foo"));
+
+        // Push a second scope with a different name — both must be findable.
+        chain.push(Scope::new("bar", "proj.bar", NodeLabel::Module));
+        assert_eq!(chain.resolve_name("foo").as_deref(), Some("proj.foo"));
+        assert_eq!(chain.resolve_name("bar").as_deref(), Some("proj.bar"));
+    }
+
+    #[test]
+    fn test_scope_chain_pop_updates_index() {
+        // After popping the innermost scope, its name must no longer be
+        // resolvable (when not shadowed by an outer scope).
+        let mut chain = ScopeChain::new();
+        chain.push(Scope::new("outer", "proj.outer", NodeLabel::Module));
+        chain.push(Scope::new("inner", "proj.outer.inner", NodeLabel::Function));
+        assert_eq!(
+            chain.resolve_name("inner").as_deref(),
+            Some("proj.outer.inner")
+        );
+
+        chain.pop();
+        // "inner" was only in the popped scope → no longer resolvable.
+        assert!(chain.resolve_name("inner").is_none());
+        // "outer" is still in the chain → still resolvable.
+        assert_eq!(chain.resolve_name("outer").as_deref(), Some("proj.outer"));
+    }
+
+    #[test]
+    fn test_scope_chain_lookup_returns_none_for_missing() {
+        // A name never pushed must return None, regardless of chain depth.
+        let chain = build_chain_of_n(100);
+        assert!(chain.resolve_name("name_0").is_some()); // sanity
+        assert!(chain.resolve_name("nonexistent_name").is_none());
+        assert!(chain.resolve_name("").is_none());
+    }
+
+    #[test]
+    fn test_scope_chain_shadowed_name_returns_innermost() {
+        // When the same name appears in multiple scopes, resolve_name must
+        // return the innermost (most recently pushed) match.
+        let mut chain = ScopeChain::new();
+        chain.push(Scope::new("x", "proj.outer.x", NodeLabel::Function));
+        chain.push(Scope::new("y", "proj.outer.y", NodeLabel::Module));
+        chain.push(Scope::new("x", "proj.outer.inner.x", NodeLabel::Function));
+
+        // "x" is shadowed: must resolve to the innermost occurrence.
+        assert_eq!(
+            chain.resolve_name("x").as_deref(),
+            Some("proj.outer.inner.x")
+        );
+
+        // Pop the innermost "x" — the outer "x" must become visible again.
+        chain.pop();
+        assert_eq!(chain.resolve_name("x").as_deref(), Some("proj.outer.x"));
+
+        // Pop "y" — y is gone, outer "x" still visible.
+        chain.pop();
+        assert!(chain.resolve_name("y").is_none());
+        assert_eq!(chain.resolve_name("x").as_deref(), Some("proj.outer.x"));
+
+        // Pop the outer "x" — "x" is gone entirely.
+        chain.pop();
+        assert!(chain.resolve_name("x").is_none());
+    }
+
+    #[test]
+    fn test_scope_chain_index_stays_in_sync_after_mixed_ops() {
+        // Stress-test the index invariant: after a sequence of mixed
+        // push/pop operations (including shadowing), every name currently
+        // on the chain must resolve to its innermost occurrence, and every
+        // popped name must be gone (unless shadowed by a remaining scope).
+        let mut chain = ScopeChain::new();
+
+        // Build a chain with interleaved unique and shadowed names.
+        // Layout (outermost → innermost):
+        //   a, b, a, c, b, d
+        chain.push(Scope::new("a", "proj.0.a", NodeLabel::Module));
+        chain.push(Scope::new("b", "proj.0.1.b", NodeLabel::Class));
+        chain.push(Scope::new("a", "proj.0.1.2.a", NodeLabel::Function)); // shadows outer a
+        chain.push(Scope::new("c", "proj.0.1.2.3.c", NodeLabel::Function));
+        chain.push(Scope::new("b", "proj.0.1.2.3.4.b", NodeLabel::Method)); // shadows outer b
+        chain.push(Scope::new("d", "proj.0.1.2.3.4.5.d", NodeLabel::Function));
+
+        // Innermost wins for shadowed names.
+        assert_eq!(chain.resolve_name("a").as_deref(), Some("proj.0.1.2.a"));
+        assert_eq!(chain.resolve_name("b").as_deref(), Some("proj.0.1.2.3.4.b"));
+        assert_eq!(chain.resolve_name("c").as_deref(), Some("proj.0.1.2.3.c"));
+        assert_eq!(
+            chain.resolve_name("d").as_deref(),
+            Some("proj.0.1.2.3.4.5.d")
+        );
+
+        // Pop d → d gone, others unchanged.
+        chain.pop();
+        assert!(chain.resolve_name("d").is_none());
+        assert_eq!(chain.resolve_name("b").as_deref(), Some("proj.0.1.2.3.4.b"));
+
+        // Pop b (innermost) → outer b becomes visible.
+        chain.pop();
+        assert_eq!(chain.resolve_name("b").as_deref(), Some("proj.0.1.b"));
+        assert_eq!(chain.resolve_name("a").as_deref(), Some("proj.0.1.2.a"));
+
+        // Pop c → c gone.
+        chain.pop();
+        assert!(chain.resolve_name("c").is_none());
+
+        // Pop a (innermost) → outer a becomes visible.
+        chain.pop();
+        assert_eq!(chain.resolve_name("a").as_deref(), Some("proj.0.a"));
+        assert_eq!(chain.resolve_name("b").as_deref(), Some("proj.0.1.b"));
+
+        // Pop b → b gone.
+        chain.pop();
+        assert!(chain.resolve_name("b").is_none());
+        assert_eq!(chain.resolve_name("a").as_deref(), Some("proj.0.a"));
+
+        // Pop a → chain empty.
+        chain.pop();
+        assert!(chain.is_empty());
+        assert!(chain.resolve_name("a").is_none());
     }
 }
 
