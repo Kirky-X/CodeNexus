@@ -6,6 +6,7 @@
 //! Uses [`notify_debouncer_full`] (ADR-013) to watch repositories and trigger
 //! incremental indexing with configurable debounce (BR-DAEMON-001/004).
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -28,6 +29,31 @@ pub const DEFAULT_DEBOUNCE_MS: u64 = 2000;
 /// 定时检查间隔（毫秒），PRD §4.3.2 步骤 6。
 const TICK_INTERVAL_MS: u64 = 500;
 
+// --- C6: 自适应防抖窗口参数 ---
+//
+// spec 主文描述（"高频扩展到 ≥ 500ms、低频缩短到 ≤ 100ms"）与 EMA 公式
+// `new = old * 0.7 + last_interval * 0.3` 实际行为相反 — 暴露冲突（rule 7），
+// 按 EMA 公式（spec 明确规则）实现：高频（last_interval 小）→ 窗口缩小到
+// clamp 下限 100ms；低频（last_interval 大）→ 窗口扩展到 clamp 上限 500ms。
+
+/// 自适应防抖窗口初始值（毫秒），C6 spec。
+const INITIAL_DEBOUNCE_WINDOW_MS: u64 = 200;
+
+/// 自适应防抖窗口下限（毫秒），C6 spec clamp [100ms, 500ms]。
+const MIN_DEBOUNCE_WINDOW_MS: u64 = 100;
+
+/// 自适应防抖窗口上限（毫秒），C6 spec clamp [100ms, 500ms]。
+const MAX_DEBOUNCE_WINDOW_MS: u64 = 500;
+
+/// 滑动窗口容量：保留最近 10 个事件间隔，C6 spec。
+const EVENT_INTERVALS_CAPACITY: usize = 10;
+
+/// EMA 旧值权重，C6 spec `new = old * 0.7 + last_interval * 0.3`。
+const EMA_OLD_WEIGHT: f64 = 0.7;
+
+/// EMA 新值权重，C6 spec `new = old * 0.7 + last_interval * 0.3`。
+const EMA_NEW_WEIGHT: f64 = 0.3;
+
 /// 守护进程（观察者模式中的主题）。
 ///
 /// 监视项目根目录，在防抖窗口结束后将过滤后的文件变更事件通知所有
@@ -45,6 +71,12 @@ pub struct Daemon {
     observers: Vec<Box<dyn EventObserver + Send>>,
     /// 停止标志（用于优雅关闭和测试）。
     stop: Arc<AtomicBool>,
+    /// C6: 最近 10 个事件间隔（滑动窗口），用于 EMA 计算。
+    event_intervals: VecDeque<Duration>,
+    /// C6: 当前自适应防抖窗口（EMA 更新，clamp [100ms, 500ms]）。
+    debounce_window: Duration,
+    /// C6: 上次事件触发时间，用于计算 last_interval。
+    last_event_at: Option<Instant>,
 }
 
 impl Daemon {
@@ -66,6 +98,9 @@ impl Daemon {
             db_path: db_path.as_ref().to_path_buf(),
             observers: Vec::new(),
             stop: Arc::new(AtomicBool::new(false)),
+            event_intervals: VecDeque::with_capacity(EVENT_INTERVALS_CAPACITY),
+            debounce_window: Duration::from_millis(INITIAL_DEBOUNCE_WINDOW_MS),
+            last_event_at: None,
         }
     }
 
@@ -102,6 +137,66 @@ impl Daemon {
     #[must_use]
     pub fn db_path(&self) -> &Path {
         &self.db_path
+    }
+
+    /// C6: 返回当前自适应防抖窗口（基于 EMA 更新，clamp [100ms, 500ms]）。
+    ///
+    /// 与 [`Daemon::debounce_ms`](Self::debounce_ms) 的区别：
+    /// `debounce_ms` 是构造时配置的固定防抖窗口（传给底层
+    /// `notify_debouncer_full::new_debouncer`）；`debounce_window` 是基于
+    /// 事件间隔 EMA 计算的自适应防抖窗口，反映最近事件频率。
+    #[must_use]
+    pub fn debounce_window(&self) -> Duration {
+        self.debounce_window
+    }
+
+    /// C6: 返回最近 10 个事件间隔（滑动窗口）。
+    ///
+    /// 第一个事件触发后不更新 `debounce_window`（无前一个事件，无法计算
+    /// 间隔），因此 `event_intervals` 长度 ≤ 触发次数 - 1。
+    ///
+    /// 返回 `Vec<Duration>` 而非 `&[Duration]` 是因为 `VecDeque` 在
+    /// wrap-around 时无法以单一 slice 借用所有元素；该方法仅用于观察
+    /// （测试和日志），不在热路径，分配开销可接受。
+    #[must_use]
+    pub fn event_intervals(&self) -> Vec<Duration> {
+        self.event_intervals.iter().copied().collect()
+    }
+
+    /// C6: 用 EMA 公式更新自适应防抖窗口。
+    ///
+    /// 计算与上一个事件的时间间隔 `last_interval`，push 到
+    /// `event_intervals`（保留最近 10 个），用 EMA 公式
+    /// `new = old * 0.7 + last_interval * 0.3` 更新 `debounce_window`，
+    /// clamp 到 `[100ms, 500ms]`。
+    ///
+    /// 第一个事件（`last_event_at` 为 `None`）只设置 `last_event_at`，
+    /// 不更新 `debounce_window`（无间隔可计算）。
+    ///
+    /// `pub(crate)` 可见性使测试可以注入受控时间（避免真实 sleep）。
+    pub(crate) fn update_adaptive_debounce(&mut self, now: Instant) {
+        if let Some(prev) = self.last_event_at {
+            let interval = now.saturating_duration_since(prev);
+
+            // 滑动窗口：push_back + 超容量时 pop_front。
+            self.event_intervals.push_back(interval);
+            if self.event_intervals.len() > EVENT_INTERVALS_CAPACITY {
+                self.event_intervals.pop_front();
+            }
+
+            // EMA 公式：new = old * 0.7 + last_interval * 0.3
+            // 用 as_secs_f64 / from_secs_f64 避免 Duration * f64（不稳定 API）。
+            let old_secs = self.debounce_window.as_secs_f64();
+            let interval_secs = interval.as_secs_f64();
+            let new_secs = old_secs * EMA_OLD_WEIGHT + interval_secs * EMA_NEW_WEIGHT;
+            let new_window = Duration::from_secs_f64(new_secs);
+
+            // clamp 到 [100ms, 500ms]。Duration 实现了 Ord，可用 max/min。
+            let min = Duration::from_millis(MIN_DEBOUNCE_WINDOW_MS);
+            let max = Duration::from_millis(MAX_DEBOUNCE_WINDOW_MS);
+            self.debounce_window = new_window.max(min).min(max);
+        }
+        self.last_event_at = Some(now);
     }
 
     /// 注册 SIGTERM/SIGINT 信号处理器，收到信号时设置 `stop` 标志。
@@ -197,6 +292,16 @@ impl Daemon {
 
     /// 处理一批防抖后的事件：过滤非代码文件，通知所有观察者。
     fn process_debounced_events(&mut self, events: &[DebouncedEvent]) {
+        // C6: 空批次直接 return，不更新自适应防抖窗口（无事件触发）。
+        if events.is_empty() {
+            return;
+        }
+
+        // C6: 每次事件触发后用 EMA 公式更新自适应防抖窗口。
+        // 注意：即使所有事件被过滤（非代码文件），底层 notify 已触发，
+        // 仍视为"事件触发"。
+        self.update_adaptive_debounce(Instant::now());
+
         let daemon_events: Vec<DaemonEvent> =
             events.iter().filter_map(Self::convert_event).collect();
 
@@ -995,5 +1100,163 @@ mod tests {
     /// 调用 libc raise(SIGUSR1)。
     unsafe fn libc_raise(sig: i32) {
         let _ = raise(sig);
+    }
+
+    // --- C6: 自适应防抖窗口测试 ---
+    //
+    // spec 主文描述（"高频扩展到 ≥ 500ms、低频缩短到 ≤ 100ms"）与 EMA 公式
+    // `new = old * 0.7 + last_interval * 0.3` 实际行为相反 — 暴露冲突
+    // （rule 7），按 EMA 公式（spec 明确规则）实现，测试断言反映 EMA
+    // 实际行为：高频（last_interval 小）→ 窗口缩小到 clamp 下限 100ms；
+    // 低频（last_interval 大）→ 窗口扩展到 clamp 上限 500ms。详见
+    // commit message 中关于 spec 矛盾的说明。
+
+    #[test]
+    fn test_adaptive_debounce_default_window_is_200ms() {
+        let daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
+        assert_eq!(
+            daemon.debounce_window(),
+            Duration::from_millis(200),
+            "初始防抖窗口应为 200ms（C6 spec）"
+        );
+    }
+
+    #[test]
+    fn test_debounce_window_clamped_to_min_100ms() {
+        // 高频场景（last_interval 极小），EMA 让窗口趋近 last_interval，
+        // clamp 到下限 100ms。
+        let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
+        let mut now = Instant::now();
+        daemon.update_adaptive_debounce(now);
+        // 5 次 1ms 间隔 → EMA 收敛到 ~1ms → clamp 到 100ms
+        for _ in 0..5 {
+            now += Duration::from_millis(1);
+            daemon.update_adaptive_debounce(now);
+        }
+        assert_eq!(
+            daemon.debounce_window(),
+            Duration::from_millis(100),
+            "高频极小间隔后窗口应 clamp 到 100ms，实际 {:?}",
+            daemon.debounce_window()
+        );
+    }
+
+    #[test]
+    fn test_debounce_window_clamped_to_max_500ms() {
+        // 低频场景（last_interval 极大），EMA 让窗口趋近 last_interval，
+        // clamp 到上限 500ms。
+        let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
+        let mut now = Instant::now();
+        daemon.update_adaptive_debounce(now);
+        // 5 次 10s 间隔 → EMA 收敛到 ~10s → clamp 到 500ms
+        for _ in 0..5 {
+            now += Duration::from_secs(10);
+            daemon.update_adaptive_debounce(now);
+        }
+        assert_eq!(
+            daemon.debounce_window(),
+            Duration::from_millis(500),
+            "低频极大间隔后窗口应 clamp 到 500ms，实际 {:?}",
+            daemon.debounce_window()
+        );
+    }
+
+    #[test]
+    fn test_event_intervals_keeps_last_10_entries() {
+        // VecDeque 滑动窗口，超过 10 个时 pop_front 保留最近 10 个。
+        let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
+        let mut now = Instant::now();
+        daemon.update_adaptive_debounce(now); // 第一次不 push（无 last_event_at）
+        for i in 1..=15 {
+            now += Duration::from_millis(i * 10);
+            daemon.update_adaptive_debounce(now);
+        }
+        assert_eq!(
+            daemon.event_intervals().len(),
+            10,
+            "event_intervals 应保留最近 10 个，实际 {}",
+            daemon.event_intervals().len()
+        );
+        // 验证保留的是最后 10 个间隔（i=6..=15 对应 interval 60..150ms）
+        let intervals: Vec<Duration> = daemon.event_intervals().to_vec();
+        assert_eq!(
+            intervals[0],
+            Duration::from_millis(60),
+            "第一个保留的间隔应为 60ms（i=6），实际 {:?}",
+            intervals[0]
+        );
+        assert_eq!(
+            intervals[9],
+            Duration::from_millis(150),
+            "最后一个保留的间隔应为 150ms（i=15），实际 {:?}",
+            intervals[9]
+        );
+    }
+
+    #[test]
+    fn test_ema_formula_weights_old_70_percent_new_30_percent() {
+        // 单次更新验证 EMA 权重：new = old * 0.7 + last_interval * 0.3
+        // old = 200ms（初始），last_interval = 1000ms
+        // 期望 new = 200 * 0.7 + 1000 * 0.3 = 140 + 300 = 440ms（未触发 clamp）
+        let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
+        let mut now = Instant::now();
+        daemon.update_adaptive_debounce(now); // 设 last_event_at，不更新 EMA
+        now += Duration::from_millis(1000);
+        daemon.update_adaptive_debounce(now);
+        assert_eq!(
+            daemon.debounce_window(),
+            Duration::from_millis(440),
+            "EMA 单次更新：200*0.7 + 1000*0.3 = 440ms，实际 {:?}",
+            daemon.debounce_window()
+        );
+    }
+
+    #[test]
+    fn test_adaptive_debounce_shrinks_window_on_high_frequency_events() {
+        // 模拟 1 秒内 20 个文件变更事件（高频，间隔 ~50ms）。
+        // 注：spec 主文说"高频扩展到 ≥ 500ms"，但 EMA 公式
+        // `new = old*0.7 + last_interval*0.3` 在 last_interval 小时让窗口
+        // 缩小。按 EMA 公式（spec 明确规则）实际行为：高频 → 缩小到
+        // clamp 下限 100ms。详见 commit message 中 spec 矛盾说明。
+        let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
+        let mut now = Instant::now();
+        let interval = Duration::from_millis(50);
+        daemon.update_adaptive_debounce(now); // 第一次不更新 EMA
+        for _ in 0..19 {
+            now += interval;
+            daemon.update_adaptive_debounce(now);
+        }
+        assert!(
+            daemon.debounce_window() <= Duration::from_millis(100),
+            "高频事件后窗口应缩小到 ≤ 100ms（clamp 下限），实际 {:?}",
+            daemon.debounce_window()
+        );
+        assert_eq!(
+            daemon.event_intervals().len(),
+            EVENT_INTERVALS_CAPACITY,
+            "event_intervals 应保留最近 {} 个（sliding window），实际 {}",
+            EVENT_INTERVALS_CAPACITY,
+            daemon.event_intervals().len()
+        );
+    }
+
+    #[test]
+    fn test_adaptive_debounce_extends_window_on_low_frequency_events() {
+        // 模拟 5 秒内 1 个事件（低频，间隔 5000ms）。
+        // 注：spec 主文说"低频缩短到 ≤ 100ms"，但 EMA 公式
+        // `new = old*0.7 + last_interval*0.3` 在 last_interval 大时让窗口
+        // 扩展。按 EMA 公式（spec 明确规则）实际行为：低频 → 扩展到
+        // clamp 上限 500ms。详见 commit message 中 spec 矛盾说明。
+        let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
+        let mut now = Instant::now();
+        daemon.update_adaptive_debounce(now); // 第一次不更新 EMA
+        now += Duration::from_millis(5000);
+        daemon.update_adaptive_debounce(now);
+        // new = 200 * 0.7 + 5000 * 0.3 = 140 + 1500 = 1640ms → clamp 到 500ms
+        assert!(
+            daemon.debounce_window() >= Duration::from_millis(500),
+            "低频事件后窗口应扩展到 ≥ 500ms（clamp 上限），实际 {:?}",
+            daemon.debounce_window()
+        );
     }
 }
