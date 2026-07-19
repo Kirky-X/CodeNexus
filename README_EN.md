@@ -21,6 +21,7 @@ English | [简体中文](README.md)
 - [CLI Commands](#cli-commands)
 - [MCP Integration](#mcp-integration)
 - [Complexity Analysis](#complexity-analysis)
+- [Dead Code Analysis](#dead-code-analysis)
 - [Architecture](#architecture)
 - [Supported Languages](#supported-languages)
 - [Development](#development)
@@ -311,6 +312,39 @@ codenexus complexity --project myproject --red_only true --sort_by_severity true
 # Custom time complexity thresholds (green=O(1), yellow=O(n log n), red=O(n^2))
 codenexus complexity --project myproject --time_complexity_green "O(1)" --time_complexity_yellow "O(n log n)" --time_complexity_red "O(n^2)"
 ```
+
+## [Dead Code Analysis](#dead-code-analysis)
+
+The `dead_code` subcommand identifies dead code via a worklist reachability propagation algorithm: starting from a seed set (entry functions / exported functions / FFI entries / test functions / trait impl methods / `pub use` reexport targets / attribute-marked entries), it BFS-propagates liveness to a fixed point. Function/Method nodes not covered by propagation are reported as dead. Each entry carries High/Medium/Low confidence; the output also includes `indexed_commit` / `current_head` / `is_stale` fields to surface index staleness.
+
+### Configuration
+
+Detection is controlled by `DeadCodeConfig` (surfaced via service-layer CLI flags). Key fields:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `entry_patterns` | `["main", "Main", "__main__", "wmain", "WinMain", "DLLMain"]` | Glob patterns for entry function names; matched Functions are live seeds |
+| `test_patterns` | 8 entries: `test_*` / `*_test` / `*_spec` / `it_*` / `sec_*` / `snap_*` / `perf_*` / `bench_*` | Glob patterns for test function names; matched Functions are live seeds |
+| `attribute_entries` | 6 entries: `#[tool` / `#[forge` / `#[tokio::main` / `#[rocket::main` / `#[actix::main` / `#[axum::main` | Substring match against the function `signature`; on hit the function is treated as a macro-synthesised entry (tree-sitter does not expand macros, so the CALLS edge is invisible). `#[test]` / `#[bench]` are covered by `test_patterns` name-globs, so they are intentionally absent from `attribute_entries` |
+| `check_dynamic_dispatch` | `true` | Detect `#<TypeName>` disambiguator in `qualified_name` (e.g. `fmt#Display`); on hit the function is treated as a trait impl method (vtable dynamic dispatch, no static CALLS edge) and excluded from dead-code. Set `false` for conservative mode |
+| `check_exported` | `true` | `isExported=true` Functions/Methods are treated as externally visible and excluded |
+| `check_ffi` | `true` | Functions whose signature contains `extern "C"` / `#[no_mangle]` are treated as FFI entry points and excluded |
+| `edge_types` | `CALLS` / `FfiCalls` / `Implements` / `Usage` / `Tests` / `UsesType` / `HttpCalls` / `AsyncCalls` | Edge-type whitelist participating in reachability propagation |
+
+### Examples
+
+```bash
+# Default detection
+codenexus dead_code --project myproject --entry "" --check_exported true --check_ffi true --edge_types ""
+
+# Custom edge_types (CALLS + IMPLEMENTS only)
+codenexus dead_code --project myproject --edge_types "CALLS,IMPLEMENTS"
+
+# Conservative mode: disable trait-impl recognition
+codenexus dead_code --project myproject --check_dynamic_dispatch false
+```
+
+> **Limitations**: tree-sitter does not expand procedural macros (`#[derive(Serialize)]` etc.), so derive-generated impl methods may be reported as dead code (known false positive). const fn invocations in const context are also not recognised as CALLS edges by tree-sitter.
 
 ## [Architecture](#architecture)
 

@@ -21,6 +21,7 @@
 - [CLI 命令](#cli-命令)
 - [MCP 集成](#mcp-集成)
 - [复杂度分析](#复杂度分析)
+- [死代码分析](#死代码分析)
 - [架构](#架构)
 - [支持语言](#支持语言)
 - [开发](#开发)
@@ -327,6 +328,39 @@ codenexus complexity --project myproject --red_only true --sort_by_severity true
 # 自定义时间复杂度阈值（green=O(1), yellow=O(n log n), red=O(n^2)）
 codenexus complexity --project myproject --time_complexity_green "O(1)" --time_complexity_yellow "O(n log n)" --time_complexity_red "O(n^2)"
 ```
+
+## [死代码分析](#死代码分析)
+
+`dead_code` 子命令基于工作列表（worklist）可达性传播算法识别死代码：从种子集合（入口函数 / 导出函数 / FFI 入口 / 测试函数 / trait impl 方法 / `pub use` 重导出目标 / 属性标记入口）出发 BFS 传播 liveness 到不动点，未被传播覆盖的 Function/Method 节点判定为死代码。每条死代码记录携带 High/Medium/Low 置信度分层，输出含 `indexed_commit` / `current_head` / `is_stale` 三字段标识索引新鲜度。
+
+### 配置项
+
+通过 `DeadCodeConfig`（service 层 CLI 参数透传）控制检测行为，关键字段：
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `entry_patterns` | `["main", "Main", "__main__", "wmain", "WinMain", "DLLMain"]` | 入口函数名 glob 模式，匹配的 Function 视为 live 种子 |
+| `test_patterns` | 8 项：`test_*` / `*_test` / `*_spec` / `it_*` / `sec_*` / `snap_*` / `perf_*` / `bench_*` | 测试函数名 glob 模式，匹配的 Function 视为 live 种子 |
+| `attribute_entries` | 6 项：`#[tool` / `#[forge` / `#[tokio::main` / `#[rocket::main` / `#[actix::main` / `#[axum::main` | 函数 `signature` 字段子串匹配，命中则视为宏展开合成的入口（tree-sitter 不展开宏，CALLS 边不可见）。`#[test]` / `#[bench]` 由 `test_patterns` 名字 glob 覆盖，故不在 `attribute_entries` 内 |
+| `check_dynamic_dispatch` | `true` | 检测 qualified_name 中的 `#<TypeName>` disambiguator（如 `fmt#Display`），命中则视为 trait impl 方法（vtable 动态分发，无静态 CALLS 边），跳过死代码判定。设为 `false` 时按保守模式判定为死代码 |
+| `check_exported` | `true` | `isExported=true` 的 Function/Method 视为外部可见，跳过死代码判定 |
+| `check_ffi` | `true` | signature 含 `extern "C"` / `#[no_mangle]` 的 Function 视为 FFI 入口，跳过死代码判定 |
+| `edge_types` | `CALLS` / `FfiCalls` / `Implements` / `Usage` / `Tests` / `UsesType` / `HttpCalls` / `AsyncCalls` | 参与可达性传播的边类型白名单 |
+
+### 示例
+
+```bash
+# 默认配置检测
+codenexus dead_code --project myproject --entry "" --check_exported true --check_ffi true --edge_types ""
+
+# 自定义 edge_types（仅 CALLS + IMPLEMENTS）
+codenexus dead_code --project myproject --edge_types "CALLS,IMPLEMENTS"
+
+# 保守模式：禁用 trait impl 识别
+codenexus dead_code --project myproject --check_dynamic_dispatch false
+```
+
+> **限制**：tree-sitter 不展开 procedural macro（`#[derive(Serialize)]` 等），derive 生成的 impl 方法会被判定为死代码（已知误报）。const fn 在 const 上下文的调用也不被 tree-sitter 识别为 CALLS 边。
 
 ## [架构](#架构)
 
