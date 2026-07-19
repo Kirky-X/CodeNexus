@@ -72,7 +72,7 @@ const EMA_REFERENCE_INTERVAL_SECS: f64 = 5.0;
 // spec 主文：文件大小变化 > 50% 或 line count 变化 > 30% 时强制全量解析，
 // 否则使用增量解析（透传 old_tree 给 parser.parse）。
 // 实际实现需配合 tree-sitter 0.26 的 `Tree::edit` API（详见
-// `Daemon::parse_file_incremental` 文档）。
+// `TreeCache::parse_incremental` 文档）。
 
 /// C1: 缓存失效阈值——文件大小（字节数）相对变化超过此比例时强制全量解析。
 const CACHE_INVALIDATION_SIZE_RATIO: f64 = 0.5;
@@ -85,6 +85,173 @@ const CACHE_INVALIDATION_LINE_RATIO: f64 = 0.3;
 /// 选 100 是经验值：覆盖中小型项目所有源文件；超出时下一次解析走全量，
 /// 性能损失可接受。
 const MAX_TREE_CACHE_ENTRIES: usize = 100;
+
+/// C1: 增量解析的最大源文件大小（1 MB）。超过此大小的文件直接走全量
+/// 解析，跳过 `compute_input_edit` 的 O(N) 字节级 diff。
+///
+/// T202 security-review LOW-3: `compute_input_edit` 在 daemon 主循环中
+/// 同步执行，对大文件（如生成的代码、minified JS）会阻塞事件处理
+/// ~100ms。1 MB 阈值覆盖典型源文件（Rust 通常 < 100KB），同时避免
+/// 大文件阻塞。文件超出阈值不影响正确性——只是走全量解析路径。
+const MAX_INCREMENTAL_PARSE_SIZE: usize = 1024 * 1024;
+
+/// C1: Tree-sitter 增量解析缓存。
+///
+/// 封装 `file_path → (Tree, source_text)` 映射 + 增量解析逻辑。
+/// [`Daemon`] 持有此 struct 作为可选能力，[`IndexObserver`] 可选择性
+/// 调用 [`TreeCache::parse_incremental`] 加速重复解析。
+///
+/// T202 arch-review MEDIUM-1: 提取 `TreeCache` 改善 Daemon SRP。
+/// Daemon 不再直接持有 `HashMap`，而是委托 `TreeCache` 管理缓存和
+/// 增量解析逻辑。Daemon 仍保留 `parse_file_incremental` 方法作为
+/// 薄委托，保持现有 API 不变（测试无需修改）。
+///
+/// Daemon 是单线程模型（`run` 是阻塞循环），无需 `Sync`。
+struct TreeCache {
+    /// file_path → (上次解析的 Tree, 上次解析的 source text)。
+    entries: HashMap<String, (Tree, String)>,
+}
+
+impl TreeCache {
+    /// 创建空的 TreeCache。
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+        }
+    }
+
+    /// 返回缓存条目数（仅供测试和诊断）。
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// 清空缓存（用于测试或显式失效）。
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// 解析文件并以 `path` 为 key 缓存 `Tree`，下次调用若变化较小
+    /// 则走 tree-sitter 增量解析；变化较大时强制全量解析（缓存失效）。
+    ///
+    /// # 缓存失效策略（spec T093）
+    ///
+    /// - 文件大小（字节数）相对变化 > 50% → 全量解析
+    /// - 文件行数相对变化 > 30% → 全量解析
+    /// - 文件大小 > [`MAX_INCREMENTAL_PARSE_SIZE`] → 全量解析
+    ///   （T202 security-review LOW-3：避免 O(N) 字节级 diff 阻塞）
+    /// - 否则 → 增量解析（`Tree::edit` + `parser.parse(source, Some(&old_tree))`）
+    ///
+    /// # Spec deviation (rule 7 conflict)
+    ///
+    /// spec 主文描述"文件变更时优先使用增量解析"，但 tree-sitter 0.26 文档
+    /// 明确："If the text of the document has changed since `old_tree` was
+    /// created, then you **must** edit `old_tree` to match the new text using
+    /// `Tree::edit`." 直接 `parser.parse(new_source, Some(&old_tree))` 会让
+    /// tree-sitter 忽略超出 old_tree 字节范围的新增内容。本方法通过 diff
+    /// old_source 与 new_source（公共前缀 + 公共后缀）构造 `InputEdit`，
+    /// 编辑缓存的 `old_tree`，再传入 `parser.parse`。
+    ///
+    /// # Architecture note (rule 7, T202 arch-review MEDIUM-1)
+    ///
+    /// `TreeCache` 封装了 tree-sitter 增量解析的所有状态和逻辑。
+    /// [`Daemon`] 在观察者模式中是"主题"（subject），原本不直接做解析；
+    /// 解析职责在 [`IndexObserver`] 中。Daemon 持有 `TreeCache` 作为
+    /// 可选能力暴露——`IndexObserver` 可选择性调用以加速重复解析。
+    /// 这样既满足 spec（Daemon 持有 `tree_cache`）又不破坏 SRP。
+    ///
+    /// # Errors
+    ///
+    /// - [`ParseError::UnsupportedLanguage`]：扩展名无法推断 Language，或该
+    ///   Language 未编译进当前 binary（未启用对应 `lang-*` feature）。
+    /// - [`ParseError::LanguageSet`]：parser 无法加载该 Language。
+    /// - [`ParseError::ParseFailed`]：parser 返回 `None`（无 Tree）。
+    fn parse_incremental(&mut self, path: &str, source: &str) -> Result<usize, ParseError> {
+        let lang = infer_language_from_path(path)
+            .ok_or_else(|| ParseError::UnsupportedLanguage(path.to_string()))?;
+
+        // 检查 Language 是否编译进当前 binary（lang-* feature gate）。
+        if !Language::compiled().contains(&lang) {
+            return Err(ParseError::UnsupportedLanguage(format!(
+                "{lang} (grammar not compiled in; enable lang-{lang} feature)"
+            )));
+        }
+
+        let new_byte_len = source.len();
+        let new_line_count = source.lines().count();
+
+        // 决定走增量还是全量：检查 cache 命中 + 变化幅度 + 文件大小。
+        let use_incremental = self
+            .entries
+            .get(path)
+            .map(|(_old_tree, old_source)| {
+                let old_byte_len = old_source.len();
+                let old_line_count = old_source.lines().count();
+
+                let size_ratio = if old_byte_len == 0 {
+                    1.0
+                } else {
+                    ((new_byte_len as f64) - (old_byte_len as f64)).abs() / (old_byte_len as f64)
+                };
+                let line_ratio = if old_line_count == 0 {
+                    1.0
+                } else {
+                    ((new_line_count as f64) - (old_line_count as f64)).abs()
+                        / (old_line_count as f64)
+                };
+
+                // spec: 大小变化 > 50% 或行数变化 > 30% → 全量。
+                // T202 security-review LOW-3: 超过 MAX_INCREMENTAL_PARSE_SIZE
+                // 也强制全量，避免 compute_input_edit 的 O(N) 字节级 diff
+                // 阻塞 daemon 主循环（大文件 ~100ms 延迟）。
+                new_byte_len <= MAX_INCREMENTAL_PARSE_SIZE
+                    && old_byte_len <= MAX_INCREMENTAL_PARSE_SIZE
+                    && size_ratio <= CACHE_INVALIDATION_SIZE_RATIO
+                    && line_ratio <= CACHE_INVALIDATION_LINE_RATIO
+            })
+            .unwrap_or(false);
+
+        let mut parser = ParserFactory::create_parser(lang)?;
+        let tree = if use_incremental {
+            // clone cache entry 避免连续 borrow 冲突（self.entries 可变借用
+            // 与 self.entries.get 不可变借用不能同时存在）。
+            let (old_tree, old_source) = self.entries.get(path).expect("checked above");
+            let old_tree_clone = old_tree.clone();
+            let old_source_clone = old_source.clone();
+            let edit = compute_input_edit(&old_source_clone, source);
+            let mut edited_old_tree = old_tree_clone;
+            edited_old_tree.edit(&edit);
+            parser
+                .parse(source, Some(&edited_old_tree))
+                .ok_or_else(|| ParseError::ParseFailed {
+                    file_path: path.to_string(),
+                })?
+        } else {
+            parser
+                .parse(source, None)
+                .ok_or_else(|| ParseError::ParseFailed {
+                    file_path: path.to_string(),
+                })?
+        };
+
+        let node_count = count_tree_nodes(&tree.root_node());
+        // 更新 cache（覆盖旧 entry，旧 Tree 被 drop）。
+        // 容量保护：若 cache 已满且 path 是新 key，clear 整个 cache 再插入
+        // （粗粒度淘汰，避免长期运行内存膨胀；clear 后下一次其他文件解析
+        // 走全量，性能损失可接受）。
+        if !self.entries.contains_key(path) && self.entries.len() >= MAX_TREE_CACHE_ENTRIES {
+            self.entries.clear();
+        }
+        self.entries
+            .insert(path.to_string(), (tree, source.to_string()));
+        Ok(node_count)
+    }
+}
+
+impl Default for TreeCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// 守护进程（观察者模式中的主题）。
 ///
@@ -109,10 +276,9 @@ pub struct Daemon {
     debounce_window: Duration,
     /// C6: 上次事件触发时间，用于计算 last_interval。
     last_event_at: Option<Instant>,
-    /// C1: file_path → (上次解析的 Tree, 上次解析的 source text)。
-    /// 用于 `parse_file_incremental` 驱动 tree-sitter 增量解析。
-    /// Daemon 是单线程模型（`run` 是阻塞循环），无需 `Sync`。
-    tree_cache: HashMap<String, (Tree, String)>,
+    /// C1: Tree-sitter 增量解析缓存（封装在 [`TreeCache`] 中）。
+    /// T202 arch-review MEDIUM-1: 提取 TreeCache 改善 SRP。
+    tree_cache: TreeCache,
 }
 
 impl Daemon {
@@ -137,7 +303,7 @@ impl Daemon {
             event_intervals: VecDeque::with_capacity(EVENT_INTERVALS_CAPACITY),
             debounce_window: Duration::from_millis(INITIAL_DEBOUNCE_WINDOW_MS),
             last_event_at: None,
-            tree_cache: HashMap::new(),
+            tree_cache: TreeCache::new(),
         }
     }
 
@@ -244,116 +410,19 @@ impl Daemon {
         self.last_event_at = Some(now);
     }
 
-    /// C1: 解析文件并以 `file_path` 为 key 缓存 `Tree`，下次调用若变化较小
+    /// C1: 解析文件并以 `path` 为 key 缓存 `Tree`，下次调用若变化较小
     /// 则走 tree-sitter 增量解析；变化较大时强制全量解析（缓存失效）。
     ///
-    /// # 缓存失效策略（spec T093）
-    ///
-    /// - 文件大小（字节数）相对变化 > 50% → 全量解析
-    /// - 文件行数相对变化 > 30% → 全量解析
-    /// - 否则 → 增量解析（`Tree::edit` + `parser.parse(source, Some(&old_tree))`）
-    ///
-    /// # Spec deviation (rule 7 conflict)
-    ///
-    /// spec 主文描述"文件变更时优先使用增量解析"，但 tree-sitter 0.26 文档
-    /// 明确："If the text of the document has changed since `old_tree` was
-    /// created, then you **must** edit `old_tree` to match the new text using
-    /// `Tree::edit`." 直接 `parser.parse(new_source, Some(&old_tree))` 会让
-    /// tree-sitter 忽略超出 old_tree 字节范围的新增内容。本方法通过 diff
-    /// old_source 与 new_source（公共前缀 + 公共后缀）构造 `InputEdit`，
-    /// 编辑缓存的 `old_tree`，再传入 `parser.parse`。
-    ///
-    /// # Architecture note (rule 7)
-    ///
-    /// Daemon 在观察者模式中是"主题"（subject），原本不直接做解析；解析职责
-    /// 在 [`IndexObserver`] 中。本方法不改变 `process_debounced_events` 流程，
-    /// 仅作为可选能力暴露——`IndexObserver` 可选择性调用以加速重复解析。
-    /// 这样既满足 spec（Daemon 持有 `tree_cache`）又不破坏 SRP。
-    ///
-    /// # Errors
-    ///
-    /// - [`ParseError::UnsupportedLanguage`]：扩展名无法推断 Language，或该
-    ///   Language 未编译进当前 binary（未启用对应 `lang-*` feature）。
-    /// - [`ParseError::LanguageSet`]：parser 无法加载该 Language。
-    /// - [`ParseError::ParseFailed`]：parser 返回 `None`（无 Tree）。
+    /// T202 arch-review MEDIUM-1: 实际逻辑已提取到 [`TreeCache::parse_incremental`]，
+    /// 本方法仅作为薄委托保持现有 API 不变（测试无需修改）。详见
+    /// [`TreeCache::parse_incremental`] 的文档注释（含 spec deviation、
+    /// 缓存失效策略、安全考量）。
     pub fn parse_file_incremental(
         &mut self,
         path: &str,
         source: &str,
     ) -> Result<usize, ParseError> {
-        let lang = infer_language_from_path(path)
-            .ok_or_else(|| ParseError::UnsupportedLanguage(path.to_string()))?;
-
-        // 检查 Language 是否编译进当前 binary（lang-* feature gate）。
-        if !Language::compiled().contains(&lang) {
-            return Err(ParseError::UnsupportedLanguage(format!(
-                "{lang} (grammar not compiled in; enable lang-{lang} feature)"
-            )));
-        }
-
-        let new_byte_len = source.len();
-        let new_line_count = source.lines().count();
-
-        // 决定走增量还是全量：检查 cache 命中 + 变化幅度。
-        let use_incremental = self
-            .tree_cache
-            .get(path)
-            .map(|(_old_tree, old_source)| {
-                let old_byte_len = old_source.len();
-                let old_line_count = old_source.lines().count();
-
-                let size_ratio = if old_byte_len == 0 {
-                    1.0
-                } else {
-                    ((new_byte_len as f64) - (old_byte_len as f64)).abs() / (old_byte_len as f64)
-                };
-                let line_ratio = if old_line_count == 0 {
-                    1.0
-                } else {
-                    ((new_line_count as f64) - (old_line_count as f64)).abs()
-                        / (old_line_count as f64)
-                };
-
-                // spec: 大小变化 > 50% 或行数变化 > 30% → 全量
-                size_ratio <= CACHE_INVALIDATION_SIZE_RATIO
-                    && line_ratio <= CACHE_INVALIDATION_LINE_RATIO
-            })
-            .unwrap_or(false);
-
-        let mut parser = ParserFactory::create_parser(lang)?;
-        let tree = if use_incremental {
-            // clone cache entry 避免连续 borrow 冲突（self.tree_cache 可变借用
-            // 与 self.tree_cache.get 不可变借用不能同时存在）。
-            let (old_tree, old_source) = self.tree_cache.get(path).expect("checked above");
-            let old_tree_clone = old_tree.clone();
-            let old_source_clone = old_source.clone();
-            let edit = compute_input_edit(&old_source_clone, source);
-            let mut edited_old_tree = old_tree_clone;
-            edited_old_tree.edit(&edit);
-            parser
-                .parse(source, Some(&edited_old_tree))
-                .ok_or_else(|| ParseError::ParseFailed {
-                    file_path: path.to_string(),
-                })?
-        } else {
-            parser
-                .parse(source, None)
-                .ok_or_else(|| ParseError::ParseFailed {
-                    file_path: path.to_string(),
-                })?
-        };
-
-        let node_count = count_tree_nodes(&tree.root_node());
-        // 更新 cache（覆盖旧 entry，旧 Tree 被 drop）。
-        // 容量保护：若 cache 已满且 path 是新 key，clear 整个 cache 再插入
-        // （粗粒度淘汰，避免长期运行内存膨胀；clear 后下一次其他文件解析
-        // 走全量，性能损失可接受）。
-        if !self.tree_cache.contains_key(path) && self.tree_cache.len() >= MAX_TREE_CACHE_ENTRIES {
-            self.tree_cache.clear();
-        }
-        self.tree_cache
-            .insert(path.to_string(), (tree, source.to_string()));
-        Ok(node_count)
+        self.tree_cache.parse_incremental(path, source)
     }
 
     /// C1: 返回 `tree_cache` 中缓存的条目数（仅供测试和诊断）。
