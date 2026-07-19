@@ -300,6 +300,48 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
 // Definition extractors
 // ---------------------------------------------------------------------------
 
+/// Builds the signature text for a `function_item` node, prepending any
+/// leading `attribute_item` siblings (`#[tool(...)]`, `#[forge(...)]`,
+/// `#[tokio::main]`, etc.).
+///
+/// tree-sitter-rust 0.24 tokenises outer attributes as sibling
+/// `attribute_item` nodes in the parent (e.g. `source_file`, `mod_item`,
+/// `impl_item`), NOT as children of `function_item`. A bare
+/// `node_text(function_item)` therefore drops the attributes — the
+/// dead-code detector scans `signature` for `#[tool` / `#[forge` /
+/// `#[tokio::main` substrings to recognise macro-synthesised entry points,
+/// so without this prepend every `#[tool]` / `#[forge]` function would be
+/// a false positive (T182-B).
+///
+/// Walks `prev_sibling()` backwards collecting consecutive `attribute_item`
+/// nodes, reverses the collected slice (so attributes appear in source
+/// order), then joins them with `\n` and appends the function body text.
+/// Returns `None` only when both the attribute walk and the function body
+/// yield no text (which should not happen for a valid `function_item`).
+fn collect_function_signature(node: Node, source: &str) -> Option<String> {
+    let body = node_text(node, source)?;
+    let mut attrs: Vec<&str> = Vec::new();
+    let mut cursor = node.prev_sibling();
+    while let Some(sibling) = cursor {
+        if sibling.kind() == "attribute_item" {
+            if let Some(text) = node_text(sibling, source) {
+                attrs.push(text);
+            }
+            cursor = sibling.prev_sibling();
+        } else {
+            break;
+        }
+    }
+    if attrs.is_empty() {
+        return Some(body.to_string());
+    }
+    attrs.reverse();
+    let mut combined = attrs.join("\n");
+    combined.push('\n');
+    combined.push_str(body);
+    Some(combined)
+}
+
 fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
@@ -308,7 +350,15 @@ fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &m
         return;
     };
     let is_exported = is_pub(node);
-    let signature = node_text(node, source).map(String::from);
+    // T182-B: prepend leading `attribute_item` siblings (`#[tool(...)]`,
+    // `#[forge(...)]`, `#[tokio::main]`, etc.) to the signature text.
+    // tree-sitter-rust 0.24 tokenises outer attributes as sibling
+    // `attribute_item` nodes (not children of `function_item`), so
+    // `node_text(node)` alone drops them. The dead-code detector scans
+    // `signature` for `#[tool` / `#[forge` / `#[tokio::main` substrings
+    // to recognise macro-synthesised entry points — without this prepend,
+    // every `#[tool]` / `#[forge]` function would be a false positive.
+    let signature = collect_function_signature(node, source);
     let qn = make_qn(ctx.file_path, &name, ctx.project, ctx.current_parent);
     let mut builder = ModelNode::builder(NodeLabel::Function, name, qn)
         .file_path(ctx.file_path)
@@ -537,22 +587,30 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
     let Some(callee) = callee_name(func_node, source) else {
         return;
     };
-    // C2 fix: filter stdlib method calls to match gitnexus (only user-code
-    // function calls are tracked). See triage.md §C2. Also handles
-    // generic_function wrapping a field_expression (e.g. `.collect::<Vec<_>>()`).
-    if is_field_expression_call(func_node) && is_stdlib_method(&callee) {
-        return;
-    }
-    let args = call_arguments(node, source);
     let caller_qn = ctx
         .current_func
         .map(|name| make_qn(ctx.file_path, name, ctx.project, ctx.current_parent));
-    result.calls.push(CallInfo {
-        caller_qn: caller_qn.clone(),
-        callee_name: callee,
-        line: node.start_position().row as u32 + 1,
-        args,
-    });
+    // C2 fix: filter stdlib method calls to match gitnexus (only user-code
+    // function calls are tracked). See triage.md §C2. Also handles
+    // generic_function wrapping a field_expression (e.g. `.collect::<Vec<_>>()`).
+    //
+    // T182-A fix: do NOT short-circuit before `extract_function_ref_args`.
+    // When the stdlib filter matches (e.g. `.map(fn_name)`), the method call
+    // itself is filtered (no CallInfo for `map`), but bare-identifier
+    // arguments (e.g. `fn_name`) are still potential function references and
+    // must be extracted. Short-circuiting caused 15/27 dead-code false
+    // positives in T182 sampling (every `.map(signature_first_line)` /
+    // `.map(row_to_function)` etc. lost its CALLS edge to the referenced
+    // function).
+    if !(is_field_expression_call(func_node) && is_stdlib_method(&callee)) {
+        let args = call_arguments(node, source);
+        result.calls.push(CallInfo {
+            caller_qn: caller_qn.clone(),
+            callee_name: callee,
+            line: node.start_position().row as u32 + 1,
+            args,
+        });
+    }
     // B1b fix: function-reference arguments (e.g. `eval_unary(..., erf)`).
     // tree-sitter parses a function name passed as an argument as a bare
     // `identifier` inside `arguments`. Without this, `erf` only generates a
@@ -560,6 +618,11 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
     // (zero incoming CALLS edges). The resolver drops CallInfo records whose
     // callee_name doesn't match a function in the symbol table, so variables
     // passed as arguments (e.g. `foo(x)`) are silently filtered.
+    //
+    // T182-A: now invoked unconditionally (both for stdlib-filtered and
+    // preserved method calls) so closure-passing patterns like
+    // `.map(transform_fn)` / `.filter(predicate)` / `.for_each(consumer)`
+    // generate CALLS edges to the referenced functions.
     extract_function_ref_args(node, source, &caller_qn, result);
 }
 
@@ -1667,6 +1730,189 @@ fn contains_scientific(ast: &AstNode) -> bool { true }
             !contains_calls.is_empty(),
             "expected contains_scientific call to be extracted, got {:?}",
             result.calls
+        );
+    }
+
+    /// T182-A: Verifies CallInfo extraction for function-reference arguments
+    /// passed to stdlib iterator adaptors (`.map(fn_name)`, `.filter(pred)`,
+    /// etc.). The closure-passing pattern is pervasive in the CodeNexus
+    /// codebase (15/27 dead-code false positives in T182 sampling).
+    ///
+    /// Root cause: `extract_call` short-circuits on stdlib method filter
+    /// (`is_field_expression_call && is_stdlib_method`) BEFORE calling
+    /// `extract_function_ref_args`, so the bare-identifier argument
+    /// (`transform_fn`) only generates a ReadInfo, not a CallInfo. Dead-code
+    /// analysis then reports it as having zero incoming CALLS edges.
+    ///
+    /// Fix: still call `extract_function_ref_args` when the stdlib filter
+    /// matches, so function-reference arguments are extracted regardless of
+    /// whether the receiver method is stdlib-filtered. The resolver drops
+    /// CallInfo records whose callee_name doesn't match a function in the
+    /// symbol table, so non-function bare identifiers (e.g. local variables)
+    /// are silently filtered — no false-positive CALLS edges.
+    #[test]
+    fn a_extracts_function_reference_passed_as_method_call_argument() {
+        let src = r#"
+fn transform_fn(x: i32) -> i32 { x }
+fn main() {
+    let v: Vec<i32> = vec![1, 2, 3];
+    let _out: Vec<i32> = v.iter().map(transform_fn).collect::<Vec<_>>();
+}
+"#;
+        let result = extract(src);
+        let transform_calls: Vec<_> = result
+            .calls
+            .iter()
+            .filter(|c| c.callee_name == "transform_fn")
+            .collect();
+        assert!(
+            !transform_calls.is_empty(),
+            "T182-A: transform_fn passed as .map() argument should be extracted as CallInfo, got {:?}",
+            result.calls
+        );
+    }
+
+    /// T182-A: Verifies CallInfo extraction covers common iterator adaptors
+    /// that take function-reference arguments. Mirrors real CodeNexus
+    /// call sites: `.map(signature_first_line)`, `.filter(predicate)`,
+    /// `.then(callback)`, `.and_then(fallible)`, `.or_else(fallback)`,
+    /// `.for_each(consumer)`.
+    #[test]
+    fn a_extracts_function_reference_for_common_iterator_adaptors() {
+        let src = r#"
+fn double(x: i32) -> i32 { x * 2 }
+fn is_even(x: &i32) -> bool { x % 2 == 0 }
+fn stringify(x: i32) -> String { x.to_string() }
+fn fallback(x: i32) -> Option<i32> { Some(x) }
+fn consume(x: &i32) { let _ = x; }
+fn main() {
+    let v: Vec<i32> = vec![1, 2, 3];
+    let _a: Vec<i32> = v.iter().map(double).collect::<Vec<_>>();
+    let _b: Vec<&i32> = v.iter().filter(is_even).collect::<Vec<_>>();
+    let _c: Vec<String> = v.iter().map(stringify).collect::<Vec<_>>();
+    let _d: Vec<i32> = v.iter().filter_map(fallback).collect::<Vec<_>>();
+    v.iter().for_each(consume);
+}
+"#;
+        let result = extract(src);
+        let callees: Vec<String> = result.calls.iter().map(|c| c.callee_name.clone()).collect();
+        for expected in ["double", "is_even", "stringify", "fallback", "consume"] {
+            assert!(
+                callees.contains(&expected.to_string()),
+                "T182-A: {expected} should be extracted as CallInfo when passed as iterator adaptor argument, got {callees:?}"
+            );
+        }
+    }
+
+    /// T182-B: Verifies `extract_function` prepends leading `attribute_item`
+    /// siblings (`#[tool(...)]`, `#[forge(...)]`, `#[tokio::main]`) to the
+    /// `signature` field of the resulting Function node. tree-sitter-rust 0.24
+    /// tokenises outer attributes as sibling `attribute_item` nodes (not
+    /// children of `function_item`), so `node_text(function_item)` alone
+    /// drops them. The dead-code detector scans `signature` for `#[tool` /
+    /// `#[forge` / `#[tokio::main` substrings to recognise
+    /// macro-synthesised entry points — without this prepend, every
+    /// `#[tool]` / `#[forge]` function would be a false positive.
+    #[test]
+    fn b_signature_includes_leading_attribute_items() {
+        let src = r#"
+#[cfg(all(feature = "cli", feature = "analysis"))]
+#[forge(
+    name = "architecture",
+    version = "0.3.5",
+    description = "Show high-level architecture overview of a project.",
+    cli = true
+)]
+async fn architecture(project: String) -> Result<(), ApiError> {
+    let _ = project;
+    Ok(())
+}
+"#;
+        let result = extract(src);
+        let arch = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "architecture")
+            .expect("architecture fn should be extracted");
+        let sig = arch
+            .signature
+            .as_deref()
+            .expect("architecture should have a signature");
+        assert!(
+            sig.contains("#[forge"),
+            "T182-B: signature should contain #[forge] attribute, got: {sig:?}"
+        );
+        assert!(
+            sig.contains("#[cfg(all(feature = \"cli\", feature = \"analysis\"))]"),
+            "T182-B: signature should contain leading #[cfg(...)] attribute, got: {sig:?}"
+        );
+        assert!(
+            sig.contains("async fn architecture"),
+            "T182-B: signature should still contain the function body, got: {sig:?}"
+        );
+        // Attribute order must follow source order: #[cfg] before #[forge].
+        let cfg_idx = sig.find("#[cfg").expect("#[cfg present");
+        let forge_idx = sig.find("#[forge").expect("#[forge present");
+        assert!(
+            cfg_idx < forge_idx,
+            "T182-B: attributes must appear in source order (#[cfg] before #[forge])"
+        );
+    }
+
+    /// T182-B: Verifies the common async-runtime / web-framework entry
+    /// attributes (`#[tokio::main]`, `#[rocket::main]`, `#[actix::main]`,
+    /// `#[axum::main]`) are captured in the signature. These macros
+    /// synthesise a synchronous `main` that calls the decorated async fn,
+    /// so the decorated fn has no static CALLS edge in the graph.
+    #[test]
+    fn b_signature_includes_async_runtime_entry_attributes() {
+        let src = r#"
+#[tokio::main]
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
+}
+"#;
+        let result = extract(src);
+        let run_fn = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "run")
+            .expect("run fn should be extracted");
+        let sig = run_fn
+            .signature
+            .as_deref()
+            .expect("run should have a signature");
+        assert!(
+            sig.contains("#[tokio::main]"),
+            "T182-B: signature should contain #[tokio::main], got: {sig:?}"
+        );
+        assert!(
+            sig.contains("async fn run"),
+            "T182-B: signature should still contain the function body, got: {sig:?}"
+        );
+    }
+
+    /// T182-B: Verifies that a plain function with no leading attributes
+    /// produces the same signature as before (regression guard for
+    /// `collect_function_signature`).
+    #[test]
+    fn b_signature_without_attributes_unchanged() {
+        let src = r#"
+fn plain(x: i32) -> i32 { x + 1 }
+"#;
+        let result = extract(src);
+        let plain_fn = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "plain")
+            .expect("plain fn should be extracted");
+        let sig = plain_fn
+            .signature
+            .as_deref()
+            .expect("plain should have a signature");
+        assert_eq!(
+            sig, "fn plain(x: i32) -> i32 { x + 1 }",
+            "T182-B: plain function signature must be unchanged when no attributes precede it"
         );
     }
 

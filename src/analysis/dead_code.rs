@@ -43,6 +43,38 @@ const DEFAULT_TEST_PATTERNS: &[&str] = &[
 const DEFAULT_ENTRY_PATTERNS: &[&str] =
     &["main", "Main", "__main__", "wmain", "WinMain", "DLLMain"];
 
+/// Default entry-point attribute substrings scanned for in a function's
+/// `signature` field (T182-B / B4.5 deferred).
+///
+/// These attributes register the decorated function as an external entry
+/// point via macro expansion:
+/// - `#[tool(...)]` — rmcp MCP tool registration (synthesises a dispatch
+///   table that calls the fn at runtime by tool name).
+/// - `#[forge(...)]` — CodeNexus service registration (registers both an
+///   MCP tool and a CLI subcommand).
+/// - `#[tokio::main]` / `#[rocket::main]` / `#[actix::main]` /
+///   `#[axum::main]` — async-runtime entry macros that synthesise a
+///   synchronous `main` calling the decorated async fn.
+///
+/// The check is a substring match on the signature, so both `#[tool]`
+/// (bare) and `#[tool(name = "...")]` (with arguments) are recognised.
+/// tree-sitter does not expand macros, so the synthesised CALLS edge is
+/// invisible to the graph — dead_code must treat the attribute itself as
+/// the entry-point signal.
+///
+/// Non-entry-point attributes (`#[cfg(...)]`, `#[derive(...)]`,
+/// `#[allow(...)]`, `#[test]`, `#[bench]`) are intentionally absent —
+/// `#[test]` / `#[bench]` are already covered by `DEFAULT_TEST_PATTERNS`
+/// name-globs, and the others do not register external entry points.
+const DEFAULT_ATTRIBUTE_ENTRIES: &[&str] = &[
+    "#[tool",
+    "#[forge",
+    "#[tokio::main",
+    "#[rocket::main",
+    "#[actix::main",
+    "#[axum::main",
+];
+
 /// Reason string recorded on every [`DeadCodeEntry`].
 const REASON_ZERO_INCOMING_CALLS: &str = "zero incoming CALLS edges";
 
@@ -69,6 +101,14 @@ pub struct DeadCodeConfig {
     /// When `true`, signatures containing `extern "C"` / `#[no_mangle]` are
     /// treated as FFI entry points and excluded.
     pub check_ffi: bool,
+    /// Substrings scanned for in a function's `signature` field to recognise
+    /// attribute-marked entry points (T182-B / B4.5 deferred). When any
+    /// substring matches, the function is treated as a live seed (macro
+    /// expansion synthesises an external call to it that is invisible to
+    /// the static graph). Defaults to [`DEFAULT_ATTRIBUTE_ENTRIES`]
+    /// (`#[tool]`, `#[forge]`, `#[tokio::main]`, `#[rocket::main]`,
+    /// `#[actix::main]`, `#[axum::main]`).
+    pub attribute_entries: Vec<String>,
     /// Edge types whose incoming edges mark a function as "used".
     pub edge_types: Vec<EdgeType>,
 }
@@ -93,6 +133,14 @@ impl Default for DeadCodeConfig {
             check_dynamic_dispatch: true,
             check_reflection: false,
             check_ffi: true,
+            // T182-B / B4.5: attribute-marked entry points. Defaults mirror
+            // `DEFAULT_ATTRIBUTE_ENTRIES` (rmcp `#[tool]`, CodeNexus `#[forge]`,
+            // async-runtime entry macros). Users can extend via
+            // `DeadCodeConfig { attribute_entries: ..., ..Default::default() }`.
+            attribute_entries: DEFAULT_ATTRIBUTE_ENTRIES
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
             edge_types: vec![
                 EdgeType::Calls,
                 EdgeType::FfiCalls,
@@ -495,9 +543,9 @@ impl<'a> ReachabilityAnalyzer<'a> {
         }
     }
 
-    /// Collects all eight seed categories into the worklist.
+    /// Collects all nine seed categories into the worklist.
     ///
-    /// Categories (aligned with design.md D1 + B0/B4/B7):
+    /// Categories (aligned with design.md D1 + B0/B4/B7 + T182-B/B4.5):
     /// 1. Entry functions (name matches `entry_patterns` or `config.entry_patterns`)
     /// 2. Test functions (name matches `test_patterns` or `DEFAULT_TEST_PATTERNS`)
     /// 3. B0: test module function (`#tests` disambiguator)
@@ -506,11 +554,9 @@ impl<'a> ReachabilityAnalyzer<'a> {
     /// 6. Exported functions (`isExported=true`, when `check_exported`)
     /// 7. FFI entries (signature contains `extern "C"` / `#[no_mangle]`, when `check_ffi`)
     /// 8. B7: re-export targets (`REEXPORTS` edge targets, always checked)
-    ///
-    /// Attribute-marked seeds (`#[test]`, `#[bench]`, `#[tokio::test]`) are
-    /// deferred to B4.5 — `#[test] fn foo()` already matches the `test_*`
-    /// glob in category 2, so the attribute path is redundant for the
-    /// common case.
+    /// 9. T182-B: attribute-marked entry points (signature contains any
+    ///    `config.attribute_entries` substring, e.g. `#[tool` / `#[forge` /
+    ///    `#[tokio::main`)
     ///
     /// Fully in-memory after [`BatchPrefetch::load`] — no Cypher round-trips
     /// (arch-review MEDIUM-2: removed the dead `StorageResult` return).
@@ -527,6 +573,12 @@ impl<'a> ReachabilityAnalyzer<'a> {
             .iter()
             .map(|s| s.as_str())
             .collect();
+        let config_attribute_entries: Vec<&str> = self
+            .config
+            .attribute_entries
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
 
         for func in self.functions {
             if self.is_seed_function(
@@ -534,6 +586,7 @@ impl<'a> ReachabilityAnalyzer<'a> {
                 entry_patterns,
                 &config_entry_patterns,
                 &config_test_patterns,
+                &config_attribute_entries,
             ) {
                 self.worklist.push_back(func.id.clone());
             }
@@ -554,12 +607,16 @@ impl<'a> ReachabilityAnalyzer<'a> {
     /// 6. Exported functions (`isExported=true`, when `check_exported`)
     /// 7. FFI entries (signature contains `extern "C"` / `#[no_mangle]`, when `check_ffi`)
     /// 8. Re-export targets (B7 — `REEXPORTS` edge targets, always checked)
+    /// 9. T182-B: attribute-marked entry points (signature contains any
+    ///    `attribute_entries` substring, e.g. `#[tool` / `#[forge` /
+    ///    `#[tokio::main`)
     fn is_seed_function(
         &self,
         func: &FunctionRow,
         entry_patterns: &[&str],
         config_entry_patterns: &[&str],
         config_test_patterns: &[&str],
+        attribute_entries: &[&str],
     ) -> bool {
         // 1. Entry functions (name-based)
         if matches_any_pattern(&func.name, entry_patterns)
@@ -600,6 +657,20 @@ impl<'a> ReachabilityAnalyzer<'a> {
         // regardless of `check_exported` (which gates `pub fn`, a
         // different liveness path).
         if self.prefetch.is_reexport_target(&func.id) {
+            return true;
+        }
+        // 9. T182-B: attribute-marked entry points. Macro expansion
+        // synthesises an external call to the decorated fn that is
+        // invisible to the static graph (tree-sitter does not expand
+        // macros), so the attribute itself is the entry-point signal.
+        // Substring match recognises both `#[tool]` (bare) and
+        // `#[tool(name = "...")]` (with arguments). Non-entry-point
+        // attributes (`#[cfg]`, `#[derive]`, `#[allow]`) are intentionally
+        // absent from `DEFAULT_ATTRIBUTE_ENTRIES`.
+        if attribute_entries
+            .iter()
+            .any(|attr| func.signature.contains(attr))
+        {
             return true;
         }
         false
@@ -741,6 +812,16 @@ impl<'a> DeadCodeDetector<'a> {
             .iter()
             .map(|s| s.as_str())
             .collect();
+        // T182-B: config.attribute_entries substring list for defense-in-depth
+        // (seeds already short-circuit liveness via `is_seed_function` above;
+        // this gate exists so a future code path that bypasses the worklist
+        // still respects attribute-marked entry points).
+        let config_attribute_entries: Vec<&str> = self
+            .config
+            .attribute_entries
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
         let mut entries = Vec::new();
         for func in &functions {
             // B5: primary gate — function is live if reachable from any seed.
@@ -790,6 +871,17 @@ impl<'a> DeadCodeDetector<'a> {
             // treat them as live — they are called via dynamic dispatch / vtable
             // and have no static CALLS edge in the graph.
             if self.config.check_dynamic_dispatch && is_trait_impl_method(&func.qualified_name) {
+                continue;
+            }
+            // T182-B defense-in-depth: attribute-marked entry points. Mirrors
+            // `is_seed_function` category 9 — keeps the filter loop
+            // self-consistent if `live_set` ever diverges from the seed list
+            // (e.g. via a future config that disables worklist seeding but
+            // keeps the filter loop). Substring match on `func.signature`.
+            if config_attribute_entries
+                .iter()
+                .any(|attr| func.signature.contains(attr))
+            {
                 continue;
             }
             let language = file_languages
@@ -1323,6 +1415,200 @@ mod tests {
         );
     }
 
+    // T182-B: Function nodes whose signature carries an entry-point
+    // attribute (`#[tool(...)]` / `#[forge(...)]` / `#[tokio::main]` /
+    // `#[rocket::main]` / `#[actix::main]` / `#[axum::main]` etc.) must
+    // NOT be reported dead. These attributes register the function as an
+    // external entry point via macro expansion (e.g. rmcp `#[tool]` /
+    // CodeNexus `#[forge]` register MCP tools; `#[tokio::main]` synthesizes
+    // a synchronous `main` that calls the async fn). tree-sitter does not
+    // expand macros, so the synthesised CALLS edge is invisible to the
+    // graph — dead_code must treat the attribute itself as the entry-point
+    // signal (B4.5 deferred task, T045/T046 spec).
+    #[test]
+    fn b_tool_attribute_marked_functions_treated_as_live() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // `#[tool(name = "query")]` registers `query_mcp` as an MCP tool —
+        // macro expansion synthesises a dispatch table that calls it.
+        create_function_with_flags(
+            &kit,
+            "f_tool",
+            "demo",
+            "query_mcp",
+            "demo.query_mcp",
+            "/src/service/query.rs",
+            75,
+            false,
+            "#[tool(name = \"query\")]\nasync fn query_mcp() {}",
+        );
+        // `#[forge(name = "architecture", cli = true)]` is the CodeNexus
+        // equivalent — `#[forge]` registers both an MCP tool and a CLI
+        // subcommand.
+        create_function_with_flags(
+            &kit,
+            "f_forge",
+            "demo",
+            "architecture",
+            "demo.architecture",
+            "/src/service/architecture.rs",
+            63,
+            false,
+            "#[forge(name = \"architecture\", cli = true)]\nasync fn architecture() {}",
+        );
+        // Control: plain private function with no attribute, no incoming
+        // CALLS edges → IS dead.
+        create_function_with_flags(
+            &kit,
+            "f_plain",
+            "demo",
+            "unused_helper",
+            "demo.unused_helper",
+            "/src/lib.rs",
+            100,
+            false,
+            "fn unused_helper() {}",
+        );
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            !names.contains(&"query_mcp"),
+            "T182-B: #[tool]-marked query_mcp must NOT be dead: {:?}",
+            names
+        );
+        assert!(
+            !names.contains(&"architecture"),
+            "T182-B: #[forge]-marked architecture must NOT be dead: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"unused_helper"),
+            "T182-B: plain unused_helper IS dead: {:?}",
+            names
+        );
+    }
+
+    // T182-B: Verifies that the common async-runtime / web-framework entry
+    // attributes (`#[tokio::main]`, `#[rocket::main]`, `#[actix::main]`,
+    // `#[axum::main]`) are also recognised as entry-point seeds. These
+    // macros synthesise a synchronous `main` that calls the decorated async
+    // fn, so the decorated fn has no static CALLS edge in the graph.
+    #[test]
+    fn b_async_runtime_entry_attributes_treated_as_live() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function_with_flags(
+            &kit,
+            "f_tokio",
+            "demo",
+            "run",
+            "demo.run",
+            "/src/main.rs",
+            10,
+            false,
+            "#[tokio::main]\nasync fn run() {}",
+        );
+        create_function_with_flags(
+            &kit,
+            "f_rocket",
+            "demo",
+            "rocket_main",
+            "demo.rocket_main",
+            "/src/main.rs",
+            20,
+            false,
+            "#[rocket::main]\nasync fn rocket_main() {}",
+        );
+        create_function_with_flags(
+            &kit,
+            "f_actix",
+            "demo",
+            "actix_main",
+            "demo.actix_main",
+            "/src/main.rs",
+            30,
+            false,
+            "#[actix::main]\nasync fn actix_main() {}",
+        );
+        create_function_with_flags(
+            &kit,
+            "f_axum",
+            "demo",
+            "axum_main",
+            "demo.axum_main",
+            "/src/main.rs",
+            40,
+            false,
+            "#[axum::main]\nasync fn axum_main() {}",
+        );
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        for expected in ["run", "rocket_main", "actix_main", "axum_main"] {
+            assert!(
+                !names.contains(&expected),
+                "T182-B: async-runtime entry attribute should keep {expected} live: {:?}",
+                names
+            );
+        }
+    }
+
+    // T182-B: Verifies the attribute seed check is a substring match (not
+    // exact match), so both `#[tool]` (bare) and `#[tool(...)]` (with
+    // arguments) are recognised. Also verifies that `#[cfg(...)]` /
+    // `#[derive(...)]` (non-entry-point attributes) do NOT falsely mark a
+    // function as live.
+    #[test]
+    fn b_attribute_seed_uses_substring_match_and_ignores_non_entry_attributes() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Bare `#[tool]` without arguments — substring `#[tool` matches.
+        create_function_with_flags(
+            &kit,
+            "f_bare",
+            "demo",
+            "bare_tool",
+            "demo.bare_tool",
+            "/src/m.rs",
+            1,
+            false,
+            "#[tool]\nfn bare_tool() {}",
+        );
+        // `#[cfg(test)]` + `#[derive(Debug)]` are NOT entry-point attributes
+        // — this function should still be reported dead.
+        create_function_with_flags(
+            &kit,
+            "f_cfg",
+            "demo",
+            "cfg_only",
+            "demo.cfg_only",
+            "/src/m.rs",
+            10,
+            false,
+            "#[cfg(test)]\n#[derive(Debug)]\nfn cfg_only() {}",
+        );
+
+        let storage = storage(&kit);
+        let detector = DeadCodeDetector::new(&*storage);
+        let result = detector.detect("demo", &[]).expect("detect");
+        let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            !names.contains(&"bare_tool"),
+            "T182-B: bare #[tool] should mark bare_tool as live: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"cfg_only"),
+            "T182-B: #[cfg]/#[derive] should NOT mark cfg_only as live: {:?}",
+            names
+        );
+    }
+
     // B7: a Function with no incoming CALLS edges but targeted by a
     // REEXPORTS edge (File→Function, created by `resolve/imports.rs`
     // for `pub use` / `export ... from`) must NOT be reported dead —
@@ -1664,6 +1950,7 @@ mod tests {
             check_dynamic_dispatch: false,
             check_reflection: false,
             check_ffi: false,
+            attribute_entries: vec![],
             edge_types: vec![EdgeType::Calls],
         };
         let detector = DeadCodeDetector::with_config(&*storage, cfg);
