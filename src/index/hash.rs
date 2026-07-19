@@ -615,7 +615,7 @@ mod tests {
             chunks_before.iter().map(|(o, h)| (*o, h)).collect();
         let changed: usize = chunks_after
             .iter()
-            .filter(|(o, h)| before_map.get(o).map_or(true, |bh| *bh != h))
+            .filter(|(o, h)| before_map.get(o).is_none_or(|bh| *bh != h))
             .count();
         // Allow up to 5 chunks to change (conservative; theory says 1-3).
         assert!(
@@ -631,7 +631,7 @@ mod tests {
     fn test_fastcdc_chunk_size_bounds() {
         // 1MB of pseudo-random content.
         let mut content = vec![0u8; 1024 * 1024];
-        fill_pseudo_random(&mut content, 0xC0FFEE_BEEF_12345);
+        fill_pseudo_random(&mut content, 0x0C0F_FEEB_EEF1_2345);
 
         let tmp = NamedTempFile::new().unwrap();
         fs::write(tmp.path(), &content).unwrap();
@@ -800,7 +800,7 @@ mod tests {
         // Calling with non-empty old_chunks on an empty file must still
         // produce the empty-file hash (old_chunks is ignored for hash
         // computation; see compute_file_hash_incremental docstring).
-        let stale_old = vec![(0u64, String::from("0".repeat(64)))];
+        let stale_old = vec![(0u64, "0".repeat(64))];
         let (file_hash_2, new_chunks_2) = compute_file_hash_incremental(tmp.path(), &stale_old)
             .expect("empty file with stale old_chunks should not error");
         assert_eq!(file_hash, file_hash_2, "empty file hash must be stable");
@@ -944,7 +944,7 @@ mod tests {
             old_chunks.iter().map(|(o, h)| (*o, h)).collect();
         let changed: usize = new_chunks
             .iter()
-            .filter(|(o, h)| old_map.get(o).map_or(true, |oh| *oh != h))
+            .filter(|(o, h)| old_map.get(o).is_none_or(|oh| *oh != h))
             .count();
         assert!(
             changed > 0,

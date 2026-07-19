@@ -437,31 +437,39 @@ mod tests {
         Repository::in_memory().expect("in_memory repository")
     }
 
+    /// Argument bundle for [`sample_function_with_docstring`].
+    ///
+    /// All `String` fields default to empty via `#[derive(Default)]`; callers
+    /// only need to set fields they care about and can use `..Default::default()`
+    /// to leave the rest blank.
+    #[derive(Default)]
+    struct SampleFunctionSpec {
+        id: String,
+        project: String,
+        name: String,
+        qn: String,
+        file: String,
+        line: u32,
+        docstring: String,
+        content: String,
+    }
+
     /// Builds a Function node with explicit docstring. `content` is set via
     /// the `properties` JSON bag (the schema stores `content` there).
-    fn sample_function_with_docstring(
-        id: &str,
-        project: &str,
-        name: &str,
-        qn: &str,
-        file: &str,
-        line: u32,
-        docstring: &str,
-        content: &str,
-    ) -> Node {
-        let mut builder = Node::builder(NodeLabel::Function, name, qn)
-            .id(id)
-            .project(project)
-            .file_path(file)
-            .start_line(line)
-            .end_line(line + 10)
+    fn sample_function_with_docstring(spec: SampleFunctionSpec) -> Node {
+        let mut builder = Node::builder(NodeLabel::Function, &spec.name, &spec.qn)
+            .id(&spec.id)
+            .project(&spec.project)
+            .file_path(&spec.file)
+            .start_line(spec.line)
+            .end_line(spec.line + 10)
             .language(Language::Rust)
             .signature("fn x()");
-        if !docstring.is_empty() {
-            builder = builder.docstring(docstring);
+        if !spec.docstring.is_empty() {
+            builder = builder.docstring(&spec.docstring);
         }
-        if !content.is_empty() {
-            builder = builder.properties(serde_json::json!({ "content": content }));
+        if !spec.content.is_empty() {
+            builder = builder.properties(serde_json::json!({ "content": spec.content }));
         }
         builder.build()
     }
@@ -479,29 +487,28 @@ mod tests {
         let mut nodes = Vec::new();
         // 5 symbols with name match (sort AFTER "aaa_*" alphabetically)
         for i in 0..5 {
-            nodes.push(sample_function_with_docstring(
-                &format!("name_{i}"),
-                "demo",
-                &format!("parse_{i}"),
-                &format!("demo.parse_{i}"),
-                "/a.rs",
-                i as u32 + 1,
-                "",
-                "",
-            ));
+            nodes.push(sample_function_with_docstring(SampleFunctionSpec {
+                id: format!("name_{i}"),
+                project: "demo".into(),
+                name: format!("parse_{i}"),
+                qn: format!("demo.parse_{i}"),
+                file: "/a.rs".into(),
+                line: i as u32 + 1,
+                ..Default::default()
+            }));
         }
         // 5 symbols with comment-only match (sort BEFORE "parse_*" alphabetically)
         for i in 0..5 {
-            nodes.push(sample_function_with_docstring(
-                &format!("doc_{i}"),
-                "demo",
-                &format!("aaa_{i}"),
-                &format!("demo.aaa_{i}"),
-                "/b.rs",
-                i as u32 + 100,
-                &format!("parse something {i}"),
-                "",
-            ));
+            nodes.push(sample_function_with_docstring(SampleFunctionSpec {
+                id: format!("doc_{i}"),
+                project: "demo".into(),
+                name: format!("aaa_{i}"),
+                qn: format!("demo.aaa_{i}"),
+                file: "/b.rs".into(),
+                line: i as u32 + 100,
+                docstring: format!("parse something {i}"),
+                ..Default::default()
+            }));
         }
         repo.save_nodes(&nodes, NodeLabel::Function)
             .expect("save_nodes");
@@ -528,29 +535,29 @@ mod tests {
         // builder. With comment weight >> symbol_name weight, comment-only
         // matches should outscore name matches.
         let repo = fresh_repo();
-        let mut nodes = Vec::new();
-        // name match, no docstring
-        nodes.push(sample_function_with_docstring(
-            "n1",
-            "demo",
-            "parse",
-            "demo.parse",
-            "/a.rs",
-            1,
-            "",
-            "",
-        ));
-        // comment-only match
-        nodes.push(sample_function_with_docstring(
-            "n2",
-            "demo",
-            "other",
-            "demo.other",
-            "/b.rs",
-            2,
-            "parse a file",
-            "",
-        ));
+        let nodes = vec![
+            // name match, no docstring
+            sample_function_with_docstring(SampleFunctionSpec {
+                id: "n1".into(),
+                project: "demo".into(),
+                name: "parse".into(),
+                qn: "demo.parse".into(),
+                file: "/a.rs".into(),
+                line: 1,
+                ..Default::default()
+            }),
+            // comment-only match
+            sample_function_with_docstring(SampleFunctionSpec {
+                id: "n2".into(),
+                project: "demo".into(),
+                name: "other".into(),
+                qn: "demo.other".into(),
+                file: "/b.rs".into(),
+                line: 2,
+                docstring: "parse a file".into(),
+                ..Default::default()
+            }),
+        ];
         repo.save_nodes(&nodes, NodeLabel::Function)
             .expect("save_nodes");
 
@@ -586,16 +593,16 @@ mod tests {
         // at the unit level; here we verify the integration behaviour.
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function_with_docstring(
-                "f1",
-                "demo",
-                "read_input",
-                "demo.read_input",
-                "/a.rs",
-                1,
-                "reads from stdin",
-                "let x = read();",
-            )],
+            &[sample_function_with_docstring(SampleFunctionSpec {
+                id: "f1".into(),
+                project: "demo".into(),
+                name: "read_input".into(),
+                qn: "demo.read_input".into(),
+                file: "/a.rs".into(),
+                line: 1,
+                docstring: "reads from stdin".into(),
+                content: "let x = read();".into(),
+            })],
             NodeLabel::Function,
         )
         .expect("save_nodes");
@@ -612,16 +619,16 @@ mod tests {
         // should appear in results (ranked below name matches).
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function_with_docstring(
-                "f1",
-                "demo",
-                "compute",
-                "demo.compute",
-                "/a.rs",
-                1,
-                "parse the input and return result",
-                "",
-            )],
+            &[sample_function_with_docstring(SampleFunctionSpec {
+                id: "f1".into(),
+                project: "demo".into(),
+                name: "compute".into(),
+                qn: "demo.compute".into(),
+                file: "/a.rs".into(),
+                line: 1,
+                docstring: "parse the input and return result".into(),
+                ..Default::default()
+            })],
             NodeLabel::Function,
         )
         .expect("save_nodes");
@@ -645,16 +652,16 @@ mod tests {
         // appear in results.
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function_with_docstring(
-                "f1",
-                "demo",
-                "compute",
-                "demo.compute",
-                "/a.rs",
-                1,
-                "",
-                "let parsed = parse_input();",
-            )],
+            &[sample_function_with_docstring(SampleFunctionSpec {
+                id: "f1".into(),
+                project: "demo".into(),
+                name: "compute".into(),
+                qn: "demo.compute".into(),
+                file: "/a.rs".into(),
+                line: 1,
+                content: "let parsed = parse_input();".into(),
+                ..Default::default()
+            })],
             NodeLabel::Function,
         )
         .expect("save_nodes");
@@ -670,16 +677,15 @@ mod tests {
         // Verify that the fallback CONTAINS scan now checks `qualifiedName`.
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_function_with_docstring(
-                "f1",
-                "demo",
-                "compute",
-                "demo.parse_helper",
-                "/a.rs",
-                1,
-                "",
-                "",
-            )],
+            &[sample_function_with_docstring(SampleFunctionSpec {
+                id: "f1".into(),
+                project: "demo".into(),
+                name: "compute".into(),
+                qn: "demo.parse_helper".into(),
+                file: "/a.rs".into(),
+                line: 1,
+                ..Default::default()
+            })],
             NodeLabel::Function,
         )
         .expect("save_nodes");

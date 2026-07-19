@@ -828,7 +828,7 @@ mod tests {
         // First call: cold cache, server must be hit. Pre-stage the response.
         rt.send(Message::Response(Response {
             id: RequestId::from(1),
-            response_result: Ok(serde_json::to_value(&vec![loc_one.clone()]).unwrap()),
+            response_result: Ok(serde_json::to_value(vec![loc_one.clone()]).unwrap()),
         }))
         .unwrap();
         let r1 = c
@@ -874,7 +874,7 @@ mod tests {
         // so the server response id must be 2).
         rt.send(Message::Response(Response {
             id: RequestId::from(2),
-            response_result: Ok(serde_json::to_value(&vec![loc_one]).unwrap()),
+            response_result: Ok(serde_json::to_value(vec![loc_one]).unwrap()),
         }))
         .unwrap();
         let r3 = c
