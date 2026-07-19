@@ -14,6 +14,7 @@
 //! - [`fulltext`]: [`FullTextSearcher`] for BM25 full-text search.
 //! - [`facade`]: [`QueryFacade`] (Facade pattern) unifying the above.
 
+pub mod bm25f;
 pub mod capability;
 pub mod cypher;
 pub mod cypher_subset;
@@ -24,6 +25,7 @@ pub mod module;
 pub mod structured;
 pub mod tokenizer;
 
+pub use bm25f::{bm25f_score, FieldWeights};
 pub use cypher::CypherExecutor;
 pub use cypher_subset::validate_cypher_subset;
 pub use error::{QueryError, Result};

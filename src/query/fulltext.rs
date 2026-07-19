@@ -15,6 +15,7 @@
 //! searching for `parse` to match `parseFile`, `parse_file`, and
 //! `my_parse_helper` — a plain `CONTAINS` would only match the exact substring.
 
+use super::bm25f::{bm25f_score, relevance_score_with_reason, FieldWeights};
 use super::error::{QueryError, Result};
 use super::tokenizer::codenexus_tokenize;
 use super::SearchResult;
@@ -72,16 +73,32 @@ const FTS_NAME_INDEXES: &[(&str, NodeLabel)] = &[
 /// Executes BM25 full-text searches against a [`StorageConnection`].
 ///
 /// Tries the LadybugDB FTS extension first; falls back to a `CONTAINS`-based
-/// scan when FTS is unavailable.
+/// scan when FTS is unavailable. The fallback path uses BM25F multi-field
+/// scoring (see [`bm25f_score`]) with the searcher's [`FieldWeights`].
 pub struct FullTextSearcher<'a> {
     conn: &'a StorageConnection,
+    weights: FieldWeights,
 }
 
 impl<'a> FullTextSearcher<'a> {
-    /// Creates a new [`FullTextSearcher`] borrowing `conn`.
+    /// Creates a new [`FullTextSearcher`] borrowing `conn`, with default
+    /// BM25F [`FieldWeights`].
     #[must_use]
     pub fn new(conn: &'a StorageConnection) -> Self {
-        Self { conn }
+        Self {
+            conn,
+            weights: FieldWeights::default(),
+        }
+    }
+
+    /// Overrides the BM25F field weights used by the fallback CONTAINS path.
+    ///
+    /// The FTS extension path is unaffected (LadybugDB FTS does not expose
+    /// per-field weights).
+    #[must_use]
+    pub fn with_weights(mut self, weights: FieldWeights) -> Self {
+        self.weights = weights;
+        self
     }
 
     /// Searches for `text` using BM25 (FTS) when available, falling back to a
@@ -183,15 +200,26 @@ impl<'a> FullTextSearcher<'a> {
         Ok(all_results)
     }
 
-    /// Fallback: scans symbol tables with `CONTAINS` and ranks by a relevance
-    /// score (exact > prefix > token-match > substring). Case-insensitive.
+    /// Fallback: scans symbol tables with `CONTAINS` and ranks by BM25F
+    /// multi-field scoring (C4 upgrade). Case-insensitive.
     ///
     /// H11: the query is pre-tokenized via [`codenexus_tokenize`] so that a
     /// multi-token query like `parseFile` becomes `["parse", "file"]`. The
-    /// WHERE clause ORs one `CONTAINS` per token, enabling `parseFile` to
-    /// match `parse_file` (which contains both `parse` and `file` as
-    /// substrings) — a plain single-substring `CONTAINS('parseFile')` would
-    /// miss it.
+    /// WHERE clause ORs one `CONTAINS` per token across each available text
+    /// field (`name`, `qualifiedName`, `docstring`, `content`), enabling
+    /// `parseFile` to match `parse_file` (which contains both `parse` and
+    /// `file` as substrings) — a plain single-substring `CONTAINS('parseFile')`
+    /// would miss it.
+    ///
+    /// C4: BM25F scores each matching field independently and sums the
+    /// weighted scores via [`bm25f_score`], so `symbol_name` matches
+    /// (weight 3.5) outrank `comment` matches (weight 0.5) even when both
+    /// fields match the query token.
+    ///
+    /// Per-table column awareness: tables without `docstring` or `content`
+    /// columns (e.g. `Module`, `Namespace`, `Variable`) are scanned only on
+    /// `name` and `qualifiedName`, with `NULL` returned for the missing
+    /// fields. This avoids query errors on tables with narrower schemas.
     fn fallback_contains_search(
         &self,
         text: &str,
@@ -205,44 +233,47 @@ impl<'a> FullTextSearcher<'a> {
                 "fulltext query tokenized to empty".to_string(),
             ));
         }
-        let or_clauses: Vec<String> = tokens
-            .iter()
-            .map(|t| {
-                // Single-line for coverage: tarpaulin attribute continuation
-                format!(
-                    "toLower(n.name) CONTAINS toLower('{}')",
-                    escape_cypher_string(t)
-                )
-            })
-            .collect();
-        let where_inner = or_clauses.join(" OR ");
         let mut results = Vec::new();
         for &label in SYMBOL_LABELS {
-            let table = escape_identifier(label.table_name());
+            let columns = node_table_columns(label);
+            let fields = contains_fields_for(columns);
+            let where_inner = build_contains_where(&tokens, &fields);
             // Namespace and Module tables have no `startLine`
             // column; return NULL instead of erroring so the fallback path
             // reaches all symbol tables (previously these were silently
             // skipped via `Err(_) => continue`).
-            let line_expr = if node_table_columns(label).contains(&"startLine") {
+            let line_expr = if columns.contains(&"startLine") {
                 "n.startLine"
             } else {
                 "NULL"
             };
-            let cypher = match project {
-                Some(p) => format!(
-                    "MATCH (n:{table}) WHERE ({where_inner}) AND n.project = '{}' \
-                     RETURN n.name AS name, n.qualifiedName AS qn, \
-                     n.filePath AS filePath, {line_expr} AS line;",
-                    escape_cypher_string(p),
-                ),
-                None => format!(
-                    "MATCH (n:{table}) WHERE ({where_inner}) \
-                     RETURN n.name AS name, n.qualifiedName AS qn, \
-                     n.filePath AS filePath, {line_expr} AS line;",
-                ),
+            let doc_expr = if columns.contains(&"docstring") {
+                "n.docstring"
+            } else {
+                "NULL"
             };
+            let content_expr = if columns.contains(&"content") {
+                "n.content"
+            } else {
+                "NULL"
+            };
+            let table = escape_identifier(label.table_name());
+            let cypher = build_contains_cypher(
+                &table,
+                &where_inner,
+                line_expr,
+                doc_expr,
+                content_expr,
+                project,
+            );
             match self.conn.query(&cypher) {
-                Ok(rows) => results.extend(rows_to_search_results(rows, label, text)),
+                Ok(rows) => results.extend(rows_to_search_results_bm25f(
+                    rows,
+                    label,
+                    text,
+                    &self.weights,
+                )),
+                // Skip tables that error (e.g. missing in this schema).
                 Err(_) => continue,
             }
         }
@@ -251,7 +282,72 @@ impl<'a> FullTextSearcher<'a> {
     }
 }
 
+/// Returns the list of `n.<field>` expressions scannable for `columns`.
+///
+/// `name` and `qualifiedName` are present on every symbol table; `docstring`
+/// and `content` are added only when the table's schema declares them.
+fn contains_fields_for(columns: &[&'static str]) -> Vec<&'static str> {
+    let mut fields: Vec<&'static str> = vec!["n.name", "n.qualifiedName"];
+    if columns.contains(&"docstring") {
+        fields.push("n.docstring");
+    }
+    if columns.contains(&"content") {
+        fields.push("n.content");
+    }
+    fields
+}
+
+/// Builds the OR-joined `CONTAINS` clauses for one (token, field) pair each.
+///
+/// Each clause is `toLower(<field>) CONTAINS toLower('<token>')`. Tokens are
+/// escaped via [`escape_cypher_string`] to prevent Cypher injection from
+/// identifier substrings.
+fn build_contains_where(tokens: &[String], fields: &[&str]) -> String {
+    let or_clauses: Vec<String> = tokens
+        .iter()
+        .flat_map(|t| {
+            let escaped = escape_cypher_string(t);
+            fields
+                .iter()
+                .map(move |field| format!("toLower({field}) CONTAINS toLower('{escaped}')"))
+        })
+        .collect();
+    or_clauses.join(" OR ")
+}
+
+/// Builds the Cypher `MATCH ... RETURN` statement for the CONTAINS fallback.
+///
+/// The RETURN clause always projects six columns (`name`, `qn`, `filePath`,
+/// `line`, `doc`, `content`); callers that lack `docstring` or `content`
+/// pass `"NULL"` for those expressions so the row shape is uniform across
+/// all symbol tables.
+fn build_contains_cypher(
+    table: &str,
+    where_inner: &str,
+    line_expr: &str,
+    doc_expr: &str,
+    content_expr: &str,
+    project: Option<&str>,
+) -> String {
+    let return_clause = format!(
+        "RETURN n.name AS name, n.qualifiedName AS qn, \
+         n.filePath AS filePath, {line_expr} AS line, \
+         {doc_expr} AS doc, {content_expr} AS content;"
+    );
+    match project {
+        Some(p) => format!(
+            "MATCH (n:{table}) WHERE ({where_inner}) AND n.project = '{}' {return_clause}",
+            escape_cypher_string(p),
+        ),
+        None => format!("MATCH (n:{table}) WHERE ({where_inner}) {return_clause}"),
+    }
+}
+
 /// Converts query rows into [`SearchResult`]s with a relevance score.
+///
+/// Used by the FTS extension path (4-column RETURN: `name`, `qn`, `filePath`,
+/// `line`). Scoring is single-field (name only) via [`relevance_score_with_reason`],
+/// since the LadybugDB FTS extension does not expose per-field weights.
 fn rows_to_search_results(
     rows: Vec<Vec<serde_json::Value>>,
     label: NodeLabel,
@@ -282,45 +378,54 @@ fn rows_to_search_results(
         .collect()
 }
 
-/// Computes a relevance score in `[0.0, 1.0]` for `name` against `query`.
+/// Converts query rows into [`SearchResult`]s using BM25F multi-field scoring.
 ///
-/// Scoring tiers (H11 token-aware):
-/// - `1.0` — exact match (case-insensitive)
-/// - `0.8` — name starts with query (prefix)
-/// - `0.7` — every query token appears as a substring of some name token
-///   (e.g. `my_parse_helper` vs `parse` → `["my","parse","helper"]` contains
-///   `parse`)
-/// - `0.5` — name contains query as a plain substring
-/// - `0.3` — no match (defensive; callers pre-filter via `CONTAINS`)
-#[allow(dead_code)]
-fn relevance_score(name: &str, query: &str) -> f64 {
-    relevance_score_with_reason(name, query).0
-}
-
-/// Computes both the score and a human-readable match reason.
-fn relevance_score_with_reason(name: &str, query: &str) -> (f64, &'static str) {
-    let name_lower = name.to_ascii_lowercase();
-    let query_lower = query.to_ascii_lowercase();
-    if name_lower == query_lower {
-        return (1.0, "exact name match");
-    }
-    if name_lower.starts_with(&query_lower) {
-        return (0.8, "prefix match");
-    }
-    let query_tokens = codenexus_tokenize(&query_lower);
-    let name_tokens = codenexus_tokenize(&name_lower);
-    if !query_tokens.is_empty() && !name_tokens.is_empty() {
-        let all_match = query_tokens
-            .iter()
-            .all(|qt| name_tokens.iter().any(|nt| nt == qt));
-        if all_match {
-            return (0.7, "token-aligned match");
-        }
-    }
-    if name_lower.contains(&query_lower) {
-        return (0.5, "substring match");
-    }
-    (0.3, "no match")
+/// Used by the fallback CONTAINS path (6-column RETURN: `name`, `qn`,
+/// `filePath`, `line`, `doc`, `content`). The `doc` and `content` columns
+/// may be `NULL` for tables that lack those fields (e.g. `Module`,
+/// `Namespace`, `Variable`); they are coerced to empty strings before
+/// scoring.
+///
+/// Rows whose BM25F score is `0.0` (no field actually matched the query,
+/// despite the CONTAINS pre-filter) are dropped defensively.
+fn rows_to_search_results_bm25f(
+    rows: Vec<Vec<serde_json::Value>>,
+    label: NodeLabel,
+    query: &str,
+    weights: &FieldWeights,
+) -> Vec<SearchResult> {
+    let label_str = label.to_string();
+    rows.into_iter()
+        .filter_map(|row| {
+            let name = row.first().and_then(|v| v.as_str())?.to_string();
+            let qualified_name = row.get(1).and_then(|v| v.as_str()).map(String::from);
+            let file_path = row.get(2).and_then(|v| v.as_str()).map(String::from);
+            let start_line = row
+                .get(3)
+                .and_then(|v| v.as_i64())
+                .and_then(|i| u32::try_from(i).ok());
+            let docstring = row.get(4).and_then(|v| v.as_str()).unwrap_or("");
+            let content = row.get(5).and_then(|v| v.as_str()).unwrap_or("");
+            let qn_str = qualified_name.as_deref().unwrap_or("");
+            let score = bm25f_score(query, &name, qn_str, docstring, content, weights);
+            // Defensive: drop rows with zero score (no field actually matched).
+            // CONTAINS pre-filter normally prevents this, but all-zero weights
+            // or other edge cases could otherwise produce zero-score results.
+            if score <= 0.0 {
+                return None;
+            }
+            Some(SearchResult {
+                name,
+                label: label_str.clone(),
+                file_path,
+                start_line,
+                qualified_name,
+                score,
+                match_reason: "bm25f weighted".to_string(),
+                degree: 0,
+            })
+        })
+        .collect()
 }
 
 /// Sorts results by descending score then ascending name, and truncates.
@@ -560,37 +665,9 @@ mod tests {
         assert!(r.score > 0.0);
     }
 
-    #[test]
-    fn relevance_score_exact_match() {
-        assert_eq!(relevance_score("parse", "parse"), 1.0);
-        assert_eq!(relevance_score("PARSE", "parse"), 1.0);
-    }
-
-    #[test]
-    fn relevance_score_prefix_match() {
-        assert_eq!(relevance_score("parse_file", "parse"), 0.8);
-    }
-
-    #[test]
-    fn relevance_score_token_match() {
-        // H11: token-aligned match ranks above plain substring. `my_parse`
-        // tokenizes to `["my", "parse"]` which contains the query token
-        // `parse` exactly.
-        assert_eq!(relevance_score("my_parse", "parse"), 0.7);
-        assert_eq!(relevance_score("my_parse_helper", "parse"), 0.7);
-    }
-
-    #[test]
-    fn relevance_score_substring_match() {
-        // H11: a non-token-aligned substring (e.g. `xparse` → single token
-        // `xparse`) scores below a token-aligned match.
-        assert_eq!(relevance_score("xparse", "parse"), 0.5);
-    }
-
-    #[test]
-    fn relevance_score_no_match() {
-        assert_eq!(relevance_score("read_input", "parse"), 0.3);
-    }
+    // Note: `relevance_score_with_reason` unit tests moved to `bm25f.rs`
+    // (the function now lives there). The integration tests below exercise
+    // it indirectly via `search()` and `fallback_contains_search()`.
 
     #[test]
     fn is_fts_unsupported_error_detects_unsupported_patterns() {
@@ -1083,67 +1160,7 @@ mod tests {
     }
 
     // --- Coverage gap tests: relevance_score_with_reason all branches ---
-
-    #[test]
-    fn relevance_score_with_reason_exact_match_returns_one() {
-        let (score, reason) = relevance_score_with_reason("parse", "parse");
-        assert_eq!(score, 1.0);
-        assert_eq!(reason, "exact name match");
-    }
-
-    #[test]
-    fn relevance_score_with_reason_prefix_match_returns_zero_eight() {
-        let (score, reason) = relevance_score_with_reason("parse_file", "parse");
-        assert_eq!(score, 0.8);
-        assert_eq!(reason, "prefix match");
-    }
-
-    #[test]
-    fn relevance_score_with_reason_token_aligned_match_returns_zero_seven() {
-        // Cover token-aligned match: "my_parse_helper" tokenized as
-        // ["my","parse","helper"], query "parse" → all query tokens
-        // present in name tokens → 0.7
-        let (score, reason) = relevance_score_with_reason("my_parse_helper", "parse");
-        assert_eq!(score, 0.7);
-        assert_eq!(reason, "token-aligned match");
-    }
-
-    #[test]
-    fn relevance_score_with_reason_substring_match_returns_zero_five() {
-        // Cover substring match: name contains query but not as prefix,
-        // and token alignment doesn't fully match.
-        let (score, reason) = relevance_score_with_reason("myparsehelper", "parse");
-        assert_eq!(score, 0.5);
-        assert_eq!(reason, "substring match");
-    }
-
-    #[test]
-    fn relevance_score_with_reason_no_match_returns_zero_three() {
-        // Cover `(0.3, "no match")`: name doesn't contain query at all.
-        let (score, reason) = relevance_score_with_reason("read_input", "parse");
-        assert_eq!(score, 0.3);
-        assert_eq!(reason, "no match");
-    }
-
-    #[test]
-    fn relevance_score_with_reason_camel_case_token_alignment() {
-        // camelCase "parseFile" tokenized as ["parse","file"],
-        // query "fileparse" tokenized as ["fileparse"] → not all tokens
-        // match → falls through to substring → 0.3
-        let (score, _) = relevance_score_with_reason("parseFile", "fileparse");
-        assert_eq!(score, 0.3);
-    }
-
-    // --- Coverage gap tests: relevance_score wrapper ---
-
-    #[test]
-    fn relevance_score_returns_score_only() {
-        // Cover the #[allow(dead_code)] wrapper that delegates to
-        // relevance_score_with_reason and returns only the score.
-        assert_eq!(relevance_score("parse", "parse"), 1.0);
-        assert_eq!(relevance_score("parse_file", "parse"), 0.8);
-        assert_eq!(relevance_score("read_input", "parse"), 0.3);
-    }
+    // Moved to `bm25f.rs` (functions now live there).
 
     // --- Coverage gap tests: is_fts_unsupported_error all branches ---
 
@@ -1261,27 +1278,6 @@ mod tests {
             .search("   \t\n", None, 10)
             .expect_err("whitespace-only query should error");
         assert!(err.is_invalid_query());
-    }
-
-    #[test]
-    fn relevance_score_with_reason_name_with_empty_tokens() {
-        // Cover the false branch of `!query_tokens.is_empty() && !name_tokens.is_empty()`
-        // (line 312). When the name is all digits, codenexus_tokenize returns
-        // empty → the token-alignment check is skipped → falls through to
-        // substring → 0.3 (since "12345" doesn't contain "parse").
-        let (score, reason) = relevance_score_with_reason("12345", "parse");
-        assert_eq!(score, 0.3);
-        assert_eq!(reason, "no match");
-    }
-
-    #[test]
-    fn relevance_score_with_reason_query_with_empty_tokens() {
-        // Cover the false branch when query_tokens is empty (query is all
-        // digits). The name "parse" does contain... wait, "parse" doesn't
-        // contain "12345". So it falls to substring → 0.3.
-        let (score, reason) = relevance_score_with_reason("parse", "12345");
-        assert_eq!(score, 0.3);
-        assert_eq!(reason, "no match");
     }
 
     #[test]
