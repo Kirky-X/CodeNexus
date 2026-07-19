@@ -15,7 +15,7 @@
 /// Cache key type — all cache operations use string keys.
 ///
 /// Callers are responsible for constructing meaningful keys (e.g., file
-/// paths, SHA-256 hashes of query strings, content hashes). This is a
+/// paths, BLAKE3 hashes of query strings, content hashes). This is a
 /// type alias rather than a newtype to keep the ergonomics of `&str` and
 /// `String` at call sites.
 pub type CacheKey = String;

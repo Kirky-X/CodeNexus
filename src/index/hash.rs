@@ -1,18 +1,22 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! SHA-256 file content hashing (ADR-009) and FastCDC content-defined
-//! chunking (Phase C5, T130-T133).
+//! BLAKE3 file content hashing (ADR-009, T206 algorithm upgrade) and FastCDC
+//! content-defined chunking (Phase C5, T130-T133).
 //!
-//! Provides deterministic SHA-256 digests used by the incremental indexer to
+//! Provides deterministic BLAKE3 digests used by the incremental indexer to
 //! detect file changes (BR-INDEX-001~003). Hashes are returned as lowercase
 //! hexadecimal strings (64 characters), matching the format stored in the
 //! `File` node's `hash` property.
 //!
+//! T206 replaced the previous SHA-256 implementation with BLAKE3 — same
+//! 32-byte digest length, 5–10× faster on SIMD-capable CPUs, and equally
+//! deterministic across runs and machines.
+//!
 //! # FastCDC (Phase C5)
 //!
 //! [`chunked_hash`] splits a file into variable-sized chunks via the FastCDC
-//! algorithm (rolling hash over a fixed gear table) and computes SHA-256 of
+//! algorithm (rolling hash over a fixed gear table) and computes BLAKE3 of
 //! each chunk independently. Chunk sizes are bounded by [`MIN_CHUNK_SIZE`]
 //! (2KB) and [`MAX_CHUNK_SIZE`] (8KB), averaging ~[`AVG_CHUNK_SIZE`] (4KB).
 //! [`compute_file_hash_incremental`] re-chunks the file and aggregates the
@@ -27,7 +31,6 @@ use std::path::Path;
 
 #[cfg(feature = "cache")]
 use crate::cache::CacheStore;
-use sha2::{Digest, Sha256};
 
 /// Minimum chunk size for FastCDC (2KB). No cut point is considered before
 /// this many bytes have been accumulated in the current chunk.
@@ -66,6 +69,64 @@ const FASTCDC_MASK_L: u64 = (1u64 << FASTCDC_BITS) - 1;
 /// the fixed seed [`GEAR_SEED`].
 const GEAR_TABLE: [u64; 256] = generate_gear_table();
 
+/// Maximum file size (10 MB) accepted by the in-memory hashing entry points
+/// ([`compute_file_hash`], [`chunked_hash`], [`compute_file_hash_incremental`]).
+///
+/// T202 security-review MEDIUM-1: bounds memory when indexing untrusted
+/// source trees. Files larger than this are rejected with
+/// [`std::io::ErrorKind::InvalidInput`] — callers should skip them and log
+/// a warning. Streaming I/O (mmap-backed chunking) is tracked as future
+/// work (C5-followup). The 10 MB ceiling is conservative: Rust source files
+/// rarely exceed 1 MB, and even generated code stays under 5 MB.
+pub const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
+/// Validates that `path` is a regular file (not a symlink) and within
+/// [`MAX_FILE_SIZE`] before any `fs::read` call.
+///
+/// T202 security-review LOW-2 + MEDIUM-1:
+/// - **LOW-2 (path traversal)**: `symlink_metadata` does not follow
+///   symlinks, so we can detect and reject them. This prevents a malicious
+///   repository from containing a symlink that points outside the project
+///   tree (e.g., to `/etc/passwd`) and tricking the indexer into hashing
+///   (and potentially logging) sensitive files.
+/// - **MEDIUM-1 (OOM)**: bounding file size at [`MAX_FILE_SIZE`] prevents
+///   a pathologically large file from triggering OOM when `fs::read` slurps
+///   it into memory. Callers that need to hash larger files should use the
+///   streaming API once it lands (C5-followup).
+///
+/// # Errors
+///
+/// Returns [`std::io::ErrorKind::InvalidInput`] if `path` is a symlink or
+/// exceeds [`MAX_FILE_SIZE`]. Returns the underlying `io::Error` if
+/// `symlink_metadata` itself fails (e.g., file not found, permission
+/// denied).
+fn validate_file_for_hashing(path: &Path) -> Result<(), std::io::Error> {
+    // symlink_metadata does NOT follow symlinks — gives us the link's own
+    // metadata so we can detect and reject it.
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to hash symlink {}; resolve the target explicitly \
+                 before calling the hashing API",
+                path.display()
+            ),
+        ));
+    }
+    let size = metadata.len();
+    if size > MAX_FILE_SIZE {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "file size {size} bytes exceeds MAX_FILE_SIZE ({MAX_FILE_SIZE} bytes); \
+                 refusing to hash in-memory to prevent OOM (C5-followup: streaming I/O)"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// `splitmix64` PRNG step (compile-time-`const`-friendly). Used only to
 /// populate [`GEAR_TABLE`] — never called at runtime.
 const fn splitmix64(state: &mut u64) -> u64 {
@@ -89,18 +150,21 @@ const fn generate_gear_table() -> [u64; 256] {
     table
 }
 
-/// Computes the SHA-256 hash of the file at `path`, returning the digest as
+/// Computes the BLAKE3 hash of the file at `path`, returning the digest as
 /// a lowercase 64-character hex string.
 ///
 /// # Errors
 ///
-/// Returns [`std::io::Error`] if the file cannot be read.
+/// Returns [`std::io::Error`] if the file cannot be read, is a symlink
+/// (rejected to prevent path traversal), or exceeds [`MAX_FILE_SIZE`]
+/// (rejected to prevent OOM).
 pub fn compute_file_hash(path: &Path) -> Result<String, std::io::Error> {
+    validate_file_for_hashing(path)?;
     let content = std::fs::read(path)?;
     Ok(compute_content_hash(&content))
 }
 
-/// Computes the SHA-256 hash of the file at `path` with optional cache.
+/// Computes the BLAKE3 hash of the file at `path` with optional cache.
 ///
 /// When `cache` is `Some`, queries the cache first using a key derived from
 /// the file path **and** its mtime (nanoseconds since `UNIX_EPOCH`). On a
@@ -152,7 +216,7 @@ pub fn compute_file_hash_cached(
 /// Builds the cache key for a file hash entry:
 /// `hash:file:{path_hash}:{mtime_nanos}`.
 ///
-/// The `path_hash` is the SHA-256 of the path's string representation. This
+/// The `path_hash` is the BLAKE3 of the path's string representation. This
 /// prevents cache-key injection via `:` characters in file paths (Windows
 /// drive letters like `C:\...`, NTFS alternate data streams, or POSIX paths
 /// containing `:`), which would otherwise create ambiguity with the `:`
@@ -170,24 +234,29 @@ fn build_cache_key(path: &Path) -> Option<String> {
     Some(format!("hash:file:{path_hash}:{nanos}"))
 }
 
-/// Computes the SHA-256 hash of `content`, returning the digest as a
+/// Computes the BLAKE3 hash of `content`, returning the digest as a
 /// lowercase 64-character hex string.
 #[must_use]
 pub fn compute_content_hash(content: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(content);
-    let digest = hasher.finalize();
+    // T206: BLAKE3 replaces SHA-256 — same 32-byte digest, 5–10× faster.
+    // `blake3::hash` is the single-shot entry point (no incremental updates
+    // needed here).
+    let digest = blake3::hash(content);
     // 32 bytes → 64 hex chars, lowercase.
+    // perf-review LOW-3: lookup-table encoding avoids the `write!` macro's
+    // format machinery overhead (measured ~5% of total hash time on 1MB
+    // inputs; not the bottleneck but a cheap win).
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(64);
-    for byte in digest {
-        use std::fmt::Write as _;
-        let _ = write!(out, "{byte:02x}");
+    for byte in digest.as_bytes() {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
 }
 
 /// Splits a file into variable-sized chunks via the FastCDC algorithm
-/// (content-defined chunking) and computes SHA-256 of each chunk
+/// (content-defined chunking) and computes BLAKE3 of each chunk
 /// independently.
 ///
 /// Chunk sizes are bounded by [`MIN_CHUNK_SIZE`] (2KB) and
@@ -200,28 +269,29 @@ pub fn compute_content_hash(content: &[u8]) -> String {
 ///
 /// # Returns
 ///
-/// A `Vec` of `(byte_offset, sha256_hex)` pairs, ordered by offset. The
+/// A `Vec` of `(byte_offset, blake3_hex)` pairs, ordered by offset. The
 /// offset is relative to the start of the file. Returns an empty `Vec`
 /// for empty files; a single chunk (offset 0) for files smaller than
 /// [`MIN_CHUNK_SIZE`].
 ///
 /// # Memory
 ///
-/// Reads the entire file into memory via [`std::fs::read`]. Callers
-/// indexing untrusted source trees should bound the file size upstream
-/// (e.g., via [`std::fs::metadata`]) before calling this function — a
-/// maliciously large file could otherwise trigger OOM. Streaming I/O
+/// Reads the entire file into memory via [`std::fs::read`]. File size is
+/// bounded by [`MAX_FILE_SIZE`] (10 MB) — files exceeding this are rejected
+/// with [`std::io::ErrorKind::InvalidInput`] before the read. Streaming I/O
 /// (mmap-backed chunking) is tracked as future work (C5-followup).
 ///
 /// # Errors
 ///
-/// Returns [`std::io::Error`] if the file cannot be read.
+/// Returns [`std::io::Error`] if the file cannot be read, is a symlink,
+/// or exceeds [`MAX_FILE_SIZE`].
 pub fn chunked_hash(file_path: &Path) -> Result<Vec<(u64, String)>, std::io::Error> {
+    validate_file_for_hashing(file_path)?;
     let content = std::fs::read(file_path)?;
     Ok(chunk_content(&content))
 }
 
-/// Chunks `content` via FastCDC and computes SHA-256 of each chunk.
+/// Chunks `content` via FastCDC and computes BLAKE3 of each chunk.
 /// Shared between [`chunked_hash`] (file-based API) and the incremental
 /// variant. Exposed as a private helper so tests can construct chunk
 /// lists from in-memory byte buffers without touching the filesystem.
@@ -320,10 +390,10 @@ fn find_cut_point(data: &[u8]) -> usize {
 }
 
 /// Incremental file hash: re-chunks the file with FastCDC and computes
-/// SHA-256 of each chunk, then aggregates the per-chunk hashes into a
+/// BLAKE3 of each chunk, then aggregates the per-chunk hashes into a
 /// single file-level digest.
 ///
-/// The file-level hash is the SHA-256 of the concatenation of all chunk
+/// The file-level hash is the BLAKE3 of the concatenation of all chunk
 /// hashes (sorted ascending for stability), producing a single
 /// deterministic digest for the file regardless of chunk boundary drift.
 ///
@@ -341,19 +411,19 @@ fn find_cut_point(data: &[u8]) -> usize {
 ///
 /// To preserve correctness, this implementation re-hashes every chunk on
 /// every call. Performance still meets the C5 target: a 1MB file splits
-/// into ~256 chunks of ~4KB, and SHA-256 throughput (~200MB/s on modern
-/// CPUs) yields ~20µs per chunk → ~5ms total, matching the spec's
-/// ~5ms goal. The `old_chunks` parameter is retained as part of the
-/// incremental API contract (T132) and is returned to the caller along
-/// with the new chunks for change-detection and caching at higher
+/// into ~256 chunks of ~4KB, and BLAKE3 throughput (~1GB/s on modern
+/// SIMD-capable CPUs) yields ~4µs per chunk → ~1ms total, well within
+/// the spec's ~5ms goal. The `old_chunks` parameter is retained as part
+/// of the incremental API contract (T132) and is returned to the caller
+/// along with the new chunks for change-detection and caching at higher
 /// layers.
 ///
 /// # Algorithm
 ///
 /// 1. Read the file and re-run FastCDC to determine the new chunk
 ///    boundaries.
-/// 2. For each new chunk, compute SHA-256 of its bytes (always).
-/// 3. Concatenate all chunk hashes (sorted ascending) and SHA-256 the
+/// 2. For each new chunk, compute BLAKE3 of its bytes (always).
+/// 3. Concatenate all chunk hashes (sorted ascending) and BLAKE3 the
 ///    concatenation to produce the file-level hash.
 ///
 /// # Returns
@@ -365,14 +435,16 @@ fn find_cut_point(data: &[u8]) -> usize {
 ///
 /// # Errors
 ///
-/// Returns [`std::io::Error`] if the file cannot be read.
+/// Returns [`std::io::Error`] if the file cannot be read, is a symlink,
+/// or exceeds [`MAX_FILE_SIZE`].
 pub fn compute_file_hash_incremental(
     file_path: &Path,
     old_chunks: &[(u64, String)],
 ) -> Result<(String, Vec<(u64, String)>), std::io::Error> {
+    validate_file_for_hashing(file_path)?;
     let content = std::fs::read(file_path)?;
     if content.is_empty() {
-        // Empty file: no chunks; file hash is SHA-256 of empty input.
+        // Empty file: no chunks; file hash is BLAKE3 of empty input.
         return Ok((compute_content_hash(b""), Vec::new()));
     }
     // Re-chunk and hash every chunk. See docstring above for why we
@@ -386,7 +458,7 @@ pub fn compute_file_hash_incremental(
     Ok((file_hash, new_chunks))
 }
 
-/// Aggregates per-chunk SHA-256 hashes into a single file-level digest.
+/// Aggregates per-chunk BLAKE3 hashes into a single file-level digest.
 ///
 /// Hashes are sorted ascending (lexicographic on hex string) before
 /// concatenation, so the file-level digest is robust against
@@ -413,7 +485,7 @@ mod tests {
     #[test]
     fn compute_content_hash_returns_64_char_hex_string() {
         let hash = compute_content_hash(b"hello world");
-        assert_eq!(hash.len(), 64, "SHA-256 hex digest must be 64 chars");
+        assert_eq!(hash.len(), 64, "BLAKE3 hex digest must be 64 chars");
         assert!(
             hash.chars()
                 .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
@@ -423,21 +495,21 @@ mod tests {
 
     #[test]
     fn compute_content_hash_known_value() {
-        // SHA-256("hello world") = b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
+        // BLAKE3("hello world") = d74981efa70a0c880b8d8c1985d075dbcbf679b99a5f9914e5aaf96b831a9e24
         let hash = compute_content_hash(b"hello world");
         assert_eq!(
             hash,
-            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9" // pragma: allowlist secret
+            "d74981efa70a0c880b8d8c1985d075dbcbf679b99a5f9914e5aaf96b831a9e24" // pragma: allowlist secret
         );
     }
 
     #[test]
     fn compute_content_hash_empty_input() {
-        // SHA-256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        // BLAKE3("") = af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
         let hash = compute_content_hash(b"");
         assert_eq!(
             hash,
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" // pragma: allowlist secret
+            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262" // pragma: allowlist secret
         );
         assert_eq!(hash.len(), 64);
     }
@@ -523,13 +595,55 @@ mod tests {
     }
 
     #[test]
+    fn compute_file_hash_rejects_symlink() {
+        // T202 security-review LOW-2: symlinks are rejected to prevent
+        // path traversal (a malicious repo could symlink to /etc/passwd).
+        let target = NamedTempFile::new().unwrap();
+        fs::write(target.path(), b"sensitive content").unwrap();
+        let dir = tempfile::TempDir::new().unwrap();
+        let link_path = dir.path().join("link.rs");
+        std::os::unix::fs::symlink(target.path(), &link_path).expect("symlink");
+
+        let result = compute_file_hash(&link_path);
+        assert!(result.is_err(), "symlink should be rejected");
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn compute_file_hash_rejects_oversized_file() {
+        // T202 security-review MEDIUM-1: files > MAX_FILE_SIZE are rejected
+        // to prevent OOM. We cannot materialize a > 10 MB file in unit
+        // tests without slowing the suite, so we temporarily lower the
+        // ceiling via a sparse file whose reported size exceeds MAX_FILE_SIZE.
+        // Use a sparse file: seek to MAX_FILE_SIZE + 1 and write 1 byte.
+        let tmp = NamedTempFile::new().unwrap();
+        let mut file = fs::OpenOptions::new().write(true).open(tmp.path()).unwrap();
+        // Seek to MAX_FILE_SIZE + 1; this creates a sparse file whose
+        // metadata.len() reports MAX_FILE_SIZE + 1 without allocating
+        // that much disk space.
+        let offset = std::io::Seek::seek(
+            &mut file.try_clone().unwrap(),
+            std::io::SeekFrom::Start(MAX_FILE_SIZE + 1),
+        )
+        .unwrap();
+        use std::io::Write;
+        let _ = file.write(&[0u8]);
+        drop(file);
+        assert!(offset >= MAX_FILE_SIZE);
+
+        let result = compute_file_hash(tmp.path());
+        assert!(result.is_err(), "oversized file should be rejected");
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
     fn compute_file_hash_empty_file() {
         let tmp = NamedTempFile::new().unwrap();
         fs::write(tmp.path(), b"").unwrap();
         let hash = compute_file_hash(tmp.path()).unwrap();
         assert_eq!(
             hash,
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" // pragma: allowlist secret
+            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262" // pragma: allowlist secret
         );
     }
 
@@ -759,7 +873,7 @@ mod tests {
         }
 
         // Hashes must be unique (different chunks of pseudo-random content
-        // must produce distinct SHA-256 digests with overwhelming
+        // must produce distinct BLAKE3 digests with overwhelming
         // probability).
         let unique: std::collections::HashSet<&str> =
             chunks.iter().map(|(_, h)| h.as_str()).collect();
@@ -777,7 +891,7 @@ mod tests {
         let tmp = NamedTempFile::new().unwrap();
         fs::write(tmp.path(), b"").unwrap();
 
-        // Empty file with empty old_chunks → empty new_chunks, SHA-256("").
+        // Empty file with empty old_chunks → empty new_chunks, BLAKE3("").
         let (file_hash, new_chunks) =
             compute_file_hash_incremental(tmp.path(), &[]).expect("empty file should not error");
         assert!(
@@ -786,8 +900,8 @@ mod tests {
         );
         assert_eq!(
             file_hash,
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", // pragma: allowlist secret
-            "empty file hash must be SHA-256 of empty input"
+            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262", // pragma: allowlist secret
+            "empty file hash must be BLAKE3 of empty input"
         );
         assert_eq!(file_hash.len(), 64);
         assert!(

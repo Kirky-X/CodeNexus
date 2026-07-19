@@ -856,7 +856,7 @@ mod tests {
     fn get_file_hash_returns_stored_hash() {
         let repo = fresh_repo();
         repo.save_nodes(
-            &[sample_file("file_1", "demo", "/src/main.rs", "sha256:abc")],
+            &[sample_file("file_1", "demo", "/src/main.rs", "blake3:abc")],
             NodeLabel::File,
         )
         .unwrap();
@@ -864,7 +864,7 @@ mod tests {
         let hash = repo
             .get_file_hash("/src/main.rs", "demo")
             .expect("get_file_hash");
-        assert_eq!(hash.as_deref(), Some("sha256:abc"));
+        assert_eq!(hash.as_deref(), Some("blake3:abc"));
     }
 
     #[test]

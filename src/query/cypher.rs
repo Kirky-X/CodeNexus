@@ -45,7 +45,7 @@ impl<'a> CypherExecutor<'a> {
 
     /// Creates a new [`CypherExecutor`] with query-result caching enabled.
     ///
-    /// Read queries (`MATCH`/`RETURN`/`WITH`) are cached by their SHA-256 key;
+    /// Read queries (`MATCH`/`RETURN`/`WITH`) are cached by their BLAKE3 key;
     /// write queries bypass the cache and execute directly.
     #[cfg(feature = "cache")]
     #[must_use]
@@ -549,7 +549,7 @@ mod cached_tests {
             key.starts_with("cypher:"),
             "key should have 'cypher:' prefix, got: {key}"
         );
-        // Key suffix must be the SHA-256 of the cypher string.
+        // Key suffix must be the BLAKE3 of the cypher string.
         let expected_hash = compute_content_hash(cypher.as_bytes());
         assert!(
             key.ends_with(&expected_hash),

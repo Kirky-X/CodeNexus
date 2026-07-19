@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Incremental indexing via SHA-256 hash diffing (BR-INDEX-001~003, ADR-009).
+//! Incremental indexing via BLAKE3 hash diffing (BR-INDEX-001~003, ADR-009).
 //!
 //! Compares the set of source files on disk against the `(path, hash)` pairs
 //! stored in the database for a project, classifying each file as
@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 
 use rayon::prelude::*;
+use tracing::warn;
 
 use crate::discover::FileInfo;
 use crate::index::hash::compute_file_hash;
@@ -108,7 +109,7 @@ enum FileClass {
 /// # Parallelism
 ///
 /// Hash computation and per-file classification run in parallel via rayon
-/// (`par_iter`). SHA-256 hashing is I/O-bound (file read) + CPU-bound
+/// (`par_iter`). BLAKE3 hashing is I/O-bound (file read) + CPU-bound
 /// (digest), so rayon's thread pool overlaps disk I/O across files. Results
 /// are collected in `disk_files` order to preserve traversal order.
 ///
@@ -126,17 +127,39 @@ pub fn diff_files(
 
     // Parallel hash computation + classification (rayon par_iter).
     //
-    // SHA-256 hashing is I/O-bound (file read) + CPU-bound (digest), so
+    // BLAKE3 hashing is I/O-bound (file read) + CPU-bound (digest), so
     // rayon's thread pool overlaps disk I/O across files. Each file is
     // classified independently; results are collected in disk_files order
     // (rayon preserves source order on `collect`).
-    let classifications: Result<Vec<FileClass>, std::io::Error> = disk_files
+    //
+    // T202 security-review LOW-2 + MEDIUM-1: `compute_file_hash` rejects
+    // symlinks (path traversal) and oversized files (OOM) with
+    // `InvalidInput`. We skip those files (warn + treat as unchanged so
+    // they don't trigger re-parse) rather than failing the entire scan
+    // phase — a single malicious symlink should not block indexing the
+    // rest of the project. Other errors (NotFound, PermissionDenied) are
+    // propagated as before.
+    let classifications: Result<Vec<Option<FileClass>>, std::io::Error> = disk_files
         .par_iter()
         .map(|file| {
-            let disk_hash = compute_file_hash(&file.path)?;
+            let disk_hash = match compute_file_hash(&file.path) {
+                Ok(h) => h,
+                Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
+                    // Symlink or oversized file: skip with a warning.
+                    // Returning None signals the caller to skip this file.
+                    warn!(
+                        file = %file.relative_path,
+                        error = %err,
+                        "skipping file during hash classification \
+                         (symlink or exceeds MAX_FILE_SIZE)"
+                    );
+                    return Ok(None);
+                }
+                Err(err) => return Err(err),
+            };
             if force {
                 // BR-INDEX-003: --force ignores hashes; every disk file is changed.
-                return Ok(FileClass::Changed);
+                return Ok(Some(FileClass::Changed));
             }
             let class = match db_map.get(file.relative_path.as_str()) {
                 None => FileClass::Added,
@@ -150,7 +173,7 @@ pub fn diff_files(
                     }
                 }
             };
-            Ok(class)
+            Ok(Some(class))
         })
         .collect();
 
@@ -160,12 +183,21 @@ pub fn diff_files(
     let mut seen_on_disk: HashMap<&str, ()> = HashMap::with_capacity(disk_files.len());
 
     // Bucket files in disk traversal order (preserves pre-parallel behavior).
+    // Files whose hash computation was skipped (symlink / oversized) are
+    // recorded in `seen_on_disk` so they are not mistakenly classified as
+    // deleted from the DB, but they are not added to any diff bucket — the
+    // pipeline's `build_file_nodes` will warn again when it fails to hash
+    // them and skip File node creation.
     for (file, class) in disk_files.iter().zip(classifications) {
         seen_on_disk.insert(file.relative_path.as_str(), ());
         match class {
-            FileClass::Changed => diff.changed.push(file.clone()),
-            FileClass::Added => diff.added.push(file.clone()),
-            FileClass::Unchanged => diff.unchanged.push(file.clone()),
+            Some(FileClass::Changed) => diff.changed.push(file.clone()),
+            Some(FileClass::Added) => diff.added.push(file.clone()),
+            Some(FileClass::Unchanged) => diff.unchanged.push(file.clone()),
+            None => {
+                // Skipped during classification — already warned above.
+                // Fall through without bucketing.
+            }
         }
     }
 
@@ -204,7 +236,7 @@ mod tests {
         }
     }
 
-    /// Computes the SHA-256 hash of `dir/rel` for use in DB hash fixtures.
+    /// Computes the BLAKE3 hash of `dir/rel` for use in DB hash fixtures.
     fn hash_of(dir: &Path, rel: &str) -> String {
         compute_file_hash(&dir.join(rel)).unwrap()
     }

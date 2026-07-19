@@ -95,7 +95,7 @@ ignore = "0.4"
 notify = { version = "8", optional = true }
 notify-debouncer-full = { version = "0.7", optional = true }
 signal-hook = { version = "0.4", optional = true }
-sha2 = "0.11"
+blake3 = { version = "1.8", default-features = false, features = ["std"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "blocking", "rustls"], optional = true }
 ort = { version = "2.0.0-rc.12", optional = true }
 tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"], optional = true }

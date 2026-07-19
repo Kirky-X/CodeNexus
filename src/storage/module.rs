@@ -377,7 +377,7 @@ mod tests {
             .project("demo")
             .file_path("/src/main.rs")
             .language(Language::Rust)
-            .properties(serde_json::json!({"hash": "sha256:abc", "lineCount": 100}))
+            .properties(serde_json::json!({"hash": "blake3:abc", "lineCount": 100}))
             .build();
         cap.save_nodes(&[file], NodeLabel::File)
             .expect("save_nodes");
@@ -385,14 +385,14 @@ mod tests {
         let hash = cap
             .get_file_hash("/src/main.rs", "demo")
             .expect("get_file_hash");
-        assert_eq!(hash.as_deref(), Some("sha256:abc"));
+        assert_eq!(hash.as_deref(), Some("blake3:abc"));
 
         let all = cap
             .get_all_file_hashes("demo")
             .expect("get_all_file_hashes");
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].0, "/src/main.rs");
-        assert_eq!(all[0].1, "sha256:abc");
+        assert_eq!(all[0].1, "blake3:abc");
     }
 
     #[test]

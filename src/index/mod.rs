@@ -3,14 +3,14 @@
 
 //! Indexing pipeline (Facade pattern).
 //!
-//! Orchestrates discover → parse → resolve → storage, computes SHA-256 file
+//! Orchestrates discover → parse → resolve → storage, computes BLAKE3 file
 //! hashes for incremental indexing (ADR-009), and exposes [`IndexFacade`] as
 //! the single entry point for the indexing workflow.
 //!
 //! # Modules
 //!
 //! - [`error`]: [`IndexError`] and [`Result`](error::Result) alias.
-//! - [`hash`]: SHA-256 file/content hashing (ADR-009).
+//! - [`hash`]: BLAKE3 file/content hashing (ADR-009).
 //! - [`incremental`]: [`FileDiff`] and [`diff_files`] for incremental indexing
 //!   (BR-INDEX-001~003).
 //! - [`pipeline`]: [`IndexFacade`] (Facade), [`Pipeline`], [`IndexResult`].

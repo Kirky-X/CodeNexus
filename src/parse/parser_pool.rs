@@ -87,7 +87,7 @@ impl ParserPool {
     ///
     /// When `cache` is `Some`, checks the cache first using the key
     /// `ast:{lang}:{hash}` (where `hash` is the first 16 hex chars of
-    /// SHA-256(source)). On a hit, returns the cached S-expression directly,
+    /// BLAKE3(source)). On a hit, returns the cached S-expression directly,
     /// skipping tree-sitter. On a miss, parses via tree-sitter, serializes
     /// the root node to S-expression, stores it in cache, and returns it.
     #[cfg(feature = "cache")]

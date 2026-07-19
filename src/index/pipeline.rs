@@ -6,7 +6,7 @@
 //! [`IndexFacade`] is the single entry point for the indexing workflow. It
 //! owns a [`Pipeline`] which orchestrates the full discover → parse → resolve
 //! → storage sequence via the typed [`Phase`] DAG runner
-//! ([`super::pipeline_dag`]), computing SHA-256 file hashes for incremental
+//! ([`super::pipeline_dag`]), computing BLAKE3 file hashes for incremental
 //! indexing (ADR-009) and applying the diff logic from [`super::incremental`].
 //!
 //! # Pipeline phases (Task 2.5, design.md D2)
@@ -459,7 +459,7 @@ impl Pipeline {
 }
 
 /// Builds a [`Node`] (label `File`) for each changed/added file, carrying the
-/// SHA-256 hash in `properties.hash` for future incremental runs.
+/// BLAKE3 hash in `properties.hash` for future incremental runs.
 pub(crate) fn build_file_nodes(diff: &FileDiff, project_id: &str) -> Vec<Node> {
     let mut nodes = Vec::new();
     for file in diff.changed.iter().chain(diff.added.iter()) {

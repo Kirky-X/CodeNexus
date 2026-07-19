@@ -573,7 +573,7 @@ fn deserialize_vec(bytes: &[u8]) -> Vec<f32> {
 ///
 /// Wraps an inner [`EmbedClient`] and a [`CacheStore`](crate::cache::CacheStore).
 /// On `embed`, each input text is looked up in the cache by
-/// `format!("embed:{content_hash}")` where `content_hash` is the SHA-256 of
+/// `format!("embed:{content_hash}")` where `content_hash` is the BLAKE3 of
 /// the text (via [`compute_content_hash`](crate::index::hash::compute_content_hash)).
 /// Hits are returned from the cache; misses are batched and delegated to the
 /// inner client, then written back to the cache.

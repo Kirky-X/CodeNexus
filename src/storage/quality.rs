@@ -665,7 +665,7 @@ mod tests {
         storage
             .save_nodes(
                 &[
-                    sample_file("f1", "demo", "/a.rs", "sha256:abc"),
+                    sample_file("f1", "demo", "/a.rs", "blake3:abc"),
                     sample_file("f2", "demo", "/b.rs", ""),
                 ],
                 NodeLabel::File,
@@ -692,8 +692,8 @@ mod tests {
         storage
             .save_nodes(
                 &[
-                    sample_file("f1", "demo", "/a.rs", "sha256:abc"),
-                    sample_file("f2", "demo", "/b.rs", "sha256:def"),
+                    sample_file("f1", "demo", "/a.rs", "blake3:abc"),
+                    sample_file("f2", "demo", "/b.rs", "blake3:def"),
                 ],
                 NodeLabel::File,
             )
@@ -1010,7 +1010,7 @@ mod tests {
                 &[
                     sample_file("f1", "demo", "/a.rs", ""),
                     sample_file("f2", "demo", "/b.rs", ""),
-                    sample_file("f3", "demo", "/c.rs", "sha256:valid"),
+                    sample_file("f3", "demo", "/c.rs", "blake3:valid"),
                 ],
                 NodeLabel::File,
             )
