@@ -420,6 +420,7 @@ mod tests {
     use super::*;
     use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
     use crate::model::{Edge, EdgeType, Node, NodeLabel};
+    use crate::trace::MAX_SUBGRAPH_NODES;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
