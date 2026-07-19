@@ -165,9 +165,17 @@ impl ProjectSymbolTable {
     /// Adds a file symbol table to the project.
     ///
     /// All entries in the file table are also registered in the global index.
+    ///
+    /// Entries are sorted by qualified name before insertion to guarantee
+    /// deterministic iteration order inside `global_symbols[name]`. Without
+    /// this, `FileSymbolTable::all_symbols()` iterates a `HashMap` whose order
+    /// is randomized per process (SipHash seed), making `lookup_exact().first()`
+    /// and any caller relying on `Vec` order non-deterministic across runs.
+    /// See B12 fix in `tools/verification/results/triage.md`.
     pub fn add_file_table(&mut self, file_path: &str, table: FileSymbolTable) {
         // Collect clones first so we can move `table` afterwards.
-        let entries: Vec<SymbolEntry> = table.all_symbols().cloned().collect();
+        let mut entries: Vec<SymbolEntry> = table.all_symbols().cloned().collect();
+        entries.sort_by(|a, b| a.qn.cmp(&b.qn));
         for entry in entries {
             self.global_symbols
                 .entry(entry.name.clone())
@@ -188,12 +196,30 @@ impl ProjectSymbolTable {
     }
 
     /// Global lookup: returns all entries matching the name across all files.
+    ///
+    /// Results are sorted by qualified name so callers using `.first()`
+    /// (e.g. `CallResolver::resolve_call_internal` steps 2/3) observe the
+    /// same entry across runs. The `global_symbols` `HashMap` itself iterates
+    /// in random order per process, but `add_file_table` already sorts entries
+    /// on insertion — sorting here is a defensive guarantee for entries added
+    /// via `add_symbol` or any other future mutation path. See B12 fix.
+    ///
+    /// The `len() > 1` short-circuit avoids the `sort_by` call entirely on the
+    /// common K=1 path (single-definition name), which is the overwhelming
+    /// majority in real codebases. `sort_by` on a 0/1-element `Vec` is already
+    /// a no-op in the standard library, but skipping the call saves the
+    /// function-call overhead on this hot path.
     #[must_use]
     pub fn lookup(&self, name: &str) -> Vec<&SymbolEntry> {
-        self.global_symbols
+        let mut v: Vec<&SymbolEntry> = self
+            .global_symbols
             .get(name)
             .map(|v| v.iter().collect())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if v.len() > 1 {
+            v.sort_by(|a, b| a.qn.cmp(&b.qn));
+        }
+        v
     }
 
     /// Returns the first entry matching the name across all files, or `None`.

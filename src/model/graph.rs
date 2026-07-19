@@ -98,20 +98,35 @@ impl Graph {
             .collect()
     }
 
-    /// Returns all nodes with the given label. Order is not guaranteed.
+    /// Returns all nodes with the given label, sorted by node id.
+    ///
+    /// Sorting by `id` (FQN or `file_<uuid>`) makes the order deterministic
+    /// across runs, since `self.nodes` is a `HashMap` whose iteration order
+    /// is randomized per process (SipHash seed). Callers that pick `.first()`
+    /// or iterate the result to build edges/parameters now observe stable
+    /// output across indexes. See B12 fix in `tools/verification/results/triage.md`.
     #[must_use]
     pub fn nodes_by_label(&self, label: NodeLabel) -> Vec<&Node> {
-        self.nodes.values().filter(|n| n.label == label).collect()
+        let mut v: Vec<&Node> = self.nodes.values().filter(|n| n.label == label).collect();
+        v.sort_by(|a, b| a.id.cmp(&b.id));
+        v
     }
 
-    /// Returns all nodes belonging to the given project. Order is not
-    /// guaranteed.
+    /// Returns all nodes belonging to the given project, sorted by node id.
+    ///
+    /// Same determinism guarantee as [`nodes_by_label`](Self::nodes_by_label):
+    /// the underlying `HashMap` iterates in random order per process, so we
+    /// sort by `id` to give callers a stable result. See B12 fix in
+    /// `tools/verification/results/triage.md`.
     #[must_use]
     pub fn nodes_by_project(&self, project: &str) -> Vec<&Node> {
-        self.nodes
+        let mut v: Vec<&Node> = self
+            .nodes
             .values()
             .filter(|n| n.project == project)
-            .collect()
+            .collect();
+        v.sort_by(|a, b| a.id.cmp(&b.id));
+        v
     }
 
     /// Returns the number of nodes in the graph.
