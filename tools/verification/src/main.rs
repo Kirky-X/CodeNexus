@@ -12,7 +12,7 @@ mod report;
 mod type_map;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use codenexus::sdforge::clap::{self, Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 

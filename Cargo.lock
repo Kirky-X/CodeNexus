@@ -477,7 +477,6 @@ name = "codenexus"
 version = "0.3.5"
 dependencies = [
  "anyhow",
- "clap",
  "criterion",
  "crossbeam-channel",
  "csv",
@@ -502,7 +501,6 @@ dependencies = [
  "rayon",
  "regex",
  "reqwest",
- "rmcp",
  "rust_decimal",
  "sdforge",
  "serde",
