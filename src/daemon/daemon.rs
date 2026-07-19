@@ -31,10 +31,13 @@ const TICK_INTERVAL_MS: u64 = 500;
 
 // --- C6: 自适应防抖窗口参数 ---
 //
-// spec 主文描述（"高频扩展到 ≥ 500ms、低频缩短到 ≤ 100ms"）与 EMA 公式
-// `new = old * 0.7 + last_interval * 0.3` 实际行为相反 — 暴露冲突（rule 7），
-// 按 EMA 公式（spec 明确规则）实现：高频（last_interval 小）→ 窗口缩小到
-// clamp 下限 100ms；低频（last_interval 大）→ 窗口扩展到 clamp 上限 500ms。
+// spec 主文描述："高频扩展到 ≥ 500ms、低频缩短到 ≤ 100ms"。防抖的标准行为：
+// 高频事件密集时扩展窗口以批量处理（减少重建索引次数），低频事件稀疏时缩短
+// 窗口以快速响应用户。EMA 公式 `new = old * 0.7 + last_interval * 0.3` 原始
+// 形式让 debounce_window 与 last_interval 正相关（高频缩小、低频扩展），与
+// spec 主文描述相反。修复方案：反转 EMA 输入，用 (REFERENCE_INTERVAL -
+// last_interval).max(0) 代替 last_interval，让 debounce_window 与 last_interval
+// 反相关，符合 spec 主文描述。
 
 /// 自适应防抖窗口初始值（毫秒），C6 spec。
 const INITIAL_DEBOUNCE_WINDOW_MS: u64 = 200;
@@ -48,11 +51,17 @@ const MAX_DEBOUNCE_WINDOW_MS: u64 = 500;
 /// 滑动窗口容量：保留最近 10 个事件间隔，C6 spec。
 const EVENT_INTERVALS_CAPACITY: usize = 10;
 
-/// EMA 旧值权重，C6 spec `new = old * 0.7 + last_interval * 0.3`。
+/// EMA 旧值权重，C6 spec `new = old * 0.7 + inverted_interval * 0.3`。
 const EMA_OLD_WEIGHT: f64 = 0.7;
 
-/// EMA 新值权重，C6 spec `new = old * 0.7 + last_interval * 0.3`。
+/// EMA 新值权重，C6 spec `new = old * 0.7 + inverted_interval * 0.3`。
 const EMA_NEW_WEIGHT: f64 = 0.3;
+
+/// EMA 参考间隔（秒）。用于反转 last_interval：高频事件（last_interval 小）
+/// → inverted_interval 大 → debounce_window 扩展；低频事件（last_interval 大）
+/// → inverted_interval 小 → debounce_window 缩短。5 秒对应 spec 低频场景
+/// "5 秒内 1 个事件"，确保低频时 inverted_interval ≈ 0。
+const EMA_REFERENCE_INTERVAL_SECS: f64 = 5.0;
 
 /// 守护进程（观察者模式中的主题）。
 ///
@@ -166,9 +175,14 @@ impl Daemon {
     /// C6: 用 EMA 公式更新自适应防抖窗口。
     ///
     /// 计算与上一个事件的时间间隔 `last_interval`，push 到
-    /// `event_intervals`（保留最近 10 个），用 EMA 公式
-    /// `new = old * 0.7 + last_interval * 0.3` 更新 `debounce_window`，
-    /// clamp 到 `[100ms, 500ms]`。
+    /// `event_intervals`（保留最近 10 个），用反转 EMA 公式
+    /// `new = old * 0.7 + (REFERENCE - last_interval).max(0) * 0.3`
+    /// 更新 `debounce_window`，clamp 到 `[100ms, 500ms]`。
+    ///
+    /// 反转 EMA 输入确保行为符合 spec 主文描述：高频（last_interval 小）
+    /// → inverted_interval 大 → debounce_window 扩展到 500ms；低频
+    /// （last_interval 大）→ inverted_interval 小 → debounce_window
+    /// 缩短到 100ms。
     ///
     /// 第一个事件（`last_event_at` 为 `None`）只设置 `last_event_at`，
     /// 不更新 `debounce_window`（无间隔可计算）。
@@ -184,11 +198,14 @@ impl Daemon {
                 self.event_intervals.pop_front();
             }
 
-            // EMA 公式：new = old * 0.7 + last_interval * 0.3
+            // 反转 EMA：用 (REFERENCE - last_interval).max(0) 作为新值输入。
+            // 高频（last_interval 小）→ inverted 大 → 窗口扩展；
+            // 低频（last_interval 大）→ inverted 小 → 窗口缩短。
             // 用 as_secs_f64 / from_secs_f64 避免 Duration * f64（不稳定 API）。
             let old_secs = self.debounce_window.as_secs_f64();
             let interval_secs = interval.as_secs_f64();
-            let new_secs = old_secs * EMA_OLD_WEIGHT + interval_secs * EMA_NEW_WEIGHT;
+            let inverted_secs = (EMA_REFERENCE_INTERVAL_SECS - interval_secs).max(0.0);
+            let new_secs = old_secs * EMA_OLD_WEIGHT + inverted_secs * EMA_NEW_WEIGHT;
             let new_window = Duration::from_secs_f64(new_secs);
 
             // clamp 到 [100ms, 500ms]。Duration 实现了 Ord，可用 max/min。
@@ -1104,12 +1121,9 @@ mod tests {
 
     // --- C6: 自适应防抖窗口测试 ---
     //
-    // spec 主文描述（"高频扩展到 ≥ 500ms、低频缩短到 ≤ 100ms"）与 EMA 公式
-    // `new = old * 0.7 + last_interval * 0.3` 实际行为相反 — 暴露冲突
-    // （rule 7），按 EMA 公式（spec 明确规则）实现，测试断言反映 EMA
-    // 实际行为：高频（last_interval 小）→ 窗口缩小到 clamp 下限 100ms；
-    // 低频（last_interval 大）→ 窗口扩展到 clamp 上限 500ms。详见
-    // commit message 中关于 spec 矛盾的说明。
+    // 反转 EMA 实现符合 spec 主文描述：高频（last_interval 小）→ inverted
+    // 大 → 窗口扩展到 clamp 上限 500ms；低频（last_interval 大）→ inverted
+    // 小 → 窗口缩短到 clamp 下限 100ms。
 
     #[test]
     fn test_adaptive_debounce_default_window_is_200ms() {
@@ -1123,40 +1137,40 @@ mod tests {
 
     #[test]
     fn test_debounce_window_clamped_to_min_100ms() {
-        // 高频场景（last_interval 极小），EMA 让窗口趋近 last_interval，
-        // clamp 到下限 100ms。
+        // 低频场景（last_interval 极大 ≥ REFERENCE=5s），inverted ≈ 0，
+        // EMA 让窗口收敛到 0，clamp 到下限 100ms。
         let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
         let mut now = Instant::now();
         daemon.update_adaptive_debounce(now);
-        // 5 次 1ms 间隔 → EMA 收敛到 ~1ms → clamp 到 100ms
-        for _ in 0..5 {
-            now += Duration::from_millis(1);
-            daemon.update_adaptive_debounce(now);
-        }
-        assert_eq!(
-            daemon.debounce_window(),
-            Duration::from_millis(100),
-            "高频极小间隔后窗口应 clamp 到 100ms，实际 {:?}",
-            daemon.debounce_window()
-        );
-    }
-
-    #[test]
-    fn test_debounce_window_clamped_to_max_500ms() {
-        // 低频场景（last_interval 极大），EMA 让窗口趋近 last_interval，
-        // clamp 到上限 500ms。
-        let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
-        let mut now = Instant::now();
-        daemon.update_adaptive_debounce(now);
-        // 5 次 10s 间隔 → EMA 收敛到 ~10s → clamp 到 500ms
+        // 5 次 10s 间隔 → inverted = (5 - 10).max(0) = 0 → EMA 收敛到 0 → clamp 100ms
         for _ in 0..5 {
             now += Duration::from_secs(10);
             daemon.update_adaptive_debounce(now);
         }
         assert_eq!(
             daemon.debounce_window(),
+            Duration::from_millis(100),
+            "低频极大间隔后窗口应 clamp 到 100ms，实际 {:?}",
+            daemon.debounce_window()
+        );
+    }
+
+    #[test]
+    fn test_debounce_window_clamped_to_max_500ms() {
+        // 高频场景（last_interval 极小），inverted ≈ REFERENCE=5s，
+        // EMA 让窗口收敛到 ~5s，clamp 到上限 500ms。
+        let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
+        let mut now = Instant::now();
+        daemon.update_adaptive_debounce(now);
+        // 5 次 1ms 间隔 → inverted ≈ 5s → EMA 收敛到 ~5s → clamp 500ms
+        for _ in 0..5 {
+            now += Duration::from_millis(1);
+            daemon.update_adaptive_debounce(now);
+        }
+        assert_eq!(
+            daemon.debounce_window(),
             Duration::from_millis(500),
-            "低频极大间隔后窗口应 clamp 到 500ms，实际 {:?}",
+            "高频极小间隔后窗口应 clamp 到 500ms，实际 {:?}",
             daemon.debounce_window()
         );
     }
@@ -1195,9 +1209,10 @@ mod tests {
 
     #[test]
     fn test_ema_formula_weights_old_70_percent_new_30_percent() {
-        // 单次更新验证 EMA 权重：new = old * 0.7 + last_interval * 0.3
-        // old = 200ms（初始），last_interval = 1000ms
-        // 期望 new = 200 * 0.7 + 1000 * 0.3 = 140 + 300 = 440ms（未触发 clamp）
+        // 单次更新验证反转 EMA 权重：new = old * 0.7 + inverted * 0.3
+        // old = 200ms（初始），last_interval = 1000ms = 1s
+        // inverted = (5 - 1).max(0) = 4s
+        // 期望 new = 0.2*0.7 + 4*0.3 = 0.14 + 1.2 = 1.34s → clamp 到 500ms
         let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
         let mut now = Instant::now();
         daemon.update_adaptive_debounce(now); // 设 last_event_at，不更新 EMA
@@ -1205,19 +1220,17 @@ mod tests {
         daemon.update_adaptive_debounce(now);
         assert_eq!(
             daemon.debounce_window(),
-            Duration::from_millis(440),
-            "EMA 单次更新：200*0.7 + 1000*0.3 = 440ms，实际 {:?}",
+            Duration::from_millis(500),
+            "反转 EMA 单次更新：0.2*0.7 + 4*0.3 = 1.34s → clamp 500ms，实际 {:?}",
             daemon.debounce_window()
         );
     }
 
     #[test]
-    fn test_adaptive_debounce_shrinks_window_on_high_frequency_events() {
+    fn test_adaptive_debounce_extends_window_on_high_frequency_events() {
         // 模拟 1 秒内 20 个文件变更事件（高频，间隔 ~50ms）。
-        // 注：spec 主文说"高频扩展到 ≥ 500ms"，但 EMA 公式
-        // `new = old*0.7 + last_interval*0.3` 在 last_interval 小时让窗口
-        // 缩小。按 EMA 公式（spec 明确规则）实际行为：高频 → 缩小到
-        // clamp 下限 100ms。详见 commit message 中 spec 矛盾说明。
+        // 反转 EMA：inverted = (5 - 0.05).max(0) = 4.95s → 窗口扩展到
+        // clamp 上限 500ms。符合 spec 主文描述"高频扩展到 ≥ 500ms"。
         let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
         let mut now = Instant::now();
         let interval = Duration::from_millis(50);
@@ -1227,8 +1240,8 @@ mod tests {
             daemon.update_adaptive_debounce(now);
         }
         assert!(
-            daemon.debounce_window() <= Duration::from_millis(100),
-            "高频事件后窗口应缩小到 ≤ 100ms（clamp 下限），实际 {:?}",
+            daemon.debounce_window() >= Duration::from_millis(500),
+            "高频事件后窗口应扩展到 ≥ 500ms（clamp 上限），实际 {:?}",
             daemon.debounce_window()
         );
         assert_eq!(
@@ -1241,21 +1254,23 @@ mod tests {
     }
 
     #[test]
-    fn test_adaptive_debounce_extends_window_on_low_frequency_events() {
-        // 模拟 5 秒内 1 个事件（低频，间隔 5000ms）。
-        // 注：spec 主文说"低频缩短到 ≤ 100ms"，但 EMA 公式
-        // `new = old*0.7 + last_interval*0.3` 在 last_interval 大时让窗口
-        // 扩展。按 EMA 公式（spec 明确规则）实际行为：低频 → 扩展到
-        // clamp 上限 500ms。详见 commit message 中 spec 矛盾说明。
+    fn test_adaptive_debounce_shrinks_window_on_low_frequency_events() {
+        // 模拟 5 秒内 1 个事件（低频，间隔 5000ms = 5s = REFERENCE）。
+        // 反转 EMA：inverted = (5 - 5).max(0) = 0 → 窗口缩短。
+        // 单次更新：new = 0.2*0.7 + 0*0.3 = 0.14s = 140ms（未触发 clamp）。
+        // 多次低频事件后 EMA 收敛到 0 → clamp 到 100ms。
+        // 符合 spec 主文描述"低频缩短到 ≤ 100ms"。
         let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
         let mut now = Instant::now();
         daemon.update_adaptive_debounce(now); // 第一次不更新 EMA
-        now += Duration::from_millis(5000);
-        daemon.update_adaptive_debounce(now);
-        // new = 200 * 0.7 + 5000 * 0.3 = 140 + 1500 = 1640ms → clamp 到 500ms
+                                              // 5 次低频事件，每次间隔 5s → inverted = 0 → EMA 收敛到 0 → clamp 100ms
+        for _ in 0..5 {
+            now += Duration::from_millis(5000);
+            daemon.update_adaptive_debounce(now);
+        }
         assert!(
-            daemon.debounce_window() >= Duration::from_millis(500),
-            "低频事件后窗口应扩展到 ≥ 500ms（clamp 上限），实际 {:?}",
+            daemon.debounce_window() <= Duration::from_millis(100),
+            "低频事件后窗口应缩短到 ≤ 100ms（clamp 下限），实际 {:?}",
             daemon.debounce_window()
         );
     }
