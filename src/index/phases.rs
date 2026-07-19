@@ -790,6 +790,13 @@ fn lookup_or_create_project_id(
 /// Only saves the project node if it does not already exist — this preserves
 /// the File nodes (and their hashes) from prior runs, which the incremental
 /// indexer depends on.
+///
+/// T206: canonicalizes `root` to an absolute path before writing it into the
+/// Project node's `rootPath` property. This prevents downstream staleness
+/// checks (`status`/`dead_code`) from running `git rev-parse HEAD` against the
+/// process's CWD when the caller passed a relative path like `.`. Falls back
+/// to the original path on `canonicalize` failure so dry-run tests with
+/// non-existent paths still work.
 fn save_project_node(
     repo: &Repository,
     project_id: &str,
@@ -805,11 +812,12 @@ fn save_project_node(
         );
         let _ = repo.connection().execute(&cypher);
     }
-    let last_commit = git_head_commit(root);
+    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let last_commit = git_head_commit(&canonical_root);
     let project_node = Node::builder(NodeLabel::Project, project_name, project_name)
         .id(project_id)
         .properties(serde_json::json!({
-            "rootPath": root.display().to_string(),
+            "rootPath": canonical_root.display().to_string(),
             "fileCount": disk_files.len() as i64,
             "indexedAt": now_unix_seconds(),
             "lastCommit": last_commit,

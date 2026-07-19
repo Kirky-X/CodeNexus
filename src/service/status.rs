@@ -3,7 +3,7 @@
 
 //! Status command: list indexed projects with staleness check.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -15,6 +15,8 @@ use crate::service::error::CodeNexusError;
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
 #[cfg(feature = "cli")]
 use crate::service::runtime::kit;
+#[cfg(any(feature = "cli", feature = "analysis", test))]
+use crate::storage::StorageConfig;
 use crate::storage::{is_table_missing_error, ProjectRecord};
 
 #[cfg(feature = "cli")]
@@ -81,6 +83,36 @@ pub(crate) fn is_stale(last_commit: &str, current_head: &str) -> bool {
     !last_commit.is_empty() && !current_head.is_empty() && last_commit != current_head
 }
 
+/// Resolves a project's root directory with fallback for legacy relative
+/// `rootPath` values.
+///
+/// T206: older indexes stored `rootPath = "."` because the indexer didn't
+/// canonicalize the path. When such an index is queried from a different
+/// CWD, `git rev-parse HEAD` would run against the wrong directory and
+/// produce false `is_stale=true` results. This function detects that case
+/// and falls back to `db_path.parent().and_then(parent)` — the typical
+/// layout is `<project>/.codenexus/<name>.lbug`, so two `.parent()` calls
+/// walk from the DB file up to the project root.
+///
+/// Returns the original `root_path` (wrapped as `PathBuf`) when:
+/// - it is already an absolute path that exists on disk, OR
+/// - the fallback chain fails (no parent / no parent-of-parent or the
+///   resolved path does not exist), in which case the caller will surface
+///   the staleness as before (best-effort, no panic).
+#[cfg(any(feature = "cli", feature = "analysis", test))]
+pub(crate) fn resolve_project_root(root_path: &str, db_path: &Path) -> PathBuf {
+    let p = Path::new(root_path);
+    if p.is_absolute() && p.exists() {
+        return p.to_path_buf();
+    }
+    db_path
+        .parent()
+        .and_then(|parent| parent.parent())
+        .map(PathBuf::from)
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| p.to_path_buf())
+}
+
 /// Runs status against an injected Kit (testable core).
 ///
 /// On a fresh/uninitialized DB (Project table missing), returns an empty
@@ -92,6 +124,7 @@ pub(crate) fn is_stale(last_commit: &str, current_head: &str) -> bool {
 #[cfg(any(feature = "cli", test))]
 pub fn run_status(kit: &AsyncKit<AsyncReady>) -> Result<StatusOutput, CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
+    let db_path = kit.config::<StorageConfig>()?.db_path.clone();
     let projects = match storage.list_projects() {
         Ok(projects) => projects,
         Err(err) if is_table_missing_error(&err) => return Ok(StatusOutput::default()),
@@ -101,7 +134,8 @@ pub fn run_status(kit: &AsyncKit<AsyncReady>) -> Result<StatusOutput, CodeNexusE
         projects: projects
             .into_iter()
             .map(|p| {
-                let current_head = git_head_commit(Path::new(&p.root_path));
+                let root = resolve_project_root(&p.root_path, &db_path);
+                let current_head = git_head_commit(&root);
                 let stale = is_stale(&p.last_commit, &current_head);
                 ProjectOutput::from_record(p, current_head, stale)
             })
@@ -303,5 +337,89 @@ mod tests {
         let result = rt.block_on(status());
         assert!(result.is_err(), "wrapper should fail without kit");
         reset_kit_for_testing();
+    }
+
+    /// T206: legacy indexes stored `rootPath = "."`. Without
+    /// [`resolve_project_root`], `git rev-parse HEAD` would run in the
+    /// process CWD (which might be a different git repo) and return the
+    /// wrong commit, causing false `stale=true`. This test verifies the
+    /// `db_path`-based fallback resolves the actual project root.
+    #[test]
+    fn test_status_resolves_relative_rootpath_via_db_path() {
+        let project_root = TempDir::new().unwrap();
+        let project_root_path = project_root.path().canonicalize().unwrap();
+
+        let status = std::process::Command::new("git")
+            .arg("init")
+            .arg(&project_root_path)
+            .status();
+        if status.is_err() || !status.unwrap().success() {
+            eprintln!("skipping test: git init failed");
+            return;
+        }
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&project_root_path)
+                .args(args)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+        std::fs::write(project_root_path.join("README.md"), "init\n").unwrap();
+        if !git(&["add", "."])
+            || !git(&[
+                "-c",
+                "user.email=t@t.com",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-m",
+                "init",
+            ])
+        {
+            eprintln!("skipping test: git commit failed");
+            return;
+        }
+        let head = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&project_root_path)
+            .arg("rev-parse")
+            .arg("HEAD")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        if head.is_empty() {
+            eprintln!("skipping test: could not determine HEAD");
+            return;
+        }
+
+        // Create DB at <project_root>/.codenexus/test.lbug — the layout
+        // `resolve_project_root`'s fallback expects.
+        let db_dir = project_root_path.join(".codenexus");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        let db_path = db_dir.join("test.lbug");
+
+        let kit = build_kit_for_db(&db_path);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        // rootPath deliberately set to "." (legacy). lastCommit = current HEAD
+        // so stale should be false once the fallback resolves the root.
+        storage
+            .execute(&format!(
+                "CREATE (:Project {{id: 'demo', name: 'demo', rootPath: '.', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: '{head}'}});"
+            ))
+            .expect("create project");
+
+        let output = run_status(&kit).expect("run_status");
+        assert_eq!(output.projects.len(), 1, "exactly one project");
+        let p = &output.projects[0];
+        assert_eq!(
+            p.current_head, head,
+            "current_head must be the project's actual HEAD, not the CWD's HEAD"
+        );
+        assert!(
+            !p.stale,
+            "should not be stale: last_commit == current_head after fallback resolution"
+        );
     }
 }

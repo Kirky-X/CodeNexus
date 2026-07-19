@@ -22,9 +22,9 @@ use crate::service::project::resolve_project_id;
 #[cfg(all(feature = "cli", feature = "analysis"))]
 use crate::service::runtime::kit;
 #[cfg(feature = "analysis")]
-use crate::service::status::{git_head_commit, is_stale};
+use crate::service::status::{git_head_commit, is_stale, resolve_project_root};
 #[cfg(feature = "analysis")]
-use std::path::Path;
+use crate::storage::StorageConfig;
 
 #[cfg(all(feature = "cli", feature = "analysis"))]
 use sdforge::forge;
@@ -97,7 +97,12 @@ pub fn run_dead_code(
         .map_err(CodeNexusError::from)?
         .ok_or_else(|| CodeNexusError::ProjectNotFound(project.to_string()))?;
     let indexed_commit = project_record.last_commit.clone();
-    let current_head = git_head_commit(Path::new(&project_record.root_path));
+    // T206: resolve rootPath with fallback for legacy relative paths so
+    // `git rev-parse HEAD` runs against the actual project root, not the
+    // process CWD. See `status::resolve_project_root` for the heuristic.
+    let storage_config = kit.config::<StorageConfig>()?;
+    let root = resolve_project_root(&project_record.root_path, &storage_config.db_path);
+    let current_head = git_head_commit(&root);
     let stale = is_stale(&indexed_commit, &current_head);
     let config = build_dead_code_config(
         check_exported,
@@ -668,5 +673,83 @@ mod tests {
         assert_eq!(output.indexed_commit, head);
         assert_eq!(output.current_head, head);
         assert!(!output.is_stale, "commits match → fresh");
+    }
+
+    /// T206: legacy indexes stored `rootPath = "."`. Without
+    /// [`resolve_project_root`], `git rev-parse HEAD` would run in the
+    /// process CWD (which might be a different git repo) and return the
+    /// wrong commit, causing false `is_stale=true`. This test verifies the
+    /// `db_path`-based fallback resolves the actual project root.
+    #[test]
+    fn test_dead_code_resolves_relative_rootpath_via_db_path() {
+        let project_root = TempDir::new().unwrap();
+        let project_root_path = project_root.path().canonicalize().unwrap();
+
+        let status = std::process::Command::new("git")
+            .arg("init")
+            .arg(&project_root_path)
+            .status();
+        if status.is_err() || !status.unwrap().success() {
+            eprintln!("skipping test: git init failed");
+            return;
+        }
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&project_root_path)
+                .args(args)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+        std::fs::write(project_root_path.join("README.md"), "init\n").unwrap();
+        if !git(&["add", "."])
+            || !git(&[
+                "-c",
+                "user.email=t@t.com",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-m",
+                "init",
+            ])
+        {
+            eprintln!("skipping test: git commit failed");
+            return;
+        }
+        let head = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&project_root_path)
+            .arg("rev-parse")
+            .arg("HEAD")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        if head.is_empty() {
+            eprintln!("skipping test: could not determine HEAD");
+            return;
+        }
+
+        // Create DB at <project_root>/.codenexus/test.lbug — the layout
+        // `resolve_project_root`'s fallback expects (db_path → parent →
+        // parent = project_root).
+        let db_dir = project_root_path.join(".codenexus");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        let db_path = db_dir.join("test.lbug");
+
+        let kit = build_kit_for_db(&db_path);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        // rootPath deliberately set to "." (legacy). lastCommit = current HEAD
+        // so is_stale should be false once the fallback resolves the root.
+        seed_project_with(&*storage, "demo", "demo", ".", &head);
+        let output = run_dead_code(&kit, "demo", "", true, true, true, "").expect("run");
+        assert_eq!(
+            output.current_head, head,
+            "current_head must be the project's actual HEAD, not the CWD's HEAD"
+        );
+        assert!(
+            !output.is_stale,
+            "should not be stale: indexed_commit == current_head after fallback resolution"
+        );
     }
 }
