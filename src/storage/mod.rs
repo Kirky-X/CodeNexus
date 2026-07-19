@@ -23,6 +23,6 @@ pub use module::{StorageConfig, StorageModule};
 pub use quality::{QualityChecker, QualityReport, QualityViolation};
 pub use repository::{FunctionRecord, ProjectRecord, Repository};
 pub use schema::{
-    all_init_ddl, embedding_table_ddl, index_ddl, node_table_columns, node_table_ddl,
-    relation_table_columns, relation_table_ddl,
+    all_init_ddl, embedding_table_ddl, escape_cypher_string, index_ddl, node_table_columns,
+    node_table_ddl, relation_table_columns, relation_table_ddl,
 };

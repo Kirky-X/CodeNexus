@@ -60,9 +60,28 @@ pub fn escape_identifier(name: &str) -> String {
 /// string. Backslash is escaped first, then single quote — the same rule used
 /// by every prior local copy (graph_loader, repository, fulltext, structured,
 /// disambiguation, rename_cmd) before consolidation here.
+///
+/// # T202 security-review LOW-1: control character hardening
+///
+/// The openCypher spec only mandates escaping `\` and `'` inside single-quoted
+/// string literals. LadybugDB's Cypher engine follows the spec and treats
+/// raw control bytes (`\n`, `\r`, `\t`, etc.) as literal bytes — they do not
+/// alter query semantics. However, embedding raw control characters produces
+/// malformed log lines (a `\n` breaks the Cypher statement across lines in
+/// tracing output) and confuses downstream parsers. We therefore escape the
+/// common whitespace control characters to their `\n` / `\r` / `\t` literal
+/// forms; the Cypher engine interprets these escape sequences back to the
+/// original bytes, so round-trip semantics are preserved while logs and
+/// audit trails remain parseable.
 #[must_use]
 pub fn escape_cypher_string(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('\'', "\\'")
+    // Order matters: backslash first so we do not double-escape escapes
+    // introduced by later steps, then single quote, then control chars.
+    s.replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 /// Returns `(table_name, ddl)` pairs for all 44 node tables, in declaration
@@ -730,6 +749,24 @@ mod tests {
         assert_eq!(escape_cypher_string("plain"), "plain");
         assert_eq!(escape_cypher_string("'quoted'"), "\\'quoted\\'");
         assert_eq!(escape_cypher_string("back\\slash"), "back\\\\slash");
+    }
+
+    #[test]
+    fn escape_cypher_string_escapes_control_characters() {
+        // T202 security-review LOW-1: \n / \r / \t are escaped to their
+        // literal backslash sequences so logs and audit trails remain
+        // parseable. The Cypher engine interprets these escape sequences
+        // back to the original bytes — round-trip semantics preserved.
+        assert_eq!(escape_cypher_string("line1\nline2"), "line1\\nline2");
+        assert_eq!(escape_cypher_string("col1\tcol2"), "col1\\tcol2");
+        assert_eq!(escape_cypher_string("a\rb"), "a\\rb");
+        // Mixed: backslash + quote + control chars.
+        assert_eq!(
+            escape_cypher_string("it's\na\t\\test\r"),
+            "it\\'s\\na\\t\\\\test\\r"
+        );
+        // Empty string is a no-op.
+        assert_eq!(escape_cypher_string(""), "");
     }
 
     #[test]
