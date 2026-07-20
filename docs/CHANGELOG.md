@@ -5,6 +5,17 @@ All notable changes to CodeNexus are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.9] - 2026-07-21
+
+### Fixed
+
+- **fix(parse): DQ-002 duplicate FQN for struct field + impl method** — CalNexus indexing reported 4 DQ-002 Duplicate FQN warnings. Root cause: a struct field and an impl method with the same name produced identical FQNs (e.g. `Foo.bar#Foo` for both `struct Foo { bar: ... }` and `impl Foo { fn bar() {} }`), because both used the struct name as the disambiguator. Fix: prepend `field_` to the struct field disambiguator in `rust_extractor.rs::extract_struct_fields` — fields now use `#field_Foo` while methods keep `#Foo`, cleanly separating the two namespaces without changing Function FQNs. Eliminates 4 DQ-002 warnings; downstream `context`/`rename`/`impact` symbol resolution is no longer ambiguous on the 4 collision sites.
+- **fix(parse): DQ-004 orphan edge from Python nested functions** — CalNexus indexing reported 2 DQ-004 Orphan edge warnings where the source node existed but the target (`_strip_blank_ends`) did not. Root cause: Python nested `def` (def inside another def) was previously skipped entirely to align with gitnexus function counts (170 vs 280), but outer functions calling inner ones still emitted CALLS edges targeting non-existent nodes. Fix in `python.rs::extract_function`: nested functions are now extracted as Function nodes but marked `is_global = false` so they don't pollute the global symbol table, while still providing a target for CALLS edges. Eliminates 2 DQ-004 warnings; the `flush_section`/`flush_req` → `_strip_blank_ends` call chain is no longer broken.
+
+### Documentation
+
+- **docs(appendix): document 3 known limitations from CalNexus 0.3.8 verification** — `references/appendix.md` Known Issues table extended with: (1) bash `dead_code` — `trap cleanup EXIT` (signal-triggered) and indirect calls via string concatenation / variable expansion are invisible to tree-sitter; results are correctly flagged Medium-confidence but require manual confirmation before deletion. (2) axum route extraction — updated existing entry to also cover `cross_service` returning empty `[]` for `Router::new().route(...)` macro registration (route strings are macro arguments, not standalone string literals). (3) LSP environment dependency — `lsp_goto_def`/`lsp_hover` may fail with exit 2 (`LSP communication error: server connection closed`) in environments where the language server exits immediately after startup; this is an environment/configuration issue, not a tool logic bug.
+
 ## [0.3.8] - 2026-07-21
 
 ### Fixed

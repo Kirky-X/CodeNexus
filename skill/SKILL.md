@@ -5,7 +5,7 @@ description: "Code knowledge graph indexer and query tool. Use when indexing cod
 
 # CodeNexus CLI Skill
 
-> **Verified against `codenexus 0.3.8`.** The CLI is **strictly flag-based**: there are **no positional arguments**, and almost every function parameter is a **mandatory flag** (plain `String`/`u32`/`bool` types in the source map to required flags — only `--db <DB_PATH>` and `--debounce-ms <MS>` are global options with defaults). Booleans are pass-by-value (e.g. `--force true` on `index`, `--apply true` on `rename`, `--cross_service false` on `trace`). ⚠️ `--cross_service` is **`trace`-only** — `impact` does NOT have this flag; `search` does NOT have `--name` (use `--text`+`--fulltext`+`--mode`).
+> **Verified against `codenexus 0.3.9`.** The CLI is **strictly flag-based**: there are **no positional arguments**, and almost every function parameter is a **mandatory flag** (plain `String`/`u32`/`bool` types in the source map to required flags — only `--db <DB_PATH>` and `--debounce-ms <MS>` are global options with defaults). Booleans are pass-by-value (e.g. `--force true` on `index`, `--apply true` on `rename`, `--cross_service false` on `trace`). ⚠️ `--cross_service` is **`trace`-only** — `impact` does NOT have this flag; `search` does NOT have `--name` (use `--text`+`--fulltext`+`--mode`).
 
 ## Description
 
