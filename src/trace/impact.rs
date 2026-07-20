@@ -37,11 +37,21 @@ const MAX_DEPTH_LIMIT: u32 = 10;
 /// caps are intentionally aligned so that `load_graph` never loads more
 /// nodes than `trace_upstream` can analyse.
 const MAX_NODES_LIMIT: usize = 5000;
+/// Default `max_depth` value used by [`ImpactConfig::default`].
+///
+/// Extracted from the `5` literal previously hard-coded in `Default::default()`
+/// so tests can reference the same source of truth (perf-review M3:
+/// test constants were coupled to `Default::default()` via duplicated
+/// literals — changing the default would silently break tests or, worse,
+/// tests would pass while runtime behaviour diverged from the documented
+/// spec). Tests that need to assert the default value now reference this
+/// constant instead of re-typing `5`.
+const DEFAULT_MAX_DEPTH: u32 = 5;
 
 impl Default for ImpactConfig {
     fn default() -> Self {
         Self {
-            max_depth: 5,
+            max_depth: DEFAULT_MAX_DEPTH,
             edge_types: vec![EdgeType::Calls, EdgeType::Implements, EdgeType::UsesType],
             include_tests: false,
         }
@@ -612,7 +622,7 @@ mod tests {
     #[test]
     fn impact_config_default_has_expected_values() {
         let config = ImpactConfig::default();
-        assert_eq!(config.max_depth, 5);
+        assert_eq!(config.max_depth, DEFAULT_MAX_DEPTH);
         assert_eq!(
             config.edge_types,
             vec![EdgeType::Calls, EdgeType::Implements, EdgeType::UsesType]
@@ -739,7 +749,7 @@ mod tests {
     fn new_uses_default_config() {
         let g = Graph::new();
         let analyzer = ImpactAnalyzer::new(&g);
-        assert_eq!(analyzer.config.max_depth, 5);
+        assert_eq!(analyzer.config.max_depth, DEFAULT_MAX_DEPTH);
         assert!(!analyzer.config.include_tests);
     }
 
@@ -1383,15 +1393,16 @@ mod tests {
     fn with_config_clamps_max_depth_to_limit() {
         // max_depth=15 should be clamped to MAX_DEPTH_LIMIT (10) internally.
         // Chain of 11: target ← c1 ← ... ← c11 (depths 1-11).
-        // With clamped max_depth=10, only c1..c10 (depths 1-10) are found;
-        // c11 at depth 11 is NOT reached because depth 10 >= 10 triggers continue.
+        // With clamped max_depth=MAX_DEPTH_LIMIT, only c1..c10 (depths 1-10)
+        // are found; c11 at depth 11 is NOT reached because depth 10 >=
+        // MAX_DEPTH_LIMIT triggers continue.
         let mut g = Graph::new();
         g.add_node(make_func("target", "target"));
         for i in 1..=11 {
             let id = format!("c{i}");
             g.add_node(make_func(&id, &id));
         }
-        for i in 1..=10 {
+        for i in 1..=MAX_DEPTH_LIMIT {
             let from = format!("c{i}");
             let to = if i == 1 {
                 "target".to_string()
@@ -1410,11 +1421,12 @@ mod tests {
         let result = analyzer.analyze_impact(&"target".to_string());
         assert_eq!(
             result.affected.len(),
-            10,
-            "max_depth=15 should be clamped to 10, finding only 10 nodes"
+            MAX_DEPTH_LIMIT as usize,
+            "max_depth=15 should be clamped to MAX_DEPTH_LIMIT, finding only \
+             MAX_DEPTH_LIMIT nodes"
         );
         let max_depth = result.affected.iter().map(|n| n.depth).max().unwrap_or(0);
-        assert_eq!(max_depth, 10);
+        assert_eq!(max_depth, MAX_DEPTH_LIMIT);
         assert!(
             !result.affected.iter().any(|n| n.name == "c11"),
             "c11 at depth 11 should not be found due to clamping"
