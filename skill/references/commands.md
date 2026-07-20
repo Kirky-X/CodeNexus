@@ -128,7 +128,7 @@ All of `--text`, `--fulltext`, `--limit`, `--mode`, `--project` are **required**
 
 **Output (JSON):** `{"count":N,"results":[{name, label, file_path, start_line, qualified_name, score, match_reason, degree}]}`
 
-> Note: When `--fulltext true`, `match_reason` is `"bm25 fts"` (FTS extension path) or `"bm25f"` (CONTAINS fallback path). When `--fulltext false`, `match_reason` reflects the structured match type (`exact name match`/`prefix match`/`token match`/`substring match`). As of v0.3.7, the FTS path no longer mislabels results with structured-match reasons.
+> Note: When `--fulltext true`, `match_reason` is `"bm25 fts"` (FTS extension path) or `"bm25f weighted"` (CONTAINS fallback path). When `--fulltext false`, `match_reason` reflects the structured match type (`exact name match`/`prefix match`/`token match`/`substring match`). As of v0.3.7, the FTS path no longer mislabels results with structured-match reasons.
 
 ### Tracing & impact
 
@@ -155,7 +155,7 @@ All of `--symbol`, `--trace_type`, `--depth`, `--path_filter`, `--detect_cycles`
 
 Performs reverse traversal to find all symbols that depend on the target.
 
-> ⚠️ **Performance:** The subgraph load is capped at `MAX_SUBGRAPH_NODES=1000` (BFS stops early; `truncated:true` in the output flags a capped result) and node materialization is batched, so `impact` no longer hits the 120s tool timeout that broad `--edge_types`/high `--max_depth`/high-degree targets used to trigger. Narrowing `--edge_types` and lowering `--max_depth` still keeps results focused (fewer irrelevant edges). A scoped run (`--edge_types "CALLS" --max_depth 3`) completes in seconds.
+> ⚠️ **Performance:** The subgraph load is capped at `MAX_SUBGRAPH_NODES=5000` (BFS stops early; `truncated:true` in the output flags a capped result) and node materialization is batched, so `impact` no longer hits the 120s tool timeout that broad `--edge_types`/high `--max_depth`/high-degree targets used to trigger. Narrowing `--edge_types` and lowering `--max_depth` still keeps results focused (fewer irrelevant edges). A scoped run (`--edge_types "CALLS" --max_depth 3`) completes in seconds.
 
 ```bash
 codenexus impact --symbol <SYMBOL> --depth <N> --edge_types <LIST> --max_depth <N> --include_tests <BOOL> [--db <DB_PATH>]
