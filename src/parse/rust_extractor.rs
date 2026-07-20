@@ -508,9 +508,15 @@ fn extract_struct_fields(
         return;
     };
     let struct_qn = make_qn(ctx.file_path, &struct_name, ctx.project, ctx.current_parent);
+    // P1 (DQ-002): prepend `field_` to the disambiguator so struct fields
+    // never collide with same-name impl methods. Without this, a struct
+    // `Foo` with field `bar` AND `impl Foo { fn bar() }` produce identical
+    // FQNs (`...bar#Foo`) — the Property (field) and Function (method)
+    // nodes violate DQ-002 uniqueness. The `field_` prefix cleanly
+    // separates the two namespaces without changing Function FQNs.
     let combined = match ctx.current_parent {
-        Some(p) => format!("{p}_{struct_name}"),
-        None => struct_name.clone(),
+        Some(p) => format!("field_{p}_{struct_name}"),
+        None => format!("field_{struct_name}"),
     };
     for i in 0..body.named_child_count() as u32 {
         let Some(field) = body.named_child(i) else {
@@ -2936,10 +2942,11 @@ impl Foo { fn new() -> Self { Self } }
 
     #[test]
     fn struct_fields_have_disambiguated_fqn() {
-        // Field FQN (qualified_name) should be disambiguated by the struct
-        // name: e.g. `proj.test.x#Point` (matching the convention for impl
-        // methods). Note: `id` is a UUID at extraction time; the FQN lives in
-        // `qualified_name` and becomes the node id after ScopeResolutionPhase.
+        // P1 fix: Field FQN (qualified_name) is disambiguated by `field_`
+        // prefix + struct name: e.g. `proj.test.x#field_Point` (NOT
+        // `#Point` — that would collide with `impl Point { fn x() }`).
+        // The `field_` prefix cleanly separates Property (field) and
+        // Function (method) namespaces, eliminating DQ-002 duplicates.
         let result = extract(RUST_SOURCE);
         let property_x = result
             .nodes
@@ -2947,8 +2954,8 @@ impl Foo { fn new() -> Self { Self } }
             .find(|n| n.label == NodeLabel::Property && n.name == "x")
             .expect("should have Property node for field x");
         assert!(
-            property_x.qualified_name.ends_with("#Point"),
-            "field x FQN should end with #Point: {}",
+            property_x.qualified_name.ends_with("#field_Point"),
+            "field x FQN should end with #field_Point: {}",
             property_x.qualified_name
         );
         assert!(
@@ -2961,7 +2968,8 @@ impl Foo { fn new() -> Self { Self } }
     #[test]
     fn struct_in_module_has_module_qualified_field_fqn() {
         // Fields of a struct inside a module should be disambiguated by
-        // `{module}_{struct}` (same convention as impl methods).
+        // `field_{module}_{struct}` (P1 fix adds `field_` prefix to
+        // distinguish from same-name impl methods).
         let src = r#"mod foo {
     struct Point { x: i32, y: i32 }
 }
@@ -2973,8 +2981,8 @@ impl Foo { fn new() -> Self { Self } }
             .find(|n| n.label == NodeLabel::Property && n.name == "x")
             .expect("should have Property node for field x in module");
         assert!(
-            property_x.qualified_name.ends_with("#foo_Point"),
-            "field x FQN in module foo should end with #foo_Point: {}",
+            property_x.qualified_name.ends_with("#field_foo_Point"),
+            "field x FQN in module foo should end with #field_foo_Point: {}",
             property_x.qualified_name
         );
     }

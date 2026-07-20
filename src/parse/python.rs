@@ -301,15 +301,14 @@ fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &m
     };
     // Determine if this is a method (inside a class) or a function.
     let is_method = is_inside_class(node);
-    // P2-5: skip nested `def` (def inside another def) — its body is still
-    // traversed by visit_children, but no Function node is created. This
-    // aligns with gitnexus which does not index nested defs (codenexus
-    // previously over-extracted 280 vs gitnexus 170). Functions inside
-    // if/try/with blocks at module scope ARE still indexed (only direct
-    // function_definition ancestors trigger the skip).
-    if !is_method && has_ancestor_function(node) {
-        return;
-    }
+    // P2-5/P2: nested `def` (def inside another def) was previously skipped
+    // entirely to align with gitnexus (170 vs 280 functions). But this
+    // caused DQ-004 orphan edges when outer functions call inner ones
+    // (e.g. `flush_section` calling `_strip_blank_ends` — the CALLS edge
+    // targets a non-existent node). Now we extract nested functions but
+    // mark them as non-global so they don't pollute the global symbol
+    // table, while still providing a node for CALLS edges to target.
+    let is_nested = !is_method && has_ancestor_function(node);
     let label = if is_method {
         NodeLabel::Method
     } else {
@@ -327,7 +326,7 @@ fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &m
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Python)
         .project(ctx.project)
-        .is_global(!is_method);
+        .is_global(!is_method && !is_nested);
     // B8 fix: set parentQn for Method nodes so class_methods.cql can find them
     // (CodeNexus doesn't emit HAS_METHOD edges; parentQn is the linkage).
     if is_method {
@@ -1125,10 +1124,13 @@ class Foo(metaclass=Meta):
 
     #[test]
     fn nested_function_definitions() {
-        // P2-5: nested `def inner` (def inside another def) is NOT promoted to
-        // a Function node — only the top-level `outer` is. gitnexus applies
-        // the same rule (codenexus previously over-extracted 280 vs 170).
-        // The inner function's body is still traversed for calls/reads.
+        // P2 fix: nested `def inner` (def inside another def) IS now promoted
+        // to a Function node (previously skipped by P2-5). This was changed
+        // because skipping nested functions caused DQ-004 orphan edges when
+        // outer functions called inner ones (the CALLS edge targeted a
+        // non-existent node). Now both outer and inner are extracted, but
+        // inner is marked `is_global = false` so it doesn't pollute the
+        // global symbol table.
         let src = "def outer():\n    def inner():\n        return 1\n    return inner()\n";
         let result = extract(src);
         let funcs: Vec<_> = result
@@ -1142,8 +1144,26 @@ class Foo(metaclass=Meta):
             "should extract top-level outer function"
         );
         assert!(
-            !names.contains(&"inner"),
-            "nested inner function must NOT be promoted to a Function node (P2-5)"
+            names.contains(&"inner"),
+            "nested inner function MUST be promoted to a Function node (P2 fix for DQ-004)"
+        );
+        // The inner function must be marked non-global.
+        let inner_node = funcs
+            .iter()
+            .find(|n| n.name == "inner")
+            .expect("inner function node must exist");
+        assert!(
+            !inner_node.is_global,
+            "nested inner function must be is_global=false (non-global)"
+        );
+        // The outer function remains global.
+        let outer_node = funcs
+            .iter()
+            .find(|n| n.name == "outer")
+            .expect("outer function node must exist");
+        assert!(
+            outer_node.is_global,
+            "top-level outer function must be is_global=true"
         );
         // The call to inner() inside outer() must still be captured.
         let inner_call = result.calls.iter().find(|c| c.callee_name == "inner");
