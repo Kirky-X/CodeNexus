@@ -214,7 +214,7 @@ All of `--project`, `--entry`, `--check_exported`, `--check_ffi`, `--edge_types`
 
 **Output (JSON):** `project`, `dead_code[]` (each entry: `name`, `qualified_name`, `file_path`, `start_line`, `language`, `reason`, `confidence`)
 
-> Note: For Rust projects, tree-sitter's static analysis does not capture trait-object `dyn` dispatch or all cross-module calls, so `dead_code` may produce false positives (e.g. `parse`, `route`, `new`). Treat results as a triage list, not ground truth.
+> Note: For Rust projects, tree-sitter's static analysis does not capture trait-object `dyn` dispatch or all cross-module calls, so `dead_code` may produce false positives (e.g. `parse`, `route`, `new`). Treat results as a triage list, not ground truth. **Rust results require manual verification of the entry chain** (`main` → crate-root re-export `pub use` → target function) before deleting — tree-sitter may miss `calnexus::run()`-style calls where the crate name is used as a module prefix. As of v0.3.7, re-export targets (`pub use cli::run`) are tracked as live seeds, eliminating the CalNexus-class false positive where an entire `cli.rs` file was misjudged dead because `main → calnexus::run()` resolved to `batch::run` instead.
 
 #### architecture — Show architecture overview
 

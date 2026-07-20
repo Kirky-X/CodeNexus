@@ -673,6 +673,36 @@ fn resolve_rust_module_path(
         return try_candidates(&rust_relative_candidates(&normalised), file_index);
     }
 
+    // Unprefixed Rust module path (e.g. `cli::run` in lib.rs where `mod cli;`
+    // is declared). In lib.rs context, `cli::run` is equivalent to
+    // `crate::cli::run` (Rust's implicit crate-root-relative path). Try to
+    // resolve as internal module: first component is a module name, rest is
+    // path/symbol.
+    //
+    // BUG-FIX: `pub use cli::run` in src/lib.rs produces `source_file =
+    // "cli::run"`. Without this branch, all strategies fail and no
+    // REEXPORTS edge is created, causing dead_code false positives
+    // (cli.rs::run judged dead despite being the crate root entry point via
+    // re-export). On CalNexus this was 100% false-positive rate on cli.rs
+    // (11 functions) because the B7 re-export seed never fired.
+    //
+    // Boundary: only attempt if the path contains `::` and doesn't contain
+    // `/` or `.` (file path markers). External crates (std, serde, etc.)
+    // will fail the candidate lookup and return None — no false-positive
+    // edges. `rust_crate_candidates` already tries both the full path
+    // (`src/cli/run.rs`) and the parent path (`src/cli.rs`, stripping the
+    // trailing symbol name), matching the `crate::` branch's behaviour.
+    if source_file.contains("::") && !source_file.contains('/') && !source_file.contains('.') {
+        // Defense-in-depth: reject path traversal from tree-sitter input.
+        // Candidates are only looked up in `file_index` (project-internal
+        // paths), but reject early to keep the invariant explicit.
+        if source_file.contains("..") {
+            return None;
+        }
+        let path = source_file.replace("::", "/");
+        return try_candidates(&rust_crate_candidates(&path), file_index);
+    }
+
     None
 }
 
@@ -1366,6 +1396,166 @@ mod tests {
         let edges = resolver.resolve_imports(&results, &mut graph);
 
         assert!(edges.is_empty(), "external crate (std::io) → no edge");
+    }
+
+    // --- resolve_imports: Rust module path resolution (unprefixed, e.g. `cli::run`) ---
+    //
+    // BUG-FIX: `pub use cli::run` in src/lib.rs (where `mod cli;` is declared)
+    // produces `source_file = "cli::run"`. Without unprefixed module path
+    // resolution, this fails all strategies and no REEXPORTS edge is created,
+    // causing dead_code false positives (cli.rs::run judged dead despite being
+    // the crate root entry point via re-export).
+    //
+    // In lib.rs context, `cli::run` is equivalent to `crate::cli::run` (Rust's
+    // implicit crate-root-relative path). The resolver tries `src/cli.rs` etc.
+
+    #[test]
+    fn resolve_imports_resolves_unprefixed_rust_module_path_to_src_file() {
+        // src/lib.rs `pub use cli::run` → src/cli.rs
+        let mut lib_result = make_result("src/lib.rs");
+        lib_result.imports.push(crate::ir::ImportInfo {
+            source_file: "cli::run".to_string(),
+            imported_names: vec!["run".to_string()],
+            line: 1,
+            is_reexport: true,
+        });
+        let results = vec![lib_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/lib.rs", "proj"));
+        graph.add_node(make_file_node("src/cli.rs", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(
+            edges.len(),
+            1,
+            "unprefixed `cli::run` should resolve to src/cli.rs"
+        );
+        assert_eq!(edges[0].source, "src/lib.rs");
+        assert_eq!(edges[0].target, "src/cli.rs");
+    }
+
+    #[test]
+    fn resolve_imports_unprefixed_rust_module_path_creates_reexports_edge() {
+        // src/lib.rs `pub use cli::run` (is_reexport=true) → REEXPORTS edge
+        // targeting the `run` Function node in src/cli.rs.
+        let mut lib_result = make_result("src/lib.rs");
+        lib_result.imports.push(crate::ir::ImportInfo {
+            source_file: "cli::run".to_string(),
+            imported_names: vec!["run".to_string()],
+            line: 1,
+            is_reexport: true,
+        });
+        let results = vec![lib_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/lib.rs", "proj"));
+        graph.add_node(make_file_node("src/cli.rs", "proj"));
+        // The `run` Function node in src/cli.rs.
+        graph.add_node(
+            Node::builder(NodeLabel::Function, "run", "proj.src.cli.rs.run")
+                .id("proj.src.cli.rs.run")
+                .project("proj")
+                .file_path("src/cli.rs")
+                .language(Language::Rust)
+                .is_exported(true)
+                .build(),
+        );
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        // 1 IMPORTS edge (lib.rs → cli.rs) + 1 REEXPORTS edge (lib.rs → run Function)
+        assert_eq!(edges.len(), 2, "should create IMPORTS + REEXPORTS edges");
+        let reexports: Vec<_> = edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Reexports)
+            .collect();
+        assert_eq!(reexports.len(), 1, "should create 1 REEXPORTS edge");
+        assert_eq!(reexports[0].source, "src/lib.rs");
+        assert_eq!(reexports[0].target, "proj.src.cli.rs.run");
+    }
+
+    #[test]
+    fn resolve_imports_resolves_unprefixed_nested_rust_module_path() {
+        // src/lib.rs `pub use cli::sub::run` → src/cli/sub.rs (or src/cli.rs)
+        let mut lib_result = make_result("src/lib.rs");
+        lib_result.imports.push(crate::ir::ImportInfo {
+            source_file: "cli::sub::run".to_string(),
+            imported_names: vec!["run".to_string()],
+            line: 1,
+            is_reexport: false,
+        });
+        let results = vec![lib_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/lib.rs", "proj"));
+        graph.add_node(make_file_node("src/cli/sub.rs", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(edges.len(), 1, "nested unprefixed path should resolve");
+        assert_eq!(edges[0].target, "src/cli/sub.rs");
+    }
+
+    #[test]
+    fn resolve_imports_unprefixed_rust_module_path_strips_symbol_name() {
+        // src/lib.rs `pub use cli::run` → tries src/cli/run.rs first (full path),
+        // then src/cli.rs (parent path, stripping symbol `run`).
+        // When only src/cli.rs exists, should resolve via parent path.
+        let mut lib_result = make_result("src/lib.rs");
+        lib_result.imports.push(crate::ir::ImportInfo {
+            source_file: "cli::run".to_string(),
+            imported_names: vec!["run".to_string()],
+            line: 1,
+            is_reexport: false,
+        });
+        let results = vec![lib_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/lib.rs", "proj"));
+        // Only src/cli.rs exists (not src/cli/run.rs).
+        graph.add_node(make_file_node("src/cli.rs", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert_eq!(
+            edges.len(),
+            1,
+            "should resolve via parent path (symbol stripped)"
+        );
+        assert_eq!(edges[0].target, "src/cli.rs");
+    }
+
+    #[test]
+    fn resolve_imports_unprefixed_external_crate_still_skipped() {
+        // `std::io` (external) with no matching src/std.rs → skip.
+        // Ensures the unprefixed resolver doesn't create spurious edges for
+        // external crates whose names happen to lack `crate::` prefix.
+        let mut lib_result = make_result("src/lib.rs");
+        lib_result.imports.push(crate::ir::ImportInfo {
+            source_file: "std::io".to_string(),
+            imported_names: vec!["Read".to_string()],
+            line: 1,
+            is_reexport: false,
+        });
+        let results = vec![lib_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node("src/lib.rs", "proj"));
+        // No src/std.rs or src/std/io.rs in graph.
+
+        let resolver = ImportResolver::new("proj");
+        let edges = resolver.resolve_imports(&results, &mut graph);
+
+        assert!(
+            edges.is_empty(),
+            "external `std::io` → no edge (no false positive)"
+        );
     }
 
     // --- resolve_rust_module_path helper (direct unit tests) ---

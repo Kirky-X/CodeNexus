@@ -252,7 +252,19 @@ impl<'a> CallResolver<'a> {
         } else {
             self.symbol_table.lookup_exported(callee_name)
         };
-        if let Some(entry) = exported.first() {
+        // B13 fix: prefer re-export target over alphabetically-first exported
+        // entry. When multiple exported symbols share the same simple name
+        // (e.g. `batch::run` and `cli::run`), the re-export target (via
+        // `pub use cli::run` in lib.rs) is the canonical entry point
+        // reachable from outside the crate. Without this preference,
+        // `.first()` picks `batch::run` (qn-sorted first), breaking the
+        // `main → cli::run` call edge (CalNexus regression: 100%
+        // false-positive rate on cli.rs in dead_code analysis).
+        if let Some(entry) = exported
+            .iter()
+            .find(|e| self.symbol_table.is_reexport_target(&e.qn))
+            .or_else(|| exported.first())
+        {
             return Some((entry.qn.clone(), CONFIDENCE_PROJECT, ConfidenceTier::Global));
         }
 
@@ -477,6 +489,95 @@ mod tests {
 
         let resolved = resolver.resolve_call("a.rs", "bar");
         assert!(resolved.is_none());
+    }
+
+    // --- resolve_call: re-export target preference (Fix2) ---
+
+    #[test]
+    fn resolve_call_prefers_reexport_target_over_alphabetically_first() {
+        // CalNexus regression: main.rs calls `calnexus::run()`. Both
+        // `batch::run` and `cli::run` are exported. `pub use cli::run` in
+        // lib.rs marks `cli::run` as the re-export target. Resolution
+        // must pick `cli::run`, not `batch::run` (which sorts first by qn).
+        let batch_run = make_exported_node("run", "src/batch.rs", "proj", NodeLabel::Function);
+        let batch_result = make_result("src/batch.rs", vec![batch_run]);
+        let cli_run = make_exported_node("run", "src/cli.rs", "proj", NodeLabel::Function);
+        let cli_result = make_result("src/cli.rs", vec![cli_run]);
+        let mut lib_result = make_result("src/lib.rs", vec![]);
+        lib_result.imports.push(ImportInfo {
+            source_file: "cli::run".to_string(),
+            imported_names: vec!["run".to_string()],
+            line: 38,
+            is_reexport: true,
+        });
+        let main_result = make_result("src/main.rs", vec![]);
+
+        let results = vec![batch_result, cli_result, lib_result, main_result];
+        let table = build_symbol_table(&results, "proj");
+        let resolver = CallResolver::new(&table, "proj");
+
+        let resolved = resolver.resolve_call("src/main.rs", "run");
+        assert!(resolved.is_some());
+        let (qn, _, _) = resolved.unwrap();
+        assert_eq!(
+            qn, "proj.src.cli.rs.run",
+            "re-export target must be preferred over alphabetically-first batch::run"
+        );
+    }
+
+    #[test]
+    fn resolve_call_without_reexport_falls_back_to_alphabetical_order() {
+        // When no re-export is present, the original B12 behaviour (qn-sorted
+        // first) is preserved — Fix2 only overrides when a re-export target
+        // exists. main.rs has NO import (so step 2 is skipped) and resolves
+        // via step 3 (project-level exported), picking batch::run (qn-sorted
+        // first because 'b' < 'c').
+        let batch_run = make_exported_node("run", "src/batch.rs", "proj", NodeLabel::Function);
+        let batch_result = make_result("src/batch.rs", vec![batch_run]);
+        let cli_run = make_exported_node("run", "src/cli.rs", "proj", NodeLabel::Function);
+        let cli_result = make_result("src/cli.rs", vec![cli_run]);
+        let main_result = make_result("src/main.rs", vec![]);
+
+        let results = vec![batch_result, cli_result, main_result];
+        let table = build_symbol_table(&results, "proj");
+        let resolver = CallResolver::new(&table, "proj");
+
+        let resolved = resolver.resolve_call("src/main.rs", "run").unwrap();
+        assert_eq!(
+            resolved.0, "proj.src.batch.rs.run",
+            "without re-export, qn-sorted first (batch::run) is picked"
+        );
+        assert_eq!(resolved.2, ConfidenceTier::Global);
+    }
+
+    #[test]
+    fn resolve_call_reexport_target_only_affects_step3_project_lookup() {
+        // When the call resolves via step 1 (same-file) or step 2 (import),
+        // Fix2's re-export preference is NOT applied — only step 3 falls back
+        // to it. This test ensures Fix2 doesn't accidentally override higher-
+        // confidence matches.
+        let cli_run = make_exported_node("run", "src/cli.rs", "proj", NodeLabel::Function);
+        let cli_result = make_result("src/cli.rs", vec![cli_run]);
+        let mut lib_result = make_result("src/lib.rs", vec![]);
+        lib_result.imports.push(ImportInfo {
+            source_file: "cli::run".to_string(),
+            imported_names: vec!["run".to_string()],
+            line: 38,
+            is_reexport: true,
+        });
+
+        let results = vec![cli_result, lib_result];
+        let table = build_symbol_table(&results, "proj");
+        let resolver = CallResolver::new(&table, "proj");
+
+        // lib.rs calls `run` — step 3 (project-level exported) should pick
+        // cli::run because it's the re-export target (and the only match).
+        let resolved = resolver.resolve_call("src/lib.rs", "run");
+        assert!(resolved.is_some());
+        let (qn, confidence, tier) = resolved.unwrap();
+        assert_eq!(qn, "proj.src.cli.rs.run");
+        assert!((confidence - 0.80).abs() < 1e-6);
+        assert_eq!(tier, ConfidenceTier::Global);
     }
 
     // --- resolve_call: scope-aware lookup (BUG-C4 fix, v0.3.0) ---

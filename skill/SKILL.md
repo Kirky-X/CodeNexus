@@ -5,7 +5,7 @@ description: "Code knowledge graph indexer and query tool. Use when indexing cod
 
 # CodeNexus CLI Skill
 
-> **Verified against `codenexus 0.3.5`.** The CLI is **strictly flag-based**: there are **no positional arguments**, and almost every function parameter is a **mandatory flag** (plain `String`/`u32`/`bool` types in the source map to required flags — only `--db <DB_PATH>` and `--debounce-ms <MS>` are global options with defaults). Booleans are pass-by-value (e.g. `--force true`, `--apply true`, `--cross_service false`).
+> **Verified against `codenexus 0.3.7`.** The CLI is **strictly flag-based**: there are **no positional arguments**, and almost every function parameter is a **mandatory flag** (plain `String`/`u32`/`bool` types in the source map to required flags — only `--db <DB_PATH>` and `--debounce-ms <MS>` are global options with defaults). Booleans are pass-by-value (e.g. `--force true` on `index`, `--apply true` on `rename`, `--cross_service false` on `trace`). ⚠️ `--cross_service` is **`trace`-only** — `impact` does NOT have this flag; `search` does NOT have `--name` (use `--text`+`--fulltext`+`--mode`).
 
 ## Description
 
@@ -16,11 +16,11 @@ Use this Skill when you need to index a codebase, query its structure, trace fun
 ## Conventions (apply to every subcommand)
 
 - **No positional arguments.** Everything is a named flag. `codenexus query "MATCH ..."` fails; use `codenexus query --cypher "MATCH ..."`.
-- **Booleans take a value**: `--force true`, `--apply true`, `--cross_service false`, `--embed false`, `--ram_first false`, `--enhanced false`.
+- **Booleans take a value**: `--force true`, `--apply true`, `--cross_service false` (trace-only), `--embed false`, `--ram_first false`, `--enhanced false`, `--include_tests false` (impact).
 - **Project filter accepts BOTH name and id.** All commands that take `--project <VALUE>` resolve the value via `resolve_project_id` (in `src/service/project.rs`): if the value matches a stored project `name`, the canonical project `id` is used; otherwise the value is treated as a raw project id. Pass `--project ""` (empty string) only where explicitly documented to disable the filter.
 - **Plain-typed params are required.** Function parameters with plain `String`/`u32`/`bool` types (no `Option<T>`) map to **mandatory** CLI flags with no built-in defaults. Empty strings are allowed where the source explicitly handles them (e.g. `--edge_types ""`, `--path_filter ""`, `--protocol ""`).
 - **Global options** on every command: `--db <DB_PATH>` and `--debounce-ms <MS>` (default `2000`, daemon-only relevance — safe to ignore otherwise).
-- **Default DB path** (when `--db` is omitted): `.codenexus/<project>.lbug`, where `<project>` is sanitized from the subcommand's `--name` arg (preferred), or the dirname of its `--path` arg, or the fallback `codenexus`. The `.codenexus/` directory is auto-created. Example: `codenexus index --path /home/me/myrepo --name myrepo ...` resolves to `.codenexus/myrepo.lbug`. To override, pass `--db /custom/path.lbug`.
+- **Default DB path** (when `--db` is omitted): `.codenexus/<project>.lbug`, where `<project>` is sanitized from the `--name` arg passed to `index`/`daemon` (preferred), or the dirname of the `--path` arg, or the fallback `codenexus`. The `.codenexus/` directory is auto-created. Example: `codenexus index --path /home/me/myrepo --name myrepo ...` resolves to `.codenexus/myrepo.lbug`. To override, pass `--db /custom/path.lbug`. ⚠️ `--name` is **`index`/`daemon`-only** — `search` uses `--text`+`--fulltext`+`--mode` (no `--name` flag).
 - **Stderr noise**: every connection prints warnings like `inklog ... Failed to set log crate logger` and `storage::connection - skipping unsupported DDL statement`. These are benign; filter with `2>/dev/null` to see clean JSON, or `2>&1 | grep -v "WARN\|skipping unsupported"`.
 - **JSON output**: every command that returns a result prints a single JSON object/array to stdout (commands like `daemon`, `hook`, `mcp` are streaming/long-running and do not emit a final JSON blob).
 
@@ -60,11 +60,11 @@ CodeNexus has **28 subcommands** grouped into eight functional areas. **All requ
 | `clean` | Indexing | Remove a project and all its nodes/edges. Accepts `--project <name_or_id>`. |
 | `daemon` | Indexing | Watch a directory recursively and incrementally re-index on file change. Long-running. |
 | `query` | Query | Execute a Cypher query. ADR-021 validator rejects destructive clauses at the CLI boundary. |
-| `search` | Query | Symbol search (exact/regex/fuzzy/graph/multi) or BM25 full-text. ⚠️ See Known Issues — `query` is the reliable path. |
-| `trace` | Tracing | Trace a symbol's call/dataflow paths with optional cycle detection and cross-service traversal. |
-| `impact` | Tracing | Reverse BFS to find all symbols that depend on a target. Narrow `--edge_types` + `--max_depth` on large graphs. |
+| `search` | Query | Symbol search via `--text`+`--fulltext`+`--mode` (exact/regex/fuzzy/graph/multi) or BM25 full-text. No `--name` flag. ⚠️ See Known Issues. |
+| `trace` | Tracing | Trace a symbol's call/dataflow paths with optional cycle detection and cross-service traversal (`--cross_service <BOOL>` is trace-only). |
+| `impact` | Tracing | Reverse BFS to find all symbols that depend on a target. Flags: `--symbol`/`--depth`/`--edge_types`/`--max_depth`/`--include_tests`. Narrow `--edge_types` + `--max_depth` on large graphs. **No `--cross_service`** (that's `trace`-only). |
 | `context` | Tracing | 360° view of a symbol: callers/callees/processes/routes/endpoints. `--enhanced true` resolves `--project <name\|id>` and fails fast on ambiguous symbols (verified 0.3.5). |
-| `dead_code` | Analysis | Detect unreferenced `Function`/`Method` nodes with confidence levels (High/Medium/Low). |
+| `dead_code` | Analysis | Detect unreferenced `Function`/`Method` nodes with confidence levels (High/Medium/Low). ⚠️ **Rust results are triage-only** — manually verify the entry chain (`main` → crate-root re-export `pub use` → target function) before deleting; tree-sitter may miss `calnexus::run()`-style calls where the crate name is used as a module prefix. |
 | `architecture` | Analysis | High-level overview: module boundaries, dependency directions, layers, entry points, hotspots. |
 | `complexity` | Analysis | AST-based per-function complexity (cyclomatic/cognitive/nesting/length/Halstead/MI/time/space). 26 threshold flags required. |
 | `community` | Analysis | Leiden community detection on the call graph (guarantees internally connected communities; C3 upgrade from Louvain). |
@@ -87,7 +87,7 @@ CodeNexus has **28 subcommands** grouped into eight functional areas. **All requ
 
 The full list with severities is in [`references/appendix.md`](references/appendix.md#known-issues). The ones most likely to bite during normal use:
 
-- **Rust call graph is a lower bound** — trait-object `dyn` dispatch and many cross-module calls are not captured by tree-sitter. Treat `dead_code`/`trace`/`impact` results for Rust as a triage list, not ground truth.
+- **Rust call graph is a lower bound** — trait-object `dyn` dispatch and many cross-module calls are not captured by tree-sitter. Treat `dead_code`/`trace`/`impact` results for Rust as a triage list, not ground truth. For `dead_code` specifically: Rust results require **manual verification of the entry chain** (`main` → crate-root re-export `pub use` → target function), since tree-sitter may miss `calnexus::run()`-style calls where the crate name is used as a module prefix (CalNexus regression: 11 functions in `cli.rs` were 100% false-positive before v0.3.7 fixed the re-export CALLS edge).
 - **`impact` on very large graphs** — two node sets: `affected` (true blast-radius, capped by `trace_upstream` at `MAX_NODES_LIMIT=1000` + `max_depth≤10`) and the loaded subgraph (`nodes`/`edges`/`node_count`). As of 0.3.5 the subgraph load is **also capped**: BFS stops at `MAX_SUBGRAPH_NODES=1000` and sets `truncated:true` on the cap (node materialization is batched — one `WHERE id IN [...]` per label — killing the ~77s N+1 regression). Verified 2026-07-17 (6289 functions): `sanitize_project_name --depth 3` → `node_count=1000, truncated:true, ~5s` (was ~77s / 5034 nodes); leaf `analyze --depth 10` → ~4.5s unchanged. `truncated:true` ⇒ subgraph was capped; widen `--depth`/`--edge_types` only if you accept that.
 
 > Fixed in 0.3.4 (no longer listed above): `--project` accepts name or id on **all** commands including `context --enhanced true`; `rename` dry-run recomputes the qualified name for `.` and `#` separators; ambiguous symbols fail fast in both `context` and `rename`; the `export` manifest version is read from `Cargo.toml` via `env!("CARGO_PKG_VERSION")` and matches the binary; **`search` now returns real hits** (the empty-`project` filter that dropped all rows, and the silent per-table `Err(_) => continue` that swallowed storage errors, were fixed — verified `search --text parse` returns `count:3`); **`list --db <missing>` now exits 4** (NotFound) with a clear message instead of returning `[]` with exit 0; **`lsp_*` with no server exits 2** (verified: `lsp_goto_def`/`lsp_hover` on a `.go` file with no `gopls` → `failed to start LSP server`, exit 2 — the earlier "exit 0" diagnosis was a greenhouse assumption, not observed behavior). See the per-command notes in [`references/commands.md`](references/commands.md) and the table in [`references/appendix.md`](references/appendix.md#known-issues).

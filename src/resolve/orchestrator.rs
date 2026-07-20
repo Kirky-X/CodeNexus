@@ -116,6 +116,13 @@ pub fn build_symbol_table(results: &[ExtractResult], project: &str) -> ProjectSy
             table.add_file_table(&result.file_path, file_table);
         }
     }
+    // B13 fix: populate re-export target QN set from `pub use` / `export ... from`
+    // statements. Must run AFTER all file tables are added so suffix-match
+    // against `files` keys can find target files. Used by CallResolver step 3
+    // to prefer re-export targets over alphabetically-first exported entries
+    // (CalNexus regression: main.rs `calnexus::run()` → `cli::run`, not
+    // `batch::run`).
+    table.populate_reexport_targets(results);
     table
 }
 

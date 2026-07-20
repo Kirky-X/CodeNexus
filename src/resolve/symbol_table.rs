@@ -9,6 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::ir::ExtractResult;
 use crate::model::{Language, NodeLabel};
 
 use super::includes_graph::IncludesGraph;
@@ -153,6 +154,25 @@ impl FileSymbolTable {
 pub struct ProjectSymbolTable {
     files: HashMap<String, FileSymbolTable>,
     global_symbols: HashMap<String, Vec<SymbolEntry>>,
+    /// B13 fix: QN set of symbols that are re-exported via `pub use` /
+    /// `export ... from`. Populated by [`populate_reexport_targets`] from
+    /// `ExtractResult.imports`. Used by `CallResolver::resolve_call_internal`
+    /// step 3 to prefer re-export targets over other exported entries with
+    /// the same simple name.
+    ///
+    /// # Background
+    ///
+    /// `pub use cli::run` in `src/lib.rs` re-exports `cli::run` as the
+    /// crate's public API. When `main.rs` calls `calnexus::run()`, the
+    /// parser emits `callee_name = "run"` (scoped_identifier only keeps
+    /// the last segment). `lookup_exported("run")` then returns multiple
+    /// matches: `batch::run` (alphabetically first) and `cli::run`. Without
+    /// this set, `.first()` picks `batch::run`, breaking the
+    /// `main → cli::run` call edge and causing 100% false positives in
+    /// dead_code analysis on `cli.rs` (CalNexus regression).
+    ///
+    /// [`populate_reexport_targets`]: ProjectSymbolTable::populate_reexport_targets
+    reexport_target_qns: HashSet<String>,
 }
 
 impl ProjectSymbolTable {
@@ -311,6 +331,155 @@ impl ProjectSymbolTable {
     pub fn symbol_count(&self) -> usize {
         self.global_symbols.values().map(Vec::len).sum()
     }
+
+    /// B13 fix: Marks a symbol (by fully-qualified name) as a re-export target.
+    ///
+    /// Called by [`populate_reexport_targets`](Self::populate_reexport_targets)
+    /// during `build_symbol_table`. Re-export targets are preferred by
+    /// `CallResolver::resolve_call_internal` step 3 when multiple exported
+    /// entries share the same simple name.
+    pub fn mark_reexport_target(&mut self, qn: String) {
+        self.reexport_target_qns.insert(qn);
+    }
+
+    /// B13 fix: Returns `true` if the symbol (by QN) is a re-export target.
+    ///
+    /// Used by `CallResolver::resolve_call_internal` step 3 to prefer
+    /// re-export targets over alphabetically-first exported entries.
+    #[must_use]
+    pub fn is_reexport_target(&self, qn: &str) -> bool {
+        self.reexport_target_qns.contains(qn)
+    }
+
+    /// B13 fix: Populates [`reexport_target_qns`](Self::reexport_target_qns)
+    /// from `pub use` / `export ... from` statements in `ExtractResult.imports`.
+    ///
+    /// For each re-export (`is_reexport = true`) with non-empty
+    /// `imported_names`, resolves the `source_file` to a target file path,
+    /// then looks up each `imported_names[i]` in that file's symbol table
+    /// and marks the matching entry's QN as a re-export target.
+    ///
+    /// # Arguments
+    ///
+    /// * `results` - The extraction results containing import information.
+    ///
+    /// # Resolution strategy (deterministic — Rule 5)
+    ///
+    /// Only Rust module paths are resolved here (the CalNexus regression
+    /// case). Other languages' re-exports are handled by the existing
+    /// `ImportResolver` REEXPORTS edge creation, which feeds into
+    /// dead_code's B7 seed via Cypher query — no symbol-table annotation
+    /// needed. File path matching uses suffix match with path boundary
+    /// check to bridge absolute (production `file_path`) vs relative
+    /// (candidate) gap, matching `imports.rs::find_best_suffix_match`.
+    pub(crate) fn populate_reexport_targets(&mut self, results: &[ExtractResult]) {
+        // B13 fix: pub(crate) ensures only `orchestrator::build_symbol_table`
+        // calls this, which guarantees the call happens AFTER all file tables
+        // are added. When `files` is empty (results have imports but no nodes),
+        // suffix match simply misses — no re-export targets are populated,
+        // which is correct behavior for that edge case.
+        for result in results {
+            for import in &result.imports {
+                if !import.is_reexport || import.imported_names.is_empty() {
+                    continue;
+                }
+                let candidates = resolve_reexport_target_file_candidates(&import.source_file);
+                if candidates.is_empty() {
+                    continue;
+                }
+                // suffix match against `files` keys (handles absolute vs
+                // relative file paths). Pick the LONGEST matching candidate
+                // for determinism (most specific module path).
+                let matched_file = self
+                    .files
+                    .keys()
+                    .filter_map(|fp| {
+                        let fp_norm = fp.replace('\\', "/");
+                        candidates
+                            .iter()
+                            .rev()
+                            .find(|c| file_path_matches_candidate(&fp_norm, c))
+                            .map(|c| (c.len(), fp.clone()))
+                    })
+                    .max_by_key(|(len, _)| *len)
+                    .map(|(_, fp)| fp);
+                let Some(target_file) = matched_file else {
+                    continue;
+                };
+                let Some(file_table) = self.files.get(&target_file) else {
+                    continue;
+                };
+                for name in &import.imported_names {
+                    if let Some(entry) = file_table.lookup_exact(name) {
+                        self.reexport_target_qns.insert(entry.qn.clone());
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// B13 fix: Generates candidate relative file paths for a re-export's
+/// `source_file`.
+///
+/// Only handles Rust module paths (`crate::`, `self::`, `super::`, and
+/// unprefixed `cli::run` — the last is the CalNexus regression case where
+/// `pub use cli::run` in `src/lib.rs` produces `source_file = "cli::run"`).
+/// Non-Rust specifiers (file paths, external modules) return empty — they
+/// are handled by `ImportResolver`'s REEXPORTS edge creation and the
+/// dead_code B7 Cypher seed.
+///
+/// # Candidates (tried in order, longest first for suffix-match priority)
+///
+/// For `crate::a::b` / `a::b` (path = "a/b"):
+/// 1. `src/a/b.rs`, `src/a/b/mod.rs` (full path as module)
+/// 2. `src/a.rs`, `src/a/mod.rs` (last component is symbol name)
+fn resolve_reexport_target_file_candidates(source_file: &str) -> Vec<String> {
+    let path = if let Some(p) = source_file.strip_prefix("crate::") {
+        p
+    } else if let Some(p) = source_file.strip_prefix("self::") {
+        p
+    } else if let Some(p) = source_file.strip_prefix("super::") {
+        p
+    } else if source_file.contains("::") && !source_file.contains('/') && !source_file.contains('.')
+    {
+        source_file
+    } else {
+        return Vec::new();
+    };
+    // Defense-in-depth: reject path traversal attempts from tree-sitter input.
+    // Candidates are only used for string matching against HashMap keys (never
+    // opened as files), but reject early to keep the invariant explicit.
+    if path.contains("..") {
+        return Vec::new();
+    }
+    let path = path.replace("::", "/");
+    let mut candidates = Vec::new();
+    candidates.push(format!("src/{path}.rs"));
+    candidates.push(format!("src/{path}/mod.rs"));
+    if let Some((parent, _)) = path.rsplit_once('/') {
+        candidates.push(format!("src/{parent}.rs"));
+        candidates.push(format!("src/{parent}/mod.rs"));
+    }
+    candidates
+}
+
+/// B13 fix: Checks if `file_path` (normalised, possibly absolute) matches
+/// `candidate` (relative, e.g. `src/cli.rs`).
+///
+/// Direct match or suffix match with path boundary check (the char before
+/// the suffix must be `/`). Mirrors `imports.rs::find_best_suffix_match`
+/// logic without cross-module dependency.
+fn file_path_matches_candidate(file_path_norm: &str, candidate: &str) -> bool {
+    if file_path_norm == candidate {
+        return true;
+    }
+    // strip_suffix returns Some only when len >= candidate.len(); the equal
+    // case is already handled above, so no extra filter needed.
+    if let Some(prefix) = file_path_norm.strip_suffix(candidate) {
+        return prefix.ends_with('/');
+    }
+    false
 }
 
 #[cfg(test)]
@@ -787,5 +956,223 @@ mod tests {
         assert_eq!(project.file_count(), 1);
         assert_eq!(project.lookup_in_file("a.rs", "foo").len(), 1);
         assert_eq!(project.lookup_in_file("a.rs", "bar").len(), 1);
+    }
+
+    // --- populate_reexport_targets (Fix2) ---
+
+    use crate::ir::ImportInfo;
+
+    fn make_import_result(file_path: &str, imports: Vec<ImportInfo>) -> ExtractResult {
+        let mut result = ExtractResult::new(file_path, Language::Rust);
+        result.imports = imports;
+        result
+    }
+
+    #[test]
+    fn populate_reexport_targets_marks_reexported_function_via_pub_use() {
+        // CalNexus regression scenario: `pub use cli::run` in src/lib.rs
+        // should mark cli.rs::run as a re-export target.
+        let mut project = ProjectSymbolTable::new();
+        let mut cli_table = FileSymbolTable::new();
+        cli_table.add(make_exported_entry(
+            "run",
+            "proj.src.cli.rs.run",
+            "src/cli.rs",
+        ));
+        project.add_file_table("src/cli.rs", cli_table);
+
+        let lib_result = make_import_result(
+            "src/lib.rs",
+            vec![ImportInfo {
+                source_file: "cli::run".to_string(),
+                imported_names: vec!["run".to_string()],
+                line: 38,
+                is_reexport: true,
+            }],
+        );
+
+        project.populate_reexport_targets(&[lib_result]);
+
+        assert!(project.is_reexport_target("proj.src.cli.rs.run"));
+    }
+
+    #[test]
+    fn populate_reexport_targets_skips_non_reexport_imports() {
+        // Ordinary `use cli::run` (not `pub use`) must NOT be marked.
+        let mut project = ProjectSymbolTable::new();
+        let mut cli_table = FileSymbolTable::new();
+        cli_table.add(make_exported_entry(
+            "run",
+            "proj.src.cli.rs.run",
+            "src/cli.rs",
+        ));
+        project.add_file_table("src/cli.rs", cli_table);
+
+        let main_result = make_import_result(
+            "src/main.rs",
+            vec![ImportInfo {
+                source_file: "cli::run".to_string(),
+                imported_names: vec!["run".to_string()],
+                line: 1,
+                is_reexport: false,
+            }],
+        );
+
+        project.populate_reexport_targets(&[main_result]);
+
+        assert!(!project.is_reexport_target("proj.src.cli.rs.run"));
+    }
+
+    #[test]
+    fn populate_reexport_targets_skips_wildcard_reexports() {
+        // `pub use cli::*` (empty imported_names) cannot be precisely
+        // mapped to specific symbols — skip to avoid false-positive marking.
+        let mut project = ProjectSymbolTable::new();
+        let mut cli_table = FileSymbolTable::new();
+        cli_table.add(make_exported_entry(
+            "run",
+            "proj.src.cli.rs.run",
+            "src/cli.rs",
+        ));
+        project.add_file_table("src/cli.rs", cli_table);
+
+        let lib_result = make_import_result(
+            "src/lib.rs",
+            vec![ImportInfo {
+                source_file: "cli::*".to_string(),
+                imported_names: vec![],
+                line: 38,
+                is_reexport: true,
+            }],
+        );
+
+        project.populate_reexport_targets(&[lib_result]);
+
+        assert!(!project.is_reexport_target("proj.src.cli.rs.run"));
+    }
+
+    #[test]
+    fn populate_reexport_targets_handles_crate_prefix() {
+        // `pub use crate::cli::run` — explicit crate prefix.
+        let mut project = ProjectSymbolTable::new();
+        let mut cli_table = FileSymbolTable::new();
+        cli_table.add(make_exported_entry(
+            "run",
+            "proj.src.cli.rs.run",
+            "src/cli.rs",
+        ));
+        project.add_file_table("src/cli.rs", cli_table);
+
+        let lib_result = make_import_result(
+            "src/lib.rs",
+            vec![ImportInfo {
+                source_file: "crate::cli::run".to_string(),
+                imported_names: vec!["run".to_string()],
+                line: 1,
+                is_reexport: true,
+            }],
+        );
+
+        project.populate_reexport_targets(&[lib_result]);
+
+        assert!(project.is_reexport_target("proj.src.cli.rs.run"));
+    }
+
+    #[test]
+    fn populate_reexport_targets_handles_absolute_file_paths() {
+        // Production file_path is absolute; candidates are relative.
+        // Suffix match with path boundary check bridges the gap.
+        let mut project = ProjectSymbolTable::new();
+        let mut cli_table = FileSymbolTable::new();
+        cli_table.add(make_exported_entry(
+            "run",
+            "proj.src.cli.rs.run",
+            "src/cli.rs",
+        ));
+        project.add_file_table("/home/user/projects/CalNexus/src/cli.rs", cli_table);
+
+        let lib_result = make_import_result(
+            "/home/user/projects/CalNexus/src/lib.rs",
+            vec![ImportInfo {
+                source_file: "cli::run".to_string(),
+                imported_names: vec!["run".to_string()],
+                line: 38,
+                is_reexport: true,
+            }],
+        );
+
+        project.populate_reexport_targets(&[lib_result]);
+
+        assert!(project.is_reexport_target("proj.src.cli.rs.run"));
+    }
+
+    #[test]
+    fn populate_reexport_targets_no_match_does_not_mark() {
+        // Unresolvable source_file (external crate) must not mark anything.
+        let mut project = ProjectSymbolTable::new();
+        let mut cli_table = FileSymbolTable::new();
+        cli_table.add(make_exported_entry(
+            "run",
+            "proj.src.cli.rs.run",
+            "src/cli.rs",
+        ));
+        project.add_file_table("src/cli.rs", cli_table);
+
+        let lib_result = make_import_result(
+            "src/lib.rs",
+            vec![ImportInfo {
+                source_file: "serde::Serialize".to_string(),
+                imported_names: vec!["Serialize".to_string()],
+                line: 1,
+                is_reexport: true,
+            }],
+        );
+
+        project.populate_reexport_targets(&[lib_result]);
+
+        // `cli::run` was not marked because source_file `serde::Serialize`
+        // doesn't resolve to any project file. The only candidate symbol
+        // (`proj.src.cli.rs.run`) must not be in the re-export set.
+        assert!(!project.is_reexport_target("proj.src.cli.rs.run"));
+    }
+
+    #[test]
+    fn populate_reexport_targets_prefers_most_specific_match() {
+        // When both `src/cli.rs` and `src/deep/cli.rs` exist, `pub use
+        // cli::run` should match `src/cli.rs` (longest candidate match).
+        let mut project = ProjectSymbolTable::new();
+        let mut cli_table = FileSymbolTable::new();
+        cli_table.add(make_exported_entry(
+            "run",
+            "proj.src.cli.rs.run",
+            "src/cli.rs",
+        ));
+        let mut deep_cli_table = FileSymbolTable::new();
+        deep_cli_table.add(make_exported_entry(
+            "run",
+            "proj.src.deep.cli.rs.run",
+            "src/deep/cli.rs",
+        ));
+        project.add_file_table("src/cli.rs", cli_table);
+        project.add_file_table("src/deep/cli.rs", deep_cli_table);
+
+        let lib_result = make_import_result(
+            "src/lib.rs",
+            vec![ImportInfo {
+                source_file: "cli::run".to_string(),
+                imported_names: vec!["run".to_string()],
+                line: 1,
+                is_reexport: true,
+            }],
+        );
+
+        project.populate_reexport_targets(&[lib_result]);
+
+        // `cli::run` candidates are `src/cli.rs`/`src/cli/mod.rs` (per
+        // `resolve_reexport_target_file_candidates`), not `src/deep/cli.rs`.
+        // So only `src/cli.rs` matches, even though `src/deep/cli.rs` would
+        // be a longer suffix — `max_by_key` picks among matched candidates.
+        assert!(project.is_reexport_target("proj.src.cli.rs.run"));
+        assert!(!project.is_reexport_target("proj.src.deep.cli.rs.run"));
     }
 }
