@@ -5,6 +5,12 @@ All notable changes to CodeNexus are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7] - 2026-07-20
+
+### Fixed
+
+- **fix(build): link `libgcc` statically to resolve `__cpu_model` linker failure** — `cargo install codenexus` failed on machines using the `mold` linker with `error: linking with gcc failed` / `mold: error: undefined symbol: __cpu_model` (referenced by `liblbug.a(base_csv_reader.cpp.o)`). `__cpu_model` is a GCC runtime symbol that lives in the static `libgcc.a`, not the dynamic `libgcc_s.so` that rustc links by default; `mold`'s strict symbol resolution rejects the undefined reference, while `ld` silently defers it to runtime — so the failure was environment-specific and invisible to default `cargo build`. `build.rs` now probes `libgcc.a`'s directory via `cc -print-file-name=libgcc.a` and links it statically (`cargo:rustc-link-lib=static=gcc`) on Linux/gcc targets, with a `target_os = "linux"` guard so macOS/Windows clang builds are unaffected. Verified: `RUSTFLAGS="-C link-arg=-Wl,--no-undefined"` strict link of `codenexus-verify` now succeeds.
+
 ## [0.3.6] - 2026-07-20
 
 ### Changed
@@ -183,7 +189,11 @@ Initial public release. CodeNexus indexes source code into a queryable knowledge
 - **Database corruption detection** — corrupt LadybugDB files are detected at startup and reported with a distinct exit code (4) instead of being loaded into a half-valid state.
 - **`.env` files ignored by default** in `.gitignore`, with an explicit `!.env.example` allow-list so the template is tracked but real secrets never are.
 
-[Unreleased]: https://github.com/Kirky-X/codenexus/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/Kirky-X/codenexus/compare/v0.3.7...HEAD
+[0.3.7]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.7
+[0.3.6]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.6
+[0.3.5]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.5
+[0.3.4]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.4
 [0.3.3]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.3
 [0.3.2]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.2
 [0.3.1]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.1
