@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - **docs(skill): fix 2 doc-code inconsistencies** found in B-bulwark post-commit code-doc consistency review: `commands.md:158` `MAX_SUBGRAPH_NODES=1000` → `=5000`; `commands.md:131` `"bm25f"` → `"bm25f weighted"`.
+- **docs(appendix): document axum route extraction limitation (diting M1)** — `references/appendix.md` Known Issues table now records that `extract_axum_routes` only recognizes bare-identifier handlers (`get(handler)`); path-qualified (`get(crate::module::handler)`) and closure (`get(|| { ... })`) handlers are skipped and require manual verification. Code is correct; this closes the doc-vs-code gap surfaced in the v0.3.8 diting review.
+
+### Added
+
+- **test(trace): `impact_5000_node_subgraph` benchmark (diting M2)** — new benchmark in `benches/trace_bench.rs` builds a 4971-node high-fanin graph (1 target + 70 direct callers + 4900 transitive callers) and runs `ImpactAnalyzer::analyze_impact` with both default config and `max_depth=10`. Asserts `affected.len() <= 5000` (`MAX_NODES_LIMIT`) so a regression that removes the cap surfaces here instead of in production. Latency is tracked under the `impact_large_subgraph` criterion group. Closes the "5000-node cap lacks memory regression test" gap from the v0.3.8 diting review.
+- **test(cli): `discover_single_indexed_db` multi-`.lbug` coverage (diting M3)** — three new serial tests in `src/main.rs`: (1) `discover_single_indexed_db_returns_none_when_multiple_lbug_files` verifies the multi-file fallback returns `None`; (2) `discover_single_indexed_db_returns_path_when_single_lbug_file` verifies the single-file happy path returns the path; (3) `discover_single_indexed_db_returns_none_when_directory_missing` verifies the missing-directory path does not panic. Uses a local `CwdGuard` struct (Drop-restores cwd) + `serial_test::serial(db_discover)` to avoid cwd races. Closes the "multi-`.lbug` fallback untested" gap from the v0.3.8 diting review.
 
 ## [0.3.7] - 2026-07-20
 

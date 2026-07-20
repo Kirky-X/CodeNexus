@@ -798,4 +798,98 @@ mod tests {
             "unregistered command should return empty args"
         );
     }
+
+    // --- discover_single_indexed_db (M3: multi-`.lbug` fallback coverage) ---
+
+    /// Restores the process cwd on drop. Used by the
+    /// `discover_single_indexed_db_*` tests below so the original cwd is
+    /// restored even if an assertion panics after a `set_current_dir`.
+    struct CwdGuard {
+        original: std::path::PathBuf,
+    }
+
+    impl CwdGuard {
+        fn enter(new_dir: &std::path::Path) -> Self {
+            let original = std::env::current_dir().expect("failed to read cwd");
+            std::env::set_current_dir(new_dir).expect("failed to chdir into temp");
+            CwdGuard { original }
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.original);
+        }
+    }
+
+    /// `discover_single_indexed_db` returns `None` when `.codenexus/`
+    /// contains multiple `.lbug` files, forcing the caller to fall back
+    /// to [`FALLBACK_PROJECT_NAME`]. This test creates a temporary
+    /// working directory with `.codenexus/` holding two `.lbug` files,
+    /// chdirs into it, and verifies the function returns `None`.
+    ///
+    /// Serialized via `serial_test::serial(db_discover)` because the
+    /// function reads the relative `.codenexus/` path from the process
+    /// cwd — concurrent chdir would race with other cwd-dependent tests.
+    #[test]
+    #[serial_test::serial(db_discover)]
+    fn discover_single_indexed_db_returns_none_when_multiple_lbug_files() {
+        let tmp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let _guard = CwdGuard::enter(tmp.path());
+
+        let codenexus_dir = tmp.path().join(DEFAULT_DB_DIR);
+        std::fs::create_dir_all(&codenexus_dir).expect("failed to create .codenexus/");
+        std::fs::write(codenexus_dir.join("project_a.lbug"), b"a").expect("write a.lbug");
+        std::fs::write(codenexus_dir.join("project_b.lbug"), b"b").expect("write b.lbug");
+
+        let result = discover_single_indexed_db();
+        assert!(
+            result.is_none(),
+            "multiple .lbug files must return None (got {:?})",
+            result
+        );
+    }
+
+    /// `discover_single_indexed_db` returns `Some(path)` when `.codenexus/`
+    /// contains exactly one `.lbug` file. Companion to the multi-file case
+    /// above; ensures the single-file happy path is also covered.
+    #[test]
+    #[serial_test::serial(db_discover)]
+    fn discover_single_indexed_db_returns_path_when_single_lbug_file() {
+        let tmp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let _guard = CwdGuard::enter(tmp.path());
+
+        let codenexus_dir = tmp.path().join(DEFAULT_DB_DIR);
+        std::fs::create_dir_all(&codenexus_dir).expect("failed to create .codenexus/");
+        std::fs::write(codenexus_dir.join("only_project.lbug"), b"only")
+            .expect("write only_project.lbug");
+
+        let result = discover_single_indexed_db();
+        // `discover_single_indexed_db` reads the relative `.codenexus/`
+        // path, so the returned string is relative (e.g.
+        // `.codenexus/only_project.lbug`). Assert the file name matches
+        // rather than the full path to stay robust against cwd.
+        let returned = result.expect("single .lbug file must return Some(path)");
+        assert!(
+            returned.ends_with("only_project.lbug"),
+            "expected path ending with only_project.lbug, got {returned:?}"
+        );
+    }
+
+    /// `discover_single_indexed_db` returns `None` when `.codenexus/`
+    /// does not exist (zero-file case). Ensures the missing-directory
+    /// path is exercised and does not panic.
+    #[test]
+    #[serial_test::serial(db_discover)]
+    fn discover_single_indexed_db_returns_none_when_directory_missing() {
+        let tmp = tempfile::TempDir::new().expect("failed to create temp dir");
+        let _guard = CwdGuard::enter(tmp.path());
+        // Intentionally do NOT create .codenexus/.
+        let result = discover_single_indexed_db();
+        assert!(
+            result.is_none(),
+            "missing .codenexus/ must return None (got {:?})",
+            result
+        );
+    }
 }
