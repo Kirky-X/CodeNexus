@@ -5,6 +5,26 @@ All notable changes to CodeNexus are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] - 2026-07-21
+
+### Fixed
+
+- **fix(analysis): bulwark testing 5 bugs + triage review fixes** — Phase 2 bulwark project testing (534 files / 19242 nodes / 94127 edges) revealed 5 real bugs, all fixed plus triage review (security/architecture/performance) findings addressed:
+  - **P0: `query`/`list` without `--db` failed** even when `.codenexus/<project>.lbug` existed. Added `discover_single_indexed_db()` to scan `.codenexus/` and auto-select the single available index.
+  - **P1: `dead_code` reported 99.2% false positives** (1376/1387) on Rust `tests.rs` — `#[test]`/`#[tokio::test]`/`#[rstest]` macro CALLS edges are invisible to tree-sitter. Added `TEST_ATTRIBUTE_MARKERS` const + `has_test_attribute_marker()` helper to treat `#[test]`-attributed functions as entry points.
+  - **P2: `route_map`/`shape_check`/`cross_service`/`tool_map` returned 0 on axum projects** — axum uses programmatic `Router::new().route("/x", get(h))` instead of attribute macros. Added `extract_axum_routes()` in `rust_extractor.rs` emitting `NodeLabel::Route` + `EdgeType::HandlesRoute`. `api_review.rs` service layer now supports both legacy (Handler+HANDLES) and axum (Function+HANDLES_ROUTE) patterns via module constants `HANDLER_LIKE_EDGE_TYPES`/`ROUTE_LIKE_LABELS`/`HANDLER_LIKE_LABELS`/`CALLER_LIKE_LABELS`/`ENDPOINT_MATCH_FIELDS`.
+  - **P1: `search --fulltext true` mislabeled `matchReason`** as `"prefix match"`/`"substring match"`. FTS path now returns `MATCH_REASON_FTS` (`"bm25 fts"`) and BM25F path returns `MATCH_REASON_BM25F_WEIGHTED` (`"bm25f weighted"`) — both extracted as module constants.
+  - **P2: `impact` 1000-node cap too tight** for bulwark (270+ direct callers truncated on first BFS hop). Raised `MAX_SUBGRAPH_NODES` and `MAX_NODES_LIMIT` from 1000 to 5000 (aligned).
+- **Triage review fixes** — Performance CRITICAL (C1): added `idx_rel_source`/`idx_rel_target` indexes on `CodeRelation` table (targeted WHERE queries were full-scanning 94k edges). Performance HIGH (H1): `load_caller_info` `Vec::contains` (O(N)) → `HashSet<&str>` (O(1)). Performance HIGH (H2): `shape_check` N+1 query pattern → single `load_calls_with_reason()` + `HashMap<target_id, Vec<reason>>` index. Performance MEDIUM (M1): `escape_identifier` `String` → `Cow<'_, str>` (Borrowed for common case). Architecture MEDIUM (M1): deleted `load_edges` (DRY with `load_edges_multi`). Architecture MEDIUM (M4): deleted `load_edge_reason` (replaced by `load_calls_with_reason`). Security LOW (LOW-1): `escape_identifier` security note added — only reserved-keyword escaping, NOT user-input sanitisation.
+
+### Changed
+
+- **refactor(trace): decouple impact tests from `ImpactConfig` defaults (M3)** — Performance review M3 (previously deferred): tests in `src/trace/impact.rs` asserted against hard-coded numeric literals (`5`, `10`) that mirrored production defaults, so any future change to `ImpactConfig::default()` or `MAX_DEPTH_LIMIT` would silently break tests or — worse — tests would pass while runtime behaviour diverged from the documented spec. Extracted `DEFAULT_MAX_DEPTH: u32 = 5` constant; `Default::default()` now references it; `impact_config_default_has_expected_values`/`new_uses_default_config`/`with_config_clamps_max_depth_to_limit` tests now reference `DEFAULT_MAX_DEPTH`/`MAX_DEPTH_LIMIT` instead of duplicating literals.
+
+### Documentation
+
+- **docs(skill): fix 2 doc-code inconsistencies** found in B-bulwark post-commit code-doc consistency review: `commands.md:158` `MAX_SUBGRAPH_NODES=1000` → `=5000`; `commands.md:131` `"bm25f"` → `"bm25f weighted"`.
+
 ## [0.3.7] - 2026-07-20
 
 ### Fixed
@@ -189,7 +209,8 @@ Initial public release. CodeNexus indexes source code into a queryable knowledge
 - **Database corruption detection** — corrupt LadybugDB files are detected at startup and reported with a distinct exit code (4) instead of being loaded into a half-valid state.
 - **`.env` files ignored by default** in `.gitignore`, with an explicit `!.env.example` allow-list so the template is tracked but real secrets never are.
 
-[Unreleased]: https://github.com/Kirky-X/codenexus/compare/v0.3.7...HEAD
+[Unreleased]: https://github.com/Kirky-X/codenexus/compare/v0.3.8...HEAD
+[0.3.8]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.8
 [0.3.7]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.7
 [0.3.6]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.6
 [0.3.5]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.5
