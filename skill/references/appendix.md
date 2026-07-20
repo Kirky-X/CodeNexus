@@ -51,6 +51,8 @@ Originally recorded in `temp/problem.md` against a `--version` polluted by the `
 | bash dead code | P3 (open) | `dead_code` (bash) | tree-sitter cannot capture implicit calls in bash: `trap cleanup EXIT` (signal-triggered) and indirect calls via string concatenation / variable expansion (`$func_name`). Such functions correctly show zero CALLS in-edges and are flagged as Medium-confidence dead code. **Always manually confirm bash `dead_code` results before deletion.** |
 | LSP environment dependency | P3 (open) | `lsp_goto_def`, `lsp_hover` | LSP handshake may fail in some environments even when the language server binary is installed (e.g. `rust-analyzer` exits immediately after startup). The CLI exits 2 with `LSP communication error: server connection closed` per the documented contract. This is an environment/configuration issue, not a tool logic bug. Verify LSP server works standalone (`rust-analyzer --help`) before reporting a defect. |
 
+> **Tracking open issues:** Items marked `(open)` are tracked on the GitHub issue tracker at <https://github.com/Kirky-X/codenexus/issues>. Search by the issue summary keyword (e.g. "Rust call graph", "axum route extraction", "bash dead code", "LSP environment") to find the corresponding issue and its fix timeline. File a new issue if you encounter a case not listed above.
+
 ## Examples
 
 Runnable example programs live in `examples/src/bin/`:

@@ -2988,6 +2988,47 @@ impl Foo { fn new() -> Self { Self } }
     }
 
     #[test]
+    fn same_name_field_and_method_have_distinct_fqns() {
+        // DQ-002 regression test (diting MEDIUM-1): a struct field and an
+        // impl method with the same name must produce DISTINCT FQNs.
+        // Before the `field_` prefix fix, both `struct Foo { bar }` and
+        // `impl Foo { fn bar() }` produced `...bar#Foo` — violating FQN
+        // uniqueness and causing ambiguity in context/rename/impact.
+        // After the fix, the Property uses `#field_Foo` and the Function
+        // keeps `#Foo`, so they never collide.
+        let src = r#"struct Foo { bar: i32 }
+impl Foo { fn bar(&self) -> i32 { self.bar } }
+"#;
+        let result = extract(src);
+        let property_bar = result
+            .nodes
+            .iter()
+            .find(|n| n.label == NodeLabel::Property && n.name == "bar")
+            .expect("should have Property node for field bar");
+        let function_bar = result
+            .nodes
+            .iter()
+            .find(|n| n.label == NodeLabel::Function && n.name == "bar")
+            .expect("should have Function node for method bar");
+        assert_ne!(
+            property_bar.qualified_name, function_bar.qualified_name,
+            "DQ-002 regression: field `bar` and method `bar` must NOT share an FQN \
+             (field={}, method={})",
+            property_bar.qualified_name, function_bar.qualified_name
+        );
+        assert!(
+            property_bar.qualified_name.ends_with("#field_Foo"),
+            "field bar FQN should end with #field_Foo: {}",
+            property_bar.qualified_name
+        );
+        assert!(
+            function_bar.qualified_name.ends_with("#Foo"),
+            "method bar FQN should end with #Foo (no field_ prefix): {}",
+            function_bar.qualified_name
+        );
+    }
+
+    #[test]
     fn property_nodes_have_defines_edges() {
         // Property nodes should have DEFINES edges from the file (same as
         // other definition nodes).

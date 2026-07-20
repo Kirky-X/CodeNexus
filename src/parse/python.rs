@@ -300,7 +300,6 @@ fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &m
         return;
     };
     // Determine if this is a method (inside a class) or a function.
-    let is_method = is_inside_class(node);
     // P2-5/P2: nested `def` (def inside another def) was previously skipped
     // entirely to align with gitnexus (170 vs 280 functions). But this
     // caused DQ-004 orphan edges when outer functions call inner ones
@@ -308,7 +307,12 @@ fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &m
     // targets a non-existent node). Now we extract nested functions but
     // mark them as non-global so they don't pollute the global symbol
     // table, while still providing a node for CALLS edges to target.
-    let is_nested = !is_method && has_ancestor_function(node);
+    //
+    // diting MEDIUM-3/LOW-1: call `function_scope` once and reuse the
+    // result for both is_method and is_global, avoiding a duplicate
+    // O(depth) ancestor traversal when the node is not inside a class.
+    let scope = function_scope(node);
+    let is_method = matches!(scope, FunctionScope::Class);
     let label = if is_method {
         NodeLabel::Method
     } else {
@@ -326,7 +330,7 @@ fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &m
         .end_line(node.end_position().row as u32 + 1)
         .language(Language::Python)
         .project(ctx.project)
-        .is_global(!is_method && !is_nested);
+        .is_global(matches!(scope, FunctionScope::Module));
     // B8 fix: set parentQn for Method nodes so class_methods.cql can find them
     // (CodeNexus doesn't emit HAS_METHOD edges; parentQn is the linkage).
     if is_method {
@@ -552,17 +556,6 @@ fn function_scope(node: Node) -> FunctionScope {
         }
     }
     FunctionScope::Module
-}
-
-/// Backwards-compatible predicate kept for any external callers.
-fn is_inside_class(node: Node) -> bool {
-    matches!(function_scope(node), FunctionScope::Class)
-}
-
-/// Returns true if the node has a `function_definition` ancestor (i.e. it is
-/// nested inside another function). Used by P2-5 to skip nested defs.
-fn has_ancestor_function(node: Node) -> bool {
-    matches!(function_scope(node), FunctionScope::Function)
 }
 
 fn function_signature(node: Node, source: &str) -> Option<String> {
@@ -1170,6 +1163,24 @@ class Foo(metaclass=Meta):
         assert!(
             inner_call.is_some(),
             "call to inner() should still be recorded"
+        );
+        // DQ-004 regression (diting MEDIUM-2): the CALLS edge from outer to
+        // inner must target a real node, not be orphan. CallInfo only stores
+        // callee_name (FQN resolution happens later in the resolve phase), so
+        // we verify (1) the callee_name matches the inner Function node's name
+        // and (2) the inner node has a non-empty qualified_name — together
+        // these prove the resolver will be able to attach this CALLS edge to
+        // a real target node, eliminating the orphan edge.
+        let inner_call = inner_call.expect("inner_call checked above");
+        assert_eq!(
+            inner_call.callee_name, inner_node.name,
+            "DQ-004 regression: CALLS edge callee_name must match the inner \
+             Function node name (edge target must not be orphan)"
+        );
+        assert!(
+            !inner_node.qualified_name.is_empty(),
+            "DQ-004 regression: inner node must have a non-empty qualified_name \
+             so the resolver can attach the CALLS edge to a real target"
         );
     }
 
