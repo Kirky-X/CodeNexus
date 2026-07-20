@@ -1238,6 +1238,82 @@ fn detect_excludes_ffi_entry_no_mangle() {
 }
 
 #[test]
+fn detect_excludes_test_attribute_marker_basic() {
+    // B-bulwark-2: `#[test]` attribute on a function with a descriptive name
+    // that matches no test_* glob and whose QN lacks the #tests disambiguator.
+    // This is the bulwark regression — 1376/1387 false positives were `#[test]`
+    // functions with names like `run_succeeds_on_empty_db`.
+    let db = fresh_db_path();
+    let kit = build_kit_for_db(&db);
+    create_function_with_flags(
+        &kit,
+        "f_t1",
+        "demo",
+        "run_succeeds_on_empty_db",
+        "demo.src.svc.rs.run_succeeds_on_empty_db",
+        "/src/svc.rs",
+        1,
+        false,
+        "#[test]\nfn run_succeeds_on_empty_db() { assert!(true); }",
+    );
+    create_function_with_flags(
+        &kit,
+        "f_t2",
+        "demo",
+        "descriptive_name_no_glob_match",
+        "demo.src.svc.rs.descriptive_name_no_glob_match",
+        "/src/svc.rs",
+        10,
+        false,
+        "#[tokio::test]\nasync fn descriptive_name_no_glob_match() { assert!(true); }",
+    );
+    create_function_with_flags(
+        &kit,
+        "f_t3",
+        "demo",
+        "parametrized_case",
+        "demo.src.svc.rs.parametrized_case",
+        "/src/svc.rs",
+        20,
+        false,
+        "#[rstest]\nfn parametrized_case() { assert!(true); }",
+    );
+    // Control: a plain function with no test marker and no callers → dead.
+    create_function_with_flags(
+        &kit,
+        "f_p1",
+        "demo",
+        "plain_unused",
+        "demo.src.svc.rs.plain_unused",
+        "/src/svc.rs",
+        30,
+        false,
+        "fn plain_unused() {}",
+    );
+
+    let storage = storage(&kit);
+    let detector = DeadCodeDetector::new(&*storage);
+    let result = detector.detect("demo", &[]).expect("detect");
+    let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
+    assert!(
+        !names.contains(&"run_succeeds_on_empty_db"),
+        "#[test] function with descriptive name must NOT be dead"
+    );
+    assert!(
+        !names.contains(&"descriptive_name_no_glob_match"),
+        "#[tokio::test] function with descriptive name must NOT be dead"
+    );
+    assert!(
+        !names.contains(&"parametrized_case"),
+        "#[rstest] function with descriptive name must NOT be dead"
+    );
+    assert!(
+        names.contains(&"plain_unused"),
+        "plain function with no callers and no test marker → dead"
+    );
+}
+
+#[test]
 fn detect_includes_ffi_when_check_ffi_false() {
     // When check_ffi=false, FFI functions ARE dead code.
     let db = fresh_db_path();
@@ -2563,4 +2639,44 @@ fn detect_uses_batch_prefetch_for_exported_function_liveness() {
         names.contains(&"unused_private"),
         "non-exported function with no incoming edges IS dead"
     );
+}
+
+// --- has_test_attribute_marker direct unit tests (arch-review L5) ---
+
+#[test]
+fn has_test_attribute_marker_detects_all_markers() {
+    // Each of the three TEST_ATTRIBUTE_MARKERS must be detected.
+    assert!(has_test_attribute_marker("#[test]\nfn foo() {}"));
+    assert!(has_test_attribute_marker(
+        "#[tokio::test]\nasync fn foo() {}"
+    ));
+    assert!(has_test_attribute_marker("#[rstest]\nfn foo() {}"));
+}
+
+#[test]
+fn has_test_attribute_marker_returns_false_for_no_attributes() {
+    // Plain function with no attributes — the common case.
+    assert!(!has_test_attribute_marker("fn plain() {}"));
+    assert!(!has_test_attribute_marker(
+        "pub async fn handler() -> Response {}"
+    ));
+}
+
+#[test]
+fn has_test_attribute_marker_returns_false_for_other_attributes() {
+    // Attributes that are NOT test markers must not match.
+    assert!(!has_test_attribute_marker(
+        "#[no_mangle]\npub extern \"C\" fn ffi() {}"
+    ));
+    assert!(!has_test_attribute_marker("#[derive(Debug)]\nstruct Foo;"));
+    assert!(!has_test_attribute_marker("#[inline]\nfn fast() {}"));
+}
+
+#[test]
+fn has_test_attribute_marker_short_circuits_on_missing_bracket() {
+    // Perf: the `signature.contains("#[")` pre-filter must reject signatures
+    // with no outer attribute syntax before entering the marker loop.
+    // This is verified by a signature that contains "test" but not "#[".
+    assert!(!has_test_attribute_marker("fn test_handler() {}"));
+    assert!(!has_test_attribute_marker("// this is a test\nfn run() {}"));
 }

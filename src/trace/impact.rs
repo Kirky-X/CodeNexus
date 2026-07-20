@@ -30,7 +30,13 @@ pub struct ImpactConfig {
 /// Maximum allowed depth (spec constraint).
 const MAX_DEPTH_LIMIT: u32 = 10;
 /// Maximum nodes returned per trace (spec constraint).
-const MAX_NODES_LIMIT: usize = 1000;
+///
+/// B-bulwark-5: raised from 1000 to 5000 to match `MAX_SUBGRAPH_NODES` after
+/// bulwark testing showed high-fanin symbols (270+ direct callers) were
+/// truncated on the first BFS hop, hiding all transitive impact. The two
+/// caps are intentionally aligned so that `load_graph` never loads more
+/// nodes than `trace_upstream` can analyse.
+const MAX_NODES_LIMIT: usize = 5000;
 
 impl Default for ImpactConfig {
     fn default() -> Self {
@@ -1303,12 +1309,13 @@ mod tests {
 
     #[test]
     fn trace_upstream_breaks_at_max_nodes_limit() {
-        // 1000 direct predecessors of target + 1 transitive caller of f0.
-        // After adding 1000 predecessors, results.len() >= MAX_NODES_LIMIT (1000),
-        // so the break at line 229 fires before the transitive caller can be found.
+        // MAX_NODES_LIMIT (5000) direct predecessors of target + 1 transitive
+        // caller of f0. After adding 5000 predecessors, results.len() >=
+        // MAX_NODES_LIMIT, so the break at line 229 fires before the
+        // transitive caller can be found.
         let mut g = Graph::new();
         g.add_node(make_func("target", "target"));
-        for i in 0..1000 {
+        for i in 0..MAX_NODES_LIMIT {
             let id = format!("f{i}");
             g.add_node(make_func(&id, &id));
             g.add_edge(Edge::new(&id, "target", EdgeType::Calls, "proj"));
@@ -1324,8 +1331,8 @@ mod tests {
         let result = analyzer.analyze_impact(&"target".to_string());
         assert_eq!(
             result.affected.len(),
-            1000,
-            "break should fire after 1000 results, preventing the transitive caller"
+            MAX_NODES_LIMIT,
+            "break should fire after MAX_NODES_LIMIT results, preventing the transitive caller"
         );
         assert!(
             !result.affected.iter().any(|n| n.name == "transitive"),

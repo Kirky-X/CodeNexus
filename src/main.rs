@@ -217,8 +217,20 @@ fn extract_global_arg(
 ///
 /// Resolves to `.codenexus/<project>.lbug`, where `<project>` is derived from
 /// the subcommand's `name` arg when present, otherwise the directory name of
-/// its `path` arg, otherwise [`FALLBACK_PROJECT_NAME`]. The project component
-/// is sanitized so it is safe to use as a single filesystem path segment.
+/// its `path` arg. When neither is available (read-only commands like
+/// `query`/`list`/`search`/`impact`/`context`), the `.codenexus/` directory
+/// is scanned for an existing `.lbug` file:
+///
+/// - Exactly one file → use it (common case: single indexed project in CWD).
+/// - Zero or multiple files → fall back to [`FALLBACK_PROJECT_NAME`], which
+///   `validate_db_exists` will reject with a clear "run `codenexus index`"
+///   message (Rule 12: failures must surface, not silently succeed).
+///
+/// This fixes the bulwark regression where `query`/`list` without `--db`
+/// returned exit 4 NotFound even though `.codenexus/bulwark.lbug` existed —
+/// the old code unconditionally fell back to `codenexus` (this repo's own
+/// name), producing `.codenexus/codenexus.lbug` which does not exist in
+/// downstream project workspaces.
 fn default_db_path(sub: &sdforge::clap::ArgMatches) -> String {
     // try_get_one (not get_one): commands like `search`/`impact`/`context` do
     // not define a `name`/`path` arg, and clap's get_one panics on an
@@ -236,11 +248,44 @@ fn default_db_path(sub: &sdforge::clap::ArgMatches) -> String {
                     .unwrap_or(FALLBACK_PROJECT_NAME)
                     .to_string()
             })
-        })
-        .unwrap_or_else(|| FALLBACK_PROJECT_NAME.to_string());
+        });
 
-    let project = sanitize_project_name(&raw_project);
+    let project = match raw_project {
+        Some(name) => sanitize_project_name(&name),
+        None => match discover_single_indexed_db() {
+            Some(path) => return path,
+            None => FALLBACK_PROJECT_NAME.to_string(),
+        },
+    };
     format!("{DEFAULT_DB_DIR}/{project}.lbug")
+}
+
+/// Scans the `.codenexus/` directory in the current working directory for an
+/// existing `.lbug` database file. Returns the full path when exactly one is
+/// found (the unambiguous case); returns `None` for zero or multiple files.
+///
+/// Used by [`default_db_path`] to pick up an already-indexed project when the
+/// user runs a read-only command (`query`, `list`, `search`, ...) without
+/// `--db` in the project's own workspace.
+fn discover_single_indexed_db() -> Option<String> {
+    let dir = std::path::Path::new(DEFAULT_DB_DIR);
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut lbug_files: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let path = e.path();
+            let ext = path.extension().and_then(|x| x.to_str())?;
+            if ext == "lbug" {
+                path.to_str().map(String::from)
+            } else {
+                None
+            }
+        })
+        .collect();
+    match lbug_files.len() {
+        1 => lbug_files.pop(),
+        _ => None,
+    }
 }
 
 /// Reduces `name` to a safe single path segment: trims whitespace, replaces
@@ -601,9 +646,10 @@ mod tests {
     #[test]
     fn default_db_path_does_not_panic_when_subcommand_has_no_name_arg() {
         // Real commands like `search`/`impact`/`context` do not define a `name`
-        // or `path` arg. default_db_path must fall back to the fallback project
-        // name instead of panicking. Regression: clap `get_one` panics on an
-        // arg id that the Command never defined.
+        // or `path` arg. default_db_path must use [`FALLBACK_PROJECT_NAME`]
+        // (after [`discover_single_indexed_db`] returns `None`) instead of
+        // panicking. Regression: clap `get_one` panics on an arg id that the
+        // Command never defined.
         let sub_cmd = sdforge::clap::Command::new("search");
         let cmd = sdforge::clap::Command::new("codenexus").subcommand(sub_cmd);
         let m = cmd.get_matches_from(["codenexus", "search"]);

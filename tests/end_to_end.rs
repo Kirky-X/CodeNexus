@@ -695,8 +695,9 @@ async fn ffi_trace_returns_cross_language_path() {
 
     // Load the trace graph around "c_bridge" and verify FfiCalls edge exists.
     let trace = kit.require::<TraceModule>().expect("require_trace");
-    // 1000 = MAX_SUBGRAPH_NODES (src/trace/graph_loader.rs:30); load_graph now
-    // returns (Graph, truncated) after the optimize-impact-large-graphs change.
+    // 1000 = test-specific max_nodes argument (MAX_SUBGRAPH_NODES was raised
+    // from 1000 to 5000 in v0.3.7 after bulwark testing showed high-fanin
+    // symbols hit the first-hop cap). load_graph returns (Graph, truncated).
     let (graph, _truncated) = trace.load_graph("c_bridge", 3, 1000).expect("load_graph");
 
     assert!(

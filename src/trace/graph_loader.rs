@@ -27,7 +27,13 @@ use crate::storage::{Repository, StorageError};
 /// is truncated. Caps the N×M-label query cost on high-fanin symbols (the ~77s
 /// `impact` regression root cause). Aligned with `MAX_NODES_LIMIT`
 /// (`trace_upstream` analysis-layer cap); the two caps are independent.
-pub const MAX_SUBGRAPH_NODES: usize = 1000;
+///
+/// B-bulwark-5: raised from 1000 to 5000 after bulwark testing showed that
+/// high-fanin symbols (e.g. `default_config` with 270 direct callers) hit
+/// the 1000 cap on the first hop, hiding all transitive impact. 5000 covers
+/// medium-scale projects (534 files / 19k nodes / 94k edges) with headroom
+/// while keeping the in-memory footprint bounded (~50 MB worst case).
+pub const MAX_SUBGRAPH_NODES: usize = 5000;
 
 /// Loads the subgraph reachable from `symbol` (within `depth` hops) from the
 /// database into an in-memory [`Graph`].

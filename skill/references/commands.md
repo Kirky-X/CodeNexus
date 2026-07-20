@@ -128,6 +128,8 @@ All of `--text`, `--fulltext`, `--limit`, `--mode`, `--project` are **required**
 
 **Output (JSON):** `{"count":N,"results":[{name, label, file_path, start_line, qualified_name, score, match_reason, degree}]}`
 
+> Note: When `--fulltext true`, `match_reason` is `"bm25 fts"` (FTS extension path) or `"bm25f"` (CONTAINS fallback path). When `--fulltext false`, `match_reason` reflects the structured match type (`exact name match`/`prefix match`/`token match`/`substring match`). As of v0.3.7, the FTS path no longer mislabels results with structured-match reasons.
+
 ### Tracing & impact
 
 #### trace — Trace a symbol's paths
@@ -169,7 +171,7 @@ All of `--symbol`, `--depth`, `--edge_types`, `--max_depth`, `--include_tests` a
 - `--include_tests <BOOL>` — `true` includes `TESTS` edges in the reverse BFS; default `false` (required)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
-**Output (JSON):** `symbol`, `depth`, `node_count`, `edge_count`, `truncated` (bool; `true` when the loaded subgraph hit the `MAX_SUBGRAPH_NODES=1000` cap), `nodes[]`, `edges[]`, `risk_assessment` (when enhanced), `affected[]` (when enhanced, each `ImpactNode` has `id`, `name`, `qualified_name`, `edge_type`, `depth`, `path`)
+**Output (JSON):** `symbol`, `depth`, `node_count`, `edge_count`, `truncated` (bool; `true` when the loaded subgraph hit the `MAX_SUBGRAPH_NODES=5000` cap), `nodes[]`, `edges[]`, `risk_assessment` (when enhanced), `affected[]` (when enhanced, each `ImpactNode` has `id`, `name`, `qualified_name`, `edge_type`, `depth`, `path`)
 
 #### context — Show a 360° view of a symbol (H8)
 
@@ -214,7 +216,7 @@ All of `--project`, `--entry`, `--check_exported`, `--check_ffi`, `--edge_types`
 
 **Output (JSON):** `project`, `dead_code[]` (each entry: `name`, `qualified_name`, `file_path`, `start_line`, `language`, `reason`, `confidence`)
 
-> Note: For Rust projects, tree-sitter's static analysis does not capture trait-object `dyn` dispatch or all cross-module calls, so `dead_code` may produce false positives (e.g. `parse`, `route`, `new`). Treat results as a triage list, not ground truth. **Rust results require manual verification of the entry chain** (`main` → crate-root re-export `pub use` → target function) before deleting — tree-sitter may miss `calnexus::run()`-style calls where the crate name is used as a module prefix. As of v0.3.7, re-export targets (`pub use cli::run`) are tracked as live seeds, eliminating the CalNexus-class false positive where an entire `cli.rs` file was misjudged dead because `main → calnexus::run()` resolved to `batch::run` instead.
+> Note: For Rust projects, tree-sitter's static analysis does not capture trait-object `dyn` dispatch or all cross-module calls, so `dead_code` may produce false positives (e.g. `parse`, `route`, `new`). Treat results as a triage list, not ground truth. **Rust results require manual verification of the entry chain** (`main` → crate-root re-export `pub use` → target function) before deleting — tree-sitter may miss `calnexus::run()`-style calls where the crate name is used as a module prefix. As of v0.3.7, re-export targets (`pub use cli::run`) are tracked as live seeds, eliminating the CalNexus-class false positive where an entire `cli.rs` file was misjudged dead because `main → calnexus::run()` resolved to `batch::run` instead. As of v0.3.7, `#[test]`/`#[tokio::test]`/`#[rstest]` functions are excluded from `dead_code` results via signature markers (bulwark regression: 1376/1387 "dead code" findings were `tests.rs` test functions — now filtered at both seed-detection and result-filter stages).
 
 #### architecture — Show architecture overview
 
@@ -317,6 +319,8 @@ codenexus route_map --project <NAME_OR_ID> [--db <DB_PATH>]
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
 **Output (JSON):** `project`, `route_map[]` (each entry has route path/method + handler symbol + file/line)
+
+> Note: As of v0.3.7, `route_map` supports both legacy `Handler`+`HANDLES` routes and axum-style `Router::new().route("/path", get(handler))` programming routes. The axum extractor creates `Route` nodes and `HANDLES_ROUTE` edges (source = handler `Function` FQN, target = `Route` FQN); `route_map` merges both edge types and resolves `Function` nodes as handlers. `api_impact` also supports axum routes (finds `Route` by path/name → follows `HANDLES_ROUTE` to the `Function` handler → reverse-traces `CALLS` edges). `shape_check`/`tool_map` still require legacy `Endpoint`/`Tool` nodes (axum does not create these).
 
 #### tool_map — List MCP tools and handlers
 

@@ -47,6 +47,42 @@ const DEFAULT_TEST_PATTERNS: &[&str] = &[
 const DEFAULT_ENTRY_PATTERNS: &[&str] =
     &["main", "Main", "__main__", "wmain", "WinMain", "DLLMain"];
 
+/// Attribute substrings that mark a function as a test function (not an
+/// entry point). When any substring appears in a function's `signature`
+/// field, the function is treated as live — test runners (`cargo test`,
+/// `pytest`, `go test`) invoke them via reflection / macro expansion that
+/// is invisible to the static call graph.
+///
+/// This is a defense-in-depth overlay on top of [`DEFAULT_TEST_PATTERNS`]
+/// (name-globs) and [`is_test_module_function`] (`#tests` disambiguator):
+/// it catches `#[test]` / `#[tokio::test]` functions whose names do not
+/// match any glob (e.g. `run_succeeds_on_empty_db`) and whose QN lacks the
+/// `#tests` disambiguator (tree-sitter-rust does not currently emit it for
+/// inline `mod tests` blocks).
+///
+/// On bulwark this closes 1376/1387 (99.2%) false positives — virtually
+/// every `#[test]` function had a descriptive name that matched no glob.
+const TEST_ATTRIBUTE_MARKERS: &[&str] = &["#[test", "#[tokio::test", "#[rstest"];
+
+/// Returns `true` when `signature` carries one of the [`TEST_ATTRIBUTE_MARKERS`]
+/// substrings, i.e. the function is a Rust test entry point. Used by both
+/// [`DeadCodeDetector::is_seed_function`] (seed category 5) and the result
+/// filter loop (defense-in-depth) so the check stays consistent.
+///
+/// # Performance
+///
+/// Cheap pre-filter: `signature.contains("#[")` returns `false` for the vast
+/// majority of functions (no outer attributes), short-circuiting before the
+/// `TEST_ATTRIBUTE_MARKERS.iter().any(...)` loop. On bulwark this saves ~115k
+/// unnecessary `contains` scans across 19k functions × 2 call sites
+/// (perf-review L1).
+fn has_test_attribute_marker(signature: &str) -> bool {
+    signature.contains("#[")
+        && TEST_ATTRIBUTE_MARKERS
+            .iter()
+            .any(|marker| signature.contains(marker))
+}
+
 /// Default entry-point attribute substrings scanned for in a function's
 /// `signature` field (T182-B / B4.5 deferred).
 ///
@@ -67,9 +103,10 @@ const DEFAULT_ENTRY_PATTERNS: &[&str] =
 /// the entry-point signal.
 ///
 /// Non-entry-point attributes (`#[cfg(...)]`, `#[derive(...)]`,
-/// `#[allow(...)]`, `#[test]`, `#[bench]`) are intentionally absent —
-/// `#[test]` / `#[bench]` are already covered by `DEFAULT_TEST_PATTERNS`
-/// name-globs, and the others do not register external entry points.
+/// `#[allow(...)]`) are intentionally absent — they do not register
+/// external entry points. `#[test]` / `#[bench]` are covered separately
+/// by [`TEST_ATTRIBUTE_MARKERS`] (test functions are live seeds, not
+/// entry points — they are invoked by the test runner, not by user code).
 const DEFAULT_ATTRIBUTE_ENTRIES: &[&str] = &[
     "#[tool",
     "#[forge",
@@ -620,13 +657,15 @@ impl<'a> ReachabilityAnalyzer<'a> {
     /// 2. Test functions (name matches `test_patterns` or `DEFAULT_TEST_PATTERNS`)
     /// 3. Test module function (`#tests` disambiguator — B0)
     /// 4. Integration test file (B4 — `tests/`, `test/`, `src/test/`)
-    /// 5. Trait impl method (B3 — `#<TypeName>` disambiguator, when `check_dynamic_dispatch`)
-    /// 6. Exported functions (`isExported=true`, when `check_exported`)
-    /// 7. FFI entries (signature contains `extern "C"` / `#[no_mangle]`, when `check_ffi`)
-    /// 8. Re-export targets (B7 — `REEXPORTS` edge targets, always checked)
-    /// 9. T182-B: attribute-marked entry points (signature contains any
-    ///    `attribute_entries` substring, e.g. `#[tool` / `#[forge` /
-    ///    `#[tokio::main`)
+    /// 5. Test-attribute-marked functions (signature contains `#[test` /
+    ///    `#[tokio::test` / `#[rstest` — closes bulwark 1376/1387 FPs)
+    /// 6. Trait impl method (B3 — `#<TypeName>` disambiguator, when `check_dynamic_dispatch`)
+    /// 7. Exported functions (`isExported=true`, when `check_exported`)
+    /// 8. FFI entries (signature contains `extern "C"` / `#[no_mangle]`, when `check_ffi`)
+    /// 9. Re-export targets (B7 — `REEXPORTS` edge targets, always checked)
+    /// 10. T182-B: attribute-marked entry points (signature contains any
+    ///     `attribute_entries` substring, e.g. `#[tool` / `#[forge` /
+    ///     `#[tokio::main`)
     fn is_seed_function(
         &self,
         func: &FunctionRow,
@@ -656,19 +695,29 @@ impl<'a> ReachabilityAnalyzer<'a> {
         if is_integration_test_file(&func.file_path) {
             return true;
         }
-        // 5. B3: Trait impl method (`#<TypeName>` disambiguator)
+        // 5. Test-attribute markers (#[test] / #[tokio::test] / #[rstest]).
+        //    tree-sitter-rust tokenises outer attributes as sibling
+        //    `attribute_item` nodes; `collect_function_signature` prepends
+        //    them to the signature text, so a substring match on the
+        //    signature reliably detects test decoration regardless of the
+        //    function name or QN disambiguator. On bulwark this is the
+        //    single largest FP reducer (1376/1387 = 99.2% of findings).
+        if has_test_attribute_marker(&func.signature) {
+            return true;
+        }
+        // 6. B3: Trait impl method (`#<TypeName>` disambiguator)
         if self.config.check_dynamic_dispatch && is_trait_impl_method(&func.qualified_name) {
             return true;
         }
-        // 6. Exported functions (batch-prefetched)
+        // 7. Exported functions (batch-prefetched)
         if self.config.check_exported && self.prefetch.is_exported(&func.id) {
             return true;
         }
-        // 7. FFI entries (batch-prefetched)
+        // 8. FFI entries (batch-prefetched)
         if self.config.check_ffi && self.prefetch.is_ffi_entry(&func.id) {
             return true;
         }
-        // 8. B7: Re-export targets (batch-prefetched). Always checked —
+        // 9. B7: Re-export targets (batch-prefetched). Always checked —
         // `pub use` / `export ... from` makes the symbol reachable from
         // outside the current crate/module, so it's a live entry point
         // regardless of `check_exported` (which gates `pub fn`, a
@@ -676,7 +725,7 @@ impl<'a> ReachabilityAnalyzer<'a> {
         if self.prefetch.is_reexport_target(&func.id) {
             return true;
         }
-        // 9. T182-B: attribute-marked entry points. Macro expansion
+        // 10. T182-B: attribute-marked entry points. Macro expansion
         // synthesises an external call to the decorated fn that is
         // invisible to the static graph (tree-sitter does not expand
         // macros), so the attribute itself is the entry-point signal.
@@ -878,6 +927,16 @@ impl<'a> DeadCodeDetector<'a> {
             // eliminated 8/11 remaining false positives (integration tests
             // with descriptive names that don't match any test_* glob).
             if is_integration_test_file(&func.file_path) {
+                continue;
+            }
+            // Defense-in-depth: `#[test]` / `#[tokio::test]` / `#[rstest]`
+            // attribute markers. Mirrors `is_seed_function` category 5 —
+            // catches test functions whose names match no glob and whose QN
+            // lacks the `#tests` disambiguator (the common case for inline
+            // `mod tests` blocks in production source files like
+            // `src/service/foo.rs`). On bulwark this is the dominant FP
+            // reducer: 1376/1387 = 99.2% of findings were `#[test]` fns.
+            if has_test_attribute_marker(&func.signature) {
                 continue;
             }
             // Use batch-prefetched sets instead of per-function Cypher

@@ -210,6 +210,8 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "call_expression" => {
             extract_call(node, source, ctx, result);
+            // axum 编程式路由提取：识别 `.route("/path", get(handler))` 模式。
+            extract_axum_routes(node, source, ctx, result);
             visit_children(node, source, ctx, result);
         }
         "let_declaration" => {
@@ -678,6 +680,240 @@ fn extract_function_ref_args(
             args: Vec::new(),
         });
     }
+}
+
+// ---------------------------------------------------------------------------
+// axum 编程式路由提取
+// ---------------------------------------------------------------------------
+
+/// axum HTTP method functions recognized in method routers.
+const AXUM_HTTP_METHODS: &[&str] = &[
+    "get", "post", "put", "delete", "patch", "head", "options", "trace",
+];
+
+/// Extracts axum programming-style routes from a `call_expression` node.
+///
+/// Recognizes the pattern `<receiver>.route("/path", method_router)` where
+/// `method_router` is one of:
+/// - `get(handler)` / `post(handler)` / etc. (single method)
+/// - `get(handler).delete(handler2)` (chained methods)
+///
+/// For each `(method, handler)` pair, creates:
+/// - A [`NodeLabel::Route`] node with `httpMethod` and `path` properties
+/// - An [`EdgeType::HandlesRoute`] edge from the handler's FQN to the Route's FQN
+///
+/// Non-axum calls (e.g. `foo.route()`, `obj.method()`) are filtered out by
+/// requiring: (1) the method name is `route`, (2) the first argument is a
+/// string literal, and (3) the second argument is a call to one of the
+/// [`AXUM_HTTP_METHODS`] functions (possibly chained).
+///
+/// # Limitations
+///
+/// The `handler_qn` is built from a **bare identifier** only — path
+/// expressions like `get(path::to::handler)` and closure expressions like
+/// `get(|| async { ... })` are silently skipped by [`identifier_text`] (it
+/// returns `None` for non-identifier nodes). This means `HANDLES_ROUTE`
+/// edges are emitted only for the common case `get(handler)` where `handler`
+/// is a single in-scope identifier. Path-qualified and closure handlers will
+/// produce an orphan `Route` node with no handler edge, and the caller will
+/// need to rely on `route_map`'s orphan-route fallback (empty handler fields)
+/// or add the path resolution in a future enhancement.
+fn extract_axum_routes(
+    node: Node,
+    source: &str,
+    ctx: &VisitContext<'_>,
+    result: &mut ExtractResult,
+) {
+    // The call's function must be a field_expression (method call).
+    let Some(func_node) = node.child_by_field_name("function") else {
+        return;
+    };
+    if func_node.kind() != "field_expression" {
+        return;
+    }
+    // The method name must be "route".
+    let Some(field_node) = func_node.child_by_field_name("field") else {
+        return;
+    };
+    let Some(field_name) = node_text(field_node, source) else {
+        return;
+    };
+    if field_name != "route" {
+        return;
+    }
+    // First argument must be a string_literal (the path).
+    let Some(args_node) = node.child_by_field_name("arguments") else {
+        return;
+    };
+    let Some(path_arg) = args_node.named_child(0) else {
+        return;
+    };
+    if path_arg.kind() != "string_literal" {
+        return;
+    }
+    let Some(path) = string_literal_value(path_arg, source) else {
+        return;
+    };
+    // Second argument must be a method router (call to get/post/etc.).
+    let Some(method_router_node) = args_node.named_child(1) else {
+        return;
+    };
+    let pairs = collect_method_handler_pairs(method_router_node, source);
+    if pairs.is_empty() {
+        return;
+    }
+    let start_line = node.start_position().row as u32 + 1;
+    let end_line = node.end_position().row as u32 + 1;
+    for (http_method, handler_name) in pairs {
+        // Build a deterministic node id so --force reindex doesn't create
+        // duplicate primary keys (ADR-014).
+        let route_id = sanitize_route_id(&format!(
+            "route_{}_{}_{}_{}",
+            ctx.file_path, start_line, http_method, path
+        ));
+        let route_name = format!("{} {}", http_method.to_uppercase(), path);
+        // Disambiguator carries method+path+line so multiple routes in the
+        // same file get distinct FQNs.
+        let disambiguator = format!(
+            "{}_{}_{}",
+            http_method,
+            sanitize_route_id(&path),
+            start_line
+        );
+        let route_qn = make_qn(ctx.file_path, "route", ctx.project, Some(&disambiguator));
+        let properties = serde_json::json!({
+            "httpMethod": http_method.to_uppercase(),
+            "path": path,
+        });
+        let route_node = ModelNode::builder(NodeLabel::Route, route_name, route_qn.clone())
+            .id(route_id)
+            .file_path(ctx.file_path)
+            .start_line(start_line)
+            .end_line(end_line)
+            .language(Language::Rust)
+            .project(ctx.project)
+            .properties(properties)
+            .build();
+        result.push_node(route_node);
+        // HANDLES_ROUTE edge: handler FQN -> Route FQN.
+        let handler_qn = make_qn(
+            ctx.file_path,
+            &handler_name,
+            ctx.project,
+            ctx.current_parent,
+        );
+        result.edges.push(Edge::new(
+            handler_qn,
+            route_qn,
+            EdgeType::HandlesRoute,
+            ctx.project,
+        ));
+    }
+}
+
+/// Extracts the string content from a `string_literal` node (strips outer
+/// quotes and optional `r`/`b` prefixes).
+fn string_literal_value(node: Node, source: &str) -> Option<String> {
+    if node.kind() != "string_literal" {
+        return None;
+    }
+    let text = node_text(node, source)?;
+    // Find the content between the first and last double quote. This handles
+    // plain `"..."`, raw `r"..."`, and byte `b"..."` literals. Escape
+    // sequences (e.g. `\n`) are preserved as-is — route paths rarely use them.
+    let start = text.find('"')?;
+    let end = text.rfind('"')?;
+    if start >= end {
+        return None;
+    }
+    Some(text[start + 1..end].to_string())
+}
+
+/// Collects `(http_method, handler_name)` pairs from an axum method router
+/// expression.
+///
+/// Handles two shapes:
+/// - `get(handler)` — single method call; returns `[(get, handler)]`.
+/// - `get(handler).delete(handler2)` — chained method call; recurses into
+///   the `value` field of the `field_expression` (the inner `get(handler)`
+///   call) and adds the outer method (`delete`).
+///
+/// Returns an empty vector if the expression is not a recognised method
+/// router (e.g. a bare identifier or a non-HTTP method call).
+fn collect_method_handler_pairs(node: Node, source: &str) -> Vec<(String, String)> {
+    if node.kind() != "call_expression" {
+        return Vec::new();
+    }
+    let Some(func_node) = node.child_by_field_name("function") else {
+        return Vec::new();
+    };
+    match func_node.kind() {
+        "identifier" => {
+            // Single method call: e.g. `get(handler)`.
+            let Some(method) = node_text(func_node, source).map(String::from) else {
+                return Vec::new();
+            };
+            if !AXUM_HTTP_METHODS.contains(&method.as_str()) {
+                return Vec::new();
+            }
+            let Some(args_node) = node.child_by_field_name("arguments") else {
+                return Vec::new();
+            };
+            let Some(handler_node) = args_node.named_child(0) else {
+                return Vec::new();
+            };
+            let Some(handler) = identifier_text(handler_node, source) else {
+                return Vec::new();
+            };
+            vec![(method, handler)]
+        }
+        "field_expression" => {
+            // Chained method call: e.g. `get(handler).delete(handler2)`.
+            // Recurse into the value (the inner call) first to collect inner
+            // pairs. Note: tree-sitter-rust uses `value` (not `receiver`) as
+            // the field name for the object of a field_expression.
+            let mut pairs = Vec::new();
+            if let Some(value) = func_node.child_by_field_name("value") {
+                pairs.extend(collect_method_handler_pairs(value, source));
+            }
+            // The outer method is the field name (e.g. `delete`).
+            let Some(field_node) = func_node.child_by_field_name("field") else {
+                return pairs;
+            };
+            let Some(method) = node_text(field_node, source).map(String::from) else {
+                return pairs;
+            };
+            if !AXUM_HTTP_METHODS.contains(&method.as_str()) {
+                return pairs;
+            }
+            // The handler is the first argument of the outer call.
+            let Some(args_node) = node.child_by_field_name("arguments") else {
+                return pairs;
+            };
+            let Some(handler_node) = args_node.named_child(0) else {
+                return pairs;
+            };
+            if let Some(handler) = identifier_text(handler_node, source) {
+                pairs.push((method, handler));
+            }
+            pairs
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Sanitizes a string for use in a node id: keeps alphanumeric and underscore,
+/// replaces all other characters with `_`.
+fn sanitize_route_id(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// B1 fix: extracts function calls from inside macro arguments.
@@ -4331,6 +4567,268 @@ impl Repo {
             lang,
             Language::all()[0],
             "unknown string should return default language"
+        );
+    }
+
+    // --- axum 编程式路由提取 ---
+
+    #[test]
+    fn extracts_single_axum_route() {
+        // `Router::new().route("/users", get(list_users))` → 1 Route node.
+        let src = r#"
+fn list_users() {}
+fn main() {
+    Router::new().route("/users", get(list_users));
+}
+"#;
+        let result = extract(src);
+        let routes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Route)
+            .collect();
+        assert_eq!(routes.len(), 1, "should extract 1 Route node: {:?}", routes);
+        assert_eq!(routes[0].name, "GET /users");
+        assert_eq!(routes[0].properties["httpMethod"], "GET");
+        assert_eq!(routes[0].properties["path"], "/users");
+    }
+
+    #[test]
+    fn extracts_chained_axum_routes() {
+        // 链式 `.route().route()` 调用 → 2 Route nodes.
+        let src = r#"
+fn list_users() {}
+fn list_orders() {}
+fn main() {
+    Router::new()
+        .route("/users", get(list_users))
+        .route("/orders", get(list_orders));
+}
+"#;
+        let result = extract(src);
+        let routes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Route)
+            .collect();
+        assert_eq!(
+            routes.len(),
+            2,
+            "should extract 2 Route nodes: {:?}",
+            routes
+        );
+        let paths: Vec<&str> = routes
+            .iter()
+            .map(|r| r.properties["path"].as_str().unwrap())
+            .collect();
+        assert!(
+            paths.contains(&"/users"),
+            "paths should contain /users: {paths:?}"
+        );
+        assert!(
+            paths.contains(&"/orders"),
+            "paths should contain /orders: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn extracts_axum_routes_with_different_http_methods() {
+        // 覆盖 get/post/put/delete/patch 五种 HTTP 方法。
+        let src = r#"
+fn handler() {}
+fn main() {
+    Router::new()
+        .route("/a", get(handler))
+        .route("/b", post(handler))
+        .route("/c", put(handler))
+        .route("/d", delete(handler))
+        .route("/e", patch(handler));
+}
+"#;
+        let result = extract(src);
+        let routes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Route)
+            .collect();
+        assert_eq!(routes.len(), 5, "should extract 5 Route nodes");
+        let methods: Vec<&str> = routes
+            .iter()
+            .map(|r| r.properties["httpMethod"].as_str().unwrap())
+            .collect();
+        for expected in ["GET", "POST", "PUT", "DELETE", "PATCH"] {
+            assert!(
+                methods.contains(&expected),
+                "should extract {expected} method: {methods:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn extracts_axum_chained_method_handlers() {
+        // `.route("/path", get(handler).delete(handler2))` → 2 Route nodes
+        // (GET + DELETE) for the same path.
+        let src = r#"
+fn get_user() {}
+fn delete_user() {}
+fn main() {
+    Router::new().route("/users", get(get_user).delete(delete_user));
+}
+"#;
+        let result = extract(src);
+        let routes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Route)
+            .collect();
+        assert_eq!(
+            routes.len(),
+            2,
+            "should extract 2 Route nodes (GET + DELETE): {:?}",
+            routes
+        );
+        let methods: Vec<&str> = routes
+            .iter()
+            .map(|r| r.properties["httpMethod"].as_str().unwrap())
+            .collect();
+        assert!(
+            methods.contains(&"GET"),
+            "methods should contain GET: {methods:?}"
+        );
+        assert!(
+            methods.contains(&"DELETE"),
+            "methods should contain DELETE: {methods:?}"
+        );
+        // 两个路由的 path 应相同。
+        for route in &routes {
+            assert_eq!(
+                route.properties["path"], "/users",
+                "both routes should share path /users"
+            );
+        }
+    }
+
+    #[test]
+    fn does_not_misidentify_non_axum_calls() {
+        // `foo.route()`、`bar.method()`、`obj.route(123)` 都不应被识别为 axum 路由。
+        let src = r#"
+fn main() {
+    foo.route();
+    bar.method();
+    obj.route(123);
+    obj.route("not_a_path", not_a_call);
+}
+"#;
+        let result = extract(src);
+        let routes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Route)
+            .collect();
+        assert_eq!(
+            routes.len(),
+            0,
+            "non-axum calls should not create Route nodes: {:?}",
+            routes
+        );
+    }
+
+    #[test]
+    fn axum_route_creates_handles_route_edge() {
+        // 每个 (method, handler) 对应创建一条 HANDLES_ROUTE 边：
+        // source = handler FQN, target = Route FQN。
+        let src = r#"
+fn list_users() {}
+fn main() {
+    Router::new().route("/users", get(list_users));
+}
+"#;
+        let result = extract(src);
+        let handles_route: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::HandlesRoute)
+            .collect();
+        assert_eq!(handles_route.len(), 1, "should create 1 HANDLES_ROUTE edge");
+        let edge = &handles_route[0];
+        assert!(
+            edge.source.contains("list_users"),
+            "edge source should contain the handler name: {}",
+            edge.source
+        );
+        // Target 应匹配 Route 节点的 FQN。
+        let route = result
+            .nodes
+            .iter()
+            .find(|n| n.label == NodeLabel::Route)
+            .expect("Route node should exist");
+        assert_eq!(
+            edge.target, route.qualified_name,
+            "edge target should be the Route FQN"
+        );
+    }
+
+    #[test]
+    fn axum_chained_method_handlers_create_distinct_edges() {
+        // `get(get_user).delete(delete_user)` 应创建 2 条 HANDLES_ROUTE 边，
+        // 分别指向 2 个不同的 Route 节点。
+        let src = r#"
+fn get_user() {}
+fn delete_user() {}
+fn main() {
+    Router::new().route("/users", get(get_user).delete(delete_user));
+}
+"#;
+        let result = extract(src);
+        let handles_route: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::HandlesRoute)
+            .collect();
+        assert_eq!(
+            handles_route.len(),
+            2,
+            "should create 2 HANDLES_ROUTE edges: {:?}",
+            handles_route
+        );
+        let sources: Vec<&str> = handles_route.iter().map(|e| e.source.as_str()).collect();
+        assert!(
+            sources.iter().any(|s| s.contains("get_user")),
+            "should have edge from get_user: {sources:?}"
+        );
+        assert!(
+            sources.iter().any(|s| s.contains("delete_user")),
+            "should have edge from delete_user: {sources:?}"
+        );
+    }
+
+    #[test]
+    fn axum_route_id_is_deterministic() {
+        // 同一源码重复提取应产生相同的 Route id（ADR-014：避免 --force
+        // reindex 时主键冲突）。
+        let src = r#"
+fn list_users() {}
+fn main() {
+    Router::new().route("/users", get(list_users));
+}
+"#;
+        let result1 = extract(src);
+        let result2 = extract(src);
+        let id1 = result1
+            .nodes
+            .iter()
+            .find(|n| n.label == NodeLabel::Route)
+            .map(|n| n.id.clone())
+            .expect("first extraction should have Route node");
+        let id2 = result2
+            .nodes
+            .iter()
+            .find(|n| n.label == NodeLabel::Route)
+            .map(|n| n.id.clone())
+            .expect("second extraction should have Route node");
+        assert_eq!(
+            id1, id2,
+            "Route node id should be deterministic across extractions"
         );
     }
 }

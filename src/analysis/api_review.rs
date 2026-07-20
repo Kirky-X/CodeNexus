@@ -6,7 +6,8 @@
 //! Provides four graph-based analysis capabilities over the existing
 //! LadybugDB graph:
 //! - [`ApiReviewer::route_map`] — lists all `Route`/`Endpoint` nodes joined
-//!   with their `Handler` and `Middleware` via `HANDLES`/`USES` edges.
+//!   with their handler (legacy `Handler` node or axum `Function` node) and
+//!   `Middleware` via `HANDLES`/`HANDLES_ROUTE`/`USES` edges.
 //! - [`ApiReviewer::shape_check`] — validates API endpoint schema consistency
 //!   by comparing an `Endpoint` node's `expectedSchema` property with the
 //!   actual schema recorded on `CALLS` edges pointing to it.
@@ -32,12 +33,45 @@
 
 use crate::storage::capability::Storage;
 use crate::storage::error::Result as StorageResult;
-use crate::storage::schema::escape_cypher_string;
+use crate::storage::{escape_cypher_string, escape_identifier};
 use serde::Serialize;
 
 /// Severity label recorded on [`ShapeViolation`] when expected and actual
 /// schemas differ.
 const SEVERITY_MISMATCH: &str = "mismatch";
+
+/// Node labels that may carry an HTTP route / endpoint path.
+///
+/// `Endpoint` is the legacy schema (with `expectedSchema`); `Route` is emitted
+/// by the axum extractor in [`crate::parse::rust_extractor::extract_axum_routes`].
+/// `route_map`/`api_impact` query both so the analysis works for either style.
+const ROUTE_LIKE_LABELS: &[&str] = &["Endpoint", "Route"];
+
+/// Node labels whose `id` may appear as the source of a `HANDLES` or
+/// `HANDLES_ROUTE` edge — i.e. handler-like entities.
+///
+/// `Handler` is the legacy label; `Function` is what the axum extractor emits
+/// for `Router::new().route(path, get(handler))`. Merged here so
+/// `route_map`/`api_impact`/`tool_map` resolve handlers regardless of style.
+const HANDLER_LIKE_LABELS: &[&str] = &["Handler", "Function"];
+
+/// Edge types whose `source` is a handler-like node pointing at a route,
+/// endpoint, or tool. Used by [`ApiReviewer::find_handler_for_target`] and
+/// [`ApiReviewer::route_map`] (via [`ApiReviewer::load_edges_multi`]) to merge
+/// legacy `HANDLES` edges (Handler → Route/Tool) with axum `HANDLES_ROUTE`
+/// edges (Function → Route) without duplicating the literal list.
+const HANDLER_LIKE_EDGE_TYPES: &[&str] = &["HANDLES", "HANDLES_ROUTE"];
+
+/// Node labels searched when resolving a caller's `(name, filePath, startLine)`.
+///
+/// `CALLS` edges can originate from any callable — `Function` (free functions),
+/// `Method` (impl blocks), or `Handler` (legacy handler nodes) — so all three
+/// are scanned by [`ApiReviewer::load_caller_info`].
+const CALLER_LIKE_LABELS: &[&str] = &["Function", "Method", "Handler"];
+
+/// Properties on `Endpoint`/`Route` nodes that may carry the route path or
+/// name. Searched in order by [`ApiReviewer::find_endpoint`].
+const ENDPOINT_MATCH_FIELDS: &[&str] = &["path", "name"];
 
 /// A single route-map entry: one route + its handler + middleware chain.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -120,17 +154,20 @@ impl<'a> ApiReviewer<'a> {
         // (a) Load all Route + Endpoint nodes (same schema, separate queries).
         let routes = self.load_routes(project)?;
 
-        // (b) Load all Handler nodes (id → name).
-        let handlers = self.load_handlers(project)?;
+        // (b) Load all handler-like nodes (id → name): Handler + Function.
+        let handlers = self.load_handler_like_nodes(project)?;
 
         // (c) Load all Middleware nodes (id → name).
         let middleware = self.load_middleware(project)?;
 
-        // (d) Load HANDLES edges (source = handler id, target = route id).
-        let handles = self.load_edges(project, "HANDLES")?;
+        // (d) Load HANDLES + HANDLES_ROUTE edges (source = handler id,
+        //     target = route id). axum routes use HANDLES_ROUTE edges with
+        //     Function sources; legacy routes use HANDLES edges with Handler
+        //     sources. Both are merged here so route_map works for either.
+        let handles = self.load_edges_multi(project, HANDLER_LIKE_EDGE_TYPES)?;
 
         // (e) Load USES edges (source = middleware id, target = handler id).
-        let uses = self.load_edges(project, "USES")?;
+        let uses = self.load_edges_multi(project, &["USES"])?;
 
         // (f) Build handler → middleware list map.
         // Single-line for coverage: tarpaulin attribute continuation
@@ -189,28 +226,37 @@ impl<'a> ApiReviewer<'a> {
         // (a) Load all Endpoint nodes with expectedSchema.
         let endpoints = self.load_endpoints_with_schema(project)?;
 
-        // (b) Load CALLS edges pointing to endpoints.
-        let calls = self.load_edges(project, "CALLS")?;
+        // (b) Load CALLS edges with their `reason` field in a single query
+        //     (perf-review H2: was N+1 — one Cypher query per endpoint ×
+        //     matching CALLS edge). Build a HashMap<target_id, Vec<reason>>
+        //     so each endpoint lookup is O(1) instead of triggering another
+        //     round-trip.
+        let calls_with_reason = self.load_calls_with_reason(project)?;
+        let mut by_target: std::collections::HashMap<&str, Vec<&str>> =
+            std::collections::HashMap::new();
+        for (target, reason) in &calls_with_reason {
+            if !reason.is_empty() {
+                by_target
+                    .entry(target.as_str())
+                    .or_default()
+                    .push(reason.as_str());
+            }
+        }
 
-        // (c) For each endpoint with a non-empty expectedSchema, find CALLS
-        //     edges pointing to it and compare schemas.
+        // (c) For each endpoint with a non-empty expectedSchema, look up its
+        //     CALLS reasons in the HashMap and emit a violation per mismatch.
         let mut result = Vec::new();
         for (ep_id, ep_path, expected_schema) in &endpoints {
             if expected_schema.is_empty() {
                 continue;
             }
-            for (_caller_id, callee_id) in &calls {
-                if callee_id != ep_id {
-                    continue;
-                }
-                // Look up the actual schema from the edge's reason field.
-                let actual_schema = self.load_edge_reason(project, "CALLS", callee_id)?;
-                for actual in &actual_schema {
-                    if actual != expected_schema {
+            if let Some(actuals) = by_target.get(ep_id.as_str()) {
+                for actual in actuals {
+                    if *actual != expected_schema.as_str() {
                         result.push(ShapeViolation {
                             endpoint: ep_path.clone(),
                             expected_schema: expected_schema.clone(),
-                            actual_schema: actual.clone(),
+                            actual_schema: actual.to_string(),
                             severity: SEVERITY_MISMATCH.to_string(),
                         });
                     }
@@ -239,24 +285,20 @@ impl<'a> ApiReviewer<'a> {
             None => return Ok(Vec::new()),
         };
 
-        // (b) Find the Handler via HANDLES edge (source = handler, target = endpoint).
-        let handles = self.load_edges(project, "HANDLES")?;
-        let handler_id = handles
-            .iter()
-            .find(|(_, target)| target == &endpoint_id)
-            .map(|(source, _)| source.clone());
-        let handler_id = match handler_id {
+        // (b) Find the Handler via a targeted HANDLES/HANDLES_ROUTE query
+        //     (source = handler/function, target = endpoint/route). axum
+        //     routes emit HANDLES_ROUTE edges with Function sources; legacy
+        //     endpoints use HANDLES edges with Handler sources. Uses a
+        //     targeted `WHERE e.target = ...` query instead of loading all
+        //     edges and filtering in Rust (M2: was O(N) over all edges).
+        let handler_id = match self.find_handler_for_target(project, &endpoint_id)? {
             Some(id) => id,
             None => return Ok(Vec::new()),
         };
 
-        // (c) Find all CALLS edges pointing to the handler.
-        let calls = self.load_edges(project, "CALLS")?;
-        let caller_ids: Vec<String> = calls
-            .iter()
-            .filter(|(_, target)| target == &handler_id)
-            .map(|(source, _)| source.clone())
-            .collect();
+        // (c) Find all CALLS edges pointing to the handler via a targeted
+        //     query (M2: was loading all CALLS edges then filtering).
+        let caller_ids = self.find_callers_of_target(project, &handler_id)?;
 
         // (d) Look up caller info (name, filePath, startLine) from
         //     Function/Method/Handler tables.
@@ -291,11 +333,14 @@ impl<'a> ApiReviewer<'a> {
         // (a) Load all Tool nodes.
         let tools = self.load_tools(project)?;
 
-        // (b) Load all Handler nodes (id → name).
-        let handlers = self.load_handlers(project)?;
+        // (b) Load all handler-like nodes (id → name): Handler + Function.
+        let handlers = self.load_handler_like_nodes(project)?;
 
         // (c) Load HANDLES edges (source = handler id, target = tool id).
-        let handles = self.load_edges(project, "HANDLES")?;
+        // tool_map intentionally queries HANDLES only (not HANDLES_ROUTE) —
+        // MCP tool dispatch is registered via the legacy `Handler` node +
+        // HANDLES edge pattern; axum-style routes have no MCP tool semantics.
+        let handles = self.load_edges_multi(project, &["HANDLES"])?;
 
         // (d) Build tool → handler map.
         let mut tool_to_handler: std::collections::HashMap<String, (String, String)> =
@@ -334,9 +379,10 @@ impl<'a> ApiReviewer<'a> {
     fn load_routes(&self, project: &str) -> StorageResult<Vec<(String, String, String)>> {
         let escaped = escape_cypher_string(project);
         let mut out = Vec::new();
-        for label in &["Route", "Endpoint"] {
+        for label in ROUTE_LIKE_LABELS {
+            let safe_label = escape_identifier(label);
             let cypher = format!(
-                "MATCH (n:{label}) WHERE n.project = '{escaped}' \
+                "MATCH (n:{safe_label}) WHERE n.project = '{escaped}' \
                  RETURN n.id AS id, n.path AS path, n.httpMethod AS method;"
             );
             let rows = self.storage.query(&cypher)?;
@@ -353,27 +399,41 @@ impl<'a> ApiReviewer<'a> {
         Ok(out)
     }
 
-    /// Loads all `Handler` nodes for `project`.
+    /// Loads all handler-like nodes for `project`: legacy `Handler` nodes plus
+    /// `Function` nodes so that axum-style routes (where the handler is a
+    /// `Function` linked via `HANDLES_ROUTE` edges) are visible to
+    /// `route_map`/`api_impact`/`tool_map`.
+    ///
+    /// LadybugDB's Cypher subset does not support multi-label
+    /// `WHERE (n:A OR n:B)` expressions, so we issue one query per label and
+    /// merge in Rust — matching the pattern used by [`Self::load_routes`].
+    /// The label set is [`HANDLER_LIKE_LABELS`].
     ///
     /// Returns a `HashMap<id, name>`.
-    fn load_handlers(
+    fn load_handler_like_nodes(
         &self,
         project: &str,
     ) -> StorageResult<std::collections::HashMap<String, String>> {
         let escaped = escape_cypher_string(project);
-        let cypher = format!(
-            "MATCH (h:Handler) WHERE h.project = '{escaped}' \
-             RETURN h.id AS id, h.name AS name;"
-        );
-        let rows = self.storage.query(&cypher)?;
-        let mut map = std::collections::HashMap::with_capacity(rows.len());
-        for row in rows {
-            if row.len() < 2 {
-                continue;
+        let mut map = std::collections::HashMap::new();
+        // Query each label separately and merge; ids are unique across labels
+        // (FQN-based), so insertions never collide in practice.
+        for label in HANDLER_LIKE_LABELS {
+            let safe_label = escape_identifier(label);
+            let cypher = format!(
+                "MATCH (h:{safe_label}) WHERE h.project = '{escaped}' \
+                 RETURN h.id AS id, h.name AS name;"
+            );
+            let rows = self.storage.query(&cypher)?;
+            map.reserve(rows.len());
+            for row in rows {
+                if row.len() < 2 {
+                    continue;
+                }
+                let id = row[0].as_str().unwrap_or_default().to_string();
+                let name = row[1].as_str().unwrap_or_default().to_string();
+                map.insert(id, name);
             }
-            let id = row[0].as_str().unwrap_or_default().to_string();
-            let name = row[1].as_str().unwrap_or_default().to_string();
-            map.insert(id, name);
         }
         Ok(map)
     }
@@ -386,8 +446,9 @@ impl<'a> ApiReviewer<'a> {
         project: &str,
     ) -> StorageResult<std::collections::HashMap<String, String>> {
         let escaped = escape_cypher_string(project);
+        let safe_label = escape_identifier("Middleware");
         let cypher = format!(
-            "MATCH (m:Middleware) WHERE m.project = '{escaped}' \
+            "MATCH (m:{safe_label}) WHERE m.project = '{escaped}' \
              RETURN m.id AS id, m.name AS name;"
         );
         let rows = self.storage.query(&cypher)?;
@@ -408,8 +469,9 @@ impl<'a> ApiReviewer<'a> {
     /// Returns a vector of `(id, name)` tuples.
     fn load_tools(&self, project: &str) -> StorageResult<Vec<(String, String)>> {
         let escaped = escape_cypher_string(project);
+        let safe_label = escape_identifier("Tool");
         let cypher = format!(
-            "MATCH (t:Tool) WHERE t.project = '{escaped}' \
+            "MATCH (t:{safe_label}) WHERE t.project = '{escaped}' \
              RETURN t.id AS id, t.name AS name;"
         );
         let rows = self.storage.query(&cypher)?;
@@ -425,18 +487,91 @@ impl<'a> ApiReviewer<'a> {
         Ok(out)
     }
 
-    /// Loads `CodeRelation` edges of the given `edge_type` for `project`.
+    /// Finds the handler id for a specific endpoint/route via a targeted
+    /// `WHERE e.target = ...` query over the edge types in
+    /// [`HANDLER_LIKE_EDGE_TYPES`] (HANDLES + HANDLES_ROUTE). Hits the
+    /// `idx_rel_target` index added in v0.3.7 (perf-review C1).
+    ///
+    /// Returns the handler (source) id if a matching edge exists.
+    fn find_handler_for_target(
+        &self,
+        project: &str,
+        target_id: &str,
+    ) -> StorageResult<Option<String>> {
+        let escaped_project = escape_cypher_string(project);
+        let escaped_target = escape_cypher_string(target_id);
+        let in_list = HANDLER_LIKE_EDGE_TYPES
+            .iter()
+            .map(|t| format!("'{}'", escape_cypher_string(t)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.type IN [{in_list}] \
+             AND e.project = '{escaped_project}' AND e.target = '{escaped_target}' \
+             RETURN e.source AS source LIMIT 1;"
+        );
+        let rows = self.storage.query(&cypher)?;
+        if let Some(row) = rows.into_iter().next() {
+            if let Some(source) = row.first().and_then(|v| v.as_str()) {
+                return Ok(Some(source.to_string()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Finds all caller ids for a specific target via a targeted
+    /// `WHERE e.target = ...` query over `CALLS` edges.
+    ///
+    /// Returns a vector of caller (source) ids.
+    fn find_callers_of_target(&self, project: &str, target_id: &str) -> StorageResult<Vec<String>> {
+        let escaped_project = escape_cypher_string(project);
+        let escaped_target = escape_cypher_string(target_id);
+        let cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.type = 'CALLS' \
+             AND e.project = '{escaped_project}' AND e.target = '{escaped_target}' \
+             RETURN e.source AS source;"
+        );
+        let rows = self.storage.query(&cypher)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            if let Some(source) = row.first().and_then(|v| v.as_str()) {
+                out.push(source.to_string());
+            }
+        }
+        Ok(out)
+    }
+
+    /// Loads `CodeRelation` edges of any of the given `edge_types` for
+    /// `project`. Used by [`route_map`](Self::route_map) and
+    /// [`api_impact`](Self::api_impact) to merge legacy `HANDLES` edges
+    /// (Handler → Route/Tool) with axum `HANDLES_ROUTE` edges
+    /// (Function → Route) in a single call.
+    ///
+    /// Issues a single Cypher query with `WHERE e.type IN [...]` rather than
+    /// one query per edge type, matching the pattern in
+    /// `dead_code::load_outgoing_edges`.
     ///
     /// Returns a vector of `(source, target)` tuples.
-    fn load_edges(&self, project: &str, edge_type: &str) -> StorageResult<Vec<(String, String)>> {
+    fn load_edges_multi(
+        &self,
+        project: &str,
+        edge_types: &[&str],
+    ) -> StorageResult<Vec<(String, String)>> {
+        if edge_types.is_empty() {
+            return Ok(Vec::new());
+        }
         let escaped_project = escape_cypher_string(project);
-        let escaped_type = escape_cypher_string(edge_type);
+        let in_list = edge_types
+            .iter()
+            .map(|t| format!("'{}'", escape_cypher_string(t)))
+            .collect::<Vec<_>>()
+            .join(", ");
         let cypher = format!(
-            "MATCH (e:CodeRelation) WHERE e.type = '{escaped_type}' AND e.project = '{escaped_project}' \
+            "MATCH (e:CodeRelation) WHERE e.type IN [{in_list}] AND e.project = '{escaped_project}' \
              RETURN e.source AS source, e.target AS target;"
         );
         let rows = self.storage.query(&cypher)?;
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             if row.len() < 2 {
                 continue;
@@ -456,8 +591,9 @@ impl<'a> ApiReviewer<'a> {
         project: &str,
     ) -> StorageResult<Vec<(String, String, String)>> {
         let escaped = escape_cypher_string(project);
+        let safe_label = escape_identifier("Endpoint");
         let cypher = format!(
-            "MATCH (e:Endpoint) WHERE e.project = '{escaped}' \
+            "MATCH (e:{safe_label}) WHERE e.project = '{escaped}' \
              RETURN e.id AS id, e.path AS path, e.expectedSchema AS expected_schema;"
         );
         let rows = self.storage.query(&cypher)?;
@@ -474,56 +610,68 @@ impl<'a> ApiReviewer<'a> {
         Ok(out)
     }
 
-    /// Loads the `reason` field (actual schema) from `CALLS` edges pointing
-    /// to `target_id`.
-    fn load_edge_reason(
-        &self,
-        project: &str,
-        edge_type: &str,
-        target_id: &str,
-    ) -> StorageResult<Vec<String>> {
+    /// Loads all `CALLS` edges for `project` together with their `reason`
+    /// field (the actual schema). Used by [`shape_check`](Self::shape_check)
+    /// to build a `HashMap<target_id, Vec<reason>>` in one round-trip instead
+    /// of one Cypher query per endpoint × matching edge (perf-review H2).
+    ///
+    /// Returns a vector of `(target_id, reason)` tuples. Empty `reason`
+    /// values are preserved here; the caller filters them as needed.
+    fn load_calls_with_reason(&self, project: &str) -> StorageResult<Vec<(String, String)>> {
         let escaped_project = escape_cypher_string(project);
-        let escaped_type = escape_cypher_string(edge_type);
-        let escaped_target = escape_cypher_string(target_id);
         let cypher = format!(
-            "MATCH (e:CodeRelation) WHERE e.type = '{escaped_type}' AND e.project = '{escaped_project}' \
-             AND e.target = '{escaped_target}' RETURN e.reason AS reason;"
+            "MATCH (e:CodeRelation) WHERE e.type = 'CALLS' AND e.project = '{escaped_project}' \
+             RETURN e.target AS target, e.reason AS reason;"
         );
         let rows = self.storage.query(&cypher)?;
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(rows.len());
         for row in rows {
-            if let Some(reason) = row.first().and_then(|v| v.as_str()) {
-                if !reason.is_empty() {
-                    out.push(reason.to_string());
-                }
+            if row.len() < 2 {
+                continue;
             }
+            let target = row[0].as_str().unwrap_or_default().to_string();
+            let reason = row[1].as_str().unwrap_or_default().to_string();
+            out.push((target, reason));
         }
         Ok(out)
     }
 
-    /// Finds an `Endpoint` node by `path` or `name` for `project`.
+    /// Finds an `Endpoint` or `Route` node by `path` or `name` for `project`.
     ///
-    /// Returns the endpoint id if found.
+    /// Searches both labels (see [`ROUTE_LIKE_LABELS`]) so that `api_impact`
+    /// works for legacy `Endpoint` nodes (with `expectedSchema`) and axum
+    /// `Route` nodes (created by the axum route extractor).
+    ///
+    /// Returns the node id if found.
     fn find_endpoint(&self, project: &str, endpoint: &str) -> StorageResult<Option<String>> {
         let escaped_project = escape_cypher_string(project);
         let escaped_endpoint = escape_cypher_string(endpoint);
-        // Try by path first, then by name.
-        for field in &["path", "name"] {
-            let cypher = format!(
-                "MATCH (e:Endpoint) WHERE e.project = '{escaped_project}' \
-                 AND e.{field} = '{escaped_endpoint}' RETURN e.id AS id;"
-            );
-            let rows = self.storage.query(&cypher)?;
-            if let Some(row) = rows.into_iter().next() {
-                if let Some(id) = row.first().and_then(|v| v.as_str()) {
-                    return Ok(Some(id.to_string()));
+        // Try each label, then each field. Endpoint is checked first so that
+        // legacy endpoints with explicit schemas take precedence over axum
+        // routes when both happen to share a path.
+        for label in ROUTE_LIKE_LABELS {
+            let safe_label = escape_identifier(label);
+            for field in ENDPOINT_MATCH_FIELDS {
+                let safe_field = escape_identifier(field);
+                let cypher = format!(
+                    "MATCH (e:{safe_label}) WHERE e.project = '{escaped_project}' \
+                     AND e.{safe_field} = '{escaped_endpoint}' RETURN e.id AS id;"
+                );
+                let rows = self.storage.query(&cypher)?;
+                if let Some(row) = rows.into_iter().next() {
+                    if let Some(id) = row.first().and_then(|v| v.as_str()) {
+                        return Ok(Some(id.to_string()));
+                    }
                 }
             }
         }
         Ok(None)
     }
 
-    /// Loads the `path` of an `Endpoint` by `id`.
+    /// Loads the `path` of an `Endpoint` or `Route` node by `id`.
+    ///
+    /// Searches both labels (see [`ROUTE_LIKE_LABELS`]) so `api_impact` can
+    /// resolve the path of either legacy endpoints or axum routes.
     fn load_endpoint_path(
         &self,
         project: &str,
@@ -531,14 +679,17 @@ impl<'a> ApiReviewer<'a> {
     ) -> StorageResult<Option<String>> {
         let escaped_project = escape_cypher_string(project);
         let escaped_id = escape_cypher_string(endpoint_id);
-        let cypher = format!(
-            "MATCH (e:Endpoint) WHERE e.project = '{escaped_project}' \
-             AND e.id = '{escaped_id}' RETURN e.path AS path;"
-        );
-        let rows = self.storage.query(&cypher)?;
-        if let Some(row) = rows.into_iter().next() {
-            if let Some(path) = row.first().and_then(|v| v.as_str()) {
-                return Ok(Some(path.to_string()));
+        for label in ROUTE_LIKE_LABELS {
+            let safe_label = escape_identifier(label);
+            let cypher = format!(
+                "MATCH (e:{safe_label}) WHERE e.project = '{escaped_project}' \
+                 AND e.id = '{escaped_id}' RETURN e.path AS path;"
+            );
+            let rows = self.storage.query(&cypher)?;
+            if let Some(row) = rows.into_iter().next() {
+                if let Some(path) = row.first().and_then(|v| v.as_str()) {
+                    return Ok(Some(path.to_string()));
+                }
             }
         }
         Ok(None)
@@ -546,7 +697,11 @@ impl<'a> ApiReviewer<'a> {
 
     /// Loads caller info (name, filePath, startLine) for the given `caller_ids`.
     ///
-    /// Searches `Function`, `Method`, and `Handler` tables.
+    /// Searches the labels in [`CALLER_LIKE_LABELS`] (`Function`, `Method`,
+    /// `Handler`). The `caller_ids` slice is materialised into a `HashSet`
+    /// once so each per-row membership check is O(1) instead of the previous
+    /// `Vec::contains` O(N) scan (perf-review H1: bulwark-class graphs hit
+    /// this with 19k Function rows × 270 caller ids = 5M comparisons).
     fn load_caller_info(
         &self,
         project: &str,
@@ -555,11 +710,14 @@ impl<'a> ApiReviewer<'a> {
         if caller_ids.is_empty() {
             return Ok(Vec::new());
         }
+        let caller_set: std::collections::HashSet<&str> =
+            caller_ids.iter().map(String::as_str).collect();
         let escaped_project = escape_cypher_string(project);
         let mut out = Vec::new();
-        for table in &["Function", "Method", "Handler"] {
+        for table in CALLER_LIKE_LABELS {
+            let safe_table = escape_identifier(table);
             let cypher = format!(
-                "MATCH (n:{table}) WHERE n.project = '{escaped_project}' \
+                "MATCH (n:{safe_table}) WHERE n.project = '{escaped_project}' \
                  RETURN n.id AS id, n.name AS name, n.filePath AS file_path, n.startLine AS start_line;"
             );
             let rows = self.storage.query(&cypher)?;
@@ -567,8 +725,8 @@ impl<'a> ApiReviewer<'a> {
                 if row.len() < 4 {
                     continue;
                 }
-                let id = row[0].as_str().unwrap_or_default().to_string();
-                if !caller_ids.contains(&id) {
+                let id = row[0].as_str().unwrap_or_default();
+                if !caller_set.contains(id) {
                     continue;
                 }
                 let name = row[1].as_str().unwrap_or_default().to_string();
@@ -877,6 +1035,80 @@ mod tests {
         assert_eq!(result[0].path, "/api/users");
     }
 
+    // --- route_map: axum-style routes (Function + HANDLES_ROUTE + Route) ---
+
+    #[test]
+    fn route_map_lists_axum_routes_with_function_handlers() {
+        // axum extractor emits Route nodes + HANDLES_ROUTE edges with Function
+        // sources (not Handler nodes). route_map should resolve the Function
+        // name via load_handler_like_nodes and link it to the Route via
+        // HANDLES_ROUTE.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r1", "demo", "/api/users", "GET");
+        create_function(&kit, "h1", "demo", "list_users", "/src/api.rs", 10);
+        create_edge(&kit, "e1", "h1", "r1", "HANDLES_ROUTE", "demo");
+
+        let storage = storage(&kit);
+        let reviewer = ApiReviewer::new(&*storage);
+        let result = reviewer.route_map("demo").expect("route_map");
+        assert_eq!(result.len(), 1, "should have 1 axum route");
+        let entry = &result[0];
+        assert_eq!(entry.path, "/api/users");
+        assert_eq!(entry.method, "GET");
+        assert_eq!(entry.handler_id, "h1");
+        assert_eq!(entry.handler_name, "list_users");
+        assert!(entry.middleware.is_empty(), "no middleware for axum route");
+    }
+
+    #[test]
+    fn route_map_merges_legacy_handles_and_axum_handles_route_edges() {
+        // When a project has both legacy Handler+HANDLES routes and axum
+        // Function+HANDLES_ROUTE routes, route_map should list both.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Legacy route: Handler + HANDLES.
+        create_route(&kit, "r1", "demo", "/api/legacy", "GET");
+        create_handler(&kit, "h1", "demo", "legacy_handler");
+        create_edge(&kit, "e1", "h1", "r1", "HANDLES", "demo");
+        // axum route: Function + HANDLES_ROUTE.
+        create_route(&kit, "r2", "demo", "/api/axum", "POST");
+        create_function(&kit, "h2", "demo", "axum_handler", "/src/api.rs", 20);
+        create_edge(&kit, "e2", "h2", "r2", "HANDLES_ROUTE", "demo");
+
+        let storage = storage(&kit);
+        let reviewer = ApiReviewer::new(&*storage);
+        let result = reviewer.route_map("demo").expect("route_map");
+        assert_eq!(result.len(), 2, "should have 2 routes (legacy + axum)");
+        // Sorted by path.
+        assert_eq!(result[0].path, "/api/axum");
+        assert_eq!(result[0].handler_name, "axum_handler");
+        assert_eq!(result[1].path, "/api/legacy");
+        assert_eq!(result[1].handler_name, "legacy_handler");
+    }
+
+    #[test]
+    fn route_map_axum_route_without_function_handler_is_orphan() {
+        // A Route node with no HANDLES_ROUTE edge should still appear, but
+        // with empty handler fields (same behaviour as legacy orphan routes).
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r1", "demo", "/api/orphan", "GET");
+        // No Function node, no HANDLES_ROUTE edge.
+
+        let storage = storage(&kit);
+        let reviewer = ApiReviewer::new(&*storage);
+        let result = reviewer.route_map("demo").expect("route_map");
+        assert_eq!(result.len(), 1, "should have 1 route");
+        let entry = &result[0];
+        assert_eq!(entry.path, "/api/orphan");
+        assert!(entry.handler_id.is_empty(), "handler_id should be empty");
+        assert!(
+            entry.handler_name.is_empty(),
+            "handler_name should be empty"
+        );
+    }
+
     // --- shape_check tests ---
 
     #[test]
@@ -1131,6 +1363,93 @@ mod tests {
             .api_impact("demo", "users_api")
             .expect("api_impact");
         assert_eq!(result.len(), 1, "should find 1 caller by name match");
+    }
+
+    // --- api_impact: axum-style routes (Function + HANDLES_ROUTE + Route) ---
+
+    #[test]
+    fn api_impact_traces_callers_for_axum_route() {
+        // axum route: Route + Function (handler) + HANDLES_ROUTE edge.
+        // Caller calls the Function (not the Route) via a CALLS edge.
+        // api_impact should: find Route by path → find Function via
+        // HANDLES_ROUTE → find CALLS edges to the Function → return callers.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r1", "demo", "/api/users", "GET");
+        create_function(&kit, "h1", "demo", "list_users", "/src/api.rs", 10);
+        create_edge(&kit, "he1", "h1", "r1", "HANDLES_ROUTE", "demo");
+        // 2 callers calling the handler function.
+        create_function(&kit, "f1", "demo", "caller_a", "/src/a.rs", 5);
+        create_function(&kit, "f2", "demo", "caller_b", "/src/b.rs", 15);
+        create_edge(&kit, "ce1", "f1", "h1", "CALLS", "demo");
+        create_edge(&kit, "ce2", "f2", "h1", "CALLS", "demo");
+
+        let storage = storage(&kit);
+        let reviewer = ApiReviewer::new(&*storage);
+        let result = reviewer
+            .api_impact("demo", "/api/users")
+            .expect("api_impact");
+        assert_eq!(result.len(), 2, "should have 2 impact entries");
+        // Sorted by caller name.
+        assert_eq!(result[0].affected_caller, "caller_a");
+        assert_eq!(result[0].caller_file, "/src/a.rs");
+        assert_eq!(result[0].caller_line, 5);
+        assert_eq!(result[1].affected_caller, "caller_b");
+        assert_eq!(result[1].caller_file, "/src/b.rs");
+        assert_eq!(result[1].caller_line, 15);
+        // All entries should carry the route path.
+        for entry in &result {
+            assert_eq!(entry.endpoint, "/api/users");
+        }
+    }
+
+    #[test]
+    fn api_impact_axum_route_no_callers_returns_empty() {
+        // axum route with handler but no CALLS edges to the handler.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r1", "demo", "/api/users", "GET");
+        create_function(&kit, "h1", "demo", "list_users", "/src/api.rs", 10);
+        create_edge(&kit, "he1", "h1", "r1", "HANDLES_ROUTE", "demo");
+        // No CALLS edges to h1.
+
+        let storage = storage(&kit);
+        let reviewer = ApiReviewer::new(&*storage);
+        let result = reviewer
+            .api_impact("demo", "/api/users")
+            .expect("api_impact");
+        assert!(result.is_empty(), "no callers → no impact");
+    }
+
+    #[test]
+    fn api_impact_axum_route_not_found_returns_empty() {
+        // No Route or Endpoint matches the given path.
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r1", "demo", "/api/users", "GET");
+
+        let storage = storage(&kit);
+        let reviewer = ApiReviewer::new(&*storage);
+        let result = reviewer
+            .api_impact("demo", "/api/nonexistent")
+            .expect("api_impact");
+        assert!(result.is_empty(), "nonexistent route → no impact");
+    }
+
+    #[test]
+    fn api_impact_axum_route_without_handler_returns_empty() {
+        // Route exists but no HANDLES_ROUTE edge (orphan route).
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r1", "demo", "/api/users", "GET");
+        // No Function, no HANDLES_ROUTE edge.
+
+        let storage = storage(&kit);
+        let reviewer = ApiReviewer::new(&*storage);
+        let result = reviewer
+            .api_impact("demo", "/api/users")
+            .expect("api_impact");
+        assert!(result.is_empty(), "no handler → no impact");
     }
 
     // --- tool_map tests ---

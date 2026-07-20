@@ -45,6 +45,17 @@ const SYMBOL_LABELS: &[NodeLabel] = &[
     NodeLabel::Namespace,
 ];
 
+/// `match_reason` value emitted by the FTS extension path
+/// ([`rows_to_search_results`]). Distinguishes FTS hits from the structured
+/// search reasons (`exact name match` / `prefix match` / ...) emitted by
+/// `structured::search`.
+const MATCH_REASON_FTS: &str = "bm25 fts";
+
+/// `match_reason` value emitted by the CONTAINS fallback path
+/// ([`rows_to_search_results_bm25f`]). Distinguishes BM25F multi-field
+/// weighted hits from the single-field FTS extension hits.
+const MATCH_REASON_BM25F_WEIGHTED: &str = "bm25f weighted";
+
 /// FTS indexes on symbol `name` columns, created by
 /// [`crate::storage::schema::index_ddl`]. Each entry pairs the FTS index name
 /// with the [`NodeLabel`] used to tag search results.
@@ -348,6 +359,15 @@ fn build_contains_cypher(
 /// Used by the FTS extension path (4-column RETURN: `name`, `qn`, `filePath`,
 /// `line`). Scoring is single-field (name only) via [`relevance_score_with_reason`],
 /// since the LadybugDB FTS extension does not expose per-field weights.
+///
+/// The `match_reason` is set to [`MATCH_REASON_FTS`] (`"bm25 fts"`) to reflect
+/// that this is a fulltext-search result ranked by the FTS extension's BM25
+/// algorithm (the per-row `score` is a secondary name-relevance tiebreaker,
+/// not the primary ranking signal — the FTS extension already BM25-ranked the
+/// rows before yielding them). This fixes the bulwark regression where
+/// `search --fulltext true` reported `"prefix match"` / `"substring match"`
+/// in the `matchReason` field, misleading users into thinking the structured
+/// name-search path had been taken.
 fn rows_to_search_results(
     rows: Vec<Vec<serde_json::Value>>,
     label: NodeLabel,
@@ -363,7 +383,7 @@ fn rows_to_search_results(
                 .get(3)
                 .and_then(|v| v.as_i64())
                 .and_then(|i| u32::try_from(i).ok());
-            let (score, reason) = relevance_score_with_reason(&name, query);
+            let (score, _) = relevance_score_with_reason(&name, query);
             Some(SearchResult {
                 name,
                 label: label_str.clone(),
@@ -371,7 +391,7 @@ fn rows_to_search_results(
                 start_line,
                 qualified_name,
                 score,
-                match_reason: reason.to_string(),
+                match_reason: MATCH_REASON_FTS.to_string(),
                 degree: 0,
             })
         })
@@ -421,7 +441,7 @@ fn rows_to_search_results_bm25f(
                 start_line,
                 qualified_name,
                 score,
-                match_reason: "bm25f weighted".to_string(),
+                match_reason: MATCH_REASON_BM25F_WEIGHTED.to_string(),
                 degree: 0,
             })
         })
@@ -787,6 +807,31 @@ mod tests {
         let searcher = FullTextSearcher::new(repo.connection());
         let result = searcher.try_fts_search("parse", None, 100);
         assert!(result.is_err(), "try_fts_search should error without FTS");
+    }
+
+    #[test]
+    fn rows_to_search_results_sets_bm25_fts_match_reason() {
+        // B-bulwark-4: FTS path must report `"bm25 fts"` as the match reason,
+        // not `"prefix match"` / `"substring match"` (which belong to the
+        // structured name-search path). Calling `search --fulltext true` and
+        // seeing `prefix match` in the output misled users into thinking the
+        // structured path had been taken.
+        let rows = vec![vec![
+            serde_json::json!("parse_file"),
+            serde_json::json!("demo.parse_file"),
+            serde_json::json!("/a.rs"),
+            serde_json::json!(1),
+        ]];
+        let results = rows_to_search_results(rows, NodeLabel::Function, "parse");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "parse_file");
+        assert_eq!(
+            results[0].match_reason, "bm25 fts",
+            "FTS path must report 'bm25 fts', not structured-search reasons"
+        );
+        // Score is still computed (secondary tiebreaker), but the reason
+        // field must reflect the fulltext-search semantics.
+        assert!(results[0].score > 0.0);
     }
 
     #[test]

@@ -45,14 +45,33 @@ pub fn is_reserved_keyword(name: &str) -> bool {
 }
 
 /// Wraps `name` in backticks if it collides with a reserved keyword, otherwise
-/// returns it unchanged. Use this whenever a table or column name is spliced
+/// returns it borrowed. Use this whenever a table or column name is spliced
 /// into a Cypher statement.
+///
+/// # Security note (T202-B security-review LOW-1)
+///
+/// This function ONLY handles reserved-keyword escaping — it does NOT sanitise
+/// arbitrary user input. Callers MUST pass values that are known-safe
+/// identifiers (hard-coded constants, `NodeLabel::table_name()` results, or
+/// values from a fixed enum). Passing user-controlled strings here is a
+/// Cypher-injection risk: a malicious `name` containing backticks or single
+/// quotes would break out of the identifier context. For user-controlled
+/// string values, use [`escape_cypher_string`] inside a single-quoted literal
+/// instead.
+///
+/// # Performance
+///
+/// Returns [`Cow::Borrowed`] when no escaping is needed (the common case —
+/// only `MACRO` and `UNION` are reserved), avoiding a heap allocation per
+/// call. The previous `String` return forced `to_string()` on every
+/// non-keyword input (perf-review M1: ~12 wasted allocations per
+/// `route_map` call on bulwark-class graphs).
 #[must_use]
-pub fn escape_identifier(name: &str) -> String {
+pub fn escape_identifier(name: &str) -> std::borrow::Cow<'_, str> {
     if is_reserved_keyword(name) {
-        format!("`{name}`")
+        std::borrow::Cow::Owned(format!("`{name}`"))
     } else {
-        name.to_string()
+        std::borrow::Cow::Borrowed(name)
     }
 }
 
@@ -163,6 +182,14 @@ pub fn index_ddl() -> Vec<String> {
         "CREATE INDEX idx_var_global ON Variable(isGlobal);".to_string(),
         "CREATE INDEX idx_rel_type ON CodeRelation(type);".to_string(),
         "CREATE INDEX idx_rel_project ON CodeRelation(project);".to_string(),
+        // source/target indexes: targeted WHERE e.target = '...' / e.source = '...'
+        // queries (api_review::find_handler_for_target, find_callers_of_target,
+        // load_edge_reason, trace::graph_loader::fetch_edges_for_node) hit these
+        // instead of full-scanning the CodeRelation table. Without them, the
+        // bulwark-class graph (94k edges) turns every "targeted" lookup into a
+        // 60k+ row linear scan (perf-review C1).
+        "CREATE INDEX idx_rel_source ON CodeRelation(source);".to_string(),
+        "CREATE INDEX idx_rel_target ON CodeRelation(target);".to_string(),
         // --- FTS indexes (DDD §6): BM25 over symbol `content` columns ---
         "CREATE FTS INDEX fts_function_content ON Function(content);".to_string(),
         "CREATE FTS INDEX fts_class_content ON Class(content);".to_string(),
@@ -934,13 +961,16 @@ mod tests {
         assert!(indexes.iter().any(|s| s.contains("idx_var_global")));
         assert!(indexes.iter().any(|s| s.contains("idx_rel_type")));
         assert!(indexes.iter().any(|s| s.contains("idx_rel_project")));
+        assert!(indexes.iter().any(|s| s.contains("idx_rel_source")));
+        assert!(indexes.iter().any(|s| s.contains("idx_rel_target")));
     }
 
     #[test]
     fn index_ddl_count_matches_spec() {
         let indexes = index_ddl();
-        // 18 secondary indexes + 18 FTS indexes (3 content + 15 name) + 1 VECTOR index = 37
-        assert_eq!(indexes.len(), 37, "expected 37 index statements");
+        // 20 secondary indexes (18 + idx_rel_source + idx_rel_target)
+        // + 18 FTS indexes (3 content + 15 name) + 1 VECTOR index = 39
+        assert_eq!(indexes.len(), 39, "expected 39 index statements");
     }
 
     #[test]
@@ -1058,8 +1088,10 @@ mod tests {
     fn all_init_ddl_includes_node_tables_relation_embedding_and_indexes() {
         let ddl = all_init_ddl();
         // 44 node tables (incl. Embedding via ddl_for_label) + 1 relation
-        // + 37 indexes (18 secondary + 18 FTS + 1 VECTOR) = 82
-        assert_eq!(ddl.len(), 82, "expected 82 DDL statements total");
+        // + 39 indexes (20 secondary + 18 FTS + 1 VECTOR) = 84
+        // (v0.3.7: added idx_rel_source + idx_rel_target for targeted WHERE
+        // e.target/e.source lookups — perf-review C1)
+        assert_eq!(ddl.len(), 84, "expected 84 DDL statements total");
         assert!(ddl.iter().any(|s| s.contains("CREATE NODE TABLE Project")));
         assert!(ddl.iter().any(|s| s.contains("CodeRelation")));
         assert!(ddl.iter().any(|s| s.contains("Embedding")));
