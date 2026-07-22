@@ -46,24 +46,24 @@ Supports **21 languages** with the default `full` preset: C, Rust, Fortran, Pyth
 
 ## Key Features
 
-| Feature | Description |
-|---------|-------------|
-| Multi-language parsing | 21 languages (default `full` preset) via tree-sitter, trimmable with `lang-*` features |
-| Graph database | LadybugDB storage with 44 node types + 30 edge types |
-| Incremental indexing | SHA-256 file hash diffing, re-parses only changed files |
-| Parallel parsing | Rayon parallelism + thread-local parser pool |
-| RAM-first indexing | LZ4-compress source into memory, single `COPY FROM` dump (`--ram-first`) |
-| Symbol tracing | Bidirectional call (Calls) and data-flow (DataFlows) tracing |
-| Impact analysis | Change impact radius analysis, layered by depth |
-| Disambiguation | Ranked multi-match symbol resolution by confidence (auto-selects the unique match; errors if it cannot be disambiguated) |
-| Confidence tiers | Each edge carries a tier (SameFile / ImportScoped / Global) + 0.0-1.0 score |
-| Cross-language FFI | C-Fortran `bind(C)`, Rust `extern`, and other FFI call resolution |
-| Team artifacts | `export`/`import` compressed `.graph.zst` artifacts for sharing indexes |
-| Multi-agent MCP | `setup` auto-detects Claude Code/Cursor/Codex; `hook` emits PreToolUse/PostToolUse JSON; `mcp` stdio server |
-| File watching | Daemon mode with auto-incremental indexing (`daemon` feature) |
-| Vector embedding | Enabled-by-default semantic search (`embed` feature, included in `full` preset) |
-| Taint tracing | Cross-language multi-hop taint path tracing (`TaintPathTracer`, BFS over DataFlows/Reads/Writes/FfiCalls) |
-| Internationalization | Unicode case folding + NFC normalization (ICU4X, `i18n` feature, included in `full` preset) |
+| Feature                | Description                                                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Multi-language parsing | 21 languages (default `full` preset) via tree-sitter, trimmable with `lang-*` features                                   |
+| Graph database         | LadybugDB storage with 44 node types + 30 edge types                                                                     |
+| Incremental indexing   | SHA-256 file hash diffing, re-parses only changed files                                                                  |
+| Parallel parsing       | Rayon parallelism + thread-local parser pool                                                                             |
+| RAM-first indexing     | LZ4-compress source into memory, single `COPY FROM` dump (`--ram-first`)                                                 |
+| Symbol tracing         | Bidirectional call (Calls) and data-flow (DataFlows) tracing                                                             |
+| Impact analysis        | Change impact radius analysis, layered by depth                                                                          |
+| Disambiguation         | Ranked multi-match symbol resolution by confidence (auto-selects the unique match; errors if it cannot be disambiguated) |
+| Confidence tiers       | Each edge carries a tier (SameFile / ImportScoped / Global) + 0.0-1.0 score                                              |
+| Cross-language FFI     | C-Fortran `bind(C)`, Rust `extern`, and other FFI call resolution                                                        |
+| Team artifacts         | `export`/`import` compressed `.graph.zst` artifacts for sharing indexes                                                  |
+| Multi-agent MCP        | `setup` auto-detects Claude Code/Cursor/Codex; `hook` emits PreToolUse/PostToolUse JSON; `mcp` stdio server              |
+| File watching          | Daemon mode with auto-incremental indexing (`daemon` feature)                                                            |
+| Vector embedding       | Enabled-by-default semantic search (`embed` feature, included in `full` preset)                                          |
+| Taint tracing          | Cross-language multi-hop taint path tracing (`TaintPathTracer`, BFS over DataFlows/Reads/Writes/FfiCalls)                |
+| Internationalization   | Unicode case folding + NFC normalization (ICU4X, `i18n` feature, included in `full` preset)                              |
 
 ## Installation
 
@@ -83,48 +83,54 @@ cargo build --release
 cargo build --release --features mcp
 ```
 
+> **Link error on openEuler / CentOS (GCC ≤ 12)?** The default install downloads a prebuilt LadybugDB binary that requires a newer `libstdc++`. If linking fails with `undefined symbol: std::to_chars(..., _Float128, ...)`, force a source build (requires `cmake`):
+>
+> ```bash
+> LBUG_BUILD_FROM_SOURCE=1 cargo install codenexus
+> ```
+
 ### Feature Flags
 
 **Preset**: `default = ["full"]`
 
-| Feature | Default | Description |
-|---------|---------|-------------|
-| `minimal` | — | Minimal preset: `lang-rust` only |
-| `core` | — | Core preset: `lang-c` + `lang-rust` + `lang-python` |
-| `full` | enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/lsp/cli/mcp/cache/embed/i18n |
-| `lang-c` | — | C language parser (tree-sitter-c) |
-| `lang-rust` | enabled | Rust language parser (tree-sitter-rust) |
-| `lang-fortran` | — | Fortran language parser (tree-sitter-fortran) |
-| `lang-python` | — | Python language parser (tree-sitter-python) |
-| `lang-typescript` | — | TypeScript language parser (tree-sitter-typescript) |
-| `lang-go` | — | Go language parser (tree-sitter-go) |
-| `lang-java` | — | Java language parser (tree-sitter-java) |
-| `lang-cpp` | — | C++ language parser (tree-sitter-cpp) |
-| `lang-javascript` | — | JavaScript language parser (tree-sitter-javascript) |
-| `lang-ruby` | — | Ruby language parser (tree-sitter-ruby) |
-| `lang-haskell` | — | Haskell language parser (tree-sitter-haskell) |
-| `lang-ocaml` | — | OCaml language parser (tree-sitter-ocaml) |
-| `lang-scala` | — | Scala language parser (tree-sitter-scala) |
-| `lang-php` | — | PHP language parser (tree-sitter-php) |
-| `lang-csharp` | — | C# language parser (tree-sitter-c-sharp) |
-| `lang-bash` | — | Bash language parser (tree-sitter-bash) |
-| `lang-html` | — | HTML language parser (tree-sitter-html) |
-| `lang-css` | — | CSS language parser (tree-sitter-css) |
-| `lang-json` | — | JSON language parser (tree-sitter-json) |
-| `lang-regex` | — | Regex language parser (tree-sitter-regex) |
-| `lang-verilog` | — | Verilog language parser (tree-sitter-verilog) |
-| `daemon` | enabled | File-watching daemon (notify + notify-debouncer-full) |
-| `embed` | enabled | Vector embedding semantic search (reqwest HTTP + local ONNX inference) |
-| `lsp` | enabled | LSP-enhanced extraction (7 LSP clients: Rust rust-analyzer, Python pyright, C/C++ clangd, Go gopls, TypeScript ts-lang-server, Fortran fortls, Java jdtls) |
-| `analysis` | enabled | Dead code detection + architecture overview (pure Cypher aggregation) |
-| `complexity` | enabled | AST complexity analysis (cyclomatic/cognitive/nesting/length/Halstead/maintainability/time/space, depends on `analysis`) |
-| `api-review` | enabled | API review toolkit (route_map/shape_check/api_impact/tool_map) |
-| `community` | enabled | Community detection (Leiden modularity optimization, depends on petgraph) |
-| `cross-service` | enabled | Cross-service call chain detection (HTTP route pattern matching) |
-| `mcp` | enabled | MCP server via sdforge `mcp` stdio transport |
-| `cli` | enabled | CLI binary (sdforge `cli` transport; required by the binary) |
-| `cache` | enabled | Query result caching (oxcache) |
-| `i18n` | enabled | Unicode case folding + NFC normalization (ICU4X, included in `full` preset) |
+| Feature           | Default | Description                                                                                                                                                                                                                   |
+| ----------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `minimal`         | —       | Minimal preset: `lang-rust` only                                                                                                                                                                                              |
+| `core`            | —       | Core preset: `lang-c` + `lang-rust` + `lang-python`                                                                                                                                                                           |
+| `full`            | enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/lsp/cli/mcp/cache/embed/i18n |
+| `lang-c`          | —       | C language parser (tree-sitter-c)                                                                                                                                                                                             |
+| `lang-rust`       | enabled | Rust language parser (tree-sitter-rust)                                                                                                                                                                                       |
+| `lang-fortran`    | —       | Fortran language parser (tree-sitter-fortran)                                                                                                                                                                                 |
+| `lang-python`     | —       | Python language parser (tree-sitter-python)                                                                                                                                                                                   |
+| `lang-typescript` | —       | TypeScript language parser (tree-sitter-typescript)                                                                                                                                                                           |
+| `lang-go`         | —       | Go language parser (tree-sitter-go)                                                                                                                                                                                           |
+| `lang-java`       | —       | Java language parser (tree-sitter-java)                                                                                                                                                                                       |
+| `lang-cpp`        | —       | C++ language parser (tree-sitter-cpp)                                                                                                                                                                                         |
+| `lang-javascript` | —       | JavaScript language parser (tree-sitter-javascript)                                                                                                                                                                           |
+| `lang-ruby`       | —       | Ruby language parser (tree-sitter-ruby)                                                                                                                                                                                       |
+| `lang-haskell`    | —       | Haskell language parser (tree-sitter-haskell)                                                                                                                                                                                 |
+| `lang-ocaml`      | —       | OCaml language parser (tree-sitter-ocaml)                                                                                                                                                                                     |
+| `lang-scala`      | —       | Scala language parser (tree-sitter-scala)                                                                                                                                                                                     |
+| `lang-php`        | —       | PHP language parser (tree-sitter-php)                                                                                                                                                                                         |
+| `lang-csharp`     | —       | C# language parser (tree-sitter-c-sharp)                                                                                                                                                                                      |
+| `lang-bash`       | —       | Bash language parser (tree-sitter-bash)                                                                                                                                                                                       |
+| `lang-html`       | —       | HTML language parser (tree-sitter-html)                                                                                                                                                                                       |
+| `lang-css`        | —       | CSS language parser (tree-sitter-css)                                                                                                                                                                                         |
+| `lang-json`       | —       | JSON language parser (tree-sitter-json)                                                                                                                                                                                       |
+| `lang-regex`      | —       | Regex language parser (tree-sitter-regex)                                                                                                                                                                                     |
+| `lang-verilog`    | —       | Verilog language parser (tree-sitter-verilog)                                                                                                                                                                                 |
+| `daemon`          | enabled | File-watching daemon (notify + notify-debouncer-full)                                                                                                                                                                         |
+| `embed`           | enabled | Vector embedding semantic search (reqwest HTTP + local ONNX inference)                                                                                                                                                        |
+| `lsp`             | enabled | LSP-enhanced extraction (7 LSP clients: Rust rust-analyzer, Python pyright, C/C++ clangd, Go gopls, TypeScript ts-lang-server, Fortran fortls, Java jdtls)                                                                    |
+| `analysis`        | enabled | Dead code detection + architecture overview (pure Cypher aggregation)                                                                                                                                                         |
+| `complexity`      | enabled | AST complexity analysis (cyclomatic/cognitive/nesting/length/Halstead/maintainability/time/space, depends on `analysis`)                                                                                                      |
+| `api-review`      | enabled | API review toolkit (route_map/shape_check/api_impact/tool_map)                                                                                                                                                                |
+| `community`       | enabled | Community detection (Leiden modularity optimization, depends on petgraph)                                                                                                                                                     |
+| `cross-service`   | enabled | Cross-service call chain detection (HTTP route pattern matching)                                                                                                                                                              |
+| `mcp`             | enabled | MCP server via sdforge `mcp` stdio transport                                                                                                                                                                                  |
+| `cli`             | enabled | CLI binary (sdforge `cli` transport; required by the binary)                                                                                                                                                                  |
+| `cache`           | enabled | Query result caching (oxcache)                                                                                                                                                                                                |
+| `i18n`            | enabled | Unicode case folding + NFC normalization (ICU4X, included in `full` preset)                                                                                                                                                   |
 
 > **Logging**: inklog is the sole logging backend (console + file rotation + daily rotation + LZ4 compression); the tracing-subscriber optional backend is no longer available.
 
@@ -217,36 +223,36 @@ codenexus architecture --project myproject
 
 ## [CLI Commands](#cli-commands)
 
-| Command | Description |
-|---------|-------------|
-| `index` | Index a codebase into the knowledge graph (`--ram-first` for LZ4 in-memory) |
-| `query` | Execute a Cypher query |
-| `trace` | Trace a symbol's call/data-flow paths (`--symbol`/`--trace_type`/`--depth`/`--path_filter`/`--detect_cycles`/`--cross_service`) |
-| `impact` | Analyze the impact radius of changing a symbol (`--edge-types`/`--max-depth`/`--include-tests` multi-dimensional + `risk_assessment`) |
-| `search` | Search symbols by name or content (`--mode` exact/regex/fuzzy/graph/multi; `--fulltext` BM25; `--project` filter) |
-| `context` | 360° symbol view (`--project`/`--enhanced` multi-dimensional SymbolContext) |
-| `detect_changes` | Git diff → affected symbols + risk_level |
-| `rename` | Graph-edits for high-confidence + text-search edits (`--from`/`--to`/`--path`; `--apply false` = dry-run) |
-| `export` | Export LadybugDB dump → zstd artifact (`--output`; `--project` optional; DB via global `--db`) |
-| `import` | Import artifact → LadybugDB (`--input`; `--reindex` with `--path`/`--name` for local diff) |
-| `setup` | Auto-detect installed agents (Claude Code/Cursor/Codex) and write MCP config |
-| `hook` | Emit PreToolUse/PostToolUse JSON (exit 0, never blocks) |
-| `mcp` | stdio MCP server (JSON-RPC 2.0, protocol 2024-11-05) |
-| `daemon` | Start the file-watching daemon |
-| `status` | Show indexing status |
-| `list` | List all indexed projects |
-| `clean` | Remove a project and its index |
-| `dead_code` | Dead code detection (9 edge types + FFI/export + High/Medium/Low confidence, `analysis` feature) |
-| `architecture` | Architecture overview (module boundaries + dependency directions + layers + cross-service deps, `analysis` feature) |
-| `complexity` | AST complexity analysis (8 metrics + configurable thresholds, `complexity` feature) |
-| `route_map` | HTTP route mapping (API endpoint inventory, `api-review` feature) |
-| `shape_check` | API shape check (request/response structure validation, `api-review` feature) |
-| `api_impact` | API change impact analysis (`api-review` feature) |
-| `tool_map` | Tool mapping (MCP tool inventory, `api-review` feature) |
-| `community` | Community detection (Leiden modularity optimization, `community` feature) |
-| `cross_service` | Cross-service call chain detection (HTTP REST/gRPC/GraphQL/message queue/event bus, `cross-service` feature) |
-| `lsp_goto_def` | LSP go-to-definition (rust-analyzer integration, `lsp` feature) |
-| `lsp_hover` | LSP hover info (rust-analyzer integration, `lsp` feature) |
+| Command          | Description                                                                                                                           |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `index`          | Index a codebase into the knowledge graph (`--ram-first` for LZ4 in-memory)                                                           |
+| `query`          | Execute a Cypher query                                                                                                                |
+| `trace`          | Trace a symbol's call/data-flow paths (`--symbol`/`--trace_type`/`--depth`/`--path_filter`/`--detect_cycles`/`--cross_service`)       |
+| `impact`         | Analyze the impact radius of changing a symbol (`--edge-types`/`--max-depth`/`--include-tests` multi-dimensional + `risk_assessment`) |
+| `search`         | Search symbols by name or content (`--mode` exact/regex/fuzzy/graph/multi; `--fulltext` BM25; `--project` filter)                     |
+| `context`        | 360° symbol view (`--project`/`--enhanced` multi-dimensional SymbolContext)                                                           |
+| `detect_changes` | Git diff → affected symbols + risk_level                                                                                              |
+| `rename`         | Graph-edits for high-confidence + text-search edits (`--from`/`--to`/`--path`; `--apply false` = dry-run)                             |
+| `export`         | Export LadybugDB dump → zstd artifact (`--output`; `--project` optional; DB via global `--db`)                                        |
+| `import`         | Import artifact → LadybugDB (`--input`; `--reindex` with `--path`/`--name` for local diff)                                            |
+| `setup`          | Auto-detect installed agents (Claude Code/Cursor/Codex) and write MCP config                                                          |
+| `hook`           | Emit PreToolUse/PostToolUse JSON (exit 0, never blocks)                                                                               |
+| `mcp`            | stdio MCP server (JSON-RPC 2.0, protocol 2024-11-05)                                                                                  |
+| `daemon`         | Start the file-watching daemon                                                                                                        |
+| `status`         | Show indexing status                                                                                                                  |
+| `list`           | List all indexed projects                                                                                                             |
+| `clean`          | Remove a project and its index                                                                                                        |
+| `dead_code`      | Dead code detection (9 edge types + FFI/export + High/Medium/Low confidence, `analysis` feature)                                      |
+| `architecture`   | Architecture overview (module boundaries + dependency directions + layers + cross-service deps, `analysis` feature)                   |
+| `complexity`     | AST complexity analysis (8 metrics + configurable thresholds, `complexity` feature)                                                   |
+| `route_map`      | HTTP route mapping (API endpoint inventory, `api-review` feature)                                                                     |
+| `shape_check`    | API shape check (request/response structure validation, `api-review` feature)                                                         |
+| `api_impact`     | API change impact analysis (`api-review` feature)                                                                                     |
+| `tool_map`       | Tool mapping (MCP tool inventory, `api-review` feature)                                                                               |
+| `community`      | Community detection (Leiden modularity optimization, `community` feature)                                                             |
+| `cross_service`  | Cross-service call chain detection (HTTP REST/gRPC/GraphQL/message queue/event bus, `cross-service` feature)                          |
+| `lsp_goto_def`   | LSP go-to-definition (rust-analyzer integration, `lsp` feature)                                                                       |
+| `lsp_hover`      | LSP hover info (rust-analyzer integration, `lsp` feature)                                                                             |
 
 ## [Complexity Analysis](#complexity-analysis)
 
@@ -254,46 +260,46 @@ The `complexity` subcommand computes AST complexity metrics for every function i
 
 ### Metrics
 
-| Metric | Field | Description |
-|--------|-------|-------------|
-| Cyclomatic | `cyclomatic` | McCabe 1976 — branch nodes + explicit exits (return/break/continue) + logical operators |
-| Cognitive | `cognitive` | Nesting-weighted SonarQube-style complexity |
-| Nesting depth | `nesting_depth` | Maximum branch-node nesting depth |
-| Function length | `function_length` | End line − start line + 1 |
-| Halstead | `halstead` | Halstead 1977: `n1/n2/N1/N2/volume/difficulty/effort/delivered_bugs` |
-| Maintainability Index | `maintainability_index` | Microsoft 2007 revision, 0-100 (higher = better) |
-| Time complexity | `time_complexity` | AST-pattern estimate: O(1)/O(log n)/O(n)/O(n log n)/O(n^2)/O(n^3)/O(2^n) |
-| Space complexity | `space_complexity` | Allocation-pattern recognition: O(1)/O(n)/O(n^2) |
+| Metric                | Field                   | Description                                                                             |
+| --------------------- | ----------------------- | --------------------------------------------------------------------------------------- |
+| Cyclomatic            | `cyclomatic`            | McCabe 1976 — branch nodes + explicit exits (return/break/continue) + logical operators |
+| Cognitive             | `cognitive`             | Nesting-weighted SonarQube-style complexity                                             |
+| Nesting depth         | `nesting_depth`         | Maximum branch-node nesting depth                                                       |
+| Function length       | `function_length`       | End line − start line + 1                                                               |
+| Halstead              | `halstead`              | Halstead 1977: `n1/n2/N1/N2/volume/difficulty/effort/delivered_bugs`                    |
+| Maintainability Index | `maintainability_index` | Microsoft 2007 revision, 0-100 (higher = better)                                        |
+| Time complexity       | `time_complexity`       | AST-pattern estimate: O(1)/O(log n)/O(n)/O(n log n)/O(n^2)/O(n^3)/O(2^n)                |
+| Space complexity      | `space_complexity`      | Allocation-pattern recognition: O(1)/O(n)/O(n^2)                                        |
 
 Each metric is classified Green / Yellow / Red / Critical against thresholds; `overall_severity` is the maximum.
 
 ### Threshold CLI flags
 
-| Flag | Description |
-|------|-------------|
-| `--cyclomatic_green <N>` / `--cyclomatic_yellow <N>` / `--cyclomatic_red <N>` | Cyclomatic thresholds |
-| `--cognitive_green <N>` / `--cognitive_yellow <N>` / `--cognitive_red <N>` | Cognitive thresholds |
-| `--nesting_green <N>` / `--nesting_yellow <N>` / `--nesting_red <N>` | Nesting depth thresholds |
-| `--func_length_green <N>` / `--func_length_yellow <N>` / `--func_length_red <N>` | Function length thresholds |
-| `--halstead_volume_green <N>` / `--halstead_volume_yellow <N>` / `--halstead_volume_red <N>` | Halstead volume thresholds |
-| `--maintainability_green <N>` / `--maintainability_yellow <N>` / `--maintainability_red <N>` | Maintainability Index thresholds (higher = better) |
-| `--time_complexity_green <O(...)>` / `--time_complexity_yellow <O(...)>` / `--time_complexity_red <O(...)>` | Time complexity thresholds |
-| `--space_complexity_yellow <O(...)>` / `--space_complexity_red <O(...)>` | Space complexity thresholds (3-level, no Critical) |
+| Flag                                                                                                        | Description                                        |
+| ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `--cyclomatic_green <N>` / `--cyclomatic_yellow <N>` / `--cyclomatic_red <N>`                               | Cyclomatic thresholds                              |
+| `--cognitive_green <N>` / `--cognitive_yellow <N>` / `--cognitive_red <N>`                                  | Cognitive thresholds                               |
+| `--nesting_green <N>` / `--nesting_yellow <N>` / `--nesting_red <N>`                                        | Nesting depth thresholds                           |
+| `--func_length_green <N>` / `--func_length_yellow <N>` / `--func_length_red <N>`                            | Function length thresholds                         |
+| `--halstead_volume_green <N>` / `--halstead_volume_yellow <N>` / `--halstead_volume_red <N>`                | Halstead volume thresholds                         |
+| `--maintainability_green <N>` / `--maintainability_yellow <N>` / `--maintainability_red <N>`                | Maintainability Index thresholds (higher = better) |
+| `--time_complexity_green <O(...)>` / `--time_complexity_yellow <O(...)>` / `--time_complexity_red <O(...)>` | Time complexity thresholds                         |
+| `--space_complexity_yellow <O(...)>` / `--space_complexity_red <O(...)>`                                    | Space complexity thresholds (3-level, no Critical) |
 
 `<O(...)>` values: time `O(1)` / `O(log n)` / `O(n)` / `O(n log n)` / `O(n^2)` / `O(n^3)` / `O(2^n)`, space `O(1)` / `O(n)` / `O(n^2)`. Unset flags fall back to defaults.
 
 ### Default thresholds
 
-| Metric | Green | Yellow | Red |
-|--------|-------|--------|-----|
-| cyclomatic | 10 | 20 | 25 |
-| cognitive | 10 | 15 | 20 |
-| nesting | 3 | 5 | 6 |
-| func_length | 30 | 100 | 200 |
-| halstead_volume | 100 | 1000 | 8000 |
-| maintainability | 85 | 65 | 25 |
-| time_complexity | O(log n) | O(n) | O(n^2) |
-| space_complexity | — | O(1) | O(n) |
+| Metric           | Green    | Yellow | Red    |
+| ---------------- | -------- | ------ | ------ |
+| cyclomatic       | 10       | 20     | 25     |
+| cognitive        | 10       | 15     | 20     |
+| nesting          | 3        | 5      | 6      |
+| func_length      | 30       | 100    | 200    |
+| halstead_volume  | 100      | 1000   | 8000   |
+| maintainability  | 85       | 65     | 25     |
+| time_complexity  | O(log n) | O(n)   | O(n^2) |
+| space_complexity | —        | O(1)   | O(n)   |
 
 > `maintainability` is inverted: MI higher = better, so `value >= green → Green`, `value >= yellow → Yellow`, `value >= red → Red`, else `Critical`. `space_complexity` has only 3 levels (Green/Yellow/Red), no Critical.
 
@@ -321,15 +327,15 @@ The `dead_code` subcommand identifies dead code via a worklist reachability prop
 
 Detection is controlled by `DeadCodeConfig` (surfaced via service-layer CLI flags). Key fields:
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `entry_patterns` | `["main", "Main", "__main__", "wmain", "WinMain", "DLLMain"]` | Glob patterns for entry function names; matched Functions are live seeds |
-| `test_patterns` | 8 entries: `test_*` / `*_test` / `*_spec` / `it_*` / `sec_*` / `snap_*` / `perf_*` / `bench_*` | Glob patterns for test function names; matched Functions are live seeds |
-| `attribute_entries` | 6 entries: `#[tool` / `#[forge` / `#[tokio::main` / `#[rocket::main` / `#[actix::main` / `#[axum::main` | Substring match against the function `signature`; on hit the function is treated as a macro-synthesised entry (tree-sitter does not expand macros, so the CALLS edge is invisible). `#[test]` / `#[bench]` are covered by `test_patterns` name-globs, so they are intentionally absent from `attribute_entries` |
-| `check_dynamic_dispatch` | `true` | Detect `#<TypeName>` disambiguator in `qualified_name` (e.g. `fmt#Display`); on hit the function is treated as a trait impl method (vtable dynamic dispatch, no static CALLS edge) and excluded from dead-code. Set `false` for conservative mode |
-| `check_exported` | `true` | `isExported=true` Functions/Methods are treated as externally visible and excluded |
-| `check_ffi` | `true` | Functions whose signature contains `extern "C"` / `#[no_mangle]` are treated as FFI entry points and excluded |
-| `edge_types` | `CALLS` / `FfiCalls` / `Implements` / `Usage` / `Tests` / `UsesType` / `HttpCalls` / `AsyncCalls` | Edge-type whitelist participating in reachability propagation |
+| Field                    | Default                                                                                                 | Description                                                                                                                                                                                                                                                                                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `entry_patterns`         | `["main", "Main", "__main__", "wmain", "WinMain", "DLLMain"]`                                           | Glob patterns for entry function names; matched Functions are live seeds                                                                                                                                                                                                                                        |
+| `test_patterns`          | 8 entries: `test_*` / `*_test` / `*_spec` / `it_*` / `sec_*` / `snap_*` / `perf_*` / `bench_*`          | Glob patterns for test function names; matched Functions are live seeds                                                                                                                                                                                                                                         |
+| `attribute_entries`      | 6 entries: `#[tool` / `#[forge` / `#[tokio::main` / `#[rocket::main` / `#[actix::main` / `#[axum::main` | Substring match against the function `signature`; on hit the function is treated as a macro-synthesised entry (tree-sitter does not expand macros, so the CALLS edge is invisible). `#[test]` / `#[bench]` are covered by `test_patterns` name-globs, so they are intentionally absent from `attribute_entries` |
+| `check_dynamic_dispatch` | `true`                                                                                                  | Detect `#<TypeName>` disambiguator in `qualified_name` (e.g. `fmt#Display`); on hit the function is treated as a trait impl method (vtable dynamic dispatch, no static CALLS edge) and excluded from dead-code. Set `false` for conservative mode                                                               |
+| `check_exported`         | `true`                                                                                                  | `isExported=true` Functions/Methods are treated as externally visible and excluded                                                                                                                                                                                                                              |
+| `check_ffi`              | `true`                                                                                                  | Functions whose signature contains `extern "C"` / `#[no_mangle]` are treated as FFI entry points and excluded                                                                                                                                                                                                   |
+| `edge_types`             | `CALLS` / `FfiCalls` / `Implements` / `Usage` / `Tests` / `UsesType` / `HttpCalls` / `AsyncCalls`       | Edge-type whitelist participating in reachability propagation                                                                                                                                                                                                                                                   |
 
 ### Examples
 
@@ -417,25 +423,25 @@ graph TB
 
 The default `full` preset compiles **21 languages**. The table below lists the core 8; `full` additionally enables JavaScript, Ruby, Haskell, OCaml, Scala, PHP, C#, Bash, HTML, CSS, JSON, Regex, and Verilog.
 
-| Language | Node Types | Edge Types |
-|----------|------------|------------|
-| C | Function, GlobalVar, Struct, Enum, Typedef, Macro | Calls, Imports, Reads, Writes, Includes |
-| Rust | Function, Struct, Enum, Trait, Impl, Const, Static, Macro, Module, TypeAlias | Calls, Imports, Reads, Writes |
-| Fortran | Module, Function | Calls, Imports, FfiCalls |
-| Python | Function, Method, Class | Calls, Imports, Extends |
-| TypeScript | Function, Class, Method, Interface, Enum, TypeAlias, Const | Calls, Imports |
-| Go | Function, Method, Struct, Interface, TypeAlias | Defines, Calls, Imports |
-| Java | Class, Interface, Enum, Method | Defines, Calls, Imports |
-| C++ | Function, Method, Class, Struct, Namespace, Enum, Template | Defines, Calls, Imports |
+| Language   | Node Types                                                                   | Edge Types                              |
+| ---------- | ---------------------------------------------------------------------------- | --------------------------------------- |
+| C          | Function, GlobalVar, Struct, Enum, Typedef, Macro                            | Calls, Imports, Reads, Writes, Includes |
+| Rust       | Function, Struct, Enum, Trait, Impl, Const, Static, Macro, Module, TypeAlias | Calls, Imports, Reads, Writes           |
+| Fortran    | Module, Function                                                             | Calls, Imports, FfiCalls                |
+| Python     | Function, Method, Class                                                      | Calls, Imports, Extends                 |
+| TypeScript | Function, Class, Method, Interface, Enum, TypeAlias, Const                   | Calls, Imports                          |
+| Go         | Function, Method, Struct, Interface, TypeAlias                               | Defines, Calls, Imports                 |
+| Java       | Class, Interface, Enum, Method                                               | Defines, Calls, Imports                 |
+| C++        | Function, Method, Class, Struct, Namespace, Enum, Template                   | Defines, Calls, Imports                 |
 
 ## Configuration
 
 CodeNexus is a CLI tool and is configured primarily through command-line flags. A small number of environment variables are honored:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RUST_LOG` | `info` | `tracing` log level (`error`/`warn`/`info`/`debug`/`trace`), supports `codenexus=debug` style filtering. |
-| `CODENEXUS_DB_PATH` | `./codenexus.lbug` | Default LadybugDB database path used when `--db` is not passed to `index`/`query`/`status`/etc. |
+| Variable            | Default            | Description                                                                                              |
+| ------------------- | ------------------ | -------------------------------------------------------------------------------------------------------- |
+| `RUST_LOG`          | `info`             | `tracing` log level (`error`/`warn`/`info`/`debug`/`trace`), supports `codenexus=debug` style filtering. |
+| `CODENEXUS_DB_PATH` | `./codenexus.lbug` | Default LadybugDB database path used when `--db` is not passed to `index`/`query`/`status`/etc.          |
 
 See [`.env.example`](.env.example) for a copy-paste template. CodeNexus does not read a `.env` file itself; that file is for shells or process managers.
 
