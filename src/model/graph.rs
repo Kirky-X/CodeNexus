@@ -141,6 +141,49 @@ impl Graph {
         self.edges.len()
     }
 
+    /// Iterates over all nodes in the graph (L3 of the memory-overflow fix).
+    ///
+    /// Replaces the `all_nodes: Vec<Node>` duplicate previously held in
+    /// [`ScopeOutput`](crate::index::ScopeOutput) /
+    /// [`ResolveOutput`](crate::index::ResolveOutput). Callers that
+    /// previously consumed `&all_nodes` now consume `graph.nodes_view()`,
+    /// eliminating one of the 4-5 copies of the same node set.
+    ///
+    /// Iteration order is the HashMap's unspecified order; callers that need
+    /// determinism should use [`nodes_by_label`](Self::nodes_by_label) or
+    /// [`nodes_by_project`](Self::nodes_by_project) which sort by id.
+    pub fn nodes_view(&self) -> impl Iterator<Item = &Node> {
+        self.nodes.values()
+    }
+
+    /// Iterates over all edges in the graph in insertion order (L3 of the
+    /// memory-overflow fix).
+    ///
+    /// Replaces the `all_edges: Vec<Edge>` duplicate previously held in
+    /// [`ScopeOutput`](crate::index::ScopeOutput) /
+    /// [`ResolveOutput`](crate::index::ResolveOutput).
+    pub fn edges_view(&self) -> impl Iterator<Item = &Edge> {
+        self.edges.iter()
+    }
+
+    /// Mutates every node with the given `label` via `f` (L3 of the
+    /// memory-overflow fix).
+    ///
+    /// Used by [`ResolvePhase`](crate::index::ResolvePhase) to rewrite
+    /// `file_path` on `Parameter` / `Variable` nodes in place, instead of
+    /// cloning them into a separate `all_nodes: Vec<Node>` and rewriting
+    /// the clones.
+    pub fn for_each_node_with_label_mut<F>(&mut self, label: NodeLabel, mut f: F)
+    where
+        F: FnMut(&mut Node),
+    {
+        for node in self.nodes.values_mut() {
+            if node.label == label {
+                f(node);
+            }
+        }
+    }
+
     /// Returns all outgoing edges from `id`, in insertion order.
     #[must_use]
     pub fn edges_from(&self, id: &NodeId) -> Vec<&Edge> {
@@ -481,6 +524,91 @@ mod tests {
     fn nodes_by_label_empty_for_empty_graph() {
         let g = Graph::new();
         assert!(g.nodes_by_label(NodeLabel::Function).is_empty());
+    }
+
+    // --- nodes_view (L3 memory-overflow fix) ---
+
+    #[test]
+    fn nodes_view_returns_all_nodes() {
+        let mut g = Graph::new();
+        g.add_node(make_node("f1", NodeLabel::Function, "f1", "proj"));
+        g.add_node(make_node("s1", NodeLabel::Struct, "s1", "proj"));
+        g.add_node(make_node("f2", NodeLabel::Function, "f2", "proj"));
+        let count = g.nodes_view().count();
+        assert_eq!(count, 3, "nodes_view must return every node");
+    }
+
+    #[test]
+    fn nodes_view_empty_for_empty_graph() {
+        let g = Graph::new();
+        assert_eq!(g.nodes_view().count(), 0);
+    }
+
+    // --- edges_view (L3 memory-overflow fix) ---
+
+    #[test]
+    fn edges_view_returns_all_edges_in_insertion_order() {
+        let mut g = Graph::new();
+        g.add_node(make_node("a", NodeLabel::Function, "a", "proj"));
+        g.add_node(make_node("b", NodeLabel::Function, "b", "proj"));
+        g.add_node(make_node("c", NodeLabel::Function, "c", "proj"));
+        g.add_edge(Edge::new("a", "b", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("b", "c", EdgeType::Calls, "proj"));
+        g.add_edge(Edge::new("a", "c", EdgeType::UsesType, "proj"));
+        let collected: Vec<&Edge> = g.edges_view().collect();
+        assert_eq!(collected.len(), 3);
+        // Insertion order: a→b, b→c, a→c.
+        assert_eq!(collected[0].source, "a");
+        assert_eq!(collected[0].target, "b");
+        assert_eq!(collected[1].source, "b");
+        assert_eq!(collected[1].target, "c");
+        assert_eq!(collected[2].source, "a");
+        assert_eq!(collected[2].target, "c");
+    }
+
+    #[test]
+    fn edges_view_empty_for_empty_graph() {
+        let g = Graph::new();
+        assert_eq!(g.edges_view().count(), 0);
+    }
+
+    // --- for_each_node_with_label_mut (L3 memory-overflow fix) ---
+
+    #[test]
+    fn for_each_node_with_label_mut_modifies_only_matching_label() {
+        let mut g = Graph::new();
+        g.add_node(make_node("f1", NodeLabel::Function, "f1", "proj"));
+        g.add_node(make_node("p1", NodeLabel::Parameter, "p1", "proj"));
+        g.add_node(make_node("p2", NodeLabel::Parameter, "p2", "proj"));
+        g.add_node(make_node("s1", NodeLabel::Struct, "s1", "proj"));
+
+        // Append "_mut" to every Parameter node's name, in place.
+        g.for_each_node_with_label_mut(NodeLabel::Parameter, |n| {
+            n.name.push_str("_mut");
+        });
+
+        assert_eq!(g.get_node(&"f1".to_string()).unwrap().name, "f1");
+        assert_eq!(g.get_node(&"p1".to_string()).unwrap().name, "p1_mut");
+        assert_eq!(g.get_node(&"p2".to_string()).unwrap().name, "p2_mut");
+        assert_eq!(g.get_node(&"s1".to_string()).unwrap().name, "s1");
+    }
+
+    #[test]
+    fn for_each_node_with_label_mut_noop_when_no_match() {
+        let mut g = Graph::new();
+        g.add_node(make_node("f1", NodeLabel::Function, "f1", "proj"));
+        g.for_each_node_with_label_mut(NodeLabel::Parameter, |n| {
+            n.name.push_str("_mut");
+        });
+        assert_eq!(g.get_node(&"f1".to_string()).unwrap().name, "f1");
+    }
+
+    #[test]
+    fn for_each_node_with_label_mut_empty_graph_is_noop() {
+        let mut g = Graph::new();
+        g.for_each_node_with_label_mut(NodeLabel::Parameter, |_| {
+            panic!("callback should not fire on empty graph");
+        });
     }
 
     #[test]

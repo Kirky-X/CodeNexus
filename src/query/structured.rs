@@ -531,15 +531,11 @@ impl<'a> SearchEngine<'a> {
              RETURN e.target AS target;"
         );
         let mut set = HashSet::new();
-        match self.storage.query(&cypher) {
-            Ok(rows) => {
-                for row in rows {
-                    if let Some(target) = row.first().and_then(|v| v.as_str()) {
-                        set.insert(target.to_string());
-                    }
-                }
+        let rows = self.storage.query(&cypher)?;
+        for row in rows {
+            if let Some(target) = row.first().and_then(|v| v.as_str()) {
+                set.insert(target.to_string());
             }
-            Err(e) => return Err(e.into()),
         }
         Ok(set)
     }

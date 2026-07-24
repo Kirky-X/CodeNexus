@@ -17,7 +17,7 @@
 use super::capability::Storage;
 use super::connection::{SchemaInitReport, StorageConnection};
 use super::error::{Result, StorageError};
-use super::loader::{load_from_csv, write_csv_temp, write_edges_csv, write_nodes_csv};
+use super::loader::{load_from_csv, write_edges_csv_stream, write_nodes_csv_stream};
 use super::schema::{escape_cypher_string, escape_identifier, node_table_columns};
 use crate::model::{Edge, Node, NodeLabel};
 
@@ -153,26 +153,56 @@ impl Repository {
     /// table with a different column layout. The `label` field on each node
     /// is not checked — callers are responsible for passing a homogeneous
     /// slice.
+    ///
+    /// # L4 memory-overflow fix
+    ///
+    /// Streams the CSV directly to a `tempfile::tempdir()`-owned file via
+    /// [`write_nodes_csv_stream`], avoiding the intermediate `String`
+    /// allocation of the pre-L4 API. The `TempDir` is dropped when this
+    /// method returns, auto-cleaning the CSV file (fixing the tempdir leak
+    /// in the pre-L4 `write_csv_temp` which used `std::mem::forget`).
     pub fn save_nodes(&self, nodes: &[Node], label: NodeLabel) -> Result<()> {
         if nodes.is_empty() {
             return Ok(());
         }
-        let csv = write_nodes_csv(nodes, label);
         let table = label.table_name();
         let safe_id = nodes[0].id.replace(['/', '\\'], "_");
         let file_name = format!("{table}_{safe_id}.csv");
-        let csv_path = write_csv_temp(&csv, &file_name)?;
-        load_from_csv(&self.conn, table, &csv_path)
+        // TempDir owns the CSV file for the duration of load_from_csv and
+        // auto-cleans on drop (no std::mem::forget leak).
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join(&file_name);
+        let file = std::fs::File::create(&path)?;
+        write_nodes_csv_stream(nodes, label, file)?;
+        load_from_csv(&self.conn, table, &path)
+        // dir drops here, auto-cleaning the CSV file.
     }
 
     /// Bulk-saves edges via CSV `COPY FROM` into the `CodeRelation` table.
+    ///
+    /// # L4 memory-overflow fix
+    ///
+    /// Streams the CSV directly to a temp file via [`write_edges_csv_stream`],
+    /// avoiding the intermediate `String` allocation. Duplicate edges are
+    /// skipped during streaming (BR-INDEX-005); a warning is printed to
+    /// stderr when any duplicates are skipped (fail-loud principle).
     pub fn save_edges(&self, edges: &[Edge]) -> Result<()> {
         if edges.is_empty() {
             return Ok(());
         }
-        let csv = write_edges_csv(edges);
-        let csv_path = write_csv_temp(&csv, "coderelation.csv")?;
-        load_from_csv(&self.conn, "CodeRelation", &csv_path)
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("coderelation.csv");
+        let file = std::fs::File::create(&path)?;
+        let stats = write_edges_csv_stream(edges, file)?;
+        if stats.skipped_duplicates > 0 {
+            eprintln!(
+                "warning: skipped {} duplicate edge(s) during CSV generation (edges: {}, unique: {})",
+                stats.skipped_duplicates,
+                edges.len(),
+                stats.written
+            );
+        }
+        load_from_csv(&self.conn, "CodeRelation", &path)
     }
 
     /// Returns the project with the given id, or `None` if not found.

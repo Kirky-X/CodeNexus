@@ -18,7 +18,11 @@
 //!   topological sort (T9 H2, design.md D2).
 //! - [`phases`]: 6 typed [`Phase`] implementations (Scan, Parse, ScopeResolution,
 //!   Resolve, Confidence, Load) for Task 2.5.
+//! - [`budget`]: [`MemoryBudget`] + [`Pressure`] — the explicit "memory as a
+//!   bounded resource" model used by every phase to decide when to flush /
+//!   batch / degrade (L1 of the memory-overflow fix).
 
+pub mod budget;
 pub mod capability;
 pub mod error;
 pub mod hash;
@@ -28,6 +32,7 @@ pub mod phases;
 pub mod pipeline;
 pub mod pipeline_dag;
 
+pub use budget::{MemoryBudget, Pressure};
 pub use error::{IndexError, Result};
 pub use hash::{
     chunked_hash, compute_content_hash, compute_file_hash, compute_file_hash_incremental,

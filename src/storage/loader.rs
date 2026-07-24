@@ -47,20 +47,24 @@ impl CsvLoader {
         Self
     }
 
-    /// Convenience wrapper around [`write_nodes_csv`] that writes the CSV to
-    /// `path` on disk.
+    /// Streams a node table CSV directly to `path` on disk (L4 of the
+    /// memory-overflow fix: no intermediate `String` allocation).
+    ///
+    /// Delegates to [`write_nodes_csv_stream`]. The file is created (or
+    /// truncated) at `path` and the CSV is written row-by-row through a
+    /// `csv::Writer` buffer.
     pub fn write_nodes_file(&self, nodes: &[Node], label: NodeLabel, path: &Path) -> Result<()> {
-        let csv = write_nodes_csv(nodes, label);
-        std::fs::write(path, csv)?;
-        Ok(())
+        let file = std::fs::File::create(path)?;
+        write_nodes_csv_stream(nodes, label, file)
     }
 
-    /// Convenience wrapper around [`write_edges_csv`] that writes the CSV to
-    /// `path` on disk.
+    /// Streams the `CodeRelation` CSV directly to `path` on disk (L4 of the
+    /// memory-overflow fix).
+    ///
+    /// Delegates to [`write_edges_csv_stream`].
     pub fn write_edges_file(&self, edges: &[Edge], path: &Path) -> Result<()> {
-        let csv = write_edges_csv(edges);
-        std::fs::write(path, csv)?;
-        Ok(())
+        let file = std::fs::File::create(path)?;
+        write_edges_csv_stream(edges, file).map(|_| ())
     }
 }
 
@@ -108,51 +112,67 @@ fn sanitize_for_ladybugdb(s: String) -> String {
         .replace(['\n', '\r', '\t'], " ")
 }
 
-/// Generates a CSV string for a node table (header + one row per node).
+/// Streams a node table CSV (header + one row per node) directly to `writer`,
+/// avoiding the intermediate `String` allocation of the pre-L4 API (L4 of the
+/// memory-overflow fix).
 ///
 /// The header row contains the column names from [`node_table_columns`] for the
 /// given `label`. Each subsequent row contains the field values extracted by
 /// [`node_to_row`], sanitized via [`sanitize_for_ladybugdb`] to avoid the
 /// LadybugDB COPY parser bug (B6). Uses tab-delimited format (see
 /// [`CSV_DELIMITER`] for rationale).
-#[must_use]
-pub fn write_nodes_csv(nodes: &[Node], label: NodeLabel) -> String {
+///
+/// The caller owns `writer`; this function flushes the `csv::Writer` buffer
+/// before returning, so the underlying writer receives all bytes. Callers that
+/// pass a `std::fs::File` should `drop`/`flush` it as needed.
+pub fn write_nodes_csv_stream<W: Write>(nodes: &[Node], label: NodeLabel, writer: W) -> Result<()> {
     let columns = node_table_columns(label);
-    let mut writer = WriterBuilder::new()
+    let mut csv_writer = WriterBuilder::new()
         .delimiter(CSV_DELIMITER)
-        .from_writer(Vec::new());
-    // Header
-    writer.write_record(columns).expect("csv header write");
-    // Rows
+        .from_writer(writer);
+    csv_writer.write_record(columns)?;
     for node in nodes {
         let row: Vec<String> = node_to_row(node, label)
             .into_iter()
             .map(sanitize_for_ladybugdb)
             .collect();
-        writer.write_record(&row).expect("csv row write");
+        csv_writer.write_record(&row)?;
     }
-    let bytes = writer.into_inner().expect("csv flush");
-    String::from_utf8(bytes).expect("csv utf8")
+    csv_writer.flush()?;
+    Ok(())
 }
 
-/// Generates a CSV string for the `CodeRelation` table (header + one row per
-/// edge).
+/// Statistics from streaming an edges CSV (L4 of the memory-overflow fix).
+///
+/// Returned by [`write_edges_csv_stream`] so callers can log dedup metrics
+/// (BR-INDEX-005, fail-loud principle) without inspecting the CSV content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EdgeCsvStats {
+    /// Number of edges written to the CSV (after dedup).
+    pub written: usize,
+    /// Number of duplicate edges skipped during dedup.
+    pub skipped_duplicates: usize,
+}
+
+/// Streams the `CodeRelation` CSV (header + one row per edge) directly to
+/// `writer`, avoiding the intermediate `String` allocation of the pre-L4 API
+/// (L4 of the memory-overflow fix).
 ///
 /// Deduplicates edges by their primary-key id ([`edge_id`]) to prevent
 /// primary-key conflicts during `COPY FROM`. Duplicate edges arise when
 /// distinct call sites resolve to the same `{source, target, type, line}`
 /// tuple (e.g. chained `.project(project)` calls in different files sharing
-/// the same start line). When duplicates are skipped, a warning is printed
-/// to stderr reporting the count (BR-INDEX-005, fail-loud principle).
-#[must_use]
-pub fn write_edges_csv(edges: &[Edge]) -> String {
+/// the same start line). Returns [`EdgeCsvStats`] so callers can log dedup
+/// counts.
+pub fn write_edges_csv_stream<W: Write>(edges: &[Edge], writer: W) -> Result<EdgeCsvStats> {
     let columns = relation_table_columns();
-    let mut writer = WriterBuilder::new()
+    let mut csv_writer = WriterBuilder::new()
         .delimiter(CSV_DELIMITER)
-        .from_writer(Vec::new());
-    writer.write_record(columns).expect("csv header write");
+        .from_writer(writer);
+    csv_writer.write_record(columns)?;
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut skipped = 0usize;
+    let mut written = 0usize;
     for edge in edges {
         let id = edge_id(edge);
         if !seen.insert(id) {
@@ -163,17 +183,14 @@ pub fn write_edges_csv(edges: &[Edge]) -> String {
             .into_iter()
             .map(sanitize_for_ladybugdb)
             .collect();
-        writer.write_record(&row).expect("csv row write");
+        csv_writer.write_record(&row)?;
+        written += 1;
     }
-    if skipped > 0 {
-        eprintln!(
-            "warning: skipped {skipped} duplicate edge(s) during CSV generation (edges: {}, unique: {})",
-            edges.len(),
-            edges.len() - skipped
-        );
-    }
-    let bytes = writer.into_inner().expect("csv flush");
-    String::from_utf8(bytes).expect("csv utf8")
+    csv_writer.flush()?;
+    Ok(EdgeCsvStats {
+        written,
+        skipped_duplicates: skipped,
+    })
 }
 
 /// Loads a CSV file into a table via LadybugDB's `COPY FROM` command.
@@ -594,20 +611,6 @@ pub fn edge_to_row(edge: &Edge) -> Vec<String> {
     ]
 }
 
-/// Writes a CSV string to a temporary file and returns the path.
-///
-/// Used by tests and by the repository when bulk-loading.
-pub(crate) fn write_csv_temp(content: &str, file_name: &str) -> Result<std::path::PathBuf> {
-    let dir = tempfile::tempdir()?;
-    let path = dir.path().join(file_name);
-    let mut file = std::fs::File::create(&path)?;
-    file.write_all(content.as_bytes())?;
-    // Leak the tempdir so the file survives for the caller; the OS reclaims it
-    // on process exit. This matches the lifetime model used in tests.
-    std::mem::forget(dir);
-    Ok(path)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -630,9 +633,55 @@ mod tests {
             .build()
     }
 
+    /// Test helper: streams nodes to an in-memory buffer and returns the CSV
+    /// as a `String`. Replaces the pre-L4 `write_nodes_csv` in tests so they
+    /// can assert on the produced CSV content without changing the production
+    /// streaming API.
+    fn write_nodes_csv_to_string(nodes: &[Node], label: NodeLabel) -> String {
+        let mut buf = Vec::new();
+        write_nodes_csv_stream(nodes, label, &mut buf).expect("stream write");
+        String::from_utf8(buf).expect("csv utf8")
+    }
+
+    /// Test helper: streams edges to an in-memory buffer and returns the CSV
+    /// as a `String`. Replaces the pre-L4 `write_edges_csv` in tests.
+    fn write_edges_csv_to_string(edges: &[Edge]) -> String {
+        let mut buf = Vec::new();
+        write_edges_csv_stream(edges, &mut buf).expect("stream write");
+        String::from_utf8(buf).expect("csv utf8")
+    }
+
+    /// Test helper: streams nodes to a temp file and returns the path. The
+    /// caller owns the temp dir (leaked on purpose for the same process model
+    /// as the pre-L4 `write_csv_temp`).
+    fn write_nodes_csv_to_temp(
+        nodes: &[Node],
+        label: NodeLabel,
+        file_name: &str,
+    ) -> std::path::PathBuf {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(file_name);
+        let file = std::fs::File::create(&path).expect("create temp file");
+        write_nodes_csv_stream(nodes, label, file).expect("stream write");
+        // Leak the tempdir so the file survives for the caller (matches the
+        // lifetime model used in load_from_csv tests).
+        std::mem::forget(dir);
+        path
+    }
+
+    /// Test helper: streams edges to a temp file and returns the path.
+    fn write_edges_csv_to_temp(edges: &[Edge], file_name: &str) -> std::path::PathBuf {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(file_name);
+        let file = std::fs::File::create(&path).expect("create temp file");
+        write_edges_csv_stream(edges, file).expect("stream write");
+        std::mem::forget(dir);
+        path
+    }
+
     #[test]
     fn write_nodes_csv_has_header_row() {
-        let csv = write_nodes_csv(&[], NodeLabel::Function);
+        let csv = write_nodes_csv_to_string(&[], NodeLabel::Function);
         let lines: Vec<&str> = csv.lines().collect();
         // CSV_DELIMITER is tab (LadybugDB COPY compatibility); header uses tabs.
         assert_eq!(
@@ -644,7 +693,7 @@ mod tests {
     #[test]
     fn write_nodes_csv_has_one_row_per_node() {
         let nodes = vec![sample_function_node()];
-        let csv = write_nodes_csv(&nodes, NodeLabel::Function);
+        let csv = write_nodes_csv_to_string(&nodes, NodeLabel::Function);
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 2, "expected header + 1 row");
     }
@@ -652,7 +701,7 @@ mod tests {
     #[test]
     fn write_nodes_csv_contains_correct_values() {
         let nodes = vec![sample_function_node()];
-        let csv = write_nodes_csv(&nodes, NodeLabel::Function);
+        let csv = write_nodes_csv_to_string(&nodes, NodeLabel::Function);
         let lines: Vec<&str> = csv.lines().collect();
         let row = lines[1];
         assert!(row.contains("func_001"));
@@ -676,7 +725,7 @@ mod tests {
             .project("p")
             .docstring("has\t tab")
             .build();
-        let csv = write_nodes_csv(&[node], NodeLabel::Function);
+        let csv = write_nodes_csv_to_string(&[node], NodeLabel::Function);
         let lines: Vec<&str> = csv.lines().collect();
         // Tab replaced with space; field is NOT quoted.
         assert!(lines[1].contains("foo bar"));
@@ -697,7 +746,7 @@ mod tests {
             .project("p")
             .docstring("say \"hi\"")
             .build();
-        let csv = write_nodes_csv(&[node], NodeLabel::Function);
+        let csv = write_nodes_csv_to_string(&[node], NodeLabel::Function);
         let lines: Vec<&str> = csv.lines().collect();
         // Quotes are sanitized to single-quotes (no RFC 4180 doubling needed)
         assert!(lines[1].contains("foo'bar"));
@@ -720,7 +769,7 @@ mod tests {
             .signature("#define MY_MACRO(x) \\ continuation")
             .properties(serde_json::json!({"content": "#define MY_MACRO(x) \\ continuation"}))
             .build();
-        let csv = write_nodes_csv(&[node], NodeLabel::Macro);
+        let csv = write_nodes_csv_to_string(&[node], NodeLabel::Macro);
         // Backslash in signature/content replaced with forward slash
         assert!(csv.contains("MY_MACRO(x) / continuation"));
         // Ensure no raw backslash remains in the CSV data (sanitize was applied)
@@ -736,7 +785,7 @@ mod tests {
             .project("p")
             .docstring("line1\nline2")
             .build();
-        let csv = write_nodes_csv(&[node], NodeLabel::Function);
+        let csv = write_nodes_csv_to_string(&[node], NodeLabel::Function);
         let lines: Vec<&str> = csv.lines().collect();
         // Newline replaced with space; field is NOT quoted (no quoting needed).
         assert!(lines[1].contains("line1 line2"));
@@ -754,7 +803,7 @@ mod tests {
                 "lastCommit": "abc123"
             }))
             .build();
-        let csv = write_nodes_csv(&[node], NodeLabel::Project);
+        let csv = write_nodes_csv_to_string(&[node], NodeLabel::Project);
         let lines: Vec<&str> = csv.lines().collect();
         // CSV_DELIMITER is tab; Project header uses tabs.
         assert_eq!(
@@ -778,7 +827,7 @@ mod tests {
             .language(Language::Rust)
             .properties(serde_json::json!({"hash": "abc123", "lineCount": 100}))
             .build();
-        let csv = write_nodes_csv(&[node], NodeLabel::File);
+        let csv = write_nodes_csv_to_string(&[node], NodeLabel::File);
         let lines: Vec<&str> = csv.lines().collect();
         assert!(lines[1].contains("abc123"));
         assert!(lines[1].contains("100"));
@@ -787,7 +836,7 @@ mod tests {
 
     #[test]
     fn write_nodes_csv_empty_input_returns_header_only() {
-        let csv = write_nodes_csv(&[], NodeLabel::Class);
+        let csv = write_nodes_csv_to_string(&[], NodeLabel::Class);
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 1);
         // CSV_DELIMITER is tab; header starts with "id\t".
@@ -796,7 +845,7 @@ mod tests {
 
     #[test]
     fn write_edges_csv_has_header_row() {
-        let csv = write_edges_csv(&[]);
+        let csv = write_edges_csv_to_string(&[]);
         let lines: Vec<&str> = csv.lines().collect();
         // CSV_DELIMITER is tab (LadybugDB COPY compatibility); header uses tabs.
         assert_eq!(
@@ -812,7 +861,7 @@ mod tests {
             .reason("direct call")
             .start_line(15)
             .build();
-        let csv = write_edges_csv(&[edge]);
+        let csv = write_edges_csv_to_string(&[edge]);
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[1].contains("func_a"));
@@ -831,7 +880,7 @@ mod tests {
         let edge = Edge::builder("s", "t", EdgeType::Calls, "p")
             .reason("arg, index=0\nnext line")
             .build();
-        let csv = write_edges_csv(&[edge]);
+        let csv = write_edges_csv_to_string(&[edge]);
         // Newline replaced with space; no quoting needed.
         assert!(csv.contains("arg, index=0 next line"));
         assert!(!csv.contains("\"arg"));
@@ -892,8 +941,7 @@ mod tests {
         conn.init_schema().unwrap();
 
         let node = sample_function_node();
-        let csv = write_nodes_csv(&[node], NodeLabel::Function);
-        let csv_path = write_csv_temp(&csv, "functions.csv").unwrap();
+        let csv_path = write_nodes_csv_to_temp(&[node], NodeLabel::Function, "functions.csv");
         load_from_csv(&conn, "Function", &csv_path).expect("COPY failed");
 
         let rows = conn
@@ -914,8 +962,7 @@ mod tests {
             .confidence(0.9)
             .start_line(5)
             .build();
-        let csv = write_edges_csv(&[edge]);
-        let csv_path = write_csv_temp(&csv, "edges.csv").unwrap();
+        let csv_path = write_edges_csv_to_temp(&[edge], "edges.csv");
         load_from_csv(&conn, "CodeRelation", &csv_path).expect("COPY failed");
 
         let rows = conn
@@ -940,8 +987,7 @@ mod tests {
             .signature("#define MY_MACRO(x) x+1")
             .properties(serde_json::json!({"content": "#define MY_MACRO(x) x+1"}))
             .build();
-        let csv = write_nodes_csv(&[node], NodeLabel::Macro);
-        let csv_path = write_csv_temp(&csv, "macros.csv").unwrap();
+        let csv_path = write_nodes_csv_to_temp(&[node], NodeLabel::Macro, "macros.csv");
         load_from_csv(&conn, "Macro", &csv_path).expect("COPY Macro failed");
 
         let rows = conn
@@ -986,7 +1032,7 @@ mod tests {
         let edge3 = Edge::builder("a", "b", EdgeType::Calls, "p")
             .start_line(20) // different line -> different id
             .build();
-        let csv = write_edges_csv(&[edge1, edge2, edge3]);
+        let csv = write_edges_csv_to_string(&[edge1, edge2, edge3]);
         let lines: Vec<&str> = csv.lines().collect();
         // 1 header + 2 unique data rows (edge1 and edge3; edge2 is dup of edge1)
         assert_eq!(lines.len(), 3);
@@ -1001,7 +1047,7 @@ mod tests {
             Edge::new("b", "c", EdgeType::Calls, "p"),
             Edge::new("c", "d", EdgeType::Reads, "p"),
         ];
-        let csv = write_edges_csv(&edges);
+        let csv = write_edges_csv_to_string(&edges);
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 4); // header + 3 edges
     }
@@ -1691,5 +1737,123 @@ mod tests {
         assert_eq!(row[5], "10");
         assert_eq!(row[6], "[0.1,0.2]");
         assert_eq!(row[7], "abc123");
+    }
+
+    // --- L4 streaming API tests ---
+
+    #[test]
+    fn write_nodes_csv_stream_writes_header_and_rows_to_vec() {
+        let nodes = vec![sample_function_node()];
+        let mut buf = Vec::new();
+        write_nodes_csv_stream(&nodes, NodeLabel::Function, &mut buf).expect("stream");
+        let csv = String::from_utf8(buf).expect("utf8");
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), 2, "header + 1 row");
+        assert!(lines[1].contains("func_001"));
+        assert!(lines[1].contains("demo"));
+    }
+
+    #[test]
+    fn write_nodes_csv_stream_empty_input_writes_header_only() {
+        let mut buf = Vec::new();
+        write_nodes_csv_stream(&[], NodeLabel::Class, &mut buf).expect("stream");
+        let csv = String::from_utf8(buf).expect("utf8");
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), 1, "header only");
+        assert!(lines[0].starts_with("id\t"));
+    }
+
+    #[test]
+    fn write_nodes_csv_stream_propagates_writer_error() {
+        // A writer that always fails: write_record should return Err.
+        use std::io::{self, Write};
+        struct FailingWriter;
+        impl Write for FailingWriter {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("write failed"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Err(io::Error::other("flush failed"))
+            }
+        }
+        let result = write_nodes_csv_stream(&[], NodeLabel::Function, FailingWriter);
+        assert!(result.is_err(), "writer error must propagate");
+    }
+
+    #[test]
+    fn write_edges_csv_stream_returns_stats_with_zero_skipped_when_no_dups() {
+        let edges = vec![
+            Edge::builder("a", "b", EdgeType::Calls, "p")
+                .start_line(1)
+                .build(),
+            Edge::builder("b", "c", EdgeType::Calls, "p")
+                .start_line(2)
+                .build(),
+        ];
+        let mut buf = Vec::new();
+        let stats = write_edges_csv_stream(&edges, &mut buf).expect("stream");
+        assert_eq!(stats.written, 2);
+        assert_eq!(stats.skipped_duplicates, 0);
+    }
+
+    #[test]
+    fn write_edges_csv_stream_returns_stats_with_correct_dedup_count() {
+        let edge1 = Edge::builder("a", "b", EdgeType::Calls, "p")
+            .confidence(0.9)
+            .start_line(10)
+            .build();
+        let edge2 = Edge::builder("a", "b", EdgeType::Calls, "p")
+            .confidence(0.5) // different confidence, same id
+            .start_line(10)
+            .build();
+        let edge3 = Edge::builder("a", "b", EdgeType::Calls, "p")
+            .start_line(20) // different line → different id
+            .build();
+        let mut buf = Vec::new();
+        let stats = write_edges_csv_stream(&[edge1, edge2, edge3], &mut buf).expect("stream");
+        assert_eq!(stats.written, 2, "edge1 + edge3");
+        assert_eq!(stats.skipped_duplicates, 1, "edge2 is dup of edge1");
+        // Verify the CSV content also matches the stats.
+        let csv = String::from_utf8(buf).expect("utf8");
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), 3, "header + 2 unique rows");
+    }
+
+    #[test]
+    fn edge_csv_stats_default_is_zero_zero() {
+        let stats = EdgeCsvStats::default();
+        assert_eq!(stats.written, 0);
+        assert_eq!(stats.skipped_duplicates, 0);
+    }
+
+    #[test]
+    fn edge_csv_stats_is_send_sync_copy() {
+        fn _assert_send_sync<T: Send + Sync + Copy>() {}
+        _assert_send_sync::<EdgeCsvStats>();
+    }
+
+    #[test]
+    fn edge_csv_stats_equality_and_debug() {
+        let a = EdgeCsvStats {
+            written: 5,
+            skipped_duplicates: 2,
+        };
+        let b = a;
+        assert_eq!(a, b);
+        let debug = format!("{a:?}");
+        assert!(debug.contains("EdgeCsvStats"));
+        assert!(debug.contains("written"));
+        assert!(debug.contains("skipped_duplicates"));
+    }
+
+    #[test]
+    fn write_edges_csv_stream_empty_input_writes_header_only() {
+        let mut buf = Vec::new();
+        let stats = write_edges_csv_stream(&[], &mut buf).expect("stream");
+        assert_eq!(stats.written, 0);
+        assert_eq!(stats.skipped_duplicates, 0);
+        let csv = String::from_utf8(buf).expect("utf8");
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), 1, "header only");
     }
 }

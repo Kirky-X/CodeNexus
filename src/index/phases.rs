@@ -35,9 +35,7 @@ use crate::model::{
     new_project_id, ConfidenceTier, Edge, EdgeType, Graph, Language, Node, NodeLabel,
 };
 use crate::parse::parallel::{parallel_parse, parallel_parse_ram_first, RamFirstSources};
-use crate::resolve::{
-    build_symbol_table, prune_dangling_type_edges_vec, resolve_all, resolve_include, IncludesGraph,
-};
+use crate::resolve::{build_symbol_table, resolve_all, resolve_include, IncludesGraph};
 use crate::storage::Repository;
 
 use super::pipeline::IndexResult;
@@ -94,12 +92,9 @@ pub struct ParseOutput {
 
 /// Typed output of [`ScopeResolutionPhase`], consumed by [`ResolvePhase`].
 pub struct ScopeOutput {
-    /// The in-memory graph (nodes + per-file edges).
+    /// The in-memory graph — single source of truth for nodes + edges
+    /// (L3 memory-overflow fix: removed `all_nodes`/`all_edges` duplicates).
     pub graph: Graph,
-    /// All definition + file nodes collected so far.
-    pub all_nodes: Vec<Node>,
-    /// All edges collected so far (definition + per-file).
-    pub all_edges: Vec<Edge>,
     /// Mapping from absolute file path → relative path (for normalizing
     /// filePath fields on Parameter/Variable nodes in [`ResolvePhase`]).
     pub path_to_rel: HashMap<String, String>,
@@ -107,10 +102,11 @@ pub struct ScopeOutput {
 
 /// Typed output of [`ResolvePhase`], consumed by [`LoadPhase`].
 pub struct ResolveOutput {
-    /// All nodes to persist (definition + file + parameter + variable).
-    pub all_nodes: Vec<Node>,
-    /// All edges to persist (definition + resolved + INCLUDES).
-    pub all_edges: Vec<Edge>,
+    /// The in-memory graph — single source of truth for nodes + edges
+    /// (L3 memory-overflow fix: removed `all_nodes`/`all_edges` duplicates;
+    /// `graph` is the only copy, with resolved edges added and dangling
+    /// type edges pruned in place by `resolve_all`).
+    pub graph: Graph,
     /// Number of files parsed (for IndexResult).
     pub files_parsed: usize,
     /// Number of files skipped (for IndexResult).
@@ -292,15 +288,12 @@ impl Phase for ScopeResolutionPhase {
 
         let project_id = &scan.project_id;
         let mut graph = Graph::new();
-        let mut all_nodes: Vec<Node> = Vec::new();
-        let mut all_edges: Vec<Edge> = Vec::new();
 
         // Add File nodes for every parsed file (used by incremental indexing).
         let file_nodes = build_file_nodes(&scan.diff, project_id);
         for file_node in &file_nodes {
             graph.add_node(file_node.clone());
         }
-        all_nodes.extend(file_nodes.iter().cloned());
 
         // Build mapping from absolute file path → File node id (file_<uuid>).
         let mut path_to_file_id: HashMap<&str, &str> = HashMap::new();
@@ -328,6 +321,9 @@ impl Phase for ScopeResolutionPhase {
             .collect();
 
         // Merge per-file extraction results into the graph.
+        // L3 memory-overflow fix: graph is the single source of truth; no
+        // parallel `all_nodes`/`all_edges` Vecs are built. Nodes/edges are
+        // moved into the graph (not cloned twice).
         for result in &parse.results {
             let rel_path = path_to_rel
                 .get(result.file_path.as_str())
@@ -354,8 +350,7 @@ impl Phase for ScopeResolutionPhase {
                 if g.project.is_empty() {
                     g.project = project_id.clone();
                 }
-                graph.add_node(g.clone());
-                all_nodes.push(g);
+                graph.add_node(g);
             }
             for edge in &result.edges {
                 let mut e = edge.clone();
@@ -365,17 +360,11 @@ impl Phase for ScopeResolutionPhase {
                 if let Some(new_target) = id_remap.get(&e.target) {
                     e.target = new_target.clone();
                 }
-                graph.add_edge(e.clone());
-                all_edges.push(e);
+                graph.add_edge(e);
             }
         }
 
-        Ok(ScopeOutput {
-            graph,
-            all_nodes,
-            all_edges,
-            path_to_rel,
-        })
+        Ok(ScopeOutput { graph, path_to_rel })
     }
 }
 
@@ -556,9 +545,12 @@ impl Phase for ResolvePhase {
         let project_id = &scan.project_id;
 
         // Clone the graph so we can mutate it (ctx is immutable in run).
+        // L3 memory-overflow fix: graph is the single source of truth — no
+        // parallel `all_nodes`/`all_edges` Vecs are cloned. Resolved edges
+        // are added directly to `graph` by `build_includes_edges` and
+        // `resolve_all`; dangling type edges are pruned in place by
+        // `resolve_all`'s internal `prune_dangling_type_edges(graph)` call.
         let mut graph = scope.graph.clone();
-        let mut all_nodes = scope.all_nodes.clone();
-        let mut all_edges = scope.all_edges.clone();
 
         // Scheme C (v0.3.0): Build INCLUDES edges for C++ #include directives.
         // C++ #include is handled separately from IMPORTS (which is for
@@ -569,9 +561,11 @@ impl Phase for ResolvePhase {
         //
         // MUST run before resolve_all so the IncludesGraph is available to
         // CallResolver for scope-aware lookup_exported_in_scope.
-        let (includes_edges, includes_graph) =
+        //
+        // L3 fix: `build_includes_edges` adds edges to `graph` directly; the
+        // returned Vec is ignored (previously extended into `all_edges`).
+        let (_includes_edges, includes_graph) =
             build_includes_edges(&parse.results, &mut graph, &scope.path_to_rel, project_id);
-        all_edges.extend(includes_edges);
 
         // Resolve calls + dataflow + FFI edges. `TypeResolver::resolve_types`
         // internally builds a path mapping between `result.file_path` (absolute
@@ -583,41 +577,38 @@ impl Phase for ResolvePhase {
         // v0.3.0: includes_graph is passed to CallResolver for scope-aware
         // call resolution (BUG-C4 fix). Files with #include edges use
         // lookup_exported_in_scope; others use lookup_exported (backward compat).
+        //
+        // L3 fix: `resolve_all` adds resolved edges to `graph` directly and
+        // prunes dangling type edges via `prune_dangling_type_edges(graph)`.
+        // The returned Vec is ignored (previously extended into `all_edges`
+        // and pruned again separately — that second prune is now redundant).
         let symbol_table = build_symbol_table(&parse.results, project_id);
-        let resolved_edges = resolve_all(
+        let _resolved_edges = resolve_all(
             &parse.results,
             &symbol_table,
             project_id,
             &mut graph,
             &includes_graph,
         );
-        all_edges.extend(resolved_edges);
 
-        // Prune dangling type-reference edges (Implements/Extends/UsesType)
-        // from the persisted collection. resolve_all prunes graph.edges, but
-        // all_edges is a separate Vec built from scope.all_edges (parse-phase
-        // edges) + resolved_edges — both unpruned. Without this, dangling
-        // IMPLEMENTS edges (e.g. `impl Display for Foo`) reach the DB.
-        let node_ids: std::collections::HashSet<String> = graph.nodes.keys().cloned().collect();
-        prune_dangling_type_edges_vec(&mut all_edges, &node_ids);
-
-        // Collect Parameter and Variable nodes created during dataflow
-        // resolution (DQ-004) so they are persisted alongside other nodes.
+        // L3 fix: Parameter and Variable nodes created during dataflow
+        // resolution (DQ-004) are already in `graph.nodes`. Rewrite their
+        // `file_path` in place (absolute → relative) instead of cloning them
+        // into a separate `all_nodes` Vec. This eliminates the second copy
+        // of Parameter/Variable nodes that previously existed in `all_nodes`.
         for label in [NodeLabel::Parameter, NodeLabel::Variable] {
-            for node in graph.nodes_by_label(label) {
-                let mut n = node.clone();
+            let path_to_rel = &scope.path_to_rel;
+            graph.for_each_node_with_label_mut(label, |n| {
                 if let Some(fp) = n.file_path.as_mut() {
-                    if let Some(rel) = scope.path_to_rel.get(fp) {
+                    if let Some(rel) = path_to_rel.get(fp) {
                         *fp = rel.clone();
                     }
                 }
-                all_nodes.push(n);
-            }
+            });
         }
 
         Ok(ResolveOutput {
-            all_nodes,
-            all_edges,
+            graph,
             files_parsed: parse.files_parsed,
             files_skipped: scan.diff.unchanged.len(),
             includes_graph,
@@ -681,8 +672,11 @@ impl Phase for LoadPhase {
         let project_name = &scan.project_name;
         let root = &scan.root_path;
         let disk_files = &scan.disk_files;
-        let all_nodes = &resolve.all_nodes;
-        let all_edges = &resolve.all_edges;
+        // L3 memory-overflow fix: graph is the single source of truth — no
+        // `all_nodes`/`all_edges` Vecs are borrowed from ResolveOutput. The
+        // graph's node/edge counts are used for IndexResult reporting.
+        let graph = &resolve.graph;
+        let edges_created = graph.edge_count();
 
         // Step 7: batch-delete old nodes for deleted + changed files.
         //
@@ -708,12 +702,18 @@ impl Phase for LoadPhase {
         }
 
         // Step 8: persist project node, definition nodes, and edges.
+        // L3 fix: stream nodes from `graph.nodes_view()` instead of borrowing
+        // a separate `all_nodes: Vec<Node>`. Edges are collected into a Vec
+        // for `save_edges` (the L4 fix will replace this with a streaming
+        // CSV writer that takes an iterator).
         save_project_node(&self.repo, project_id, project_name, root, disk_files)
             .map_err(|e| phase_err(Self::NAME, e))?;
-        save_nodes_by_label(&self.repo, all_nodes).map_err(|e| phase_err(Self::NAME, e))?;
-        if !all_edges.is_empty() {
+        save_nodes_by_label(&self.repo, graph.nodes_view())
+            .map_err(|e| phase_err(Self::NAME, e))?;
+        if edges_created > 0 {
+            let all_edges: Vec<Edge> = graph.edges_view().cloned().collect();
             with_retry(DEFAULT_MAX_RETRIES, || {
-                self.repo.save_edges(all_edges).map_err(IndexError::from)
+                self.repo.save_edges(&all_edges).map_err(IndexError::from)
             })
             .map_err(|e| phase_err(Self::NAME, e))?;
         }
@@ -722,8 +722,7 @@ impl Phase for LoadPhase {
         let duration_ms = scan.start.elapsed().as_millis().min(u64::MAX as u128) as u64;
         let files_indexed = resolve.files_parsed;
         let files_skipped = resolve.files_skipped;
-        let nodes_created = all_nodes.len();
-        let edges_created = all_edges.len();
+        let nodes_created = graph.node_count();
 
         info!(
             event = "index_completed",
@@ -851,10 +850,19 @@ fn git_head_commit(root: &Path) -> String {
 /// Deduplicates by id within each label group (LadybugDB's COPY rejects
 /// duplicate primary keys). Project nodes are skipped (saved via
 /// [`save_project_node`]).
-fn save_nodes_by_label(repo: &Repository, nodes: &[Node]) -> std::result::Result<(), IndexError> {
-    let mut by_label: HashMap<NodeLabel, Vec<Node>> = HashMap::new();
+///
+/// L3 memory-overflow fix: accepts `impl Iterator<Item = &Node>` instead of
+/// `&[Node]`, so callers can stream from [`Graph::nodes_view`] without
+/// building a separate `Vec<Node>` copy. The internal `by_label` and
+/// `deduped` collections are built per-label (transient), not for all
+/// nodes at once.
+fn save_nodes_by_label<'a>(
+    repo: &Repository,
+    nodes: impl Iterator<Item = &'a Node>,
+) -> std::result::Result<(), IndexError> {
+    let mut by_label: HashMap<NodeLabel, Vec<&Node>> = HashMap::new();
     for node in nodes {
-        by_label.entry(node.label).or_default().push(node.clone());
+        by_label.entry(node.label).or_default().push(node);
     }
     for (label, group) in by_label {
         if group.is_empty() {
@@ -869,10 +877,10 @@ fn save_nodes_by_label(repo: &Repository, nodes: &[Node]) -> std::result::Result
         let mut deduped: Vec<Node> = Vec::with_capacity(group.len());
         for node in group {
             if let Some(&idx) = seen.get(&node.id) {
-                deduped[idx] = node;
+                deduped[idx] = node.clone();
             } else {
                 seen.insert(node.id.clone(), deduped.len());
-                deduped.push(node);
+                deduped.push(node.clone());
             }
         }
         with_retry(DEFAULT_MAX_RETRIES, || {
