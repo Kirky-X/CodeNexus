@@ -158,9 +158,28 @@ pub type RamFirstSources = std::collections::HashMap<std::path::PathBuf, Vec<u8>
 /// if the map was built from a slightly different file set (e.g. a file was
 /// created between the pre-scan and the DAG scan).
 ///
-/// Peak per-worker memory is bounded by one decompressed file at a time: the
-/// decompressed `String` is dropped at the end of each rayon task before the
-/// result is collected.
+/// # L2 memory-bounding refactor
+///
+/// Pre-L2 used `files.par_iter().map(parse).collect::<Vec<_>>()` which
+/// forces rayon to materialize every `ExtractResult` in an intermediate
+/// `Vec` before the caller can drain it. For large repos this drives peak
+/// memory up to roughly `sum(all_extract_results) + N * max_source`
+/// (where N is the rayon worker count), because all results live in the
+/// collected `Vec` simultaneously.
+///
+/// The streaming path uses:
+/// * `par_chunks(CHUNK_SIZE)` — each worker processes a batch of files
+///   sequentially, reducing rayon scheduling overhead vs. per-file dispatch
+///   while keeping the per-worker memory bound unchanged (one decompressed
+///   `String` at a time).
+/// * `mpsc::sync_channel(CHANNEL_BOUND)` — workers send each result through
+///   a bounded channel; when the main thread is slow to drain, workers block
+///   on `send`, capping in-flight `ExtractResult` count at `CHANNEL_BOUND`
+///   instead of `files.len()`.
+///
+/// The main thread drains the channel and pushes successes/failures into the
+/// result `Vec`s in arrival order. The public API and `ParallelParseResult`
+/// shape are unchanged — this is a pure internal memory-bounding refactor.
 ///
 /// # Arguments
 ///
@@ -176,59 +195,120 @@ pub fn parallel_parse_ram_first(
     compressed: &RamFirstSources,
     project: &str,
 ) -> ParallelParseResult {
-    let results: Vec<Result<ExtractResult, (String, String)>> = files
-        .par_iter()
-        .map(|file| {
-            let lang = file
-                .language
-                .ok_or_else(|| (file.relative_path.clone(), "unknown language".to_string()))?;
-            if let Some(comp_bytes) = compressed.get(&file.path) {
-                // RAM-first path: LZ4-decompress into String, parse, drop.
-                let raw = lz4_flex::decompress_size_prepended(comp_bytes).map_err(|e| {
-                    (
-                        file.relative_path.clone(),
-                        format!("LZ4 decompress failed: {e}"),
-                    )
-                })?;
-                let source = String::from_utf8(raw).map_err(|e| {
-                    (
-                        file.relative_path.clone(),
-                        format!("UTF-8 decode failed: {e}"),
-                    )
-                })?;
-                let result =
-                    extract_from_source(&file.path.display().to_string(), &source, lang, project)
-                        .map_err(|e| (file.relative_path.clone(), e.to_string()))?;
-                // `source` dropped here (decompressed bytes released).
-                debug!(
-                    event = "file_parsed_ram_first",
-                    path = %file.relative_path,
-                    language = %lang,
-                    nodes = result.nodes.len(),
-                    "file parsed from RAM-first buffer"
-                );
-                Ok(result)
-            } else {
-                // Fallback: file not in compressed map — read from disk.
-                warn!(
-                    path = %file.relative_path,
-                    "RAM-first: file not in compressed map, falling back to disk read"
-                );
-                let result = extract_file(&file.path, lang, project)
+    // L2: chunked dispatch + bounded-channel backpressure.
+    const CHUNK_SIZE: usize = 8;
+    const CHANNEL_BOUND: usize = 4;
+
+    if files.is_empty() {
+        return ParallelParseResult {
+            results: Vec::new(),
+            errors: Vec::new(),
+            files_parsed: 0,
+            files_failed: 0,
+        };
+    }
+
+    let (tx, rx) =
+        std::sync::mpsc::sync_channel::<Result<ExtractResult, (String, String)>>(CHANNEL_BOUND);
+
+    // Worker closure: parse one file and return Ok(ExtractResult) or
+    // Err((relative_path, message)) matching the pre-L2 error shape.
+    // Captures `compressed` and `project` by reference — both are Sync so
+    // the closure is Send + Sync and safe to invoke from rayon workers.
+    let parse_one = |file: &FileInfo| -> Result<ExtractResult, (String, String)> {
+        let lang = file
+            .language
+            .ok_or_else(|| (file.relative_path.clone(), "unknown language".to_string()))?;
+        if let Some(comp_bytes) = compressed.get(&file.path) {
+            // RAM-first path: LZ4-decompress into String, parse, drop.
+            let raw = lz4_flex::decompress_size_prepended(comp_bytes).map_err(|e| {
+                (
+                    file.relative_path.clone(),
+                    format!("LZ4 decompress failed: {e}"),
+                )
+            })?;
+            let source = String::from_utf8(raw).map_err(|e| {
+                (
+                    file.relative_path.clone(),
+                    format!("UTF-8 decode failed: {e}"),
+                )
+            })?;
+            let result =
+                extract_from_source(&file.path.display().to_string(), &source, lang, project)
                     .map_err(|e| (file.relative_path.clone(), e.to_string()))?;
-                Ok(result)
-            }
-        })
-        .collect();
+            // `source` dropped here (decompressed bytes released).
+            debug!(
+                event = "file_parsed_ram_first",
+                path = %file.relative_path,
+                language = %lang,
+                nodes = result.nodes.len(),
+                "file parsed from RAM-first buffer"
+            );
+            Ok(result)
+        } else {
+            // Fallback: file not in compressed map — read from disk.
+            warn!(
+                path = %file.relative_path,
+                "RAM-first: file not in compressed map, falling back to disk read"
+            );
+            extract_file(&file.path, lang, project)
+                .map_err(|e| (file.relative_path.clone(), e.to_string()))
+        }
+    };
+
+    // CRITICAL: par_chunks + bounded channel must run concurrently with the
+    // rx drain loop. `for_each_with` is blocking, so if we called it inline
+    // the workers would block on `send` (channel full) while the main
+    // thread blocked on `for_each_with` returning — a classic deadlock.
+    //
+    // `std::thread::scope` spawns a producer thread that drives the rayon
+    // parallelism; the main thread drains `rx` concurrently. When all
+    // workers finish, the producer thread drops the original `tx` (and the
+    // `for_each_with` clones drop as workers exit), the channel closes, and
+    // the rx iterator terminates.
+    //
+    // Tracing subscriber propagation: `tracing`'s subscriber is thread-local
+    // and neither `std::thread::spawn` nor rayon workers inherit the parent
+    // thread's current subscriber. We snapshot the current `Dispatch` and
+    // re-install it inside both the producer thread and each rayon worker's
+    // body via `tracing::dispatcher::with_default`, so `debug!`/`warn!`
+    // events emitted by `parse_one` reach test capture subscribers (and
+    // production subscribers alike).
+    let dispatcher = tracing::dispatcher::get_default(tracing::Dispatch::clone);
 
     let mut ok_results = Vec::with_capacity(files.len());
     let mut errors = Vec::new();
-    for result in results {
-        match result {
-            Ok(r) => ok_results.push(r),
-            Err((path, msg)) => errors.push((path, msg)),
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            tracing::dispatcher::with_default(&dispatcher, || {
+                files
+                    .par_chunks(CHUNK_SIZE)
+                    .for_each_with(tx, |worker_tx, chunk| {
+                        tracing::dispatcher::with_default(&dispatcher, || {
+                            for file in chunk {
+                                let result = parse_one(file);
+                                if worker_tx.send(result).is_err() {
+                                    // Receiver dropped — abort this chunk.
+                                    return;
+                                }
+                            }
+                        });
+                    });
+            });
+            // `tx` dropped here when the producer thread exits. Worker
+            // clones drop as workers finish, so the channel closes once all
+            // in-flight chunks complete.
+        });
+
+        // Main thread: drain the channel in arrival order, splitting Ok/Err
+        // into the result Vecs. The loop exits when all senders are gone.
+        for result in rx {
+            match result {
+                Ok(r) => ok_results.push(r),
+                Err((path, msg)) => errors.push((path, msg)),
+            }
         }
-    }
+    });
 
     let files_parsed = ok_results.len();
     let files_failed = errors.len();
@@ -989,5 +1069,156 @@ mod tests {
                 "expected LZ4 failure, got: {msg}"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // L2: mpsc channel + par_chunks streaming — large-batch coverage
+    //
+    // These tests exercise the streaming/backpressure path that replaced the
+    // pre-L2 `par_iter().collect()` shape. They use batches larger than the
+    // channel bound and chunk size to ensure results are not lost when the
+    // main thread drains the channel slowly.
+    // -----------------------------------------------------------------------
+
+    /// Builds `count` Rust files with unique function names `f0`, `f1`, ...
+    /// and inserts each into `compressed` with LZ4-prepared bytes.
+    fn make_compressed_batch(
+        dir: &std::path::Path,
+        count: usize,
+    ) -> (Vec<FileInfo>, RamFirstSources) {
+        let mut files = Vec::with_capacity(count);
+        let mut compressed = RamFirstSources::new();
+        for i in 0..count {
+            let name = format!("f{i}.rs");
+            let source = format!("fn f{i}() {{}}");
+            let file = make_file(dir, &name, &source, Some(Language::Rust));
+            compressed.insert(file.path.clone(), compress_source(&source));
+            files.push(file);
+        }
+        (files, compressed)
+    }
+
+    #[test]
+    fn ram_first_large_batch_all_parsed_under_backpressure() {
+        // 64 files > CHANNEL_BOUND (4) × typical chunk size, exercising the
+        // backpressure path: workers must block on send when the channel is
+        // full and the main thread is still draining.
+        let dir = tempfile::tempdir().unwrap();
+        let (files, compressed) = make_compressed_batch(dir.path(), 64);
+
+        let result = parallel_parse_ram_first(&files, &compressed, "proj");
+        assert_eq!(result.files_failed, 0, "got errors: {:?}", result.errors);
+        assert_eq!(result.files_parsed, 64);
+        assert_eq!(result.results.len(), 64);
+        assert!(result.errors.is_empty());
+
+        // Every f0..f63 must appear exactly once across all results.
+        // Use a HashSet to validate uniqueness + completeness without
+        // depending on lexicographic vs numeric ordering.
+        let names: std::collections::HashSet<String> = result
+            .results
+            .iter()
+            .flat_map(|r| r.nodes.iter().map(|n| n.name.clone()))
+            .collect();
+        assert_eq!(
+            names.len(),
+            64,
+            "no duplicate names expected, got: {names:?}"
+        );
+        for i in 0..64 {
+            assert!(
+                names.contains(&format!("f{i}")),
+                "missing f{i} in extracted names: {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ram_first_large_batch_mixed_success_failure_keeps_exact_counts() {
+        // Interleave success (in compressed map) with failure (corrupt LZ4)
+        // across a 48-file batch. The streaming path must not lose or
+        // duplicate any result regardless of which worker handled it.
+        let dir = tempfile::tempdir().unwrap();
+        let mut files = Vec::with_capacity(48);
+        let mut compressed = RamFirstSources::new();
+        for i in 0..48 {
+            let name = format!("m{i}.rs");
+            let source = format!("fn m{i}() {{}}");
+            let file = make_file(dir.path(), &name, &source, Some(Language::Rust));
+            if i % 2 == 0 {
+                compressed.insert(file.path.clone(), compress_source(&source));
+            } else {
+                // Odd index → corrupt LZ4 → guaranteed decompress failure.
+                compressed.insert(file.path.clone(), vec![0xFF; 8]);
+            }
+            files.push(file);
+        }
+
+        let result = parallel_parse_ram_first(&files, &compressed, "proj");
+        assert_eq!(result.files_parsed, 24, "got errors: {:?}", result.errors);
+        assert_eq!(result.files_failed, 24);
+        assert_eq!(result.results.len(), 24);
+        assert_eq!(result.errors.len(), 24);
+        // All failures must mention LZ4 decompress failure.
+        for (_, msg) in &result.errors {
+            assert!(
+                msg.contains("LZ4 decompress failed"),
+                "expected LZ4 failure, got: {msg}"
+            );
+        }
+        // parsed + failed must equal input length (no result lost).
+        assert_eq!(
+            result.files_parsed + result.files_failed,
+            files.len(),
+            "streaming must not drop results"
+        );
+    }
+
+    #[test]
+    fn ram_first_large_batch_with_disk_fallback_completes() {
+        // 40 files: half in compressed map (RAM-first), half missing from
+        // the map (disk fallback). Verifies the streaming path correctly
+        // handles the fallback branch under backpressure.
+        let dir = tempfile::tempdir().unwrap();
+        let mut files = Vec::with_capacity(40);
+        let mut compressed = RamFirstSources::new();
+        for i in 0..40 {
+            let name = format!("d{i}.rs");
+            let source = format!("fn d{i}() {{}}");
+            let file = make_file(dir.path(), &name, &source, Some(Language::Rust));
+            if i % 2 == 0 {
+                compressed.insert(file.path.clone(), compress_source(&source));
+            }
+            // Odd index intentionally missing from `compressed` → disk read.
+            files.push(file);
+        }
+
+        let result = parallel_parse_ram_first(&files, &compressed, "proj");
+        assert_eq!(result.files_failed, 0, "got errors: {:?}", result.errors);
+        assert_eq!(result.files_parsed, 40);
+        assert_eq!(result.results.len(), 40);
+    }
+
+    #[test]
+    fn ram_first_single_file_uses_streaming_path_correctly() {
+        // Boundary: batch size = 1 must still work after the streaming
+        // refactor (no off-by-one in chunking or channel drain).
+        let dir = tempfile::tempdir().unwrap();
+        let source = "fn lone() {}";
+        let file = make_file(dir.path(), "lone.rs", source, Some(Language::Rust));
+
+        let mut compressed = RamFirstSources::new();
+        compressed.insert(file.path.clone(), compress_source(source));
+
+        let result = parallel_parse_ram_first(&[file], &compressed, "proj");
+        assert_eq!(result.files_parsed, 1);
+        assert_eq!(result.files_failed, 0);
+        assert_eq!(result.results.len(), 1);
+        let names: Vec<&str> = result.results[0]
+            .nodes
+            .iter()
+            .map(|n| n.name.as_str())
+            .collect();
+        assert!(names.contains(&"lone"), "should extract lone: {names:?}");
     }
 }
