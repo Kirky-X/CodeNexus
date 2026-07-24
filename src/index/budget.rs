@@ -21,10 +21,15 @@
 //!   - `Green` → continue growing.
 //!   - `Yellow` → flush current batch, then continue.
 //!   - `Red` → abort RAM-first mode, switch to streaming disk-read.
-//! - Per-collection soft limit (`per_collection_soft_limit`) and per-cache-entry
-//!   limit (`cache_entry_max_bytes`) provide local caps independent of the
-//!   global RSS reading, so a single pathological collection cannot OOM the
-//!   process before the next RSS poll.
+//! - Per-collection soft limit (`per_collection_soft_limit`) provides a local
+//!   cap independent of the global RSS reading, so a single pathological
+//!   collection cannot OOM the process before the next RSS poll.
+//!
+//! # Cache entry limit
+//!
+//! The per-cache-entry size cap lives in [`crate::cache::CacheConfig`] (not
+//! here) — cache policy is owned by the cache module. [`MemoryBudget`] only
+//! owns the process-level memory budget.
 //!
 //! # Cross-platform
 //!
@@ -74,13 +79,14 @@ impl Pressure {
 
 /// Memory budget for the indexing pipeline.
 ///
-/// Holds four independent caps:
+/// Holds three independent caps:
 /// 1. `max_rss_bytes` — process-level hard cap on resident set size.
 /// 2. `per_collection_soft_limit` — per-collection size (bytes) above which
 ///    the collection must be flushed or split into batches.
 /// 3. `flush_batch_size` — number of items per batch when flushing.
-/// 4. `cache_entry_max_bytes` — max bytes per cache entry; larger entries
-///    are rejected by [`crate::cache::CacheStore`] implementations.
+///
+/// The per-cache-entry size cap is owned by [`crate::cache::CacheConfig`],
+/// not by `MemoryBudget` — cache policy is the cache module's responsibility.
 ///
 /// All fields are `pub` so callers can construct custom budgets (e.g. for
 /// tests), but the [`with_*`](Self::with_soft_limit) builder methods are
@@ -93,8 +99,6 @@ pub struct MemoryBudget {
     pub per_collection_soft_limit: u64,
     /// Number of items per batch when flushing a large collection.
     pub flush_batch_size: usize,
-    /// Max bytes per cache entry. Entries larger than this are rejected.
-    pub cache_entry_max_bytes: usize,
 }
 
 impl MemoryBudget {
@@ -102,8 +106,6 @@ impl MemoryBudget {
     pub const DEFAULT_SOFT_LIMIT: u64 = 256 * 1024 * 1024;
     /// Default batch size when flushing.
     pub const DEFAULT_FLUSH_BATCH: usize = 5_000;
-    /// Default max bytes per cache entry: 64 KiB.
-    pub const DEFAULT_CACHE_ENTRY_MAX: usize = 64 * 1024;
 
     /// Builds a budget by probing the current system's available memory.
     ///
@@ -128,7 +130,6 @@ impl MemoryBudget {
             max_rss_bytes: max_rss,
             per_collection_soft_limit: Self::DEFAULT_SOFT_LIMIT,
             flush_batch_size: Self::DEFAULT_FLUSH_BATCH,
-            cache_entry_max_bytes: Self::DEFAULT_CACHE_ENTRY_MAX,
         }
     }
 
@@ -141,7 +142,6 @@ impl MemoryBudget {
             max_rss_bytes,
             per_collection_soft_limit: Self::DEFAULT_SOFT_LIMIT,
             flush_batch_size: Self::DEFAULT_FLUSH_BATCH,
-            cache_entry_max_bytes: Self::DEFAULT_CACHE_ENTRY_MAX,
         }
     }
 
@@ -156,13 +156,6 @@ impl MemoryBudget {
     #[must_use]
     pub fn with_flush_batch_size(mut self, size: usize) -> Self {
         self.flush_batch_size = size;
-        self
-    }
-
-    /// Overrides the max bytes per cache entry.
-    #[must_use]
-    pub fn with_cache_entry_max(mut self, bytes: usize) -> Self {
-        self.cache_entry_max_bytes = bytes;
         self
     }
 
@@ -193,20 +186,11 @@ impl MemoryBudget {
     /// per-collection soft limit.
     ///
     /// Callers use this to decide whether to flush a `Vec<Node>` / `String`
-    /// / `HashMap` before adding more items.
+    /// / `HashMap` before adding more items, or (in [`IndexFacade`]::index_ram_first])
+    /// whether to fall back from RAM-first to streaming disk-read mode.
     #[must_use]
     pub fn collection_exceeds_limit(&self, size: u64) -> bool {
         size >= self.per_collection_soft_limit
-    }
-
-    /// Returns `true` if a cache entry of `entry_size` bytes exceeds the
-    /// per-entry cap.
-    ///
-    /// [`crate::cache::CacheStore`] implementations MUST consult this before
-    /// calling `set`, and reject oversized entries with a `warn!` log.
-    #[must_use]
-    pub fn cache_entry_exceeds_limit(&self, entry_size: usize) -> bool {
-        entry_size > self.cache_entry_max_bytes
     }
 
     /// Probes the system's currently available memory, in bytes.
@@ -286,11 +270,6 @@ mod tests {
         assert_eq!(MemoryBudget::DEFAULT_FLUSH_BATCH, 5_000);
     }
 
-    #[test]
-    fn default_cache_entry_max_is_64kib() {
-        assert_eq!(MemoryBudget::DEFAULT_CACHE_ENTRY_MAX, 64 * 1024);
-    }
-
     // --- MemoryBudget::new ---
 
     #[test]
@@ -302,10 +281,6 @@ mod tests {
             MemoryBudget::DEFAULT_SOFT_LIMIT
         );
         assert_eq!(b.flush_batch_size, MemoryBudget::DEFAULT_FLUSH_BATCH);
-        assert_eq!(
-            b.cache_entry_max_bytes,
-            MemoryBudget::DEFAULT_CACHE_ENTRY_MAX
-        );
     }
 
     #[test]
@@ -332,20 +307,12 @@ mod tests {
     }
 
     #[test]
-    fn with_cache_entry_max_overrides_default() {
-        let b = MemoryBudget::new(1024).with_cache_entry_max(128 * 1024);
-        assert_eq!(b.cache_entry_max_bytes, 128 * 1024);
-    }
-
-    #[test]
     fn builder_methods_chain() {
         let b = MemoryBudget::new(1024)
             .with_soft_limit(100)
-            .with_flush_batch_size(200)
-            .with_cache_entry_max(300);
+            .with_flush_batch_size(200);
         assert_eq!(b.per_collection_soft_limit, 100);
         assert_eq!(b.flush_batch_size, 200);
-        assert_eq!(b.cache_entry_max_bytes, 300);
     }
 
     // --- check_pressure boundaries ---
@@ -415,28 +382,6 @@ mod tests {
         assert!(b.collection_exceeds_limit(1_001));
     }
 
-    // --- cache_entry_exceeds_limit ---
-
-    #[test]
-    fn cache_entry_exceeds_limit_below_max_returns_false() {
-        let b = MemoryBudget::new(1024).with_cache_entry_max(1_000);
-        assert!(!b.cache_entry_exceeds_limit(999));
-    }
-
-    #[test]
-    fn cache_entry_exceeds_limit_at_max_returns_false() {
-        // `>` (strict) so that "at max" is allowed (an entry exactly at the
-        // cap is acceptable; only larger entries are rejected).
-        let b = MemoryBudget::new(1024).with_cache_entry_max(1_000);
-        assert!(!b.cache_entry_exceeds_limit(1_000));
-    }
-
-    #[test]
-    fn cache_entry_exceeds_limit_above_max_returns_true() {
-        let b = MemoryBudget::new(1024).with_cache_entry_max(1_000);
-        assert!(b.cache_entry_exceeds_limit(1_001));
-    }
-
     // --- from_system (env-aware, but assert invariants) ---
 
     #[test]
@@ -456,10 +401,6 @@ mod tests {
             MemoryBudget::DEFAULT_SOFT_LIMIT
         );
         assert_eq!(b.flush_batch_size, MemoryBudget::DEFAULT_FLUSH_BATCH);
-        assert_eq!(
-            b.cache_entry_max_bytes,
-            MemoryBudget::DEFAULT_CACHE_ENTRY_MAX
-        );
     }
 
     #[test]

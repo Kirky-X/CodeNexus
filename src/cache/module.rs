@@ -66,11 +66,18 @@ pub enum CacheError {
 // Config
 // ---------------------------------------------------------------------------
 
+/// Default max bytes per cache entry: 64 KiB.
+///
+/// This is the single source of truth for the per-entry size cap — cache
+/// policy is owned by the cache module, not by `MemoryBudget`. Entries
+/// larger than this are rejected by [`OxcacheStore::set`] with a `warn!` log.
+pub const DEFAULT_ENTRY_MAX_BYTES: usize = 64 * 1024;
+
 /// Configuration for [`CacheModule`] (T017).
 ///
 /// Stored in Kit via `AsyncKit::set_config` and read in
 /// [`AsyncAutoBuilder::build`]. Defaults to 10,000 entries (matching
-/// oxcache's `MokaMemoryBackend` default).
+/// oxcache's `MokaMemoryBackend` default) and a 64 KiB per-entry cap.
 ///
 /// # Example
 ///
@@ -84,16 +91,24 @@ pub struct CacheConfig {
     /// Max entries held by the L1 moka memory backend.
     /// Default: 10,000 (matches oxcache's `MokaMemoryBackend` default).
     pub capacity: u64,
+    /// Max bytes per cache entry. Entries larger than this are rejected
+    /// by [`OxcacheStore::set`] with a `warn!` log. Default: 64 KiB
+    /// ([`DEFAULT_ENTRY_MAX_BYTES`]).
+    pub entry_max_bytes: usize,
 }
 
 impl Default for CacheConfig {
     fn default() -> Self {
-        Self { capacity: 10_000 }
+        Self {
+            capacity: 10_000,
+            entry_max_bytes: DEFAULT_ENTRY_MAX_BYTES,
+        }
     }
 }
 
 impl CacheConfig {
-    /// Creates a config with the default capacity (10,000 entries).
+    /// Creates a config with the default capacity (10,000 entries) and
+    /// default per-entry cap (64 KiB).
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -103,6 +118,14 @@ impl CacheConfig {
     #[must_use]
     pub fn with_capacity(mut self, capacity: u64) -> Self {
         self.capacity = capacity;
+        self
+    }
+
+    /// Sets the max bytes per cache entry. Entries larger than this are
+    /// rejected by [`OxcacheStore::set`].
+    #[must_use]
+    pub fn with_entry_max_bytes(mut self, bytes: usize) -> Self {
+        self.entry_max_bytes = bytes;
         self
     }
 }
@@ -169,7 +192,7 @@ impl CacheModule {
             .build()
             .await
             .map_err(|e| CacheError::BuildFailed(e.to_string()))?;
-        Ok(Arc::new(OxcacheStore::new(cache)))
+        Ok(Arc::new(OxcacheStore::new(cache, config.entry_max_bytes)))
     }
 }
 
@@ -189,12 +212,19 @@ struct OxcacheStore {
     /// The oxcache Cache instance. Built with `sync_mode(true)` so
     /// `backend_sync` is `Some`, enabling the `_sync` methods.
     inner: oxcache::Cache<String, Vec<u8>>,
+    /// Max bytes per cache entry. Entries larger than this are rejected
+    /// by [`set`](CacheStore::set) with a `warn!` log.
+    entry_max_bytes: usize,
 }
 
 impl OxcacheStore {
-    /// Creates a new `OxcacheStore` wrapping the given oxcache `Cache`.
-    fn new(cache: oxcache::Cache<String, Vec<u8>>) -> Self {
-        Self { inner: cache }
+    /// Creates a new `OxcacheStore` wrapping the given oxcache `Cache`
+    /// and enforcing the given per-entry byte cap.
+    fn new(cache: oxcache::Cache<String, Vec<u8>>, entry_max_bytes: usize) -> Self {
+        Self {
+            inner: cache,
+            entry_max_bytes,
+        }
     }
 }
 
@@ -210,6 +240,19 @@ impl CacheStore for OxcacheStore {
     }
 
     fn set(&self, key: &str, val: Vec<u8>) {
+        // L5: per-entry byte cap. Reject oversized entries before they
+        // claim moka capacity. A single pathological entry (e.g. a 100 MB
+        // AST blob) would otherwise evict thousands of small entries and
+        // could OOM the process when the cache serialises the value.
+        if val.len() > self.entry_max_bytes {
+            tracing::warn!(
+                key = %key,
+                entry_size = val.len(),
+                max = self.entry_max_bytes,
+                "cache set rejected: entry exceeds entry_max_bytes"
+            );
+            return;
+        }
         if let Err(e) = self.inner.set_bytes_sync(key, val, None) {
             tracing::warn!(key = %key, error = %e, "cache set failed");
         }
@@ -248,6 +291,30 @@ mod tests {
     fn cache_config_with_capacity_overrides_default() {
         let config = CacheConfig::new().with_capacity(5_000);
         assert_eq!(config.capacity, 5_000);
+    }
+
+    #[test]
+    fn cache_config_default_entry_max_bytes_is_64kib() {
+        // Cache module owns the per-entry cap (DEFAULT_ENTRY_MAX_BYTES is
+        // the single source of truth — MemoryBudget no longer duplicates it).
+        let config = CacheConfig::default();
+        assert_eq!(config.entry_max_bytes, 64 * 1024);
+        assert_eq!(config.entry_max_bytes, DEFAULT_ENTRY_MAX_BYTES);
+    }
+
+    #[test]
+    fn cache_config_with_entry_max_bytes_overrides_default() {
+        let config = CacheConfig::new().with_entry_max_bytes(128 * 1024);
+        assert_eq!(config.entry_max_bytes, 128 * 1024);
+    }
+
+    #[test]
+    fn cache_config_builder_chains() {
+        let config = CacheConfig::new()
+            .with_capacity(2_000)
+            .with_entry_max_bytes(32 * 1024);
+        assert_eq!(config.capacity, 2_000);
+        assert_eq!(config.entry_max_bytes, 32 * 1024);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -298,10 +365,66 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn capability_set_large_value() {
-        let cap = build_cache().await;
+        // Use a custom entry_max_bytes so the 100KB value is accepted
+        // (default cap is 64KB). This isolates "large value round-trip"
+        // from the entry_max_bytes rejection logic tested separately.
+        let cap = build_cache_with_entry_max(200 * 1024).await;
         let large = vec![0xAB; 1024 * 100]; // 100KB
         cap.set("large", large.clone());
         assert_eq!(cap.get("large"), Some(large));
+    }
+
+    /// Builds a CacheModule capability with a custom `entry_max_bytes`.
+    async fn build_cache_with_entry_max(bytes: usize) -> Arc<dyn CacheStore> {
+        let config = CacheConfig::default().with_entry_max_bytes(bytes);
+        CacheModule::build_cap(&config)
+            .await
+            .expect("CacheModule::build_cap with custom entry_max_bytes")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn capability_set_at_entry_max_bytes_accepted() {
+        // Entry exactly at the cap (≤, not <) is accepted.
+        let cap = build_cache_with_entry_max(1024).await;
+        let val = vec![0xCD; 1024];
+        cap.set("at_max", val.clone());
+        assert_eq!(cap.get("at_max"), Some(val));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn capability_set_above_entry_max_bytes_rejected() {
+        // Entry one byte above the cap is rejected → get returns None.
+        let cap = build_cache_with_entry_max(1024).await;
+        let oversized = vec![0xEF; 1025];
+        cap.set("oversized", oversized.clone());
+        assert!(
+            cap.get("oversized").is_none(),
+            "oversized entry must be rejected"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn capability_set_oversized_does_not_evict_existing() {
+        // Rejecting an oversized entry must not evict a prior small entry
+        // for the same key (defensive: the rejection short-circuits before
+        // the moka set call, so the prior value survives).
+        let cap = build_cache_with_entry_max(1024).await;
+        cap.set("k", b"small".to_vec());
+        cap.set("k", vec![0xAA; 2048]); // rejected — too large
+        assert_eq!(cap.get("k"), Some(b"small".to_vec()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn capability_set_default_64kib_rejects_100kib_entry() {
+        // Default cap (64 KiB) rejects a 100 KiB entry — the canonical
+        // "pathological AST blob" scenario from the L5 root-cause analysis.
+        let cap = build_cache().await;
+        let blob = vec![0xAA; 100 * 1024];
+        cap.set("ast_blob", blob);
+        assert!(
+            cap.get("ast_blob").is_none(),
+            "100 KiB entry must be rejected by default 64 KiB cap"
+        );
     }
 
     /// Verify the full AsyncKit registration flow works end-to-end.

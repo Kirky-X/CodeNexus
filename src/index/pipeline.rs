@@ -28,10 +28,11 @@ use std::time::Instant;
 
 use tracing::{info, warn};
 
-use crate::discover::Walker;
+use crate::discover::{FileInfo, Walker};
 use crate::index::error::{IndexError, Result};
 use crate::index::hash::compute_file_hash;
 use crate::index::incremental::FileDiff;
+use crate::index::MemoryBudget;
 use crate::model::{new_file_id, Language, Node, NodeLabel};
 use crate::parse::parallel::RamFirstSources;
 use crate::storage::{Repository, StorageError};
@@ -171,6 +172,10 @@ pub struct IndexFacade {
     db_path: PathBuf,
     #[cfg(feature = "cache")]
     cache: Option<Arc<dyn CacheStore>>,
+    /// Memory budget used by [`index_ram_first`](Self::index_ram_first) to
+    /// decide whether RAM-first mode is safe or whether to fall back to the
+    /// streaming disk-read path (L5 adaptive degradation).
+    budget: MemoryBudget,
 }
 
 impl IndexFacade {
@@ -182,6 +187,7 @@ impl IndexFacade {
             db_path: db_path.to_path_buf(),
             #[cfg(feature = "cache")]
             cache: None,
+            budget: MemoryBudget::from_system(),
         })
     }
 
@@ -193,6 +199,19 @@ impl IndexFacade {
     #[must_use]
     pub fn with_cache(mut self, cache: Arc<dyn CacheStore>) -> Self {
         self.cache = Some(cache);
+        self
+    }
+
+    /// Overrides the default system-probed [`MemoryBudget`] (L5 adaptive
+    /// degradation).
+    ///
+    /// Use this in tests to force a specific `per_collection_soft_limit` so
+    /// the RAM-first fallback decision can be exercised deterministically.
+    /// In production, [`IndexFacade::new`] probes the system's available
+    /// memory via [`MemoryBudget::from_system`].
+    #[must_use]
+    pub fn with_budget(mut self, budget: MemoryBudget) -> Self {
+        self.budget = budget;
         self
     }
 
@@ -259,6 +278,32 @@ impl IndexFacade {
         // the authoritative diff; the compressed map is keyed by absolute
         // path, so ParsePhase looks up whatever subset ScanPhase selects.
         let disk_files = Walker::new(path).discover().map_err(IndexError::from)?;
+
+        // L5: Adaptive degradation — when total source size exceeds the
+        // per-collection soft limit, RAM-first mode would balloon memory
+        // (LZ4-compressed buffers + decompressed parse trees + Graph nodes
+        // + CSV strings all live in RAM simultaneously). Fall back to the
+        // streaming disk-read path which parses file-by-file via ParsePhase's
+        // default mode, keeping peak memory bounded.
+        //
+        // NOTE (P1 tradeoff): `self.index()` → ScanPhase will re-discover
+        // files via `Walker::discover()`. This double walk is a known cost
+        // of the fallback path — the alternative (threading `disk_files`
+        // through ScanInput) requires a non-trivial refactor of ScanPhase.
+        // The extra walk is I/O-bound but cheap relative to the
+        // parse/resolve/load phases that follow, and only triggers for
+        // repositories over the 256 MiB soft limit.
+        let (total_bytes, use_ram_first) = evaluate_ram_first_budget(&disk_files, &self.budget);
+        if !use_ram_first {
+            warn!(
+                total_bytes = total_bytes,
+                soft_limit = self.budget.per_collection_soft_limit,
+                file_count = disk_files.len(),
+                "RAM-first: repository exceeds per-collection soft limit, \
+                 falling back to streaming disk-read mode"
+            );
+            return self.index(path, project_name, force);
+        }
 
         // H15: LZ4-compress every discovered file into memory. Files that
         // ScanPhase later marks unchanged (hash match) won't be in `to_parse`,
@@ -456,6 +501,27 @@ impl Pipeline {
 
         Ok(load_output.index_result)
     }
+}
+
+/// Evaluates whether RAM-first mode is safe for `files` under `budget`
+/// (L5 adaptive degradation).
+///
+/// Returns `(total_bytes, should_use_ram_first)`:
+/// - `total_bytes` — sum of all `FileInfo.size`, computed with
+///   `saturating_add` so an overflow fails safe (saturates to `u64::MAX`,
+///   which always exceeds the soft limit → fallback).
+/// - `should_use_ram_first` — `true` when `total_bytes` is below
+///   `budget.per_collection_soft_limit`.
+///
+/// Returning the total alongside the decision lets the caller emit it in
+/// the fallback `warn!` log without recomputing the sum (P2 fix).
+///
+/// This is a pure function (no I/O, no global state) so the decision can be
+/// unit-tested deterministically without touching the database or file system.
+#[must_use]
+fn evaluate_ram_first_budget(files: &[FileInfo], budget: &MemoryBudget) -> (u64, bool) {
+    let total: u64 = files.iter().fold(0u64, |acc, f| acc.saturating_add(f.size));
+    (total, !budget.collection_exceeds_limit(total))
 }
 
 /// Builds a [`Node`] (label `File`) for each changed/added file, carrying the
@@ -2004,6 +2070,255 @@ mod tests {
         assert!(
             cache.invalidates.load(Ordering::SeqCst) >= 1,
             "invalidate_all should be called after ram_first index"
+        );
+    }
+
+    // --- L5: evaluate_ram_first_budget (pure decision function) ---
+
+    #[test]
+    fn evaluate_ram_first_budget_returns_true_when_total_below_limit() {
+        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(1_000);
+        let files = vec![
+            FileInfo {
+                path: PathBuf::from("a.rs"),
+                relative_path: "a.rs".to_string(),
+                language: Some(Language::Rust),
+                size: 100,
+            },
+            FileInfo {
+                path: PathBuf::from("b.rs"),
+                relative_path: "b.rs".to_string(),
+                language: Some(Language::Rust),
+                size: 200,
+            },
+        ];
+        let (total, use_ram_first) = evaluate_ram_first_budget(&files, &budget);
+        assert_eq!(total, 300, "total must be the sum of all file sizes");
+        assert!(use_ram_first, "300 < 1000 → ram_first is safe");
+    }
+
+    #[test]
+    fn evaluate_ram_first_budget_returns_false_when_total_at_limit() {
+        // `collection_exceeds_limit` uses `>=` so "at limit" triggers fallback
+        // (defensive: flush at the boundary, not past it).
+        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(300);
+        let files = vec![
+            FileInfo {
+                path: PathBuf::from("a.rs"),
+                relative_path: "a.rs".to_string(),
+                language: Some(Language::Rust),
+                size: 100,
+            },
+            FileInfo {
+                path: PathBuf::from("b.rs"),
+                relative_path: "b.rs".to_string(),
+                language: Some(Language::Rust),
+                size: 200,
+            },
+        ];
+        let (total, use_ram_first) = evaluate_ram_first_budget(&files, &budget);
+        assert_eq!(total, 300);
+        assert!(!use_ram_first, "300 >= 300 → fall back to streaming");
+    }
+
+    #[test]
+    fn evaluate_ram_first_budget_returns_false_when_total_above_limit() {
+        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(299);
+        let files = vec![
+            FileInfo {
+                path: PathBuf::from("a.rs"),
+                relative_path: "a.rs".to_string(),
+                language: Some(Language::Rust),
+                size: 100,
+            },
+            FileInfo {
+                path: PathBuf::from("b.rs"),
+                relative_path: "b.rs".to_string(),
+                language: Some(Language::Rust),
+                size: 200,
+            },
+        ];
+        let (total, use_ram_first) = evaluate_ram_first_budget(&files, &budget);
+        assert_eq!(total, 300);
+        assert!(!use_ram_first, "300 >= 299 → fall back to streaming");
+    }
+
+    #[test]
+    fn evaluate_ram_first_budget_returns_true_for_empty_files() {
+        // Empty repository → total = 0 < any non-zero limit → ram_first ok.
+        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(1);
+        let files: Vec<FileInfo> = vec![];
+        let (total, use_ram_first) = evaluate_ram_first_budget(&files, &budget);
+        assert_eq!(total, 0, "empty → total 0");
+        assert!(use_ram_first, "0 < 1 → ram_first is safe");
+    }
+
+    #[test]
+    fn evaluate_ram_first_budget_sums_all_files_not_just_first() {
+        // Regression guard: a bug that only checks `files[0].size` would
+        // wrongly return true here (100 < 1000) even though the total
+        // (100+950=1050) exceeds the limit.
+        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(1_000);
+        let files = vec![
+            FileInfo {
+                path: PathBuf::from("a.rs"),
+                relative_path: "a.rs".to_string(),
+                language: Some(Language::Rust),
+                size: 100,
+            },
+            FileInfo {
+                path: PathBuf::from("b.rs"),
+                relative_path: "b.rs".to_string(),
+                language: Some(Language::Rust),
+                size: 950,
+            },
+        ];
+        let (total, use_ram_first) = evaluate_ram_first_budget(&files, &budget);
+        assert_eq!(total, 1050, "must sum all files, not just the first");
+        assert!(!use_ram_first, "1050 >= 1000 → fall back");
+    }
+
+    #[test]
+    fn evaluate_ram_first_budget_saturates_on_overflow() {
+        // Security hardening: when the sum overflows u64, `saturating_add`
+        // must return u64::MAX so the decision fails safe (fallback).
+        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(u64::MAX);
+        let files = vec![
+            FileInfo {
+                path: PathBuf::from("huge.rs"),
+                relative_path: "huge.rs".to_string(),
+                language: Some(Language::Rust),
+                size: u64::MAX,
+            },
+            FileInfo {
+                path: PathBuf::from("overflow.rs"),
+                relative_path: "overflow.rs".to_string(),
+                language: Some(Language::Rust),
+                size: 1,
+            },
+        ];
+        let (total, use_ram_first) = evaluate_ram_first_budget(&files, &budget);
+        assert_eq!(total, u64::MAX, "overflow must saturate to u64::MAX");
+        // soft_limit is u64::MAX, so u64::MAX >= u64::MAX → exceeds → fallback.
+        assert!(!use_ram_first, "saturated total must trigger fallback");
+    }
+
+    // --- L5: IndexFacade::with_budget builder ---
+
+    #[test]
+    fn index_facade_with_budget_overrides_default() {
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("testdb");
+        let budget = MemoryBudget::new(123).with_soft_limit(456);
+        let facade = IndexFacade::new(&db_path)
+            .expect("facade")
+            .with_budget(budget);
+        assert_eq!(facade.budget.max_rss_bytes, 123);
+        assert_eq!(facade.budget.per_collection_soft_limit, 456);
+    }
+
+    #[test]
+    fn index_facade_new_defaults_to_system_budget() {
+        // IndexFacade::new must populate `budget` with from_system() so the
+        // fallback decision works out-of-the-box without an explicit builder.
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("testdb");
+        let facade = IndexFacade::new(&db_path).expect("facade");
+        assert!(
+            facade.budget.max_rss_bytes > 0,
+            "from_system must probe a non-zero max_rss"
+        );
+        assert_eq!(
+            facade.budget.per_collection_soft_limit,
+            MemoryBudget::DEFAULT_SOFT_LIMIT
+        );
+    }
+
+    // --- L5: index_ram_first adaptive fallback (integration) ---
+
+    #[test]
+    fn index_ram_first_falls_back_to_streaming_when_over_budget() {
+        // Force a tiny soft limit so the small test file triggers fallback.
+        // The fallback path delegates to `self.index()`, which must succeed
+        // and emit the diagnostic warning.
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "main.rs", "fn main() { helper(); }\n");
+        let db_path = fresh_db_path();
+        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(1);
+        let facade = IndexFacade::new(&db_path)
+            .expect("facade")
+            .with_budget(budget);
+
+        let captured = capture_tracing(|| {
+            let result = facade.index_ram_first(tmp.path(), "fallback_demo", false);
+            assert!(
+                result.is_ok(),
+                "fallback to streaming should succeed: {:?}",
+                result
+            );
+        });
+
+        assert!(
+            captured.contains("RAM-first: repository exceeds per-collection soft limit"),
+            "fallback warning should be emitted, got: {captured:?}"
+        );
+        assert!(
+            captured.contains("soft_limit=1"),
+            "soft_limit field should be in the warning, got: {captured:?}"
+        );
+    }
+
+    #[test]
+    fn index_ram_first_proceeds_when_under_budget() {
+        // Large soft limit → total file size is under it → no fallback, the
+        // ram_first path runs and emits no fallback warning.
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "main.rs", "fn main() { helper(); }\n");
+        let db_path = fresh_db_path();
+        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(u64::MAX);
+        let facade = IndexFacade::new(&db_path)
+            .expect("facade")
+            .with_budget(budget);
+
+        let captured = capture_tracing(|| {
+            let result = facade.index_ram_first(tmp.path(), "ram_first_demo", false);
+            assert!(
+                result.is_ok(),
+                "ram_first should succeed when under budget: {:?}",
+                result
+            );
+        });
+
+        assert!(
+            !captured.contains("RAM-first: repository exceeds per-collection soft limit"),
+            "no fallback warning should be emitted when under budget, got: {captured:?}"
+        );
+    }
+
+    #[test]
+    fn index_ram_first_fallback_emits_total_bytes_and_file_count() {
+        // The fallback warning must carry total_bytes and file_count fields
+        // so operators can correlate the trigger with repository size.
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "a.rs", "fn a() {}\n");
+        write_file(tmp.path(), "b.rs", "fn b() {}\n");
+        let db_path = fresh_db_path();
+        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(1);
+        let facade = IndexFacade::new(&db_path)
+            .expect("facade")
+            .with_budget(budget);
+
+        let captured = capture_tracing(|| {
+            let _ = facade.index_ram_first(tmp.path(), "fields_demo", false);
+        });
+
+        assert!(
+            captured.contains("total_bytes="),
+            "total_bytes field must be present: {captured:?}"
+        );
+        assert!(
+            captured.contains("file_count=2"),
+            "file_count must reflect discovered file count: {captured:?}"
         );
     }
 }

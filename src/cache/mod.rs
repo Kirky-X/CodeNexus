@@ -28,4 +28,4 @@ pub mod capability;
 pub mod module;
 
 pub use capability::{CacheKey, CacheStore};
-pub use module::{CacheConfig, CacheError, CacheModule};
+pub use module::{CacheConfig, CacheError, CacheModule, DEFAULT_ENTRY_MAX_BYTES};

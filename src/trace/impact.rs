@@ -8,11 +8,63 @@
 //! that any node that (transitively) depends on the symbol is reported.
 
 use std::collections::{HashSet, VecDeque};
+use std::rc::Rc;
 
 use crate::model::{EdgeType, Graph, NodeId};
 use serde::{Deserialize, Serialize};
 
 use super::TraceNode;
+
+// ===== L5: Path link for O(1) path sharing in trace_upstream =====
+
+/// Singly-linked path node used by [`ImpactAnalyzer::trace_upstream`] to
+/// share the BFS path prefix without deep-cloning a `Vec<String>` on every
+/// predecessor expansion.
+///
+/// Each `PathLink` holds one node name plus an `Rc` to its parent link.
+/// Appending a new node is O(1) (one `Rc::clone` + one allocation); the
+/// full `Vec<String>` is materialised only when an [`ImpactNode`] is
+/// pushed to `results` via [`expand_path`].
+///
+/// `Rc` (not `Arc`) is sufficient because `ImpactAnalyzer` is
+/// single-threaded — the analyzer holds an immutable borrow of the
+/// `Graph` and runs BFS on the calling thread.
+struct PathLink {
+    name: String,
+    parent: Option<Rc<PathLink>>,
+}
+
+impl PathLink {
+    /// Creates a root link (no parent) — used for the BFS start node.
+    fn root(name: String) -> Rc<Self> {
+        Rc::new(Self { name, parent: None })
+    }
+
+    /// Creates a child link pointing at `parent` — O(1) (one `Rc::clone`
+    /// plus one allocation). The parent prefix is shared, not copied.
+    fn child(name: String, parent: &Rc<Self>) -> Rc<Self> {
+        Rc::new(Self {
+            name,
+            parent: Some(Rc::clone(parent)),
+        })
+    }
+}
+
+/// Expands a [`PathLink`] chain into a `Vec<String>` from root → leaf.
+///
+/// Walks the `parent` pointers (leaf → root), collects names, then
+/// reverses so the result is in start → leaf order. O(N) where N is the
+/// path length.
+fn expand_path(link: &Rc<PathLink>) -> Vec<String> {
+    let mut path = Vec::new();
+    let mut current: Option<&PathLink> = Some(link);
+    while let Some(node) = current {
+        path.push(node.name.clone());
+        current = node.parent.as_deref();
+    }
+    path.reverse();
+    path
+}
 
 // ===== Multi-dimensional impact types (T024-T027) =====
 
@@ -218,6 +270,16 @@ impl<'a> ImpactAnalyzer<'a> {
     /// Each affected node appears exactly once (deduplicated by id). Respects
     /// `config.max_depth` (clamped to [`MAX_DEPTH_LIMIT`]) and
     /// [`MAX_NODES_LIMIT`].
+    ///
+    /// # L5 memory optimization
+    ///
+    /// The BFS queue stores paths as [`Rc<PathLink>`] chains rather than
+    /// `Vec<String>`. Appending a new node is O(1) (Rc clone + one
+    /// allocation); the full `Vec<String>` is materialised only when an
+    /// [`ImpactNode`] is pushed to `results` via [`expand_path`]. This
+    /// eliminates the O(N×K) intermediate `Vec` allocations that previously
+    /// occurred when deep-cloning the parent path for each of K
+    /// predecessors at every BFS hop.
     fn trace_upstream(&self, start_id: &NodeId, config: &ImpactConfig) -> Vec<ImpactNode> {
         if self.graph.get_node(start_id).is_none() {
             return Vec::new();
@@ -226,18 +288,25 @@ impl<'a> ImpactAnalyzer<'a> {
         let edge_filter: HashSet<EdgeType> = config.edge_types.iter().copied().collect();
         let mut visited: HashSet<NodeId> = HashSet::new();
         visited.insert(start_id.clone());
-        // Queue holds (node_id, depth, path_to_node, edge_type_to_reach_it).
-        let mut queue: VecDeque<(NodeId, u32, Vec<String>, EdgeType)> = VecDeque::new();
+        // Queue holds (node_id, depth, path_link, edge_type_to_reach_it).
+        // `path_link` is an Rc<PathLink> chain — O(1) to clone when
+        // pushing children to the queue, no deep Vec copy.
+        let mut queue: VecDeque<(NodeId, u32, Rc<PathLink>, EdgeType)> = VecDeque::new();
         let start_name = self
             .graph
             .get_node(start_id)
             .map(|n| n.name.clone())
             .unwrap_or_default();
-        queue.push_back((start_id.clone(), 0, vec![start_name], EdgeType::Calls));
+        queue.push_back((
+            start_id.clone(),
+            0,
+            PathLink::root(start_name),
+            EdgeType::Calls,
+        ));
 
         let mut results: Vec<ImpactNode> = Vec::new();
 
-        while let Some((current_id, current_depth, path, _edge)) = queue.pop_front() {
+        while let Some((current_id, current_depth, path_link, _edge)) = queue.pop_front() {
             if current_depth >= max_depth {
                 continue;
             }
@@ -260,20 +329,22 @@ impl<'a> ImpactAnalyzer<'a> {
                     continue;
                 }
                 visited.insert(predecessor.id.clone());
-                let mut new_path = path.clone();
-                new_path.push(predecessor.name.clone());
+                // O(1) path extension: share the parent prefix via Rc.
+                let new_link = PathLink::child(predecessor.name.clone(), &path_link);
+                // Materialise Vec<String> once, only for the output ImpactNode.
+                let impact_path = expand_path(&new_link);
                 results.push(ImpactNode {
                     name: predecessor.name.clone(),
                     qualified_name: predecessor.qualified_name.clone(),
                     file_path: predecessor.file_path.clone().unwrap_or_default(),
-                    impact_path: new_path.clone(),
+                    impact_path,
                     edge_type: edge.edge_type,
                     depth: current_depth + 1,
                 });
                 queue.push_back((
                     predecessor.id.clone(),
                     current_depth + 1,
-                    new_path,
+                    new_link,
                     edge.edge_type,
                 ));
             }
@@ -417,6 +488,57 @@ mod tests {
             .file_path(format!("src/{name}.rs"))
             .start_line(10)
             .build()
+    }
+
+    // ===== L5: PathLink + expand_path unit tests =====
+
+    #[test]
+    fn path_link_root_expands_to_single_name() {
+        let root = PathLink::root("start".to_string());
+        let path = expand_path(&root);
+        assert_eq!(path, vec!["start".to_string()]);
+    }
+
+    #[test]
+    fn path_link_child_appends_to_parent() {
+        let root = PathLink::root("a".to_string());
+        let mid = PathLink::child("b".to_string(), &root);
+        let leaf = PathLink::child("c".to_string(), &mid);
+        let path = expand_path(&leaf);
+        assert_eq!(
+            path,
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+    }
+
+    #[test]
+    fn path_link_shares_parent_prefix_via_rc() {
+        // Two children sharing the same parent prefix — both see the
+        // full prefix when expanded, and the parent is not deep-copied.
+        let parent = PathLink::root("root".to_string());
+        let child1 = PathLink::child("c1".to_string(), &parent);
+        let child2 = PathLink::child("c2".to_string(), &parent);
+        assert_eq!(
+            expand_path(&child1),
+            vec!["root".to_string(), "c1".to_string()]
+        );
+        assert_eq!(
+            expand_path(&child2),
+            vec!["root".to_string(), "c2".to_string()]
+        );
+    }
+
+    #[test]
+    fn path_link_long_chain_expands_correctly() {
+        // Chain of 10 nodes — exercises reverse + reverse correctness.
+        let mut link = PathLink::root("n0".to_string());
+        for i in 1..=10 {
+            link = PathLink::child(format!("n{i}"), &link);
+        }
+        let path = expand_path(&link);
+        assert_eq!(path.len(), 11);
+        assert_eq!(path[0], "n0");
+        assert_eq!(path[10], "n10");
     }
 
     fn make_var(id: &str, name: &str) -> Node {
