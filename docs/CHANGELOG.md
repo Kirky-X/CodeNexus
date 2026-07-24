@@ -5,6 +5,20 @@ All notable changes to CodeNexus are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.10] - 2026-07-25
+
+大型仓库索引时 OOM 问题的完整 5 层防线，将峰值内存从 O(files) 降至 O(chunk_size)。
+
+### Fixed
+
+- **fix(storage): L1+L3+L4 memory-overflow — budget, graph views, streaming CSV** — L1: 新增 `MemoryBudget` + `Pressure` 枚举（sysinfo 探测可用内存，max_rss 设为 50%，分 Green/Yellow/Red 三级）。L3: `Graph::nodes_view/edges_view` 迭代器 + `for_each_node_with_label_mut` 就地修改，去除 `ScopeOutput/ResolveOutput` 中 all_nodes/all_edges 重复拷贝（消除 2 轮 node/edge 全量复制）。L4: `write_nodes_csv_stream<W:Write>` / `write_edges_csv_stream<W:Write>` 流式写入替代全量 String 拼接；`TempDir` 生命周期修正（移除 `std::mem::forget` 泄漏）。
+- **fix(parse): L2 memory-overflow — mpsc channel + par_chunks streaming** — `parallel_parse_ram_first` 重构：rayon `par_chunks(8)` + `mpsc::sync_channel(4)` 限制并发 `ExtractResult` 数量上限为 4（原先 `par_iter().collect()` 同时驻留全部结果）；`std::thread::scope` 解耦生产者/消费者避免死锁；tracing subscriber 正确传播至 rayon worker。
+- **fix(index): L5 adaptive degradation** — `CacheConfig::entry_max_bytes`（64 KiB 单条上限）防止超大 AST 驱逐小条目；`trace_upstream` 路径 `Vec<String>` 改为 `Rc<PathLink>` 链表（O(1) clone 代替 O(N*K) 拷贝）；`index_ram_first` 当仓库总大小超 `per_collection_soft_limit`（256 MiB）自动降级为 streaming disk-read 模式；`MemoryBudget` 移除死代码（`cache_entry_max_bytes` 字段等）。
+
+### Documentation
+
+- **docs(readme): document source-build for older libstdc++** — 新增「从源码编译」章节，指导 libstdc++ < 12 环境下的构建方式。
+
 ## [0.3.9] - 2026-07-21
 
 ### Fixed
