@@ -22,6 +22,14 @@ pub struct ExtractResult {
     /// Extracted definition nodes (functions, classes, variables, etc.).
     pub nodes: Vec<Node>,
     /// Extracted edges (calls, contains, defines, etc.).
+    ///
+    /// **L7-2 invariant**: After `ScopeResolutionPhase::run` (L7-2 memory
+    /// fix), this Vec is `clear()` + `shrink_to_fit()`'d to free ~1 GB on
+    /// large repos. Resolvers MUST read edges from `graph.edges`, NOT from
+    /// this field. Verified via `grep -rn 'result\.edges\|r\.edges' src/resolve`
+    /// (commit e4f92de). The only legitimate readers are:
+    /// 1. `ScopeResolutionPhase` — clones `result.edges` into `graph` then clears.
+    /// 2. Parse extractors — populate the Vec during extraction.
     pub edges: Vec<Edge>,
     /// Import/include statements.
     pub imports: Vec<ImportInfo>,

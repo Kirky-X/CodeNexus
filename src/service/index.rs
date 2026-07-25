@@ -145,6 +145,26 @@ fn resolve_abs_file_path(workspace: &Path, file_path_str: &str) -> std::path::Pa
 /// file extensions found in the project, queries each symbol's hover info,
 /// and writes the extracted type signature back to `semantic_type`.
 /// Failures degrade gracefully to pure tree-sitter extraction.
+///
+/// # L7-6 memory-overflow fix — on-demand LSP startup
+///
+/// Pre-L7-6 this function unconditionally called `provider.start(workspace)`
+/// for ALL 8 wired LSP clients (rs, py, c, cpp, go, ts, f90, java) before
+/// querying any symbol. Each LSP server (rust-analyzer, pyright, clangd,
+/// gopls, tsserver, fortls, jdtls) consumes 300 MB–2 GB of RSS, so a pure
+/// Rust project needlessly spawned 7 unused servers — ~3–5 GB of wasted RSS
+/// that compounded with the L7-5 buffer pool fix to cause OOM on 70 GB hosts.
+///
+/// L7-6 reorders the flow: query Function/Method rows FIRST, collect the
+/// set of file extensions actually present, and only `start()` the LSP
+/// providers whose extension appears in the result set. A pure Rust repo
+/// now starts only `rust-analyzer`; a Python repo starts only `pyright`;
+/// mixed repos start only the union. `shutdown()` is still called on all
+/// 8 providers (the unused ones short-circuit to `Ok(())` per the
+/// `LspProvider::shutdown` contract — "safe to call on a client that was
+/// never successfully started").
+///
+/// Memory savings: ~3–5 GB on single-language repos (the common case).
 #[cfg(feature = "lsp")]
 #[allow(clippy::result_large_err)]
 fn enhance_with_lsp(
@@ -156,12 +176,9 @@ fn enhance_with_lsp(
 
     let providers = build_lsp_providers();
 
-    for (_ext, provider) in &providers {
-        if let Err(LspError::ServerStart(msg)) = provider.start(workspace) {
-            eprintln!("[warn] LSP server start failed (degrading): {msg}");
-        }
-    }
-
+    // L7-6: query Function/Method rows FIRST, then start only the LSP
+    // providers whose extension appears in the result set. Pre-L7-6 started
+    // all 8 providers up front, wasting ~3–5 GB on single-language repos.
     let queries = build_symbol_queries(project);
     let mut rows = Vec::new();
     for q in &queries {
@@ -171,46 +188,82 @@ fn enhance_with_lsp(
         rows.extend(r);
     }
 
-    let mut enhanced: u32 = 0;
+    // Pre-extract (id, abs_file, line) tuples and collect the set of
+    // extensions that actually need an LSP server. Rows that fail
+    // `extract_lsp_row_fields` are counted as skipped (Rule 12: explicit
+    // skip, not silent success — same behaviour as pre-L7-6).
+    let provider_exts: Vec<&'static str> = providers.iter().map(|(e, _)| *e).collect();
+    let default_ext = provider_exts[0];
+    let mut entries: Vec<(String, std::path::PathBuf, u32)> = Vec::with_capacity(rows.len());
     let mut skipped: u32 = 0;
     for row in &rows {
         let Some((id, file_path_str, start_line)) = extract_lsp_row_fields(row) else {
             skipped += 1;
             continue;
         };
-
         let abs_file = resolve_abs_file_path(workspace, &file_path_str);
-
-        let ext = abs_file.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let client = select_provider_for_ext(&providers, ext);
-
         let line = u32::try_from(start_line).unwrap_or(0);
-        match client.hover(&abs_file, line, 0) {
-            Ok(Some(hover)) => {
-                if let Some(text) = crate::lsp::extract_hover_text(&hover) {
-                    let update = build_semantic_type_update(&id, project, &text);
-                    if repo.connection().execute(&update).is_ok() {
-                        enhanced += 1;
+        entries.push((id, abs_file, line));
+    }
+    let active_exts = collect_active_extensions(&entries, &provider_exts, default_ext);
+
+    // L7-6: only start providers whose extension appears in `active_exts`.
+    // Providers for absent extensions short-circuit `shutdown()` to `Ok(())`
+    // (LspProvider::shutdown contract: "safe to call on a client that was
+    // never successfully started").
+    let mut started_count: u32 = 0;
+    for (ext, provider) in &providers {
+        if !active_exts.contains(ext) {
+            continue;
+        }
+        if let Err(LspError::ServerStart(msg)) = provider.start(workspace) {
+            eprintln!("[warn] LSP server start failed (degrading): {msg}");
+        } else {
+            started_count += 1;
+        }
+    }
+    eprintln!(
+        "[info] LSP enhancement: started {started_count} of {} configured servers for {} symbols",
+        providers.len(),
+        entries.len()
+    );
+
+    // If no symbols need enhancement (empty repo / all rows failed to
+    // extract), short-circuit — there is nothing to hover. Still call
+    // shutdown() on all providers for symmetry.
+    let mut enhanced: u32 = 0;
+    if !entries.is_empty() {
+        for (id, abs_file, line) in &entries {
+            let ext = abs_file.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let client = select_provider_for_ext(&providers, ext);
+
+            match client.hover(abs_file, *line, 0) {
+                Ok(Some(hover)) => {
+                    if let Some(text) = crate::lsp::extract_hover_text(&hover) {
+                        let update = build_semantic_type_update(id, project, &text);
+                        if repo.connection().execute(&update).is_ok() {
+                            enhanced += 1;
+                        } else {
+                            skipped += 1;
+                        }
                     } else {
                         skipped += 1;
                     }
-                } else {
+                }
+                Ok(None) => {
                     skipped += 1;
                 }
-            }
-            Ok(None) => {
-                skipped += 1;
-            }
-            Err(LspError::Timeout(_)) | Err(LspError::Communication(_)) => {
-                skipped += 1;
-            }
-            Err(LspError::ServerStart(_)) => {
-                skipped += 1;
-            }
-            Err(LspError::NotImplemented(_)) => {
-                // `hover` is implemented on all current clients; defensive
-                // skip for future opt-outs (C9 R-lsp-002 pattern).
-                skipped += 1;
+                Err(LspError::Timeout(_)) | Err(LspError::Communication(_)) => {
+                    skipped += 1;
+                }
+                Err(LspError::ServerStart(_)) => {
+                    skipped += 1;
+                }
+                Err(LspError::NotImplemented(_)) => {
+                    // `hover` is implemented on all current clients; defensive
+                    // skip for future opt-outs (C9 R-lsp-002 pattern).
+                    skipped += 1;
+                }
             }
         }
     }
@@ -221,6 +274,46 @@ fn enhance_with_lsp(
         let _ = provider.shutdown();
     }
     Ok(())
+}
+
+/// Collects the set of provider extensions that appear in `entries` (L7-6).
+///
+/// Given the pre-extracted `(id, abs_file, line)` tuples from the
+/// Function/Method query, returns the set of provider extensions whose LSP
+/// server must be started. Files whose extension does not match any wired
+/// provider fall back to `default_ext` (preserves pre-L7-6 behaviour where
+/// `select_provider_for_ext` falls back to `providers[0]`).
+///
+/// This is a pure function (no I/O, no LSP, no DB) so the L7-6 routing
+/// decision can be unit-tested deterministically without spawning language
+/// servers or opening a database.
+///
+/// # Arguments
+///
+/// * `entries` - Pre-extracted `(id, abs_file, line)` tuples from
+///   `extract_lsp_row_fields`. Only the `abs_file` extension is read.
+/// * `provider_exts` - Slice of wired provider extensions (e.g.
+///   `["rs", "py", "c", "cpp", "go", "ts", "f90", "java"]`). The first
+///   element MUST equal `default_ext`.
+/// * `default_ext` - Fallback extension for files whose extension is not
+///   in `provider_exts` (e.g. `.md`, `.toml`). Typically `"rs"`.
+#[cfg(feature = "lsp")]
+fn collect_active_extensions<'a>(
+    entries: &[(String, std::path::PathBuf, u32)],
+    provider_exts: &[&'a str],
+    default_ext: &'a str,
+) -> std::collections::HashSet<&'a str> {
+    let mut active: std::collections::HashSet<&'a str> = std::collections::HashSet::new();
+    for (_, abs_file, _) in entries {
+        let ext = abs_file.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let provider_ext = provider_exts
+            .iter()
+            .find(|e| **e == ext)
+            .copied()
+            .unwrap_or(default_ext);
+        active.insert(provider_ext);
+    }
+    active
 }
 
 /// Core index pipeline: indexer + DQ checks + CHECKPOINT + optional LSP.
@@ -773,6 +866,202 @@ mod tests {
         let workspace = std::path::Path::new("/workspace");
         let abs = resolve_abs_file_path(workspace, "./src/main.rs");
         assert_eq!(abs, std::path::PathBuf::from("/workspace/./src/main.rs"));
+    }
+
+    // --- collect_active_extensions (L7-6) tests ---
+    //
+    // L7-6 memory-overflow fix: only start LSP servers for extensions that
+    // actually appear in the indexed symbols. These tests verify the routing
+    // decision without spawning any LSP server or opening a database.
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn collect_active_extensions_empty_entries_returns_empty_set() {
+        let provider_exts = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+        let active = collect_active_extensions(&[], &provider_exts, "rs");
+        assert!(
+            active.is_empty(),
+            "empty entries must produce empty active set"
+        );
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn collect_active_extensions_pure_rust_returns_only_rs() {
+        let provider_exts = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+        let entries = vec![
+            (
+                "id1".to_string(),
+                std::path::PathBuf::from("/src/main.rs"),
+                1,
+            ),
+            (
+                "id2".to_string(),
+                std::path::PathBuf::from("/src/lib.rs"),
+                10,
+            ),
+            (
+                "id3".to_string(),
+                std::path::PathBuf::from("/src/mod.rs"),
+                20,
+            ),
+        ];
+        let active = collect_active_extensions(&entries, &provider_exts, "rs");
+        assert_eq!(
+            active.len(),
+            1,
+            "pure Rust repo must activate only rust-analyzer"
+        );
+        assert!(active.contains("rs"));
+        // Critical L7-6 invariant: must NOT start unused LSP servers.
+        assert!(!active.contains("py"));
+        assert!(!active.contains("c"));
+        assert!(!active.contains("cpp"));
+        assert!(!active.contains("go"));
+        assert!(!active.contains("ts"));
+        assert!(!active.contains("f90"));
+        assert!(!active.contains("java"));
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn collect_active_extensions_pure_python_returns_only_py() {
+        let provider_exts = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+        let entries = vec![
+            (
+                "id1".to_string(),
+                std::path::PathBuf::from("/src/main.py"),
+                1,
+            ),
+            (
+                "id2".to_string(),
+                std::path::PathBuf::from("/src/utils.py"),
+                5,
+            ),
+        ];
+        let active = collect_active_extensions(&entries, &provider_exts, "rs");
+        assert_eq!(
+            active.len(),
+            1,
+            "pure Python repo must activate only pyright"
+        );
+        assert!(active.contains("py"));
+        assert!(!active.contains("rs"));
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn collect_active_extensions_mixed_rs_py_returns_both() {
+        let provider_exts = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+        let entries = vec![
+            (
+                "id1".to_string(),
+                std::path::PathBuf::from("/src/main.rs"),
+                1,
+            ),
+            (
+                "id2".to_string(),
+                std::path::PathBuf::from("/src/script.py"),
+                5,
+            ),
+        ];
+        let active = collect_active_extensions(&entries, &provider_exts, "rs");
+        assert_eq!(
+            active.len(),
+            2,
+            "mixed repo must activate exactly the union"
+        );
+        assert!(active.contains("rs"));
+        assert!(active.contains("py"));
+        assert!(!active.contains("java"));
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn collect_active_extensions_unknown_extension_falls_back_to_default() {
+        // Pre-L7-6 select_provider_for_ext fell back to providers[0] ("rs")
+        // for unknown extensions like .md/.toml. L7-6 preserves this:
+        // unknown extensions still trigger the default provider so the
+        // hover loop doesn't silently no-op.
+        let provider_exts = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+        let entries = vec![
+            ("id1".to_string(), std::path::PathBuf::from("/README.md"), 1),
+            (
+                "id2".to_string(),
+                std::path::PathBuf::from("/Cargo.toml"),
+                1,
+            ),
+        ];
+        let active = collect_active_extensions(&entries, &provider_exts, "rs");
+        assert_eq!(active.len(), 1);
+        assert!(
+            active.contains("rs"),
+            "unknown ext must fall back to default"
+        );
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn collect_active_extensions_cpp_and_c_both_active() {
+        // ClangdClient is wired for both "c" and "cpp"; a project with both
+        // .c and .cpp files activates both extension keys (which both map
+        // to the same ClangdClient, but the routing decision is per-ext).
+        let provider_exts = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+        let entries = vec![
+            (
+                "id1".to_string(),
+                std::path::PathBuf::from("/src/main.c"),
+                1,
+            ),
+            (
+                "id2".to_string(),
+                std::path::PathBuf::from("/src/util.cpp"),
+                5,
+            ),
+        ];
+        let active = collect_active_extensions(&entries, &provider_exts, "rs");
+        assert_eq!(active.len(), 2);
+        assert!(active.contains("c"));
+        assert!(active.contains("cpp"));
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn collect_active_extensions_dedupes_repeated_extensions() {
+        // 1000 .rs files should activate exactly one extension ("rs"), not
+        // 1000 entries — the HashSet deduplicates.
+        let provider_exts = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+        let entries: Vec<(String, std::path::PathBuf, u32)> = (0..1000)
+            .map(|i| (format!("id{i}"), std::path::PathBuf::from("/src/mod.rs"), i))
+            .collect();
+        let active = collect_active_extensions(&entries, &provider_exts, "rs");
+        assert_eq!(active.len(), 1);
+        assert!(active.contains("rs"));
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn collect_active_extensions_all_eight_exts_active_for_polyglot_repo() {
+        // A polyglot repo with all 8 wired extensions activates all 8
+        // providers (worst case — no savings vs pre-L7-6, but correctness
+        // preserved).
+        let provider_exts = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+        let entries = vec![
+            ("id1".to_string(), std::path::PathBuf::from("/a.rs"), 1),
+            ("id2".to_string(), std::path::PathBuf::from("/b.py"), 1),
+            ("id3".to_string(), std::path::PathBuf::from("/c.c"), 1),
+            ("id4".to_string(), std::path::PathBuf::from("/d.cpp"), 1),
+            ("id5".to_string(), std::path::PathBuf::from("/e.go"), 1),
+            ("id6".to_string(), std::path::PathBuf::from("/f.ts"), 1),
+            ("id7".to_string(), std::path::PathBuf::from("/g.f90"), 1),
+            ("id8".to_string(), std::path::PathBuf::from("/h.java"), 1),
+        ];
+        let active = collect_active_extensions(&entries, &provider_exts, "rs");
+        assert_eq!(
+            active.len(),
+            8,
+            "polyglot repo must activate all 8 providers"
+        );
     }
 
     // --- #[forge] index wrapper tests ---

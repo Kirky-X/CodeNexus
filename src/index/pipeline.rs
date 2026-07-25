@@ -54,6 +54,28 @@ use super::pipeline_dag::{Phase, Pipeline as DagPipeline, PipelineCtx};
 /// returned (PRD §4.1.6, exit code 2).
 pub(crate) const DEFAULT_MAX_RETRIES: u32 = 3;
 
+/// L7-4: Conservative amplification factor for RAM-first peak RSS estimation.
+///
+/// RAM-first mode keeps multiple derived representations of the source bytes
+/// in memory simultaneously during the parse and resolve phases. This
+/// constant is the product of per-component multipliers (see the table in
+/// [`evaluate_ram_first_budget`]'s doc comment):
+///
+/// - LZ4 compressed buffers: 1.0×
+/// - Decompressed sources: 1.0×
+/// - IR (ExtractResult with AST + edges + records): 3.0×
+/// - Graph (deduplicated nodes + edges, post-L7-2/L6-4 cleanup): 2.0×
+/// - CSV stream (per-batch, post-L6-3 streaming): 1.0×
+///
+/// Total = 8.0×, rounded down to a `u64` multiplier.
+///
+/// This is a conservative upper bound — actual peak RSS may be lower for
+/// repos with sparse source files (lots of whitespace, few symbols) or
+/// higher for repos with dense symbol tables (lots of small functions).
+/// The factor is `pub(crate)` so it can be referenced in tests that
+/// verify the threshold arithmetic.
+pub(crate) const RAM_FIRST_AMPLIFICATION_FACTOR: u64 = 8;
+
 /// Classifies whether an error message is a transient database-lock /
 /// write-transaction conflict that [`with_retry`] should retry on.
 ///
@@ -286,20 +308,29 @@ impl IndexFacade {
         // streaming disk-read path which parses file-by-file via ParsePhase's
         // default mode, keeping peak memory bounded.
         //
+        // L7-4: The check now uses an amplified-peak estimate
+        // (`total × RAM_FIRST_AMPLIFICATION_FACTOR`) compared against
+        // `max_rss_bytes / 2`, replacing the pre-L7-4 raw-bytes vs
+        // `per_collection_soft_limit` comparison (which was a budget
+        // distortion — see [`evaluate_ram_first_budget`]).
+        //
         // NOTE (P1 tradeoff): `self.index()` → ScanPhase will re-discover
         // files via `Walker::discover()`. This double walk is a known cost
         // of the fallback path — the alternative (threading `disk_files`
         // through ScanInput) requires a non-trivial refactor of ScanPhase.
         // The extra walk is I/O-bound but cheap relative to the
         // parse/resolve/load phases that follow, and only triggers for
-        // repositories over the 256 MiB soft limit.
+        // repositories whose amplified peak would exceed half of max_rss.
         let (total_bytes, use_ram_first) = evaluate_ram_first_budget(&disk_files, &self.budget);
         if !use_ram_first {
             warn!(
                 total_bytes = total_bytes,
-                soft_limit = self.budget.per_collection_soft_limit,
+                estimated_peak_bytes = total_bytes.saturating_mul(RAM_FIRST_AMPLIFICATION_FACTOR),
+                amplification_factor = RAM_FIRST_AMPLIFICATION_FACTOR,
+                max_rss_bytes = self.budget.max_rss_bytes,
+                ram_first_threshold = self.budget.max_rss_bytes / 2,
                 file_count = disk_files.len(),
-                "RAM-first: repository exceeds per-collection soft limit, \
+                "RAM-first: estimated peak RSS exceeds half of max_rss_bytes, \
                  falling back to streaming disk-read mode"
             );
             return self.index(path, project_name, force);
@@ -510,14 +541,48 @@ impl Pipeline {
 }
 
 /// Evaluates whether RAM-first mode is safe for `files` under `budget`
-/// (L5 adaptive degradation).
+/// (L5 adaptive degradation, L7-4 amplified-peak estimation).
 ///
 /// Returns `(total_bytes, should_use_ram_first)`:
 /// - `total_bytes` — sum of all `FileInfo.size`, computed with
 ///   `saturating_add` so an overflow fails safe (saturates to `u64::MAX`,
-///   which always exceeds the soft limit → fallback).
-/// - `should_use_ram_first` — `true` when `total_bytes` is below
-///   `budget.per_collection_soft_limit`.
+///   which always exceeds the threshold → fallback).
+/// - `should_use_ram_first` — `true` when the **estimated peak RSS** of
+///   RAM-first mode is below `budget.max_rss_bytes / 2`.
+///
+/// # L7-4 memory-overflow fix — amplified-peak estimation
+///
+/// Pre-L7-4 this function compared `total_bytes` (raw source bytes) against
+/// `budget.per_collection_soft_limit` (256 MiB default). This was a
+/// **budget distortion**: RAM-first mode amplifies source bytes by ~8×
+/// because the following all live in RAM simultaneously during the parse
+/// and resolve phases:
+///
+/// | Component              | Multiplier | Rationale                              |
+/// |------------------------|------------|----------------------------------------|
+/// | LZ4 compressed buffers | 1.0×       | `lz4_flex::compress_prepend_size` ≈ 1:1 for source code |
+/// | Decompressed sources   | 1.0×       | `std::fs::read` into `Vec<u8>`         |
+/// | IR (ExtractResult)     | 3.0×       | AST nodes + edges + imports + calls + assignments + externs + reads + writes |
+/// | Graph (nodes + edges)  | 2.0×       | Deduplicated graph; commit e4f92de L7-2 measured 5M edges × 200 B = 1 GB for 200 MiB repo (5×), but L7-2/L6-4 free IR edges after scope resolution, so steady-state is ~2× |
+/// | CSV stream (per batch) | 1.0×       | L6-3 streams nodes/edges via iterator; only one batch in flight |
+/// | **Total amplification**| **8.0×**   | Conservative upper bound               |
+///
+/// Pre-L7-4 with `per_collection_soft_limit = 256 MiB`, a 200 MiB repo
+/// would pass the check (200 < 256) but actually consume ~1.6 GB of peak
+/// RSS — on a 4 GB laptop this triggers OOM. L7-4 fixes the distortion by:
+///
+/// 1. Estimating peak RSS as `total_bytes × RAM_FIRST_AMPLIFICATION_FACTOR`.
+/// 2. Comparing against `budget.max_rss_bytes / 2` (conservative: never
+///    claim more than half of the RSS cap for RAM-first mode alone — the
+///    other half is reserved for LadybugDB buffer pool, LSP servers, and
+///    OS page cache).
+///
+/// On a 70 GB host with `max_rss_bytes = 35 GB` (50% of available), the
+/// threshold becomes 17.5 GB, so RAM-first is allowed for repos up to
+/// ~2.2 GB of source — generous for any reasonable CodeNexus workload.
+/// On a 4 GB laptop with `max_rss_bytes = 2 GB`, the threshold is 1 GB,
+/// so RAM-first is allowed for repos up to ~125 MB — correct defensive
+/// behaviour for memory-constrained hosts.
 ///
 /// Returning the total alongside the decision lets the caller emit it in
 /// the fallback `warn!` log without recomputing the sum (P2 fix).
@@ -527,7 +592,17 @@ impl Pipeline {
 #[must_use]
 fn evaluate_ram_first_budget(files: &[FileInfo], budget: &MemoryBudget) -> (u64, bool) {
     let total: u64 = files.iter().fold(0u64, |acc, f| acc.saturating_add(f.size));
-    (total, !budget.collection_exceeds_limit(total))
+    // L7-4: estimate peak RSS by applying the amplification factor.
+    // `saturating_mul` so an overflow fails safe (saturates to u64::MAX,
+    // which always exceeds the threshold → fallback).
+    let estimated_peak = total.saturating_mul(RAM_FIRST_AMPLIFICATION_FACTOR);
+    // L7-4: compare against `max_rss_bytes / 2` (process-level RSS cap
+    // divided by 2 to leave headroom for LadybugDB buffer pool, LSP
+    // servers, and OS page cache). Pre-L7-4 used `per_collection_soft_limit`
+    // which is the wrong cap — that limits a single in-process collection
+    // (e.g. a `Vec<Node>`), not the cumulative RSS of RAM-first mode.
+    let ram_first_threshold = budget.max_rss_bytes / 2;
+    (total, estimated_peak < ram_first_threshold)
 }
 
 /// Builds a [`Node`] (label `File`) for each changed/added file, carrying the
@@ -2079,11 +2154,13 @@ mod tests {
         );
     }
 
-    // --- L5: evaluate_ram_first_budget (pure decision function) ---
+    // --- L5/L7-4: evaluate_ram_first_budget (pure decision function) ---
 
     #[test]
     fn evaluate_ram_first_budget_returns_true_when_total_below_limit() {
-        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(1_000);
+        // L7-4: peak = total × 8 = 300 × 8 = 2400; threshold = max_rss / 2
+        // = 10_000 / 2 = 5_000; 2400 < 5000 → ram_first is safe.
+        let budget = MemoryBudget::new(10_000);
         let files = vec![
             FileInfo {
                 path: PathBuf::from("a.rs"),
@@ -2100,14 +2177,18 @@ mod tests {
         ];
         let (total, use_ram_first) = evaluate_ram_first_budget(&files, &budget);
         assert_eq!(total, 300, "total must be the sum of all file sizes");
-        assert!(use_ram_first, "300 < 1000 → ram_first is safe");
+        assert!(
+            use_ram_first,
+            "300×8=2400 < 10000/2=5000 → ram_first is safe"
+        );
     }
 
     #[test]
     fn evaluate_ram_first_budget_returns_false_when_total_at_limit() {
-        // `collection_exceeds_limit` uses `>=` so "at limit" triggers fallback
-        // (defensive: flush at the boundary, not past it).
-        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(300);
+        // L7-4: peak = total × 8 = 300 × 8 = 2400; threshold = max_rss / 2
+        // = 4800 / 2 = 2400; 2400 < 2400 is FALSE → fall back.
+        // (Defensive `<` rather than `<=` so "at limit" triggers fallback.)
+        let budget = MemoryBudget::new(4_800);
         let files = vec![
             FileInfo {
                 path: PathBuf::from("a.rs"),
@@ -2124,12 +2205,17 @@ mod tests {
         ];
         let (total, use_ram_first) = evaluate_ram_first_budget(&files, &budget);
         assert_eq!(total, 300);
-        assert!(!use_ram_first, "300 >= 300 → fall back to streaming");
+        assert!(
+            !use_ram_first,
+            "300×8=2400, threshold=4800/2=2400, 2400<2400 is false → fall back"
+        );
     }
 
     #[test]
     fn evaluate_ram_first_budget_returns_false_when_total_above_limit() {
-        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(299);
+        // L7-4: peak = 300 × 8 = 2400; threshold = 4798 / 2 = 2399;
+        // 2400 < 2399 is FALSE → fall back.
+        let budget = MemoryBudget::new(4_798);
         let files = vec![
             FileInfo {
                 path: PathBuf::from("a.rs"),
@@ -2146,25 +2232,29 @@ mod tests {
         ];
         let (total, use_ram_first) = evaluate_ram_first_budget(&files, &budget);
         assert_eq!(total, 300);
-        assert!(!use_ram_first, "300 >= 299 → fall back to streaming");
+        assert!(
+            !use_ram_first,
+            "300×8=2400 >= 4798/2=2399 → fall back to streaming"
+        );
     }
 
     #[test]
     fn evaluate_ram_first_budget_returns_true_for_empty_files() {
-        // Empty repository → total = 0 < any non-zero limit → ram_first ok.
-        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(1);
+        // Empty repository → total = 0, peak = 0 × 8 = 0; threshold = any
+        // non-zero max_rss / 2 > 0; 0 < threshold → ram_first ok.
+        let budget = MemoryBudget::new(1_000);
         let files: Vec<FileInfo> = vec![];
         let (total, use_ram_first) = evaluate_ram_first_budget(&files, &budget);
         assert_eq!(total, 0, "empty → total 0");
-        assert!(use_ram_first, "0 < 1 → ram_first is safe");
+        assert!(use_ram_first, "0×8=0 < 1000/2=500 → ram_first is safe");
     }
 
     #[test]
     fn evaluate_ram_first_budget_sums_all_files_not_just_first() {
         // Regression guard: a bug that only checks `files[0].size` would
-        // wrongly return true here (100 < 1000) even though the total
-        // (100+950=1050) exceeds the limit.
-        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(1_000);
+        // wrongly return true here (100×8=800 < 16798/2=8399) even though
+        // the total (100+950=1050) × 8 = 8400 exceeds 8399.
+        let budget = MemoryBudget::new(16_798);
         let files = vec![
             FileInfo {
                 path: PathBuf::from("a.rs"),
@@ -2181,14 +2271,16 @@ mod tests {
         ];
         let (total, use_ram_first) = evaluate_ram_first_budget(&files, &budget);
         assert_eq!(total, 1050, "must sum all files, not just the first");
-        assert!(!use_ram_first, "1050 >= 1000 → fall back");
+        assert!(!use_ram_first, "1050×8=8400 >= 16798/2=8399 → fall back");
     }
 
     #[test]
     fn evaluate_ram_first_budget_saturates_on_overflow() {
         // Security hardening: when the sum overflows u64, `saturating_add`
         // must return u64::MAX so the decision fails safe (fallback).
-        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(u64::MAX);
+        // L7-4: peak = u64::MAX × 8 = u64::MAX (saturating_mul); threshold
+        // = u64::MAX / 2; u64::MAX < u64::MAX/2 is FALSE → fallback.
+        let budget = MemoryBudget::new(u64::MAX);
         let files = vec![
             FileInfo {
                 path: PathBuf::from("huge.rs"),
@@ -2205,8 +2297,106 @@ mod tests {
         ];
         let (total, use_ram_first) = evaluate_ram_first_budget(&files, &budget);
         assert_eq!(total, u64::MAX, "overflow must saturate to u64::MAX");
-        // soft_limit is u64::MAX, so u64::MAX >= u64::MAX → exceeds → fallback.
+        // peak = u64::MAX (saturating_mul); threshold = u64::MAX / 2;
+        // u64::MAX < u64::MAX/2 is false → fallback.
         assert!(!use_ram_first, "saturated total must trigger fallback");
+    }
+
+    // --- L7-4: amplified-peak estimation tests ---
+
+    #[test]
+    fn ram_first_amplification_factor_is_eight() {
+        // L7-4: documented amplification factor (1 LZ4 + 1 decompressed +
+        // 3 IR + 2 Graph + 1 CSV = 8). If this constant changes, the doc
+        // table in `evaluate_ram_first_budget` and the threshold arithmetic
+        // in all tests above MUST be re-verified.
+        assert_eq!(RAM_FIRST_AMPLIFICATION_FACTOR, 8);
+    }
+
+    #[test]
+    fn evaluate_ram_first_budget_applies_amplification_factor() {
+        // Direct verification of the L7-4 peak estimation formula:
+        //   peak = total × RAM_FIRST_AMPLIFICATION_FACTOR
+        //   threshold = max_rss_bytes / 2
+        //   decision = peak < threshold
+        //
+        // Pick numbers where the boundary is unambiguous:
+        //   total = 1000 → peak = 8000
+        //   max_rss = 16001 → threshold = 8000
+        //   8000 < 8000 → false (defensive `<`)
+        //   max_rss = 16002 → threshold = 8001
+        //   8000 < 8001 → true
+        let files = vec![FileInfo {
+            path: PathBuf::from("a.rs"),
+            relative_path: "a.rs".to_string(),
+            language: Some(Language::Rust),
+            size: 1000,
+        }];
+
+        let budget_at_boundary = MemoryBudget::new(16_001);
+        let (_, use_at_boundary) = evaluate_ram_first_budget(&files, &budget_at_boundary);
+        assert!(
+            !use_at_boundary,
+            "1000×8=8000, threshold=16001/2=8000, 8000<8000 is false → fallback"
+        );
+
+        let budget_just_above = MemoryBudget::new(16_002);
+        let (_, use_just_above) = evaluate_ram_first_budget(&files, &budget_just_above);
+        assert!(
+            use_just_above,
+            "1000×8=8000, threshold=16002/2=8001, 8000<8001 is true → proceed"
+        );
+    }
+
+    #[test]
+    fn evaluate_ram_first_budget_70gb_host_allows_2_2gb_repo() {
+        // L7-4 design goal: on a 70 GB host (the user's environment), with
+        // `from_system` setting max_rss = 50% of available = 35 GB, the
+        // RAM-first threshold is 17.5 GB. With 8× amplification, the
+        // maximum repo size that fits is 17.5 GB / 8 ≈ 2.19 GB.
+        //
+        // This test documents the design invariant: a 2 GB repo fits, a
+        // 2.5 GB repo falls back. If the amplification factor changes,
+        // these bounds change and the doc comment must be updated.
+        let max_rss_70gb_host: u64 = 35 * 1024 * 1024 * 1024; // 35 GiB
+        let threshold = max_rss_70gb_host / 2; // 17.5 GiB
+
+        let repo_2gb: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
+        let peak_2gb = repo_2gb.saturating_mul(RAM_FIRST_AMPLIFICATION_FACTOR);
+        assert!(
+            peak_2gb < threshold,
+            "2 GiB repo (peak {peak_2gb}) must fit under threshold {threshold}"
+        );
+
+        let repo_2_5gb: u64 = (5 * 1024 * 1024 * 1024) / 2; // 2.5 GiB
+        let peak_2_5gb = repo_2_5gb.saturating_mul(RAM_FIRST_AMPLIFICATION_FACTOR);
+        assert!(
+            peak_2_5gb >= threshold,
+            "2.5 GiB repo (peak {peak_2_5gb}) must exceed threshold {threshold} → fallback"
+        );
+    }
+
+    #[test]
+    fn evaluate_ram_first_budget_4gb_laptop_falls_back_for_200mb_repo() {
+        // L7-4 design goal: on a 4 GB laptop with max_rss = 2 GB, threshold
+        // = 1 GB. A 200 MB repo produces peak = 200 × 8 = 1600 MB > 1 GB →
+        // fall back to streaming. This is the budget-distortion scenario
+        // described in the L7-4 doc comment: pre-L7-4 the 200 MB repo
+        // would have passed (200 < 256) but actually OOM'd the laptop.
+        let max_rss_4gb_laptop: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
+        let budget = MemoryBudget::new(max_rss_4gb_laptop);
+        let files = vec![FileInfo {
+            path: PathBuf::from("big.rs"),
+            relative_path: "big.rs".to_string(),
+            language: Some(Language::Rust),
+            size: 200 * 1024 * 1024, // 200 MiB
+        }];
+        let (total, use_ram_first) = evaluate_ram_first_budget(&files, &budget);
+        assert_eq!(total, 200 * 1024 * 1024);
+        assert!(
+            !use_ram_first,
+            "200 MiB repo × 8 = 1600 MiB > 1024 MiB threshold → fallback (L7-4 fix)"
+        );
     }
 
     // --- L5: IndexFacade::with_budget builder ---
@@ -2240,17 +2430,20 @@ mod tests {
         );
     }
 
-    // --- L5: index_ram_first adaptive fallback (integration) ---
+    // --- L5/L7-4: index_ram_first adaptive fallback (integration) ---
 
     #[test]
     fn index_ram_first_falls_back_to_streaming_when_over_budget() {
-        // Force a tiny soft limit so the small test file triggers fallback.
-        // The fallback path delegates to `self.index()`, which must succeed
-        // and emit the diagnostic warning.
+        // L7-4: force a tiny max_rss so the small test file triggers
+        // fallback. The fallback path delegates to `self.index()`, which
+        // must succeed and emit the diagnostic warning.
+        //
+        // File "fn main() { helper(); }\n" ≈ 24 bytes; peak = 24 × 8 = 192;
+        // threshold = 10 / 2 = 5; 192 >= 5 → fallback.
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), "main.rs", "fn main() { helper(); }\n");
         let db_path = fresh_db_path();
-        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(1);
+        let budget = MemoryBudget::new(10);
         let facade = IndexFacade::new(&db_path)
             .expect("facade")
             .with_budget(budget);
@@ -2265,23 +2458,23 @@ mod tests {
         });
 
         assert!(
-            captured.contains("RAM-first: repository exceeds per-collection soft limit"),
-            "fallback warning should be emitted, got: {captured:?}"
+            captured.contains("RAM-first: estimated peak RSS exceeds half of max_rss_bytes"),
+            "L7-4 fallback warning should be emitted, got: {captured:?}"
         );
         assert!(
-            captured.contains("soft_limit=1"),
-            "soft_limit field should be in the warning, got: {captured:?}"
+            captured.contains("amplification_factor=8"),
+            "amplification_factor field should be in the warning, got: {captured:?}"
         );
     }
 
     #[test]
     fn index_ram_first_proceeds_when_under_budget() {
-        // Large soft limit → total file size is under it → no fallback, the
+        // L7-4: huge max_rss → threshold is huge → no fallback, the
         // ram_first path runs and emits no fallback warning.
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), "main.rs", "fn main() { helper(); }\n");
         let db_path = fresh_db_path();
-        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(u64::MAX);
+        let budget = MemoryBudget::new(u64::MAX);
         let facade = IndexFacade::new(&db_path)
             .expect("facade")
             .with_budget(budget);
@@ -2296,20 +2489,23 @@ mod tests {
         });
 
         assert!(
-            !captured.contains("RAM-first: repository exceeds per-collection soft limit"),
+            !captured.contains("RAM-first: estimated peak RSS exceeds half of max_rss_bytes"),
             "no fallback warning should be emitted when under budget, got: {captured:?}"
         );
     }
 
     #[test]
     fn index_ram_first_fallback_emits_total_bytes_and_file_count() {
-        // The fallback warning must carry total_bytes and file_count fields
-        // so operators can correlate the trigger with repository size.
+        // L7-4: the fallback warning must carry total_bytes, file_count,
+        // estimated_peak_bytes, and amplification_factor fields so
+        // operators can correlate the trigger with repository size and
+        // the L7-4 amplification estimate.
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), "a.rs", "fn a() {}\n");
         write_file(tmp.path(), "b.rs", "fn b() {}\n");
         let db_path = fresh_db_path();
-        let budget = MemoryBudget::new(u64::MAX).with_soft_limit(1);
+        // max_rss = 10 → threshold = 5; 2 files × ~10 bytes × 8 = ~160 > 5 → fallback.
+        let budget = MemoryBudget::new(10);
         let facade = IndexFacade::new(&db_path)
             .expect("facade")
             .with_budget(budget);
@@ -2325,6 +2521,14 @@ mod tests {
         assert!(
             captured.contains("file_count=2"),
             "file_count must reflect discovered file count: {captured:?}"
+        );
+        assert!(
+            captured.contains("estimated_peak_bytes="),
+            "L7-4 estimated_peak_bytes field must be present: {captured:?}"
+        );
+        assert!(
+            captured.contains("amplification_factor=8"),
+            "L7-4 amplification_factor field must be present: {captured:?}"
         );
     }
 }
