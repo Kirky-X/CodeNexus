@@ -5,6 +5,16 @@ All notable changes to CodeNexus are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+L6 memory-overflow fix：管线流式化 + LSP kill 超时 + iterator API，将峰值内存从 O(graph) 降至 O(1)（ResolvePhase 不再 clone Graph）。
+
+### Fixed
+
+- **fix(index): L6 memory-overflow — pipeline streaming + ctx.take()** — `ResolvePhase` 改用 `ctx.remove::<ScopeOutput>("scope")` 取得 Graph 所有权（替代 `scope.graph.clone()`，消除大型仓库多 GB 的 deep-clone）；`ctx.remove::<ParseOutput>("parse")` 在 ResolvePhase 结束后释放 `ExtractResult` AST 快照；`build_includes_edges` 返回 `IncludesGraph`（INCLUDES edge 直接 move 进 graph，不再 clone）；`resolve_all` 返回 `()` 替代 `Vec<Edge>`（master Vec 立即被丢弃，~100 MB 浪费）；`prune_dangling_type_edges` 用 `std::mem::take` + `retain` 替代 `HashSet<String>` 全量节点 id 拷贝（百 MB 级 HashSet 消除）；`Phase::run` 签名从 `&PipelineCtx` 改为 `&mut PipelineCtx` 以支持 `ctx.remove` 独占借用。
+- **fix(storage): L6-3 iterator API — save_nodes/save_edges/write_nodes_csv_stream/write_edges_csv_stream** — 4 个函数签名从 `&[Node]`/`&[Edge]` 改为 `impl IntoIterator<Item = &Node/&Edge>`，调用方可直接从 `Graph::nodes_view()`/`edges_view()` 流式写入，消除 `Vec<Node>`/`Vec<Edge>` 中间集合（大型仓库 ~10 MB 峰值 RSS）；新增 `NodeCsvStats` 结构体（与 `EdgeCsvStats` 对称），dedup 内移到 `write_nodes_csv_stream`（HashSet by node id，first-wins 语义）；`save_nodes_by_label` 移除 `deduped: Vec<Node>` per-label clone；`EdgeCsvStats`/`NodeCsvStats` 新增 `total` 字段（恢复 `save_edges` 切到 iterator 后丢失的可观测性）；`save_nodes`/`save_edges` 内部包 `BufWriter`（64 KB）减少 write syscall。`Storage` trait 方法保留 `&[Node]`/`&[Edge]` 签名以维持 object safety（dyn Storage 在 89+ callsites 使用）。
+- **fix(lsp): L6-3 LSP kill timeout — bound force_kill_and_wait with KILL_TIMEOUT_MS** — 新增 `kill_session`（initialize 失败路径的 force-kill，避免 orphan LSP server）；`shutdown_session` 统一 graceful shutdown（shutdown request → exit notification → wait_with_timeout → force_kill_and_wait）；`force_kill_and_wait` 用 `wait_with_timeout` 替代 `child.wait()`（防止 D-state/zombie 永久阻塞）；新增 `KILL_TIMEOUT_MS=3000`/`SHUTDOWN_TIMEOUT_MS=5000` 常量；`send_raw_request` 在 channel disconnected 时 emit stderr warning（fail-loud，Rule 12）。`client.rs::shutdown` 改用 `shutdown_session`；`client.rs::initialize` 失败时调用 `kill_session` 防 orphan。
+
 ## [0.3.10] - 2026-07-25
 
 大型仓库索引时 OOM 问题的完整 5 层防线，将峰值内存从 O(files) 降至 O(chunk_size)。
@@ -240,7 +250,9 @@ Initial public release. CodeNexus indexes source code into a queryable knowledge
 - **Database corruption detection** — corrupt LadybugDB files are detected at startup and reported with a distinct exit code (4) instead of being loaded into a half-valid state.
 - **`.env` files ignored by default** in `.gitignore`, with an explicit `!.env.example` allow-list so the template is tracked but real secrets never are.
 
-[Unreleased]: https://github.com/Kirky-X/codenexus/compare/v0.3.8...HEAD
+[Unreleased]: https://github.com/Kirky-X/codenexus/compare/v0.3.10...HEAD
+[0.3.10]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.10
+[0.3.9]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.9
 [0.3.8]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.8
 [0.3.7]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.7
 [0.3.6]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.6
