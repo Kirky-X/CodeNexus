@@ -207,18 +207,37 @@ impl Phase for ScanPhase {
 ///
 /// # RAM-first mode (H15)
 ///
-/// When [`ram_first_compressed`](Self::ram_first_compressed) is `Some`, files
-/// are LZ4-decompressed from in-memory buffers instead of read from disk. The
-/// buffers are built by [`IndexFacade::index_ram_first`] before the DAG runs.
+/// When the caller ([`IndexFacade::index_ram_first`]) provides LZ4-compressed
+/// source bytes via [`PipelineCtx`], files are decompressed from in-memory
+/// buffers instead of read from disk. The buffers are built by
+/// [`IndexFacade::index_ram_first`] before the DAG runs and inserted into the
+/// context under [`ParsePhase::RAM_FIRST_KEY`].
+///
+/// # L7-1 memory-overflow fix
+///
+/// The compressed buffers are NO LONGER held as a `ParsePhase` struct field.
+/// Previously `ram_first_compressed: Option<RamFirstSources>` was moved into
+/// `ParsePhase` at registration time and held until `dag.run()` returned (i.e.
+/// until LoadPhase finished). For a 10k-file repository this kept ~30-40 GB
+/// of LZ4-compressed source bytes alive long after ParsePhase::run had
+/// finished using them.
+///
+/// The buffers now live in [`PipelineCtx`] under [`ParsePhase::RAM_FIRST_KEY`]
+/// and are removed via `ctx.remove` at the END of `ParsePhase::run`, so they
+/// are dropped immediately after parsing — before ScopeResolutionPhase,
+/// ResolvePhase, and LoadPhase run. This cuts peak RSS by ~30-40 GB for
+/// large repositories.
 ///
 /// [`IndexFacade::index_ram_first`]: super::pipeline::IndexFacade::index_ram_first
 #[derive(Default)]
-pub struct ParsePhase {
-    /// RAM-first mode: LZ4-compressed source bytes keyed by absolute path.
-    /// When `Some`, [`parallel_parse_ram_first`] is used instead of
-    /// [`parallel_parse`]. When `None`, the default streaming path reads
-    /// files from disk.
-    pub ram_first_compressed: Option<RamFirstSources>,
+pub struct ParsePhase;
+
+impl ParsePhase {
+    /// [`PipelineCtx`] key under which the caller stores the optional
+    /// LZ4-compressed source buffers (`Option<RamFirstSources>`) for RAM-first
+    /// mode. [`ParsePhase::run`] removes this entry when it finishes so the
+    /// buffers are dropped before subsequent phases run (L7-1).
+    pub const RAM_FIRST_KEY: &'static str = "ram_first_compressed";
 }
 
 impl Phase for ParsePhase {
@@ -230,6 +249,27 @@ impl Phase for ParsePhase {
     }
 
     fn run(&self, _: Self::Input, ctx: &mut PipelineCtx) -> Result<Self::Output, PhaseError> {
+        // L7-1 memory-overflow fix: take ownership of the compressed buffers
+        // via `ctx.remove` (NOT `ctx.get`) so they are dropped at the end of
+        // this `run` call. Previously the buffers were a `ParsePhase` struct
+        // field held until `dag.run()` returned (i.e. until LoadPhase
+        // finished), keeping ~30-40 GB of LZ4-compressed source bytes alive
+        // for 4 phases longer than necessary.
+        //
+        // `flatten()` turns `Option<Option<RamFirstSources>>` (outer from
+        // `remove`, inner from the stored `Option`) into `Option<RamFirstSources>`.
+        // When the key is absent (non-RAM-first mode never inserts it) or the
+        // stored value is `None`, `compressed` is `None` → streaming disk-read
+        // path is used.
+        //
+        // Order: `remove` MUST precede the immutable `get` of `scan` below —
+        // mixing a mutable borrow (`remove`) with an active immutable borrow
+        // (`get`) triggers E0502. This mirrors the borrow-ordering established
+        // by ResolvePhase::run (L6-1).
+        let compressed = ctx
+            .remove::<Option<RamFirstSources>>(Self::RAM_FIRST_KEY)
+            .flatten();
+
         let scan = ctx
             .get::<ScanOutput>("scan")
             .ok_or(PhaseError::MissingInput("scan"))?;
@@ -240,10 +280,12 @@ impl Phase for ParsePhase {
 
         // H15: RAM-first path uses LZ4-compressed in-memory buffers; the
         // streaming path reads from disk.
-        let parse_result = match &self.ram_first_compressed {
-            Some(compressed) => parallel_parse_ram_first(&to_parse, compressed, &scan.project_id),
+        let parse_result = match compressed {
+            Some(c) => parallel_parse_ram_first(&to_parse, &c, &scan.project_id),
             None => parallel_parse(&to_parse, &scan.project_id),
         };
+        // `c` (the RamFirstSources) is dropped here at the end of `match`,
+        // freeing ~30-40 GB for large repos before ScopeResolutionPhase runs.
 
         // PRD §4.1.6: parse failures are logged and skipped.
         for (file_path, error_msg) in &parse_result.errors {

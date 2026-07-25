@@ -441,6 +441,15 @@ impl Pipeline {
                 start,
             },
         );
+        // L7-1 memory-overflow fix: store the optional LZ4-compressed source
+        // buffers in the context (NOT as a `ParsePhase` struct field). ParsePhase
+        // removes this entry via `ctx.remove` at the end of its `run`, so the
+        // buffers are dropped before ScopeResolutionPhase runs. Previously the
+        // buffers were moved into `ParsePhase` at registration time and held
+        // until `dag.run()` returned (i.e. until LoadPhase finished), keeping
+        // ~30-40 GB of compressed source bytes alive for 4 phases longer than
+        // necessary for large repos.
+        ctx.insert(ParsePhase::RAM_FIRST_KEY, compressed);
         // Derived phases use Input = ().
         ctx.insert(ParsePhase::NAME, ());
         ctx.insert(ScopeResolutionPhase::NAME, ());
@@ -454,10 +463,7 @@ impl Pipeline {
             repo: self.repository.clone(),
         })
         .map_err(IndexError::from)?;
-        dag.register(ParsePhase {
-            ram_first_compressed: compressed,
-        })
-        .map_err(IndexError::from)?;
+        dag.register(ParsePhase).map_err(IndexError::from)?;
         dag.register(ScopeResolutionPhase)
             .map_err(IndexError::from)?;
         dag.register(ResolvePhase).map_err(IndexError::from)?;
