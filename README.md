@@ -490,6 +490,7 @@ CodeNexus 按当前优先级排序的规划工作：
 - [x] v0.3.2 — 向量嵌入默认开启语义搜索（`embed` feature 已包含在 `full` 预设中）
 - [x] v0.3.3 — 国际化模块（`i18n` feature）：ICU4X Unicode case folding + NFC 规范化 + CJK 边界检测
 - [x] v0.3.3 — Harness 现代化：CI 升级 Rust 1.91 + 6 特性矩阵 + dependabot + codeql + crates.io 发布
+- [x] v0.3.11 — 大型仓库索引 OOM 修复（L1–L7 七层防线）：`MemoryBudget` 三级内存压力 + `Graph::nodes_view/edges_view` 迭代器 + 流式 CSV + mpsc channel 并行解析 + L5 自适应降级 + L6 管线流式化（`ctx.remove` 取代 `Graph::clone`）+ L7 LadybugDB buffer_pool 封顶（4 GB）+ LSP 按需启动 + RAM-first 8× 放大因子预算。70 GB 主机峰值内存从 60 GB 降至 ~4 GB。
 - [ ] 未来 — 基于查询门面的 Web UI / 图可视化
 
 ## [许可证](#许可证)

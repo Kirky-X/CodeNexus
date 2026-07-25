@@ -496,6 +496,7 @@ CodeNexus planned work, ordered by current priority:
 - [x] v0.3.2 — Vector embedding default-on semantic search (`embed` feature included in `full` preset)
 - [x] v0.3.3 — Internationalization module (`i18n` feature): ICU4X Unicode case folding + NFC normalization + CJK boundary detection
 - [x] v0.3.3 — Harness modernization: CI upgraded to Rust 1.91 + 6-feature matrix + dependabot + codeql + crates.io publish
+- [x] v0.3.11 — Large-repo indexing OOM fix (L1–L7 seven-layer defense): `MemoryBudget` three-level memory pressure + `Graph::nodes_view/edges_view` iterators + streaming CSV + mpsc channel parallel parsing + L5 adaptive degradation + L6 pipeline streaming (`ctx.remove` replaces `Graph::clone`) + L7 LadybugDB buffer_pool cap (4 GB) + on-demand LSP startup + RAM-first 8× amplification-factor budget. 70 GB host peak RSS reduced from 60 GB to ~4 GB.
 - [ ] Future — Web UI / graph visualization on top of the query facade
 
 ## [License](#license)

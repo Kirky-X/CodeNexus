@@ -7,13 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-L6 memory-overflow fix：管线流式化 + LSP kill 超时 + iterator API，将峰值内存从 O(graph) 降至 O(1)（ResolvePhase 不再 clone Graph）。
+无。
+
+## [0.3.11] - 2026-07-26
+
+L6+L7 memory-overflow fix：L6 管线流式化 + LSP kill 超时 + iterator API 将峰值内存从 O(graph) 降至 O(1)（ResolvePhase 不再 clone Graph）；L7 在 L6 基础上进一步定位并修复 6 个剩余瓶颈（LZ4 缓冲生命周期 / 解析 edge 清理 / ctx drain / RAM 预算放大因子 / LadybugDB buffer_pool 封顶 / LSP 按需启动），70 GB 主机峰值内存从 60 GB 降至 ~4 GB。
 
 ### Fixed
 
 - **fix(index): L6 memory-overflow — pipeline streaming + ctx.take()** — `ResolvePhase` 改用 `ctx.remove::<ScopeOutput>("scope")` 取得 Graph 所有权（替代 `scope.graph.clone()`，消除大型仓库多 GB 的 deep-clone）；`ctx.remove::<ParseOutput>("parse")` 在 ResolvePhase 结束后释放 `ExtractResult` AST 快照；`build_includes_edges` 返回 `IncludesGraph`（INCLUDES edge 直接 move 进 graph，不再 clone）；`resolve_all` 返回 `()` 替代 `Vec<Edge>`（master Vec 立即被丢弃，~100 MB 浪费）；`prune_dangling_type_edges` 用 `std::mem::take` + `retain` 替代 `HashSet<String>` 全量节点 id 拷贝（百 MB 级 HashSet 消除）；`Phase::run` 签名从 `&PipelineCtx` 改为 `&mut PipelineCtx` 以支持 `ctx.remove` 独占借用。
 - **fix(storage): L6-3 iterator API — save_nodes/save_edges/write_nodes_csv_stream/write_edges_csv_stream** — 4 个函数签名从 `&[Node]`/`&[Edge]` 改为 `impl IntoIterator<Item = &Node/&Edge>`，调用方可直接从 `Graph::nodes_view()`/`edges_view()` 流式写入，消除 `Vec<Node>`/`Vec<Edge>` 中间集合（大型仓库 ~10 MB 峰值 RSS）；新增 `NodeCsvStats` 结构体（与 `EdgeCsvStats` 对称），dedup 内移到 `write_nodes_csv_stream`（HashSet by node id，first-wins 语义）；`save_nodes_by_label` 移除 `deduped: Vec<Node>` per-label clone；`EdgeCsvStats`/`NodeCsvStats` 新增 `total` 字段（恢复 `save_edges` 切到 iterator 后丢失的可观测性）；`save_nodes`/`save_edges` 内部包 `BufWriter`（64 KB）减少 write syscall。`Storage` trait 方法保留 `&[Node]`/`&[Edge]` 签名以维持 object safety（dyn Storage 在 89+ callsites 使用）。
 - **fix(lsp): L6-3 LSP kill timeout — bound force_kill_and_wait with KILL_TIMEOUT_MS** — 新增 `kill_session`（initialize 失败路径的 force-kill，避免 orphan LSP server）；`shutdown_session` 统一 graceful shutdown（shutdown request → exit notification → wait_with_timeout → force_kill_and_wait）；`force_kill_and_wait` 用 `wait_with_timeout` 替代 `child.wait()`（防止 D-state/zombie 永久阻塞）；新增 `KILL_TIMEOUT_MS=3000`/`SHUTDOWN_TIMEOUT_MS=5000` 常量；`send_raw_request` 在 channel disconnected 时 emit stderr warning（fail-loud，Rule 12）。`client.rs::shutdown` 改用 `shutdown_session`；`client.rs::initialize` 失败时调用 `kill_session` 防 orphan。
+- **fix(index): L7-1 memory-overflow — drop LZ4 buffers after parse phase** — `ParsePhase` 移除 `RamFirstSources` 字段，LZ4 压缩缓冲存入 `PipelineCtx`（键值 `"ram_first_compressed"`，由 `Pipeline::run_inner` 调用 `ctx.insert(ParsePhase::RAM_FIRST_KEY, compressed)` 转交），`ParsePhase::run` 起始处通过 `ctx.remove::<Option<RamFirstSources>>(Self::RAM_FIRST_KEY).flatten()` 取得并在函数返回时立即 drop（原先压缩缓冲在 `ParsePhase` 结构体字段中存活至 pipeline 结束）。10k 文件仓库省 ~3 GB 峰值 RSS。`RamFirstSources` 类型从 `ParsePhase` 字段移至 `PipelineCtx` 类型擦除存储。
+- **fix(index): L7-2 memory-overflow — clear parse edges after scope resolution** — `ScopeResolutionPhase::run` 在把 `result.edges` clone 进 `graph.edges` 后，对每个 `ExtractResult` 执行 `result.edges.clear()` + `result.edges.shrink_to_fit()` + `result.seen_qns.clear()` + `result.seen_qns.shrink_to_fit()`，然后 `ctx.insert("parse", parse)` 回写。`ExtractResult.edges` 字段添加文档注释标注 L7-2 不变式（"After `ScopeResolutionPhase::run`, this Vec is `clear()` + `shrink_to_fit()`'d... Resolvers MUST read edges from `graph.edges`, NOT from this field"）。大型仓库省 ~1 GB 重复 edge 数据（5M edges × 200 B = 1 GB for 200 MiB repo）。
+- **fix(index): L7-3 memory-overflow — drain ScanOutput/ResolveOutput from PipelineCtx in LoadPhase** — `LoadPhase::run` 改用 `ctx.remove::<ScanOutput>("scan")` 和 `ctx.remove::<ResolveOutput>("resolve")` 取得所有权（替代 `ctx.get` 共享借用），LoadPhase 返回时 `ScanOutput`（含 `FileInfo` 列表）和 `ResolveOutput`（含 `Graph`）立即 drop，不再存活至 pipeline ctx 整体 drop。省 ~1–2 GB 后置管线内存。
+- **fix(index): L7-4 memory-overflow — RAM-first amplification factor** — 新增 `RAM_FIRST_AMPLIFICATION_FACTOR: u64 = 8` 常量；`evaluate_ram_first_budget` 改为 `(total_bytes × 8) < (max_rss_bytes / 2)` 判定（替代原 `total_bytes < per_collection_soft_limit`）。修正预算失真：RAM-first 模式同时驻留 LZ4 缓冲（1.0×）+ 解压源码（1.0×）+ IR ExtractResult（3.0×）+ Graph（2.0×）+ CSV 流（1.0×）= 8× 放大；原判定用 raw bytes 对比 256 MiB 软限制，200 MiB 仓库会通过检查（200 < 256）但实际峰值 ~1.6 GB。70 GB 主机（max_rss=35 GB）阈值 17.5 GB，允许 ~2.2 GB 仓库走 RAM-first；4 GB 笔记本（max_rss=2 GB）阈值 1 GB，仅允许 ~125 MB 仓库——内存受限主机的正确防御行为。
+- **fix(storage): L7-5 memory-overflow — cap LadybugDB buffer_pool_size to 4 GB** — `open_with` 在非 `cfg!(test)` 分支显式设置 `SystemConfig::default().buffer_pool_size(4 GiB).max_db_size(16 GiB).max_num_threads(8)`（生产环境），测试分支保持 `256 MiB / 1 GiB / 8`。DuckDB 默认 `buffer_pool_size = 80% 物理内存`（70 GB 主机 ~56 GB），是 L6 修复后剩余的主要内存瓶颈；显式封顶省 ~52 GB。`max_db_size=16 GiB` 防止数据库文件无限增长吞噬磁盘；`max_num_threads=8` 限制 DuckDB 内部并行度避免与 rayon 线程池竞争。
+- **fix(lsp): L7-6 memory-overflow — on-demand LSP startup** — `enhance_with_lsp` 重构为「先查询 Function/Method 行 → 收集实际出现的文件扩展名集合 → 只 `start()` 需要的 LSP provider」（原先无条件启动全部 8 个 LSP server：rust-analyzer / pyright / clangd / gopls / tsserver / fortls / jdtls，每个 300 MB–2 GB RSS）。新增 `collect_active_extensions` 纯函数（无 I/O / 无 LSP / 无 DB，可单元测试）+ 8 个单元测试覆盖空仓库 / 纯 Rust / 纯 Python / 混合 / 未知扩展名回退 / C+CPP 双激活 / 去重 / 8 语言 polyglot 全激活场景。纯 Rust 仓库现在只启动 rust-analyzer，省 ~3–5 GB；混合仓库启动 union 子集。`shutdown()` 仍对所有 8 个 provider 调用（未启动的 provider 短路 `Ok(())`，符合 `LspProvider::shutdown` 契约）。
 
 ## [0.3.10] - 2026-07-25
 
@@ -250,7 +260,8 @@ Initial public release. CodeNexus indexes source code into a queryable knowledge
 - **Database corruption detection** — corrupt LadybugDB files are detected at startup and reported with a distinct exit code (4) instead of being loaded into a half-valid state.
 - **`.env` files ignored by default** in `.gitignore`, with an explicit `!.env.example` allow-list so the template is tracked but real secrets never are.
 
-[Unreleased]: https://github.com/Kirky-X/codenexus/compare/v0.3.10...HEAD
+[Unreleased]: https://github.com/Kirky-X/codenexus/compare/v0.3.11...HEAD
+[0.3.11]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.11
 [0.3.10]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.10
 [0.3.9]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.9
 [0.3.8]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.8
