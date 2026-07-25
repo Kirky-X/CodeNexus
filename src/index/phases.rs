@@ -321,21 +321,40 @@ impl Phase for ScopeResolutionPhase {
     }
 
     fn run(&self, _: Self::Input, ctx: &mut PipelineCtx) -> Result<Self::Output, PhaseError> {
+        // L7-2 memory-overflow fix: take ownership of `ParseOutput` via
+        // `ctx.remove` (instead of `ctx.get`) so we can clear the per-file
+        // `edges` Vec after cloning them into the graph. The edges are never
+        // read by any subsequent phase — `ResolvePhase` and its sub-resolvers
+        // use `graph.edges`, `result.nodes`, and the intermediate records
+        // (calls/imports/assignments/reads/writes), but NEVER `result.edges`
+        // (verified via `grep -rn 'result\.edges\|r\.edges' src/resolve`).
+        // For large repos (5 M edges × ~200 bytes) this frees ~1 GB of
+        // duplicated edge data before ResolvePhase runs.
+        //
+        // Order: `remove` (mutable borrow) MUST precede `get` (immutable
+        // borrow) to satisfy E0502 — same pattern as ResolvePhase::run (L6-1)
+        // and ParsePhase::run (L7-1).
+        let mut parse = ctx
+            .remove::<ParseOutput>("parse")
+            .ok_or(PhaseError::MissingInput("parse"))?;
         let scan = ctx
             .get::<ScanOutput>("scan")
             .ok_or(PhaseError::MissingInput("scan"))?;
-        let parse = ctx
-            .get::<ParseOutput>("parse")
-            .ok_or(PhaseError::MissingInput("parse"))?;
 
-        let project_id = &scan.project_id;
+        // Clone project_id so the immutable borrow of `scan` ends before the
+        // `ctx.insert("parse", ...)` mutable borrow below. Pre-L7-2 used
+        // `let project_id = &scan.project_id;` which kept `scan` (and thus
+        // `ctx`) borrowed for the entire function, preventing `ctx.insert`.
+        let project_id = scan.project_id.clone();
         let mut graph = Graph::new();
 
         // Add File nodes for every parsed file (used by incremental indexing).
-        let file_nodes = build_file_nodes(&scan.diff, project_id);
+        let file_nodes = build_file_nodes(&scan.diff, &project_id);
         for file_node in &file_nodes {
             graph.add_node(file_node.clone());
         }
+        // `scan` is no longer used after this point — NLL releases the
+        // immutable borrow of `ctx`, allowing `ctx.insert` later.
 
         // Build mapping from absolute file path → File node id (file_<uuid>).
         let mut path_to_file_id: HashMap<&str, &str> = HashMap::new();
@@ -405,6 +424,26 @@ impl Phase for ScopeResolutionPhase {
                 graph.add_edge(e);
             }
         }
+        // `path_to_file_id` (which held `&str` borrows into `parse.to_parse`)
+        // is no longer used — NLL releases the immutable borrow of
+        // `parse.to_parse`, allowing `&mut parse.results` below.
+
+        // L7-2: clear per-file edges and seen_qns from parse.results. The
+        // edges have been cloned into `graph`; `seen_qns` was used only by
+        // `push_node` during extraction. No subsequent phase reads either.
+        // `clear()` + `shrink_to_fit()` releases the backing allocation,
+        // not just the length — important for large repos where the Vec was
+        // grown to capacity during extraction.
+        for result in &mut parse.results {
+            result.edges.clear();
+            result.edges.shrink_to_fit();
+            result.seen_qns.clear();
+            result.seen_qns.shrink_to_fit();
+        }
+
+        // Put parse back into ctx for ResolvePhase (which removes it again
+        // via `ctx.remove::<ParseOutput>("parse")` — L6-4).
+        ctx.insert("parse", parse);
 
         Ok(ScopeOutput { graph, path_to_rel })
     }
@@ -745,11 +784,24 @@ impl Phase for LoadPhase {
     }
 
     fn run(&self, _: Self::Input, ctx: &mut PipelineCtx) -> Result<Self::Output, PhaseError> {
+        // L7-3 memory-overflow fix: remove scan and resolve from ctx (instead
+        // of get) so they are freed when LoadPhase returns, not when the
+        // caller drops `ctx`. LoadPhase is the last phase in the DAG — no
+        // subsequent phase reads `scan` or `resolve`. Keeping them in ctx
+        // after LoadPhase finishes holds `disk_files: Vec<FileInfo>` (10k+
+        // entries × ~100 bytes) and the resolved `Graph` alive until the
+        // caller extracts `LoadOutput` and drops ctx, which for large repos
+        // adds ~1-2 GB of needless post-pipeline RSS.
+        //
+        // Order: both `remove`s go first (mutable borrow of ctx), then the
+        // owned values are used via shared references for the rest of the
+        // function — same borrow pattern as ResolvePhase::run (L6-1) and
+        // ScopeResolutionPhase::run (L7-2).
         let scan = ctx
-            .get::<ScanOutput>("scan")
+            .remove::<ScanOutput>("scan")
             .ok_or(PhaseError::MissingInput("scan"))?;
         let resolve = ctx
-            .get::<ResolveOutput>("resolve")
+            .remove::<ResolveOutput>("resolve")
             .ok_or(PhaseError::MissingInput("resolve"))?;
 
         let project_id = &scan.project_id;

@@ -133,15 +133,40 @@ impl StorageConnection {
     /// [`StorageError::Corrupt`] (exit 4), otherwise the raw
     /// [`StorageError::Database`] is returned.
     fn open_with<P: AsRef<Path>>(path: P, read_only: bool) -> Result<Self> {
-        // Test builds run many StorageConnection instances in parallel under
-        // `cargo test`. LadybugDB's default `buffer_pool_size = 0` lets DuckDB
-        // auto-detect the buffer pool, which resolves to ~8 TiB and triggers
-        // `Mmap for size 8796093022208 failed` once N parallel instances each
-        // try to reserve 8 TiB of virtual address space (Rule 12: fail loud —
-        // the original failure surfaced as `.expect("in_memory ...")` panics
-        // scattered across ~120 tests). Pin a 256 MiB cap in test builds so
-        // parallel in-memory DBs stay within reasonable per-process limits.
-        // Production builds keep the auto-detect behavior (buffer_pool_size = 0).
+        // L7-5 memory-overflow fix: pin explicit LadybugDB memory caps in BOTH
+        // test and production builds.
+        //
+        // Pre-L7-5 production path used `SystemConfig::default()` which leaves
+        // `buffer_pool_size = 0` (auto-detect). DuckDB's auto-detection
+        // resolves 0 to ~80% of physical memory — on a 70 GB host this is
+        // ~56 GB of buffer pool reserved by a single indexing process, which
+        // alone accounts for the 60 GB / 70 GB (80%+) RSS reported during
+        // indexing. Combined with parse results, the in-memory Graph, LZ4
+        // compressed sources, and 8 LSP servers, the system OOMs.
+        //
+        // The fix pins three knobs in production:
+        //   1. `buffer_pool_size = 4 GiB` — DuckDB's page cache for Cypher
+        //      query execution. 4 GiB is generous for CodeNexus workloads
+        //      (the largest known repo produces ~1 M nodes / ~5 M edges;
+        //      the test suite runs the full schema on 256 MiB). Saves ~52 GB
+        //      on a 70 GB host.
+        //   2. `max_db_size = 16 GiB` — upper bound on the mmap'd BM region
+        //      (virtual address space, not RSS). Pre-L7-5 this defaulted to
+        //      `u32::MAX`, which DuckDB replaced with the 8 TiB
+        //      `DEFAULT_VM_REGION_MAX_SIZE` and then mmap'd as the BM region.
+        //      16 GiB is generous for any single CodeNexus project DB while
+        //      eliminating the 8 TiB virtual-address reservation.
+        //   3. `max_num_threads = 8` — caps DuckDB's internal worker thread
+        //      count. Each DuckDB thread allocates per-operator scratch
+        //      (hash join build, aggregation hashes). Pre-L7-5 this defaulted
+        //      to 0 (auto-detect = num_cpus), which on a 16-core/32-thread
+        //      host meant 32 DuckDB threads × per-thread scratch ≈ 1-2 GB of
+        //      pure thread overhead. 8 threads is plenty for indexing.
+        //
+        // Test builds keep the smaller 256 MiB / 1 GiB / 8-thread caps so
+        // many parallel `StorageConnection` instances under `cargo test` stay
+        // within reasonable per-process limits (the original 8 TiB mmap
+        // failure that motivated the test-only branch is documented below).
         let config = if cfg!(test) {
             // Test builds run many StorageConnection instances in parallel
             // under `cargo test`. Two SystemConfig defaults trigger 8 TiB
@@ -157,13 +182,23 @@ impl StorageConnection {
             // surfaces in ~120 tests via `.expect("in_memory ...")`. Pin both
             // to small explicit values so parallel in-memory DBs stay within
             // reasonable per-process limits (Rule 12: fail loud, not silent).
-            // Production builds keep the auto-detect behavior.
             SystemConfig::default()
                 .buffer_pool_size(256 * 1024 * 1024)
                 .max_db_size(1024 * 1024 * 1024)
+                .max_num_threads(8)
                 .read_only(read_only)
         } else {
-            SystemConfig::default().read_only(read_only)
+            // L7-5: production caps. See the function-level comment for the
+            // full rationale. Values are sized for a 70 GB host running a
+            // single indexing process; the buffer pool is the dominant DuckDB
+            // RSS contributor and is bounded well below the system size to
+            // leave headroom for parse results, the in-memory Graph, LZ4
+            // compressed sources (RAM-first mode), and LSP servers.
+            SystemConfig::default()
+                .buffer_pool_size(4 * 1024 * 1024 * 1024)
+                .max_db_size(16 * 1024 * 1024 * 1024)
+                .max_num_threads(8)
+                .read_only(read_only)
         };
         match Database::new(path, config) {
             Ok(db) => Ok(Self { db }),
