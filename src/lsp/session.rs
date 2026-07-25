@@ -202,11 +202,28 @@ fn wait_with_timeout(child: &mut Child, timeout_ms: u64) -> bool {
     }
 }
 
-/// Force-kills `child` and blocks until OS reaps it (no timeout). Used as the
-/// last-resort fallback in [`shutdown_session`] after graceful wait timed out.
+/// Force-kills `child` and bounds the post-`SIGKILL` wait to
+/// [`KILL_TIMEOUT_MS`]. Used as the last-resort fallback in
+/// [`shutdown_session`] after graceful wait timed out.
+///
+/// # L6-3 architecture fix (review follow-up)
+///
+/// Symmetric with [`kill_session`]: both post-`SIGKILL` paths now use
+/// [`wait_with_timeout`] instead of an unbounded `child.wait()`. SIGKILL
+/// cannot interrupt D-state (uninterruptible sleep on NFS/FUSE/磁盘 IO
+/// 挂起), so an unbounded `wait()` in this fallback would re-introduce
+/// the very hang that [`kill_session`]'s timeout was designed to prevent.
+/// On timeout we leave the OS to reap the zombie (child is dropped right
+/// after this call returns — the zombie is reaped by init when CodeNexus
+/// exits).
 fn force_kill_and_wait(child: &mut Child) {
     let _ = child.kill();
-    let _ = child.wait();
+    if !wait_with_timeout(child, KILL_TIMEOUT_MS) {
+        eprintln!(
+            "warning: LSP child did not exit {KILL_TIMEOUT_MS}ms after SIGKILL \
+             in force_kill_and_wait (possible D-state); leaving OS to reap zombie"
+        );
+    }
 }
 
 /// Forcefully terminate a session whose handshake failed.
@@ -222,9 +239,21 @@ fn force_kill_and_wait(child: &mut Child) {
 /// (zombie reaping, D-state stall). `kill_session` is called on the
 /// `initialize_session` failure path (`client.rs`), so an unbounded wait
 /// would hang the entire CLI.
+///
+/// # L6-3 review follow-up (fail-loud, Rule 12)
+///
+/// On timeout, emits a warning to stderr so the user knows the child may
+/// be orphaned (zombie reaped by init when CodeNexus exits). The previous
+/// `let _ = wait_with_timeout(...)` silently dropped the `bool` return,
+/// violating the fail-loud principle.
 pub(crate) fn kill_session(mut session: Session) {
     let _ = session.child.kill();
-    let _ = wait_with_timeout(&mut session.child, KILL_TIMEOUT_MS);
+    if !wait_with_timeout(&mut session.child, KILL_TIMEOUT_MS) {
+        eprintln!(
+            "warning: LSP child did not exit {KILL_TIMEOUT_MS}ms after SIGKILL \
+             in kill_session; process may be orphaned"
+        );
+    }
 }
 
 /// Graceful shutdown shared by every LSP client.
@@ -243,6 +272,14 @@ pub(crate) fn shutdown_session(mut session: Session) {
 }
 
 /// Send a raw (untyped) request — used for the `shutdown` handshake.
+///
+/// # L6-3 review follow-up (fail-loud, Rule 12)
+///
+/// On channel-disconnected (writer thread panicked / server closed stdin),
+/// emits a warning to stderr instead of silently dropping the send error.
+/// The caller ([`shutdown_session`]) falls back to `wait_with_timeout` →
+/// `force_kill_and_wait`, so functional behavior is unaffected, but the
+/// warning makes the failure visible (fail-loud principle).
 pub(crate) fn send_raw_request(session: &mut Session, method: &str, params: serde_json::Value) {
     let id = session.next_request_id;
     session.next_request_id += 1;
@@ -251,7 +288,17 @@ pub(crate) fn send_raw_request(session: &mut Session, method: &str, params: serd
         method: method.to_string(),
         params,
     };
-    let _ = session.connection.sender.send(Message::Request(request));
+    if session
+        .connection
+        .sender
+        .send(Message::Request(request))
+        .is_err()
+    {
+        eprintln!(
+            "warning: LSP writer channel disconnected, cannot send `{method}` request \
+             (server may have closed stdin or writer thread panicked)"
+        );
+    }
 }
 
 /// Send an LSP notification (no response expected).
