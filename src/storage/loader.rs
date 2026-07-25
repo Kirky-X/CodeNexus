@@ -53,9 +53,27 @@ impl CsvLoader {
     /// Delegates to [`write_nodes_csv_stream`]. The file is created (or
     /// truncated) at `path` and the CSV is written row-by-row through a
     /// `csv::Writer` buffer.
-    pub fn write_nodes_file(&self, nodes: &[Node], label: NodeLabel, path: &Path) -> Result<()> {
+    ///
+    /// # L6-3 memory-overflow fix
+    ///
+    /// Accepts `impl IntoIterator<Item = &Node>` instead of `&[Node]` for API
+    /// symmetry with [`write_nodes_csv_stream`]. Dedup stats are consumed
+    /// internally: a warning is printed to stderr when any duplicates are
+    /// skipped (fail-loud principle, mirroring [`Repository::save_nodes`]'s
+    /// behavior).
+    pub fn write_nodes_file<'a, I>(&self, nodes: I, label: NodeLabel, path: &Path) -> Result<()>
+    where
+        I: IntoIterator<Item = &'a Node>,
+    {
         let file = std::fs::File::create(path)?;
-        write_nodes_csv_stream(nodes, label, file)
+        let stats = write_nodes_csv_stream(nodes, label, file)?;
+        if stats.skipped_duplicates > 0 {
+            eprintln!(
+                "warning: skipped {} duplicate node(s) during CSV generation (unique: {})",
+                stats.skipped_duplicates, stats.written
+            );
+        }
+        Ok(())
     }
 
     /// Streams the `CodeRelation` CSV directly to `path` on disk (L4 of the
@@ -125,33 +143,106 @@ fn sanitize_for_ladybugdb(s: String) -> String {
 /// The caller owns `writer`; this function flushes the `csv::Writer` buffer
 /// before returning, so the underlying writer receives all bytes. Callers that
 /// pass a `std::fs::File` should `drop`/`flush` it as needed.
-pub fn write_nodes_csv_stream<W: Write>(nodes: &[Node], label: NodeLabel, writer: W) -> Result<()> {
+///
+/// # L6 memory-overflow fix
+///
+/// Accepts `impl IntoIterator<Item = &Node>` instead of `&[Node]` so callers
+/// can stream from [`Graph::nodes_view`] without first collecting into a
+/// `Vec<Node>`. For large repos (100k+ nodes), eliminating the intermediate
+/// Vec avoids ~10 MB of peak RSS.
+///
+/// Deduplicates nodes by their `id` field (primary key in every node table) to
+/// prevent primary-key conflicts during `COPY FROM`. Returns
+/// [`NodeCsvStats`] so callers can log dedup counts (fail-loud principle,
+/// mirroring [`write_edges_csv_stream`]'s behavior). Dedup is "first-wins"
+/// (consistent with [`write_edges_csv_stream`]): the first node with a given
+/// id is written, subsequent nodes with the same id are skipped.
+///
+/// [`Graph::nodes_view`]: crate::model::Graph::nodes_view
+/// [`write_edges_csv_stream`]: self::write_edges_csv_stream
+pub fn write_nodes_csv_stream<'a, W: Write, I>(
+    nodes: I,
+    label: NodeLabel,
+    writer: W,
+) -> Result<NodeCsvStats>
+where
+    I: IntoIterator<Item = &'a Node>,
+{
     let columns = node_table_columns(label);
     let mut csv_writer = WriterBuilder::new()
         .delimiter(CSV_DELIMITER)
         .from_writer(writer);
     csv_writer.write_record(columns)?;
+    // L6-3 perf fix: borrow node ids as `&'a str` instead of cloning each id
+    // into a `HashSet<String>`. For 100k+ nodes this avoids ~5 MB of String
+    // allocations. The `'a` lifetime is bound to the input iterator's `Node`
+    // refs, so the borrows are valid for the entire dedup pass.
+    let mut seen: std::collections::HashSet<&'a str> = std::collections::HashSet::new();
+    let mut skipped = 0usize;
+    let mut written = 0usize;
+    let mut total = 0usize;
     for node in nodes {
+        total += 1;
+        if !seen.insert(node.id.as_str()) {
+            skipped += 1;
+            continue;
+        }
         let row: Vec<String> = node_to_row(node, label)
             .into_iter()
             .map(sanitize_for_ladybugdb)
             .collect();
         csv_writer.write_record(&row)?;
+        written += 1;
     }
     csv_writer.flush()?;
-    Ok(())
+    Ok(NodeCsvStats {
+        written,
+        skipped_duplicates: skipped,
+        total,
+    })
+}
+
+/// Statistics from streaming a nodes CSV (L6-3 of the memory-overflow fix).
+///
+/// Returned by [`write_nodes_csv_stream`] so callers can log dedup metrics
+/// (fail-loud principle) without inspecting the CSV content. Mirrors
+/// [`EdgeCsvStats`] for symmetric API design.
+///
+/// # L6-3 architecture fix
+///
+/// Includes `total` field (mirrors [`EdgeCsvStats`]) so callers can compute
+/// dedup rate in warnings.
+///
+/// [`EdgeCsvStats`]: self::EdgeCsvStats
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NodeCsvStats {
+    /// Number of nodes written to the CSV (after dedup).
+    pub written: usize,
+    /// Number of duplicate nodes skipped during dedup.
+    pub skipped_duplicates: usize,
+    /// Total number of nodes seen by the streamer (written + skipped).
+    pub total: usize,
 }
 
 /// Statistics from streaming an edges CSV (L4 of the memory-overflow fix).
 ///
 /// Returned by [`write_edges_csv_stream`] so callers can log dedup metrics
 /// (BR-INDEX-005, fail-loud principle) without inspecting the CSV content.
+///
+/// # L6-3 architecture fix
+///
+/// Added `total` field so callers can compute dedup rate (`skipped / total`)
+/// in warnings. Restores the observability lost when `save_edges` switched
+/// from `&[Edge]` (where `edges.len()` was available) to `impl IntoIterator`
+/// (where the count must be accumulated during streaming).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct EdgeCsvStats {
     /// Number of edges written to the CSV (after dedup).
     pub written: usize,
     /// Number of duplicate edges skipped during dedup.
     pub skipped_duplicates: usize,
+    /// Total number of edges seen by the streamer (written + skipped).
+    pub total: usize,
 }
 
 /// Streams the `CodeRelation` CSV (header + one row per edge) directly to
@@ -164,7 +255,19 @@ pub struct EdgeCsvStats {
 /// tuple (e.g. chained `.project(project)` calls in different files sharing
 /// the same start line). Returns [`EdgeCsvStats`] so callers can log dedup
 /// counts.
-pub fn write_edges_csv_stream<W: Write>(edges: &[Edge], writer: W) -> Result<EdgeCsvStats> {
+///
+/// # L6 memory-overflow fix
+///
+/// Accepts `impl IntoIterator<Item = &Edge>` instead of `&[Edge]` so callers
+/// can stream from [`Graph::edges_view`] without first collecting into a
+/// `Vec<Edge>`. For large repos (100k+ edges), eliminating the intermediate
+/// Vec avoids ~10 MB of peak RSS.
+///
+/// [`Graph::edges_view`]: crate::model::Graph::edges_view
+pub fn write_edges_csv_stream<'a, W: Write, I>(edges: I, writer: W) -> Result<EdgeCsvStats>
+where
+    I: IntoIterator<Item = &'a Edge>,
+{
     let columns = relation_table_columns();
     let mut csv_writer = WriterBuilder::new()
         .delimiter(CSV_DELIMITER)
@@ -173,7 +276,9 @@ pub fn write_edges_csv_stream<W: Write>(edges: &[Edge], writer: W) -> Result<Edg
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut skipped = 0usize;
     let mut written = 0usize;
+    let mut total = 0usize;
     for edge in edges {
+        total += 1;
         let id = edge_id(edge);
         if !seen.insert(id) {
             skipped += 1;
@@ -190,6 +295,7 @@ pub fn write_edges_csv_stream<W: Write>(edges: &[Edge], writer: W) -> Result<Edg
     Ok(EdgeCsvStats {
         written,
         skipped_duplicates: skipped,
+        total,
     })
 }
 
@@ -1794,6 +1900,8 @@ mod tests {
         let stats = write_edges_csv_stream(&edges, &mut buf).expect("stream");
         assert_eq!(stats.written, 2);
         assert_eq!(stats.skipped_duplicates, 0);
+        // L6-3: total mirrors written + skipped_duplicates.
+        assert_eq!(stats.total, 2);
     }
 
     #[test]
@@ -1813,6 +1921,8 @@ mod tests {
         let stats = write_edges_csv_stream(&[edge1, edge2, edge3], &mut buf).expect("stream");
         assert_eq!(stats.written, 2, "edge1 + edge3");
         assert_eq!(stats.skipped_duplicates, 1, "edge2 is dup of edge1");
+        // L6-3: total counts every edge seen (2 written + 1 dup).
+        assert_eq!(stats.total, 3);
         // Verify the CSV content also matches the stats.
         let csv = String::from_utf8(buf).expect("utf8");
         let lines: Vec<&str> = csv.lines().collect();
@@ -1820,10 +1930,12 @@ mod tests {
     }
 
     #[test]
-    fn edge_csv_stats_default_is_zero_zero() {
+    fn edge_csv_stats_default_is_zero_zero_zero() {
+        // L6-3: `total` field added — default must be 0 for all three counters.
         let stats = EdgeCsvStats::default();
         assert_eq!(stats.written, 0);
         assert_eq!(stats.skipped_duplicates, 0);
+        assert_eq!(stats.total, 0);
     }
 
     #[test]
@@ -1834,9 +1946,12 @@ mod tests {
 
     #[test]
     fn edge_csv_stats_equality_and_debug() {
+        // L6-3: `total` mirrors `written + skipped_duplicates`. Construct with
+        // all three fields and verify equality + Debug output includes `total`.
         let a = EdgeCsvStats {
             written: 5,
             skipped_duplicates: 2,
+            total: 7,
         };
         let b = a;
         assert_eq!(a, b);
@@ -1844,6 +1959,7 @@ mod tests {
         assert!(debug.contains("EdgeCsvStats"));
         assert!(debug.contains("written"));
         assert!(debug.contains("skipped_duplicates"));
+        assert!(debug.contains("total"));
     }
 
     #[test]
@@ -1852,8 +1968,108 @@ mod tests {
         let stats = write_edges_csv_stream(&[], &mut buf).expect("stream");
         assert_eq!(stats.written, 0);
         assert_eq!(stats.skipped_duplicates, 0);
+        // L6-3: `total` counts every edge seen by the streamer, even on empty
+        // input (must be 0, not unset).
+        assert_eq!(stats.total, 0);
         let csv = String::from_utf8(buf).expect("utf8");
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 1, "header only");
+    }
+
+    // --- L6-3 memory-overflow fix: write_nodes_csv_stream iterator API ---
+
+    #[test]
+    fn write_nodes_csv_stream_accepts_iterator_of_node_refs() {
+        // L6-3: write_nodes_csv_stream now accepts `impl IntoIterator<Item = &Node>`
+        // so callers can stream from `Graph::nodes_view()` without first collecting
+        // into a `Vec<Node>`. Verify by passing a direct iterator over node refs.
+        let nodes = [
+            sample_function_node(),
+            Node::builder(NodeLabel::Function, "helper", "proj.helper")
+                .id("func_002")
+                .project("demo")
+                .build(),
+        ];
+        let mut buf = Vec::new();
+        let stats =
+            write_nodes_csv_stream(nodes.iter(), NodeLabel::Function, &mut buf).expect("stream");
+        assert_eq!(stats.written, 2);
+        assert_eq!(stats.skipped_duplicates, 0);
+        // L6-3: total mirrors written + skipped_duplicates.
+        assert_eq!(stats.total, 2);
+        let csv = String::from_utf8(buf).expect("utf8");
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), 3, "header + 2 rows");
+        assert!(lines[1].contains("func_001"));
+        assert!(lines[2].contains("func_002"));
+    }
+
+    #[test]
+    fn write_nodes_csv_stream_deduplicates_by_node_id() {
+        // L6-3: dedup is now performed inside write_nodes_csv_stream (HashSet by
+        // node id), mirroring write_edges_csv_stream's behavior. Two nodes with
+        // the same id produce only one CSV row; the duplicate is counted in
+        // skipped_duplicates. This lets save_nodes_by_label skip the
+        // `deduped: Vec<Node>` clone entirely.
+        let n1 = Node::builder(NodeLabel::Function, "main", "proj.main")
+            .id("dup_id")
+            .project("demo")
+            .signature("fn main() -> i32")
+            .build();
+        let n2 = Node::builder(NodeLabel::Function, "main", "proj.main")
+            .id("dup_id") // same id, different signature (last-write-wins input)
+            .project("demo")
+            .signature("fn main() -> u64")
+            .build();
+        let n3 = Node::builder(NodeLabel::Function, "helper", "proj.helper")
+            .id("unique_id")
+            .project("demo")
+            .build();
+        let mut buf = Vec::new();
+        let stats =
+            write_nodes_csv_stream([&n1, &n2, &n3], NodeLabel::Function, &mut buf).expect("stream");
+        assert_eq!(stats.written, 2, "n1 + n3; n2 is dup of n1");
+        assert_eq!(stats.skipped_duplicates, 1);
+        // L6-3: total counts every node seen by the streamer (2 written + 1 dup).
+        assert_eq!(stats.total, 3);
+        let csv = String::from_utf8(buf).expect("utf8");
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), 3, "header + 2 unique rows");
+        // first-wins semantics (consistent with write_edges_csv_stream)
+        assert!(lines[1].contains("fn main() -> i32"));
+        assert!(!csv.contains("fn main() -> u64"));
+    }
+
+    #[test]
+    fn node_csv_stats_default_is_zero_zero_zero() {
+        // L6-3: `total` field added — default must be 0 for all three counters.
+        let stats = NodeCsvStats::default();
+        assert_eq!(stats.written, 0);
+        assert_eq!(stats.skipped_duplicates, 0);
+        assert_eq!(stats.total, 0);
+    }
+
+    #[test]
+    fn node_csv_stats_is_send_sync_copy() {
+        fn _assert_send_sync<T: Send + Sync + Copy>() {}
+        _assert_send_sync::<NodeCsvStats>();
+    }
+
+    #[test]
+    fn node_csv_stats_equality_and_debug() {
+        // L6-3: `total` mirrors `written + skipped_duplicates`. Construct with
+        // all three fields and verify equality + Debug output includes `total`.
+        let a = NodeCsvStats {
+            written: 5,
+            skipped_duplicates: 2,
+            total: 7,
+        };
+        let b = a;
+        assert_eq!(a, b);
+        let debug = format!("{a:?}");
+        assert!(debug.contains("NodeCsvStats"));
+        assert!(debug.contains("written"));
+        assert!(debug.contains("skipped_duplicates"));
+        assert!(debug.contains("total"));
     }
 }

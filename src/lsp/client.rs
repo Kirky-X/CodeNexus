@@ -6,7 +6,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use lsp_types::notification::{Exit, Notification as _};
 use lsp_types::request::{GotoDefinition, GotoTypeDefinition, HoverRequest};
 use lsp_types::{GotoDefinitionParams, HoverParams, PartialResultParams, WorkDoneProgressParams};
 
@@ -71,7 +70,11 @@ impl LspProvider for RustAnalyzerClient {
             _writer_handle: writer_handle,
             next_request_id: 1,
         };
-        session::initialize_session(&mut session, workspace)?;
+        if let Err(err) = session::initialize_session(&mut session, workspace) {
+            // Reap the spawned server — Child::drop would leak an orphan.
+            session::kill_session(session);
+            return Err(err);
+        }
         *guard = Some(session);
         Ok(())
     }
@@ -142,14 +145,10 @@ impl LspProvider for RustAnalyzerClient {
 
     fn shutdown(&self) -> Result<(), LspError> {
         let mut guard = self.session.lock().expect("session mutex poisoned");
-        let Some(mut session) = guard.take() else {
+        let Some(session) = guard.take() else {
             return Ok(());
         };
-        session::send_raw_request(&mut session, "shutdown", serde_json::Value::Null);
-        let _ =
-            session::send_notification(&session.connection, Exit::METHOD, &serde_json::Value::Null);
-        let _ = session.child.wait();
-        drop(session);
+        session::shutdown_session(session);
         Ok(())
     }
 }

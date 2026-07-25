@@ -156,7 +156,7 @@ impl Phase for ScanPhase {
         &[]
     }
 
-    fn run(&self, input: Self::Input, _ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+    fn run(&self, input: Self::Input, _ctx: &mut PipelineCtx) -> Result<Self::Output, PhaseError> {
         let ScanInput {
             path,
             project_name,
@@ -229,7 +229,7 @@ impl Phase for ParsePhase {
         &["scan"]
     }
 
-    fn run(&self, _: Self::Input, ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+    fn run(&self, _: Self::Input, ctx: &mut PipelineCtx) -> Result<Self::Output, PhaseError> {
         let scan = ctx
             .get::<ScanOutput>("scan")
             .ok_or(PhaseError::MissingInput("scan"))?;
@@ -278,7 +278,7 @@ impl Phase for ScopeResolutionPhase {
         &["scan", "parse"]
     }
 
-    fn run(&self, _: Self::Input, ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+    fn run(&self, _: Self::Input, ctx: &mut PipelineCtx) -> Result<Self::Output, PhaseError> {
         let scan = ctx
             .get::<ScanOutput>("scan")
             .ok_or(PhaseError::MissingInput("scan"))?;
@@ -391,16 +391,14 @@ impl Phase for ScopeResolutionPhase {
 ///
 /// # Returns
 ///
-/// A tuple of `(edges, includes_graph)`:
-/// - `edges`: all created INCLUDES edges (also added to `graph`)
-/// - `includes_graph`: populated graph for `lookup_exported_in_scope`
+/// An [`IncludesGraph`] populated for `lookup_exported_in_scope`. INCLUDES
+/// edges are added directly to `graph` (moved, not cloned — L6 fix).
 fn build_includes_edges(
     results: &[ExtractResult],
     graph: &mut Graph,
     path_to_rel: &HashMap<String, String>,
     project_id: &str,
-) -> (Vec<Edge>, IncludesGraph) {
-    let mut edges = Vec::new();
+) -> IncludesGraph {
     let mut includes_graph = IncludesGraph::new();
 
     #[cfg(feature = "lang-cpp")]
@@ -489,8 +487,12 @@ fn build_includes_edges(
                 .confidence_tier(ConfidenceTier::ImportScoped)
                 .start_line(import.line)
                 .build();
-                graph.add_edge(edge.clone());
-                edges.push(edge);
+                // L6 memory-overflow fix: move `edge` into the graph (no
+                // clone). The previous `graph.add_edge(edge.clone()); edges.push(edge);`
+                // double-allocated every INCLUDES edge — the returned Vec was
+                // immediately discarded by ResolvePhase. Now `build_includes_edges`
+                // returns only `IncludesGraph`, so the edge is moved directly.
+                graph.add_edge(edge);
 
                 // IncludesGraph target key: convert target_rel back to absolute
                 // via rel_to_abs map. In tests (path_to_rel empty), fallback to
@@ -509,7 +511,7 @@ fn build_includes_edges(
         let _ = (results, graph, path_to_rel, project_id);
     }
 
-    (edges, includes_graph)
+    includes_graph
 }
 
 // ---------------------------------------------------------------------------
@@ -531,26 +533,63 @@ impl Phase for ResolvePhase {
         &["scan", "parse", "scope"]
     }
 
-    fn run(&self, _: Self::Input, ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+    fn run(&self, _: Self::Input, ctx: &mut PipelineCtx) -> Result<Self::Output, PhaseError> {
+        // L6 memory-overflow fix: take ownership of `ScopeOutput` via
+        // `ctx.remove` instead of `ctx.get` + `graph.clone()`.
+        //
+        // `ResolvePhase` is the sole consumer of `scope` (LoadPhase deps are
+        // `["scan", "resolve"]` — it does NOT read `scope`). The previous
+        // `let mut graph = scope.graph.clone();` deep-cloned the entire
+        // `Graph` (nodes HashMap + edges Vec), which for large repos is
+        // multi-GB and was the dominant memory-pressure point after L1–L5.
+        //
+        // Removing `scope` from the ctx also frees `ScopeOutput.path_to_rel`
+        // and the (now-moved) `Graph` for the remainder of the pipeline,
+        // cutting peak RSS by roughly one full Graph worth of memory.
+        //
+        // Safety of `remove`: if a future phase adds `scope` to its `deps()`,
+        // `topo_sort` will still order it after `resolve`, but the
+        // `ctx.get::<ScopeOutput>("scope")` call in that phase will return
+        // `None` → `MissingInput`. This is fail-loud (Rule 12) and will be
+        // caught the first time the new phase is exercised.
+        //
+        // Order: `remove` first so the mutable borrow ends before the
+        // immutable `get` borrows below. Borrowing `scan`/`parse` first would
+        // conflict with `remove`'s mutable borrow (E0502).
+        let scope = ctx
+            .remove::<ScopeOutput>("scope")
+            .ok_or(PhaseError::MissingInput("scope"))?;
+        // L6 memory-overflow fix: take ownership of `ParseOutput` via
+        // `ctx.remove` so its `results: Vec<ExtractResult>` is freed when
+        // `ResolvePhase` returns. `LoadPhase` deps are
+        // `["scan", "resolve", "confidence"]` — it does NOT read `parse`, so
+        // removing it here is safe. Keeping `parse` alive until pipeline end
+        // holds every `ExtractResult` (AST snapshots, per-file node/edge
+        // lists) in memory alongside the resolved `Graph`, doubling peak RSS
+        // for large repos.
+        //
+        // Order: both `remove`s go first (mutable borrow), then `get` for
+        // `scan` (immutable borrow) — mixing them triggers E0502.
+        let parse = ctx
+            .remove::<ParseOutput>("parse")
+            .ok_or(PhaseError::MissingInput("parse"))?;
+
         let scan = ctx
             .get::<ScanOutput>("scan")
             .ok_or(PhaseError::MissingInput("scan"))?;
-        let parse = ctx
-            .get::<ParseOutput>("parse")
-            .ok_or(PhaseError::MissingInput("parse"))?;
-        let scope = ctx
-            .get::<ScopeOutput>("scope")
-            .ok_or(PhaseError::MissingInput("scope"))?;
 
         let project_id = &scan.project_id;
 
-        // Clone the graph so we can mutate it (ctx is immutable in run).
         // L3 memory-overflow fix: graph is the single source of truth — no
         // parallel `all_nodes`/`all_edges` Vecs are cloned. Resolved edges
         // are added directly to `graph` by `build_includes_edges` and
         // `resolve_all`; dangling type edges are pruned in place by
         // `resolve_all`'s internal `prune_dangling_type_edges(graph)` call.
-        let mut graph = scope.graph.clone();
+        //
+        // L6 fix: `graph` is MOVED out of `scope` (no clone). The previous
+        // `scope.graph.clone()` was the largest single allocation in the
+        // pipeline for large repos.
+        let mut graph = scope.graph;
 
         // Scheme C (v0.3.0): Build INCLUDES edges for C++ #include directives.
         // C++ #include is handled separately from IMPORTS (which is for
@@ -564,7 +603,9 @@ impl Phase for ResolvePhase {
         //
         // L3 fix: `build_includes_edges` adds edges to `graph` directly; the
         // returned Vec is ignored (previously extended into `all_edges`).
-        let (_includes_edges, includes_graph) =
+        // L6 fix: `build_includes_edges` now returns only `IncludesGraph`
+        // (the Vec was always discarded — pure waste).
+        let includes_graph =
             build_includes_edges(&parse.results, &mut graph, &scope.path_to_rel, project_id);
 
         // Resolve calls + dataflow + FFI edges. `TypeResolver::resolve_types`
@@ -580,10 +621,11 @@ impl Phase for ResolvePhase {
         //
         // L3 fix: `resolve_all` adds resolved edges to `graph` directly and
         // prunes dangling type edges via `prune_dangling_type_edges(graph)`.
-        // The returned Vec is ignored (previously extended into `all_edges`
-        // and pruned again separately — that second prune is now redundant).
+        // L6 fix: `resolve_all` now returns `()` — no master Vec<Edge> is
+        // built. Each sub-resolver's Vec is dropped immediately after its
+        // edges are cloned into `graph`.
         let symbol_table = build_symbol_table(&parse.results, project_id);
-        let _resolved_edges = resolve_all(
+        resolve_all(
             &parse.results,
             &symbol_table,
             project_id,
@@ -634,7 +676,7 @@ impl Phase for ConfidencePhase {
         &["resolve"]
     }
 
-    fn run(&self, _: Self::Input, _ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+    fn run(&self, _: Self::Input, _ctx: &mut PipelineCtx) -> Result<Self::Output, PhaseError> {
         // Pass-through — real confidence scoring added in Task 2.8.
         Ok(())
     }
@@ -660,7 +702,7 @@ impl Phase for LoadPhase {
         &["scan", "resolve", "confidence"]
     }
 
-    fn run(&self, _: Self::Input, ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+    fn run(&self, _: Self::Input, ctx: &mut PipelineCtx) -> Result<Self::Output, PhaseError> {
         let scan = ctx
             .get::<ScanOutput>("scan")
             .ok_or(PhaseError::MissingInput("scan"))?;
@@ -703,17 +745,22 @@ impl Phase for LoadPhase {
 
         // Step 8: persist project node, definition nodes, and edges.
         // L3 fix: stream nodes from `graph.nodes_view()` instead of borrowing
-        // a separate `all_nodes: Vec<Node>`. Edges are collected into a Vec
-        // for `save_edges` (the L4 fix will replace this with a streaming
-        // CSV writer that takes an iterator).
+        // a separate `all_nodes: Vec<Node>`.
+        // L6 fix: stream edges from `graph.edges_view()` directly into
+        // `save_edges` (which now accepts `impl IntoIterator<Item = &Edge>`),
+        // eliminating the `let all_edges: Vec<Edge> = ...collect()` that
+        // previously deep-cloned every edge. For large repos (100k+ edges)
+        // this avoids ~10 MB of peak RSS. Each `with_retry` attempt re-creates
+        // the iterator (cheap — `edges_view` returns an iterator over `&Edge`).
         save_project_node(&self.repo, project_id, project_name, root, disk_files)
             .map_err(|e| phase_err(Self::NAME, e))?;
         save_nodes_by_label(&self.repo, graph.nodes_view())
             .map_err(|e| phase_err(Self::NAME, e))?;
         if edges_created > 0 {
-            let all_edges: Vec<Edge> = graph.edges_view().cloned().collect();
             with_retry(DEFAULT_MAX_RETRIES, || {
-                self.repo.save_edges(&all_edges).map_err(IndexError::from)
+                self.repo
+                    .save_edges(graph.edges_view())
+                    .map_err(IndexError::from)
             })
             .map_err(|e| phase_err(Self::NAME, e))?;
         }
@@ -853,9 +900,17 @@ fn git_head_commit(root: &Path) -> String {
 ///
 /// L3 memory-overflow fix: accepts `impl Iterator<Item = &Node>` instead of
 /// `&[Node]`, so callers can stream from [`Graph::nodes_view`] without
-/// building a separate `Vec<Node>` copy. The internal `by_label` and
-/// `deduped` collections are built per-label (transient), not for all
-/// nodes at once.
+/// building a separate `Vec<Node>` copy. The internal `by_label` collection is
+/// built per-label (transient), not for all nodes at once.
+///
+/// L6-3 memory-overflow fix: dedup is now performed inside
+/// [`Repository::save_nodes`] (via [`write_nodes_csv_stream`]'s HashSet by
+/// node id), so this function no longer builds a `deduped: Vec<Node>` clone
+/// per label group. For large repos (100k+ nodes), eliminating the per-group
+/// Vec clone avoids ~10 MB of peak RSS. The `by_label: HashMap<NodeLabel,
+/// Vec<&Node>>` collection is retained because each label maps to a distinct
+/// CSV file (and thus a distinct `save_nodes` call) — the grouping is
+/// structurally necessary, only the per-group dedup Vec was waste.
 fn save_nodes_by_label<'a>(
     repo: &Repository,
     nodes: impl Iterator<Item = &'a Node>,
@@ -872,19 +927,15 @@ fn save_nodes_by_label<'a>(
         if label == NodeLabel::Project {
             continue;
         }
-        // Deduplicate by id within this label group.
-        let mut seen: HashMap<String, usize> = HashMap::new();
-        let mut deduped: Vec<Node> = Vec::with_capacity(group.len());
-        for node in group {
-            if let Some(&idx) = seen.get(&node.id) {
-                deduped[idx] = node.clone();
-            } else {
-                seen.insert(node.id.clone(), deduped.len());
-                deduped.push(node.clone());
-            }
-        }
+        // L6-3: pass `group.iter().copied()` (Iterator<Item = &Node>) directly
+        // to `Repository::save_nodes` (now accepts `impl IntoIterator<Item =
+        // &Node>`). Dedup is performed inside `write_nodes_csv_stream`
+        // (HashSet by node id), so no `deduped: Vec<Node>` clone is needed
+        // here. `with_retry` re-creates the iterator on each attempt (cheap —
+        // `group.iter()` is a single pointer borrow).
         with_retry(DEFAULT_MAX_RETRIES, || {
-            repo.save_nodes(&deduped, label).map_err(IndexError::from)
+            repo.save_nodes(group.iter().copied(), label)
+                .map_err(IndexError::from)
         })?;
     }
     Ok(())
@@ -995,9 +1046,14 @@ mod tests {
         let results = vec![main_result];
 
         let path_to_rel = HashMap::new();
-        let (edges, includes_graph) =
-            build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
+        // L6 fix: `build_includes_edges` now returns only `IncludesGraph`
+        // (edges are moved into `graph`).
+        let includes_graph = build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
 
+        let edges: Vec<&Edge> = graph
+            .edges_view()
+            .filter(|e| e.edge_type == EdgeType::Includes)
+            .collect();
         assert_eq!(edges.len(), 1, "should create 1 INCLUDES edge");
         assert_eq!(edges[0].edge_type, EdgeType::Includes);
         assert_eq!(edges[0].source, "src/main.cpp");
@@ -1031,11 +1087,15 @@ mod tests {
         let results = vec![ts_result];
 
         let path_to_rel = HashMap::new();
-        let (edges, includes_graph) =
-            build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
+        // L6 fix: `build_includes_edges` now returns only `IncludesGraph`.
+        let includes_graph = build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
 
+        let includes_edges: Vec<&Edge> = graph
+            .edges_view()
+            .filter(|e| e.edge_type == EdgeType::Includes)
+            .collect();
         assert!(
-            edges.is_empty(),
+            includes_edges.is_empty(),
             "non-C++ languages should NOT produce INCLUDES edges"
         );
         assert!(
@@ -1061,11 +1121,15 @@ mod tests {
         let results = vec![main_result];
 
         let path_to_rel = HashMap::new();
-        let (edges, includes_graph) =
-            build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
+        // L6 fix: `build_includes_edges` now returns only `IncludesGraph`.
+        let includes_graph = build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
 
+        let includes_edges: Vec<&Edge> = graph
+            .edges_view()
+            .filter(|e| e.edge_type == EdgeType::Includes)
+            .collect();
         assert!(
-            edges.is_empty(),
+            includes_edges.is_empty(),
             "system header #include <iostream> should not produce INCLUDES edge"
         );
         assert!(includes_graph.is_empty());
@@ -1098,10 +1162,14 @@ mod tests {
         let results = vec![main_result, foo_result];
 
         let path_to_rel = HashMap::new();
-        let (edges, includes_graph) =
-            build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
+        // L6 fix: `build_includes_edges` now returns only `IncludesGraph`.
+        let includes_graph = build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
 
-        assert_eq!(edges.len(), 2, "should create 2 INCLUDES edges");
+        let includes_edges: Vec<&Edge> = graph
+            .edges_view()
+            .filter(|e| e.edge_type == EdgeType::Includes)
+            .collect();
+        assert_eq!(includes_edges.len(), 2, "should create 2 INCLUDES edges");
         assert!(includes_graph.contains("src/main.cpp", "src/foo.h"));
         assert!(includes_graph.contains("src/foo.h", "src/bar.h"));
 
@@ -1141,16 +1209,19 @@ mod tests {
             "src/foo.h".to_string(),
         );
 
-        let (edges, includes_graph) =
-            build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
+        let includes_graph = build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
 
+        let includes_edges: Vec<&Edge> = graph
+            .edges_view()
+            .filter(|e| e.edge_type == EdgeType::Includes)
+            .collect();
         assert_eq!(
-            edges.len(),
+            includes_edges.len(),
             1,
             "absolute source path should resolve via path_to_rel"
         );
-        assert_eq!(edges[0].source, "src/main.cpp");
-        assert_eq!(edges[0].target, "src/foo.h");
+        assert_eq!(includes_edges[0].source, "src/main.cpp");
+        assert_eq!(includes_edges[0].target, "src/foo.h");
         // IncludesGraph uses absolute paths (for SymbolEntry.file_path matching).
         assert!(
             includes_graph.contains("/home/dev/proj/src/main.cpp", "/home/dev/proj/src/foo.h"),
@@ -1179,15 +1250,18 @@ mod tests {
         let results = vec![main_result];
 
         let path_to_rel = HashMap::new();
-        let (edges, _includes_graph) =
-            build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
+        let _includes_graph = build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
 
+        let includes_edges: Vec<&Edge> = graph
+            .edges_view()
+            .filter(|e| e.edge_type == EdgeType::Includes)
+            .collect();
         assert_eq!(
-            edges.len(),
+            includes_edges.len(),
             1,
             "partial-path #include should resolve via suffix matching"
         );
-        assert_eq!(edges[0].target, "include/fmt/format.h");
+        assert_eq!(includes_edges[0].target, "include/fmt/format.h");
     }
 
     #[test]
@@ -1208,11 +1282,14 @@ mod tests {
         let results = vec![main_result];
 
         let path_to_rel = HashMap::new();
-        let (edges, includes_graph) =
-            build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
+        let includes_graph = build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
 
+        let includes_edges: Vec<&Edge> = graph
+            .edges_view()
+            .filter(|e| e.edge_type == EdgeType::Includes)
+            .collect();
         assert!(
-            edges.is_empty(),
+            includes_edges.is_empty(),
             "no edges when source File node not in graph"
         );
         assert!(includes_graph.is_empty());

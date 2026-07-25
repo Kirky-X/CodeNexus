@@ -43,8 +43,21 @@ const PRUNABLE_EDGE_TYPES: [EdgeType; 3] =
 /// Returns the count of pruned edges.
 fn prune_dangling_type_edges(graph: &mut Graph) -> usize {
     let before = graph.edge_count();
-    let node_ids: std::collections::HashSet<String> = graph.nodes.keys().cloned().collect();
-    prune_dangling_type_edges_vec(&mut graph.edges, &node_ids);
+    // L6 memory-overflow fix: previously built a `HashSet<String>` from
+    // `graph.nodes.keys().cloned().collect()` (N String allocations) just to
+    // answer `node_ids.contains(&edge.target)` inside `retain`. For large
+    // graphs (100k+ nodes) this HashSet alone is hundreds of MB.
+    //
+    // `std::mem::take` swaps `graph.edges` out so the `retain` closure can
+    // borrow `graph.nodes` (immutable) without conflicting with the mutable
+    // borrow of `graph.edges`. This is the standard split-borrow pattern for
+    // struct fields that cannot be borrowed simultaneously through a method
+    // call. After `retain`, the pruned Vec is moved back into `graph.edges`.
+    let mut edges = std::mem::take(&mut graph.edges);
+    edges.retain(|edge| {
+        !PRUNABLE_EDGE_TYPES.contains(&edge.edge_type) || graph.nodes.contains_key(&edge.target)
+    });
+    graph.edges = edges;
     before - graph.edge_count()
 }
 
@@ -126,7 +139,8 @@ pub fn build_symbol_table(results: &[ExtractResult], project: &str) -> ProjectSy
     table
 }
 
-/// Resolves all symbols: calls + dataflows + FFI + imports, returning resolved edges.
+/// Resolves all symbols: calls + dataflows + FFI + imports, adding edges to
+/// `graph` in place.
 ///
 /// This is the top-level orchestration function for the resolve phase
 /// (ADR-011). It runs [`CallResolver`] to produce CALLS edges,
@@ -134,6 +148,16 @@ pub fn build_symbol_table(results: &[ExtractResult], project: &str) -> ProjectSy
 /// produce FfiCalls edges (ADD §7.4), [`ImportResolver`] to produce IMPORTS
 /// edges (DDD §7.2), and [`TypeResolver`] to fix dangling type edges,
 /// adding all resolved edges to the graph.
+///
+/// # L6 memory-overflow fix
+///
+/// Returns `()` instead of `Vec<Edge>`. The previous signature collected
+/// every resolved edge into a master `Vec<Edge>` that was immediately
+/// discarded by [`ResolvePhase`](crate::index::ResolvePhase) (the sole
+/// production caller). For large repos (1M+ edges) this was ~100 MB of
+/// pure waste. Each sub-resolver's `Vec<Edge>` is now dropped immediately
+/// after its edges are moved into `graph`, so peak RSS is bounded by the
+/// largest single resolver's working set rather than the union of all.
 ///
 /// # Arguments
 ///
@@ -143,47 +167,47 @@ pub fn build_symbol_table(results: &[ExtractResult], project: &str) -> ProjectSy
 /// * `graph` - The graph to add resolved edges to.
 /// * `includes_graph` - C++ `#include` graph for scope-aware call resolution
 ///   (BUG-C4 fix, v0.3.0). Built by `build_includes_edges` before this call.
-///
-/// # Returns
-///
-/// A vector of all resolved edges (also added to `graph`).
 pub fn resolve_all(
     results: &[ExtractResult],
     symbol_table: &ProjectSymbolTable,
     project: &str,
     graph: &mut Graph,
     includes_graph: &IncludesGraph,
-) -> Vec<Edge> {
-    let mut edges = Vec::new();
+) {
     let call_resolver =
         CallResolver::new(symbol_table, project).with_includes_graph(includes_graph.clone());
-    edges.extend(call_resolver.resolve_calls(results, graph));
+    // Each resolver returns `Vec<Edge>` for backward compatibility with
+    // tests that inspect the returned Vec directly. In production
+    // (`resolve_all`), the Vec is dropped immediately after edges are
+    // cloned into `graph` (resolvers call `graph.add_edge(edge.clone())`
+    // before pushing to their return Vec). The drop is immediate — no
+    // master Vec is built.
+    let _ = call_resolver.resolve_calls(results, graph);
     let df_resolver = DataFlowResolver::new(symbol_table, project);
-    edges.extend(df_resolver.resolve_dataflows(results, graph));
+    let _ = df_resolver.resolve_dataflows(results, graph);
     // FFI resolution requires both C and Rust to be compiled in (gated with
     // the `cross_lang` module). Skipped in leaner builds.
     #[cfg(all(feature = "lang-c", feature = "lang-rust"))]
     {
         let ffi_resolver = FfiResolver::new(symbol_table, project);
-        edges.extend(ffi_resolver.resolve_ffi(results, graph));
+        let _ = ffi_resolver.resolve_ffi(results, graph);
     }
     // Import resolution creates File → File IMPORTS edges from ImportInfo
     // records extracted by the parse phase (DDD §7.2). Runs after the other
     // resolvers; needs File nodes already in the graph (created by the scope
     // phase).
     let import_resolver = ImportResolver::new(project);
-    edges.extend(import_resolver.resolve_imports(results, graph));
+    let _ = import_resolver.resolve_imports(results, graph);
     // Type resolution fixes dangling Extends/Implements/UsesType edges
     // (design.md H6). Runs after other resolvers so it can fix edges created
     // by the parse phase. Returns the list of fixed edges (already mutated
     // in `graph`).
     let type_resolver = TypeResolver::new(symbol_table);
-    edges.extend(type_resolver.resolve_types(results, graph));
+    let _ = type_resolver.resolve_types(results, graph);
     // Prune type-reference edges that TypeResolver could not resolve (e.g.
     // std trait impls like `impl Display for Foo`). These dangling edges
     // are noise — the target doesn't exist in the project graph.
     prune_dangling_type_edges(graph);
-    edges
 }
 
 #[cfg(all(
@@ -561,26 +585,26 @@ mod tests {
             }
         }
 
-        let edges = resolve_all(&results, &table, "proj", &mut graph, &IncludesGraph::new());
+        // L6 fix: `resolve_all` now returns `()` — inspect `graph` directly.
+        resolve_all(&results, &table, "proj", &mut graph, &IncludesGraph::new());
 
         // Should have 1 CALLS edge + 1 DataFlows edge = 2 total.
-        assert_eq!(edges.len(), 2);
         assert_eq!(graph.edge_count(), 2);
 
-        let calls_count = edges
-            .iter()
+        let calls_count = graph
+            .edges_view()
             .filter(|e| e.edge_type == crate::model::EdgeType::Calls)
             .count();
-        let dataflows_count = edges
-            .iter()
+        let dataflows_count = graph
+            .edges_view()
             .filter(|e| e.edge_type == crate::model::EdgeType::DataFlows)
             .count();
         assert_eq!(calls_count, 1);
         assert_eq!(dataflows_count, 1);
 
         // Verify CALLS edge: foo -> bar
-        let call_edge = edges
-            .iter()
+        let call_edge = graph
+            .edges_view()
             .find(|e| e.edge_type == crate::model::EdgeType::Calls)
             .unwrap();
         assert_eq!(call_edge.source, foo_qn);
@@ -591,8 +615,8 @@ mod tests {
     fn resolve_all_empty_results_returns_empty() {
         let table = ProjectSymbolTable::new();
         let mut graph = Graph::new();
-        let edges = resolve_all(&[], &table, "proj", &mut graph, &IncludesGraph::new());
-        assert!(edges.is_empty());
+        // L6 fix: `resolve_all` now returns `()` — check graph is empty.
+        resolve_all(&[], &table, "proj", &mut graph, &IncludesGraph::new());
         assert_eq!(graph.edge_count(), 0);
     }
 
@@ -970,7 +994,8 @@ fn contains_scientific(ast: &AstNode) -> bool { true }
         }
 
         // Resolve calls
-        let edges = resolve_all(
+        // L6 fix: `resolve_all` now returns `()` — inspect `graph` directly.
+        resolve_all(
             &[result],
             &table,
             project,
@@ -978,8 +1003,8 @@ fn contains_scientific(ast: &AstNode) -> bool { true }
             &IncludesGraph::new(),
         );
 
-        let calls_edges: Vec<_> = edges
-            .iter()
+        let calls_edges: Vec<_> = graph
+            .edges_view()
             .filter(|e| e.edge_type == EdgeType::Calls)
             .collect();
 

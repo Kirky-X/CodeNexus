@@ -10,7 +10,7 @@
 //! [`resolve_all`](super::resolve_all).
 
 use crate::ir::ExtractResult;
-use crate::model::{Edge, Graph};
+use crate::model::Graph;
 
 use super::includes_graph::IncludesGraph;
 use super::symbol_table::ProjectSymbolTable;
@@ -27,10 +27,15 @@ pub trait Resolver: Send + Sync {
     fn build_symbol_table(&self, results: &[ExtractResult], project: &str) -> ProjectSymbolTable;
 
     /// Resolves all symbols (calls + dataflows + FFI), adding edges to
-    /// `graph`. Returns the resolved edges.
+    /// `graph` in place.
     ///
     /// `includes_graph` provides C++ `#include` scope information for
     /// call resolution (BUG-C4 fix, v0.3.0).
+    ///
+    /// # L6 memory-overflow fix
+    ///
+    /// Returns `()` instead of `Vec<Edge>` — see [`super::resolve_all`] for
+    /// rationale.
     fn resolve_all(
         &self,
         results: &[ExtractResult],
@@ -38,7 +43,7 @@ pub trait Resolver: Send + Sync {
         project: &str,
         graph: &mut Graph,
         includes_graph: &IncludesGraph,
-    ) -> Vec<Edge>;
+    );
 }
 
 /// Compile-time assertion that `Resolver` is object-safe and `Send + Sync`.

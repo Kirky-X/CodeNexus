@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
-use lsp_types::notification::{Initialized, Notification as _};
+use lsp_types::notification::{Exit, Initialized, Notification as _};
 use lsp_types::request::{Initialize, References};
 use lsp_types::{
     GotoDefinitionResponse, InitializeParams, InitializedParams, PartialResultParams, Position,
@@ -168,6 +168,78 @@ where
             Message::Notification(_) | Message::Request(_) => continue,
         }
     }
+}
+
+/// How long [`shutdown_session`] waits for the server to exit voluntarily
+/// before falling back to `kill()`. Prevents `child.wait()` from blocking
+/// forever on a server that ignores the `exit` notification.
+const SHUTDOWN_TIMEOUT_MS: u64 = 5_000;
+
+/// How long [`kill_session`] waits after `SIGKILL` for the child to actually
+/// exit. Shorter than [`SHUTDOWN_TIMEOUT_MS`] because `kill_session` is the
+/// fallback path (graceful shutdown already failed or was never attempted).
+/// Prevents `child.wait()` from blocking forever on a zombie process or
+/// kernel-state stall (L6-3 architecture fix).
+const KILL_TIMEOUT_MS: u64 = 3_000;
+
+/// Polls `child.try_wait()` in 50 ms steps until it exits or `timeout_ms`
+/// elapses. Returns `true` if the child exited within the timeout, `false`
+/// otherwise. Shared by [`shutdown_session`] (graceful wait) and
+/// [`kill_session`] (post-SIGKILL reap) to avoid busy-wait code duplication.
+fn wait_with_timeout(child: &mut Child, timeout_ms: u64) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    return false;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return false,
+        }
+    }
+}
+
+/// Force-kills `child` and blocks until OS reaps it (no timeout). Used as the
+/// last-resort fallback in [`shutdown_session`] after graceful wait timed out.
+fn force_kill_and_wait(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Forcefully terminate a session whose handshake failed.
+///
+/// `Child::drop` does NOT kill the subprocess — without this, a failed
+/// `initialize` handshake leaks an orphaned LSP server that keeps indexing
+/// the workspace and consuming memory after CodeNexus exits.
+///
+/// # L6-3 architecture fix
+///
+/// Bounds the post-`SIGKILL` wait to [`KILL_TIMEOUT_MS`] (3 s). The previous
+/// `child.wait()` could block forever if the child was stuck in kernel state
+/// (zombie reaping, D-state stall). `kill_session` is called on the
+/// `initialize_session` failure path (`client.rs`), so an unbounded wait
+/// would hang the entire CLI.
+pub(crate) fn kill_session(mut session: Session) {
+    let _ = session.child.kill();
+    let _ = wait_with_timeout(&mut session.child, KILL_TIMEOUT_MS);
+}
+
+/// Graceful shutdown shared by every LSP client.
+///
+/// Sends the `shutdown` request and `exit` notification, then waits up to
+/// [`SHUTDOWN_TIMEOUT_MS`] for the server to exit. Servers that ignore the
+/// handshake are killed so no subprocess outlives the CLI run.
+pub(crate) fn shutdown_session(mut session: Session) {
+    send_raw_request(&mut session, "shutdown", serde_json::Value::Null);
+    let _ = send_notification(&session.connection, Exit::METHOD, &serde_json::Value::Null);
+
+    if wait_with_timeout(&mut session.child, SHUTDOWN_TIMEOUT_MS) {
+        return;
+    }
+    force_kill_and_wait(&mut session.child);
 }
 
 /// Send a raw (untyped) request — used for the `shutdown` handshake.

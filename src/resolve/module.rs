@@ -21,7 +21,7 @@ use super::error::ResolveError;
 use super::includes_graph::IncludesGraph;
 use super::symbol_table::ProjectSymbolTable;
 use crate::ir::ExtractResult;
-use crate::model::{Edge, Graph};
+use crate::model::Graph;
 
 // ---------------------------------------------------------------------------
 // Module (ModuleMeta + AsyncAutoBuilder)
@@ -93,7 +93,7 @@ impl Resolver for ResolverCapability {
         project: &str,
         graph: &mut Graph,
         includes_graph: &IncludesGraph,
-    ) -> Vec<Edge> {
+    ) {
         super::resolve_all(results, symbol_table, project, graph, includes_graph)
     }
 }
@@ -177,15 +177,16 @@ mod tests {
         let (results, table, mut graph) = fixture_call_foo_to_bar();
         let cap = ResolverModule::build_cap().expect("build_cap");
         let includes_graph = IncludesGraph::new();
-        let edges = cap.resolve_all(&results, &table, "proj", &mut graph, &includes_graph);
+        // L6 fix: `resolve_all` now returns `()` — inspect `graph` directly.
+        cap.resolve_all(&results, &table, "proj", &mut graph, &includes_graph);
 
-        let calls_count = edges
-            .iter()
+        let calls_count = graph
+            .edges_view()
             .filter(|e| e.edge_type == crate::model::EdgeType::Calls)
             .count();
         assert!(
             calls_count >= 1,
-            "should produce at least one CALLS edge, got {edges:?}"
+            "should produce at least one CALLS edge in graph"
         );
         assert!(
             graph.edge_count() >= 1,

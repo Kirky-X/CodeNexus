@@ -221,13 +221,18 @@ pub trait Phase: Send + Sync + 'static {
     ///
     /// * `input` - The typed input (extracted from the context under
     ///   [`NAME`](Self::NAME)).
-    /// * `ctx` - Shared context for reading dep outputs via [`PipelineCtx::get`].
+    /// * `ctx` - Mutable context. Read dep outputs via [`PipelineCtx::get`]
+    ///   (shared borrow); consume a dep's output via [`PipelineCtx::remove`]
+    ///   (exclusive borrow) when no later phase needs it — this lets the
+    ///   phase take ownership of large intermediate values (e.g. a `Graph`)
+    ///   instead of cloning them, which is critical for memory-bound
+    ///   indexing pipelines (L6 memory-overflow fix).
     ///
     /// # Errors
     ///
     /// Returns [`PhaseError`] on failure. The runner wraps non-`PhaseError`
     /// failures into [`PhaseError::ExecutionFailed`].
-    fn run(&self, input: Self::Input, ctx: &PipelineCtx) -> Result<Self::Output, PhaseError>;
+    fn run(&self, input: Self::Input, ctx: &mut PipelineCtx) -> Result<Self::Output, PhaseError>;
 }
 
 /// Type-erased phase wrapper for the registry.
@@ -452,7 +457,7 @@ mod tests {
                 fn run(
                     &self,
                     input: Self::Input,
-                    _ctx: &PipelineCtx,
+                    _ctx: &mut PipelineCtx,
                 ) -> Result<Self::Output, PhaseError> {
                     self.log
                         .lock()
@@ -706,7 +711,11 @@ mod tests {
             fn deps() -> &'static [&'static str] {
                 &[]
             }
-            fn run(&self, _: Self::Input, _ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+            fn run(
+                &self,
+                _: Self::Input,
+                _ctx: &mut PipelineCtx,
+            ) -> Result<Self::Output, PhaseError> {
                 Ok(1)
             }
         }
@@ -718,7 +727,11 @@ mod tests {
             fn deps() -> &'static [&'static str] {
                 &["A"]
             }
-            fn run(&self, _: Self::Input, ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+            fn run(
+                &self,
+                _: Self::Input,
+                ctx: &mut PipelineCtx,
+            ) -> Result<Self::Output, PhaseError> {
                 let a = ctx.get::<u32>("A").expect("A must run before B");
                 Ok(a + 1)
             }
@@ -731,7 +744,11 @@ mod tests {
             fn deps() -> &'static [&'static str] {
                 &["B"]
             }
-            fn run(&self, _: Self::Input, ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+            fn run(
+                &self,
+                _: Self::Input,
+                ctx: &mut PipelineCtx,
+            ) -> Result<Self::Output, PhaseError> {
                 let b = ctx.get::<u32>("B").expect("B must run before C");
                 Ok(b + 1)
             }
@@ -767,7 +784,11 @@ mod tests {
             fn deps() -> &'static [&'static str] {
                 &[]
             }
-            fn run(&self, _: Self::Input, _ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+            fn run(
+                &self,
+                _: Self::Input,
+                _ctx: &mut PipelineCtx,
+            ) -> Result<Self::Output, PhaseError> {
                 Ok(10)
             }
         }
@@ -779,7 +800,11 @@ mod tests {
             fn deps() -> &'static [&'static str] {
                 &["A"]
             }
-            fn run(&self, _: Self::Input, ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+            fn run(
+                &self,
+                _: Self::Input,
+                ctx: &mut PipelineCtx,
+            ) -> Result<Self::Output, PhaseError> {
                 Ok(ctx.get::<u32>("A").copied().unwrap() + 1)
             }
         }
@@ -791,7 +816,11 @@ mod tests {
             fn deps() -> &'static [&'static str] {
                 &["A"]
             }
-            fn run(&self, _: Self::Input, ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+            fn run(
+                &self,
+                _: Self::Input,
+                ctx: &mut PipelineCtx,
+            ) -> Result<Self::Output, PhaseError> {
                 Ok(ctx.get::<u32>("A").copied().unwrap() + 2)
             }
         }
@@ -803,7 +832,11 @@ mod tests {
             fn deps() -> &'static [&'static str] {
                 &["B", "C"]
             }
-            fn run(&self, _: Self::Input, ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+            fn run(
+                &self,
+                _: Self::Input,
+                ctx: &mut PipelineCtx,
+            ) -> Result<Self::Output, PhaseError> {
                 let b = ctx.get::<u32>("B").copied().unwrap();
                 let c = ctx.get::<u32>("C").copied().unwrap();
                 Ok(b + c)
@@ -875,7 +908,11 @@ mod tests {
             fn deps() -> &'static [&'static str] {
                 &[]
             }
-            fn run(&self, _: Self::Input, _ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+            fn run(
+                &self,
+                _: Self::Input,
+                _ctx: &mut PipelineCtx,
+            ) -> Result<Self::Output, PhaseError> {
                 Err(PhaseError::ExecutionFailed {
                     phase: "FAIL",
                     inner: Box::new(std::io::Error::other("boom")),
@@ -911,7 +948,11 @@ mod tests {
             fn deps() -> &'static [&'static str] {
                 &[]
             }
-            fn run(&self, _: Self::Input, _ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+            fn run(
+                &self,
+                _: Self::Input,
+                _ctx: &mut PipelineCtx,
+            ) -> Result<Self::Output, PhaseError> {
                 // A non-ExecutionFailed, non-MissingInput variant → hits the
                 // `other` arm in Pipeline::run, which wraps it.
                 Err(PhaseError::TypeMismatch("ODD"))
@@ -977,7 +1018,11 @@ mod tests {
             fn deps() -> &'static [&'static str] {
                 &[]
             }
-            fn run(&self, _: Self::Input, _ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+            fn run(
+                &self,
+                _: Self::Input,
+                _ctx: &mut PipelineCtx,
+            ) -> Result<Self::Output, PhaseError> {
                 self.0.lock().unwrap().push("A".to_string());
                 Ok(())
             }
@@ -990,7 +1035,11 @@ mod tests {
             fn deps() -> &'static [&'static str] {
                 &["A"]
             }
-            fn run(&self, _: Self::Input, _ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+            fn run(
+                &self,
+                _: Self::Input,
+                _ctx: &mut PipelineCtx,
+            ) -> Result<Self::Output, PhaseError> {
                 self.0.lock().unwrap().push("B".to_string());
                 Ok(())
             }
@@ -1003,7 +1052,11 @@ mod tests {
             fn deps() -> &'static [&'static str] {
                 &["A"]
             }
-            fn run(&self, _: Self::Input, _ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+            fn run(
+                &self,
+                _: Self::Input,
+                _ctx: &mut PipelineCtx,
+            ) -> Result<Self::Output, PhaseError> {
                 self.0.lock().unwrap().push("C".to_string());
                 Ok(())
             }
@@ -1016,7 +1069,11 @@ mod tests {
             fn deps() -> &'static [&'static str] {
                 &["B", "C"]
             }
-            fn run(&self, _: Self::Input, _ctx: &PipelineCtx) -> Result<Self::Output, PhaseError> {
+            fn run(
+                &self,
+                _: Self::Input,
+                _ctx: &mut PipelineCtx,
+            ) -> Result<Self::Output, PhaseError> {
                 self.0.lock().unwrap().push("D".to_string());
                 Ok(())
             }

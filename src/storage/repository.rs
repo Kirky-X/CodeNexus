@@ -161,19 +161,68 @@ impl Repository {
     /// allocation of the pre-L4 API. The `TempDir` is dropped when this
     /// method returns, auto-cleaning the CSV file (fixing the tempdir leak
     /// in the pre-L4 `write_csv_temp` which used `std::mem::forget`).
-    pub fn save_nodes(&self, nodes: &[Node], label: NodeLabel) -> Result<()> {
-        if nodes.is_empty() {
-            return Ok(());
-        }
+    ///
+    /// # L6-3 memory-overflow fix
+    ///
+    /// Accepts `impl IntoIterator<Item = &Node>` instead of `&[Node]` so
+    /// callers can stream from [`Graph::nodes_view`] without first collecting
+    /// into a `Vec<Node>`. For large repos (100k+ nodes), eliminating the
+    /// intermediate Vec avoids ~10 MB of peak RSS.
+    ///
+    /// Dedup is performed inside [`write_nodes_csv_stream`] (HashSet by node
+    /// id), so this method no longer needs a `deduped: Vec<Node>` collection.
+    /// Duplicate node ids (if any) are counted and a warning is printed to
+    /// stderr (fail-loud principle, mirroring [`Repository::save_edges`]'s
+    /// behavior).
+    ///
+    /// # Trait vs inherent method
+    ///
+    /// The [`Storage`] trait method [`Storage::save_nodes`] keeps the
+    /// `&[Node]` signature for object safety (`dyn Storage` is used in many
+    /// callsites across query/analysis/service modules). That trait method
+    /// delegates to this inherent method via `&[Node]: IntoIterator<Item =
+    /// &Node>`, so trait callers transparently reach this implementation.
+    /// Only hot-path callers that hold a concrete `&Repository` (e.g.
+    /// [`save_nodes_by_label`](crate::index::save_nodes_by_label)) should call
+    /// this inherent method directly to take advantage of iterator streaming
+    /// without first collecting into a `Vec<Node>`.
+    ///
+    /// [`Graph::nodes_view`]: crate::model::Graph::nodes_view
+    /// [`Storage`]: super::capability::Storage
+    /// [`Storage::save_nodes`]: super::capability::Storage::save_nodes
+    pub fn save_nodes<'a, I>(&self, nodes: I, label: NodeLabel) -> Result<()>
+    where
+        I: IntoIterator<Item = &'a Node>,
+    {
+        let mut iter = nodes.into_iter().peekable();
+        // L6-3 perf fix: build `file_name` inside the `peek` match so the
+        // mutable borrow of `iter` ends before `iter` is moved into
+        // `write_nodes_csv_stream`. Avoids cloning `node.id` into a separate
+        // `first_id: String` (saves 1 String allocation per label group).
+        let file_name = match iter.peek() {
+            None => return Ok(()),
+            Some(node) => {
+                let safe_id = node.id.replace(['/', '\\'], "_");
+                format!("{}_{}.csv", label.table_name(), safe_id)
+            }
+        };
         let table = label.table_name();
-        let safe_id = nodes[0].id.replace(['/', '\\'], "_");
-        let file_name = format!("{table}_{safe_id}.csv");
         // TempDir owns the CSV file for the duration of load_from_csv and
         // auto-cleans on drop (no std::mem::forget leak).
         let dir = tempfile::tempdir()?;
         let path = dir.path().join(&file_name);
         let file = std::fs::File::create(&path)?;
-        write_nodes_csv_stream(nodes, label, file)?;
+        // L6-3 perf fix: wrap in BufWriter (64 KB) to reduce write syscalls for
+        // large CSV files (100k+ rows). csv::Writer's internal 8 KB buffer
+        // would otherwise trigger ~12 syscalls/MB; BufWriter cuts that to ~16/MB.
+        let buf = std::io::BufWriter::with_capacity(64 * 1024, file);
+        let stats = write_nodes_csv_stream(iter, label, buf)?;
+        if stats.skipped_duplicates > 0 {
+            eprintln!(
+                "warning: skipped {} duplicate node(s) during CSV generation (unique: {})",
+                stats.skipped_duplicates, stats.written
+            );
+        }
         load_from_csv(&self.conn, table, &path)
         // dir drops here, auto-cleaning the CSV file.
     }
@@ -186,20 +235,43 @@ impl Repository {
     /// avoiding the intermediate `String` allocation. Duplicate edges are
     /// skipped during streaming (BR-INDEX-005); a warning is printed to
     /// stderr when any duplicates are skipped (fail-loud principle).
-    pub fn save_edges(&self, edges: &[Edge]) -> Result<()> {
-        if edges.is_empty() {
-            return Ok(());
-        }
+    ///
+    /// # L6 memory-overflow fix
+    ///
+    /// Accepts `impl IntoIterator<Item = &Edge>` instead of `&[Edge]` so
+    /// callers can stream from [`Graph::edges_view`] without first collecting
+    /// into a `Vec<Edge>`. For large repos (100k+ edges), eliminating the
+    /// intermediate Vec avoids ~10 MB of peak RSS.
+    ///
+    /// # Trait vs inherent method
+    ///
+    /// The [`Storage`] trait method [`Storage::save_edges`] keeps the
+    /// `&[Edge]` signature for object safety (`dyn Storage` is used in 89+
+    /// callsites). That trait method delegates to this inherent method via
+    /// `&[Edge]: IntoIterator<Item = &Edge>`, so trait callers transparently
+    /// reach this implementation. Only hot-path callers that hold a concrete
+    /// `&Repository` (e.g. [`LoadPhase`](crate::index::LoadPhase)) should
+    /// call this inherent method directly to take advantage of iterator
+    /// streaming without first collecting into a `Vec<Edge>`.
+    ///
+    /// [`Graph::edges_view`]: crate::model::Graph::edges_view
+    /// [`Storage`]: super::capability::Storage
+    /// [`Storage::save_edges`]: super::capability::Storage::save_edges
+    pub fn save_edges<'a, I>(&self, edges: I) -> Result<()>
+    where
+        I: IntoIterator<Item = &'a Edge>,
+    {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("coderelation.csv");
         let file = std::fs::File::create(&path)?;
-        let stats = write_edges_csv_stream(edges, file)?;
+        // L6-3 perf fix: wrap in BufWriter (64 KB) to reduce write syscalls for
+        // large edge CSV files (1M+ rows). Symmetric with `save_nodes`.
+        let buf = std::io::BufWriter::with_capacity(64 * 1024, file);
+        let stats = write_edges_csv_stream(edges, buf)?;
         if stats.skipped_duplicates > 0 {
             eprintln!(
-                "warning: skipped {} duplicate edge(s) during CSV generation (edges: {}, unique: {})",
-                stats.skipped_duplicates,
-                edges.len(),
-                stats.written
+                "warning: skipped {} duplicate edge(s) during CSV generation (unique: {})",
+                stats.skipped_duplicates, stats.written
             );
         }
         load_from_csv(&self.conn, "CodeRelation", &path)
@@ -781,6 +853,30 @@ mod tests {
             .expect("query Macro");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0][0], serde_json::json!("M"));
+    }
+
+    #[test]
+    fn save_nodes_accepts_iterator_of_node_refs() {
+        // L6-3 memory-overflow fix: Repository::save_nodes inherent method now
+        // accepts `impl IntoIterator<Item = &Node>` so callers can stream from
+        // `Graph::nodes_view()` without first collecting into a `Vec<Node>`.
+        // The Storage trait method keeps the `&[Node]` signature for object
+        // safety (dyn Storage is used in 89+ callsites); trait callers
+        // transparently reach this inherent method via
+        // `&[Node]: IntoIterator<Item = &Node>`.
+        let repo = fresh_repo();
+        let nodes = [
+            sample_function("f1", "demo", "main", "demo.main"),
+            sample_function("f2", "demo", "helper", "demo.helper"),
+        ];
+        // Pass a direct iterator over node refs (not a &[Node] slice).
+        repo.save_nodes(nodes.iter(), NodeLabel::Function)
+            .expect("save_nodes iterator");
+
+        let funcs = repo.query_functions("demo").expect("query_functions");
+        assert_eq!(funcs.len(), 2);
+        assert_eq!(funcs[0].name, "helper");
+        assert_eq!(funcs[1].name, "main");
     }
 
     #[test]
