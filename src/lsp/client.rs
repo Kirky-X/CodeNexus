@@ -171,7 +171,8 @@ mod tests {
         let client = RustAnalyzerClient::with_server_path(PathBuf::from(
             "/nonexistent/path/to/rust-analyzer",
         ));
-        let result = client.start(&std::env::temp_dir());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let result = client.start(dir.path());
         match result {
             Err(LspError::ServerStart(msg)) => assert!(!msg.is_empty()),
             other => panic!("expected Err(LspError::ServerStart(_)), got: {other:?}"),
@@ -189,7 +190,8 @@ mod tests {
         let client = RustAnalyzerClient::with_server_path(PathBuf::from(
             "/nonexistent/path/to/rust-analyzer",
         ));
-        let _ = client.start(&std::env::temp_dir());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _ = client.start(dir.path());
         assert!(client.shutdown().is_ok());
     }
 
@@ -577,7 +579,8 @@ mod tests {
         let (s, _rt, _wr) = mock_session();
         let c = RustAnalyzerClient::new();
         *c.session.lock().unwrap() = Some(s);
-        assert!(c.start(&std::env::temp_dir()).is_ok());
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(c.start(dir.path()).is_ok());
         assert!(c.session.lock().unwrap().is_some());
         let _ = c.shutdown();
     }

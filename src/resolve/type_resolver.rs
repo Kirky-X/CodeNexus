@@ -43,7 +43,7 @@
 use std::collections::HashMap;
 
 use crate::ir::{ExtractResult, ImportInfo};
-use crate::model::{ConfidenceTier, Edge, EdgeType, Graph};
+use crate::model::{ConfidenceTier, EdgeType, Graph};
 use crate::resolve::ProjectSymbolTable;
 
 /// Confidence for a file-level (same-file) type match.
@@ -140,16 +140,17 @@ impl<'a> TypeResolver<'a> {
     ///
     /// Edges whose target already exists in the graph are left unchanged.
     ///
+    /// L6 fix: returns `()` instead of `Vec<Edge>`; edges are mutated directly
+    /// in `graph`. The previous `Vec<Edge>` return was an anti-pattern —
+    /// production callers (`orchestrator.rs::resolve_all`) discarded it via
+    /// `let _ = ...`, wasting memory on large repos due to per-edge `clone()`
+    /// followed by immediate `drop`.
+    ///
     /// # Arguments
     ///
     /// * `results` - Extraction results (used to build a file → imports map).
     /// * `graph` - The graph whose dangling edges to fix (mutated in-place).
-    ///
-    /// # Returns
-    ///
-    /// A vector of the resolved (fixed) edges. These are the same edges that
-    /// were mutated in `graph` — returned for logging/reporting purposes.
-    pub fn resolve_types(&self, results: &[ExtractResult], graph: &mut Graph) -> Vec<Edge> {
+    pub fn resolve_types(&self, results: &[ExtractResult], graph: &mut Graph) {
         // In production, `ExtractResult.file_path` is absolute (set by
         // `extract_file` from `file.path`), while graph nodes' `file_path` is
         // relative (normalized by `ScopeResolutionPhase`, phases.rs:344-346).
@@ -209,7 +210,6 @@ impl<'a> TypeResolver<'a> {
             })
             .collect();
 
-        let mut resolved_edges = Vec::new();
         for edge in &mut graph.edges {
             // Only fix resolvable edge types.
             if !RESOLVABLE_EDGE_TYPES.contains(&edge.edge_type) {
@@ -254,9 +254,7 @@ impl<'a> TypeResolver<'a> {
             edge.target = resolved_qn;
             edge.confidence = confidence;
             edge.confidence_tier = tier;
-            resolved_edges.push(edge.clone());
         }
-        resolved_edges
     }
 }
 
@@ -407,9 +405,8 @@ mod tests {
         }
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results_with_imports, &mut graph);
+        resolver.resolve_types(&results_with_imports, &mut graph);
 
-        assert_eq!(fixed.len(), 1);
         let edge = &graph.edges[0];
         assert_eq!(edge.target, "proj.a.py.A");
         assert!((edge.confidence - 0.90).abs() < f32::EPSILON);
@@ -430,9 +427,8 @@ mod tests {
         add_extends(&mut graph, "proj.b.py.B", "proj.a.py.A");
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
-        assert!(fixed.is_empty());
-        // Edge unchanged.
+        resolver.resolve_types(&results, &mut graph);
+        // Edge unchanged (non-dangling — target already in graph).
         assert_eq!(graph.edges[0].target, "proj.a.py.A");
     }
 
@@ -454,8 +450,10 @@ mod tests {
         ));
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
-        assert!(fixed.is_empty());
+        resolver.resolve_types(&results, &mut graph);
+        // Calls edge not in RESOLVABLE_EDGE_TYPES → unchanged.
+        assert_eq!(graph.edges[0].edge_type, EdgeType::Calls);
+        assert_eq!(graph.edges[0].target, "proj.a.py.Nonexistent");
     }
 
     #[test]
@@ -484,8 +482,7 @@ mod tests {
         }
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results_with_imports, &mut graph);
-        assert_eq!(fixed.len(), 1);
+        resolver.resolve_types(&results_with_imports, &mut graph);
         assert_eq!(graph.edges[0].target, "proj.a.rs.MyTrait");
         assert_eq!(graph.edges[0].edge_type, EdgeType::Implements);
     }
@@ -502,9 +499,8 @@ mod tests {
         add_extends(&mut graph, "proj.b.py.B", "proj.b.py.Nonexistent");
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
-        assert!(fixed.is_empty());
-        // Edge unchanged (still dangling).
+        resolver.resolve_types(&results, &mut graph);
+        // Edge unchanged (still dangling — type not in symbol table).
         assert_eq!(graph.edges[0].target, "proj.b.py.Nonexistent");
     }
 
@@ -523,8 +519,7 @@ mod tests {
         add_extends(&mut graph, "proj.b.py.B", "proj.b.py.A");
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
-        assert_eq!(fixed.len(), 1);
+        resolver.resolve_types(&results, &mut graph);
         assert_eq!(graph.edges[0].target, "proj.a.py.A");
         assert!((graph.edges[0].confidence - 0.80).abs() < f32::EPSILON);
         assert_eq!(graph.edges[0].confidence_tier, ConfidenceTier::Global);
@@ -542,8 +537,9 @@ mod tests {
         add_extends(&mut graph, "proj.unknown.X", "proj.unknown.Y");
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
-        assert!(fixed.is_empty());
+        resolver.resolve_types(&results, &mut graph);
+        // Source node missing from graph → edge unchanged.
+        assert_eq!(graph.edges[0].target, "proj.unknown.Y");
     }
 
     #[test]
@@ -558,8 +554,9 @@ mod tests {
         add_extends(&mut graph, "proj.b.py.B", "proj.b.py.Nonexistent");
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
-        assert!(fixed.is_empty());
+        resolver.resolve_types(&results, &mut graph);
+        // Type not in symbol table → edge unchanged.
+        assert_eq!(graph.edges[0].target, "proj.b.py.Nonexistent");
     }
 
     #[test]
@@ -651,11 +648,10 @@ mod tests {
         ));
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
+        resolver.resolve_types(&results, &mut graph);
 
         // With the path-mapping fix, import-scoped resolution (0.90) should
         // succeed despite the path-format mismatch.
-        assert_eq!(fixed.len(), 1, "should fix the dangling edge");
         assert_eq!(graph.edges[0].target, qn_a, "should resolve to A's FQN");
         assert!(
             (graph.edges[0].confidence - 0.90).abs() < f32::EPSILON,
@@ -685,9 +681,9 @@ mod tests {
         add_extends(&mut graph, "proj.a.py.A", "proj.a.py.Nonexistent");
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
+        resolver.resolve_types(&results, &mut graph);
         // Edge is unresolvable → no fix, but duplicate path is exercised.
-        assert!(fixed.is_empty(), "unresolvable edge → no fix");
+        assert_eq!(graph.edges[0].target, "proj.a.py.Nonexistent");
     }
 
     #[test]
@@ -709,8 +705,7 @@ mod tests {
         ));
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
-        assert_eq!(fixed.len(), 1, "should fix the dangling UsesType edge");
+        resolver.resolve_types(&results, &mut graph);
         assert_eq!(graph.edges[0].target, "proj.a.py.TypeA");
         assert_eq!(graph.edges[0].edge_type, EdgeType::UsesType);
     }
@@ -738,12 +733,8 @@ mod tests {
         add_extends(&mut graph, "proj.b.py.B", "proj.b.py.A");
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
+        resolver.resolve_types(&results, &mut graph);
         // resolved_qn ("proj.b.py.A") == edge.target ("proj.b.py.A") → skip.
-        assert!(
-            fixed.is_empty(),
-            "resolved_qn == current target → no fix needed"
-        );
         // Edge target unchanged.
         assert_eq!(graph.edges[0].target, "proj.b.py.A");
         // Confidence/tier unchanged (still default 1.0 / Global from Edge::new).
@@ -822,9 +813,8 @@ mod tests {
         add_extends(&mut graph, "proj.b.py.B", "proj.b.py.A");
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
+        resolver.resolve_types(&results, &mut graph);
         // B's edge should still be resolved despite C having no file_path.
-        assert_eq!(fixed.len(), 1, "B's edge should be resolved");
         assert_eq!(graph.edges[0].target, "proj.a.py.A");
     }
 
@@ -859,9 +849,9 @@ mod tests {
         add_extends(&mut graph, "proj.a.py.A", "proj.a.py.Nonexistent");
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
+        resolver.resolve_types(&results, &mut graph);
         // "Nonexistent" is not in the symbol table → unresolvable → no fix.
-        assert!(fixed.is_empty(), "unresolvable edge → no fix");
+        assert_eq!(graph.edges[0].target, "proj.a.py.Nonexistent");
     }
 
     #[test]
@@ -899,9 +889,8 @@ mod tests {
         add_extends(&mut graph, "proj.b.py.B", "proj.b.py.A");
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
+        resolver.resolve_types(&results, &mut graph);
         // Project-level exported lookup should find A → resolve to proj.a.py.A.
-        assert_eq!(fixed.len(), 1, "should resolve via global exported lookup");
         assert_eq!(graph.edges[0].target, "proj.a.py.A");
     }
 
@@ -924,8 +913,8 @@ mod tests {
         ));
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
-        assert!(fixed.is_empty(), "Calls edge should not be resolved");
+        resolver.resolve_types(&results, &mut graph);
+        // Calls edge should not be resolved.
         assert_eq!(
             graph.edges[0].target, "proj.b.py.A",
             "edge target unchanged"
@@ -952,8 +941,8 @@ mod tests {
         ));
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
-        assert!(fixed.is_empty(), "non-dangling edge should be skipped");
+        resolver.resolve_types(&results, &mut graph);
+        // Non-dangling edge should be skipped — target unchanged.
         assert_eq!(
             graph.edges[0].target, "proj.a.py.A",
             "edge target unchanged"
@@ -982,8 +971,9 @@ mod tests {
         add_extends(&mut graph, "proj.b.py.B", "proj.b.py.Nonexistent");
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
-        assert!(fixed.is_empty(), "source with no file_path → skip");
+        resolver.resolve_types(&results, &mut graph);
+        // Source with no file_path → edge unchanged.
+        assert_eq!(graph.edges[0].target, "proj.b.py.Nonexistent");
     }
 
     // --- resolve_type: imported but not found (is_imported=true, lookup empty) ---
@@ -1025,13 +1015,8 @@ mod tests {
         add_extends(&mut graph, "proj.b.py.B", "proj.b.py.TruelyNonexistent");
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
-        assert!(
-            fixed.is_empty(),
-            "edge with unresolvable type should be skipped: {:?}",
-            fixed
-        );
-        // Edge target should be unchanged.
+        resolver.resolve_types(&results, &mut graph);
+        // Edge target should be unchanged (unresolvable type).
         assert_eq!(
             graph.edges[0].target, "proj.b.py.TruelyNonexistent",
             "unresolvable edge target should remain unchanged"
@@ -1085,8 +1070,7 @@ mod tests {
         add_extends(&mut graph, "proj.b.py.B", "proj.a.py.A");
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
-        assert_eq!(fixed.len(), 1, "should fix via same-file lookup");
+        resolver.resolve_types(&results, &mut graph);
         assert_eq!(graph.edges[0].target, "proj.b.py.A");
         assert!(
             (graph.edges[0].confidence - 0.95).abs() < f32::EPSILON,
@@ -1111,8 +1095,9 @@ mod tests {
         add_extends(&mut graph, "proj.b.py.B", "proj.b.py.Nonexistent");
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
-        assert!(fixed.is_empty(), "empty results → no resolution possible");
+        resolver.resolve_types(&results, &mut graph);
+        // Empty results → no resolution possible → edge unchanged.
+        assert_eq!(graph.edges[0].target, "proj.b.py.Nonexistent");
     }
 
     // --- resolve_types: multiple dangling edges ---
@@ -1141,10 +1126,11 @@ mod tests {
         add_extends(&mut graph, "proj.c.py.C", "proj.c.py.Nonexistent");
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
-        assert_eq!(fixed.len(), 1, "only one edge should be fixed");
-        assert_eq!(fixed[0].source, "proj.b.py.B");
-        assert_eq!(fixed[0].target, "proj.a.py.A");
+        resolver.resolve_types(&results, &mut graph);
+        // Edge 1 (B→A) should be fixed; Edge 2 (C→Nonexistent) unchanged.
+        assert_eq!(graph.edges[0].source, "proj.b.py.B");
+        assert_eq!(graph.edges[0].target, "proj.a.py.A");
+        assert_eq!(graph.edges[1].target, "proj.c.py.Nonexistent");
     }
 
     // --- resolve_types: mixed dangling and non-dangling edges ---
@@ -1171,8 +1157,7 @@ mod tests {
         add_extends(&mut graph, "proj.b.py.B", "proj.b.py.A");
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
-        assert_eq!(fixed.len(), 1, "only the dangling edge should be fixed");
+        resolver.resolve_types(&results, &mut graph);
         // First edge (non-dangling) should be unchanged.
         assert_eq!(graph.edges[0].target, "proj.a.py.A");
         // Second edge (dangling) should be fixed.
@@ -1192,8 +1177,8 @@ mod tests {
         graph.add_node(make_class("A", "a.py", Language::Python));
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
-        assert!(fixed.is_empty(), "no edges → no fixes");
+        resolver.resolve_types(&results, &mut graph);
+        assert_eq!(graph.edge_count(), 0, "no edges → no fixes");
     }
 
     // --- resolve_types: multiple resolvable edges accumulate in order ---
@@ -1220,13 +1205,12 @@ mod tests {
         add_extends(&mut graph, "proj.c.py.C", "proj.c.py.A");
 
         let resolver = TypeResolver::new(&table);
-        let fixed = resolver.resolve_types(&results, &mut graph);
-        assert_eq!(fixed.len(), 2, "both edges should be fixed");
-        // Verify insertion order matches edge iteration order.
-        assert_eq!(fixed[0].source, "proj.b.py.B");
-        assert_eq!(fixed[1].source, "proj.c.py.C");
+        resolver.resolve_types(&results, &mut graph);
+        // Both edges should be fixed; verify insertion order matches edge iteration order.
+        assert_eq!(graph.edges[0].source, "proj.b.py.B");
+        assert_eq!(graph.edges[1].source, "proj.c.py.C");
         // Both should resolve to the same target (proj.a.py.A).
-        assert_eq!(fixed[0].target, "proj.a.py.A");
-        assert_eq!(fixed[1].target, "proj.a.py.A");
+        assert_eq!(graph.edges[0].target, "proj.a.py.A");
+        assert_eq!(graph.edges[1].target, "proj.a.py.A");
     }
 }

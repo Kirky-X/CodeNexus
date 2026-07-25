@@ -78,6 +78,17 @@ fn build_symbol_queries(project: &str) -> [String; 2] {
     use crate::storage::schema::escape_cypher_string;
 
     let proj = escape_cypher_string(project);
+    // P-09: pre-merge optimization kept as two separate queries because
+    // LadybugDB's Cypher subset does NOT support `UNION` / `UNION ALL`
+    // (see `src/analysis/architecture.rs` line ~38: "LadybugDB does not
+    // support `UNION`, so we issue one query per table and merge in Rust").
+    // A single `MATCH (n) WHERE n:Function OR n:Method ...` would also not
+    // work — LadybugDB does not support multi-label `WHERE (n:A OR n:B)`
+    // expressions either (same source). The two queries are issued
+    // sequentially and their result rows are merged in Rust via
+    // `rows.extend(r)` in `enhance_with_lsp`. The per-query overhead is one
+    // round-trip to the embedded LadybugDB process — negligible compared to
+    // the per-symbol LSP `hover` cost that dominates this function.
     [
         format!(
             "MATCH (n:Function) WHERE n.project = '{proj}' \
@@ -94,14 +105,16 @@ fn build_symbol_queries(project: &str) -> [String; 2] {
 
 #[cfg(feature = "lsp")]
 fn select_provider_for_ext<'a>(
-    providers: &'a [(&'static str, Box<dyn LspProvider>)],
+    ext_map: &std::collections::HashMap<&'static str, &'a dyn LspProvider>,
     ext: &str,
-) -> &'a dyn LspProvider {
-    providers
-        .iter()
-        .find(|(e, _)| *e == ext)
-        .map(|(_, p)| p.as_ref())
-        .unwrap_or_else(|| providers[0].1.as_ref())
+) -> Option<&'a dyn LspProvider> {
+    // P-02: HashMap O(1) lookup replaces the pre-P-02 linear `.iter().find`
+    // over 8 providers that ran once per symbol (100k+ symbols → 100k+ scans).
+    // M2/P-07: returns `None` for unknown extensions instead of falling back
+    // to `providers[0]` — callers (the hover loop) skip symbols whose file
+    // extension is not wired to a real LSP server (e.g. .md, .toml). Pre-M2
+    // started rust-analyzer for .md files, wasting ~300 MB-2 GB of RSS.
+    ext_map.get(ext).copied()
 }
 
 #[cfg(feature = "lsp")]
@@ -192,8 +205,18 @@ fn enhance_with_lsp(
     // extensions that actually need an LSP server. Rows that fail
     // `extract_lsp_row_fields` are counted as skipped (Rule 12: explicit
     // skip, not silent success — same behaviour as pre-L7-6).
-    let provider_exts: Vec<&'static str> = providers.iter().map(|(e, _)| *e).collect();
-    let default_ext = provider_exts[0];
+    //
+    // P-02: build `ext_map` once (HashMap<&str, &dyn LspProvider>) so the
+    // hover loop's per-symbol `select_provider_for_ext` is O(1) instead of
+    // the pre-P-02 linear scan over 8 providers.
+    // P-10: build `provider_exts_set` once (HashSet<&str>) so `collect_active_extensions`
+    // is also O(1) per entry instead of O(8).
+    let provider_exts_set: std::collections::HashSet<&'static str> =
+        providers.iter().map(|(e, _)| *e).collect();
+    let ext_map: std::collections::HashMap<&'static str, &dyn LspProvider> = providers
+        .iter()
+        .map(|(ext, p)| (*ext, p.as_ref()))
+        .collect();
     let mut entries: Vec<(String, std::path::PathBuf, u32)> = Vec::with_capacity(rows.len());
     let mut skipped: u32 = 0;
     for row in &rows {
@@ -205,7 +228,7 @@ fn enhance_with_lsp(
         let line = u32::try_from(start_line).unwrap_or(0);
         entries.push((id, abs_file, line));
     }
-    let active_exts = collect_active_extensions(&entries, &provider_exts, default_ext);
+    let active_exts = collect_active_extensions(&entries, &provider_exts_set);
 
     // L7-6: only start providers whose extension appears in `active_exts`.
     // Providers for absent extensions short-circuit `shutdown()` to `Ok(())`
@@ -235,7 +258,14 @@ fn enhance_with_lsp(
     if !entries.is_empty() {
         for (id, abs_file, line) in &entries {
             let ext = abs_file.extension().and_then(|e| e.to_str()).unwrap_or("");
-            let client = select_provider_for_ext(&providers, ext);
+            // M2/P-07: skip symbols whose extension has no wired LSP provider
+            // (.md, .toml, .json). Pre-M2 fell back to providers[0]
+            // (rust-analyzer) and wasted 300 MB-2 GB of RSS hovering files
+            // LSP can't help with.
+            let Some(client) = select_provider_for_ext(&ext_map, ext) else {
+                skipped += 1;
+                continue;
+            };
 
             match client.hover(abs_file, *line, 0) {
                 Ok(Some(hover)) => {
@@ -280,9 +310,24 @@ fn enhance_with_lsp(
 ///
 /// Given the pre-extracted `(id, abs_file, line)` tuples from the
 /// Function/Method query, returns the set of provider extensions whose LSP
-/// server must be started. Files whose extension does not match any wired
-/// provider fall back to `default_ext` (preserves pre-L7-6 behaviour where
-/// `select_provider_for_ext` falls back to `providers[0]`).
+/// server must be started.
+///
+/// # M2/P-07 — skip unknown extensions instead of falling back
+///
+/// Files whose extension does not match any wired provider (e.g. `.md`,
+/// `.toml`, `.json`) are **skipped** — they do not activate any LSP server
+/// and the hover loop later skips them via [`select_provider_for_ext`]
+/// returning `None`. Pre-M2 fell back to `default_ext` (`"rs"`), which
+/// needlessly started `rust-analyzer` for markdown/toml symbols, wasting
+/// 300 MB-2 GB of RSS. Skipping is correct: LSP servers cannot hover
+/// non-source files anyway, so the fallback hover result was always
+/// `Ok(None)` (no semantic_type extracted) — the RSS cost was pure waste.
+///
+/// # P-10 — HashSet lookup replaces linear scan
+///
+/// `provider_exts` is now a `HashSet<&str>` instead of a `&[&str]`. The
+/// per-entry `contains` is O(1) instead of O(8). For polyglot repos with
+/// 100k+ symbols this avoids ~800k string comparisons during routing.
 ///
 /// This is a pure function (no I/O, no LSP, no DB) so the L7-6 routing
 /// decision can be unit-tested deterministically without spawning language
@@ -292,26 +337,20 @@ fn enhance_with_lsp(
 ///
 /// * `entries` - Pre-extracted `(id, abs_file, line)` tuples from
 ///   `extract_lsp_row_fields`. Only the `abs_file` extension is read.
-/// * `provider_exts` - Slice of wired provider extensions (e.g.
-///   `["rs", "py", "c", "cpp", "go", "ts", "f90", "java"]`). The first
-///   element MUST equal `default_ext`.
-/// * `default_ext` - Fallback extension for files whose extension is not
-///   in `provider_exts` (e.g. `.md`, `.toml`). Typically `"rs"`.
+/// * `provider_exts` - HashSet of wired provider extensions (e.g.
+///   `{"rs", "py", "c", "cpp", "go", "ts", "f90", "java"}`).
 #[cfg(feature = "lsp")]
 fn collect_active_extensions<'a>(
     entries: &[(String, std::path::PathBuf, u32)],
-    provider_exts: &[&'a str],
-    default_ext: &'a str,
+    provider_exts: &std::collections::HashSet<&'a str>,
 ) -> std::collections::HashSet<&'a str> {
     let mut active: std::collections::HashSet<&'a str> = std::collections::HashSet::new();
     for (_, abs_file, _) in entries {
         let ext = abs_file.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let provider_ext = provider_exts
-            .iter()
-            .find(|e| **e == ext)
-            .copied()
-            .unwrap_or(default_ext);
-        active.insert(provider_ext);
+        // M2/P-07: skip unknown extensions — do NOT fall back to default.
+        if let Some(&provider_ext) = provider_exts.get(ext) {
+            active.insert(provider_ext);
+        }
     }
     active
 }
@@ -734,18 +773,48 @@ mod tests {
 
     #[cfg(feature = "lsp")]
     #[test]
-    fn select_provider_for_ext_returns_rust_for_rs() {
+    fn select_provider_for_ext_returns_some_for_rs() {
+        // P-02: select_provider_for_ext now does a HashMap lookup and
+        // returns Option<&dyn LspProvider>. .rs must map to a provider.
         let providers = build_lsp_providers();
-        let provider = select_provider_for_ext(&providers, "rs");
+        let ext_map: std::collections::HashMap<&'static str, &dyn LspProvider> = providers
+            .iter()
+            .map(|(ext, p)| (*ext, p.as_ref()))
+            .collect();
+        let provider = select_provider_for_ext(&ext_map, "rs").expect("rs must map to a provider");
         let _ = provider.shutdown();
+        // Drop providers after shutdown to release the Box<dyn LspProvider>.
+        drop(providers);
     }
 
     #[cfg(feature = "lsp")]
     #[test]
-    fn select_provider_for_ext_returns_default_for_unknown() {
+    fn select_provider_for_ext_returns_none_for_unknown() {
+        // M2/P-07: unknown extensions (.md, .toml, .json) no longer fall
+        // back to providers[0]. select_provider_for_ext returns None so the
+        // hover loop skips the symbol — pre-M2 wasted 300 MB-2 GB of RSS
+        // starting rust-analyzer for non-source files.
         let providers = build_lsp_providers();
-        let provider = select_provider_for_ext(&providers, "unknown");
-        let _ = provider.shutdown();
+        let ext_map: std::collections::HashMap<&'static str, &dyn LspProvider> = providers
+            .iter()
+            .map(|(ext, p)| (*ext, p.as_ref()))
+            .collect();
+        assert!(
+            select_provider_for_ext(&ext_map, "md").is_none(),
+            "md must NOT map to any provider"
+        );
+        assert!(
+            select_provider_for_ext(&ext_map, "toml").is_none(),
+            "toml must NOT map to any provider"
+        );
+        assert!(
+            select_provider_for_ext(&ext_map, "unknown").is_none(),
+            "unknown ext must NOT map to any provider"
+        );
+        // Shutdown all providers (no-op for never-started clients).
+        for (_, p) in &providers {
+            let _ = p.shutdown();
+        }
     }
 
     #[cfg(feature = "lsp")]
@@ -877,8 +946,11 @@ mod tests {
     #[cfg(feature = "lsp")]
     #[test]
     fn collect_active_extensions_empty_entries_returns_empty_set() {
-        let provider_exts = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
-        let active = collect_active_extensions(&[], &provider_exts, "rs");
+        let provider_exts: std::collections::HashSet<&str> =
+            ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"]
+                .into_iter()
+                .collect();
+        let active = collect_active_extensions(&[], &provider_exts);
         assert!(
             active.is_empty(),
             "empty entries must produce empty active set"
@@ -888,7 +960,10 @@ mod tests {
     #[cfg(feature = "lsp")]
     #[test]
     fn collect_active_extensions_pure_rust_returns_only_rs() {
-        let provider_exts = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+        let provider_exts: std::collections::HashSet<&str> =
+            ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"]
+                .into_iter()
+                .collect();
         let entries = vec![
             (
                 "id1".to_string(),
@@ -906,7 +981,7 @@ mod tests {
                 20,
             ),
         ];
-        let active = collect_active_extensions(&entries, &provider_exts, "rs");
+        let active = collect_active_extensions(&entries, &provider_exts);
         assert_eq!(
             active.len(),
             1,
@@ -926,7 +1001,10 @@ mod tests {
     #[cfg(feature = "lsp")]
     #[test]
     fn collect_active_extensions_pure_python_returns_only_py() {
-        let provider_exts = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+        let provider_exts: std::collections::HashSet<&str> =
+            ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"]
+                .into_iter()
+                .collect();
         let entries = vec![
             (
                 "id1".to_string(),
@@ -939,7 +1017,7 @@ mod tests {
                 5,
             ),
         ];
-        let active = collect_active_extensions(&entries, &provider_exts, "rs");
+        let active = collect_active_extensions(&entries, &provider_exts);
         assert_eq!(
             active.len(),
             1,
@@ -952,7 +1030,10 @@ mod tests {
     #[cfg(feature = "lsp")]
     #[test]
     fn collect_active_extensions_mixed_rs_py_returns_both() {
-        let provider_exts = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+        let provider_exts: std::collections::HashSet<&str> =
+            ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"]
+                .into_iter()
+                .collect();
         let entries = vec![
             (
                 "id1".to_string(),
@@ -965,7 +1046,7 @@ mod tests {
                 5,
             ),
         ];
-        let active = collect_active_extensions(&entries, &provider_exts, "rs");
+        let active = collect_active_extensions(&entries, &provider_exts);
         assert_eq!(
             active.len(),
             2,
@@ -978,12 +1059,16 @@ mod tests {
 
     #[cfg(feature = "lsp")]
     #[test]
-    fn collect_active_extensions_unknown_extension_falls_back_to_default() {
-        // Pre-L7-6 select_provider_for_ext fell back to providers[0] ("rs")
-        // for unknown extensions like .md/.toml. L7-6 preserves this:
-        // unknown extensions still trigger the default provider so the
-        // hover loop doesn't silently no-op.
-        let provider_exts = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+    fn collect_active_extensions_unknown_extension_skipped() {
+        // M2/P-07: unknown extensions (.md, .toml, .json) are SKIPPED — they
+        // do NOT activate any LSP server. Pre-M2 fell back to default ("rs"),
+        // needlessly starting rust-analyzer for markdown/toml files (waste of
+        // 300 MB-2 GB RSS). Skipping is correct because LSP servers cannot
+        // hover non-source files anyway.
+        let provider_exts: std::collections::HashSet<&str> =
+            ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"]
+                .into_iter()
+                .collect();
         let entries = vec![
             ("id1".to_string(), std::path::PathBuf::from("/README.md"), 1),
             (
@@ -992,11 +1077,10 @@ mod tests {
                 1,
             ),
         ];
-        let active = collect_active_extensions(&entries, &provider_exts, "rs");
-        assert_eq!(active.len(), 1);
+        let active = collect_active_extensions(&entries, &provider_exts);
         assert!(
-            active.contains("rs"),
-            "unknown ext must fall back to default"
+            active.is_empty(),
+            "unknown extensions (.md, .toml) must NOT activate any LSP server; got: {active:?}"
         );
     }
 
@@ -1006,7 +1090,10 @@ mod tests {
         // ClangdClient is wired for both "c" and "cpp"; a project with both
         // .c and .cpp files activates both extension keys (which both map
         // to the same ClangdClient, but the routing decision is per-ext).
-        let provider_exts = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+        let provider_exts: std::collections::HashSet<&str> =
+            ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"]
+                .into_iter()
+                .collect();
         let entries = vec![
             (
                 "id1".to_string(),
@@ -1019,7 +1106,7 @@ mod tests {
                 5,
             ),
         ];
-        let active = collect_active_extensions(&entries, &provider_exts, "rs");
+        let active = collect_active_extensions(&entries, &provider_exts);
         assert_eq!(active.len(), 2);
         assert!(active.contains("c"));
         assert!(active.contains("cpp"));
@@ -1030,11 +1117,14 @@ mod tests {
     fn collect_active_extensions_dedupes_repeated_extensions() {
         // 1000 .rs files should activate exactly one extension ("rs"), not
         // 1000 entries — the HashSet deduplicates.
-        let provider_exts = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+        let provider_exts: std::collections::HashSet<&str> =
+            ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"]
+                .into_iter()
+                .collect();
         let entries: Vec<(String, std::path::PathBuf, u32)> = (0..1000)
             .map(|i| (format!("id{i}"), std::path::PathBuf::from("/src/mod.rs"), i))
             .collect();
-        let active = collect_active_extensions(&entries, &provider_exts, "rs");
+        let active = collect_active_extensions(&entries, &provider_exts);
         assert_eq!(active.len(), 1);
         assert!(active.contains("rs"));
     }
@@ -1045,7 +1135,10 @@ mod tests {
         // A polyglot repo with all 8 wired extensions activates all 8
         // providers (worst case — no savings vs pre-L7-6, but correctness
         // preserved).
-        let provider_exts = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+        let provider_exts: std::collections::HashSet<&str> =
+            ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"]
+                .into_iter()
+                .collect();
         let entries = vec![
             ("id1".to_string(), std::path::PathBuf::from("/a.rs"), 1),
             ("id2".to_string(), std::path::PathBuf::from("/b.py"), 1),
@@ -1056,7 +1149,7 @@ mod tests {
             ("id7".to_string(), std::path::PathBuf::from("/g.f90"), 1),
             ("id8".to_string(), std::path::PathBuf::from("/h.java"), 1),
         ];
-        let active = collect_active_extensions(&entries, &provider_exts, "rs");
+        let active = collect_active_extensions(&entries, &provider_exts);
         assert_eq!(
             active.len(),
             8,

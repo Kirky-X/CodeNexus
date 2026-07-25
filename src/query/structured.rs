@@ -935,7 +935,7 @@ mod tests {
     #[test]
     fn search_by_name_finds_substring_matches() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("f1", "demo", "parse_file", "demo.parse_file", "/a.rs", 1),
                 sample_function("f2", "demo", "read_input", "demo.read_input", "/a.rs", 10),
@@ -959,7 +959,7 @@ mod tests {
     fn search_by_name_ac_search_001_returns_parse_symbols() {
         // AC-SEARCH-001: search "parse" returns symbols containing "parse".
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("f1", "demo", "parse", "demo.parse", "/a.rs", 1),
                 sample_function("f2", "demo", "parse_token", "demo.parse_token", "/a.rs", 5),
@@ -979,7 +979,7 @@ mod tests {
     #[test]
     fn search_by_name_filters_by_project() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f1",
                 "alpha",
@@ -991,7 +991,7 @@ mod tests {
             NodeLabel::Function,
         )
         .expect("save_nodes alpha");
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f2",
                 "beta",
@@ -1026,7 +1026,7 @@ mod tests {
                 i + 1,
             ));
         }
-        repo.save_nodes(&nodes, NodeLabel::Function)
+        repo.save_nodes_stream(&nodes, NodeLabel::Function)
             .expect("save_nodes");
 
         let searcher = StructuredSearcher::new(repo.connection());
@@ -1047,7 +1047,7 @@ mod tests {
     #[test]
     fn search_by_name_returns_empty_when_no_match() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f1",
                 "demo",
@@ -1069,7 +1069,7 @@ mod tests {
     #[test]
     fn search_by_name_searches_across_multiple_labels() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f1",
                 "demo",
@@ -1081,7 +1081,7 @@ mod tests {
             NodeLabel::Function,
         )
         .expect("save_nodes function");
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_class(
                 "c1",
                 "demo",
@@ -1105,7 +1105,7 @@ mod tests {
     #[test]
     fn search_by_name_assigns_higher_score_to_exact_match() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("f1", "demo", "parse", "demo.parse", "/a.rs", 1),
                 sample_function("f2", "demo", "parse_file", "demo.parse_file", "/a.rs", 5),
@@ -1126,7 +1126,7 @@ mod tests {
     #[test]
     fn search_by_type_returns_all_functions() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("f1", "demo", "alpha", "demo.alpha", "/a.rs", 1),
                 sample_function("f2", "demo", "beta", "demo.beta", "/a.rs", 5),
@@ -1134,7 +1134,7 @@ mod tests {
             NodeLabel::Function,
         )
         .expect("save_nodes");
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_class(
                 "c1",
                 "demo",
@@ -1158,7 +1158,7 @@ mod tests {
     #[test]
     fn search_by_type_returns_all_classes() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_class("c1", "demo", "Alpha", "demo.Alpha", "/a.rs", 1),
                 sample_class("c2", "demo", "Beta", "demo.Beta", "/a.rs", 10),
@@ -1178,7 +1178,7 @@ mod tests {
     #[test]
     fn search_by_type_filters_by_project() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f1",
                 "alpha",
@@ -1190,7 +1190,7 @@ mod tests {
             NodeLabel::Function,
         )
         .expect("save_nodes alpha");
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("f2", "beta", "main", "beta.main", "/a.rs", 1),
                 sample_function("f3", "beta", "util", "beta.util", "/a.rs", 5),
@@ -1223,7 +1223,7 @@ mod tests {
                 i + 1,
             ));
         }
-        repo.save_nodes(&nodes, NodeLabel::Function)
+        repo.save_nodes_stream(&nodes, NodeLabel::Function)
             .expect("save_nodes");
 
         let searcher = StructuredSearcher::new(repo.connection());
@@ -1248,7 +1248,7 @@ mod tests {
     #[test]
     fn search_by_file_returns_all_symbols_in_file() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("f1", "demo", "alpha", "demo.alpha", "/src/main.rs", 1),
                 sample_function("f2", "demo", "beta", "demo.beta", "/src/main.rs", 10),
@@ -1256,7 +1256,7 @@ mod tests {
             NodeLabel::Function,
         )
         .expect("save_nodes");
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_class(
                 "c1",
                 "demo",
@@ -1269,7 +1269,7 @@ mod tests {
         )
         .expect("save_nodes class");
         // A symbol in a different file should not appear.
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f3",
                 "demo",
@@ -1295,7 +1295,7 @@ mod tests {
     #[test]
     fn search_by_file_filters_by_project() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f1",
                 "alpha",
@@ -1307,7 +1307,7 @@ mod tests {
             NodeLabel::Function,
         )
         .expect("save_nodes alpha");
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f2",
                 "beta",
@@ -1341,7 +1341,7 @@ mod tests {
     #[test]
     fn search_by_file_returns_empty_when_no_match() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f1",
                 "demo",
@@ -1365,7 +1365,7 @@ mod tests {
     #[test]
     fn search_delegates_to_search_by_name() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f1",
                 "demo",
@@ -1415,7 +1415,7 @@ mod tests {
         // when a per-table MATCH query fails (table dropped), the loop
         // skips it and continues to the next table.
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f1",
                 "demo",
@@ -1446,7 +1446,7 @@ mod tests {
     fn search_by_file_continues_on_query_error() {
         // Cover the `Err(_) => continue` arm (line 143) of search_by_file.
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f1",
                 "demo",
@@ -3595,7 +3595,7 @@ mod tests {
         // search_by_type: when the target table is dropped, the error
         // propagates (unlike search_by_name which uses `continue`).
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f1",
                 "demo",

@@ -30,7 +30,13 @@ pub struct ExtractResult {
     /// (commit e4f92de). The only legitimate readers are:
     /// 1. `ScopeResolutionPhase` — clones `result.edges` into `graph` then clears.
     /// 2. Parse extractors — populate the Vec during extraction.
-    pub edges: Vec<Edge>,
+    ///
+    /// **L3 encapsulation**: field is `pub(crate)` (not `pub`) to prevent
+    /// out-of-crate callers from accidentally reading it after L7-2 clear.
+    /// External crates parse via [`crate::parse::Extractor::extract`] and
+    /// never read `edges` directly. Use [`edges_mut`](Self::edges_mut) for
+    /// mutation, [`edges`](Self::edges) for read.
+    pub(crate) edges: Vec<Edge>,
     /// Import/include statements.
     pub imports: Vec<ImportInfo>,
     /// Function calls.
@@ -91,5 +97,26 @@ impl ExtractResult {
     pub fn push_node(&mut self, node: Node) {
         self.seen_qns.insert(node.qualified_name.clone());
         self.nodes.push(node);
+    }
+
+    /// Returns a shared reference to the per-file edges Vec.
+    ///
+    /// **L3 encapsulation**: extractors populate this via [`edges_mut`](Self::edges_mut);
+    /// `ScopeResolutionPhase` reads via this accessor (then clears). Keeping
+    /// the field `pub(crate)` + accessor-based read makes the L7-2 invariant
+    /// ("resolvers MUST NOT read this") enforceable by the compiler —
+    /// out-of-crate callers cannot reach the field at all.
+    #[must_use]
+    pub fn edges(&self) -> &[Edge] {
+        &self.edges
+    }
+
+    /// Returns a mutable reference to the per-file edges Vec.
+    ///
+    /// Extractors use this to populate `edges` during extraction.
+    /// `ScopeResolutionPhase` uses this to `clear()` + `shrink_to_fit()`
+    /// after cloning edges into the graph (L7-2 memory fix).
+    pub fn edges_mut(&mut self) -> &mut Vec<Edge> {
+        &mut self.edges
     }
 }

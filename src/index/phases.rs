@@ -841,11 +841,14 @@ impl Phase for LoadPhase {
         // L3 fix: stream nodes from `graph.nodes_view()` instead of borrowing
         // a separate `all_nodes: Vec<Node>`.
         // L6 fix: stream edges from `graph.edges_view()` directly into
-        // `save_edges` (which now accepts `impl IntoIterator<Item = &Edge>`),
+        // `save_edges_stream` (which now accepts `impl IntoIterator<Item = &Edge>`),
         // eliminating the `let all_edges: Vec<Edge> = ...collect()` that
         // previously deep-cloned every edge. For large repos (100k+ edges)
         // this avoids ~10 MB of peak RSS. Each `with_retry` attempt re-creates
         // the iterator (cheap — `edges_view` returns an iterator over `&Edge`).
+        //
+        // L4: renamed from `save_edges` to `save_edges_stream` — iterator-based
+        // callers MUST use the inherent `_stream` method directly.
         save_project_node(&self.repo, project_id, project_name, root, disk_files)
             .map_err(|e| phase_err(Self::NAME, e))?;
         save_nodes_by_label(&self.repo, graph.nodes_view())
@@ -853,7 +856,7 @@ impl Phase for LoadPhase {
         if edges_created > 0 {
             with_retry(DEFAULT_MAX_RETRIES, || {
                 self.repo
-                    .save_edges(graph.edges_view())
+                    .save_edges_stream(graph.edges_view())
                     .map_err(IndexError::from)
             })
             .map_err(|e| phase_err(Self::NAME, e))?;
@@ -1022,13 +1025,17 @@ fn save_nodes_by_label<'a>(
             continue;
         }
         // L6-3: pass `group.iter().copied()` (Iterator<Item = &Node>) directly
-        // to `Repository::save_nodes` (now accepts `impl IntoIterator<Item =
+        // to `Repository::save_nodes_stream` (now accepts `impl IntoIterator<Item =
         // &Node>`). Dedup is performed inside `write_nodes_csv_stream`
         // (HashSet by node id), so no `deduped: Vec<Node>` clone is needed
         // here. `with_retry` re-creates the iterator on each attempt (cheap —
         // `group.iter()` is a single pointer borrow).
+        //
+        // L4: renamed from `save_nodes` to `save_nodes_stream` — iterator-based
+        // callers MUST use the inherent `_stream` method directly; the trait
+        // method's `&[Node]` signature does not accept `impl Iterator`.
         with_retry(DEFAULT_MAX_RETRIES, || {
-            repo.save_nodes(group.iter().copied(), label)
+            repo.save_nodes_stream(group.iter().copied(), label)
                 .map_err(IndexError::from)
         })?;
     }

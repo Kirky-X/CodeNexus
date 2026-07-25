@@ -227,8 +227,8 @@ impl IndexFacade {
     /// Overrides the default system-probed [`MemoryBudget`] (L5 adaptive
     /// degradation).
     ///
-    /// Use this in tests to force a specific `per_collection_soft_limit` so
-    /// the RAM-first fallback decision can be exercised deterministically.
+    /// Use this in tests to force a specific `max_rss_bytes` so the
+    /// RAM-first fallback decision can be exercised deterministically.
     /// In production, [`IndexFacade::new`] probes the system's available
     /// memory via [`MemoryBudget::from_system`].
     #[must_use]
@@ -311,8 +311,8 @@ impl IndexFacade {
         // L7-4: The check now uses an amplified-peak estimate
         // (`total × RAM_FIRST_AMPLIFICATION_FACTOR`) compared against
         // `max_rss_bytes / 2`, replacing the pre-L7-4 raw-bytes vs
-        // `per_collection_soft_limit` comparison (which was a budget
-        // distortion — see [`evaluate_ram_first_budget`]).
+        // soft-limit comparison (which was a budget distortion — see
+        // [`evaluate_ram_first_budget`]).
         //
         // NOTE (P1 tradeoff): `self.index()` → ScanPhase will re-discover
         // files via `Walker::discover()`. This double walk is a known cost
@@ -553,10 +553,9 @@ impl Pipeline {
 /// # L7-4 memory-overflow fix — amplified-peak estimation
 ///
 /// Pre-L7-4 this function compared `total_bytes` (raw source bytes) against
-/// `budget.per_collection_soft_limit` (256 MiB default). This was a
-/// **budget distortion**: RAM-first mode amplifies source bytes by ~8×
-/// because the following all live in RAM simultaneously during the parse
-/// and resolve phases:
+/// a fixed 256 MiB soft limit. This was a **budget distortion**: RAM-first
+/// mode amplifies source bytes by ~8× because the following all live in RAM
+/// simultaneously during the parse and resolve phases:
 ///
 /// | Component              | Multiplier | Rationale                              |
 /// |------------------------|------------|----------------------------------------|
@@ -567,9 +566,9 @@ impl Pipeline {
 /// | CSV stream (per batch) | 1.0×       | L6-3 streams nodes/edges via iterator; only one batch in flight |
 /// | **Total amplification**| **8.0×**   | Conservative upper bound               |
 ///
-/// Pre-L7-4 with `per_collection_soft_limit = 256 MiB`, a 200 MiB repo
-/// would pass the check (200 < 256) but actually consume ~1.6 GB of peak
-/// RSS — on a 4 GB laptop this triggers OOM. L7-4 fixes the distortion by:
+/// Pre-L7-4 with the 256 MiB soft limit, a 200 MiB repo would pass the
+/// check (200 < 256) but actually consume ~1.6 GB of peak RSS — on a 4 GB
+/// laptop this triggers OOM. L7-4 fixes the distortion by:
 ///
 /// 1. Estimating peak RSS as `total_bytes × RAM_FIRST_AMPLIFICATION_FACTOR`.
 /// 2. Comparing against `budget.max_rss_bytes / 2` (conservative: never
@@ -598,9 +597,9 @@ fn evaluate_ram_first_budget(files: &[FileInfo], budget: &MemoryBudget) -> (u64,
     let estimated_peak = total.saturating_mul(RAM_FIRST_AMPLIFICATION_FACTOR);
     // L7-4: compare against `max_rss_bytes / 2` (process-level RSS cap
     // divided by 2 to leave headroom for LadybugDB buffer pool, LSP
-    // servers, and OS page cache). Pre-L7-4 used `per_collection_soft_limit`
-    // which is the wrong cap — that limits a single in-process collection
-    // (e.g. a `Vec<Node>`), not the cumulative RSS of RAM-first mode.
+    // servers, and OS page cache). Pre-L7-4 used a fixed soft limit which
+    // is the wrong cap — that limited a single in-process collection (e.g.
+    // a `Vec<Node>`), not the cumulative RSS of RAM-first mode.
     let ram_first_threshold = budget.max_rss_bytes / 2;
     (total, estimated_peak < ram_first_threshold)
 }
@@ -2405,12 +2404,12 @@ mod tests {
     fn index_facade_with_budget_overrides_default() {
         let tmp = TempDir::new().unwrap();
         let db_path = tmp.path().join("testdb");
-        let budget = MemoryBudget::new(123).with_soft_limit(456);
+        let budget = MemoryBudget::new(123).with_flush_batch_size(456);
         let facade = IndexFacade::new(&db_path)
             .expect("facade")
             .with_budget(budget);
         assert_eq!(facade.budget.max_rss_bytes, 123);
-        assert_eq!(facade.budget.per_collection_soft_limit, 456);
+        assert_eq!(facade.budget.flush_batch_size, 456);
     }
 
     #[test]
@@ -2425,8 +2424,8 @@ mod tests {
             "from_system must probe a non-zero max_rss"
         );
         assert_eq!(
-            facade.budget.per_collection_soft_limit,
-            MemoryBudget::DEFAULT_SOFT_LIMIT
+            facade.budget.flush_batch_size,
+            MemoryBudget::DEFAULT_FLUSH_BATCH
         );
     }
 

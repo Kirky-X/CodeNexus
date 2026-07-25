@@ -4,12 +4,12 @@
 //! Resolve-phase orchestration functions.
 //!
 //! Contains the top-level entry points for the resolve phase (ADR-011):
-//! [`build_symbol_table`], [`resolve_all`], and [`prune_dangling_type_edges_vec`].
-//! These orchestrate the individual resolvers (calls, dataflow, FFI, imports,
-//! type resolution) and were factored out of `mod.rs` for clarity.
+//! [`build_symbol_table`] and [`resolve_all`]. These orchestrate the
+//! individual resolvers (calls, dataflow, FFI, imports, type resolution)
+//! and were factored out of `mod.rs` for clarity.
 
 use crate::ir::ExtractResult;
-use crate::model::{Edge, EdgeType, Graph};
+use crate::model::{EdgeType, Graph};
 use crate::resolve::calls::CallResolver;
 use crate::resolve::dataflow::DataFlowResolver;
 use crate::resolve::fqn::FqnGenerator;
@@ -59,26 +59,6 @@ fn prune_dangling_type_edges(graph: &mut Graph) -> usize {
     });
     graph.edges = edges;
     before - graph.edge_count()
-}
-
-/// Prunes dangling type-reference edges from a `Vec<Edge>`.
-///
-/// This is the public entry point for callers that persist a separate edge
-/// collection (e.g. `ResolvePhase` in `phases.rs` persists `all_edges`, not
-/// `graph.edges`). The prune inside [`resolve_all`] only affects
-/// `graph.edges`, so the persisted Vec must also be pruned to actually remove
-/// dangling IMPLEMENTS/Extends/UsesType edges from the database.
-///
-/// Returns the count of pruned edges.
-pub fn prune_dangling_type_edges_vec(
-    edges: &mut Vec<Edge>,
-    node_ids: &std::collections::HashSet<String>,
-) -> usize {
-    let before = edges.len();
-    edges.retain(|edge| {
-        !PRUNABLE_EDGE_TYPES.contains(&edge.edge_type) || node_ids.contains(&edge.target)
-    });
-    before - edges.len()
 }
 
 /// Builds a project-level symbol table from extraction results.
@@ -155,9 +135,9 @@ pub fn build_symbol_table(results: &[ExtractResult], project: &str) -> ProjectSy
 /// every resolved edge into a master `Vec<Edge>` that was immediately
 /// discarded by [`ResolvePhase`](crate::index::ResolvePhase) (the sole
 /// production caller). For large repos (1M+ edges) this was ~100 MB of
-/// pure waste. Each sub-resolver's `Vec<Edge>` is now dropped immediately
-/// after its edges are moved into `graph`, so peak RSS is bounded by the
-/// largest single resolver's working set rather than the union of all.
+/// pure waste. Each sub-resolver now returns `()` and adds edges directly
+/// to `graph`, so peak RSS is bounded by the largest single resolver's
+/// working set rather than the union of all.
 ///
 /// # Arguments
 ///
@@ -176,34 +156,27 @@ pub fn resolve_all(
 ) {
     let call_resolver =
         CallResolver::new(symbol_table, project).with_includes_graph(includes_graph.clone());
-    // Each resolver returns `Vec<Edge>` for backward compatibility with
-    // tests that inspect the returned Vec directly. In production
-    // (`resolve_all`), the Vec is dropped immediately after edges are
-    // cloned into `graph` (resolvers call `graph.add_edge(edge.clone())`
-    // before pushing to their return Vec). The drop is immediate — no
-    // master Vec is built.
-    let _ = call_resolver.resolve_calls(results, graph);
+    call_resolver.resolve_calls(results, graph);
     let df_resolver = DataFlowResolver::new(symbol_table, project);
-    let _ = df_resolver.resolve_dataflows(results, graph);
+    df_resolver.resolve_dataflows(results, graph);
     // FFI resolution requires both C and Rust to be compiled in (gated with
     // the `cross_lang` module). Skipped in leaner builds.
     #[cfg(all(feature = "lang-c", feature = "lang-rust"))]
     {
         let ffi_resolver = FfiResolver::new(symbol_table, project);
-        let _ = ffi_resolver.resolve_ffi(results, graph);
+        ffi_resolver.resolve_ffi(results, graph);
     }
     // Import resolution creates File → File IMPORTS edges from ImportInfo
     // records extracted by the parse phase (DDD §7.2). Runs after the other
     // resolvers; needs File nodes already in the graph (created by the scope
     // phase).
     let import_resolver = ImportResolver::new(project);
-    let _ = import_resolver.resolve_imports(results, graph);
+    import_resolver.resolve_imports(results, graph);
     // Type resolution fixes dangling Extends/Implements/UsesType edges
     // (design.md H6). Runs after other resolvers so it can fix edges created
-    // by the parse phase. Returns the list of fixed edges (already mutated
-    // in `graph`).
+    // by the parse phase. Edges are mutated directly in `graph`.
     let type_resolver = TypeResolver::new(symbol_table);
-    let _ = type_resolver.resolve_types(results, graph);
+    type_resolver.resolve_types(results, graph);
     // Prune type-reference edges that TypeResolver could not resolve (e.g.
     // std trait impls like `impl Display for Foo`). These dangling edges
     // are noise — the target doesn't exist in the project graph.
@@ -220,7 +193,7 @@ pub fn resolve_all(
 mod tests {
     use super::*;
     use crate::ir::{CallInfo, ImportInfo};
-    use crate::model::{EdgeType, Language, Node, NodeLabel};
+    use crate::model::{Edge, EdgeType, Language, Node, NodeLabel};
 
     fn make_node(name: &str, label: NodeLabel, language: Language) -> Node {
         // qualified_name left empty so build_symbol_table falls back to
@@ -877,67 +850,6 @@ mod tests {
         );
     }
 
-    // --- C1 fix: prune persisted edge Vec (not just graph.edges) ---
-    // The caller (phases.rs ResolvePhase) persists `all_edges` (a Vec<Edge>),
-    // not `graph.edges`. The prune inside resolve_all only affects
-    // graph.edges, so the persisted Vec must also be pruned.
-
-    #[test]
-    fn prune_dangling_type_edges_vec_removes_dangling_type_edges() {
-        let mut edges = vec![
-            // dangling: target "Display" not in node_ids
-            Edge::new(
-                "proj.a.rs.Foo",
-                "proj.a.rs.Display",
-                EdgeType::Implements,
-                "proj",
-            ),
-            // resolvable: target "MyTrait" in node_ids
-            Edge::new(
-                "proj.a.rs.Bar",
-                "proj.a.rs.MyTrait",
-                EdgeType::Implements,
-                "proj",
-            ),
-            // non-type edge with dangling target — must NOT be pruned
-            Edge::new("proj.a.rs.foo", "proj.a.rs.bar", EdgeType::Calls, "proj"),
-        ];
-        let mut node_ids = std::collections::HashSet::new();
-        node_ids.insert("proj.a.rs.MyTrait".to_string());
-
-        let pruned = prune_dangling_type_edges_vec(&mut edges, &node_ids);
-        assert_eq!(pruned, 1, "1 dangling IMPLEMENTS edge should be pruned");
-        assert_eq!(
-            edges.len(),
-            2,
-            "2 edges remain (resolvable Implements + Calls)"
-        );
-        let implements: Vec<_> = edges
-            .iter()
-            .filter(|e| e.edge_type == EdgeType::Implements)
-            .collect();
-        assert_eq!(implements.len(), 1);
-        assert_eq!(implements[0].target, "proj.a.rs.MyTrait");
-    }
-
-    #[test]
-    fn prune_dangling_type_edges_vec_keeps_extends_and_uses_type_when_resolved() {
-        let mut edges = vec![
-            Edge::new("a", "proj.a.rs.Base", EdgeType::Extends, "proj"), // resolvable
-            Edge::new("b", "proj.a.rs.Unknown", EdgeType::UsesType, "proj"), // dangling
-        ];
-        let mut node_ids = std::collections::HashSet::new();
-        node_ids.insert("proj.a.rs.Base".to_string());
-
-        let pruned = prune_dangling_type_edges_vec(&mut edges, &node_ids);
-        assert_eq!(
-            pruned, 1,
-            "only the dangling UsesType edge should be pruned"
-        );
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].edge_type, EdgeType::Extends);
-    }
-
     /// Verifies CALLS edge creation for trait impl method calling free function,
     /// using absolute path to mirror production extraction (where result.file_path is abs).
     /// Reproduces CalNexus scientific.rs `supports -> contains_scientific` issue.
@@ -963,7 +875,8 @@ fn contains_scientific(ast: &AstNode) -> bool { true }
         // signature is (file_path_str, source, language, project).
         // Cross-platform: use temp_dir() instead of hardcoding /home/kirky/...
         // (rule 31: no platform-specific paths).
-        let file_path_buf = std::env::temp_dir().join("scientific.rs");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file_path_buf = dir.path().join("scientific.rs");
         let file_path = file_path_buf.to_string_lossy();
         let project = "proj_test";
         let result = extract_from_source(&file_path, src, crate::model::Language::Rust, project)

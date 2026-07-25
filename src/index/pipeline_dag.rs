@@ -195,6 +195,32 @@ impl std::fmt::Debug for PipelineCtx {
 /// names of phases it depends on. The [`Pipeline`] runner executes phases in
 /// dependency order, passing typed values via [`PipelineCtx`].
 ///
+/// # Data-flow contract (L6/L7 memory-overflow fixes)
+///
+/// The pipeline's memory profile is bounded by two invariants every phase
+/// MUST uphold:
+///
+/// 1. **Single-source-of-truth**: a typed `Output` is the sole owner of its
+///    data. Subsequent phases read it via [`PipelineCtx::get`] (shared borrow)
+///    or [`PipelineCtx::remove`] (exclusive borrow — take ownership). Phases
+///    MUST NOT clone large outputs (`Graph`, `Vec<ExtractResult>`,
+///    `RamFirstSources`) — instead, take ownership via `remove` when no later
+///    phase needs the value (L6-1 ResolvePhase, L6-4 ResolvePhase-parse,
+///    L7-1 ParsePhase-compressed, L7-2 ScopeResolutionPhase-parse,
+///    L7-3 LoadPhase-scan/resolve).
+///
+/// 2. **Bounded lifetime**: intermediate values that are no longer needed
+///    MUST be dropped before the phase returns — either via `ctx.remove` +
+///    explicit `drop`, or via in-place `clear()` + `shrink_to_fit()` (L7-2
+///    clears `ExtractResult.edges` after cloning into the graph). Holding
+///    stale data across phase boundaries is the dominant cause of OOM in the
+///    indexing pipeline (5-Whys root cause).
+///
+/// **Borrow-order rule**: when a phase needs both `remove` (mutable borrow
+/// of `ctx`) and `get` (immutable borrow), `remove` MUST come first to
+/// satisfy E0502. All L6/L7 phases follow this pattern; new phases must
+/// preserve it.
+///
 /// See the [module docs](crate::index::pipeline_dag) for input wiring rules.
 pub trait Phase: Send + Sync + 'static {
     /// The typed input consumed by this phase.

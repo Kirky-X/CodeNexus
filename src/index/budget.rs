@@ -21,9 +21,6 @@
 //!   - `Green` → continue growing.
 //!   - `Yellow` → flush current batch, then continue.
 //!   - `Red` → abort RAM-first mode, switch to streaming disk-read.
-//! - Per-collection soft limit (`per_collection_soft_limit`) provides a local
-//!   cap independent of the global RSS reading, so a single pathological
-//!   collection cannot OOM the process before the next RSS poll.
 //!
 //! # Cache entry limit
 //!
@@ -79,39 +76,33 @@ impl Pressure {
 
 /// Memory budget for the indexing pipeline.
 ///
-/// Holds three independent caps:
+/// Holds two independent caps:
 /// 1. `max_rss_bytes` — process-level hard cap on resident set size.
-/// 2. `per_collection_soft_limit` — per-collection size (bytes) above which
-///    the collection must be flushed or split into batches.
-/// 3. `flush_batch_size` — number of items per batch when flushing.
+/// 2. `flush_batch_size` — number of items per batch when flushing.
 ///
 /// The per-cache-entry size cap is owned by [`crate::cache::CacheConfig`],
 /// not by `MemoryBudget` — cache policy is the cache module's responsibility.
 ///
 /// All fields are `pub` so callers can construct custom budgets (e.g. for
-/// tests), but the [`with_*`](Self::with_soft_limit) builder methods are
+/// tests), but the [`with_*`](Self::with_flush_batch_size) builder methods are
 /// preferred for non-test code.
 #[derive(Debug, Clone)]
 pub struct MemoryBudget {
     /// Process-level hard cap on RSS, in bytes.
     pub max_rss_bytes: u64,
-    /// Per-collection soft limit, in bytes.
-    pub per_collection_soft_limit: u64,
     /// Number of items per batch when flushing a large collection.
     pub flush_batch_size: usize,
 }
 
 impl MemoryBudget {
-    /// Default per-collection soft limit: 256 MiB.
-    pub const DEFAULT_SOFT_LIMIT: u64 = 256 * 1024 * 1024;
     /// Default batch size when flushing.
     pub const DEFAULT_FLUSH_BATCH: usize = 5_000;
 
     /// Builds a budget by probing the current system's available memory.
     ///
     /// Sets `max_rss_bytes` to 50 % of available memory (so the indexer
-    /// never claims more than half of free RAM), and the other fields to
-    /// the `DEFAULT_*` constants.
+    /// never claims more than half of free RAM), and `flush_batch_size` to
+    /// [`DEFAULT_FLUSH_BATCH`](Self::DEFAULT_FLUSH_BATCH).
     ///
     /// If `sysinfo` cannot determine available memory (rare; only on some
     /// sandboxed containers), falls back to a conservative 1 GiB RSS cap
@@ -128,7 +119,6 @@ impl MemoryBudget {
         };
         Self {
             max_rss_bytes: max_rss,
-            per_collection_soft_limit: Self::DEFAULT_SOFT_LIMIT,
             flush_batch_size: Self::DEFAULT_FLUSH_BATCH,
         }
     }
@@ -140,16 +130,8 @@ impl MemoryBudget {
     pub fn new(max_rss_bytes: u64) -> Self {
         Self {
             max_rss_bytes,
-            per_collection_soft_limit: Self::DEFAULT_SOFT_LIMIT,
             flush_batch_size: Self::DEFAULT_FLUSH_BATCH,
         }
-    }
-
-    /// Overrides the per-collection soft limit.
-    #[must_use]
-    pub fn with_soft_limit(mut self, bytes: u64) -> Self {
-        self.per_collection_soft_limit = bytes;
-        self
     }
 
     /// Overrides the batch size used when flushing.
@@ -180,17 +162,6 @@ impl MemoryBudget {
         } else {
             Pressure::Green
         }
-    }
-
-    /// Returns `true` if a collection of `size` bytes exceeds the
-    /// per-collection soft limit.
-    ///
-    /// Callers use this to decide whether to flush a `Vec<Node>` / `String`
-    /// / `HashMap` before adding more items, or (in [`IndexFacade`]::index_ram_first])
-    /// whether to fall back from RAM-first to streaming disk-read mode.
-    #[must_use]
-    pub fn collection_exceeds_limit(&self, size: u64) -> bool {
-        size >= self.per_collection_soft_limit
     }
 
     /// Probes the system's currently available memory, in bytes.
@@ -261,11 +232,6 @@ mod tests {
     // --- MemoryBudget defaults ---
 
     #[test]
-    fn default_soft_limit_is_256mib() {
-        assert_eq!(MemoryBudget::DEFAULT_SOFT_LIMIT, 256 * 1024 * 1024);
-    }
-
-    #[test]
     fn default_flush_batch_is_5000() {
         assert_eq!(MemoryBudget::DEFAULT_FLUSH_BATCH, 5_000);
     }
@@ -276,10 +242,6 @@ mod tests {
     fn new_sets_max_rss_and_defaults() {
         let b = MemoryBudget::new(2 * 1024 * 1024 * 1024); // 2 GiB
         assert_eq!(b.max_rss_bytes, 2 * 1024 * 1024 * 1024);
-        assert_eq!(
-            b.per_collection_soft_limit,
-            MemoryBudget::DEFAULT_SOFT_LIMIT
-        );
         assert_eq!(b.flush_batch_size, MemoryBudget::DEFAULT_FLUSH_BATCH);
     }
 
@@ -295,24 +257,9 @@ mod tests {
     // --- Builder methods ---
 
     #[test]
-    fn with_soft_limit_overrides_default() {
-        let b = MemoryBudget::new(1024).with_soft_limit(512 * 1024 * 1024);
-        assert_eq!(b.per_collection_soft_limit, 512 * 1024 * 1024);
-    }
-
-    #[test]
     fn with_flush_batch_size_overrides_default() {
         let b = MemoryBudget::new(1024).with_flush_batch_size(1_000);
         assert_eq!(b.flush_batch_size, 1_000);
-    }
-
-    #[test]
-    fn builder_methods_chain() {
-        let b = MemoryBudget::new(1024)
-            .with_soft_limit(100)
-            .with_flush_batch_size(200);
-        assert_eq!(b.per_collection_soft_limit, 100);
-        assert_eq!(b.flush_batch_size, 200);
     }
 
     // --- check_pressure boundaries ---
@@ -361,27 +308,6 @@ mod tests {
         assert_eq!(b.check_pressure(2_000_000), Pressure::Red);
     }
 
-    // --- collection_exceeds_limit ---
-
-    #[test]
-    fn collection_exceeds_limit_below_limit_returns_false() {
-        let b = MemoryBudget::new(1024).with_soft_limit(1_000);
-        assert!(!b.collection_exceeds_limit(999));
-    }
-
-    #[test]
-    fn collection_exceeds_limit_at_limit_returns_true() {
-        // `>=` so that "at limit" triggers flush (defensive).
-        let b = MemoryBudget::new(1024).with_soft_limit(1_000);
-        assert!(b.collection_exceeds_limit(1_000));
-    }
-
-    #[test]
-    fn collection_exceeds_limit_above_limit_returns_true() {
-        let b = MemoryBudget::new(1024).with_soft_limit(1_000);
-        assert!(b.collection_exceeds_limit(1_001));
-    }
-
     // --- from_system (env-aware, but assert invariants) ---
 
     #[test]
@@ -394,12 +320,8 @@ mod tests {
     }
 
     #[test]
-    fn from_system_applies_other_defaults() {
+    fn from_system_applies_flush_batch_default() {
         let b = MemoryBudget::from_system();
-        assert_eq!(
-            b.per_collection_soft_limit,
-            MemoryBudget::DEFAULT_SOFT_LIMIT
-        );
         assert_eq!(b.flush_batch_size, MemoryBudget::DEFAULT_FLUSH_BATCH);
     }
 
@@ -407,10 +329,7 @@ mod tests {
     fn default_equals_from_system_invariants() {
         let d = MemoryBudget::default();
         assert!(d.max_rss_bytes > 0);
-        assert_eq!(
-            d.per_collection_soft_limit,
-            MemoryBudget::DEFAULT_SOFT_LIMIT
-        );
+        assert_eq!(d.flush_batch_size, MemoryBudget::DEFAULT_FLUSH_BATCH);
     }
 
     // --- probe_available_memory ---

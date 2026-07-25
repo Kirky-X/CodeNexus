@@ -105,19 +105,20 @@ impl<'a> CallResolver<'a> {
     ///
     /// For each call in each result, resolves the callee using the file's
     /// imports and the symbol table. If the callee is found and the call has
-    /// a known caller qualified name, a CALLS edge is created and added to
-    /// both the graph and the returned vector.
+    /// a known caller qualified name, a CALLS edge is created and added
+    /// directly to `graph`.
+    ///
+    /// L6 fix: returns `()` instead of `Vec<Edge>`; edges are added directly
+    /// to `graph`. The previous `Vec<Edge>` return was an anti-pattern —
+    /// production callers (`orchestrator.rs::resolve_all`) discarded it via
+    /// `let _ = ...`, wasting ~100MB on 1M+ edge repos due to per-edge
+    /// `clone()` followed by immediate `drop`.
     ///
     /// # Arguments
     ///
     /// * `results` - The extraction results containing call information.
     /// * `graph` - The graph to add resolved CALLS edges to.
-    ///
-    /// # Returns
-    ///
-    /// A vector of all resolved CALLS edges (also added to `graph`).
-    pub fn resolve_calls(&self, results: &[ExtractResult], graph: &mut Graph) -> Vec<Edge> {
-        let mut edges = Vec::new();
+    pub fn resolve_calls(&self, results: &[ExtractResult], graph: &mut Graph) {
         // B3 fix: deduplicate by (caller_qn, callee_qn) pair. gitnexus stores
         // one CALLS edge per (caller, callee) pair, ignoring how many call
         // sites exist. Without dedup, CodeNexus created one edge per call site
@@ -158,11 +159,9 @@ impl<'a> CallResolver<'a> {
                         .confidence_tier(tier)
                         .start_line(call.line)
                         .build();
-                graph.add_edge(edge.clone());
-                edges.push(edge);
+                graph.add_edge(edge);
             }
         }
-        edges
     }
 
     /// Resolves a single call: finds the callee by name.
@@ -781,17 +780,16 @@ mod tests {
         add_nodes_to_graph(&mut graph, &results, "proj");
 
         let resolver = CallResolver::new(&table, "proj");
-        let edges = resolver.resolve_calls(&results, &mut graph);
+        resolver.resolve_calls(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1);
-        let edge = &edges[0];
+        assert_eq!(graph.edge_count(), 1);
+        let edge = graph.edges_view().next().expect("edge should exist");
         assert_eq!(edge.source, foo_qn);
         assert_eq!(edge.target, "proj.a.rs.bar");
         assert_eq!(edge.edge_type, EdgeType::Calls);
         assert!((edge.confidence - 0.95).abs() < 1e-6);
         assert_eq!(edge.confidence_tier, ConfidenceTier::SameFile);
         assert_eq!(edge.start_line, Some(5));
-        assert_eq!(graph.edge_count(), 1);
     }
 
     #[test]
@@ -811,9 +809,8 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = CallResolver::new(&table, "proj");
-        let edges = resolver.resolve_calls(&results, &mut graph);
+        resolver.resolve_calls(&results, &mut graph);
 
-        assert!(edges.is_empty());
         assert_eq!(graph.edge_count(), 0);
     }
 
@@ -834,9 +831,9 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = CallResolver::new(&table, "proj");
-        let edges = resolver.resolve_calls(&results, &mut graph);
+        resolver.resolve_calls(&results, &mut graph);
 
-        assert!(edges.is_empty());
+        assert_eq!(graph.edge_count(), 0);
     }
 
     #[test]
@@ -860,13 +857,16 @@ mod tests {
         add_nodes_to_graph(&mut graph, &results, "proj");
 
         let resolver = CallResolver::new(&table, "proj");
-        let edges = resolver.resolve_calls(&results, &mut graph);
+        resolver.resolve_calls(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].source, a_qn);
-        assert_eq!(edges[0].target, "proj.b.rs.func_b");
-        assert!((edges[0].confidence - 0.80).abs() < 1e-6);
-        assert_eq!(edges[0].confidence_tier, ConfidenceTier::Global);
+        assert_eq!(graph.edge_count(), 1);
+        let edge = graph
+            .edges_view()
+            .find(|e| e.source == a_qn)
+            .expect("edge from a_qn should exist");
+        assert_eq!(edge.target, "proj.b.rs.func_b");
+        assert!((edge.confidence - 0.80).abs() < 1e-6);
+        assert_eq!(edge.confidence_tier, ConfidenceTier::Global);
     }
 
     #[test]
@@ -896,9 +896,8 @@ mod tests {
         add_nodes_to_graph(&mut graph, &results, "proj");
 
         let resolver = CallResolver::new(&table, "proj");
-        let edges = resolver.resolve_calls(&results, &mut graph);
+        resolver.resolve_calls(&results, &mut graph);
 
-        assert_eq!(edges.len(), 2);
         assert_eq!(graph.edge_count(), 2);
     }
 
@@ -937,13 +936,13 @@ mod tests {
         add_nodes_to_graph(&mut graph, &results, "proj");
 
         let resolver = CallResolver::new(&table, "proj");
-        let edges = resolver.resolve_calls(&results, &mut graph);
+        resolver.resolve_calls(&results, &mut graph);
 
         // Only 1 edge for the (foo, bar) pair, despite 3 call sites.
-        assert_eq!(edges.len(), 1);
         assert_eq!(graph.edge_count(), 1);
         // First call site's line is preserved.
-        assert_eq!(edges[0].start_line, Some(3));
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.start_line, Some(3));
     }
 
     #[test]
@@ -951,8 +950,8 @@ mod tests {
         let table = ProjectSymbolTable::new();
         let mut graph = Graph::new();
         let resolver = CallResolver::new(&table, "proj");
-        let edges = resolver.resolve_calls(&[], &mut graph);
-        assert!(edges.is_empty());
+        resolver.resolve_calls(&[], &mut graph);
+        assert_eq!(graph.edge_count(), 0);
     }
 
     #[test]
@@ -1063,10 +1062,11 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = CallResolver::new(&table, "proj");
-        let edges = resolver.resolve_calls(&results, &mut graph);
+        resolver.resolve_calls(&results, &mut graph);
 
-        assert!(
-            edges.is_empty(),
+        assert_eq!(
+            graph.edge_count(),
+            0,
             "CallResolver should not process assignments"
         );
     }
@@ -1177,14 +1177,14 @@ mod tests {
         add_nodes_to_graph(&mut graph, &results, "proj");
 
         let resolver = CallResolver::new(&table, "proj");
-        let edges = resolver.resolve_calls(&results, &mut graph);
+        resolver.resolve_calls(&results, &mut graph);
 
         // Builder type method calls should be filtered out.
-        assert!(
-            edges.is_empty(),
-            "Builder type method calls should be filtered: {edges:?}"
+        assert_eq!(
+            graph.edge_count(),
+            0,
+            "Builder type method calls should be filtered"
         );
-        assert_eq!(graph.edge_count(), 0);
     }
 
     #[test]
@@ -1217,16 +1217,17 @@ mod tests {
         add_nodes_to_graph(&mut graph, &results, "proj");
 
         let resolver = CallResolver::new(&table, "proj");
-        let edges = resolver.resolve_calls(&results, &mut graph);
+        resolver.resolve_calls(&results, &mut graph);
 
         // Non-Builder type method calls should be preserved.
         assert_eq!(
-            edges.len(),
+            graph.edge_count(),
             1,
             "non-Builder method call should be preserved"
         );
-        assert_eq!(edges[0].source, caller_qn);
-        assert_eq!(edges[0].target, save_qn);
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.source, caller_qn);
+        assert_eq!(edge.target, save_qn);
     }
 
     #[test]
@@ -1262,13 +1263,9 @@ mod tests {
         add_nodes_to_graph(&mut graph, &results, "proj");
 
         let resolver = CallResolver::new(&table, "proj");
-        let edges = resolver.resolve_calls(&results, &mut graph);
+        resolver.resolve_calls(&results, &mut graph);
 
         // Builder entry method calls should be filtered out.
-        assert!(
-            edges.is_empty(),
-            "Builder entry method calls should be filtered: {edges:?}"
-        );
         assert_eq!(graph.edge_count(), 0);
     }
 
@@ -1348,11 +1345,12 @@ mod tests {
         );
 
         let resolver = CallResolver::new(&table, "proj").with_includes_graph(includes);
-        let edges = resolver.resolve_calls(&results, &mut graph);
+        resolver.resolve_calls(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1);
+        assert_eq!(graph.edge_count(), 1);
+        let edge = graph.edges_view().next().expect("edge should exist");
         assert_eq!(
-            edges[0].target, "proj.foo_h.foo",
+            edge.target, "proj.foo_h.foo",
             "batch resolution should use scope-aware lookup"
         );
     }
@@ -1392,16 +1390,17 @@ mod tests {
 
         // with_imports is NOT called — resolve_calls uses result.imports.
         let resolver = CallResolver::new(&table, "proj");
-        let edges = resolver.resolve_calls(&results, &mut graph);
+        resolver.resolve_calls(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].source, a_qn);
-        assert_eq!(edges[0].target, bar_qn);
+        assert_eq!(graph.edge_count(), 1);
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.source, a_qn);
+        assert_eq!(edge.target, bar_qn);
         assert!(
-            (edges[0].confidence - 0.90).abs() < 1e-6,
+            (edge.confidence - 0.90).abs() < 1e-6,
             "import-based lookup should give 0.90"
         );
-        assert_eq!(edges[0].confidence_tier, ConfidenceTier::ImportScoped);
+        assert_eq!(edge.confidence_tier, ConfidenceTier::ImportScoped);
     }
 
     // --- is_builder_type_method: true branches (direct unit tests) ---
@@ -1463,15 +1462,16 @@ mod tests {
         add_nodes_to_graph(&mut graph, &results, "proj");
 
         let resolver = CallResolver::new(&table, "proj");
-        let edges = resolver.resolve_calls(&results, &mut graph);
+        resolver.resolve_calls(&results, &mut graph);
 
         assert_eq!(
-            edges.len(),
+            graph.edge_count(),
             1,
             "only non-Builder method call should produce edge"
         );
-        assert_eq!(edges[0].source, caller_qn);
-        assert_eq!(edges[0].target, save_qn);
-        assert_eq!(edges[0].start_line, Some(6));
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.source, caller_qn);
+        assert_eq!(edge.target, save_qn);
+        assert_eq!(edge.start_line, Some(6));
     }
 }

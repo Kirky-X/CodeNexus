@@ -202,6 +202,44 @@ fn wait_with_timeout(child: &mut Child, timeout_ms: u64) -> bool {
     }
 }
 
+/// Send SIGKILL to `child` and wait up to `timeout_ms` for it to exit,
+/// emitting a stderr warning with `context` if the timeout elapses (L1).
+///
+/// Single kill+warn helper used by [`kill_session`] (initialize-failure path)
+/// and [`shutdown_session`]'s fallback ([`force_kill_and_wait`]). Pre-L1 had
+/// two near-identical copies of the `child.kill() + wait_with_timeout +
+/// eprintln!` sequence; consolidating them removes the duplication and
+/// guarantees symmetric fail-loud behavior across both call sites.
+///
+/// # Why SIGKILL cannot guarantee immediate exit
+///
+/// `kill(SIGKILL)` cannot interrupt a process in D-state (uninterruptible
+/// sleep on NFS/FUSE/磁盘 IO 挂起) — the signal is queued until the kernel
+/// syscall returns, and `wait()` would block indefinitely. This helper
+/// bounds the wait to `timeout_ms` and, on timeout, leaves the OS to reap
+/// the orphaned process: zombies (already-exited children not yet waited
+/// on) are reaped by init when CodeNexus exits; D-state processes self-reap
+/// once the syscall returns (LOW-4: D-state is the *cause*, zombie is one
+/// possible *result* — the warning now mentions both instead of conflating
+/// them). The warning makes the orphan visible to the user (Rule 12:
+/// fail-loud).
+///
+/// # LOW-2 / LOW-3
+///
+/// Both `provider.shutdown()` (LOW-2, reaches here via
+/// [`shutdown_session`] → [`force_kill_and_wait`]) and direct `child.kill()`
+/// callers (LOW-3, [`kill_session`] on the initialize-failure path) emit
+/// the stderr warning via this helper — no kill site is silent.
+fn kill_and_warn(child: &mut Child, timeout_ms: u64, context: &str) {
+    let _ = child.kill();
+    if !wait_with_timeout(child, timeout_ms) {
+        eprintln!(
+            "warning: LSP child did not exit {timeout_ms}ms after SIGKILL \
+             in {context}; process may be orphaned (D-state stall or zombie reaped by init)"
+        );
+    }
+}
+
 /// Force-kills `child` and bounds the post-`SIGKILL` wait to
 /// [`KILL_TIMEOUT_MS`]. Used as the last-resort fallback in
 /// [`shutdown_session`] after graceful wait timed out.
@@ -213,17 +251,8 @@ fn wait_with_timeout(child: &mut Child, timeout_ms: u64) -> bool {
 /// cannot interrupt D-state (uninterruptible sleep on NFS/FUSE/磁盘 IO
 /// 挂起), so an unbounded `wait()` in this fallback would re-introduce
 /// the very hang that [`kill_session`]'s timeout was designed to prevent.
-/// On timeout we leave the OS to reap the zombie (child is dropped right
-/// after this call returns — the zombie is reaped by init when CodeNexus
-/// exits).
 fn force_kill_and_wait(child: &mut Child) {
-    let _ = child.kill();
-    if !wait_with_timeout(child, KILL_TIMEOUT_MS) {
-        eprintln!(
-            "warning: LSP child did not exit {KILL_TIMEOUT_MS}ms after SIGKILL \
-             in force_kill_and_wait (possible D-state); leaving OS to reap zombie"
-        );
-    }
+    kill_and_warn(child, KILL_TIMEOUT_MS, "force_kill_and_wait");
 }
 
 /// Forcefully terminate a session whose handshake failed.
@@ -236,24 +265,18 @@ fn force_kill_and_wait(child: &mut Child) {
 ///
 /// Bounds the post-`SIGKILL` wait to [`KILL_TIMEOUT_MS`] (3 s). The previous
 /// `child.wait()` could block forever if the child was stuck in kernel state
-/// (zombie reaping, D-state stall). `kill_session` is called on the
+/// (D-state stall or zombie reaping). `kill_session` is called on the
 /// `initialize_session` failure path (`client.rs`), so an unbounded wait
 /// would hang the entire CLI.
 ///
 /// # L6-3 review follow-up (fail-loud, Rule 12)
 ///
-/// On timeout, emits a warning to stderr so the user knows the child may
-/// be orphaned (zombie reaped by init when CodeNexus exits). The previous
-/// `let _ = wait_with_timeout(...)` silently dropped the `bool` return,
-/// violating the fail-loud principle.
+/// On timeout, emits a warning to stderr via [`kill_and_warn`] so the user
+/// knows the child may be orphaned (zombie reaped by init when CodeNexus
+/// exits). The previous `let _ = wait_with_timeout(...)` silently dropped
+/// the `bool` return, violating the fail-loud principle.
 pub(crate) fn kill_session(mut session: Session) {
-    let _ = session.child.kill();
-    if !wait_with_timeout(&mut session.child, KILL_TIMEOUT_MS) {
-        eprintln!(
-            "warning: LSP child did not exit {KILL_TIMEOUT_MS}ms after SIGKILL \
-             in kill_session; process may be orphaned"
-        );
-    }
+    kill_and_warn(&mut session.child, KILL_TIMEOUT_MS, "kill_session");
 }
 
 /// Graceful shutdown shared by every LSP client.
@@ -577,7 +600,8 @@ mod tests {
 
     #[test]
     fn spawn_server_succeeds_with_cat() {
-        let workspace = std::env::temp_dir();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = dir.path().to_path_buf();
         let result = spawn_server(Path::new("cat"), &workspace, &[]);
         assert!(result.is_ok(), "spawn_server should succeed: {result:?}");
         let (mut child, stdin, stdout) = result.unwrap();
@@ -589,7 +613,8 @@ mod tests {
 
     #[test]
     fn spawn_server_fails_with_nonexistent_binary() {
-        let workspace = std::env::temp_dir();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = dir.path().to_path_buf();
         let err = spawn_server(Path::new("/nonexistent/binary/path"), &workspace, &[])
             .expect_err("should fail");
         assert!(matches!(err, LspError::ServerStart(_)));

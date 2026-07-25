@@ -190,7 +190,22 @@ impl Repository {
     /// [`Graph::nodes_view`]: crate::model::Graph::nodes_view
     /// [`Storage`]: super::capability::Storage
     /// [`Storage::save_nodes`]: super::capability::Storage::save_nodes
-    pub fn save_nodes<'a, I>(&self, nodes: I, label: NodeLabel) -> Result<()>
+    ///
+    /// # L4 rename — inherent method is `save_nodes_stream`
+    ///
+    /// Pre-L4 this inherent method was named `save_nodes`, colliding with the
+    /// [`Storage::save_nodes`] trait method. Rust resolved the collision by
+    /// preferring the inherent method on concrete `&Repository` callers, but
+    /// the naming collision made it impossible to tell at a glance whether a
+    /// callsite was using the streaming inherent path or the slice-based trait
+    /// path. L4 renames the inherent method to `save_nodes_stream` so the
+    /// streaming path is explicit. Slice-based callers (`repo.save_nodes(&[..])`)
+    /// now route through the trait method, which delegates back to
+    /// `save_nodes_stream` via `&[Node]: IntoIterator<Item = &Node>`.
+    /// Iterator-based callers (e.g. `save_nodes_by_label`) MUST call
+    /// `save_nodes_stream` directly — the trait method's `&[Node]` signature
+    /// does not accept arbitrary `impl Iterator<Item = &Node>`.
+    pub fn save_nodes_stream<'a, I>(&self, nodes: I, label: NodeLabel) -> Result<()>
     where
         I: IntoIterator<Item = &'a Node>,
     {
@@ -212,10 +227,17 @@ impl Repository {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join(&file_name);
         let file = std::fs::File::create(&path)?;
-        // L6-3 perf fix: wrap in BufWriter (64 KB) to reduce write syscalls for
+        // L6-3 perf fix: wrap in BufWriter (256 KB) to reduce write syscalls for
         // large CSV files (100k+ rows). csv::Writer's internal 8 KB buffer
-        // would otherwise trigger ~12 syscalls/MB; BufWriter cuts that to ~16/MB.
-        let buf = std::io::BufWriter::with_capacity(64 * 1024, file);
+        // would otherwise trigger ~12 syscalls/MB; BufWriter cuts that to ~4/MB.
+        //
+        // P-11: bumped from 64 KB to 256 KB after profiling showed 64 KB still
+        // triggered ~16 syscalls/MB on 1 M-row Function CSV dumps. 256 KB
+        // amortizes a full row batch (avg ~120 bytes/row × ~2200 rows) per
+        // flush, cutting syscalls to ~4/MB. Memory cost is bounded: at most
+        // one 256 KB BufWriter live per `save_nodes_stream` call (the previous
+        // BufWriter is dropped when the function returns).
+        let buf = std::io::BufWriter::with_capacity(256 * 1024, file);
         let stats = write_nodes_csv_stream(iter, label, buf)?;
         if stats.skipped_duplicates > 0 {
             eprintln!(
@@ -257,16 +279,33 @@ impl Repository {
     /// [`Graph::edges_view`]: crate::model::Graph::edges_view
     /// [`Storage`]: super::capability::Storage
     /// [`Storage::save_edges`]: super::capability::Storage::save_edges
-    pub fn save_edges<'a, I>(&self, edges: I) -> Result<()>
+    ///
+    /// # L4 rename — inherent method is `save_edges_stream`
+    ///
+    /// Symmetric with [`save_nodes_stream`](Self::save_nodes_stream): pre-L4
+    /// this inherent method was named `save_edges`, colliding with the
+    /// [`Storage::save_edges`] trait method. L4 renames it to
+    /// `save_edges_stream` so the streaming path is explicit at the call site.
+    /// Slice-based callers (`repo.save_edges(&[..])`) now route through the
+    /// trait method, which delegates back to `save_edges_stream` via
+    /// `&[Edge]: IntoIterator<Item = &Edge>`. Iterator-based callers (e.g.
+    /// [`LoadPhase`](crate::index::LoadPhase) passing `graph.edges_view()`)
+    /// MUST call `save_edges_stream` directly — the trait method's `&[Edge]`
+    /// signature does not accept arbitrary `impl Iterator<Item = &Edge>`.
+    pub fn save_edges_stream<'a, I>(&self, edges: I) -> Result<()>
     where
         I: IntoIterator<Item = &'a Edge>,
     {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("coderelation.csv");
         let file = std::fs::File::create(&path)?;
-        // L6-3 perf fix: wrap in BufWriter (64 KB) to reduce write syscalls for
-        // large edge CSV files (1M+ rows). Symmetric with `save_nodes`.
-        let buf = std::io::BufWriter::with_capacity(64 * 1024, file);
+        // L6-3 perf fix: wrap in BufWriter (256 KB) to reduce write syscalls for
+        // large edge CSV files (1M+ rows). Symmetric with `save_nodes_stream`.
+        //
+        // P-11: bumped from 64 KB to 256 KB (same rationale as `save_nodes_stream`).
+        // Edge rows are wider than node rows (~180 bytes/row with source/target/
+        // type/confidence/start_line), so 256 KB amortizes ~1400 rows per flush.
+        let buf = std::io::BufWriter::with_capacity(256 * 1024, file);
         let stats = write_edges_csv_stream(edges, buf)?;
         if stats.skipped_duplicates > 0 {
             eprintln!(
@@ -582,11 +621,15 @@ impl Storage for Repository {
         nodes: &[Node],
         label: NodeLabel,
     ) -> std::result::Result<(), StorageError> {
-        Repository::save_nodes(self, nodes, label)
+        // L4: delegate to the renamed inherent `save_nodes_stream`. The trait
+        // keeps the `&[Node]` signature for object safety; `&[Node]:
+        // IntoIterator<Item = &Node>` bridges to the streaming inherent path.
+        Repository::save_nodes_stream(self, nodes, label)
     }
 
     fn save_edges(&self, edges: &[Edge]) -> std::result::Result<(), StorageError> {
-        Repository::save_edges(self, edges)
+        // L4: delegate to the renamed inherent `save_edges_stream`.
+        Repository::save_edges_stream(self, edges)
     }
 
     fn get_project(&self, id: &str) -> std::result::Result<Option<ProjectRecord>, StorageError> {
@@ -817,7 +860,7 @@ mod tests {
             sample_function("f1", "demo", "main", "demo.main"),
             sample_function("f2", "demo", "helper", "demo.helper"),
         ];
-        repo.save_nodes(&nodes, NodeLabel::Function)
+        repo.save_nodes_stream(&nodes, NodeLabel::Function)
             .expect("save_nodes");
 
         let funcs = repo.query_functions("demo").expect("query_functions");
@@ -829,7 +872,7 @@ mod tests {
     #[test]
     fn save_nodes_empty_slice_is_noop() {
         let repo = fresh_repo();
-        let result = repo.save_nodes(&[], NodeLabel::Function);
+        let result = repo.save_nodes_stream(&[], NodeLabel::Function);
         assert!(result.is_ok());
     }
 
@@ -844,7 +887,7 @@ mod tests {
             .signature("#define M x")
             .properties(serde_json::json!({"content": "#define M x"}))
             .build();
-        repo.save_nodes(&[node], NodeLabel::Macro)
+        repo.save_nodes_stream(&[node], NodeLabel::Macro)
             .expect("save_nodes Macro");
 
         let rows = repo
@@ -857,20 +900,23 @@ mod tests {
 
     #[test]
     fn save_nodes_accepts_iterator_of_node_refs() {
-        // L6-3 memory-overflow fix: Repository::save_nodes inherent method now
+        // L6-3 memory-overflow fix: Repository::save_nodes_stream inherent method now
         // accepts `impl IntoIterator<Item = &Node>` so callers can stream from
         // `Graph::nodes_view()` without first collecting into a `Vec<Node>`.
         // The Storage trait method keeps the `&[Node]` signature for object
         // safety (dyn Storage is used in 89+ callsites); trait callers
         // transparently reach this inherent method via
         // `&[Node]: IntoIterator<Item = &Node>`.
+        //
+        // L4: renamed from `save_nodes` to `save_nodes_stream` — iterator-based
+        // callers MUST use the inherent `_stream` method directly.
         let repo = fresh_repo();
         let nodes = [
             sample_function("f1", "demo", "main", "demo.main"),
             sample_function("f2", "demo", "helper", "demo.helper"),
         ];
         // Pass a direct iterator over node refs (not a &[Node] slice).
-        repo.save_nodes(nodes.iter(), NodeLabel::Function)
+        repo.save_nodes_stream(nodes.iter(), NodeLabel::Function)
             .expect("save_nodes iterator");
 
         let funcs = repo.query_functions("demo").expect("query_functions");
@@ -891,7 +937,7 @@ mod tests {
                 .confidence(0.8)
                 .build(),
         ];
-        repo.save_edges(&edges).expect("save_edges");
+        repo.save_edges_stream(&edges).expect("save_edges");
 
         let rows = repo
             .connection()
@@ -904,7 +950,7 @@ mod tests {
     #[test]
     fn save_edges_empty_slice_is_noop() {
         let repo = fresh_repo();
-        let result = repo.save_edges(&[]);
+        let result = repo.save_edges_stream(&[]);
         assert!(result.is_ok());
     }
 
@@ -914,12 +960,12 @@ mod tests {
     fn delete_project_removes_project_and_related_nodes() {
         let repo = fresh_repo();
         repo.save_project(&sample_project("demo", "demo")).unwrap();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function("f1", "demo", "main", "demo.main")],
             NodeLabel::Function,
         )
         .unwrap();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_file("file_1", "demo", "/src/main.rs", "abc")],
             NodeLabel::File,
         )
@@ -948,12 +994,12 @@ mod tests {
         repo.save_project(&sample_project("alpha", "alpha"))
             .unwrap();
         repo.save_project(&sample_project("beta", "beta")).unwrap();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function("f1", "alpha", "main", "alpha.main")],
             NodeLabel::Function,
         )
         .unwrap();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function("f2", "beta", "main", "beta.main")],
             NodeLabel::Function,
         )
@@ -981,7 +1027,7 @@ mod tests {
     #[test]
     fn get_file_hash_returns_stored_hash() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_file("file_1", "demo", "/src/main.rs", "blake3:abc")],
             NodeLabel::File,
         )
@@ -1005,12 +1051,12 @@ mod tests {
     #[test]
     fn get_file_hash_isolates_by_project() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_file("f1", "alpha", "/src/main.rs", "hash_alpha")],
             NodeLabel::File,
         )
         .unwrap();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_file("f2", "beta", "/src/main.rs", "hash_beta")],
             NodeLabel::File,
         )
@@ -1034,7 +1080,7 @@ mod tests {
     #[test]
     fn get_all_file_hashes_returns_all_files_for_project() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_file("f1", "demo", "/a.rs", "hash_a"),
                 sample_file("f2", "demo", "/b.rs", "hash_b"),
@@ -1044,7 +1090,7 @@ mod tests {
         )
         .unwrap();
         // A file in another project should not appear.
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_file("f4", "other", "/d.rs", "hash_d")],
             NodeLabel::File,
         )
@@ -1075,7 +1121,7 @@ mod tests {
     #[test]
     fn delete_file_nodes_removes_nodes_for_file() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("f1", "demo", "main", "demo.main"),
                 sample_function("f2", "demo", "helper", "demo.helper"),
@@ -1094,12 +1140,12 @@ mod tests {
     fn delete_file_nodes_isolates_by_project() {
         let repo = fresh_repo();
         // Same path, different projects.
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function("f1", "alpha", "main", "alpha.main")],
             NodeLabel::Function,
         )
         .unwrap();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function("f2", "beta", "main", "beta.main")],
             NodeLabel::Function,
         )
@@ -1114,7 +1160,7 @@ mod tests {
     #[test]
     fn delete_file_nodes_also_removes_related_edges() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("f1", "demo", "main", "demo.main"),
                 sample_function("f2", "demo", "helper", "demo.helper"),
@@ -1122,7 +1168,7 @@ mod tests {
             NodeLabel::Function,
         )
         .unwrap();
-        repo.save_edges(&[Edge::builder("f1", "f2", EdgeType::Calls, "demo")
+        repo.save_edges_stream(&[Edge::builder("f1", "f2", EdgeType::Calls, "demo")
             .start_line(3)
             .build()])
             .unwrap();
@@ -1157,7 +1203,7 @@ mod tests {
     #[test]
     fn query_functions_returns_functions_ordered_by_qn() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("f1", "demo", "zeta", "demo.zeta"),
                 sample_function("f2", "demo", "alpha", "demo.alpha"),
@@ -1177,12 +1223,12 @@ mod tests {
     #[test]
     fn query_functions_isolates_by_project() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function("f1", "alpha", "main", "alpha.main")],
             NodeLabel::Function,
         )
         .unwrap();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function("f2", "beta", "main", "beta.main")],
             NodeLabel::Function,
         )
@@ -1210,7 +1256,7 @@ mod tests {
             .unwrap();
         repo.save_project(&sample_project("beta", "beta")).unwrap();
 
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("a1", "alpha", "main", "alpha.main"),
                 sample_function("a2", "alpha", "util", "alpha.util"),
@@ -1218,7 +1264,7 @@ mod tests {
             NodeLabel::Function,
         )
         .unwrap();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("b1", "beta", "main", "beta.main"),
                 sample_function("b2", "beta", "util", "beta.util"),
@@ -1475,7 +1521,7 @@ mod tests {
     fn delete_file_nodes_batch_removes_multiple_files() {
         let repo = fresh_repo();
         repo.save_project(&sample_project("demo", "demo")).unwrap();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_file("f1", "demo", "/src/a.rs", "h1"),
                 sample_file("f2", "demo", "/src/b.rs", "h2"),
@@ -1500,7 +1546,7 @@ mod tests {
     fn delete_file_nodes_batch_empty_list_is_noop() {
         let repo = fresh_repo();
         repo.save_project(&sample_project("demo", "demo")).unwrap();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_file("f1", "demo", "/src/a.rs", "h1")],
             NodeLabel::File,
         )
@@ -1520,7 +1566,7 @@ mod tests {
     fn delete_file_nodes_batch_with_changed_files_removes_them() {
         let repo = fresh_repo();
         repo.save_project(&sample_project("demo", "demo")).unwrap();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_file("f1", "demo", "/src/old.rs", "h1"),
                 sample_file("f2", "demo", "/src/new.rs", "h2"),
@@ -1568,7 +1614,7 @@ mod tests {
         // cleanup is skipped (line 390 false branch).
         let repo = fresh_repo();
         repo.save_project(&sample_project("demo", "demo")).unwrap();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_file("f1", "demo", "/src/a.rs", "h1")],
             NodeLabel::File,
         )
@@ -1651,7 +1697,7 @@ mod tests {
         // (lines 390-405) when edges reference the deleted nodes.
         let repo = fresh_repo();
         repo.save_project(&sample_project("demo", "demo")).unwrap();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_file("f1", "demo", "/src/a.rs", "h1"),
                 sample_file("f2", "demo", "/src/b.rs", "h2"),
@@ -1659,7 +1705,7 @@ mod tests {
             NodeLabel::File,
         )
         .unwrap();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("fn1", "demo", "func_a", "demo.func_a"),
                 sample_function("fn2", "demo", "func_b", "demo.func_b"),
@@ -1667,7 +1713,7 @@ mod tests {
             NodeLabel::Function,
         )
         .unwrap();
-        repo.save_edges(&[Edge::builder("fn1", "fn2", EdgeType::Calls, "demo")
+        repo.save_edges_stream(&[Edge::builder("fn1", "fn2", EdgeType::Calls, "demo")
             .start_line(1)
             .build()])
             .unwrap();

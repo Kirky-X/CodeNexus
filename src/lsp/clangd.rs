@@ -169,7 +169,8 @@ mod tests {
     #[test]
     fn start_nonexistent_server_returns_error() {
         let client = ClangdClient::with_server_path(PathBuf::from("/nonexistent/path/to/clangd"));
-        let result = client.start(&std::env::temp_dir());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let result = client.start(dir.path());
         match result {
             Err(LspError::ServerStart(msg)) => assert!(!msg.is_empty()),
             other => panic!("expected Err(LspError::ServerStart(_)), got: {other:?}"),
@@ -184,7 +185,8 @@ mod tests {
     #[test]
     fn shutdown_after_failed_start_returns_ok() {
         let client = ClangdClient::with_server_path(PathBuf::from("/nonexistent/path/to/clangd"));
-        let _ = client.start(&std::env::temp_dir());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _ = client.start(dir.path());
         assert!(client.shutdown().is_ok());
     }
 

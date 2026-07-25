@@ -145,11 +145,16 @@ impl StorageConnection {
         // compressed sources, and 8 LSP servers, the system OOMs.
         //
         // The fix pins three knobs in production:
-        //   1. `buffer_pool_size = 4 GiB` — DuckDB's page cache for Cypher
-        //      query execution. 4 GiB is generous for CodeNexus workloads
-        //      (the largest known repo produces ~1 M nodes / ~5 M edges;
-        //      the test suite runs the full schema on 256 MiB). Saves ~52 GB
-        //      on a 70 GB host.
+        //   1. `buffer_pool_size` — DuckDB's page cache for Cypher query
+        //      execution. P-05 makes this dynamic: 25% of available memory,
+        //      capped at 4 GiB, floored at 256 MiB. On a 70 GB host with ~60
+        //      GB available this resolves to 4 GiB (cap); on a 16 GB host
+        //      with ~12 GB available it resolves to 3 GiB; on a 4 GB host
+        //      with ~2 GB available it resolves to 512 MiB. The cap prevents
+        //      DuckDB from reclaiming headroom needed for parse results, the
+        //      in-memory Graph, LZ4 compressed sources (RAM-first mode), and
+        //      LSP servers; the floor prevents tiny hosts from starving the
+        //      query planner.
         //   2. `max_db_size = 16 GiB` — upper bound on the mmap'd BM region
         //      (virtual address space, not RSS). Pre-L7-5 this defaulted to
         //      `u32::MAX`, which DuckDB replaced with the 8 TiB
@@ -188,14 +193,11 @@ impl StorageConnection {
                 .max_num_threads(8)
                 .read_only(read_only)
         } else {
-            // L7-5: production caps. See the function-level comment for the
-            // full rationale. Values are sized for a 70 GB host running a
-            // single indexing process; the buffer pool is the dominant DuckDB
-            // RSS contributor and is bounded well below the system size to
-            // leave headroom for parse results, the in-memory Graph, LZ4
-            // compressed sources (RAM-first mode), and LSP servers.
+            // L7-5 + P-05: production caps. `buffer_pool_size` is dynamic via
+            // [`compute_buffer_pool_size`]; the other two knobs stay fixed.
+            // See the function-level comment for the full rationale.
             SystemConfig::default()
-                .buffer_pool_size(4 * 1024 * 1024 * 1024)
+                .buffer_pool_size(compute_buffer_pool_size())
                 .max_db_size(16 * 1024 * 1024 * 1024)
                 .max_num_threads(8)
                 .read_only(read_only)
@@ -330,6 +332,41 @@ impl StorageConnection {
         let conn = Connection::new(&self.db)?;
         f(&conn)
     }
+}
+
+/// Computes the DuckDB `buffer_pool_size` for production builds based on
+/// currently available memory (P-05).
+///
+/// Returns 25% of available memory, clamped to `[256 MiB, 4 GiB]`. The
+/// 25% ratio leaves headroom for parse results, the in-memory Graph, LZ4
+/// compressed sources (RAM-first mode), and LSP servers — all of which
+/// coexist with DuckDB during the indexing pipeline. The 4 GiB cap
+/// matches the L7-5 fixed value for large hosts (the largest known repo
+/// produces ~1 M nodes / ~5 M edges, which fits comfortably in 4 GiB).
+/// The 256 MiB floor prevents tiny hosts (< 1 GiB available) from
+/// starving the query planner.
+///
+/// When `sysinfo` cannot determine available memory (returns 0 — rare,
+/// only on some restricted containers), falls back to the L7-5 fixed
+/// 4 GiB default. This is conservative: it assumes a large host where
+/// 4 GiB is safe, and lets the caller's OOM killer handle truly
+/// memory-constrained environments (Rule 12: fail loud, not silent).
+fn compute_buffer_pool_size() -> u64 {
+    const FLOOR: u64 = 256 * 1024 * 1024; // 256 MiB
+    const CAP: u64 = 4 * 1024 * 1024 * 1024; // 4 GiB
+    const FALLBACK: u64 = 4 * 1024 * 1024 * 1024; // 4 GiB (L7-5 default)
+    const RATIO_NUM: u64 = 1;
+    const RATIO_DEN: u64 = 4; // 25% of available
+
+    let avail = crate::index::MemoryBudget::probe_available_memory();
+    if avail == 0 {
+        return FALLBACK;
+    }
+    // saturating_mul + division: avail is u64, RATIO_NUM=1, so the
+    // multiply cannot overflow (avail ≤ u64::MAX, ×1 = avail). The
+    // division by 4 is exact for any avail ≥ 4 bytes.
+    let computed = avail.saturating_mul(RATIO_NUM) / RATIO_DEN;
+    computed.clamp(FLOOR, CAP)
 }
 
 impl std::fmt::Debug for StorageConnection {

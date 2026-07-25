@@ -171,7 +171,8 @@ mod tests {
         let client = PyrightClient::with_server_path(PathBuf::from(
             "/nonexistent/path/to/pyright-langserver",
         ));
-        let result = client.start(&std::env::temp_dir());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let result = client.start(dir.path());
         match result {
             Err(LspError::ServerStart(msg)) => assert!(!msg.is_empty()),
             other => panic!("expected Err(LspError::ServerStart(_)), got: {other:?}"),
@@ -188,7 +189,8 @@ mod tests {
         let client = PyrightClient::with_server_path(PathBuf::from(
             "/nonexistent/path/to/pyright-langserver",
         ));
-        let _ = client.start(&std::env::temp_dir());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _ = client.start(dir.path());
         assert!(client.shutdown().is_ok());
     }
 

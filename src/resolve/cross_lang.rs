@@ -305,19 +305,20 @@ impl<'a> FfiResolver<'a> {
     /// For each [`ExternInfo`] in each result, resolves the extern declaration
     /// using [`resolve_extern`]. If a match is found, creates an `FfiCalls`
     /// edge from the caller file's function (or the file path itself if no
-    /// function is found) to the target definition, and adds it to both the
-    /// graph and the returned vector.
+    /// function is found) to the target definition, and adds it directly to
+    /// `graph`.
+    ///
+    /// L6 fix: returns `()` instead of `Vec<Edge>`; edges are added directly
+    /// to `graph`. The previous `Vec<Edge>` return was an anti-pattern —
+    /// production callers (`orchestrator.rs::resolve_all`) discarded it via
+    /// `let _ = ...`, wasting memory on 1M+ edge repos due to per-edge
+    /// `clone()` followed by immediate `drop`.
     ///
     /// # Arguments
     ///
     /// * `results` - The extraction results containing extern declarations.
     /// * `graph` - The graph to add resolved FfiCalls edges to.
-    ///
-    /// # Returns
-    ///
-    /// A vector of all resolved FfiCalls edges (also added to `graph`).
-    pub fn resolve_ffi(&self, results: &[ExtractResult], graph: &mut Graph) -> Vec<Edge> {
-        let mut edges = Vec::new();
+    pub fn resolve_ffi(&self, results: &[ExtractResult], graph: &mut Graph) {
         for result in results {
             let caller_file = &result.file_path;
             // Use a function in the caller file as the edge source if one
@@ -339,12 +340,10 @@ impl<'a> FfiResolver<'a> {
                             .reason(reason)
                             .start_line(extern_info.line)
                             .build();
-                    graph.add_edge(edge.clone());
-                    edges.push(edge);
+                    graph.add_edge(edge);
                 }
             }
         }
-        edges
     }
 
     /// Resolves a single extern declaration.
@@ -1054,15 +1053,15 @@ mod tests {
         let results = vec![result];
         let mut graph = Graph::new();
         let resolver = FfiResolver::new(&table, "proj");
-        let edges = resolver.resolve_ffi(&results, &mut graph);
+        resolver.resolve_ffi(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].edge_type, EdgeType::FfiCalls);
-        assert_eq!(edges[0].target, "proj.c.c_function");
-        assert!((edges[0].confidence - 0.70).abs() < 1e-6);
-        assert_eq!(edges[0].confidence_tier, ConfidenceTier::Global);
-        assert_eq!(edges[0].start_line, Some(5));
         assert_eq!(graph.edge_count(), 1);
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.edge_type, EdgeType::FfiCalls);
+        assert_eq!(edge.target, "proj.c.c_function");
+        assert!((edge.confidence - 0.70).abs() < 1e-6);
+        assert_eq!(edge.confidence_tier, ConfidenceTier::Global);
+        assert_eq!(edge.start_line, Some(5));
     }
 
     #[test]
@@ -1072,8 +1071,8 @@ mod tests {
         let results = vec![result];
         let mut graph = Graph::new();
         let resolver = FfiResolver::new(&table, "proj");
-        let edges = resolver.resolve_ffi(&results, &mut graph);
-        assert!(edges.is_empty());
+        resolver.resolve_ffi(&results, &mut graph);
+        assert!(graph.edges.is_empty());
         assert_eq!(graph.edge_count(), 0);
     }
 
@@ -1082,8 +1081,8 @@ mod tests {
         let table = ProjectSymbolTable::new();
         let mut graph = Graph::new();
         let resolver = FfiResolver::new(&table, "proj");
-        let edges = resolver.resolve_ffi(&[], &mut graph);
-        assert!(edges.is_empty());
+        resolver.resolve_ffi(&[], &mut graph);
+        assert!(graph.edges.is_empty());
         assert_eq!(graph.edge_count(), 0);
     }
 
@@ -1128,11 +1127,12 @@ mod tests {
         let results = vec![result];
         let mut graph = Graph::new();
         let resolver = FfiResolver::new(&table, "proj");
-        let edges = resolver.resolve_ffi(&results, &mut graph);
+        resolver.resolve_ffi(&results, &mut graph);
 
-        assert_eq!(edges.len(), 2);
         assert_eq!(graph.edge_count(), 2);
-        assert!(edges.iter().all(|e| e.edge_type == EdgeType::FfiCalls));
+        assert!(graph
+            .edges_view()
+            .all(|e| e.edge_type == EdgeType::FfiCalls));
     }
 
     #[test]
@@ -1149,9 +1149,9 @@ mod tests {
         let results = vec![result];
         let mut graph = Graph::new();
         let resolver = FfiResolver::new(&table, "proj");
-        let edges = resolver.resolve_ffi(&results, &mut graph);
+        resolver.resolve_ffi(&results, &mut graph);
 
-        assert!(edges.is_empty());
+        assert!(graph.edges.is_empty());
         assert_eq!(graph.edge_count(), 0);
     }
 
@@ -1181,11 +1181,12 @@ mod tests {
         let results = vec![result];
         let mut graph = Graph::new();
         let resolver = FfiResolver::new(&table, "proj");
-        let edges = resolver.resolve_ffi(&results, &mut graph);
+        resolver.resolve_ffi(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].source, "main.rs");
-        assert_eq!(edges[0].target, "proj.c.c_function");
+        assert_eq!(graph.edge_count(), 1);
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.source, "main.rs");
+        assert_eq!(edge.target, "proj.c.c_function");
     }
 
     #[test]
@@ -1232,11 +1233,12 @@ mod tests {
         let results = vec![result];
         let mut graph = Graph::new();
         let resolver = FfiResolver::new(&table, "proj");
-        let edges = resolver.resolve_ffi(&results, &mut graph);
+        resolver.resolve_ffi(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].source, rust_qn);
-        assert_eq!(edges[0].target, "proj.c.c_function");
+        assert_eq!(graph.edge_count(), 1);
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.source, rust_qn);
+        assert_eq!(edge.target, "proj.c.c_function");
     }
 
     #[test]
@@ -1271,9 +1273,8 @@ mod tests {
         let results = vec![result_a, result_b];
         let mut graph = Graph::new();
         let resolver = FfiResolver::new(&table, "proj");
-        let edges = resolver.resolve_ffi(&results, &mut graph);
+        resolver.resolve_ffi(&results, &mut graph);
 
-        assert_eq!(edges.len(), 2);
         assert_eq!(graph.edge_count(), 2);
     }
 
@@ -1336,11 +1337,12 @@ mod tests {
         let results = vec![result];
         let mut graph = Graph::new();
         let resolver = FfiResolver::new(&table, "proj");
-        let edges = resolver.resolve_ffi(&results, &mut graph);
+        resolver.resolve_ffi(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1);
-        assert!((edges[0].confidence - 0.85).abs() < 1e-6);
-        assert_eq!(edges[0].confidence_tier, ConfidenceTier::Global);
+        assert_eq!(graph.edge_count(), 1);
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert!((edge.confidence - 0.85).abs() < 1e-6);
+        assert_eq!(edge.confidence_tier, ConfidenceTier::Global);
     }
 
     // --- AC-TRACE-003: Rust extern "C" -> C function FfiCalls edge ---
@@ -1385,13 +1387,14 @@ mod tests {
 
         // When: resolve FFI.
         let resolver = FfiResolver::new(&table, "proj");
-        let edges = resolver.resolve_ffi(&results, &mut graph);
+        resolver.resolve_ffi(&results, &mut graph);
 
         // Then: FfiCalls edge from Rust function to C function in graph.
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].edge_type, EdgeType::FfiCalls);
-        assert_eq!(edges[0].source, rust_func_qn);
-        assert_eq!(edges[0].target, c_func_qn);
+        assert_eq!(graph.edge_count(), 1);
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.edge_type, EdgeType::FfiCalls);
+        assert_eq!(edge.source, rust_func_qn);
+        assert_eq!(edge.target, c_func_qn);
 
         // Verify: graph has edge with type FfiCalls.
         assert!(graph
@@ -1444,13 +1447,14 @@ mod tests {
         add_nodes_to_graph(&mut graph, &results, "proj");
 
         let resolver = FfiResolver::new(&table, "proj");
-        let edges = resolver.resolve_ffi(&results, &mut graph);
+        resolver.resolve_ffi(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].edge_type, EdgeType::FfiCalls);
-        assert_eq!(edges[0].source, rust_func_qn);
-        assert_eq!(edges[0].target, c_func_qn);
-        assert!((edges[0].confidence - 0.85).abs() < 1e-6);
+        assert_eq!(graph.edge_count(), 1);
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.edge_type, EdgeType::FfiCalls);
+        assert_eq!(edge.source, rust_func_qn);
+        assert_eq!(edge.target, c_func_qn);
+        assert!((edge.confidence - 0.85).abs() < 1e-6);
     }
 
     // --- Fortran <-> C FFI tests (BR-TRACE-008) ---
@@ -1492,8 +1496,8 @@ mod tests {
         let resolver = FfiResolver::new(&table, "proj");
         // Verify resolve_ffi works on the created resolver.
         let mut graph = Graph::new();
-        let edges = resolver.resolve_ffi(&[], &mut graph);
-        assert!(edges.is_empty());
+        resolver.resolve_ffi(&[], &mut graph);
+        assert!(graph.edges.is_empty());
     }
 
     // --- TypeMapper tests (ADD §7.4, BR-TRACE-008) ---
@@ -2158,10 +2162,15 @@ mod tests {
         let results = vec![result];
         let mut graph = Graph::new();
         let resolver = FfiResolver::new(&table, "proj");
-        let edges = resolver.resolve_ffi(&results, &mut graph);
+        resolver.resolve_ffi(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "only resolvable extern should produce edge");
-        assert_eq!(edges[0].target, "proj.c.c_func");
-        assert_eq!(edges[0].start_line, Some(5));
+        assert_eq!(
+            graph.edge_count(),
+            1,
+            "only resolvable extern should produce edge"
+        );
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "proj.c.c_func");
+        assert_eq!(edge.start_line, Some(5));
     }
 }

@@ -83,23 +83,24 @@ impl<'a> ImportResolver<'a> {
     /// Duplicate `(source, target)` pairs are collapsed to a single edge
     /// (matching `CallResolver`'s dedup behaviour).
     ///
+    /// L6 fix: returns `()` instead of `Vec<Edge>`; edges are added directly
+    /// to `graph`. The previous `Vec<Edge>` return was an anti-pattern —
+    /// production callers (`orchestrator.rs::resolve_all`) discarded it via
+    /// `let _ = ...`, wasting memory on 1M+ edge repos due to per-edge
+    /// `clone()` followed by immediate `drop`.
+    ///
     /// # Arguments
     ///
     /// * `results` - The extraction results containing import information.
     /// * `graph` - The graph to add resolved IMPORTS edges to. Must already
     ///   contain File nodes (created by the scope phase).
-    ///
-    /// # Returns
-    ///
-    /// A vector of all resolved IMPORTS edges (also added to `graph`).
-    pub fn resolve_imports(&self, results: &[ExtractResult], graph: &mut Graph) -> Vec<Edge> {
+    pub fn resolve_imports(&self, results: &[ExtractResult], graph: &mut Graph) {
         let file_index = build_file_index(graph);
         // B7: Build (file_id, function_name) → function_id index for REEXPORTS
         // edge creation. Re-exports target specific Function nodes (not File
         // nodes), so we need to resolve `imported_names` to their Function ids.
         let func_index = build_function_index(graph, &file_index);
 
-        let mut edges = Vec::new();
         // Deduplicate by (source_file_id, target_file_id) — one IMPORTS edge
         // per file pair, regardless of how many symbols are imported.
         let mut seen_pairs: HashSet<(String, String)> = HashSet::new();
@@ -164,8 +165,7 @@ impl<'a> ImportResolver<'a> {
                     .confidence_tier(ConfidenceTier::ImportScoped)
                     .start_line(import.line)
                     .build();
-                    graph.add_edge(edge.clone());
-                    edges.push(edge);
+                    graph.add_edge(edge);
                 }
 
                 // B7: REEXPORTS edge for `pub use` / `export ... from`.
@@ -195,14 +195,11 @@ impl<'a> ImportResolver<'a> {
                         .confidence_tier(ConfidenceTier::ImportScoped)
                         .start_line(import.line)
                         .build();
-                        graph.add_edge(edge.clone());
-                        edges.push(edge);
+                        graph.add_edge(edge);
                     }
                 }
             }
         }
-
-        edges
     }
 }
 
@@ -802,17 +799,16 @@ mod tests {
         graph.add_node(make_file_node("b.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "should create 1 IMPORTS edge");
-        let edge = &edges[0];
+        assert_eq!(graph.edge_count(), 1, "should create 1 IMPORTS edge");
+        let edge = graph.edges_view().next().expect("edge should exist");
         assert_eq!(edge.edge_type, EdgeType::Imports);
         assert_eq!(edge.source, "a.ts");
         assert_eq!(edge.target, "b.ts");
         assert!((edge.confidence - 0.95).abs() < 1e-6);
         assert_eq!(edge.confidence_tier, ConfidenceTier::ImportScoped);
         assert_eq!(edge.start_line, Some(1));
-        assert_eq!(graph.edge_count(), 1);
     }
 
     // --- resolve_imports: empty imports ---
@@ -826,18 +822,17 @@ mod tests {
         graph.add_node(make_file_node("a.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert!(edges.is_empty(), "no imports → no edges");
-        assert_eq!(graph.edge_count(), 0);
+        assert_eq!(graph.edge_count(), 0, "no imports → no edges");
     }
 
     #[test]
     fn resolve_imports_empty_results_returns_empty() {
         let mut graph = Graph::new();
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&[], &mut graph);
-        assert!(edges.is_empty());
+        resolver.resolve_imports(&[], &mut graph);
+        assert_eq!(graph.edge_count(), 0);
     }
 
     // --- resolve_imports: skips unresolved ---
@@ -859,10 +854,9 @@ mod tests {
         // No "react" File node in graph.
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert!(edges.is_empty(), "unresolved import → no edge");
-        assert_eq!(graph.edge_count(), 0);
+        assert_eq!(graph.edge_count(), 0, "unresolved import → no edge");
     }
 
     #[test]
@@ -882,8 +876,8 @@ mod tests {
         graph.add_node(make_file_node("b.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
-        assert!(edges.is_empty());
+        resolver.resolve_imports(&results, &mut graph);
+        assert_eq!(graph.edge_count(), 0);
     }
 
     #[test]
@@ -901,8 +895,8 @@ mod tests {
         graph.add_node(make_file_node("a.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
-        assert!(edges.is_empty());
+        resolver.resolve_imports(&results, &mut graph);
+        assert_eq!(graph.edge_count(), 0);
     }
 
     // --- resolve_imports: deduplication ---
@@ -930,10 +924,9 @@ mod tests {
         graph.add_node(make_file_node("b.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "duplicate (source, target) → 1 edge");
-        assert_eq!(graph.edge_count(), 1);
+        assert_eq!(graph.edge_count(), 1, "duplicate (source, target) → 1 edge");
     }
 
     // --- resolve_imports: extension probing ---
@@ -955,10 +948,11 @@ mod tests {
         graph.add_node(make_file_node("utils.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "extensionless import should resolve");
-        assert_eq!(edges[0].target, "utils.ts");
+        assert_eq!(graph.edge_count(), 1, "extensionless import should resolve");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "utils.ts");
     }
 
     #[test]
@@ -978,11 +972,12 @@ mod tests {
         graph.add_node(make_file_node("src/helpers/b.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].source, "src/a.ts");
-        assert_eq!(edges[0].target, "src/helpers/b.ts");
+        assert_eq!(graph.edge_count(), 1);
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.source, "src/a.ts");
+        assert_eq!(edge.target, "src/helpers/b.ts");
     }
 
     #[test]
@@ -1002,10 +997,11 @@ mod tests {
         graph.add_node(make_file_node("src/b.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].target, "src/b.ts");
+        assert_eq!(graph.edge_count(), 1);
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "src/b.ts");
     }
 
     #[test]
@@ -1025,10 +1021,11 @@ mod tests {
         graph.add_node(make_file_node("utils/index.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "barrel import should resolve");
-        assert_eq!(edges[0].target, "utils/index.ts");
+        assert_eq!(graph.edge_count(), 1, "barrel import should resolve");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "utils/index.ts");
     }
 
     // --- resolve_imports: multiple files ---
@@ -1059,9 +1056,8 @@ mod tests {
         graph.add_node(make_file_node("d.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(edges.len(), 2);
         assert_eq!(graph.edge_count(), 2);
     }
 
@@ -1137,10 +1133,11 @@ mod tests {
         graph.add_node(make_file_node("b.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "direct match should resolve");
-        assert_eq!(edges[0].target, "b.ts");
+        assert_eq!(graph.edge_count(), 1, "direct match should resolve");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "b.ts");
     }
 
     // --- resolve_import_target: final None fallback ---
@@ -1163,9 +1160,13 @@ mod tests {
         // No "nonexistent" file in graph.
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert!(edges.is_empty(), "unresolvable relative import → no edge");
+        assert_eq!(
+            graph.edge_count(),
+            0,
+            "unresolvable relative import → no edge"
+        );
     }
 
     // --- resolve_imports: source File node missing from graph ---
@@ -1188,9 +1189,9 @@ mod tests {
         graph.add_node(make_file_node("b.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert!(edges.is_empty(), "source file not in graph → no edges");
+        assert_eq!(graph.edge_count(), 0, "source file not in graph → no edges");
     }
 
     // --- resolve_imports: Rust module path resolution (crate::) ---
@@ -1212,15 +1213,16 @@ mod tests {
         graph.add_node(make_file_node("src/model.rs", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            edges.len(),
+            graph.edge_count(),
             1,
             "crate:: prefix should resolve to src/model.rs"
         );
-        assert_eq!(edges[0].source, "src/lib.rs");
-        assert_eq!(edges[0].target, "src/model.rs");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.source, "src/lib.rs");
+        assert_eq!(edge.target, "src/model.rs");
     }
 
     #[test]
@@ -1240,14 +1242,15 @@ mod tests {
         graph.add_node(make_file_node("src/model.rs", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            edges.len(),
+            graph.edge_count(),
             1,
             "symbol name should be stripped, resolving to src/model.rs"
         );
-        assert_eq!(edges[0].target, "src/model.rs");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "src/model.rs");
     }
 
     #[test]
@@ -1267,14 +1270,15 @@ mod tests {
         graph.add_node(make_file_node("src/model/mod.rs", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            edges.len(),
+            graph.edge_count(),
             1,
             "crate:: prefix should resolve to src/model/mod.rs"
         );
-        assert_eq!(edges[0].target, "src/model/mod.rs");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "src/model/mod.rs");
     }
 
     #[test]
@@ -1294,10 +1298,11 @@ mod tests {
         graph.add_node(make_file_node("src/parse/parser.rs", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "nested crate:: path should resolve");
-        assert_eq!(edges[0].target, "src/parse/parser.rs");
+        assert_eq!(graph.edge_count(), 1, "nested crate:: path should resolve");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "src/parse/parser.rs");
     }
 
     // --- resolve_imports: Rust module path resolution (self::, super::) ---
@@ -1319,10 +1324,11 @@ mod tests {
         graph.add_node(make_file_node("src/model.rs", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "self:: prefix should resolve");
-        assert_eq!(edges[0].target, "src/model.rs");
+        assert_eq!(graph.edge_count(), 1, "self:: prefix should resolve");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "src/model.rs");
     }
 
     #[test]
@@ -1342,10 +1348,11 @@ mod tests {
         graph.add_node(make_file_node("src/model.rs", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "super:: prefix should resolve");
-        assert_eq!(edges[0].target, "src/model.rs");
+        assert_eq!(graph.edge_count(), 1, "super:: prefix should resolve");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "src/model.rs");
     }
 
     #[test]
@@ -1365,14 +1372,15 @@ mod tests {
         graph.add_node(make_file_node("src/model.rs", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            edges.len(),
+            graph.edge_count(),
             1,
             "super:: with symbol should strip last component"
         );
-        assert_eq!(edges[0].target, "src/model.rs");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "src/model.rs");
     }
 
     // --- resolve_imports: Rust external crate skipped ---
@@ -1393,9 +1401,9 @@ mod tests {
         graph.add_node(make_file_node("src/lib.rs", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert!(edges.is_empty(), "external crate (std::io) → no edge");
+        assert_eq!(graph.edge_count(), 0, "external crate (std::io) → no edge");
     }
 
     // --- resolve_imports: Rust module path resolution (unprefixed, e.g. `cli::run`) ---
@@ -1426,15 +1434,16 @@ mod tests {
         graph.add_node(make_file_node("src/cli.rs", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            edges.len(),
+            graph.edge_count(),
             1,
             "unprefixed `cli::run` should resolve to src/cli.rs"
         );
-        assert_eq!(edges[0].source, "src/lib.rs");
-        assert_eq!(edges[0].target, "src/cli.rs");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.source, "src/lib.rs");
+        assert_eq!(edge.target, "src/cli.rs");
     }
 
     #[test]
@@ -1465,12 +1474,16 @@ mod tests {
         );
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
         // 1 IMPORTS edge (lib.rs → cli.rs) + 1 REEXPORTS edge (lib.rs → run Function)
-        assert_eq!(edges.len(), 2, "should create IMPORTS + REEXPORTS edges");
-        let reexports: Vec<_> = edges
-            .iter()
+        assert_eq!(
+            graph.edge_count(),
+            2,
+            "should create IMPORTS + REEXPORTS edges"
+        );
+        let reexports: Vec<_> = graph
+            .edges_view()
             .filter(|e| e.edge_type == EdgeType::Reexports)
             .collect();
         assert_eq!(reexports.len(), 1, "should create 1 REEXPORTS edge");
@@ -1495,10 +1508,15 @@ mod tests {
         graph.add_node(make_file_node("src/cli/sub.rs", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "nested unprefixed path should resolve");
-        assert_eq!(edges[0].target, "src/cli/sub.rs");
+        assert_eq!(
+            graph.edge_count(),
+            1,
+            "nested unprefixed path should resolve"
+        );
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "src/cli/sub.rs");
     }
 
     #[test]
@@ -1521,14 +1539,15 @@ mod tests {
         graph.add_node(make_file_node("src/cli.rs", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            edges.len(),
+            graph.edge_count(),
             1,
             "should resolve via parent path (symbol stripped)"
         );
-        assert_eq!(edges[0].target, "src/cli.rs");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "src/cli.rs");
     }
 
     #[test]
@@ -1550,10 +1569,11 @@ mod tests {
         // No src/std.rs or src/std/io.rs in graph.
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert!(
-            edges.is_empty(),
+        assert_eq!(
+            graph.edge_count(),
+            0,
             "external `std::io` → no edge (no false positive)"
         );
     }
@@ -1731,14 +1751,15 @@ mod tests {
         graph.add_node(make_file_node("src/model.rs", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            edges.len(),
+            graph.edge_count(),
             1,
             "absolute importer path should resolve via suffix match"
         );
-        assert_eq!(edges[0].target, "src/model.rs");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "src/model.rs");
     }
 
     #[test]
@@ -1758,15 +1779,16 @@ mod tests {
         graph.add_node(make_file_node("src/b.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            edges.len(),
+            graph.edge_count(),
             1,
             "absolute importer + relative TS import should resolve"
         );
-        assert_eq!(edges[0].source, "src/a.ts");
-        assert_eq!(edges[0].target, "src/b.ts");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.source, "src/a.ts");
+        assert_eq!(edge.target, "src/b.ts");
     }
 
     // --- TS ESM .js/.jsx extension stripping (NodeNext / bundler resolution) ---
@@ -1789,14 +1811,15 @@ mod tests {
         graph.add_node(make_file_node("sdk/typescript/src/types/api.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            edges.len(),
+            graph.edge_count(),
             1,
             ".js extension should be stripped, resolving to .ts file"
         );
-        assert_eq!(edges[0].target, "sdk/typescript/src/types/api.ts");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "sdk/typescript/src/types/api.ts");
     }
 
     #[test]
@@ -1816,14 +1839,15 @@ mod tests {
         graph.add_node(make_file_node("src/Button.tsx", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            edges.len(),
+            graph.edge_count(),
             1,
             ".jsx extension should be stripped, resolving to .tsx file"
         );
-        assert_eq!(edges[0].target, "src/Button.tsx");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "src/Button.tsx");
     }
 
     #[test]
@@ -1843,14 +1867,15 @@ mod tests {
         graph.add_node(make_file_node("src/config.js", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            edges.len(),
+            graph.edge_count(),
             1,
             ".mjs extension should be stripped, resolving to .js file"
         );
-        assert_eq!(edges[0].target, "src/config.js");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "src/config.js");
     }
 
     #[test]
@@ -1869,14 +1894,15 @@ mod tests {
         graph.add_node(make_file_node("src/config.js", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            edges.len(),
+            graph.edge_count(),
             1,
             ".cjs extension should be stripped, resolving to .js file"
         );
-        assert_eq!(edges[0].target, "src/config.js");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "src/config.js");
     }
 
     // --- C++ #include: skipped by ImportResolver (scheme C, v0.3.0) ---
@@ -1904,10 +1930,11 @@ mod tests {
         graph.add_node(make_file_node("include/fmt/format.h", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert!(
-            edges.is_empty(),
+        assert_eq!(
+            graph.edge_count(),
+            0,
             "C++ #include should NOT produce IMPORTS edges (scheme C: handled by ResolvePhase)"
         );
     }
@@ -1930,10 +1957,11 @@ mod tests {
         graph.add_node(make_file_node("include/fmt/format.h", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert!(
-            edges.is_empty(),
+        assert_eq!(
+            graph.edge_count(),
+            0,
             "C++ partial-path #include should NOT produce IMPORTS edges (scheme C)"
         );
     }
@@ -1955,10 +1983,11 @@ mod tests {
         graph.add_node(make_file_node("src/main.cpp", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert!(
-            edges.is_empty(),
+        assert_eq!(
+            graph.edge_count(),
+            0,
             "C++ system header #include should NOT produce IMPORTS edges (scheme C)"
         );
     }
@@ -1982,10 +2011,11 @@ mod tests {
         graph.add_node(make_file_node("src/foo.h", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert!(
-            edges.is_empty(),
+        assert_eq!(
+            graph.edge_count(),
+            0,
             "C++ #include must NOT produce IMPORTS edges even when target file exists (scheme C)"
         );
     }
@@ -2014,15 +2044,16 @@ mod tests {
         graph.add_node(make_file_node("src/com/google/gson/Gson.java", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            edges.len(),
+            graph.edge_count(),
             1,
             "Java class import should resolve via dotted-path mapping"
         );
-        assert_eq!(edges[0].source, "src/com/google/gson/GsonBuilder.java");
-        assert_eq!(edges[0].target, "src/com/google/gson/Gson.java");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.source, "src/com/google/gson/GsonBuilder.java");
+        assert_eq!(edge.target, "src/com/google/gson/Gson.java");
     }
 
     #[test]
@@ -2049,15 +2080,16 @@ mod tests {
         ));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            edges.len(),
+            graph.edge_count(),
             1,
             "Java class import should resolve in Maven standard layout"
         );
+        let edge = graph.edges_view().next().expect("edge should exist");
         assert_eq!(
-            edges[0].target,
+            edge.target,
             "gson/src/main/java/com/google/gson/JsonElement.java"
         );
     }
@@ -2079,10 +2111,11 @@ mod tests {
         // No java/util/List.java in the project.
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        assert!(
-            edges.is_empty(),
+        assert_eq!(
+            graph.edge_count(),
+            0,
             "JDK import (java.util.List) should not resolve to a local file"
         );
     }
@@ -2106,14 +2139,15 @@ mod tests {
         graph.add_node(make_file_node("src/com/google/gson/Gson.java", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            edges.len(),
+            graph.edge_count(),
             1,
             "Java static import should resolve by stripping the member name"
         );
-        assert_eq!(edges[0].target, "src/com/google/gson/Gson.java");
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "src/com/google/gson/Gson.java");
     }
 
     // --- Coverage gap tests: build_file_index, strip_js_style_extension, resolve_java_class_import ---
@@ -2264,11 +2298,11 @@ mod tests {
         graph.add_node(make_function_node("fn-baz", "baz", "b.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
         // 1 IMPORTS edge (a.ts → b.ts) + 1 REEXPORTS edge (a.ts → fn-bar).
-        let reexports: Vec<_> = edges
-            .iter()
+        let reexports: Vec<_> = graph
+            .edges_view()
             .filter(|e| e.edge_type == EdgeType::Reexports)
             .collect();
         assert_eq!(reexports.len(), 1, "should create 1 REEXPORTS edge");
@@ -2302,10 +2336,10 @@ mod tests {
         graph.add_node(make_function_node("fn-qux", "qux", "b.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        let reexports: Vec<_> = edges
-            .iter()
+        let reexports: Vec<_> = graph
+            .edges_view()
             .filter(|e| e.edge_type == EdgeType::Reexports)
             .collect();
         assert_eq!(
@@ -2339,17 +2373,17 @@ mod tests {
         graph.add_node(make_function_node("fn-bar", "bar", "b.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        let reexports: Vec<_> = edges
-            .iter()
+        let reexports: Vec<_> = graph
+            .edges_view()
             .filter(|e| e.edge_type == EdgeType::Reexports)
             .collect();
         assert!(
             reexports.is_empty(),
             "plain use must not create REEXPORTS edges"
         );
-        assert_eq!(edges.len(), 1, "should still create 1 IMPORTS edge");
+        assert_eq!(graph.edge_count(), 1, "should still create 1 IMPORTS edge");
     }
 
     /// B7 review: duplicate `pub use foo::bar` (same source file, same target
@@ -2377,10 +2411,10 @@ mod tests {
         graph.add_node(make_function_node("fn-bar", "bar", "b.ts", "proj"));
 
         let resolver = ImportResolver::new("proj");
-        let edges = resolver.resolve_imports(&results, &mut graph);
+        resolver.resolve_imports(&results, &mut graph);
 
-        let reexports: Vec<_> = edges
-            .iter()
+        let reexports: Vec<_> = graph
+            .edges_view()
             .filter(|e| e.edge_type == EdgeType::Reexports)
             .collect();
         assert_eq!(

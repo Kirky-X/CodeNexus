@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-无。
+### Fixed
+
+- **fix(resolve): H1 — drop master `Vec<Edge>` from sub-resolvers** — 5 个子解析器（`CallResolver::resolve_calls` / `DataFlowResolver::resolve_dataflows` / `FfiResolver::resolve_ffi` / `ImportResolver::resolve_imports` / `TypeResolver::resolve_types`）返回类型从 `Vec<Edge>` 改为 `()`，edge 直接 `graph.add_edge()`，不再收集到 master Vec 后立即丢弃。大型仓库（1M+ edges）省 ~100 MB 峰值 RSS。同步移除 `prune_dangling_type_edges_vec` 死代码（L6 后已无 `all_edges` 调用方）。
+- **fix(ir): L3 — encapsulate `ExtractResult.edges`** — `edges` 字段从 `pub` 改为 `pub(crate)`，新增 `edges()`/`edges_mut()` 访问器。L7-2 在 `ScopeResolutionPhase::run` 后 `clear()` + `shrink_to_fit()` 该字段，`pub(crate)` 防止 crate 外调用方读到清空后的 Vec。同步新增 `Phase` trait 数据流契约文档（single-source-of-truth + bounded-lifetime + borrow-order rules）。
+- **fix(lsp): L1 + LOW-2/3/4 — kill_and_warn helper + D-state 注释** — 抽取 `kill_and_warn(child, timeout_ms, context)` helper 消除 `kill_session` / `force_kill_and_wait` 两处重复的 `child.kill() + wait_with_timeout + eprintln!` 序列；LOW-2/LOW-3：两条 kill 路径（`provider.shutdown()` 失败回退 + `child.kill()` 直接调用）现在都通过 helper 发 stderr 警告（无 kill 路径静默）；LOW-4：注释从 "zombie" 修正为 "D-state stall or zombie reaped by init"（D-state 是因，zombie 是可能结果）。
+- **fix(tests): LOW-1 — std::env::temp_dir() → tempfile::TempDir** — 18 处测试中 `std::env::temp_dir()` 替换为 `tempfile::tempdir()`（或 `tempfile::TempDir`），避免并发测试冲突 + 自动清理临时文件。
+- **fix(service): M2/P-07 + P-02 + P-10 — LSP 扩展名路由优化** — `collect_active_extensions` 对未知扩展名（`.md`/`.toml`/`.json`）跳过而非回退到 `default_ext`（原先为 `.md` 启动 rust-analyzer 浪费 300 MB–2 GB RSS）；`select_provider_for_ext` 用 `HashMap<&str, &dyn LspProvider>` O(1) 查找替代 8-provider 线性扫描（100k+ symbols → 100k+ scans）；`collect_active_extensions` 内部用 `HashSet<&str>` O(1) 查找替代 `&[&str]` 线性扫描。
+- **fix(index): M3 — remove dead `per_collection_soft_limit`** — `MemoryBudget` 移除 `per_collection_soft_limit` 字段 / `DEFAULT_SOFT_LIMIT` 常量 / `with_soft_limit` / `collection_exceeds_limit`（L7-4 RAM-first 放大因子已替代该软限制）。
+- **fix(storage): L4 — rename inherent `save_nodes`/`save_edges` to `_stream`** — `Repository` inherent 方法 `save_nodes`/`save_edges` 重命名为 `save_nodes_stream`/`save_edges_stream`，消除与 `Storage` trait 同名方法的命名冲突。切片调用方（`repo.save_nodes(&[..])`）现在通过 trait 方法路由（trait 委托到 `_stream`）；迭代器调用方（`save_nodes_by_label` / `LoadPhase`）必须直接调用 `_stream`（trait 的 `&[Node]` 签名不接受任意 `impl Iterator`）。
+- **fix(storage): P-06 — `write_edges_csv_stream` dedup key 改为 tuple** — `HashSet<String>` 改为 `HashSet<(&str, &str, EdgeType, u32)>`，每条 edge 不再分配 ~80 字节的 `format!("{}_{}_{}_{}")` String。1M-edge 仓库省 ~80 MB 纯 dedup-key 分配。`EdgeType` 已 `derive(Hash + Eq + Copy)`，tuple 形式直接借用 `edge.source`/`edge.target`。
+- **fix(storage): P-11 — BufWriter 64 KB → 256 KB** — `save_nodes_stream`/`save_edges_stream` 的 `BufWriter` 容量从 64 KB 提升到 256 KB，1M-row CSV dump 的 syscall 从 ~16/MB 降至 ~4/MB。内存开销有界：每次调用至多一个 256 KB BufWriter 存活。
+- **fix(storage): P-05 — dynamic DuckDB `buffer_pool_size`** — `compute_buffer_pool_size()` 新函数：25% 可用内存，clamp 到 `[256 MiB, 4 GiB]`。70 GB 主机（~60 GB 可用）→ 4 GiB（cap）；16 GB 主机（~12 GB 可用）→ 3 GiB；4 GB 主机（~2 GB 可用）→ 512 MiB。`sysinfo` 返回 0 时回退到 L7-5 的 4 GiB 固定值。测试构建保持 256 MiB 固定 cap（并行测试需要）。
+- **fix(service): P-09 — document why UNION is not used** — `build_symbol_queries` 添加文档注释说明为何保持 2 个独立查询：LadybugDB 的 Cypher 子集不支持 `UNION`/`UNION ALL`（参见 `analysis/architecture.rs`），也不支持多标签 `WHERE (n:A OR n:B)` 表达式。两个查询顺序执行，结果在 Rust 中通过 `rows.extend(r)` 合并。
 
 ## [0.3.11] - 2026-07-26
 

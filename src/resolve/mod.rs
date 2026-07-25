@@ -21,7 +21,7 @@
 //! - [`cross_lang`]: [`FfiResolver`] for resolving FfiCalls edges across
 //!   languages (ADD §7.4, BR-TRACE-008).
 //! - [`orchestrator`]: top-level orchestration functions
-//!   ([`build_symbol_table`], [`resolve_all`], [`prune_dangling_type_edges_vec`]).
+//!   ([`build_symbol_table`], [`resolve_all`]).
 
 pub mod calls;
 pub mod capability;
@@ -53,7 +53,7 @@ pub use imports::ImportResolver;
 pub use includes_graph::{resolve_include, IncludesGraph};
 pub use module::ResolverModule;
 pub use mro::{mro_for, MroResolver, MroStrategy};
-pub use orchestrator::{build_symbol_table, prune_dangling_type_edges_vec, resolve_all};
+pub use orchestrator::{build_symbol_table, resolve_all};
 pub use scope::{Scope, ScopeChain, ScopeContext, ScopeResolver, ScopeResolverRegistry};
 pub use symbol_table::{FileSymbolTable, ProjectSymbolTable, SymbolEntry};
 pub use type_resolver::TypeResolver;

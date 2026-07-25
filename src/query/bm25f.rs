@@ -510,7 +510,7 @@ mod tests {
                 ..Default::default()
             }));
         }
-        repo.save_nodes(&nodes, NodeLabel::Function)
+        repo.save_nodes_stream(&nodes, NodeLabel::Function)
             .expect("save_nodes");
 
         let searcher = FullTextSearcher::new(repo.connection());
@@ -558,7 +558,7 @@ mod tests {
                 ..Default::default()
             }),
         ];
-        repo.save_nodes(&nodes, NodeLabel::Function)
+        repo.save_nodes_stream(&nodes, NodeLabel::Function)
             .expect("save_nodes");
 
         let weights = FieldWeights {
@@ -592,7 +592,7 @@ mod tests {
         // This is implicitly covered by `test_bm25f_no_match_returns_zero`
         // at the unit level; here we verify the integration behaviour.
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function_with_docstring(SampleFunctionSpec {
                 id: "f1".into(),
                 project: "demo".into(),
@@ -618,7 +618,7 @@ mod tests {
         // not just `name`. A symbol whose docstring contains the query
         // should appear in results (ranked below name matches).
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function_with_docstring(SampleFunctionSpec {
                 id: "f1".into(),
                 project: "demo".into(),
@@ -651,7 +651,7 @@ mod tests {
         // not just `name`. A symbol whose content contains the query should
         // appear in results.
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function_with_docstring(SampleFunctionSpec {
                 id: "f1".into(),
                 project: "demo".into(),
@@ -676,7 +676,7 @@ mod tests {
     fn test_bm25f_qualified_name_match_appears_in_results() {
         // Verify that the fallback CONTAINS scan now checks `qualifiedName`.
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function_with_docstring(SampleFunctionSpec {
                 id: "f1".into(),
                 project: "demo".into(),
@@ -713,7 +713,7 @@ mod tests {
             .start_line(1)
             .language(Language::Rust)
             .build();
-        repo.save_nodes(&[module], NodeLabel::Module)
+        repo.save_nodes_stream(&[module], NodeLabel::Module)
             .expect("save_nodes");
         let searcher = FullTextSearcher::new(repo.connection());
         let results = searcher.search("parse", None, 100).expect("search");

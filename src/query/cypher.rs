@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn execute_returns_columns_and_rows() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("f1", "demo", "alpha", "demo.alpha"),
                 sample_function("f2", "demo", "beta", "demo.beta"),
@@ -223,7 +223,7 @@ mod tests {
                 &format!("demo.func_{i}"),
             ));
         }
-        repo.save_nodes(&nodes, NodeLabel::Function)
+        repo.save_nodes_stream(&nodes, NodeLabel::Function)
             .expect("save_nodes");
 
         let executor = CypherExecutor::new(repo.connection());
@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn execute_records_duration() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function("f1", "demo", "main", "demo.main")],
             NodeLabel::Function,
         )
@@ -318,7 +318,7 @@ mod tests {
     #[test]
     fn execute_multiple_columns_preserve_order() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function("f1", "demo", "main", "demo.main")],
             NodeLabel::Function,
         )
@@ -425,7 +425,7 @@ mod cached_tests {
     #[test]
     fn cached_read_query_miss_then_hit() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function("f1", "demo", "alpha", "demo.alpha")],
             NodeLabel::Function,
         )
@@ -453,7 +453,7 @@ mod cached_tests {
     #[test]
     fn cached_read_query_skips_storage_on_hit() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function("f1", "demo", "alpha", "demo.alpha")],
             NodeLabel::Function,
         )
@@ -489,7 +489,7 @@ mod cached_tests {
     #[test]
     fn cached_query_different_cypher_different_key() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function("f1", "demo", "alpha", "demo.alpha")],
             NodeLabel::Function,
         )
@@ -513,7 +513,7 @@ mod cached_tests {
     fn cached_query_with_none_cache_works_normally() {
         // CypherExecutor::new (no cache) behaves exactly as before.
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function("f1", "demo", "alpha", "demo.alpha")],
             NodeLabel::Function,
         )
@@ -530,7 +530,7 @@ mod cached_tests {
     #[test]
     fn cached_query_stores_correct_result() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function("f1", "demo", "alpha", "demo.alpha")],
             NodeLabel::Function,
         )

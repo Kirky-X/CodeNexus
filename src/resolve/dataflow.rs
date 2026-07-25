@@ -66,17 +66,16 @@ impl<'a> DataFlowResolver<'a> {
     /// - Variable reads: Reads edges (BR-TRACE-005).
     /// - Variable writes: Writes edges (BR-TRACE-006).
     ///
+    /// Edges are added directly to `graph` (no return value). This avoids the
+    /// anti-pattern of cloning each edge into both the graph and a return
+    /// `Vec<Edge>` that the production caller immediately drops.
+    ///
     /// # Arguments
     ///
     /// * `results` - The extraction results containing assignment, call, read,
     ///   and write information.
     /// * `graph` - The graph to add resolved DataFlows/Reads/Writes edges to.
-    ///
-    /// # Returns
-    ///
-    /// A vector of all resolved data flow edges (also added to `graph`).
-    pub fn resolve_dataflows(&self, results: &[ExtractResult], graph: &mut Graph) -> Vec<Edge> {
-        let mut edges = Vec::new();
+    pub fn resolve_dataflows(&self, results: &[ExtractResult], graph: &mut Graph) {
         for result in results {
             let file = &result.file_path;
             let language = result.language;
@@ -106,8 +105,7 @@ impl<'a> DataFlowResolver<'a> {
                 };
                 if let Some(mut edge) = edge {
                     edge.start_line = Some(assign.line);
-                    graph.add_edge(edge.clone());
-                    edges.push(edge);
+                    graph.add_edge(edge);
                 }
             }
 
@@ -144,17 +142,15 @@ impl<'a> DataFlowResolver<'a> {
                         .language(language)
                         .build();
                         graph.add_node(param_node);
-                        graph.add_edge(edge.clone());
-                        edges.push(edge);
+                        graph.add_edge(edge);
                     }
                 }
             }
         }
 
         // Process variable reads (BR-TRACE-005) and writes (BR-TRACE-006).
-        edges.extend(self.resolve_reads(results, graph));
-        edges.extend(self.resolve_writes(results, graph));
-        edges
+        self.resolve_reads(results, graph);
+        self.resolve_writes(results, graph);
     }
 
     /// Resolves a return assignment: `x = foo()` -> DataFlows edge from foo
@@ -275,16 +271,13 @@ impl<'a> DataFlowResolver<'a> {
     /// [`resolve_var_identifier`](Self::resolve_var_identifier). If the reader
     /// cannot be resolved, no edge is produced.
     ///
+    /// Edges are added directly to `graph` (no return value).
+    ///
     /// # Arguments
     ///
     /// * `results` - The extraction results containing read records.
     /// * `graph` - The graph to add resolved Reads edges to.
-    ///
-    /// # Returns
-    ///
-    /// A vector of all resolved Reads edges (also added to `graph`).
-    pub fn resolve_reads(&self, results: &[ExtractResult], graph: &mut Graph) -> Vec<Edge> {
-        let mut edges = Vec::new();
+    pub fn resolve_reads(&self, results: &[ExtractResult], graph: &mut Graph) {
         for result in results {
             let file = &result.file_path;
             let language = result.language;
@@ -303,11 +296,9 @@ impl<'a> DataFlowResolver<'a> {
                     .confidence_tier(ConfidenceTier::SameFile)
                     .build();
                 edge.start_line = Some(read.line);
-                graph.add_edge(edge.clone());
-                edges.push(edge);
+                graph.add_edge(edge);
             }
         }
-        edges
     }
 
     /// Resolves variable writes: function writes variable -> Writes edge
@@ -319,16 +310,13 @@ impl<'a> DataFlowResolver<'a> {
     /// [`resolve_var_identifier`](Self::resolve_var_identifier). If the writer
     /// cannot be resolved, no edge is produced.
     ///
+    /// Edges are added directly to `graph` (no return value).
+    ///
     /// # Arguments
     ///
     /// * `results` - The extraction results containing write records.
     /// * `graph` - The graph to add resolved Writes edges to.
-    ///
-    /// # Returns
-    ///
-    /// A vector of all resolved Writes edges (also added to `graph`).
-    pub fn resolve_writes(&self, results: &[ExtractResult], graph: &mut Graph) -> Vec<Edge> {
-        let mut edges = Vec::new();
+    pub fn resolve_writes(&self, results: &[ExtractResult], graph: &mut Graph) {
         for result in results {
             let file = &result.file_path;
             let language = result.language;
@@ -347,11 +335,9 @@ impl<'a> DataFlowResolver<'a> {
                     .confidence_tier(ConfidenceTier::SameFile)
                     .build();
                 edge.start_line = Some(write.line);
-                graph.add_edge(edge.clone());
-                edges.push(edge);
+                graph.add_edge(edge);
             }
         }
-        edges
     }
 
     /// Looks up a symbol's qualified name in the symbol table.
@@ -822,25 +808,32 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_dataflows(&results, &mut graph);
+        resolver.resolve_dataflows(&results, &mut graph);
 
-        assert_eq!(edges.len(), 3, "should create 3 data flow edges");
-        assert_eq!(graph.edge_count(), 3);
+        assert_eq!(graph.edge_count(), 3, "should create 3 data flow edges");
 
         // Verify edge types
-        assert!(edges.iter().all(|e| e.edge_type == EdgeType::DataFlows));
+        assert!(graph
+            .edges_view()
+            .all(|e| e.edge_type == EdgeType::DataFlows));
 
         // Verify return assignment edge: foo -> x
-        let return_edge = edges.iter().find(|e| e.source == "proj.a.rs.foo").unwrap();
+        let return_edge = graph
+            .edges_view()
+            .find(|e| e.source == "proj.a.rs.foo")
+            .unwrap();
         assert_eq!(return_edge.target, "proj.a.rs.x");
 
         // Verify variable assignment edge: z -> y
-        let var_edge = edges.iter().find(|e| e.source == "proj.a.rs.z").unwrap();
+        let var_edge = graph
+            .edges_view()
+            .find(|e| e.source == "proj.a.rs.z")
+            .unwrap();
         assert_eq!(var_edge.target, "proj.a.rs.y");
 
         // Verify arg pass edge: var -> bar.param0
-        let arg_edge = edges
-            .iter()
+        let arg_edge = graph
+            .edges_view()
             .find(|e| e.target == "proj.a.rs.bar.param0")
             .unwrap();
         assert_eq!(arg_edge.source, "proj.a.rs.var");
@@ -864,11 +857,12 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_dataflows(&results, &mut graph);
+        resolver.resolve_dataflows(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "should create 1 arg-pass edge");
+        assert_eq!(graph.edge_count(), 1, "should create 1 arg-pass edge");
         let param_qn = "proj.a.rs.foo.param0";
-        assert_eq!(edges[0].target, param_qn);
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, param_qn);
 
         let param_nodes = graph.nodes_by_label(NodeLabel::Parameter);
         assert_eq!(
@@ -897,12 +891,13 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_dataflows(&results, &mut graph);
+        resolver.resolve_dataflows(&results, &mut graph);
 
         // Only "x" is a valid identifier; "42" and "\"hello\"" are literals.
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].source, "proj.a.rs.x");
-        assert_eq!(edges[0].target, "proj.a.rs.foo.param2");
+        assert_eq!(graph.edge_count(), 1);
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.source, "proj.a.rs.x");
+        assert_eq!(edge.target, "proj.a.rs.foo.param2");
     }
 
     #[test]
@@ -920,10 +915,10 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_dataflows(&results, &mut graph);
+        resolver.resolve_dataflows(&results, &mut graph);
 
         assert!(
-            edges.is_empty(),
+            graph.edges.is_empty(),
             "unresolvable callee should produce no edge"
         );
     }
@@ -933,8 +928,8 @@ mod tests {
         let table = ProjectSymbolTable::new();
         let mut graph = Graph::new();
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_dataflows(&[], &mut graph);
-        assert!(edges.is_empty());
+        resolver.resolve_dataflows(&[], &mut graph);
+        assert!(graph.edges.is_empty());
     }
 
     #[test]
@@ -963,9 +958,9 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_dataflows(&results, &mut graph);
+        resolver.resolve_dataflows(&results, &mut graph);
 
-        assert_eq!(edges.len(), 2);
+        assert_eq!(graph.edge_count(), 2);
     }
 
     // --- AC-TRACE-002: x passed to foo param -> DataFlows edge ---
@@ -1025,10 +1020,10 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_reads(&results, &mut graph);
+        resolver.resolve_reads(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "should create 1 Reads edge");
-        let edge = &edges[0];
+        assert_eq!(graph.edge_count(), 1, "should create 1 Reads edge");
+        let edge = graph.edges_view().next().expect("edge should exist");
         assert_eq!(edge.edge_type, EdgeType::Reads);
         assert_eq!(edge.source, "proj.a.rs.foo");
         assert_eq!(edge.target, "proj.a.rs.x");
@@ -1038,7 +1033,6 @@ mod tests {
             edge.confidence
         );
         assert_eq!(edge.confidence_tier, ConfidenceTier::SameFile);
-        assert_eq!(graph.edge_count(), 1, "edge should be added to graph");
     }
 
     #[test]
@@ -1056,10 +1050,10 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_reads(&results, &mut graph);
+        resolver.resolve_reads(&results, &mut graph);
 
         assert!(
-            edges.is_empty(),
+            graph.edges.is_empty(),
             "unresolvable reader should produce no edge"
         );
         assert_eq!(graph.edge_count(), 0);
@@ -1080,10 +1074,10 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_reads(&results, &mut graph);
+        resolver.resolve_reads(&results, &mut graph);
 
         assert!(
-            edges.is_empty(),
+            graph.edges.is_empty(),
             "read with no reader_qn should produce no edge"
         );
     }
@@ -1104,10 +1098,11 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_reads(&results, &mut graph);
+        resolver.resolve_reads(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].target, "proj.a.rs.x");
+        assert_eq!(graph.edge_count(), 1);
+        let edge = graph.edges_view().next().expect("edge should exist");
+        assert_eq!(edge.target, "proj.a.rs.x");
     }
 
     // --- resolve_writes (BR-TRACE-006) ---
@@ -1128,10 +1123,10 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_writes(&results, &mut graph);
+        resolver.resolve_writes(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "should create 1 Writes edge");
-        let edge = &edges[0];
+        assert_eq!(graph.edge_count(), 1, "should create 1 Writes edge");
+        let edge = graph.edges_view().next().expect("edge should exist");
         assert_eq!(edge.edge_type, EdgeType::Writes);
         assert_eq!(edge.source, "proj.a.rs.foo");
         assert_eq!(edge.target, "proj.a.rs.y");
@@ -1141,7 +1136,6 @@ mod tests {
             edge.confidence
         );
         assert_eq!(edge.confidence_tier, ConfidenceTier::SameFile);
-        assert_eq!(graph.edge_count(), 1, "edge should be added to graph");
     }
 
     #[test]
@@ -1158,10 +1152,10 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_writes(&results, &mut graph);
+        resolver.resolve_writes(&results, &mut graph);
 
         assert!(
-            edges.is_empty(),
+            graph.edges.is_empty(),
             "unresolvable writer should produce no edge"
         );
         assert_eq!(graph.edge_count(), 0);
@@ -1182,10 +1176,10 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_writes(&results, &mut graph);
+        resolver.resolve_writes(&results, &mut graph);
 
         assert!(
-            edges.is_empty(),
+            graph.edges.is_empty(),
             "write with no writer_qn should produce no edge"
         );
     }
@@ -1214,15 +1208,15 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_dataflows(&results, &mut graph);
+        resolver.resolve_dataflows(&results, &mut graph);
 
         // Should contain at least one Reads and one Writes edge.
-        let reads_edges: Vec<_> = edges
-            .iter()
+        let reads_edges: Vec<_> = graph
+            .edges_view()
             .filter(|e| e.edge_type == EdgeType::Reads)
             .collect();
-        let writes_edges: Vec<_> = edges
-            .iter()
+        let writes_edges: Vec<_> = graph
+            .edges_view()
             .filter(|e| e.edge_type == EdgeType::Writes)
             .collect();
 
@@ -1263,10 +1257,16 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_dataflows(&results, &mut graph);
+        resolver.resolve_dataflows(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "only the DataFlows edge should be present");
-        assert!(edges.iter().all(|e| e.edge_type == EdgeType::DataFlows));
+        assert_eq!(
+            graph.edge_count(),
+            1,
+            "only the DataFlows edge should be present"
+        );
+        assert!(graph
+            .edges_view()
+            .all(|e| e.edge_type == EdgeType::DataFlows));
     }
 
     // --- Bug 2: resolve_var_identifier must NOT match local variables
@@ -1294,10 +1294,10 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_reads(&results, &mut graph);
+        resolver.resolve_reads(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "should create 1 READS edge");
-        let edge = &edges[0];
+        assert_eq!(graph.edge_count(), 1, "should create 1 READS edge");
+        let edge = graph.edges_view().next().expect("edge should exist");
         // Target must be in a.rs (same file as reader), not b.rs.
         assert!(
             edge.target.starts_with("proj.a.rs."),
@@ -1337,10 +1337,10 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_reads(&results, &mut graph);
+        resolver.resolve_reads(&results, &mut graph);
 
-        assert_eq!(edges.len(), 1, "should create 1 READS edge");
-        let edge = &edges[0];
+        assert_eq!(graph.edge_count(), 1, "should create 1 READS edge");
+        let edge = graph.edges_view().next().expect("edge should exist");
         // Target should be the exported const in b.rs.
         assert_eq!(
             edge.target, "proj.b.rs.CONFIG",
@@ -1476,10 +1476,10 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_dataflows(&results, &mut graph);
+        resolver.resolve_dataflows(&results, &mut graph);
 
-        let dataflow_edges: Vec<_> = edges
-            .iter()
+        let dataflow_edges: Vec<_> = graph
+            .edges_view()
             .filter(|e| e.edge_type == EdgeType::DataFlows)
             .collect();
         assert_eq!(
@@ -1523,10 +1523,12 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_dataflows(&results, &mut graph);
+        resolver.resolve_dataflows(&results, &mut graph);
 
         assert!(
-            edges.iter().all(|e| e.edge_type != EdgeType::DataFlows),
+            graph
+                .edges_view()
+                .all(|e| e.edge_type != EdgeType::DataFlows),
             "literal args should not produce DataFlows edges"
         );
     }
@@ -1551,10 +1553,12 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_dataflows(&results, &mut graph);
+        resolver.resolve_dataflows(&results, &mut graph);
 
         assert!(
-            edges.iter().all(|e| e.edge_type != EdgeType::DataFlows),
+            graph
+                .edges_view()
+                .all(|e| e.edge_type != EdgeType::DataFlows),
             "unresolvable callee should not produce DataFlows edge"
         );
         assert_eq!(graph.edge_count(), 0);
@@ -1579,12 +1583,11 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_dataflows(&results, &mut graph);
+        resolver.resolve_dataflows(&results, &mut graph);
 
         assert!(
-            edges.is_empty(),
-            "return assignment with unresolvable function should produce no edge: {:?}",
-            edges
+            graph.edges.is_empty(),
+            "return assignment with unresolvable function should produce no edge"
         );
         assert_eq!(graph.edge_count(), 0);
     }
@@ -1615,11 +1618,11 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_dataflows(&results, &mut graph);
+        resolver.resolve_dataflows(&results, &mut graph);
 
         // Only one DataFlows edge should be created (for foo → y).
-        let dataflow_edges: Vec<_> = edges
-            .iter()
+        let dataflow_edges: Vec<_> = graph
+            .edges_view()
             .filter(|e| e.edge_type == EdgeType::DataFlows)
             .collect();
         assert_eq!(
@@ -1651,10 +1654,10 @@ mod tests {
         let mut graph = Graph::new();
 
         let resolver = DataFlowResolver::new(&table, "proj");
-        let edges = resolver.resolve_dataflows(&results, &mut graph);
+        resolver.resolve_dataflows(&results, &mut graph);
 
-        let dataflow_edges: Vec<_> = edges
-            .iter()
+        let dataflow_edges: Vec<_> = graph
+            .edges_view()
             .filter(|e| e.edge_type == EdgeType::DataFlows)
             .collect();
         assert_eq!(

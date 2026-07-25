@@ -511,7 +511,7 @@ mod tests {
         // No FTS index is created in the test DB, so this exercises the
         // fallback path.
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("f1", "demo", "parse_file", "demo.parse_file", "/a.rs", 1),
                 sample_function("f2", "demo", "parse_line", "demo.parse_line", "/b.rs", 1),
@@ -532,7 +532,7 @@ mod tests {
     #[test]
     fn search_returns_results_sorted_by_relevance() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("f1", "demo", "parse", "demo.parse", "/a.rs", 1),
                 sample_function("f2", "demo", "parse_file", "demo.parse_file", "/a.rs", 5),
@@ -560,7 +560,7 @@ mod tests {
     #[test]
     fn search_filters_by_project() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f1",
                 "alpha",
@@ -572,7 +572,7 @@ mod tests {
             NodeLabel::Function,
         )
         .expect("save_nodes alpha");
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f2",
                 "beta",
@@ -607,7 +607,7 @@ mod tests {
                 i + 1,
             ));
         }
-        repo.save_nodes(&nodes, NodeLabel::Function)
+        repo.save_nodes_stream(&nodes, NodeLabel::Function)
             .expect("save_nodes");
 
         let searcher = FullTextSearcher::new(repo.connection());
@@ -640,7 +640,7 @@ mod tests {
     #[test]
     fn search_returns_empty_when_no_match() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f1",
                 "demo",
@@ -660,7 +660,7 @@ mod tests {
     #[test]
     fn search_populates_search_result_fields() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f1",
                 "demo",
@@ -741,7 +741,7 @@ mod tests {
         // covered above). When FTS is available, this exercises the
         // `try_fts_search` success path.
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f1",
                 "demo",
@@ -781,7 +781,7 @@ mod tests {
         // would also apply the filter, but FTS is typically unavailable in
         // tests).
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("f1", "alpha", "parse", "alpha.parse", "/a.rs", 1),
                 sample_function("f2", "beta", "parse", "beta.parse", "/b.rs", 1),
@@ -858,7 +858,7 @@ mod tests {
     #[test]
     fn fallback_contains_search_with_project_filter() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("f1", "alpha", "parse", "alpha.parse", "/a.rs", 1),
                 sample_function("f2", "beta", "parse", "beta.parse", "/b.rs", 1),
@@ -880,7 +880,7 @@ mod tests {
         // (snake_case) via tokenization. Without tokenization, a single
         // `CONTAINS('parseFile')` would miss `parse_file`.
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[
                 sample_function("f1", "demo", "parse_file", "demo.parse_file", "/a.rs", 1),
                 sample_function("f2", "demo", "read_input", "demo.read_input", "/b.rs", 1),
@@ -921,7 +921,7 @@ mod tests {
         // End-to-end: `search("parseFile")` should find `parse_file` through
         // whichever path is available (FTS or fallback).
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f1",
                 "demo",
@@ -1001,7 +1001,7 @@ mod tests {
         // R-search-001: saving a Struct named "Point" and searching "Point"
         // must return a result with label == "Struct".
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_symbol(
                 NodeLabel::Struct,
                 "s1",
@@ -1024,7 +1024,7 @@ mod tests {
     #[test]
     fn search_finds_enum_by_name() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_symbol(
                 NodeLabel::Enum,
                 "e1",
@@ -1047,7 +1047,7 @@ mod tests {
     #[test]
     fn search_finds_macro_by_name() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_symbol(
                 NodeLabel::Macro,
                 "m1",
@@ -1070,7 +1070,7 @@ mod tests {
     #[test]
     fn search_finds_namespace_by_name() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_symbol(
                 NodeLabel::Namespace,
                 "n1",
@@ -1093,7 +1093,7 @@ mod tests {
     #[test]
     fn search_finds_typedef_by_name() {
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_symbol(
                 NodeLabel::Typedef,
                 "t1",
@@ -1118,7 +1118,7 @@ mod tests {
         // R-search-001: saving Function + Struct + Enum with a shared name
         // token and searching that token must return all three label types.
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f1",
                 "demo",
@@ -1130,7 +1130,7 @@ mod tests {
             NodeLabel::Function,
         )
         .expect("save_nodes function");
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_symbol(
                 NodeLabel::Struct,
                 "s1",
@@ -1143,7 +1143,7 @@ mod tests {
             NodeLabel::Struct,
         )
         .expect("save_nodes struct");
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_symbol(
                 NodeLabel::Enum,
                 "e1",
@@ -1183,7 +1183,7 @@ mod tests {
         // fallback_contains_search: when a per-table CONTAINS query fails
         // (table dropped), the loop skips it and continues.
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_function(
                 "f1",
                 "demo",
@@ -1330,7 +1330,7 @@ mod tests {
         // Cover searching for a Module-labeled node (line_expr = "NULL"
         // branch in fallback_contains_search for Module which has no startLine).
         let repo = fresh_repo();
-        repo.save_nodes(
+        repo.save_nodes_stream(
             &[sample_symbol(
                 NodeLabel::Module,
                 "mod1",

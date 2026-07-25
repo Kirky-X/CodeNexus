@@ -22,7 +22,7 @@ use csv::WriterBuilder;
 use super::connection::StorageConnection;
 use super::error::{Result, StorageError};
 use super::schema::{escape_identifier, node_table_columns, relation_table_columns};
-use crate::model::{Edge, Node, NodeLabel};
+use crate::model::{Edge, EdgeType, Node, NodeLabel};
 
 /// Tab character used as the CSV delimiter.
 ///
@@ -273,14 +273,38 @@ where
         .delimiter(CSV_DELIMITER)
         .from_writer(writer);
     csv_writer.write_record(columns)?;
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // P-06: dedup key is `(&source, &target, edge_type, start_line)` — borrowed
+    // from each `&Edge` instead of allocating a `format!("{}_{}_{}_{}", ...)`
+    // String per edge. Pre-P-06 built a `HashSet<String>` where each insert
+    // allocated ~80 bytes (source + target + type + line + underscores) for
+    // every edge in the stream. For a 1 M-edge repo this was ~80 MB of pure
+    // dedup-key allocations, all freed at function exit but contributing to
+    // peak RSS during CSV generation.
+    //
+    // The tuple form borrows `edge.source` and `edge.target` (which are
+    // `String` = `NodeId`) by reference for the duration of the loop iteration;
+    // `EdgeType` is `Copy` (derives `Hash + Eq`); `start_line` is `u32`. The
+    // HashSet stores `(Option<&str>, ...)`-free tuples — `&str` borrows into
+    // the edge which outlives the `insert` call.
+    //
+    // Correctness: this matches `edge_id`'s dedup contract
+    // (`{source}_{target}_{type}_{start_line}`) — same four fields, same
+    // equality semantics. The `edge_id` String is still computed inside
+    // `edge_to_row` for the CSV `id` column; only the dedup key changes.
+    let mut seen: std::collections::HashSet<(&str, &str, EdgeType, u32)> =
+        std::collections::HashSet::new();
     let mut skipped = 0usize;
     let mut written = 0usize;
     let mut total = 0usize;
     for edge in edges {
         total += 1;
-        let id = edge_id(edge);
-        if !seen.insert(id) {
+        let key = (
+            edge.source.as_str(),
+            edge.target.as_str(),
+            edge.edge_type,
+            edge.start_line.unwrap_or(0),
+        );
+        if !seen.insert(key) {
             skipped += 1;
             continue;
         }
@@ -720,7 +744,7 @@ pub fn edge_to_row(edge: &Edge) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{EdgeType, Language};
+    use crate::model::Language;
 
     fn sample_function_node() -> Node {
         Node::builder(NodeLabel::Function, "main", "proj.src.main")
