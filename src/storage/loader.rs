@@ -187,11 +187,17 @@ where
             skipped += 1;
             continue;
         }
-        let row: Vec<String> = node_to_row(node, label)
-            .into_iter()
-            .map(sanitize_for_ladybugdb)
-            .collect();
-        csv_writer.write_record(&row)?;
+        // P-03: feed `node_to_row`'s `Vec<String>` directly to `write_record`
+        // via `into_iter().map(sanitize_for_ladybugdb)`. Eliminates the
+        // per-node `Vec<String>` collect that pre-P-03 allocated (~13 fields
+        // × 24 B String struct = ~310 B/node, ~31 MB peak on 100k-node repos).
+        // The csv crate consumes the iterator field-by-field via
+        // `impl IntoIterator<Item = impl AsRef<[u8]>>` (`String: AsRef<[u8]>`).
+        csv_writer.write_record(
+            node_to_row(node, label)
+                .into_iter()
+                .map(sanitize_for_ladybugdb),
+        )?;
         written += 1;
     }
     csv_writer.flush()?;
@@ -308,11 +314,15 @@ where
             skipped += 1;
             continue;
         }
-        let row: Vec<String> = edge_to_row(edge)
-            .into_iter()
-            .map(sanitize_for_ladybugdb)
-            .collect();
-        csv_writer.write_record(&row)?;
+        // P-03: feed `edge_to_row`'s `Vec<String>` directly to `write_record`
+        // via `into_iter().map(sanitize_for_ladybugdb)`. Eliminates the
+        // per-edge `Vec<String>` collect that pre-P-03 allocated (9 String
+        // structs × 24 B = ~216 B/edge, ~216 MB peak on 1M-edge repos).
+        // The csv crate consumes the iterator field-by-field via
+        // `impl IntoIterator<Item = impl AsRef<[u8]>>` (`String: AsRef<[u8]>`);
+        // serialized bytes are identical to the `Vec<String>` form (verified
+        // by `p03_*_byte_identical_*` tests).
+        csv_writer.write_record(edge_to_row(edge).into_iter().map(sanitize_for_ladybugdb))?;
         written += 1;
     }
     csv_writer.flush()?;
@@ -2095,5 +2105,275 @@ mod tests {
         assert!(debug.contains("written"));
         assert!(debug.contains("skipped_duplicates"));
         assert!(debug.contains("total"));
+    }
+
+    // --- P-03 regression: write_*_csv_stream byte-level equivalence ---
+
+    /// Reference implementation of `write_edges_csv_stream` using the
+    /// pre-P-03 `Vec<String>` collect pattern. Used by P-03 regression tests
+    /// to verify that the iterator-based implementation produces byte-identical
+    /// CSV output.
+    ///
+    /// P-03 replaces `let row: Vec<String> = ...collect(); csv_writer.write_record(&row)?;`
+    /// with `csv_writer.write_record(edge_to_row(edge).into_iter().map(sanitize_for_ladybugdb))?;`
+    /// — both forms feed the same `String` values to `csv::Writer::write_record`,
+    /// so the serialized bytes must match exactly.
+    ///
+    /// SYNC: this reference impl mirrors the production dedup logic in
+    /// `write_edges_csv_stream` (HashSet key = `(&source, &target, EdgeType,
+    /// start_line)`). If the production dedup key changes, update this
+    /// reference too — otherwise the byte-identical regression tests would
+    /// pass even when production diverges. (arch-review LOW-6.)
+    fn write_edges_csv_stream_via_vec_reference<'a, W: Write, I>(
+        edges: I,
+        writer: W,
+    ) -> Result<EdgeCsvStats>
+    where
+        I: IntoIterator<Item = &'a Edge>,
+    {
+        let columns = relation_table_columns();
+        let mut csv_writer = WriterBuilder::new()
+            .delimiter(CSV_DELIMITER)
+            .from_writer(writer);
+        csv_writer.write_record(columns)?;
+        let mut seen: std::collections::HashSet<(&str, &str, EdgeType, u32)> =
+            std::collections::HashSet::new();
+        let mut skipped = 0usize;
+        let mut written = 0usize;
+        let mut total = 0usize;
+        for edge in edges {
+            total += 1;
+            let key = (
+                edge.source.as_str(),
+                edge.target.as_str(),
+                edge.edge_type,
+                edge.start_line.unwrap_or(0),
+            );
+            if !seen.insert(key) {
+                skipped += 1;
+                continue;
+            }
+            // Pre-P-03 pattern: collect into Vec<String> before write_record.
+            let row: Vec<String> = edge_to_row(edge)
+                .into_iter()
+                .map(sanitize_for_ladybugdb)
+                .collect();
+            csv_writer.write_record(&row)?;
+            written += 1;
+        }
+        csv_writer.flush()?;
+        Ok(EdgeCsvStats {
+            written,
+            skipped_duplicates: skipped,
+            total,
+        })
+    }
+
+    /// Reference implementation of `write_nodes_csv_stream` using the
+    /// pre-P-03 `Vec<String>` collect pattern. Used by P-03 regression tests.
+    ///
+    /// SYNC: this reference impl mirrors the production dedup logic in
+    /// `write_nodes_csv_stream` (HashSet key = `node.id.as_str()`). If the
+    /// production dedup key changes, update this reference too — otherwise
+    /// the byte-identical regression tests would pass even when production
+    /// diverges. (arch-review LOW-6.)
+    fn write_nodes_csv_stream_via_vec_reference<'a, W: Write, I>(
+        nodes: I,
+        label: NodeLabel,
+        writer: W,
+    ) -> Result<NodeCsvStats>
+    where
+        I: IntoIterator<Item = &'a Node>,
+    {
+        let columns = node_table_columns(label);
+        let mut csv_writer = WriterBuilder::new()
+            .delimiter(CSV_DELIMITER)
+            .from_writer(writer);
+        csv_writer.write_record(columns)?;
+        let mut seen: std::collections::HashSet<&'a str> = std::collections::HashSet::new();
+        let mut skipped = 0usize;
+        let mut written = 0usize;
+        let mut total = 0usize;
+        for node in nodes {
+            total += 1;
+            if !seen.insert(node.id.as_str()) {
+                skipped += 1;
+                continue;
+            }
+            // Pre-P-03 pattern: collect into Vec<String> before write_record.
+            let row: Vec<String> = node_to_row(node, label)
+                .into_iter()
+                .map(sanitize_for_ladybugdb)
+                .collect();
+            csv_writer.write_record(&row)?;
+            written += 1;
+        }
+        csv_writer.flush()?;
+        Ok(NodeCsvStats {
+            written,
+            skipped_duplicates: skipped,
+            total,
+        })
+    }
+
+    #[test]
+    fn p03_write_edges_csv_stream_byte_identical_to_vec_collect_reference() {
+        // P-03 regression: the iterator-based write_record must produce the
+        // exact same bytes as the pre-P-03 Vec<String> collect pattern.
+        // Construct 5 edges (including 1 duplicate) covering Calls/Includes
+        // types and various start_line values.
+        let edges = [
+            Edge::builder("src_fn", "tgt_fn", EdgeType::Calls, "demo")
+                .start_line(10)
+                .build(),
+            Edge::builder("src_fn", "tgt_fn", EdgeType::Calls, "demo")
+                .start_line(10) // duplicate of edges[0]
+                .build(),
+            Edge::builder("module_a", "module_b", EdgeType::Includes, "demo")
+                .start_line(1)
+                .build(),
+            Edge::builder("fn_x", "fn_y", EdgeType::Calls, "demo").build(),
+            Edge::builder("cls_a", "cls_b", EdgeType::Extends, "demo")
+                .start_line(42)
+                .build(),
+        ];
+
+        let mut buf_new = Vec::new();
+        let stats_new = write_edges_csv_stream(edges.iter(), &mut buf_new).expect("new stream");
+
+        let mut buf_ref = Vec::new();
+        let stats_ref =
+            write_edges_csv_stream_via_vec_reference(edges.iter(), &mut buf_ref).expect("ref");
+
+        // Byte-level equality — the core P-03 invariant.
+        assert_eq!(
+            buf_new, buf_ref,
+            "P-03 iterator version must produce byte-identical output to Vec<String> reference"
+        );
+        // Stats must also match.
+        assert_eq!(stats_new, stats_ref);
+        // Sanity: 4 written, 1 skipped, 5 total (proves dedup ran).
+        assert_eq!(stats_new.written, 4);
+        assert_eq!(stats_new.skipped_duplicates, 1);
+        assert_eq!(stats_new.total, 5);
+    }
+
+    #[test]
+    fn p03_write_edges_csv_stream_empty_input_matches_reference() {
+        // P-03 regression: empty input must produce identical header-only output.
+        let edges: [Edge; 0] = [];
+
+        let mut buf_new = Vec::new();
+        let stats_new = write_edges_csv_stream(edges.iter(), &mut buf_new).expect("new stream");
+
+        let mut buf_ref = Vec::new();
+        let stats_ref =
+            write_edges_csv_stream_via_vec_reference(edges.iter(), &mut buf_ref).expect("ref");
+
+        assert_eq!(buf_new, buf_ref);
+        assert_eq!(stats_new, stats_ref);
+        assert_eq!(stats_new.written, 0);
+        assert_eq!(stats_new.total, 0);
+    }
+
+    #[test]
+    fn p03_write_edges_csv_stream_sanitization_unchanged() {
+        // P-03 regression: sanitization (backslash, quote, newline, tab) must
+        // still apply per-field. Construct an edge whose source/target contain
+        // characters that trigger sanitize_for_ladybugdb.
+        let edge = Edge::builder("src\\path", "tgt\"quote", EdgeType::Calls, "demo")
+            .start_line(5)
+            .build();
+        let edges = [edge];
+
+        let mut buf_new = Vec::new();
+        let _ = write_edges_csv_stream(edges.iter(), &mut buf_new).expect("new stream");
+
+        let mut buf_ref = Vec::new();
+        let _ = write_edges_csv_stream_via_vec_reference(edges.iter(), &mut buf_ref).expect("ref");
+
+        assert_eq!(buf_new, buf_ref);
+        // Verify sanitization actually ran: backslashes converted to '/',
+        // double-quotes converted to single-quotes.
+        let csv = String::from_utf8(buf_new).expect("utf8");
+        assert!(
+            csv.contains("src/path"),
+            "backslash must be sanitized to forward slash"
+        );
+        assert!(
+            csv.contains("tgt'quote"),
+            "double quote must be sanitized to single quote"
+        );
+        assert!(
+            !csv.contains("src\\path"),
+            "no raw backslash should remain in source field"
+        );
+    }
+
+    #[test]
+    fn p03_write_nodes_csv_stream_byte_identical_to_vec_collect_reference() {
+        // P-03 regression: write_nodes_csv_stream must also produce
+        // byte-identical output to the Vec<String> reference.
+        let n1 = sample_function_node();
+        let n2 = Node::builder(NodeLabel::Function, "helper", "proj.helper")
+            .id("func_002")
+            .project("demo")
+            .file_path("/src/helper.rs")
+            .start_line(30)
+            .end_line(40)
+            .language(Language::Rust)
+            .signature("fn helper() -> u64")
+            .return_type("u64")
+            .build();
+        let n3 = Node::builder(NodeLabel::Function, "main", "proj.main")
+            .id("func_001") // duplicate of n1
+            .project("demo")
+            .build();
+        let nodes = [&n1, &n2, &n3];
+
+        let mut buf_new = Vec::new();
+        let stats_new =
+            write_nodes_csv_stream(nodes.iter().copied(), NodeLabel::Function, &mut buf_new)
+                .expect("new stream");
+
+        let mut buf_ref = Vec::new();
+        let stats_ref = write_nodes_csv_stream_via_vec_reference(
+            nodes.iter().copied(),
+            NodeLabel::Function,
+            &mut buf_ref,
+        )
+        .expect("ref");
+
+        assert_eq!(
+            buf_new, buf_ref,
+            "P-03 iterator version must produce byte-identical output to Vec<String> reference"
+        );
+        assert_eq!(stats_new, stats_ref);
+        // 2 written (n1 + n2), 1 skipped (n3 dup of n1), 3 total.
+        assert_eq!(stats_new.written, 2);
+        assert_eq!(stats_new.skipped_duplicates, 1);
+        assert_eq!(stats_new.total, 3);
+    }
+
+    #[test]
+    fn p03_write_nodes_csv_stream_empty_input_matches_reference() {
+        // P-03 regression: empty input must produce identical header-only output.
+        let nodes: [&Node; 0] = [];
+
+        let mut buf_new = Vec::new();
+        let stats_new =
+            write_nodes_csv_stream(nodes.iter().copied(), NodeLabel::Function, &mut buf_new)
+                .expect("new stream");
+
+        let mut buf_ref = Vec::new();
+        let stats_ref = write_nodes_csv_stream_via_vec_reference(
+            nodes.iter().copied(),
+            NodeLabel::Function,
+            &mut buf_ref,
+        )
+        .expect("ref");
+
+        assert_eq!(buf_new, buf_ref);
+        assert_eq!(stats_new, stats_ref);
     }
 }

@@ -426,7 +426,7 @@ LIMIT 50
             codenexus::model::Node::builder(codenexus::model::NodeLabel::Project, "demo", "demo")
                 .id("proj-1")
                 .build();
-        repo.save_nodes(&[project], codenexus::model::NodeLabel::Project)
+        repo.save_nodes_stream(&[project], codenexus::model::NodeLabel::Project)
             .expect("save_nodes");
         drop(repo);
 
@@ -482,7 +482,7 @@ LIMIT 50
         )
         .id("np-1")
         .build();
-        repo.save_nodes(&[project], codenexus::model::NodeLabel::Project)
+        repo.save_nodes_stream(&[project], codenexus::model::NodeLabel::Project)
             .expect("save_nodes");
         drop(repo);
 
@@ -507,7 +507,7 @@ LIMIT 50
             codenexus::model::Node::builder(codenexus::model::NodeLabel::Project, "alpha", "alpha")
                 .id("proj-alpha-id")
                 .build();
-        repo.save_nodes(&[project], codenexus::model::NodeLabel::Project)
+        repo.save_nodes_stream(&[project], codenexus::model::NodeLabel::Project)
             .expect("save_nodes");
         drop(repo);
 

@@ -486,7 +486,7 @@ mod tests {
         )
         .id("uuid-7-a")
         .build();
-        repo.save_nodes(&[project], codenexus::model::NodeLabel::Project)
+        repo.save_nodes_stream(&[project], codenexus::model::NodeLabel::Project)
             .unwrap();
         let conn = repo.connection();
         let id = lookup_project_id(conn, "sample-a").expect("lookup_project_id");
@@ -560,9 +560,9 @@ mod tests {
         .start_line(1)
         .end_line(3)
         .build();
-        repo.save_nodes(&[alpha, beta], codenexus::model::NodeLabel::Project)
+        repo.save_nodes_stream(&[alpha, beta], codenexus::model::NodeLabel::Project)
             .unwrap();
-        repo.save_nodes(&[f1, f2, f3], codenexus::model::NodeLabel::Function)
+        repo.save_nodes_stream(&[f1, f2, f3], codenexus::model::NodeLabel::Function)
             .unwrap();
         drop(repo);
 

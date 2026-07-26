@@ -54,6 +54,16 @@ impl From<IndexResult> for IndexOutput {
     }
 }
 
+/// Maximum number of LSP providers that can be wired in [`build_lsp_providers`].
+///
+/// This const bounds the concurrency of [`start_active_providers_parallel`]:
+/// that function spawns one thread per active provider without a semaphore,
+/// relying on the bound being small (≤8) and LSP startup being IO-bound.
+/// Adding a 9th provider without raising this const would cause the assert
+/// in `build_lsp_providers` to fire (arch-review LOW-3).
+#[cfg(feature = "lsp")]
+const MAX_LSP_PROVIDERS: usize = 8;
+
 #[cfg(feature = "lsp")]
 fn build_lsp_providers() -> Vec<(&'static str, Box<dyn LspProvider>)> {
     use crate::lsp::{
@@ -61,7 +71,7 @@ fn build_lsp_providers() -> Vec<(&'static str, Box<dyn LspProvider>)> {
         TypeScriptLanguageClient,
     };
 
-    vec![
+    let providers: Vec<(&'static str, Box<dyn LspProvider>)> = vec![
         ("rs", Box::new(RustAnalyzerClient::new())),
         ("py", Box::new(PyrightClient::new())),
         ("c", Box::new(ClangdClient::new())),
@@ -70,7 +80,17 @@ fn build_lsp_providers() -> Vec<(&'static str, Box<dyn LspProvider>)> {
         ("ts", Box::new(TypeScriptLanguageClient::new())),
         ("f90", Box::new(FortlsClient::new())),
         ("java", Box::new(JdtlsClient::new())),
-    ]
+    ];
+    // arch-review LOW-3: assert the semaphore-free bound expected by
+    // `start_active_providers_parallel`. Adding a new provider without
+    // raising MAX_LSP_PROVIDERS will trip this assert at startup.
+    assert!(
+        providers.len() <= MAX_LSP_PROVIDERS,
+        "MAX_LSP_PROVIDERS={} but {} providers wired; raise the const or remove a provider",
+        MAX_LSP_PROVIDERS,
+        providers.len()
+    );
+    providers
 }
 
 #[cfg(feature = "lsp")]
@@ -130,6 +150,340 @@ fn build_semantic_type_update(id: &str, project: &str, text: &str) -> String {
     )
 }
 
+/// Batch size for LSP hover `semantic_type` UPDATE statements (P-01).
+///
+/// 500 rows per UNWIND batch balances round-trip reduction against statement
+/// size. LadybugDB's Cypher parser has no hard limit on UNWIND list length,
+/// but extremely long statements (>1 MB) hit the embedded channel's buffer
+/// threshold and degrade throughput. 500 rows × ~80 bytes per `{id, sem}` map
+/// ≈ 40 KB per statement — well within the buffer.
+#[cfg(feature = "lsp")]
+const LSP_HOVER_BATCH_SIZE: usize = 500;
+
+/// Builds a single Cypher `UNWIND ... MATCH ... SET` statement that updates
+/// `semantic_type` for all `(id, sem)` pairs in `batch` in one round-trip
+/// (P-01 — batch UPDATE replaces per-symbol `execute`).
+///
+/// Returns an empty `String` when `batch` is empty so the caller can skip
+/// the `execute` call entirely (saves one round-trip on tail flush when the
+/// total symbol count is an exact multiple of [`LSP_HOVER_BATCH_SIZE`]).
+///
+/// # Statement shape
+///
+/// ```cypher
+/// UNWIND [
+///   {id: 'sym1', sem: 'fn foo() -> Result<T, E>'},
+///   {id: 'sym2', sem: 'struct Bar { x: i32 }'},
+///   ...
+/// ] AS row
+/// MATCH (n {id: row.id, project: 'my-project'})
+/// SET n.semantic_type = row.sem;
+/// ```
+///
+/// # Escaping
+///
+/// `id`, `sem`, and `project` are all escaped via [`escape_cypher_string`].
+/// Single quotes become `\'`, backslashes are doubled, control chars become
+/// `\n`/`\r`/`\t`. Without escaping the Cypher string literal would terminate
+/// early on any embedded quote and the statement would be a syntax error.
+///
+/// # Why UNWIND instead of multi-`SET`
+///
+/// LadybugDB's Cypher subset does not support `CASE WHEN` expressions or
+/// multi-row `SET` clauses outside of `UNWIND`. The `UNWIND [{...}, {...}] AS
+/// row` form is the only way to update N rows with N different values in a
+/// single statement. Each list element is a Cypher map; `row.id` and
+/// `row.sem` are field accesses on the aliased row variable.
+///
+/// # Why not `UNION`
+///
+/// `UNION` would also batch updates but LadybugDB does not support `UNION` /
+/// `UNION ALL` in its Cypher subset (see [`build_symbol_queries`]'s P-09
+/// comment). `UNWIND` is supported and is the idiomatic batch form.
+///
+/// [`escape_cypher_string`]: crate::storage::schema::escape_cypher_string
+#[cfg(feature = "lsp")]
+fn build_batch_semantic_type_update(batch: &[(String, String)], project: &str) -> String {
+    use crate::storage::schema::escape_cypher_string;
+    use std::fmt::Write as _;
+
+    if batch.is_empty() {
+        return String::new();
+    }
+    let proj = escape_cypher_string(project);
+    // Dynamic capacity estimate (perf-review M-03): 16 bytes fixed overhead
+    // per `{id: '', sem: ''}` map + actual id/sem lengths (post-escape).
+    // Pre-size to avoid reallocation; overshoot by ~10% for separator bytes.
+    let estimated: usize = batch
+        .iter()
+        .map(|(id, sem)| id.len() + sem.len() + 16)
+        .sum::<usize>()
+        + batch.len()
+        + 80; // UNWIND/MATCH/SET wrapper overhead
+    let mut rows = String::with_capacity(estimated);
+    for (i, (id, sem)) in batch.iter().enumerate() {
+        if i > 0 {
+            rows.push_str(", ");
+        }
+        // write! directly into `rows` (perf-review M-01): avoids the temporary
+        // String allocation that `format!` would produce per entry. For 500
+        // entries per batch this saves ~500 × ~100 B = ~50 KB of churn per
+        // flush, compounding to ~10 MB across 100k symbols.
+        let _ = write!(
+            rows,
+            "{{id: '{}', sem: '{}'}}",
+            escape_cypher_string(id),
+            escape_cypher_string(sem),
+        );
+    }
+    format!(
+        "UNWIND [{rows}] AS row \
+         MATCH (n {{id: row.id, project: '{proj}'}}) \
+         SET n.semantic_type = row.sem;"
+    )
+}
+
+/// Flushes a batch of `(id, semantic_type)` pairs to the database (P-01).
+///
+/// First attempts a single batch `UNWIND ... SET` via [`build_batch_semantic_type_update`].
+/// If the batch statement fails (e.g. LadybugDB's Cypher parser rejects the
+/// `UNWIND` form, or a transient connection error), falls back to per-row
+/// `execute(&build_semantic_type_update(...))` so that a single bad row does
+/// not poison the entire batch — each successful per-row UPDATE increments
+/// `*enhanced`, each failure increments `*skipped`.
+///
+/// The `exec` closure abstracts the SQL execution so this function is
+/// unit-testable without a live LadybugDB connection. Production callers
+/// pass `|q| repo.connection().execute(q)`; tests pass a counter closure
+/// that records calls and returns canned `Result`s.
+///
+/// # Arguments
+///
+/// * `exec` - Closure that executes a Cypher statement. Called once for the
+///   batch (on success) or once per row (on batch failure + fallback).
+/// * `batch` - Mutable buffer of `(id, sem)` pairs. Always cleared on return.
+/// * `project` - Project name for the `MATCH (n {id:..., project: '...'})`
+///   clause. Escaped via [`escape_cypher_string`].
+/// * `enhanced` - Counter incremented per successful UPDATE (batch or per-row).
+/// * `skipped` - Counter incremented per failed per-row UPDATE (batch failure
+///   itself does not increment skipped — only individual row failures do).
+///
+/// # Empty batch
+///
+/// Returns without calling `exec`. This lets callers unconditionally call
+/// `flush_semantic_type_batch` after the hover loop without worrying about
+/// the tail flush on an exact-multiple-of-batch-size symbol count.
+///
+/// # Batch success path
+///
+/// When the batch `execute` succeeds, `*enhanced += batch.len()` (all rows
+/// updated in one statement). `exec` is called exactly once.
+///
+/// # Batch failure → per-row fallback (Rule 12: failure must be visible)
+///
+/// When the batch `execute` fails, an `[warn]` line is emitted to stderr
+/// with the error detail so operators can diagnose why the batch path did
+/// not fire (e.g. "LadybugDB version X does not support UNWIND"). The
+/// function then iterates `batch` and calls
+/// `exec(&build_semantic_type_update(id, project, sem))` per row. Each
+/// success increments `*enhanced`, each failure increments `*skipped`. This
+/// is O(N) round-trips but only triggers when the batch path is unsupported
+/// — once LadybugDB stabilizes `UNWIND` support the fallback becomes dead
+/// code (defensive, kept for forward compatibility).
+///
+/// [`escape_cypher_string`]: crate::storage::schema::escape_cypher_string
+#[cfg(feature = "lsp")]
+fn flush_semantic_type_batch<F>(
+    exec: F,
+    batch: &mut Vec<(String, String)>,
+    project: &str,
+    enhanced: &mut u32,
+    skipped: &mut u32,
+) where
+    F: Fn(&str) -> crate::storage::Result<()>,
+{
+    if batch.is_empty() {
+        return;
+    }
+    let processed = batch.len();
+    let stmt = build_batch_semantic_type_update(batch, project);
+    // Defensive: empty statement only happens when batch was empty (already
+    // returned above). If a future bug produces an empty statement for a
+    // non-empty batch, skip exec and clear batch rather than calling exec("").
+    // (arch-review LOW-5: `debug_assert` is compiled out in release, so the
+    // explicit `if` is the production guard.)
+    if stmt.is_empty() {
+        debug_assert!(false, "non-empty batch must produce non-empty statement");
+        batch.clear();
+        return;
+    }
+    match exec(&stmt) {
+        Ok(()) => {
+            // Batch path: one round-trip updated all rows.
+            // `processed` is bounded by `LSP_HOVER_BATCH_SIZE = 500` (compile-time
+            // const), so `as u32` cannot overflow (perf-review L-02).
+            *enhanced += processed as u32;
+        }
+        Err(e) => {
+            // Rule 12: batch failure must be visible — emit warning with the
+            // error detail so operators can diagnose why UNWIND path was skipped.
+            // (arch-review MEDIUM-3: previously this branch was silent.)
+            eprintln!(
+                "[warn] P-01 batch UNWIND failed ({e:?}), falling back to per-row execute for {processed} symbols"
+            );
+            // Fallback: per-row execute. LadybugDB's UNWIND support is spotty across
+            // versions; this path guarantees forward compatibility. Each row gets its
+            // own build_semantic_type_update + execute, with per-row success/failure
+            // accounting. The batch statement's failure is NOT counted as a skip —
+            // only individual per-row failures are (a batch failure is an executor
+            // issue, not a symbol issue).
+            for (id, sem) in batch.iter() {
+                let row_stmt = build_semantic_type_update(id, project, sem);
+                if exec(&row_stmt).is_ok() {
+                    *enhanced += 1;
+                } else {
+                    *skipped += 1;
+                }
+            }
+        }
+    }
+    batch.clear();
+}
+
+/// Starts each LSP provider whose extension is in `active_exts` in parallel
+/// using `std::thread::scope` (P-04).
+///
+/// Pre-P-04 the startup loop was serial: `for (ext, p) in &providers {
+/// p.start(workspace) }`. For polyglot repos this summed per-provider startup
+/// times (rust-analyzer ~3-8 s + clangd ~1-3 s + gopls ~2-5 s + … = ~20-40 s
+/// worst case). `thread::scope` spawns one thread per active provider so all
+/// `start()` calls run concurrently; the main thread blocks at scope exit
+/// until all spawned threads have joined.
+///
+/// # Concurrency bound
+///
+/// No semaphore is used. At most 8 LSP providers can be active (rs, py, c,
+/// cpp, go, ts, f90, java — the wired set in [`build_lsp_providers`]). LSP
+/// startup is IO-bound (waiting on subprocess pipes for `initialize`/
+/// `initialized` handshake), so 8 threads on an 8-core host does not
+/// oversubscribe CPU. A semaphore would add complexity without benefit.
+///
+/// # Failure semantics
+///
+/// A provider whose `start()` returns `Err(LspError::ServerStart)` is logged
+/// to stderr as a warning and counted as not started — the function
+/// continues with the remaining providers (degraded mode, same as pre-P-04).
+/// A provider whose `start()` **panics** is caught via
+/// `std::panic::catch_unwind` inside the spawned thread; the panic is
+/// converted to a `LspError::ServerStart` message and logged, so a buggy
+/// provider cannot abort the entire scope (which would otherwise propagate
+/// the panic to the main thread and abort `enhance_with_lsp`).
+///
+/// # Returns
+///
+/// The number of providers whose `start()` returned `Ok(())`. Always
+/// `<= active_exts.len()`.
+///
+/// # Shutdown contract for panicked providers (arch-review MEDIUM-2)
+///
+/// When a provider's `start()` panics, the panic is caught via
+/// `catch_unwind` and converted to `LspError::ServerStart`. The provider
+/// instance is **not** destroyed — it remains in the `providers` Vec and
+/// will be passed to `LspProvider::shutdown()` at the end of
+/// `enhance_with_lsp`. The `LspProvider::shutdown` trait contract already
+/// requires "safe to call on a client that was never successfully started";
+/// callers MUST additionally ensure their `shutdown()` implementation is
+/// safe to call after a `start()` that panicked mid-initialization (e.g.
+/// the impl must not assume `Mutex<Option<Session>>` is in any specific
+/// state, and must not unwrap `Option` fields that may not have been set).
+/// Current `RustAnalyzerClient` / `PyrightClient` / `ClangdClient` /
+/// `GoplsClient` / `TypeScriptLanguageClient` / `FortlsClient` /
+/// `JdtlsClient` all use `Mutex<Option<Session>>` initialized to `None`
+/// and `shutdown()` short-circuits on `None`, so panic-then-shutdown is
+/// safe by construction today.
+#[cfg(feature = "lsp")]
+fn start_active_providers_parallel(
+    providers: &[(&'static str, Box<dyn LspProvider>)],
+    active_exts: &std::collections::HashSet<&'static str>,
+    workspace: &Path,
+) -> u32 {
+    use crate::lsp::LspError;
+
+    // Collect references to (ext, provider) pairs that need starting.
+    // `&Box<dyn LspProvider>` coerces to `&dyn LspProvider`; the borrow is
+    // `Send` because `dyn LspProvider: Sync` (trait bound).
+    let active: Vec<(&'static str, &dyn LspProvider)> = providers
+        .iter()
+        .filter(|(ext, _)| active_exts.contains(ext))
+        .map(|(ext, p)| (*ext, p.as_ref()))
+        .collect();
+
+    if active.is_empty() {
+        return 0;
+    }
+
+    // Spawn one thread per active provider. `thread::scope` guarantees all
+    // spawned threads are joined before the closure returns, so `results`
+    // is fully populated when we read it.
+    let results: Vec<(&'static str, Result<(), LspError>)> = std::thread::scope(|s| {
+        let handles: Vec<_> = active
+            .iter()
+            .map(|(ext, provider)| {
+                // `*provider` is `&dyn LspProvider`; the closure captures it
+                // by reference. `&dyn LspProvider` is `Send` because
+                // `dyn LspProvider: Sync`.
+                s.spawn(move || {
+                    // Catch panics so a buggy provider cannot abort the scope.
+                    // `AssertUnwindSafe` is required because `&dyn LspProvider`
+                    // is not `UnwindSafe` (trait objects never are). The panic
+                    // payload is converted to a `LspError::ServerStart` message.
+                    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        provider.start(workspace)
+                    }));
+                    match res {
+                        Ok(outer) => (*ext, outer),
+                        Err(payload) => {
+                            let msg = payload
+                                .downcast_ref::<String>()
+                                .cloned()
+                                .or_else(|| {
+                                    payload
+                                        .downcast_ref::<&'static str>()
+                                        .map(|s| s.to_string())
+                                })
+                                .unwrap_or_else(|| "unknown panic payload".to_string());
+                            (
+                                *ext,
+                                Err(LspError::ServerStart(format!("provider panicked: {msg}"))),
+                            )
+                        }
+                    }
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("scope thread panicked unexpectedly"))
+            .collect()
+    });
+
+    let mut started_count: u32 = 0;
+    for (ext, result) in results {
+        match result {
+            Ok(()) => started_count += 1,
+            Err(LspError::ServerStart(msg)) => {
+                eprintln!("[warn] LSP server start failed for {ext} (degrading): {msg}");
+            }
+            Err(other) => {
+                // start() only returns ServerStart per the trait contract, but
+                // defensive: log any other error variant without aborting.
+                eprintln!("[warn] LSP server start failed for {ext} (degrading): {other:?}");
+            }
+        }
+    }
+    started_count
+}
+
 /// Extracts `(id, file_path_str, start_line)` from a Cypher query result row.
 /// Returns `None` if any field is missing or has the wrong type.
 #[cfg(feature = "lsp")]
@@ -149,6 +503,92 @@ fn resolve_abs_file_path(workspace: &Path, file_path_str: &str) -> std::path::Pa
         file_path.to_path_buf()
     } else {
         workspace.join(file_path)
+    }
+}
+
+/// Path interner returning `Arc<PathBuf>` for shared-path deduplication.
+///
+/// Each unique `PathBuf` input is stored once as `Arc<PathBuf>` in an internal
+/// `HashMap`; subsequent `intern` calls with the same path return a new
+/// `Arc` clone pointing at the same heap allocation (pointer equality via
+/// `Arc::ptr_eq`). This eliminates repeated `PathBuf` heap allocations when
+/// many symbols share the same absolute file path (typical: a 200-symbol
+/// `lib.rs` produces 200 entries with the same `PathBuf`).
+///
+/// # P-08 — why `PathBuf` as key (not `String`)
+///
+/// Using `PathBuf` directly as the HashMap key (rather than round-tripping
+/// through `&str` via `to_string_lossy()`) preserves full byte fidelity on
+/// non-UTF-8 paths (Linux allows arbitrary bytes in filesystem paths).
+/// `PathBuf: Hash + Eq` is well-defined over the raw bytes. The earlier
+/// `String`-keyed form would replace invalid UTF-8 bytes with `U+FFFD`,
+/// breaking hover lookups for workspace paths containing non-UTF-8 chars.
+///
+/// # P-08 — why not `string-interner` crate
+///
+/// `string-interner` returns a `Symbol` (u32 index) that requires
+/// `interner.resolve(symbol)` on every hover call — adds a lookup per hover.
+/// `Arc<PathBuf>` derefs directly to `&Path` (zero-cost via `Arc::as_ref`),
+/// matching `LspProvider::hover(&self, file: &Path, ...)` without trait
+/// changes. The bottleneck is repeated heap allocation, not hash lookup.
+///
+/// # Lifetime
+///
+/// Local to `enhance_with_lsp` — the interner and its map are dropped when
+/// the function returns. `Arc<PathBuf>` clones held by `entries` keep the
+/// underlying `PathBuf` alive until `entries` is dropped.
+///
+/// # Allocation discipline (perf-review H-01)
+///
+/// `intern` first probes with `get(&path)` (zero allocation on hit). Only
+/// on miss does it allocate the owned `PathBuf` for insertion. This avoids
+/// the per-lookup `to_owned()` allocation churn of the `entry()` API form
+/// (300k lookups × 80 B = 23.2 MB of wasted String allocations on hit path).
+#[cfg(feature = "lsp")]
+struct PathInterner {
+    map: std::collections::HashMap<std::path::PathBuf, std::sync::Arc<std::path::PathBuf>>,
+}
+
+#[cfg(feature = "lsp")]
+impl PathInterner {
+    /// Creates an empty interner.
+    #[must_use]
+    fn new() -> Self {
+        Self {
+            map: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Returns an `Arc<PathBuf>` for `path`. If `path` was previously interned,
+    /// returns a new `Arc` clone of the existing entry (pointer-equal via
+    /// `Arc::ptr_eq`); otherwise inserts a new `Arc<PathBuf>` and returns it.
+    ///
+    /// Takes `PathBuf` by value so the caller can move an existing allocation
+    /// in (typical: `resolve_abs_file_path` already returns `PathBuf`). On
+    /// miss the moved-in `PathBuf` is wrapped in `Arc` and inserted; on hit
+    /// the moved-in value is dropped (one extra drop, no extra allocation).
+    ///
+    /// # Empty path
+    ///
+    /// Interning `PathBuf::from("")` is allowed and returns a valid
+    /// `Arc<PathBuf>` pointing at the empty path. The caller is responsible
+    /// for not passing meaningless paths (hover on `""` will fail at LSP
+    /// server side).
+    fn intern(&mut self, path: std::path::PathBuf) -> std::sync::Arc<std::path::PathBuf> {
+        // Hit path: clone the existing Arc (atomic refcount increment, ~5 ns).
+        // Zero PathBuf allocation — the entry() form would allocate an owned
+        // key for lookup even on hit (perf-review H-01: 290k hits × 80 B =
+        // 23.2 MB of wasted String allocations).
+        if let Some(arc) = self.map.get(&path) {
+            return arc.clone();
+        }
+        // Miss path: wrap path in Arc (moves PathBuf, no clone), then clone
+        // PathBuf back out for the map key. Net miss cost: 1 PathBuf clone
+        // + 1 Arc allocation. Misses are rare (~10k vs ~290k hits) so the
+        // extra clone is acceptable.
+        let arc = std::sync::Arc::new(path);
+        self.map.insert((*arc).clone(), arc.clone());
+        arc
     }
 }
 
@@ -217,34 +657,34 @@ fn enhance_with_lsp(
         .iter()
         .map(|(ext, p)| (*ext, p.as_ref()))
         .collect();
-    let mut entries: Vec<(String, std::path::PathBuf, u32)> = Vec::with_capacity(rows.len());
+    // P-08: interner deduplicates PathBuf heap allocations across entries.
+    // A 200-symbol `lib.rs` produces 200 entries that previously each held
+    // an independent ~80-byte PathBuf heap allocation; now they share one
+    // Arc<PathBuf>. 10k files × 30 symbols = 300k entries → ~10k unique
+    // Arc<PathBuf>, saving ~15-30 MB on large repos.
+    let mut interner = PathInterner::new();
+    let mut entries: Vec<(String, std::sync::Arc<std::path::PathBuf>, u32)> =
+        Vec::with_capacity(rows.len());
     let mut skipped: u32 = 0;
     for row in &rows {
         let Some((id, file_path_str, start_line)) = extract_lsp_row_fields(row) else {
             skipped += 1;
             continue;
         };
-        let abs_file = resolve_abs_file_path(workspace, &file_path_str);
+        let abs_file = interner.intern(resolve_abs_file_path(workspace, &file_path_str));
         let line = u32::try_from(start_line).unwrap_or(0);
         entries.push((id, abs_file, line));
     }
     let active_exts = collect_active_extensions(&entries, &provider_exts_set);
 
-    // L7-6: only start providers whose extension appears in `active_exts`.
-    // Providers for absent extensions short-circuit `shutdown()` to `Ok(())`
-    // (LspProvider::shutdown contract: "safe to call on a client that was
-    // never successfully started").
-    let mut started_count: u32 = 0;
-    for (ext, provider) in &providers {
-        if !active_exts.contains(ext) {
-            continue;
-        }
-        if let Err(LspError::ServerStart(msg)) = provider.start(workspace) {
-            eprintln!("[warn] LSP server start failed (degrading): {msg}");
-        } else {
-            started_count += 1;
-        }
-    }
+    // P-04: parallel LSP startup via `std::thread::scope`. Pre-P-04 started
+    // providers serially (rust-analyzer ~3-8 s, clangd ~1-3 s, gopls ~2-5 s),
+    // so polyglot repos waited sum(per-provider) — up to ~20-40 s for 8-lang
+    // repos. `thread::scope` spawns one thread per active provider; the main
+    // thread joins all before continuing. No semaphore: at most 8 providers
+    // (polyglot extreme), LSP startup is IO-bound (waiting on subprocess
+    // pipes), so 8 threads on an 8-core machine is the sweet spot.
+    let started_count = start_active_providers_parallel(&providers, &active_exts, workspace);
     eprintln!(
         "[info] LSP enhancement: started {started_count} of {} configured servers for {} symbols",
         providers.len(),
@@ -255,8 +695,20 @@ fn enhance_with_lsp(
     // extract), short-circuit — there is nothing to hover. Still call
     // shutdown() on all providers for symmetry.
     let mut enhanced: u32 = 0;
+    // P-01: buffer hover results and flush in batches of LSP_HOVER_BATCH_SIZE
+    // via a single Cypher `UNWIND ... SET` statement. Pre-P-01 issued one
+    // `execute(&build_semantic_type_update(...))` per symbol — 100k symbols =
+    // 100k synchronous round-trips to the embedded LadybugDB process, each
+    // with ~1-3 ms commit overhead → 100-300 s of pure SQL waiting. The batch
+    // path collapses 500 single-row UPDATEs into one statement, cutting
+    // round-trips by 500×. On batch failure (e.g. LadybugDB rejects UNWIND),
+    // `flush_semantic_type_batch` falls back to per-row execute so a single
+    // bad statement does not poison the entire batch.
+    let mut batch: Vec<(String, String)> = Vec::with_capacity(LSP_HOVER_BATCH_SIZE);
     if !entries.is_empty() {
         for (id, abs_file, line) in &entries {
+            // P-08: abs_file is &Arc<PathBuf>; auto-deref-coerces to &Path
+            // for Path::extension and LspProvider::hover.
             let ext = abs_file.extension().and_then(|e| e.to_str()).unwrap_or("");
             // M2/P-07: skip symbols whose extension has no wired LSP provider
             // (.md, .toml, .json). Pre-M2 fell back to providers[0]
@@ -270,11 +722,15 @@ fn enhance_with_lsp(
             match client.hover(abs_file, *line, 0) {
                 Ok(Some(hover)) => {
                     if let Some(text) = crate::lsp::extract_hover_text(&hover) {
-                        let update = build_semantic_type_update(id, project, &text);
-                        if repo.connection().execute(&update).is_ok() {
-                            enhanced += 1;
-                        } else {
-                            skipped += 1;
+                        batch.push((id.clone(), text));
+                        if batch.len() >= LSP_HOVER_BATCH_SIZE {
+                            flush_semantic_type_batch(
+                                |q| repo.connection().execute(q),
+                                &mut batch,
+                                project,
+                                &mut enhanced,
+                                &mut skipped,
+                            );
                         }
                     } else {
                         skipped += 1;
@@ -295,6 +751,19 @@ fn enhance_with_lsp(
                     skipped += 1;
                 }
             }
+        }
+        // P-01: flush the tail — symbols that did not fill a complete batch.
+        // `flush_semantic_type_batch` handles the empty case (returns 0 without
+        // calling exec), so this call is safe even when entries.len() is an
+        // exact multiple of LSP_HOVER_BATCH_SIZE.
+        if !batch.is_empty() {
+            flush_semantic_type_batch(
+                |q| repo.connection().execute(q),
+                &mut batch,
+                project,
+                &mut enhanced,
+                &mut skipped,
+            );
         }
     }
 
@@ -341,11 +810,12 @@ fn enhance_with_lsp(
 ///   `{"rs", "py", "c", "cpp", "go", "ts", "f90", "java"}`).
 #[cfg(feature = "lsp")]
 fn collect_active_extensions<'a>(
-    entries: &[(String, std::path::PathBuf, u32)],
+    entries: &[(String, std::sync::Arc<std::path::PathBuf>, u32)],
     provider_exts: &std::collections::HashSet<&'a str>,
 ) -> std::collections::HashSet<&'a str> {
     let mut active: std::collections::HashSet<&'a str> = std::collections::HashSet::new();
     for (_, abs_file, _) in entries {
+        // P-08: abs_file is &Arc<PathBuf>; auto-deref-coerces to &Path.
         let ext = abs_file.extension().and_then(|e| e.to_str()).unwrap_or("");
         // M2/P-07: skip unknown extensions — do NOT fall back to default.
         if let Some(&provider_ext) = provider_exts.get(ext) {
@@ -458,6 +928,71 @@ async fn index(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "lsp")]
+    mod path_interner_tests {
+        use super::*;
+        use std::path::PathBuf;
+        use std::sync::Arc;
+
+        #[test]
+        fn intern_returns_same_arc_for_same_path() {
+            let mut interner = PathInterner::new();
+            let a = interner.intern(PathBuf::from("src/lib.rs"));
+            let b = interner.intern(PathBuf::from("src/lib.rs"));
+            assert!(
+                Arc::ptr_eq(&a, &b),
+                "same path must return pointer-equal Arc"
+            );
+        }
+
+        #[test]
+        fn intern_returns_different_arc_for_different_path() {
+            let mut interner = PathInterner::new();
+            let a = interner.intern(PathBuf::from("src/a.rs"));
+            let b = interner.intern(PathBuf::from("src/b.rs"));
+            assert!(!Arc::ptr_eq(&a, &b), "different paths must not share Arc");
+        }
+
+        #[test]
+        fn intern_increments_strong_count() {
+            let mut interner = PathInterner::new();
+            let first = interner.intern(PathBuf::from("src/lib.rs"));
+            let second = interner.intern(PathBuf::from("src/lib.rs"));
+            let third = interner.intern(PathBuf::from("src/lib.rs"));
+            // All three Arc clones point at the same heap allocation; the
+            // strong count = map(1) + first(1) + second(1) + third(1) = 4.
+            assert!(Arc::ptr_eq(&first, &second));
+            assert!(Arc::ptr_eq(&second, &third));
+            let count = Arc::strong_count(&third);
+            assert!(
+                count >= 3,
+                "strong_count after 3 interns of same path should be >= 3 (map + first + second + third - 1 shared), got {count}"
+            );
+        }
+
+        #[test]
+        fn intern_handles_empty_path() {
+            let mut interner = PathInterner::new();
+            let arc = interner.intern(PathBuf::from(""));
+            assert_eq!(arc.as_path(), std::path::Path::new(""));
+        }
+
+        #[test]
+        fn intern_handles_unicode_path() {
+            let mut interner = PathInterner::new();
+            let arc = interner.intern(PathBuf::from("src/中文/文件.rs"));
+            assert_eq!(arc.as_path(), std::path::Path::new("src/中文/文件.rs"));
+            let arc2 = interner.intern(PathBuf::from("src/中文/文件.rs"));
+            assert!(Arc::ptr_eq(&arc, &arc2));
+        }
+
+        #[test]
+        fn path_interner_is_send_sync() {
+            fn _assert_send_sync<T: Send + Sync>() {}
+            _assert_send_sync::<PathInterner>();
+        }
+    }
 
     #[test]
     fn index_output_from_index_result_maps_all_fields() {
@@ -964,20 +1499,21 @@ mod tests {
             ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"]
                 .into_iter()
                 .collect();
+        // P-08: entries now hold Arc<PathBuf> instead of PathBuf.
         let entries = vec![
             (
                 "id1".to_string(),
-                std::path::PathBuf::from("/src/main.rs"),
+                std::sync::Arc::new(std::path::PathBuf::from("/src/main.rs")),
                 1,
             ),
             (
                 "id2".to_string(),
-                std::path::PathBuf::from("/src/lib.rs"),
+                std::sync::Arc::new(std::path::PathBuf::from("/src/lib.rs")),
                 10,
             ),
             (
                 "id3".to_string(),
-                std::path::PathBuf::from("/src/mod.rs"),
+                std::sync::Arc::new(std::path::PathBuf::from("/src/mod.rs")),
                 20,
             ),
         ];
@@ -1008,12 +1544,12 @@ mod tests {
         let entries = vec![
             (
                 "id1".to_string(),
-                std::path::PathBuf::from("/src/main.py"),
+                std::sync::Arc::new(std::path::PathBuf::from("/src/main.py")),
                 1,
             ),
             (
                 "id2".to_string(),
-                std::path::PathBuf::from("/src/utils.py"),
+                std::sync::Arc::new(std::path::PathBuf::from("/src/utils.py")),
                 5,
             ),
         ];
@@ -1037,12 +1573,12 @@ mod tests {
         let entries = vec![
             (
                 "id1".to_string(),
-                std::path::PathBuf::from("/src/main.rs"),
+                std::sync::Arc::new(std::path::PathBuf::from("/src/main.rs")),
                 1,
             ),
             (
                 "id2".to_string(),
-                std::path::PathBuf::from("/src/script.py"),
+                std::sync::Arc::new(std::path::PathBuf::from("/src/script.py")),
                 5,
             ),
         ];
@@ -1070,10 +1606,14 @@ mod tests {
                 .into_iter()
                 .collect();
         let entries = vec![
-            ("id1".to_string(), std::path::PathBuf::from("/README.md"), 1),
+            (
+                "id1".to_string(),
+                std::sync::Arc::new(std::path::PathBuf::from("/README.md")),
+                1,
+            ),
             (
                 "id2".to_string(),
-                std::path::PathBuf::from("/Cargo.toml"),
+                std::sync::Arc::new(std::path::PathBuf::from("/Cargo.toml")),
                 1,
             ),
         ];
@@ -1097,12 +1637,12 @@ mod tests {
         let entries = vec![
             (
                 "id1".to_string(),
-                std::path::PathBuf::from("/src/main.c"),
+                std::sync::Arc::new(std::path::PathBuf::from("/src/main.c")),
                 1,
             ),
             (
                 "id2".to_string(),
-                std::path::PathBuf::from("/src/util.cpp"),
+                std::sync::Arc::new(std::path::PathBuf::from("/src/util.cpp")),
                 5,
             ),
         ];
@@ -1121,8 +1661,14 @@ mod tests {
             ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"]
                 .into_iter()
                 .collect();
-        let entries: Vec<(String, std::path::PathBuf, u32)> = (0..1000)
-            .map(|i| (format!("id{i}"), std::path::PathBuf::from("/src/mod.rs"), i))
+        let entries: Vec<(String, std::sync::Arc<std::path::PathBuf>, u32)> = (0..1000)
+            .map(|i| {
+                (
+                    format!("id{i}"),
+                    std::sync::Arc::new(std::path::PathBuf::from("/src/mod.rs")),
+                    i,
+                )
+            })
             .collect();
         let active = collect_active_extensions(&entries, &provider_exts);
         assert_eq!(active.len(), 1);
@@ -1140,14 +1686,46 @@ mod tests {
                 .into_iter()
                 .collect();
         let entries = vec![
-            ("id1".to_string(), std::path::PathBuf::from("/a.rs"), 1),
-            ("id2".to_string(), std::path::PathBuf::from("/b.py"), 1),
-            ("id3".to_string(), std::path::PathBuf::from("/c.c"), 1),
-            ("id4".to_string(), std::path::PathBuf::from("/d.cpp"), 1),
-            ("id5".to_string(), std::path::PathBuf::from("/e.go"), 1),
-            ("id6".to_string(), std::path::PathBuf::from("/f.ts"), 1),
-            ("id7".to_string(), std::path::PathBuf::from("/g.f90"), 1),
-            ("id8".to_string(), std::path::PathBuf::from("/h.java"), 1),
+            (
+                "id1".to_string(),
+                std::sync::Arc::new(std::path::PathBuf::from("/a.rs")),
+                1,
+            ),
+            (
+                "id2".to_string(),
+                std::sync::Arc::new(std::path::PathBuf::from("/b.py")),
+                1,
+            ),
+            (
+                "id3".to_string(),
+                std::sync::Arc::new(std::path::PathBuf::from("/c.c")),
+                1,
+            ),
+            (
+                "id4".to_string(),
+                std::sync::Arc::new(std::path::PathBuf::from("/d.cpp")),
+                1,
+            ),
+            (
+                "id5".to_string(),
+                std::sync::Arc::new(std::path::PathBuf::from("/e.go")),
+                1,
+            ),
+            (
+                "id6".to_string(),
+                std::sync::Arc::new(std::path::PathBuf::from("/f.ts")),
+                1,
+            ),
+            (
+                "id7".to_string(),
+                std::sync::Arc::new(std::path::PathBuf::from("/g.f90")),
+                1,
+            ),
+            (
+                "id8".to_string(),
+                std::sync::Arc::new(std::path::PathBuf::from("/h.java")),
+                1,
+            ),
         ];
         let active = collect_active_extensions(&entries, &provider_exts);
         assert_eq!(
@@ -1356,5 +1934,579 @@ mod tests {
         }
 
         reset_kit_for_testing();
+    }
+
+    // --- P-01: build_batch_semantic_type_update + flush_semantic_type_batch ---
+
+    #[cfg(feature = "lsp")]
+    mod batch_update_tests {
+        use super::*;
+        use crate::storage::StorageError;
+
+        #[test]
+        fn build_batch_empty_returns_empty_string() {
+            // P-01: empty batch must short-circuit — calling UNWIND [] would
+            // be a no-op but also wastes a round-trip. Return "" so the
+            // caller can skip the execute entirely.
+            let batch: Vec<(String, String)> = Vec::new();
+            let stmt = build_batch_semantic_type_update(&batch, "proj");
+            assert!(stmt.is_empty(), "empty batch must return empty string");
+        }
+
+        #[test]
+        fn build_batch_single_entry_generates_valid_unwind_statement() {
+            // P-01: a single-entry batch must produce a syntactically valid
+            // Cypher UNWIND ... MATCH ... SET statement.
+            let batch = vec![(String::from("sym1"), String::from("fn foo() -> i32"))];
+            let stmt = build_batch_semantic_type_update(&batch, "my-project");
+            assert!(
+                stmt.starts_with("UNWIND ["),
+                "must start with UNWIND [: got {stmt}"
+            );
+            assert!(
+                stmt.contains("{id: 'sym1', sem: 'fn foo() -> i32'}"),
+                "must contain the entry map: got {stmt}"
+            );
+            assert!(
+                stmt.contains("] AS row"),
+                "must close list and alias as row: got {stmt}"
+            );
+            assert!(
+                stmt.contains("MATCH (n {id: row.id, project: 'my-project'})"),
+                "must MATCH by row.id + project: got {stmt}"
+            );
+            assert!(
+                stmt.contains("SET n.semantic_type = row.sem"),
+                "must SET semantic_type from row.sem: got {stmt}"
+            );
+            assert!(
+                stmt.ends_with(';'),
+                "statement must end with semicolon: got {stmt}"
+            );
+        }
+
+        #[test]
+        fn build_batch_500_entries_contains_500_id_sem_maps() {
+            // P-01: a 500-entry batch must emit exactly 500 `{id: '...', sem: '...'}`
+            // maps. This is the contract that makes the UNWIND batch worth the
+            // round-trip — 500 single-row UPDATEs collapse into one statement.
+            //
+            // Match on `{id: '` (with trailing single quote) to distinguish
+            // entry maps from the `MATCH (n {id: row.id, ...})` clause which
+            // uses `{id: row.` (no quote after colon).
+            let batch: Vec<(String, String)> = (0..500)
+                .map(|i| (format!("sym_{i}"), format!("type_{i}")))
+                .collect();
+            let stmt = build_batch_semantic_type_update(&batch, "proj");
+            let count = stmt.matches("{id: '").count();
+            assert_eq!(count, 500, "expected 500 entry maps, got {count}");
+        }
+
+        #[test]
+        fn build_batch_escapes_single_quotes_in_id() {
+            // P-01: id values containing single quotes must be escaped via
+            // escape_cypher_string (single quote -> "\'"). Without escaping
+            // the Cypher string literal would terminate early and the
+            // statement would be a syntax error.
+            let batch = vec![(String::from("a'b"), String::from("type"))];
+            let stmt = build_batch_semantic_type_update(&batch, "proj");
+            assert!(
+                stmt.contains("{id: 'a\\'b', sem: 'type'}"),
+                "id single quote must be escaped: got {stmt}"
+            );
+        }
+
+        #[test]
+        fn build_batch_escapes_single_quotes_in_sem() {
+            // P-01: sem values containing single quotes must also be escaped.
+            let batch = vec![(String::from("sym"), String::from("fn it's() -> ()"))];
+            let stmt = build_batch_semantic_type_update(&batch, "proj");
+            assert!(
+                stmt.contains("{id: 'sym', sem: 'fn it\\'s() -> ()'}"),
+                "sem single quote must be escaped: got {stmt}"
+            );
+        }
+
+        #[test]
+        fn build_batch_escapes_single_quotes_in_project() {
+            // P-01: project containing single quotes must be escaped in the
+            // MATCH clause's `project: '...'` literal.
+            let batch = vec![(String::from("sym"), String::from("type"))];
+            let stmt = build_batch_semantic_type_update(&batch, "proj'ect");
+            assert!(
+                stmt.contains("project: 'proj\\'ect'"),
+                "project single quote must be escaped: got {stmt}"
+            );
+        }
+
+        #[test]
+        fn build_batch_escapes_backslashes_in_id_and_sem() {
+            // P-01: backslashes must be doubled (escape_cypher_string order:
+            // backslash first to avoid double-escaping later steps).
+            let batch = vec![(String::from("a\\b"), String::from("c\\d"))];
+            let stmt = build_batch_semantic_type_update(&batch, "proj");
+            assert!(
+                stmt.contains("{id: 'a\\\\b', sem: 'c\\\\d'}"),
+                "backslashes must be doubled: got {stmt}"
+            );
+        }
+
+        #[test]
+        fn flush_batch_empty_does_not_call_exec_and_returns_zero() {
+            // P-01: empty batch must short-circuit — exec must NOT be called
+            // (verified via a counter closure), and the return value must be 0.
+            let mut batch: Vec<(String, String)> = Vec::new();
+            let mut enhanced: u32 = 0;
+            let mut skipped: u32 = 0;
+            let call_count = std::cell::Cell::new(0u32);
+            let exec = |_q: &str| -> crate::storage::Result<()> {
+                call_count.set(call_count.get() + 1);
+                Ok(())
+            };
+            flush_semantic_type_batch(exec, &mut batch, "proj", &mut enhanced, &mut skipped);
+            assert_eq!(
+                call_count.get(),
+                0,
+                "exec must not be called on empty batch"
+            );
+            assert_eq!(enhanced, 0);
+            assert_eq!(skipped, 0);
+            assert!(batch.is_empty(), "batch must remain empty");
+        }
+
+        #[test]
+        fn flush_batch_500_entries_calls_exec_once_when_batch_succeeds() {
+            // P-01: when the batch UNWIND UPDATE succeeds, exec is called
+            // exactly once (the batch path), enhanced += 500, skipped += 0,
+            // batch is cleared, return value = 500.
+            let mut batch: Vec<(String, String)> = (0..500)
+                .map(|i| (format!("sym_{i}"), format!("type_{i}")))
+                .collect();
+            let mut enhanced: u32 = 0;
+            let mut skipped: u32 = 0;
+            let call_count = std::cell::Cell::new(0u32);
+            let exec = |_q: &str| -> crate::storage::Result<()> {
+                call_count.set(call_count.get() + 1);
+                Ok(())
+            };
+            flush_semantic_type_batch(exec, &mut batch, "proj", &mut enhanced, &mut skipped);
+            assert_eq!(
+                call_count.get(),
+                1,
+                "exec must be called exactly once on batch success"
+            );
+            assert_eq!(enhanced, 500, "all 500 entries counted as enhanced");
+            assert_eq!(skipped, 0);
+            assert!(batch.is_empty(), "batch must be cleared after flush");
+        }
+
+        #[test]
+        fn flush_batch_falls_back_to_per_row_when_batch_exec_fails() {
+            // P-01: when the batch UNWIND UPDATE fails, flush must fall back
+            // to per-row `build_semantic_type_update` + exec. Each successful
+            // per-row exec increments enhanced; each failure increments skipped.
+            // The batch is cleared regardless.
+            let mut batch: Vec<(String, String)> = (0..10)
+                .map(|i| (format!("sym_{i}"), format!("type_{i}")))
+                .collect();
+            let mut enhanced: u32 = 0;
+            let mut skipped: u32 = 0;
+            // Track which queries we've seen. The first call (batch) fails;
+            // subsequent calls (per-row) succeed for even-indexed symbols and
+            // fail for odd-indexed (to verify both enhanced and skipped paths).
+            let call_count = std::cell::Cell::new(0u32);
+            let exec = |_q: &str| -> crate::storage::Result<()> {
+                let n = call_count.get();
+                call_count.set(n + 1);
+                if n == 0 {
+                    // First call = batch UNWIND — fail to trigger fallback.
+                    Err(StorageError::Query(String::from(
+                        "UNWIND syntax not supported",
+                    )))
+                } else {
+                    // Per-row calls (n=1..10). sym_0..sym_9 — even succeeds, odd fails.
+                    // n=1 -> sym_0 (even) -> Ok
+                    // n=2 -> sym_1 (odd)  -> Err
+                    // ...
+                    let row_idx = (n - 1) as usize;
+                    if row_idx.is_multiple_of(2) {
+                        Ok(())
+                    } else {
+                        Err(StorageError::Query(String::from("per-row fail")))
+                    }
+                }
+            };
+            flush_semantic_type_batch(exec, &mut batch, "proj", &mut enhanced, &mut skipped);
+            // 1 batch call + 10 per-row calls = 11 total.
+            assert_eq!(
+                call_count.get(),
+                11,
+                "must call batch once then per-row 10 times"
+            );
+            // sym_0, sym_2, sym_4, sym_6, sym_8 succeed = 5 enhanced.
+            assert_eq!(enhanced, 5, "5 even-indexed per-row calls succeed");
+            // sym_1, sym_3, sym_5, sym_7, sym_9 fail = 5 skipped.
+            assert_eq!(skipped, 5, "5 odd-indexed per-row calls fail");
+            assert!(batch.is_empty(), "batch must be cleared after flush");
+        }
+
+        #[test]
+        fn flush_batch_full_failure_increments_skipped_only() {
+            // P-01: when both batch exec and all per-row execs fail, enhanced
+            // stays at its initial value and skipped increments by batch.len().
+            // The batch is still cleared regardless of failure.
+            let mut batch: Vec<(String, String)> = (0..3)
+                .map(|i| (format!("sym_{i}"), format!("type_{i}")))
+                .collect();
+            let mut enhanced: u32 = 99;
+            let mut skipped: u32 = 99;
+            let exec = |_q: &str| -> crate::storage::Result<()> {
+                Err(StorageError::Query(String::from("always fail")))
+            };
+            flush_semantic_type_batch(exec, &mut batch, "proj", &mut enhanced, &mut skipped);
+            // Batch fails (1 call), then 3 per-row calls all fail.
+            // enhanced unchanged (0 new), skipped += 3.
+            assert_eq!(enhanced, 99, "no per-row success");
+            assert_eq!(skipped, 102, "3 per-row failures increment skipped from 99");
+            assert!(batch.is_empty(), "batch cleared");
+        }
+    }
+
+    // --- P-04: parallel LSP startup via std::thread::scope ---
+
+    #[cfg(feature = "lsp")]
+    mod parallel_start_tests {
+        use super::*;
+        use crate::lsp::{LspError, LspProvider};
+        use lsp_types::{Hover, Location};
+        use std::path::{Path, PathBuf};
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        /// Mock LSP provider for P-04 parallel-start tests.
+        ///
+        /// Records `start()` calls in an `AtomicU32` so the count is visible
+        /// across threads without locking. `start_delay_ms` simulates the
+        /// subprocess startup latency of a real LSP server (rust-analyzer
+        /// ~3-8 s, clangd ~1-3 s). `should_panic` triggers a panic inside
+        /// `start()` to verify that `catch_unwind` isolates buggy providers.
+        struct MockLspProvider {
+            start_count: Arc<AtomicU32>,
+            start_delay_ms: u64,
+            should_panic: bool,
+            should_fail: bool,
+        }
+
+        impl MockLspProvider {
+            fn new(start_delay_ms: u64) -> Self {
+                Self {
+                    start_count: Arc::new(AtomicU32::new(0)),
+                    start_delay_ms,
+                    should_panic: false,
+                    should_fail: false,
+                }
+            }
+
+            fn with_panic(mut self) -> Self {
+                self.should_panic = true;
+                self
+            }
+
+            fn with_failure(mut self) -> Self {
+                self.should_fail = true;
+                self
+            }
+        }
+
+        impl LspProvider for MockLspProvider {
+            fn start(&self, _workspace: &Path) -> Result<(), LspError> {
+                self.start_count.fetch_add(1, Ordering::SeqCst);
+                if self.should_panic {
+                    panic!("MockLspProvider: simulated panic");
+                }
+                if self.start_delay_ms > 0 {
+                    std::thread::sleep(Duration::from_millis(self.start_delay_ms));
+                }
+                if self.should_fail {
+                    return Err(LspError::ServerStart(String::from(
+                        "MockLspProvider: simulated failure",
+                    )));
+                }
+                Ok(())
+            }
+
+            fn definition(
+                &self,
+                _file: &Path,
+                _line: u32,
+                _col: u32,
+            ) -> Result<Option<Location>, LspError> {
+                Ok(None)
+            }
+
+            fn type_definition(
+                &self,
+                _file: &Path,
+                _line: u32,
+                _col: u32,
+            ) -> Result<Option<Location>, LspError> {
+                Ok(None)
+            }
+
+            fn hover(
+                &self,
+                _file: &Path,
+                _line: u32,
+                _col: u32,
+            ) -> Result<Option<Hover>, LspError> {
+                Ok(None)
+            }
+
+            fn shutdown(&self) -> Result<(), LspError> {
+                Ok(())
+            }
+        }
+
+        /// Provider vector type used by [`build_mock_providers`] (P-04 tests).
+        ///
+        /// Factored into a type alias to satisfy `clippy::type_complexity` —
+        /// the raw `(Vec<(&'static str, Box<dyn LspProvider>)>, Vec<Arc<AtomicU32>>)`
+        /// form exceeds the default complexity threshold.
+        type MockProvidersResult = (
+            Vec<(&'static str, Box<dyn LspProvider>)>,
+            Vec<Arc<AtomicU32>>,
+        );
+
+        /// Builds mock providers with per-provider delays. Returns the
+        /// provider vec (production signature) plus the start_count Arcs
+        /// so tests can verify call counts after the parallel start.
+        fn build_mock_providers(delays_ms: &[u64]) -> MockProvidersResult {
+            // Static extension strings — required because the production
+            // signature uses `&'static str`. Tests use a fixed set.
+            const EXTS: [&str; 8] = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+            let mut providers: Vec<(&'static str, Box<dyn LspProvider>)> = Vec::new();
+            let mut counts: Vec<Arc<AtomicU32>> = Vec::new();
+            for (i, &delay) in delays_ms.iter().enumerate() {
+                let ext = EXTS[i];
+                let mock = MockLspProvider::new(delay);
+                counts.push(mock.start_count.clone());
+                providers.push((ext, Box::new(mock) as Box<dyn LspProvider>));
+            }
+            // Pad to 8 if fewer were provided (unused extensions).
+            while providers.len() < 8 {
+                let ext = EXTS[providers.len()];
+                let mock = MockLspProvider::new(0);
+                providers.push((ext, Box::new(mock) as Box<dyn LspProvider>));
+            }
+            (providers, counts)
+        }
+
+        #[test]
+        fn parallel_start_completes_faster_than_serial() {
+            // P-04 core invariant: 8 providers each sleeping 50 ms must
+            // complete in < 200 ms (serial would be 400 ms). The 200 ms
+            // bound gives 4× headroom over the theoretical 50 ms parallel
+            // minimum, accommodating thread spawn/sleep jitter.
+            let (providers, _counts) = build_mock_providers(&[50, 50, 50, 50, 50, 50, 50, 50]);
+            // Build active_exts = all 8 extensions.
+            let active_exts: std::collections::HashSet<&'static str> =
+                providers.iter().map(|(ext, _)| *ext).collect();
+
+            let workspace = PathBuf::from("/tmp/mock-workspace");
+            let start = Instant::now();
+            let started = start_active_providers_parallel(&providers, &active_exts, &workspace);
+            let elapsed = start.elapsed();
+
+            assert_eq!(started, 8, "all 8 providers should start successfully");
+            assert!(
+                elapsed < Duration::from_millis(200),
+                "parallel start must complete in < 200 ms, got {elapsed:?}"
+            );
+        }
+
+        #[test]
+        fn parallel_start_calls_start_on_all_active_providers() {
+            // P-04: every active provider's `start()` must be called exactly
+            // once. Verifies that the scope spawns one thread per active
+            // provider and does not skip any.
+            let delays = [10, 10, 10, 10, 10, 10, 10, 10];
+            const EXTS: [&str; 8] = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+            let mut providers: Vec<(&'static str, Box<dyn LspProvider>)> = Vec::new();
+            let mut counts: Vec<Arc<AtomicU32>> = Vec::new();
+            for (i, &delay) in delays.iter().enumerate() {
+                let mock = MockLspProvider::new(delay);
+                counts.push(mock.start_count.clone());
+                providers.push((EXTS[i], Box::new(mock) as Box<dyn LspProvider>));
+            }
+            let active_exts: std::collections::HashSet<&'static str> =
+                EXTS.iter().copied().collect();
+
+            let workspace = PathBuf::from("/tmp/mock-workspace");
+            let started = start_active_providers_parallel(&providers, &active_exts, &workspace);
+
+            assert_eq!(started, 8);
+            for (i, count) in counts.iter().enumerate() {
+                assert_eq!(
+                    count.load(Ordering::SeqCst),
+                    1,
+                    "provider {} start_count must be 1",
+                    EXTS[i]
+                );
+            }
+        }
+
+        #[test]
+        fn parallel_start_skips_inactive_providers() {
+            // P-04: providers whose extension is NOT in `active_exts` must
+            // not be started. Verifies the filter step before scope spawn.
+            const EXTS: [&str; 8] = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+            let mut providers: Vec<(&'static str, Box<dyn LspProvider>)> = Vec::new();
+            let mut counts: Vec<Arc<AtomicU32>> = Vec::new();
+            for ext in EXTS.iter() {
+                let mock = MockLspProvider::new(5);
+                counts.push(mock.start_count.clone());
+                providers.push((*ext, Box::new(mock) as Box<dyn LspProvider>));
+            }
+            // Only "rs" is active.
+            let active_exts: std::collections::HashSet<&'static str> =
+                std::collections::HashSet::from(["rs"]);
+
+            let workspace = PathBuf::from("/tmp/mock-workspace");
+            let started = start_active_providers_parallel(&providers, &active_exts, &workspace);
+
+            assert_eq!(started, 1, "only 1 provider should be started");
+            assert_eq!(
+                counts[0].load(Ordering::SeqCst),
+                1,
+                "rs provider called once"
+            );
+            for i in 1..8 {
+                assert_eq!(
+                    counts[i].load(Ordering::SeqCst),
+                    0,
+                    "provider {} must NOT be started (not in active_exts)",
+                    EXTS[i]
+                );
+            }
+        }
+
+        #[test]
+        fn parallel_start_panic_does_not_block_other_providers() {
+            // P-04: a panicking provider must be caught by `catch_unwind` and
+            // converted to a `LspError::ServerStart` message. The remaining
+            // providers must still complete successfully.
+            const EXTS: [&str; 8] = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+            let mut providers: Vec<(&'static str, Box<dyn LspProvider>)> = Vec::new();
+            let mut counts: Vec<Arc<AtomicU32>> = Vec::new();
+            for (i, ext) in EXTS.iter().enumerate() {
+                let mut mock = MockLspProvider::new(10);
+                if i == 2 {
+                    // "c" provider panics.
+                    mock = mock.with_panic();
+                }
+                counts.push(mock.start_count.clone());
+                providers.push((*ext, Box::new(mock) as Box<dyn LspProvider>));
+            }
+            let active_exts: std::collections::HashSet<&'static str> =
+                EXTS.iter().copied().collect();
+
+            let workspace = PathBuf::from("/tmp/mock-workspace");
+            let started = start_active_providers_parallel(&providers, &active_exts, &workspace);
+
+            // 7 of 8 started (the panicking "c" provider counts as not started).
+            assert_eq!(
+                started, 7,
+                "7 of 8 providers should start; panicking one is degraded"
+            );
+            // The panicking provider's start_count must still be 1 (the fetch_add
+            // happens before the panic).
+            assert_eq!(
+                counts[2].load(Ordering::SeqCst),
+                1,
+                "panicking provider was called"
+            );
+            // All non-panicking providers called once.
+            for (i, count) in counts.iter().enumerate() {
+                if i == 2 {
+                    continue;
+                }
+                assert_eq!(
+                    count.load(Ordering::SeqCst),
+                    1,
+                    "provider {} called once",
+                    EXTS[i]
+                );
+            }
+        }
+
+        #[test]
+        fn parallel_start_failure_does_not_block_other_providers() {
+            // P-04: a provider returning `Err(LspError::ServerStart)` must be
+            // logged and skipped; the remaining providers must still complete.
+            const EXTS: [&str; 8] = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+            let mut providers: Vec<(&'static str, Box<dyn LspProvider>)> = Vec::new();
+            let mut counts: Vec<Arc<AtomicU32>> = Vec::new();
+            for (i, ext) in EXTS.iter().enumerate() {
+                let mut mock = MockLspProvider::new(5);
+                if i == 1 {
+                    // "py" provider returns failure.
+                    mock = mock.with_failure();
+                }
+                counts.push(mock.start_count.clone());
+                providers.push((*ext, Box::new(mock) as Box<dyn LspProvider>));
+            }
+            let active_exts: std::collections::HashSet<&'static str> =
+                EXTS.iter().copied().collect();
+
+            let workspace = PathBuf::from("/tmp/mock-workspace");
+            let started = start_active_providers_parallel(&providers, &active_exts, &workspace);
+
+            // 7 of 8 started.
+            assert_eq!(
+                started, 7,
+                "7 of 8 providers should start; failing one is degraded"
+            );
+            for (i, count) in counts.iter().enumerate() {
+                assert_eq!(
+                    count.load(Ordering::SeqCst),
+                    1,
+                    "provider {} called once",
+                    EXTS[i]
+                );
+            }
+        }
+
+        #[test]
+        fn parallel_start_empty_active_exts_returns_zero() {
+            // P-04: empty active_exts must short-circuit without spawning
+            // any threads (early return after filter).
+            const EXTS: [&str; 8] = ["rs", "py", "c", "cpp", "go", "ts", "f90", "java"];
+            let mut providers: Vec<(&'static str, Box<dyn LspProvider>)> = Vec::new();
+            let mut counts: Vec<Arc<AtomicU32>> = Vec::new();
+            for ext in EXTS.iter() {
+                let mock = MockLspProvider::new(5);
+                counts.push(mock.start_count.clone());
+                providers.push((*ext, Box::new(mock) as Box<dyn LspProvider>));
+            }
+            let active_exts: std::collections::HashSet<&'static str> =
+                std::collections::HashSet::new();
+
+            let workspace = PathBuf::from("/tmp/mock-workspace");
+            let started = start_active_providers_parallel(&providers, &active_exts, &workspace);
+
+            assert_eq!(
+                started, 0,
+                "no providers should be started on empty active_exts"
+            );
+            for (i, count) in counts.iter().enumerate() {
+                assert_eq!(
+                    count.load(Ordering::SeqCst),
+                    0,
+                    "provider {} must not be called",
+                    EXTS[i]
+                );
+            }
+        }
     }
 }

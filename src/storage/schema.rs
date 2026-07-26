@@ -96,11 +96,18 @@ pub fn escape_identifier(name: &str) -> std::borrow::Cow<'_, str> {
 pub fn escape_cypher_string(s: &str) -> String {
     // Order matters: backslash first so we do not double-escape escapes
     // introduced by later steps, then single quote, then control chars.
+    // NUL is escaped last (tiangang security-review LOW-1): Cypher string
+    // literals treat `\0` as a literal NUL byte in some implementations,
+    // which can confuse downstream consumers (logs, audit trails). Escaping
+    // to the Cypher escape sequence `\\0` ensures round-trip fidelity and
+    // prevents any embedded NUL from prematurely terminating C-string views
+    // over the escaped value (defensive depth, no known exploit vector).
     s.replace('\\', "\\\\")
         .replace('\'', "\\'")
         .replace('\n', "\\n")
         .replace('\r', "\\r")
         .replace('\t', "\\t")
+        .replace('\0', "\\0")
 }
 
 /// Returns `(table_name, ddl)` pairs for all 44 node tables, in declaration
@@ -794,6 +801,12 @@ mod tests {
         );
         // Empty string is a no-op.
         assert_eq!(escape_cypher_string(""), "");
+        // NUL byte is escaped (tiangang security-review LOW-1):
+        // prevents embedded NUL from terminating C-string views over the
+        // escaped value, and ensures round-trip via Cypher's `\0` escape.
+        assert_eq!(escape_cypher_string("a\0b"), "a\\0b");
+        assert_eq!(escape_cypher_string("\0start"), "\\0start");
+        assert_eq!(escape_cypher_string("end\0"), "end\\0");
     }
 
     #[test]
