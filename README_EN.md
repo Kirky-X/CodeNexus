@@ -162,6 +162,9 @@ codenexus index --path /path/to/project --name myproject
 # 1b. RAM-first indexing (LZ4 in-memory, faster for small-medium repos)
 codenexus index --path /path/to/project --name myproject --ram_first true
 
+# 1c. Fresh index (delete old DB file, reclaim DuckDB dead space from repeated --force)
+codenexus index --path /path/to/project --name myproject --force true --fresh true
+
 # 2. Verify the index
 codenexus status
 codenexus list

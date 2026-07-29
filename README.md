@@ -153,6 +153,9 @@ codenexus index --path /path/to/project --name myproject
 # 1b. RAM 优先索引（LZ4 内存压缩，适合中小仓库，更快）
 codenexus index --path /path/to/project --name myproject --ram_first true
 
+# 1c. 全新索引（删除旧 DB 文件，回收 DuckDB 死空间，解决重复 --force 导致的 DB 膨胀）
+codenexus index --path /path/to/project --name myproject --force true --fresh true
+
 # 2. 查询函数
 codenexus query --cypher "MATCH (f:Function) RETURN f.name LIMIT 10"
 

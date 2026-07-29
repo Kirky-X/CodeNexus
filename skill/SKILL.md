@@ -16,7 +16,7 @@ Use this Skill when you need to index a codebase, query its structure, trace fun
 ## Conventions (apply to every subcommand)
 
 - **No positional arguments.** Everything is a named flag. `codenexus query "MATCH ..."` fails; use `codenexus query --cypher "MATCH ..."`.
-- **Booleans take a value**: `--force true`, `--apply true`, `--cross_service false` (trace-only), `--embed false`, `--ram_first false`, `--enhanced false`, `--include_tests false` (impact).
+- **Booleans take a value**: `--force true`, `--fresh true` (index only — drops existing DB file before init to reclaim DuckDB dead space), `--apply true`, `--cross_service false` (trace-only), `--embed false`, `--ram_first false`, `--enhanced false`, `--include_tests false` (impact).
 - **Project filter accepts BOTH name and id.** All commands that take `--project <VALUE>` resolve the value via `resolve_project_id` (in `src/service/project.rs`): if the value matches a stored project `name`, the canonical project `id` is used; otherwise the value is treated as a raw project id. Pass `--project ""` (empty string) only where explicitly documented to disable the filter.
 - **Plain-typed params are required.** Function parameters with plain `String`/`u32`/`bool` types (no `Option<T>`) map to **mandatory** CLI flags with no built-in defaults. Empty strings are allowed where the source explicitly handles them (e.g. `--edge_types ""`, `--path_filter ""`, `--protocol ""`).
 - **Global options** on every command: `--db <DB_PATH>` and `--debounce-ms <MS>` (default `2000`, daemon-only relevance — safe to ignore otherwise).
