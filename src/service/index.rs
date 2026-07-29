@@ -903,6 +903,7 @@ async fn index(
     lsp: bool,
     embed: bool,
     ram_first: bool,
+    fresh: bool,
 ) -> Result<(), ApiError> {
     if embed {
         eprintln!(
@@ -910,6 +911,11 @@ async fn index(
              the `embed` cargo feature (rebuild with --features embed to enable)"
         );
     }
+    // `fresh` parameter: registered by sdforge so the CLI exposes `--fresh`;
+    // the actual DB-file deletion is handled in `main::handle_fresh_flag`
+    // before Kit init. No action here — keeping the parameter preserves CLI
+    // registration without duplicating the deletion logic or its logging.
+    let _ = fresh;
 
     let kit = kit().ok_or_else(kit_not_initialized)?;
     let storage_config = kit
@@ -1752,6 +1758,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         ));
         assert!(result.is_err(), "wrapper should fail without kit");
         reset_kit_for_testing();
@@ -1785,6 +1792,7 @@ mod tests {
             src_dir.path().to_str().unwrap().to_string(),
             "wrapper_test".to_string(),
             true,
+            false,
             false,
             false,
             false,
@@ -1825,6 +1833,7 @@ mod tests {
             true,
             false,
             true,
+            false,
             false,
         ));
         assert!(
@@ -1915,6 +1924,7 @@ mod tests {
         let result = rt.block_on(index(
             "/nonexistent/path".to_string(),
             "test_project".to_string(),
+            false,
             false,
             false,
             false,

@@ -110,7 +110,7 @@ serde_json = "1"
 csv = "1"
 tempfile = "3"
 lz4_flex = "0.14"
-sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system", "disk"] }
 uuid = { version = "1.23", features = ["v7"] }
 petgraph = { version = "0.8", default-features = false, optional = true }
 lsp-types = { version = "0.97", optional = true }

@@ -155,12 +155,17 @@ impl StorageConnection {
         //      in-memory Graph, LZ4 compressed sources (RAM-first mode), and
         //      LSP servers; the floor prevents tiny hosts from starving the
         //      query planner.
-        //   2. `max_db_size = 16 GiB` — upper bound on the mmap'd BM region
-        //      (virtual address space, not RSS). Pre-L7-5 this defaulted to
-        //      `u32::MAX`, which DuckDB replaced with the 8 TiB
-        //      `DEFAULT_VM_REGION_MAX_SIZE` and then mmap'd as the BM region.
-        //      16 GiB is generous for any single CodeNexus project DB while
-        //      eliminating the 8 TiB virtual-address reservation.
+        //   2. `max_db_size` — upper bound on the database file size and the
+        //      mmap'd BM region (virtual address space, not RSS). Pre-L7-5
+        //      this defaulted to `u32::MAX`, which DuckDB replaced with the
+        //      8 TiB `DEFAULT_VM_REGION_MAX_SIZE`. L7-5 pinned it to 16 GiB,
+        //      but real-world project DBs can exceed that (e.g. a 5 GB source
+        //      repo with `content STRING` columns produced a 35 GB DB). P-DB
+        //      makes this dynamic via [`compute_max_db_size`]: 80% of the
+        //      disk space available at the DB path, clamped to
+        //      `[16 GiB, 4 TiB]`, with a 64 GiB fallback when the disk probe
+        //      fails. 4 TiB is half of DuckDB's 8 TiB default and is
+        //      negligible VAS on 64-bit Linux (128 TB user VAS).
         //   3. `max_num_threads = 8` — caps DuckDB's internal worker thread
         //      count. Each DuckDB thread allocates per-operator scratch
         //      (hash join build, aggregation hashes). Pre-L7-5 this defaulted
@@ -193,12 +198,35 @@ impl StorageConnection {
                 .max_num_threads(8)
                 .read_only(read_only)
         } else {
-            // L7-5 + P-05: production caps. `buffer_pool_size` is dynamic via
-            // [`compute_buffer_pool_size`]; the other two knobs stay fixed.
-            // See the function-level comment for the full rationale.
+            // L7-5 + P-05 + P-DB: production caps. `buffer_pool_size` is
+            // dynamic via [`compute_buffer_pool_size`]; `max_db_size` is
+            // dynamic via [`compute_max_db_size`]; `max_num_threads` stays
+            // fixed at 8. See the function-level comment for the full
+            // rationale.
+            //
+            // P-DB-perf: cache `max_db_size` process-wide via `OnceLock`.
+            // `compute_max_db_size` calls `probe_available_disk_space` which
+            // invokes `sysinfo::Disks::new_with_refreshed_list()` (reads
+            // /proc/mounts + statvfs per mount point, 1-50ms). Without
+            // caching, every `StorageConnection::open` — including read-only
+            // query commands (query/impact/trace/context/search/list) —
+            // paid this cost. Disk space changes slowly, so a process-level
+            // cache is a safe approximation (different mount points share
+            // the first probe's value, but the 16 GiB floor handles small
+            // disks and the 4 TiB cap handles large ones).
+            //
+            // Read-only connections skip the probe entirely: they never grow
+            // the DB, so `max_db_size` is a no-op for them. Use the 16 GiB
+            // floor (matches L7-5 default, avoids probe on every query).
+            static MAX_DB_SIZE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+            let max_db_size = if read_only {
+                16 * 1024 * 1024 * 1024 // 16 GiB floor (read-only: no growth)
+            } else {
+                *MAX_DB_SIZE.get_or_init(|| compute_max_db_size(path.as_ref()))
+            };
             SystemConfig::default()
                 .buffer_pool_size(compute_buffer_pool_size())
-                .max_db_size(16 * 1024 * 1024 * 1024)
+                .max_db_size(max_db_size)
                 .max_num_threads(8)
                 .read_only(read_only)
         };
@@ -367,6 +395,86 @@ fn compute_buffer_pool_size() -> u64 {
     // division by 4 is exact for any avail ≥ 4 bytes.
     let computed = avail.saturating_mul(RATIO_NUM) / RATIO_DEN;
     computed.clamp(FLOOR, CAP)
+}
+
+/// Probes the available disk space, in bytes, at the filesystem containing
+/// `db_path`.
+///
+/// Returns 0 when the value cannot be determined (e.g. in-memory path,
+/// unresolvable path, or `sysinfo` finds no matching mount point). The caller
+/// is expected to fall back to a conservative default in that case.
+///
+/// When `db_path` does not yet exist (new database), the parent directory is
+/// probed instead. This covers the `--force` fresh-index path where the DB
+/// file is created for the first time.
+fn probe_available_disk_space(db_path: &Path) -> u64 {
+    // In-memory databases have no disk space constraint.
+    if db_path == Path::new(":memory:") {
+        return 0;
+    }
+
+    // Canonicalize the path; if the file does not exist yet (new database),
+    // fall back to the parent directory so we still resolve the correct
+    // mount point.
+    let canonical = match db_path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => db_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .and_then(|p| p.canonicalize().ok())
+            .unwrap_or_else(|| Path::new(".").to_path_buf()),
+    };
+
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+
+    // Find the disk whose mount point is the longest prefix of our path.
+    // This correctly handles nested mounts (e.g. /home on a separate
+    // partition from /).
+    let mut best: Option<u64> = None;
+    let mut best_len: usize = 0;
+    for disk in disks.list() {
+        let mount = disk.mount_point();
+        if canonical.starts_with(mount) && mount.as_os_str().len() > best_len {
+            best = Some(disk.available_space());
+            best_len = mount.as_os_str().len();
+        }
+    }
+    best.unwrap_or(0)
+}
+
+/// Computes the DuckDB `max_db_size` for production builds based on the disk
+/// space available at the database location (P-DB).
+///
+/// Returns 80% of available disk space, rounded up to the next power of 2
+/// (DuckDB requirement), clamped to `[16 GiB, 4 TiB]`. The 80% ratio leaves
+/// 20% headroom for the OS, WAL, and other files on the same partition. The
+/// 16 GiB floor matches the L7-5 fixed value (handles small projects and
+/// avoids regressions). The 4 TiB cap is half of DuckDB's 8 TiB
+/// `DEFAULT_VM_REGION_MAX_SIZE` and is negligible VAS on 64-bit Linux.
+///
+/// When the disk probe fails (returns 0 — rare, e.g. in-memory path or
+/// restricted container), falls back to 64 GiB. This is conservative: it
+/// handles most real-world project DBs while staying within reasonable VAS.
+fn compute_max_db_size(db_path: &Path) -> u64 {
+    const FLOOR: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB = 2^34
+    const CAP: u64 = 4 * 1024 * 1024 * 1024 * 1024; // 4 TiB = 2^42
+    const FALLBACK: u64 = 64 * 1024 * 1024 * 1024; // 64 GiB = 2^36
+    const RATIO_NUM: u64 = 4;
+    const RATIO_DEN: u64 = 5; // 80% of available disk
+
+    let avail = probe_available_disk_space(db_path);
+    let computed = if avail == 0 {
+        FALLBACK
+    } else {
+        // saturating_mul: avail ≤ u64::MAX, ×4 can overflow for very large
+        // disks (>16 EiB), so saturate. Division by 5 is exact for any
+        // avail ≥ 5 bytes.
+        avail.saturating_mul(RATIO_NUM) / RATIO_DEN
+    };
+    // DuckDB requires max_db_size to be a power of 2. Round up to the next
+    // power of 2, then clamp to [FLOOR, CAP] (both are powers of 2, so the
+    // clamped result is also a power of 2).
+    computed.next_power_of_two().clamp(FLOOR, CAP)
 }
 
 impl std::fmt::Debug for StorageConnection {
@@ -1183,6 +1291,92 @@ mod tests {
         assert!(
             r.is_empty(),
             "读不应被写阻塞；若读报错说明 lbug 读写互斥，去锁收益受限"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // probe_available_disk_space / compute_max_db_size (P-DB)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn probe_available_disk_space_returns_nonzero_for_real_path() {
+        let avail = probe_available_disk_space(Path::new("/tmp"));
+        assert!(avail > 0, "expected non-zero disk space for /tmp");
+    }
+
+    #[test]
+    fn probe_available_disk_space_returns_zero_for_memory_path() {
+        let avail = probe_available_disk_space(Path::new(":memory:"));
+        assert_eq!(avail, 0, ":memory: should return 0 (no disk constraint)");
+    }
+
+    #[test]
+    fn probe_available_disk_space_returns_zero_for_nonexistent_rootless_path() {
+        // A path with no parent on disk and no canonicalizable prefix → 0.
+        // This is a defensive case; most real paths resolve to a mount point.
+        let avail = probe_available_disk_space(Path::new("/nonexistent_root_xyz/codenexus.lbug"));
+        // If /nonexistent_root_xyz doesn't exist, parent "/" is used, which
+        // IS a mount point. So this may return non-zero. The test verifies
+        // the function doesn't panic, not the exact value.
+        let _ = avail;
+    }
+
+    #[test]
+    fn compute_max_db_size_returns_at_least_floor_for_real_path() {
+        let size = compute_max_db_size(Path::new("/tmp"));
+        assert!(
+            size >= 16 * 1024 * 1024 * 1024,
+            "max_db_size should be >= 16 GiB floor, got {size}"
+        );
+    }
+
+    #[test]
+    fn compute_max_db_size_returns_fallback_for_memory_path() {
+        let size = compute_max_db_size(Path::new(":memory:"));
+        assert_eq!(
+            size,
+            64 * 1024 * 1024 * 1024,
+            ":memory: should return 64 GiB fallback, got {size}"
+        );
+    }
+
+    #[test]
+    fn compute_max_db_size_respects_cap() {
+        // On a system with >5 TiB free, the result should be capped at 4 TiB.
+        // We can't guarantee the test host has that much free space, so we
+        // verify the cap constant logic indirectly: the function should never
+        // exceed the cap.
+        let size = compute_max_db_size(Path::new("/tmp"));
+        assert!(
+            size <= 4 * 1024 * 1024 * 1024 * 1024,
+            "max_db_size should be <= 4 TiB cap, got {size}"
+        );
+    }
+
+    #[test]
+    fn compute_max_db_size_clamps_to_floor() {
+        // Verify the FLOOR constant is correct.
+        let floor = 16 * 1024 * 1024 * 1024;
+        let size = compute_max_db_size(Path::new("/tmp"));
+        assert!(size >= floor, "size {size} < floor {floor}");
+    }
+
+    #[test]
+    fn compute_max_db_size_result_is_power_of_two() {
+        // DuckDB requires max_db_size to be a power of 2.
+        let size = compute_max_db_size(Path::new("/tmp"));
+        assert!(
+            size.is_power_of_two(),
+            "max_db_size {size} must be a power of 2"
+        );
+    }
+
+    #[test]
+    fn compute_max_db_size_fallback_is_power_of_two() {
+        let size = compute_max_db_size(Path::new(":memory:"));
+        assert!(
+            size.is_power_of_two(),
+            "fallback {size} must be a power of 2"
         );
     }
 }

@@ -149,6 +149,12 @@ fn run_cli() {
         }
     }
 
+    // --fresh: delete existing DB file before Kit init to reclaim space.
+    // DuckDB DELETE doesn't reclaim pages and LadybugDB doesn't support
+    // VACUUM, so repeated `--force` indexes accumulate dead space. --fresh
+    // drops the old file so Kit opens a fresh one. See [`handle_fresh_flag`].
+    handle_fresh_flag(sub_name, sub_matches, &db);
+
     // Gate read-only commands against a missing DB file. Without this,
     // `list --db <missing>` would build an empty DB (create-on-open) and
     // return `[]` with exit 0 — a silent success. Creating commands bypass.
@@ -379,6 +385,82 @@ fn validate_db_exists(db: &str, sub_name: &str) -> Result<(), String> {
         ))
     } else {
         Ok(())
+    }
+}
+
+/// Deletes the DB file for `--fresh` mode (Rule 12: space reclamation).
+///
+/// Returns `Ok(true)` if the file was deleted, `Ok(false)` if it did not
+/// exist (not an error — `--fresh` only ensures a clean state), or `Err` on
+/// failure (including refusal to delete non-`.lbug` files).
+///
+/// # Safety
+///
+/// Refuses to delete files without the `.lbug` extension. Without this,
+/// `codenexus index --db /home/user/important.txt --fresh true` would delete
+/// an arbitrary file — violating least-surprise (`--db` semantically points
+/// at a database, not any file).
+///
+/// # TOCTOU
+///
+/// Calls `remove_file` directly without a prior `exists()` check, matching
+/// `ErrorKind::NotFound` to handle the "already absent" case. This eliminates
+/// the time-of-check-to-time-of-use window between `exists()` and
+/// `remove_file()`.
+fn delete_db_for_fresh(db: &str) -> std::io::Result<bool> {
+    let db_path = PathBuf::from(db);
+    if db_path.extension().and_then(|s| s.to_str()) != Some("lbug") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("refusing to delete non-.lbug file: {}", db_path.display()),
+        ));
+    }
+    match std::fs::remove_file(&db_path) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// Handles the `--fresh` CLI flag: deletes the existing DB file before Kit
+/// init so Kit opens a fresh one (DuckDB DELETE doesn't reclaim pages and
+/// LadybugDB doesn't support VACUUM, so repeated `--force` indexes accumulate
+/// dead space).
+///
+/// Only the `index` command supports `--fresh` (the `import` command has no
+/// `fresh` parameter in its `#[forge]` signature, so sdforge does not
+/// register it; `try_get_one` returns `Err` → no-op). Other commands would
+/// lose data without re-indexing (Rule 12).
+///
+/// Exits with code 4 if `--db` points at a non-`.lbug` file (safety), or code
+/// 5 if deletion fails (Rule 12: failure must surface, not be swallowed).
+fn handle_fresh_flag(sub_name: &str, sub_matches: &sdforge::clap::ArgMatches, db: &str) {
+    if sub_name != "index" {
+        return;
+    }
+    let fresh = sub_matches
+        .try_get_one::<String>("fresh")
+        .ok()
+        .flatten()
+        .is_some_and(|s| s == "true");
+    if !fresh {
+        return;
+    }
+    match delete_db_for_fresh(db) {
+        Ok(true) => {
+            eprintln!("[info] --fresh: deleted existing DB file {}", db);
+        }
+        Ok(false) => {
+            // File did not exist — nothing to delete, not an error.
+        }
+        Err(e) => {
+            eprintln!("[error] --fresh: {e}");
+            std::process::exit(if e.kind() == std::io::ErrorKind::InvalidInput {
+                4
+            } else {
+                5
+            });
+        }
     }
 }
 
@@ -737,6 +819,54 @@ mod tests {
                 "{cmd} should not require existing DB"
             );
         }
+    }
+
+    // --- delete_db_for_fresh ---
+
+    #[test]
+    fn delete_db_for_fresh_deletes_existing_lbug_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = dir.path().join("proj.lbug");
+        std::fs::write(&db, b"dummy").unwrap();
+        let result = delete_db_for_fresh(db.to_str().unwrap());
+        assert!(result.is_ok(), "expected Ok, got {:?}", result.err());
+        assert_eq!(result.unwrap(), true, "should report deleted");
+        assert!(!db.exists(), "file should be deleted");
+    }
+
+    #[test]
+    fn delete_db_for_fresh_returns_ok_false_when_file_not_exists() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = dir.path().join("never_existed.lbug");
+        let result = delete_db_for_fresh(db.to_str().unwrap());
+        assert!(result.is_ok(), "expected Ok, got {:?}", result.err());
+        assert_eq!(result.unwrap(), false, "should report not-existed");
+    }
+
+    #[test]
+    fn delete_db_for_fresh_refuses_non_lbug_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = dir.path().join("important.txt");
+        std::fs::write(&db, b"do not delete").unwrap();
+        let result = delete_db_for_fresh(db.to_str().unwrap());
+        let err = result.expect_err("non-.lbug should be refused");
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::InvalidInput,
+            "expected InvalidInput, got {err:?}"
+        );
+        assert!(db.exists(), "non-.lbug file must not be deleted");
+    }
+
+    #[test]
+    fn delete_db_for_fresh_returns_err_for_directory() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // Name with .lbug extension but actually a directory — remove_file
+        // fails on directories with PermissionDenied or IsADirectory.
+        let fake_db = dir.path().join("dir.lbug");
+        std::fs::create_dir(&fake_db).unwrap();
+        let result = delete_db_for_fresh(fake_db.to_str().unwrap());
+        assert!(result.is_err(), "directory should cause error, got Ok");
     }
 
     #[test]
