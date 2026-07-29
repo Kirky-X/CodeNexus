@@ -432,8 +432,9 @@ fn delete_db_for_fresh(db: &str) -> std::io::Result<bool> {
 /// register it; `try_get_one` returns `Err` → no-op). Other commands would
 /// lose data without re-indexing (Rule 12).
 ///
-/// Exits with code 4 if `--db` points at a non-`.lbug` file (safety), or code
+/// Exits with code 6 if `--db` points at a non-`.lbug` file (safety), or code
 /// 5 if deletion fails (Rule 12: failure must surface, not be swallowed).
+/// Code 4 is reserved for NotFound (validate_db_exists).
 fn handle_fresh_flag(sub_name: &str, sub_matches: &sdforge::clap::ArgMatches, db: &str) {
     if sub_name != "index" {
         return;
@@ -442,7 +443,7 @@ fn handle_fresh_flag(sub_name: &str, sub_matches: &sdforge::clap::ArgMatches, db
         .try_get_one::<String>("fresh")
         .ok()
         .flatten()
-        .is_some_and(|s| s == "true");
+        .is_some_and(|s| s.parse::<bool>().unwrap_or(false));
     if !fresh {
         return;
     }
@@ -451,12 +452,12 @@ fn handle_fresh_flag(sub_name: &str, sub_matches: &sdforge::clap::ArgMatches, db
             eprintln!("[info] --fresh: deleted existing DB file {}", db);
         }
         Ok(false) => {
-            // File did not exist — nothing to delete, not an error.
+            eprintln!("[info] --fresh: no existing DB file at {db}, nothing to delete");
         }
         Err(e) => {
             eprintln!("[error] --fresh: {e}");
             std::process::exit(if e.kind() == std::io::ErrorKind::InvalidInput {
-                4
+                6
             } else {
                 5
             });
@@ -535,6 +536,9 @@ const SENTINEL_DEFAULTS: &[(&str, &str, &str)] = &[
     // impl methods (e.g. `fmt#Display`) are excluded by default. Users can
     // opt out via `--check_dynamic_dispatch false` for adversarial testing.
     ("dead_code", "check_dynamic_dispatch", "true"),
+    // — index: fresh defaults to false so users can omit --fresh; only
+    // --fresh true triggers DB file deletion (P-DB space reclamation).
+    ("index", "fresh", "false"),
 ];
 
 /// Applies sentinel `default_value`s to CLI parameters listed in

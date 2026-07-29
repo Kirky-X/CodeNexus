@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.12] - 2026-07-30
+
+P-DB + P-DB-fix：动态 `max_db_size` + `--fresh` 标志解决 DuckDB 16 GiB 硬编码上限 + DELETE 死空间累积导致的 DB 膨胀问题（6.6 MB 源码 → 35 GB DB）。read-only 连接 max_db_size 从 16 GiB 改为 4 TiB cap，修复 >16 GiB DB 查询崩溃的 CRITICAL bug。
+
 ### Fixed
 
 - **fix(service): P-01 — UNWIND batch UPDATE for LSP hover `semantic_type`** — `enhance_with_lsp` hover 循环改用批量 Cypher `UNWIND [... ] AS row MATCH (n {id: row.id, project: '...'}) SET n.semantic_type = row.sem;`，每批 500 条 symbol 一条语句，替代原先每 symbol 一条 `execute(&build_semantic_type_update(...))`。100k symbols 仓库：100k 次同步 SQL 往返 → 200 次（500× 减少），节省 100–300 s 纯 SQL 等待。新增 `build_batch_semantic_type_update`（构造 UNWIND 语句，`escape_cypher_string` 转义 id/sem/project，`write!` 直接写入预分配 String 避免临时 format! 分配，动态 `with_capacity` 估算避免 reallocation）+ `flush_semantic_type_batch`（先尝试批量 execute，失败 emit `[warn]` 后回退到逐条 execute 以保证前向兼容，Rule 12 失败可见性）+ `LSP_HOVER_BATCH_SIZE=500` 常量。`flush_semantic_type_batch` 返回 `()`（非 usize），调用方依赖 enhanced/skipped 计数即可。11 个新单元测试覆盖空 batch / 单条 / 500 条 / 转义 / 批量成功 / 批量失败回退 / 全失败 / 计数正确性。
@@ -26,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **fix(storage): P-11 — BufWriter 64 KB → 256 KB** — `save_nodes_stream`/`save_edges_stream` 的 `BufWriter` 容量从 64 KB 提升到 256 KB，1M-row CSV dump 的 syscall 从 ~16/MB 降至 ~4/MB。内存开销有界：每次调用至多一个 256 KB BufWriter 存活。
 - **fix(storage): P-05 — dynamic DuckDB `buffer_pool_size`** — `compute_buffer_pool_size()` 新函数：25% 可用内存，clamp 到 `[256 MiB, 4 GiB]`。70 GB 主机（~60 GB 可用）→ 4 GiB（cap）；16 GB 主机（~12 GB 可用）→ 3 GiB；4 GB 主机（~2 GB 可用）→ 512 MiB。`sysinfo` 返回 0 时回退到 L7-5 的 4 GiB 固定值。测试构建保持 256 MiB 固定 cap（并行测试需要）。
 - **fix(service): P-09 — document why UNION is not used** — `build_symbol_queries` 添加文档注释说明为何保持 2 个独立查询：LadybugDB 的 Cypher 子集不支持 `UNION`/`UNION ALL`（参见 `analysis/architecture.rs`），也不支持多标签 `WHERE (n:A OR n:B)` 表达式。两个查询顺序执行，结果在 Rust 中通过 `rows.extend(r)` 合并。
+- **fix(storage): P-DB — dynamic `max_db_size` + `--fresh` flag for DB space reclamation** — DuckDB `max_db_size` 从硬编码 16 GiB 改为动态计算（`compute_max_db_size`：80% 可用磁盘空间，`next_power_of_two` 对齐 DuckDB 2 的幂要求，clamp 到 `[16 GiB, 4 TiB]`，`OnceLock` 进程级缓存避免重复探测）。新增 `--fresh` 标志（仅 `index` 命令）：索引前删除旧 DB 文件，回收 DuckDB DELETE 不回收的死空间（6.6 MB 源码经多次 `--force` 累积至 35 GB DB 的问题）。`delete_db_for_fresh` 含 `.lbug` 扩展名校验（防误删非 DB 文件）+ TOCTOU 修复（直接 `remove_file` 匹配 `NotFound`，消除 `exists()` + `remove_file()` 竞态窗口）+ `exit(5/6)` 错误处理（规则 12 失败显性化）。sysinfo 添加 `disk` feature 支持磁盘空间探测。
+- **fix(storage): P-DB-fix — read-only 连接 `max_db_size` 改为 4 TiB cap + 审查修复** — kueiku 审查发现 C1 CRITICAL：read-only 连接固定 16 GiB `max_db_size`，但 DB 文件可能 >16 GiB（P-DB 修复动机），read-only 查询（query/impact/trace 等）触及 >16 GiB 页面会触发 `BufferManagerException`。lbug `VMRegion` 用 `max_db_size` 决定 mmap 区域大小，read-only 连接也需要覆盖整个 DB 文件。改为 4 TiB CAP（虚拟地址空间预留，非实际内存）。同步修复：H1 — `--fresh` 添加到 `SENTINEL_DEFAULTS` 默认 `false`（原先 sdforge 标记 `required=true`，用户必须传 `--fresh false`）；M1 — `handle_fresh_flag` 用 `parse::<bool>()` 替代 `s == "true"`（与 handler 的 `bool::from_str` 保持一致，`--fresh True` 不再静默忽略）；MEDIUM-2 — exit code 4 → 6（InvalidInput 语义与 NotFound 的 exit 4 冲突）；LOW-2 — `Ok(false)` 添加日志（用户可见 `--fresh` 生效状态）；L-2 — `next_power_of_two` 改为 `checked_next_power_of_two().unwrap_or(CAP)`（消除理论 panic 风险）。
 
 ## [0.3.11] - 2026-07-26
 

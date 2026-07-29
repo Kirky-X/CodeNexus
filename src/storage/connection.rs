@@ -215,12 +215,15 @@ impl StorageConnection {
             // the first probe's value, but the 16 GiB floor handles small
             // disks and the 4 TiB cap handles large ones).
             //
-            // Read-only connections skip the probe entirely: they never grow
-            // the DB, so `max_db_size` is a no-op for them. Use the 16 GiB
-            // floor (matches L7-5 default, avoids probe on every query).
+            // P-DB-fix: read-only connections still need max_db_size to cover
+            // the entire DB file — lbug's VMRegion uses max_db_size to size
+            // the mmap region, and read-only queries touching pages beyond
+            // max_db_size throw BufferManagerException. Use the 4 TiB CAP
+            // (power of 2, avoids probe on every query). This is virtual
+            // address space reservation (mmap MAP_NORESERVE), not actual memory.
             static MAX_DB_SIZE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
             let max_db_size = if read_only {
-                16 * 1024 * 1024 * 1024 // 16 GiB floor (read-only: no growth)
+                4 * 1024 * 1024 * 1024 * 1024 // 4 TiB cap (read-only: covers any DB size)
             } else {
                 *MAX_DB_SIZE.get_or_init(|| compute_max_db_size(path.as_ref()))
             };
@@ -473,8 +476,12 @@ fn compute_max_db_size(db_path: &Path) -> u64 {
     };
     // DuckDB requires max_db_size to be a power of 2. Round up to the next
     // power of 2, then clamp to [FLOOR, CAP] (both are powers of 2, so the
-    // clamped result is also a power of 2).
-    computed.next_power_of_two().clamp(FLOOR, CAP)
+    // clamped result is also a power of 2). checked_next_power_of_two guards
+    // against theoretical panic when computed > 2^63 (debug mode).
+    computed
+        .checked_next_power_of_two()
+        .unwrap_or(CAP)
+        .clamp(FLOOR, CAP)
 }
 
 impl std::fmt::Debug for StorageConnection {
