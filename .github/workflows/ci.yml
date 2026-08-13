@@ -128,5 +128,11 @@ jobs:
         uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # 临时忽略以下 advisory，与 deny.toml 保持一致，待上游修复后移除：
+          # - RUSTSEC-2026-0235 (rkyv 0.7.46)：rust_decimal 可选 feature 未启用，不进入构建图
+          # - RUSTSEC-2026-0202 (cxx)：lbug 精确锁定 =1.0.138，无法升级
+          # - RUSTSEC-2026-0221 (event-listener)：smol-rs 间接依赖，待上游修复
+          # - RUSTSEC-2024-0436 (paste)：tokenizers/parquet 间接依赖，无升级路径
+          ignore: RUSTSEC-2026-0235,RUSTSEC-2026-0202,RUSTSEC-2026-0221,RUSTSEC-2024-0436
       - name: cargo-deny (license / ban / advisory)
         uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2
