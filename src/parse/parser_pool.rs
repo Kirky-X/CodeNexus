@@ -234,14 +234,16 @@ mod tests {
     #[test]
     fn get_parser_caches_multiple_languages() {
         let pool = ParserPool::new();
-        for lang in Language::all() {
+        // Only test languages that have tree-sitter parsers (extension-only languages like
+        // Swift/R/Sql etc. are excluded).
+        for lang in Language::compiled() {
             let parser = pool.get_parser(lang);
             assert!(parser.is_ok(), "get_parser should succeed for {lang}");
         }
         assert_eq!(
             pool.len(),
-            Language::all().len(),
-            "pool should have one parser per language"
+            Language::compiled().len(),
+            "pool should have one parser per compiled language"
         );
     }
 

@@ -42,6 +42,15 @@ pub enum Language {
     Json,
     Regex,
     Verilog,
+    // Extended languages (extension-only, no tree-sitter parser)
+    Swift,
+    R,
+    Sql,
+    VisualBasic,
+    Pascal,
+    Ada,
+    Assembly,
+    Matlab,
 }
 
 impl Language {
@@ -70,6 +79,14 @@ impl Language {
             Language::Json,
             Language::Regex,
             Language::Verilog,
+            Language::Swift,
+            Language::R,
+            Language::Sql,
+            Language::VisualBasic,
+            Language::Pascal,
+            Language::Ada,
+            Language::Assembly,
+            Language::Matlab,
         ]
     }
 
@@ -150,6 +167,14 @@ impl Language {
             Language::Json => &["json", "jsonc"],
             Language::Regex => &["regex"],
             Language::Verilog => &["v", "sv"],
+            Language::Swift => &["swift"],
+            Language::R => &["r", "R"],
+            Language::Sql => &["sql"],
+            Language::VisualBasic => &["vb", "bas", "frm"],
+            Language::Pascal => &["pas", "pp"],
+            Language::Ada => &["adb", "ads", "ada"],
+            Language::Assembly => &["asm", "s"],
+            Language::Matlab => &["m"],
         }
     }
 
@@ -180,6 +205,14 @@ impl Language {
             "json" | "jsonc" => Some(Language::Json),
             "regex" => Some(Language::Regex),
             "v" | "sv" => Some(Language::Verilog),
+            "swift" => Some(Language::Swift),
+            "r" => Some(Language::R),
+            "sql" => Some(Language::Sql),
+            "vb" | "bas" | "frm" => Some(Language::VisualBasic),
+            "pas" | "pp" => Some(Language::Pascal),
+            "adb" | "ads" | "ada" => Some(Language::Ada),
+            "asm" | "s" => Some(Language::Assembly),
+            "m" => Some(Language::Matlab),
             _ => None,
         }
     }
@@ -209,6 +242,14 @@ impl fmt::Display for Language {
             Language::Json => f.write_str("json"),
             Language::Regex => f.write_str("regex"),
             Language::Verilog => f.write_str("verilog"),
+            Language::Swift => f.write_str("swift"),
+            Language::R => f.write_str("r"),
+            Language::Sql => f.write_str("sql"),
+            Language::VisualBasic => f.write_str("visualbasic"),
+            Language::Pascal => f.write_str("pascal"),
+            Language::Ada => f.write_str("ada"),
+            Language::Assembly => f.write_str("assembly"),
+            Language::Matlab => f.write_str("matlab"),
         }
     }
 }
@@ -239,6 +280,14 @@ impl FromStr for Language {
             "json" => Ok(Language::Json),
             "regex" => Ok(Language::Regex),
             "verilog" | "v" => Ok(Language::Verilog),
+            "swift" => Ok(Language::Swift),
+            "r" => Ok(Language::R),
+            "sql" => Ok(Language::Sql),
+            "visualbasic" | "vb" => Ok(Language::VisualBasic),
+            "pascal" | "pas" => Ok(Language::Pascal),
+            "ada" => Ok(Language::Ada),
+            "assembly" | "asm" => Ok(Language::Assembly),
+            "matlab" | "m" => Ok(Language::Matlab),
             other => Err(format!("unknown Language: {other}")),
         }
     }
@@ -249,8 +298,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn has_all_21_variants() {
-        assert_eq!(Language::all().len(), 21);
+    fn has_all_29_variants() {
+        assert_eq!(Language::all().len(), 29);
     }
 
     #[test]
