@@ -120,7 +120,7 @@ url = { version = "2", optional = true }
 sdforge = { version = "0.4", default-features = false, optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
 oxcache = { version = "0.3", default-features = false, features = ["minimal"], optional = true }
-oxiarc-zstd = { version = "0.3", default-features = false, optional = true }
+oxiarc-zstd = { version = "0.4", default-features = false, optional = true }
 inklog = { version = "0.1", default-features = false }
 regex = "1"
 icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"], optional = true }
@@ -132,7 +132,7 @@ time = { version = "0.3", features = ["macros"] }
 rust_decimal = "1.37"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serial_test = "3"
-oxiarc-zstd = { version = "0.3", default-features = false }
+oxiarc-zstd = { version = "0.4", default-features = false }
 tracing-subscriber = "0.3"
 crossbeam-channel = "0.5"
 
