@@ -131,7 +131,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 time = { version = "0.3", features = ["macros"] }
 rust_decimal = "1.37"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-serial_test = "3"
+serial_test = "4"
 oxiarc-zstd = { version = "0.3", default-features = false }
 tracing-subscriber = "0.3"
 crossbeam-channel = "0.5"
