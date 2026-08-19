@@ -1,0 +1,34 @@
+{
+  "name": "gson",
+  "node_counts_by_label": {
+    "Annotation": 8,
+    "Class": 655,
+    "Community": 313,
+    "Constructor": 335,
+    "Enum": 26,
+    "File": 292,
+    "Folder": 117,
+    "Interface": 27,
+    "Method": 2856,
+    "Process": 277,
+    "Property": 1071,
+    "Section": 105,
+    "Variable": 65
+  },
+  "edge_counts_by_type": {
+    "ACCESSES": 1189,
+    "CALLS": 6081,
+    "CONTAINS": 499,
+    "DEFINES": 784,
+    "EXTENDS": 101,
+    "HAS_METHOD": 3167,
+    "HAS_PROPERTY": 1060,
+    "IMPLEMENTS": 91,
+    "IMPORTS": 1015,
+    "MEMBER_OF": 2412,
+    "METHOD_IMPLEMENTS": 62,
+    "METHOD_OVERRIDES": 128,
+    "STEP_IN_PROCESS": 1297
+  },
+  "file_count": 292
+}

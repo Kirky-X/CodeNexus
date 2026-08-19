@@ -1,0 +1,36 @@
+{
+  "name": "hermes-agent",
+  "node_counts_by_label": {
+    "Class": 2592,
+    "Community": 1209,
+    "Const": 154,
+    "File": 1508,
+    "Folder": 356,
+    "Function": 17785,
+    "Interface": 1,
+    "Method": 9,
+    "Process": 300,
+    "Property": 1427,
+    "Route": 7,
+    "Section": 17663,
+    "Tool": 10,
+    "Variable": 22543
+  },
+  "edge_counts_by_type": {
+    "ACCESSES": 350,
+    "CALLS": 28645,
+    "CONTAINS": 19373,
+    "DEFINES": 44511,
+    "ENTRY_POINT_OF": 20,
+    "EXTENDS": 99,
+    "HANDLES_ROUTE": 7,
+    "HANDLES_TOOL": 10,
+    "HAS_METHOD": 13098,
+    "HAS_PROPERTY": 965,
+    "IMPORTS": 2222,
+    "MEMBER_OF": 9189,
+    "METHOD_OVERRIDES": 11,
+    "STEP_IN_PROCESS": 1415
+  },
+  "file_count": 1508
+}

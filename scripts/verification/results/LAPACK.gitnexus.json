@@ -1,0 +1,25 @@
+{
+  "name": "LAPACK",
+  "node_counts_by_label": {
+    "Community": 127,
+    "Enum": 5,
+    "File": 6608,
+    "Folder": 35,
+    "Function": 3476,
+    "Macro": 1208,
+    "Process": 6,
+    "Property": 4,
+    "Section": 17,
+    "Typedef": 9,
+    "Variable": 5535
+  },
+  "edge_counts_by_type": {
+    "CALLS": 11812,
+    "CONTAINS": 6643,
+    "DEFINES": 10237,
+    "IMPORTS": 3036,
+    "MEMBER_OF": 3083,
+    "STEP_IN_PROCESS": 19
+  },
+  "file_count": 6608
+}

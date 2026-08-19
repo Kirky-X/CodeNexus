@@ -1,0 +1,31 @@
+{
+  "name": "redis",
+  "node_counts_by_type": {
+    "Class": 76,
+    "Enum": 85,
+    "File": 1384,
+    "Function": 11666,
+    "GlobalVar": 991,
+    "Macro": 4791,
+    "Method": 295,
+    "Parameter": 14574,
+    "Project": 1,
+    "Property": 6465,
+    "Struct": 738,
+    "Typedef": 715,
+    "Variable": 12552
+  },
+  "edge_counts_by_type": {
+    "CALLS": 13077,
+    "DATAFLOWS": 68867,
+    "DEFINES": 25827,
+    "EXTENDS": 42,
+    "IMPORTS": 1829,
+    "INCLUDES": 91
+  },
+  "file_counts_by_language": {
+    "c": 784,
+    "javascript": 1,
+    "python": 46
+  }
+}

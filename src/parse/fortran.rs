@@ -335,9 +335,15 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
 ///
 /// Fixed-form Fortran (F77) uses `*`, `C`, or `c` in column 1 as comment
 /// characters. Free-form Fortran (F90+, `.f90`/`.f95`) uses `!` only.
+///
+/// NOTE: only the lowercase `.f` extension is treated as fixed-form. The
+/// uppercase `.F` extension is free-form Fortran that goes through the C
+/// preprocessor (WRF style); its column-1 `C`/`c` lines are legal keywords
+/// such as `CONTAINS` / `CALL`, never comments, so preprocessing it would
+/// corrupt the AST.
 fn is_fixed_form_fortran(file_path: &str) -> bool {
     let ext = file_path.rsplit('.').next().unwrap_or("");
-    ext.eq_ignore_ascii_case("f")
+    ext == "f"
 }
 
 /// Preprocesses fixed-form Fortran source so tree-sitter-fortran can parse it.
@@ -359,10 +365,19 @@ fn preprocess_fixed_form_comments(source: &str, file_path: &str) -> String {
     let mut out = String::with_capacity(source.len());
     for line in source.split_inclusive('\n') {
         if let Some(first) = line.bytes().next() {
+            // Only rewrite the comment char when it is actually a comment:
+            // a column-1 `C`/`c`/`*` followed by whitespace or end-of-line.
+            // A `C` followed by a letter is a legal free-form statement
+            // (e.g. `CONTAINS`, `CALL`) — never rewrite those, otherwise the
+            // AST line numbers shift and subroutine starts are corrupted.
             if first == b'*' || first == b'C' || first == b'c' {
-                out.push('!');
-                out.push_str(&line[1..]);
-                continue;
+                let rest = &line[1..];
+                let ws = rest.starts_with([' ', '\t']) || rest.trim_end().is_empty();
+                if ws {
+                    out.push('!');
+                    out.push_str(rest);
+                    continue;
+                }
             }
         }
         out.push_str(line);
@@ -1477,11 +1492,35 @@ end function"#;
     #[test]
     fn is_fixed_form_detects_f_extension() {
         assert!(is_fixed_form_fortran("foo.f"));
-        assert!(is_fixed_form_fortran("foo.F"));
+        assert!(
+            !is_fixed_form_fortran("foo.F"),
+            "uppercase .F is free-form + CPP"
+        );
         assert!(is_fixed_form_fortran("src/bar.f"));
         assert!(!is_fixed_form_fortran("foo.f90"));
         assert!(!is_fixed_form_fortran("foo.f95"));
         assert!(!is_fixed_form_fortran("foo.rs"));
+    }
+
+    #[test]
+    fn preprocess_does_not_rewrite_contains() {
+        // A column-1 `CONTAINS` in a free-form `.F` file must not be treated
+        // as a fixed-form comment (regression: WRF module_clear_halos.F got
+        // its AST corrupted, shifting every subroutine start line by 7).
+        let src = "module m\ncontains\n  subroutine s()\n  end subroutine s\nend module m\n";
+        let out = preprocess_fixed_form_comments(src, "test.F");
+        assert_eq!(out, src, "free-form .F source must be returned unchanged");
+        assert!(
+            out.contains("contains"),
+            "CONTAINS must not become a comment"
+        );
+    }
+
+    #[test]
+    fn preprocess_does_not_rewrite_call_keyword() {
+        let src = "call foo()\n";
+        let out = preprocess_fixed_form_comments(src, "test.f");
+        assert!(out.contains("call"), "CALL must not be rewritten");
     }
 
     #[test]

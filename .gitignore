@@ -72,6 +72,9 @@ logs/
 openspec/
 specmark/
 
+# Graph viewer build output
+graph-viewer/dist/
+
 # Verification harness outputs (large, sample-derived; rebuild locally)
 tools/verification/results/
 

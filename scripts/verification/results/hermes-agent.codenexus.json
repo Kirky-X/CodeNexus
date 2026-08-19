@@ -1,0 +1,25 @@
+{
+  "name": "hermes-agent",
+  "node_counts_by_type": {
+    "Class": 2685,
+    "Const": 2,
+    "File": 815,
+    "Function": 4402,
+    "Interface": 1,
+    "Method": 12646,
+    "Parameter": 4037,
+    "Project": 1,
+    "Variable": 25106
+  },
+  "edge_counts_by_type": {
+    "CALLS": 21183,
+    "DATAFLOWS": 62979,
+    "DEFINES": 19736,
+    "EXTENDS": 360
+  },
+  "file_counts_by_language": {
+    "javascript": 3,
+    "python": 812,
+    "typescript": 3
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "name": "subno.ts",
+  "node_counts_by_type": {
+    "Class": 164,
+    "Const": 137,
+    "Enum": 27,
+    "File": 213,
+    "Function": 535,
+    "GlobalVar": 13,
+    "Impl": 22,
+    "Interface": 111,
+    "Macro": 25,
+    "Method": 1061,
+    "Module": 19,
+    "Parameter": 555,
+    "Project": 1,
+    "Property": 182,
+    "Struct": 45,
+    "Trait": 5,
+    "TypeAlias": 44,
+    "Typedef": 19,
+    "Variable": 1790
+  },
+  "edge_counts_by_type": {
+    "CALLS": 1270,
+    "DATAFLOWS": 4448,
+    "DEFINES": 2400,
+    "EXTENDS": 15,
+    "HAS_PROPERTY": 182,
+    "IMPLEMENTS": 22,
+    "IMPORTS": 176,
+    "READS": 447,
+    "WRITES": 182
+  },
+  "file_counts_by_language": {
+    "c": 9,
+    "javascript": 6,
+    "python": 26,
+    "rust": 21,
+    "typescript": 124
+  }
+}

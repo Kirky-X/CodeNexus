@@ -1,0 +1,25 @@
+{
+  "name": "claudecode",
+  "node_counts_by_type": {
+    "Class": 128,
+    "Const": 3304,
+    "Enum": 1,
+    "File": 1906,
+    "Function": 9010,
+    "Interface": 83,
+    "Method": 2034,
+    "Parameter": 7831,
+    "Project": 1,
+    "TypeAlias": 2435,
+    "Variable": 32395
+  },
+  "edge_counts_by_type": {
+    "CALLS": 24607,
+    "DATAFLOWS": 77768,
+    "DEFINES": 16969,
+    "IMPORTS": 11642
+  },
+  "file_counts_by_language": {
+    "typescript": 1906
+  }
+}

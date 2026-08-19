@@ -1,0 +1,38 @@
+{
+  "name": "CodeNexus",
+  "node_counts_by_label": {
+    "Class": 2,
+    "Community": 278,
+    "Const": 119,
+    "Enum": 41,
+    "File": 191,
+    "Folder": 28,
+    "Function": 4553,
+    "Impl": 117,
+    "Macro": 1,
+    "Module": 288,
+    "Process": 300,
+    "Property": 807,
+    "Section": 206,
+    "Static": 2,
+    "Struct": 278,
+    "Trait": 18,
+    "TypeAlias": 46,
+    "Variable": 11
+  },
+  "edge_counts_by_type": {
+    "ACCESSES": 4062,
+    "CALLS": 8635,
+    "CONTAINS": 412,
+    "DEFINES": 4730,
+    "HAS_METHOD": 205,
+    "HAS_PROPERTY": 779,
+    "IMPLEMENTS": 55,
+    "IMPORTS": 334,
+    "MEMBER_OF": 3510,
+    "METHOD_IMPLEMENTS": 118,
+    "STEP_IN_PROCESS": 1183,
+    "USES": 9
+  },
+  "file_count": 191
+}

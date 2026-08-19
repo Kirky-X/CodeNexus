@@ -1,0 +1,33 @@
+{
+  "name": "serde",
+  "node_counts_by_type": {
+    "Const": 51,
+    "Enum": 194,
+    "File": 188,
+    "Function": 1669,
+    "Impl": 66,
+    "Macro": 58,
+    "Module": 90,
+    "Parameter": 521,
+    "Project": 1,
+    "Property": 534,
+    "Static": 3,
+    "Struct": 440,
+    "Trait": 38,
+    "TypeAlias": 208,
+    "Variable": 741
+  },
+  "edge_counts_by_type": {
+    "CALLS": 1655,
+    "DATAFLOWS": 2491,
+    "DEFINES": 3306,
+    "HAS_PROPERTY": 534,
+    "IMPLEMENTS": 144,
+    "IMPORTS": 7,
+    "READS": 4241,
+    "WRITES": 1153
+  },
+  "file_counts_by_language": {
+    "rust": 188
+  }
+}

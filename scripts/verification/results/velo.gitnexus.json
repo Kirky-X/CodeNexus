@@ -1,0 +1,33 @@
+{
+  "name": "velo",
+  "node_counts_by_label": {
+    "CodeEmbedding": 6543,
+    "Community": 691,
+    "Const": 84,
+    "Enum": 186,
+    "File": 291,
+    "Folder": 39,
+    "Function": 6252,
+    "Impl": 625,
+    "Module": 569,
+    "Process": 300,
+    "Property": 2578,
+    "Section": 93,
+    "Static": 10,
+    "Struct": 828,
+    "Trait": 41,
+    "TypeAlias": 70
+  },
+  "edge_counts_by_type": {
+    "ACCESSES": 1298,
+    "CALLS": 7080,
+    "CONTAINS": 412,
+    "DEFINES": 11243,
+    "HAS_PROPERTY": 2875,
+    "IMPLEMENTS": 144,
+    "IMPORTS": 495,
+    "MEMBER_OF": 4616,
+    "STEP_IN_PROCESS": 1128
+  },
+  "file_count": 291
+}

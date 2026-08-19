@@ -1,0 +1,35 @@
+{
+  "name": "panorama",
+  "node_counts_by_label": {
+    "Class": 1122,
+    "Community": 481,
+    "Const": 823,
+    "File": 556,
+    "Folder": 100,
+    "Function": 4597,
+    "Interface": 123,
+    "Method": 62,
+    "Module": 2,
+    "Process": 300,
+    "Property": 1348,
+    "Route": 82,
+    "Section": 107,
+    "Variable": 5179
+  },
+  "edge_counts_by_type": {
+    "ACCESSES": 216,
+    "CALLS": 6803,
+    "CONTAINS": 753,
+    "DEFINES": 13256,
+    "ENTRY_POINT_OF": 2118,
+    "EXTENDS": 48,
+    "FETCHES": 1,
+    "HANDLES_ROUTE": 82,
+    "HAS_METHOD": 4072,
+    "HAS_PROPERTY": 1301,
+    "IMPORTS": 936,
+    "MEMBER_OF": 3955,
+    "STEP_IN_PROCESS": 1179
+  },
+  "file_count": 556
+}
