@@ -22,6 +22,8 @@ pub mod cross_service;
 pub mod daemon;
 pub mod dead_code;
 pub mod detect_changes;
+#[cfg(feature = "diagram")]
+pub mod diagram;
 pub mod error;
 pub mod export;
 pub mod hook;

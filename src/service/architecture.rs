@@ -343,6 +343,8 @@ mod tests {
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Route {id: 'r1', project: 'demo', name: '/api/users', qualifiedName: '/api/users', filePath: '', startLine: 0, endLine: 0, httpMethod: 'GET', path: '/api/users', parentQn: ''});").expect("create route");
         storage.execute("CREATE (:Function {id: 'f_a', project: 'demo', name: 'caller', qualifiedName: 'demo.caller', filePath: '/src/a/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: 'fetch(\"/api/users\");', parentQn: ''});").expect("create caller");
+        storage.execute("CREATE (:Function {id: 'f_h', project: 'demo', name: 'list_users', qualifiedName: 'demo.list_users', filePath: '/src/api/h.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create handler");
+        storage.execute("CREATE (:CodeRelation {id: 'e_hr', source: 'f_h', target: 'r1', type: 'HANDLES_ROUTE', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create HANDLES_ROUTE edge");
 
         let output = run_architecture(&kit, "demo").expect("run should succeed");
         assert!(

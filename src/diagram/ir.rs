@@ -175,17 +175,20 @@ pub struct DiagramDocument {
 }
 
 /// Maps a module path to its slug id: `/`-separated segments joined with `-`,
-/// with any character outside `[a-zA-Z0-9_-]` replaced by `-`.
+/// with any character outside `[a-zA-Z0-9_-]` replaced by `-`, and leading or
+/// trailing dashes trimmed (module paths like `/src/api` carry a leading
+/// separator).
 #[must_use]
 pub fn module_slug(module_name: &str) -> String {
-    module_name
+    let slug: String = module_name
         .chars()
         .map(|c| match c {
             '/' => '-',
             c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => c,
             _ => '-',
         })
-        .collect()
+        .collect();
+    slug.trim_matches('-').to_string()
 }
 
 /// Max source references attached to one component (archify parity).
@@ -383,6 +386,11 @@ mod tests {
     #[test]
     fn module_slug_replaces_separators_and_unsafe_chars() {
         assert_eq!(module_slug("src/api/v1"), "src-api-v1");
+        assert_eq!(
+            module_slug("/src/api"),
+            "src-api",
+            "leading separator trimmed"
+        );
         assert_eq!(module_slug("weird name"), "weird-name");
         assert_eq!(module_slug("a_b-c"), "a_b-c");
     }

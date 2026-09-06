@@ -945,14 +945,64 @@ impl<'a> ArchitectureAnalyzer<'a> {
     /// Returns [`crate::storage::error::StorageError`] if any underlying
     /// Cypher query fails.
     fn load_cross_service_deps(&self, project: &str) -> StorageResult<Vec<CrossServiceDep>> {
+        let escaped = escape_cypher_string(project);
         let detector = CrossServiceDetector::new(self.storage);
         let matches = detector.detect_all(project)?;
+
+        // Detector matches carry node ids (caller function id, callee route
+        // id or raw URL). `CrossServiceDep` documents module names, so map
+        // both sides to modules: caller id → its file's directory; callee
+        // route id → the directory of the function handling that route.
+        let mut id_to_module: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for table in &["Function", "Method"] {
+            let cypher = format!(
+                "MATCH (n:{table}) WHERE n.project = '{escaped}' \
+                 RETURN n.id AS id, n.filePath AS file_path;"
+            );
+            let rows = self.storage.query(&cypher)?;
+            for row in rows {
+                if row.len() < 2 {
+                    continue;
+                }
+                let id = row[0].as_str().unwrap_or_default().to_string();
+                let module = module_name_from_path(row[1].as_str().unwrap_or_default());
+                if !id.is_empty() && !module.is_empty() {
+                    id_to_module.insert(id, module);
+                }
+            }
+        }
+        let mut route_to_module: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let handles_cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.type = 'HANDLES_ROUTE' AND e.project = '{escaped}' \
+             RETURN e.source AS source, e.target AS target;"
+        );
+        let handle_rows = self.storage.query(&handles_cypher)?;
+        for row in handle_rows {
+            if row.len() < 2 {
+                continue;
+            }
+            let handler = row[0].as_str().unwrap_or_default().to_string();
+            let route = row[1].as_str().unwrap_or_default().to_string();
+            if let (Some(module), false) = (id_to_module.get(&handler), route.is_empty()) {
+                route_to_module.insert(route, module.clone());
+            }
+        }
+
         let deps = matches
             .into_iter()
-            .map(|m| CrossServiceDep {
-                from_module: m.caller,
-                to_module: m.callee,
-                protocol: protocol_to_string(&m.protocol),
+            .filter_map(|m| {
+                let from_module = id_to_module.get(&m.caller)?;
+                let to_module = route_to_module.get(&m.callee)?;
+                if from_module == to_module {
+                    return None; // same-module fetch is not cross-service
+                }
+                Some(CrossServiceDep {
+                    from_module: from_module.clone(),
+                    to_module: to_module.clone(),
+                    protocol: protocol_to_string(&m.protocol),
+                })
             })
             .collect();
         Ok(deps)
@@ -1758,6 +1808,18 @@ mod tests {
             10,
             r#"fetch("/api/users");"#,
         );
+        // The route is handled by a function in another module, giving the
+        // callee side a module to point at.
+        create_function(
+            &kit,
+            "h1",
+            "demo",
+            "list_users",
+            "demo.list_users",
+            "/src/api/h.rs",
+            1,
+        );
+        create_edge(&kit, "e_hr", "h1", "r1", "HANDLES_ROUTE", "demo");
 
         let storage = storage(&kit);
         let analyzer = ArchitectureAnalyzer::new(&*storage);
@@ -1768,8 +1830,14 @@ mod tests {
             result.cross_service_deps
         );
         let dep = &result.cross_service_deps[0];
-        assert_eq!(dep.from_module, "f1", "from_module should be caller id");
-        assert_eq!(dep.to_module, "r1", "to_module should be callee (route id)");
+        assert_eq!(
+            dep.from_module, "/src",
+            "from_module is the caller's module"
+        );
+        assert_eq!(
+            dep.to_module, "/src/api",
+            "to_module is the route handler's module"
+        );
         assert_eq!(
             dep.protocol, "HTTP",
             "protocol should be HTTP for REST match"

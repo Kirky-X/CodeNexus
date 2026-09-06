@@ -161,12 +161,15 @@ pub fn route_edges(doc: &DiagramDocument, layout: &super::layout::Layout) -> Vec
                 + CHANNEL_CLEARANCE
                 + error_channel_index as f64 * CHANNEL_STEP;
             error_channel_index += 1;
-            vec![
-                port_point(a, Side::Bottom, from_frac),
-                (port_point(a, Side::Bottom, from_frac).0, channel),
-                (port_point(b, Side::Bottom, to_frac).0, channel),
-                port_point(b, Side::Bottom, to_frac),
-            ]
+            let p0 = port_point(a, Side::Bottom, from_frac);
+            let p3 = port_point(b, Side::Bottom, to_frac);
+            if p0.0 == p3.0 {
+                // Straight vertical run: the horizontal channel leg would be
+                // zero-length, so drop it.
+                vec![p0, (p0.0, channel), p3]
+            } else {
+                vec![p0, (p0.0, channel), (p3.0, channel), p3]
+            }
         } else {
             match (from_side, to_side) {
                 (Side::Right, Side::Left) | (Side::Left, Side::Right) => {
@@ -213,7 +216,11 @@ pub fn route_edges(doc: &DiagramDocument, layout: &super::layout::Layout) -> Vec
                     error_channel_index += 1;
                     let p0 = port_point(a, from_side, from_frac);
                     let p3 = port_point(b, to_side, to_frac);
-                    vec![p0, (p0.0, channel), (p3.0, channel), p3]
+                    if p0.0 == p3.0 {
+                        vec![p0, (p0.0, channel), p3]
+                    } else {
+                        vec![p0, (p0.0, channel), (p3.0, channel), p3]
+                    }
                 }
             }
         };
