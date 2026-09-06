@@ -17,6 +17,7 @@
 //!   facts); the diagram never claims runtime behavior.
 
 pub mod deliver;
+pub mod delta;
 pub mod evidence;
 pub mod ir;
 pub mod layout;
@@ -27,6 +28,10 @@ pub mod svg;
 pub mod text;
 
 pub use deliver::write_atomically;
+pub use delta::{
+    canonicalize, compare, render_delta, ChangeKind, Classification, ComponentChange,
+    ConnectionChange, DeltaReceipt, DeltaRendered, DeltaReport, COMPARATOR_VERSION,
+};
 pub use evidence::{verify, EvidenceError, EvidenceReport, VerifiedSource};
 pub use ir::{
     from_overview, module_slug, ComponentType, DiagramComponent, DiagramConnection,
