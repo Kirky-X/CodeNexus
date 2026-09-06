@@ -52,6 +52,7 @@ compile_error!(
 pub mod cache;
 #[cfg(feature = "daemon")]
 pub mod daemon;
+pub mod diagnostics;
 pub mod discover;
 pub mod index;
 pub mod ir;

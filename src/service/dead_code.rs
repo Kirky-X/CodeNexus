@@ -8,6 +8,8 @@ use serde::Serialize;
 #[cfg(feature = "analysis")]
 use crate::analysis::dead_code::{DeadCodeConfig, DeadCodeDetector, DeadCodeEntry};
 #[cfg(feature = "analysis")]
+use crate::diagnostics::{Diagnostic, Severity};
+#[cfg(feature = "analysis")]
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(test, feature = "cli", feature = "analysis"))]
 use crate::model::EdgeType;
@@ -33,7 +35,7 @@ use sdforge::prelude::ApiError;
 
 /// JSON-serializable dead-code output.
 #[cfg(feature = "analysis")]
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct DeadCodeOutput {
     pub project: String,
     pub dead_code: Vec<DeadCodeEntry>,
@@ -45,6 +47,41 @@ pub struct DeadCodeOutput {
     pub current_head: String,
     /// `true` iff both commits are non-empty and differ.
     pub is_stale: bool,
+    /// Archify-style repair receipts (e.g. `index/stale` when the analysis
+    /// ran against an outdated index).
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Builds the `index/stale` repair receipt for a stale index.
+///
+/// Returns an empty vector when the index is fresh (commits equal, or either
+/// side unknown — non-git roots never report staleness).
+#[cfg(feature = "analysis")]
+fn stale_index_diagnostics(
+    project: &str,
+    root: &std::path::Path,
+    indexed_commit: &str,
+    current_head: &str,
+) -> Vec<Diagnostic> {
+    if !is_stale(indexed_commit, current_head) {
+        return Vec::new();
+    }
+    vec![Diagnostic {
+        code: "index/stale".to_string(),
+        severity: Severity::Warning,
+        subject: project.to_string(),
+        message: format!(
+            "index was taken at {indexed_commit} but HEAD is now {current_head}; results may not reflect current source"
+        ),
+        evidence: serde_json::json!({
+            "indexed_commit": indexed_commit,
+            "current_head": current_head,
+        }),
+        supported_fixes: vec![format!(
+            "Re-run: codenexus index --path {} --force true",
+            root.display()
+        )],
+    }]
 }
 
 /// Builds a [`DeadCodeConfig`] from CLI parameters.
@@ -121,12 +158,14 @@ pub fn run_dead_code(
         entry_patterns.push(e.as_str());
     }
     let entries = detector.detect(&project_id, &entry_patterns)?;
+    let diagnostics = stale_index_diagnostics(project, &root, &indexed_commit, &current_head);
     Ok(DeadCodeOutput {
         project: project.to_string(),
         dead_code: entries,
         indexed_commit,
         current_head,
         is_stale: stale,
+        diagnostics,
     })
 }
 
@@ -249,6 +288,7 @@ mod tests {
             indexed_commit: "abc123".into(),
             current_head: "def456".into(),
             is_stale: true,
+            diagnostics: vec![],
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(json.contains("\"project\":\"demo\""));
@@ -257,6 +297,31 @@ mod tests {
         assert!(json.contains("\"indexed_commit\":\"abc123\""));
         assert!(json.contains("\"current_head\":\"def456\""));
         assert!(json.contains("\"is_stale\":true"));
+        assert!(json.contains("\"diagnostics\":[]"));
+    }
+
+    #[test]
+    fn stale_index_diagnostics_emit_on_stale_commit() {
+        let diags =
+            stale_index_diagnostics("demo", std::path::Path::new("/repo"), "abc123", "def456");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, "index/stale");
+        assert_eq!(diags[0].severity, Severity::Warning);
+        assert_eq!(diags[0].subject, "demo");
+        assert_eq!(diags[0].evidence["indexed_commit"], "abc123");
+        assert_eq!(diags[0].evidence["current_head"], "def456");
+        assert!(diags[0].supported_fixes[0].contains("--force true"));
+    }
+
+    #[test]
+    fn stale_index_diagnostics_empty_when_fresh_or_unknown() {
+        assert!(
+            stale_index_diagnostics("demo", std::path::Path::new("/repo"), "abc", "abc").is_empty()
+        );
+        assert!(stale_index_diagnostics("demo", std::path::Path::new("/repo"), "", "").is_empty());
+        assert!(
+            stale_index_diagnostics("demo", std::path::Path::new("/repo"), "abc", "").is_empty()
+        );
     }
 
     // ===== T036: run_dead_code with config parameters =====

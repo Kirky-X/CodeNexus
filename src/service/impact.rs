@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[cfg(any(feature = "cli", feature = "mcp", test))]
+use crate::diagnostics::{Diagnostic, Severity};
+#[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::kit::{AsyncKit, AsyncReady, TraceModule};
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::model::EdgeType;
@@ -44,6 +46,31 @@ pub struct ImpactOutput {
     /// truncated subgraph. Always serialized (no skip) so incompleteness is
     /// explicit — rule 12: never hide a degraded result behind a default.
     pub truncated: bool,
+    /// Archify-style repair receipts (e.g. `impact/truncated` when the
+    /// subgraph was capped and results are incomplete).
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Builds the `impact/truncated` repair receipt for a capped subgraph.
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+fn truncated_diagnostics(symbol: &str, node_count: usize, depth: u32) -> Vec<Diagnostic> {
+    vec![Diagnostic {
+        code: "impact/truncated".to_string(),
+        severity: Severity::Warning,
+        subject: symbol.to_string(),
+        message: format!(
+            "subgraph hit the {MAX_SUBGRAPH_NODES}-node cap at depth {depth}; impact radius is a lower bound"
+        ),
+        evidence: serde_json::json!({
+            "node_count": node_count,
+            "depth": depth,
+            "max_subgraph_nodes": MAX_SUBGRAPH_NODES,
+        }),
+        supported_fixes: vec![
+            "Increase --max_depth only if the cap was not reached earlier".to_string(),
+            "Narrow --edge_types (e.g. \"CALLS\") to shrink the traversed subgraph".to_string(),
+        ],
+    }]
 }
 
 #[cfg(any(feature = "cli", feature = "mcp", test))]
@@ -63,9 +90,16 @@ fn impact_output(
         .iter()
         .map(|e| serde_json::to_value(e).unwrap_or(Value::Null))
         .collect();
+    let node_count = nodes.len();
+    let edge_count = edges.len();
+    let diagnostics = if truncated {
+        truncated_diagnostics(&symbol, node_count, depth)
+    } else {
+        Vec::new()
+    };
     ImpactOutput {
-        node_count: nodes.len(),
-        edge_count: edges.len(),
+        node_count,
+        edge_count,
         nodes,
         edges,
         symbol,
@@ -73,6 +107,7 @@ fn impact_output(
         risk_assessment: None,
         affected: vec![],
         truncated,
+        diagnostics,
     }
 }
 
@@ -260,6 +295,7 @@ mod tests {
             risk_assessment: None,
             affected: vec![],
             truncated: false,
+            diagnostics: vec![],
         };
         let json = serde_json::to_string(&output).unwrap();
         assert!(json.contains("\"symbol\":\"demo.foo\""));
@@ -270,6 +306,21 @@ mod tests {
         assert!(!json.contains("affected"));
         // truncated is always serialized (no skip), even when false.
         assert!(json.contains("\"truncated\":false"));
+        assert!(json.contains("\"diagnostics\":[]"));
+    }
+
+    #[test]
+    fn truncated_diagnostics_carry_upgrade_fixes() {
+        let diags = truncated_diagnostics("demo.foo", 500, 5);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, "impact/truncated");
+        assert_eq!(diags[0].severity, Severity::Warning);
+        assert_eq!(diags[0].subject, "demo.foo");
+        assert_eq!(diags[0].evidence["node_count"], 500);
+        assert_eq!(diags[0].evidence["depth"], 5);
+        assert!(diags[0].supported_fixes.len() >= 2);
+        assert!(diags[0].supported_fixes[0].contains("--max_depth"));
+        assert!(diags[0].supported_fixes[1].contains("--edge_types"));
     }
 
     #[test]
@@ -514,6 +565,7 @@ mod tests {
                 depth: 1,
             }],
             truncated: true,
+            diagnostics: truncated_diagnostics("demo.target", 2, 5),
         };
         let json = serde_json::to_string(&output).unwrap();
         assert!(json.contains("\"risk_assessment\""));
