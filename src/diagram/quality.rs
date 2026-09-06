@@ -213,24 +213,64 @@ fn label_boxes(doc: &DiagramDocument, layout: &Layout) -> Vec<LabelBox> {
 }
 
 fn segment_rect_min_distance(x0: f64, y0: f64, x1: f64, y1: f64, rect: &LabelBox) -> f64 {
-    // Sample the segment (orthogonal segments make 16 samples exact enough
-    // for a px-scale gate) and take the closest distance to the rect.
-    let mut min = f64::INFINITY;
-    for step in 0..=16_usize {
-        let t = f64::from(step as u32) / 16.0;
-        let px = x0 + (x1 - x0) * t;
-        let py = y0 + (y1 - y0) * t;
-        let rx = if px < rect.x {
-            rect.x - px
-        } else if px > rect.x + rect.w {
-            px - (rect.x + rect.w)
+    let (rx0, rx1) = (rect.x, rect.x + rect.w);
+    let (ry0, ry1) = (rect.y, rect.y + rect.h);
+    // Orthogonal segments (the only kind the router emits) get an exact
+    // analytic distance — fixed-step sampling misses narrow label boxes.
+    if (y0 - y1).abs() < f64::EPSILON {
+        let dy = if y0 < ry0 {
+            ry0 - y0
+        } else if y0 > ry1 {
+            y0 - ry1
         } else {
             0.0
         };
-        let ry = if py < rect.y {
-            rect.y - py
-        } else if py > rect.y + rect.h {
-            py - (rect.y + rect.h)
+        let (lo, hi) = (x0.min(x1), x0.max(x1));
+        let dx = if hi < rx0 {
+            rx0 - hi
+        } else if lo > rx1 {
+            lo - rx1
+        } else {
+            0.0
+        };
+        return dx.hypot(dy);
+    }
+    if (x0 - x1).abs() < f64::EPSILON {
+        let dx = if x0 < rx0 {
+            rx0 - x0
+        } else if x0 > rx1 {
+            x0 - rx1
+        } else {
+            0.0
+        };
+        let (lo, hi) = (y0.min(y1), y0.max(y1));
+        let dy = if hi < ry0 {
+            ry0 - hi
+        } else if lo > ry1 {
+            lo - ry1
+        } else {
+            0.0
+        };
+        return dx.hypot(dy);
+    }
+    // Non-orthogonal fallback (the orthogonal-arrows gate rejects these
+    // anyway): dense sampling is plenty for a px-scale advisory.
+    let mut min = f64::INFINITY;
+    for step in 0..=64_usize {
+        let t = f64::from(step as u32) / 64.0;
+        let px = x0 + (x1 - x0) * t;
+        let py = y0 + (y1 - y0) * t;
+        let rx = if px < rx0 {
+            rx0 - px
+        } else if px > rx1 {
+            px - rx1
+        } else {
+            0.0
+        };
+        let ry = if py < ry0 {
+            ry0 - py
+        } else if py > ry1 {
+            py - ry1
         } else {
             0.0
         };
@@ -543,5 +583,137 @@ mod tests {
                 .any(|d| d.code == "diagram/legend-clearance"),
             "{diagnostics:?}"
         );
+    }
+
+    #[test]
+    fn edge_through_a_third_label_trips_label_clearance() {
+        // a and b are the edge endpoints; c is a bystander whose label box
+        // (center 400, width 8, height 14 around y≈85) the segment crosses.
+        let mut document = doc();
+        // Rebuild the doc properly: a, b, c as separate components.
+        document.components = vec![
+            DiagramComponent {
+                id: "a".to_string(),
+                r#type: ComponentType::Service,
+                label: "a".to_string(),
+                sublabel: None,
+                tag: None,
+                sources: vec![],
+            },
+            DiagramComponent {
+                id: "b".to_string(),
+                r#type: ComponentType::Service,
+                label: "b".to_string(),
+                sublabel: None,
+                tag: None,
+                sources: vec![],
+            },
+            DiagramComponent {
+                id: "c".to_string(),
+                r#type: ComponentType::Service,
+                label: "c".to_string(),
+                sublabel: None,
+                tag: None,
+                sources: vec![],
+            },
+        ];
+        document.connections.clear();
+        let layout = Layout {
+            placements: vec![
+                Placement {
+                    id: "a".to_string(),
+                    x: 40.0,
+                    y: 200.0,
+                    w: 140.0,
+                    h: 100.0,
+                },
+                Placement {
+                    id: "b".to_string(),
+                    x: 600.0,
+                    y: 200.0,
+                    w: 140.0,
+                    h: 100.0,
+                },
+                Placement {
+                    id: "c".to_string(),
+                    x: 300.0,
+                    y: 40.0,
+                    w: 200.0,
+                    h: 100.0,
+                },
+            ],
+            view_box: (0.0, 0.0, 800.0, 400.0),
+        };
+        // Horizontal run at y=85 passes straight through c's label box
+        // (c center y=90, label box y 79..93).
+        let edges = vec![RoutedEdge {
+            from: "a".to_string(),
+            to: "b".to_string(),
+            variant: EdgeVariant::Primary,
+            points: vec![(180.0, 85.0), (600.0, 85.0)],
+            label_anchor: (390.0, 81.0),
+        }];
+        let diagnostics = check_artifact(
+            "<svg></svg>",
+            &document,
+            &layout,
+            &edges,
+            QualityProfile::Standard,
+        );
+        let clearance = diagnostics
+            .iter()
+            .find(|d| d.code == "diagram/label-clearance")
+            .unwrap_or_else(|| panic!("label-clearance must fire, got {diagnostics:?}"));
+        assert!(
+            clearance.evidence["min_clearance_px"].as_f64().unwrap() < 2.0,
+            "evidence carries measured clearance: {clearance:?}"
+        );
+    }
+
+    #[test]
+    fn multiple_edge_crossings_trip_relationship_gate() {
+        let document = doc();
+        let layout = Layout {
+            placements: vec![],
+            view_box: (0.0, 0.0, 800.0, 300.0),
+        };
+        // Three edges, two crossings with e1 (at x=50 and x=60):
+        // crossings=2 > budget=max(3/2,1)=1 → warning fires.
+        let edges = vec![
+            RoutedEdge {
+                from: "a".to_string(),
+                to: "b".to_string(),
+                variant: EdgeVariant::Primary,
+                points: vec![(0.0, 0.0), (100.0, 0.0)],
+                label_anchor: (50.0, -4.0),
+            },
+            RoutedEdge {
+                from: "b".to_string(),
+                to: "c".to_string(),
+                variant: EdgeVariant::Primary,
+                points: vec![(50.0, -10.0), (50.0, 10.0)],
+                label_anchor: (50.0, 0.0),
+            },
+            RoutedEdge {
+                from: "c".to_string(),
+                to: "a".to_string(),
+                variant: EdgeVariant::Primary,
+                points: vec![(60.0, -10.0), (60.0, 10.0)],
+                label_anchor: (60.0, 0.0),
+            },
+        ];
+        let diagnostics = check_artifact(
+            "<svg></svg>",
+            &document,
+            &layout,
+            &edges,
+            QualityProfile::Standard,
+        );
+        let crossings = diagnostics
+            .iter()
+            .find(|d| d.code == "diagram/relationship-crossings")
+            .expect("relationship-crossings must fire, got {diagnostics:?}");
+        assert_eq!(crossings.evidence["crossings"], 2);
+        assert_eq!(crossings.evidence["budget"], 1);
     }
 }
