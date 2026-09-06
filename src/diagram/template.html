@@ -108,6 +108,14 @@
     font-family: inherit; text-anchor: middle; }
   svg.arch-diagram .node-sublabel, svg.arch-diagram .node-tag,
   svg.arch-diagram .legend text { fill: var(--muted); font-size: 11px; }
+  svg.arch-diagram .legend-entry rect {
+    fill: var(--panel-2); stroke: var(--border); stroke-width: 1;
+  }
+  svg.arch-diagram .legend-entry text { text-anchor: start; }
+  svg.arch-diagram .legend-node-interface rect { stroke: var(--iface); }
+  svg.arch-diagram .legend-node-service rect { stroke: var(--service); }
+  svg.arch-diagram .legend-node-storage rect { stroke: var(--storage); }
+  svg.arch-diagram .legend-node-model rect { stroke: var(--model); }
   svg.arch-diagram .edge polyline { fill: none; stroke: var(--edge); stroke-width: 1.6; }
   svg.arch-diagram .edge-async polyline { stroke: var(--edge-async); stroke-dasharray: 6 4; }
   svg.arch-diagram .edge-error polyline { stroke: var(--edge-error); stroke-width: 2; }
