@@ -76,6 +76,9 @@ pub use sdforge;
 #[cfg(feature = "analysis")]
 pub mod analysis;
 
+#[cfg(feature = "diagram")]
+pub mod diagram;
+
 #[cfg(feature = "embed")]
 pub mod embed;
 

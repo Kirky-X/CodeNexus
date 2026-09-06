@@ -99,3 +99,8 @@ __pycache__/
 # Tool lock files
 .mimocode/
 strix_runs/
+
+# Qoder / Mimosa / Agents local config
+.qoder/
+.mimosa/
+.agents/
