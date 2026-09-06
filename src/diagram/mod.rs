@@ -17,6 +17,7 @@
 //!   facts); the diagram never claims runtime behavior.
 
 pub mod deliver;
+pub mod evidence;
 pub mod ir;
 pub mod layout;
 pub mod quality;
@@ -24,3 +25,16 @@ pub mod render;
 pub mod route;
 pub mod svg;
 pub mod text;
+
+pub use deliver::write_atomically;
+pub use evidence::{verify, EvidenceError, EvidenceReport, VerifiedSource};
+pub use ir::{
+    from_overview, module_slug, ComponentType, DiagramComponent, DiagramConnection,
+    DiagramDocument, DiagramMeta, EdgeVariant, RepositoryRef, SourceRef, SCHEMA_VERSION,
+};
+pub use layout::{layout_components, Layout, Placement};
+pub use quality::{apply_profile, check_artifact, QualityProfile};
+pub use render::{render, render_with, DiagramError, RenderedDiagram};
+pub use route::{route_edges, RoutedEdge};
+pub use svg::render_svg;
+pub use text::{fit_label, text_units};

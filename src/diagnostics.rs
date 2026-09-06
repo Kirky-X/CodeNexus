@@ -43,10 +43,16 @@ pub struct Diagnostic {
 }
 
 /// Content hash and byte size of a delivered artifact (or its specification).
+///
+/// `algorithm` names the hash (the project standardizes on BLAKE3 per
+/// ADR-009, so delivery receipts read `"blake3"` — archify's SHA-256 is
+/// deliberately not duplicated as a second hash family).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HashInfo {
-    /// SHA-256 hex digest.
-    pub sha256: String,
+    /// Hash algorithm identifier (`"blake3"`).
+    pub algorithm: String,
+    /// Lowercase hex digest.
+    pub hash: String,
     /// Payload size in bytes.
     pub bytes: u64,
 }
@@ -165,11 +171,13 @@ mod tests {
         let receipt = Receipt {
             command: "diagram".to_string(),
             specification: HashInfo {
-                sha256: "aa".to_string(),
+                algorithm: "blake3".to_string(),
+                hash: "aa".to_string(),
                 bytes: 1,
             },
             artifact: HashInfo {
-                sha256: "bb".to_string(),
+                algorithm: "blake3".to_string(),
+                hash: "bb".to_string(),
                 bytes: 2,
             },
             validation: ValidationSummary {
@@ -196,6 +204,7 @@ mod tests {
             assert!(json.contains(field), "missing {field} in {json}");
         }
         assert!(json.contains("\"evidence\":null"), "{json}");
+        assert!(json.contains("\"algorithm\":\"blake3\""), "{json}");
     }
 
     #[test]
