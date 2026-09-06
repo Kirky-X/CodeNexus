@@ -219,6 +219,89 @@ impl<'a> ArchitectureAnalyzer<'a> {
         })
     }
 
+    /// Maps each module (directory) to its dominant layer name.
+    ///
+    /// Reuses [`Self::detect_layers`] facts: every layer member qualified
+    /// name is resolved back to its file's module directory, then votes are
+    /// counted per `(module, layer)`. Ties break by fixed priority
+    /// `Controller < Repository < Service < Model` (most specific evidence
+    /// first). Modules whose members fall in no layer are absent from the
+    /// map.
+    pub fn module_layer_map(
+        &self,
+        project: &str,
+    ) -> StorageResult<std::collections::BTreeMap<String, String>> {
+        let layers = self.detect_layers(project)?;
+        let escaped = escape_cypher_string(project);
+
+        // qualifiedName -> module directory, for functions and type nodes
+        // (Model members are type nodes, so they need mapping too).
+        let mut qn_to_module: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for table in &[
+            "Function",
+            "Method",
+            "Class",
+            "Struct",
+            "Enum",
+            "Trait",
+            "Interface",
+        ] {
+            let cypher = format!(
+                "MATCH (n:{table}) WHERE n.project = '{escaped}' \
+                 RETURN n.qualifiedName AS qualified_name, n.filePath AS file_path;"
+            );
+            let rows = self.storage.query(&cypher)?;
+            for row in rows {
+                if row.len() < 2 {
+                    continue;
+                }
+                let qn = row[0].as_str().unwrap_or_default().to_string();
+                let module = module_name_from_path(row[1].as_str().unwrap_or_default());
+                if qn.is_empty() || module.is_empty() {
+                    continue;
+                }
+                qn_to_module.insert(qn, module);
+            }
+        }
+
+        // Count layer votes per module.
+        let mut votes: std::collections::HashMap<String, std::collections::HashMap<String, u32>> =
+            std::collections::HashMap::new();
+        for layer in &layers {
+            for qn in &layer.members {
+                if let Some(module) = qn_to_module.get(qn) {
+                    *votes
+                        .entry(module.clone())
+                        .or_default()
+                        .entry(layer.layer.clone())
+                        .or_insert(0) += 1;
+                }
+            }
+        }
+
+        // Dominant layer per module, ties broken by fixed priority order.
+        const PRIORITY: [&str; 4] = ["Controller", "Repository", "Service", "Model"];
+        let mut result = std::collections::BTreeMap::new();
+        for (module, per_layer) in votes {
+            let mut best: Option<(&str, u32)> = None;
+            for priority in PRIORITY {
+                let count = per_layer.get(priority).copied().unwrap_or(0);
+                if count == 0 {
+                    continue;
+                }
+                // Strict `>` keeps the earlier (higher-priority) layer on ties.
+                if best.is_none_or(|(_, best_count)| count > best_count) {
+                    best = Some((priority, count));
+                }
+            }
+            if let Some((layer, _)) = best {
+                result.insert(module, layer.to_string());
+            }
+        }
+        Ok(result)
+    }
+
     /// Loads language statistics: file count + symbol count per language.
     ///
     /// Symbol count is computed by joining `Function`/`Method` nodes with the
@@ -2884,5 +2967,83 @@ mod tests {
             "cohesion should be 0.0, got {}",
             module_b.cohesion
         );
+    }
+
+    // --- module_layer_map (absorb-archify T010) ---
+
+    #[test]
+    fn module_layer_map_dominates_by_controller() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // src/api has a controller (handles route) + a service member.
+        create_function(
+            &kit,
+            "ctrl",
+            "demo",
+            "list_users",
+            "demo.list_users",
+            "/src/api/h.rs",
+            1,
+        );
+        create_route(&kit, "r1", "demo", "/api/users", "GET");
+        create_edge(&kit, "e_hr", "ctrl", "r1", "HANDLES_ROUTE", "demo");
+        create_function(
+            &kit,
+            "svc",
+            "demo",
+            "fetch_users",
+            "demo.fetch_users",
+            "/src/api/s.rs",
+            1,
+        );
+        create_edge(&kit, "e_cs", "ctrl", "svc", "CALLS", "demo");
+        // src/db has a repository member (FETCHES).
+        create_function(
+            &kit,
+            "repo",
+            "demo",
+            "query_users",
+            "demo.query_users",
+            "/src/db/q.rs",
+            1,
+        );
+        create_edge(&kit, "e_fe", "repo", "r1", "FETCHES", "demo");
+        // src/plain has an unclassified function → absent from map.
+        create_function(
+            &kit,
+            "plain",
+            "demo",
+            "helper",
+            "demo.helper",
+            "/src/plain/p.rs",
+            1,
+        );
+
+        let kit_ref = &kit;
+        let storage = storage(kit_ref);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let map = analyzer
+            .module_layer_map("demo")
+            .expect("module_layer_map should succeed");
+        assert_eq!(map.get("/src/api").map(String::as_str), Some("Controller"));
+        assert_eq!(map.get("/src/db").map(String::as_str), Some("Repository"));
+        assert!(
+            !map.contains_key("/src/plain"),
+            "unclassified module absent"
+        );
+    }
+
+    #[test]
+    fn module_layer_map_empty_when_no_layers() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_function(&kit, "f", "demo", "a", "demo.a", "/src/a.rs", 1);
+        let kit_ref = &kit;
+        let storage = storage(kit_ref);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let map = analyzer
+            .module_layer_map("demo")
+            .expect("module_layer_map should succeed");
+        assert!(map.is_empty());
     }
 }
