@@ -1,83 +1,86 @@
-/* 后端 API 客户端 — 与 Rust 图数据服务通信 */
+/* WASM 图数据客户端 — 在浏览器内直接查询 .lbug 数据库 */
 
-import type { GraphData, ProjectInfo, SchemaInfo, TraceResult, TraceMode } from "../lib/types";
+import type { GraphData, SchemaInfo, TraceResult, TraceMode } from "../lib/types";
+import { LbugDatabase } from "../lib/lbugWasm";
+import { queryGraph, querySchema, queryTrace } from "../lib/graphQuery";
 
-const API_BASE = "/api";
+/* 模块级状态 — 当前打开的数据库 */
+let currentDb: LbugDatabase | null = null;
 
-async function fetchJson<T>(path: string, params?: Record<string, string>): Promise<T> {
-  const url = new URL(`${API_BASE}${path}`, window.location.origin);
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v) url.searchParams.set(k, v);
-    }
+/**
+ * 加载 .lbug 文件到浏览器内数据库
+ */
+export async function loadLbugFile(file: File): Promise<void> {
+  /* 关闭之前的数据库 */
+  if (currentDb) {
+    currentDb.close();
+    currentDb = null;
   }
-  let res: Response;
-  try {
-    res = await fetch(url.toString());
-  } catch {
-    throw new Error("后端服务不可用，请确认 Rust 后端已启动（端口 9800）");
-  }
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error ?? `HTTP ${res.status}`);
-  }
-  return res.json();
+  currentDb = await LbugDatabase.fromFile(file);
 }
 
-/* 获取已索引项目列表 */
-export async function fetchProjects(): Promise<ProjectInfo[]> {
-  return fetchJson<ProjectInfo[]>("/projects");
+/**
+ * 获取当前数据库实例（内部使用）
+ */
+function getDb(): LbugDatabase {
+  if (!currentDb) {
+    throw new Error("未加载数据库，请先选择 .lbug 文件");
+  }
+  return currentDb;
 }
 
-/* 获取图数据 — 支持 project 名或 lbug_path */
+/**
+ * 获取当前文件名
+ */
+export function getCurrentFileName(): string {
+  return currentDb?.fileName ?? "";
+}
+
+/**
+ * 关闭当前数据库
+ */
+export async function closeDatabase(): Promise<void> {
+  if (currentDb) {
+    currentDb.close();
+    currentDb = null;
+  }
+}
+
+/**
+ * 获取图数据（节点 + 边）
+ */
 export async function fetchGraphData(
-  project: string,
+  _project: string,
   maxNodes = 100,
-  fileFilter?: string,
-  lbugPath?: string,
+  _fileFilter?: string,
+  _lbugPath?: string,
 ): Promise<GraphData> {
-  const params: Record<string, string> = {
-    max_nodes: String(maxNodes),
-  };
-  if (lbugPath) {
-    params.lbug_path = lbugPath;
-  } else {
-    params.project = project;
-  }
-  if (fileFilter) params.file_path = fileFilter;
-  return fetchJson<GraphData>("/graph", params);
+  const db = getDb();
+  return queryGraph(db, db.fileName, maxNodes);
 }
 
-/* 获取 schema 统计信息 */
-export async function fetchSchema(project: string, lbugPath?: string): Promise<SchemaInfo> {
-  const params: Record<string, string> = {};
-  if (lbugPath) {
-    params.lbug_path = lbugPath;
-  } else {
-    params.project = project;
-  }
-  return fetchJson<SchemaInfo>("/schema", params);
+/**
+ * 获取 schema 统计信息
+ */
+export async function fetchSchema(
+  _project: string,
+  _lbugPath?: string,
+): Promise<SchemaInfo> {
+  const db = getDb();
+  return querySchema(db);
 }
 
-/* 执行追踪查询 */
+/**
+ * 执行追踪查询
+ */
 export async function fetchTrace(
-  project: string,
+  _project: string,
   nodeId: string,
   mode: TraceMode,
   direction: "downstream" | "upstream" | "both" = "both",
   maxDepth = 10,
-  lbugPath?: string,
+  _lbugPath?: string,
 ): Promise<TraceResult> {
-  const params: Record<string, string> = {
-    node_id: nodeId,
-    mode,
-    direction,
-    max_depth: String(maxDepth),
-  };
-  if (lbugPath) {
-    params.lbug_path = lbugPath;
-  } else {
-    params.project = project;
-  }
-  return fetchJson<TraceResult>("/trace", params);
+  const db = getDb();
+  return queryTrace(db, db.fileName, nodeId, mode, direction, maxDepth);
 }

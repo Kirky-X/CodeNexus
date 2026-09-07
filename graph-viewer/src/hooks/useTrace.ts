@@ -9,8 +9,8 @@ export interface UseTraceResult {
   traceNodeIds: Set<string>;
   traceEdgeIds: Set<string>;
   loading: boolean;
-  startCallTrace: (project: string, node: GraphNode) => void;
-  startVariableTrace: (project: string, node: GraphNode) => void;
+  startCallTrace: (node: GraphNode) => void;
+  startVariableTrace: (node: GraphNode) => void;
   clearTrace: () => void;
 }
 
@@ -82,11 +82,11 @@ export function useTrace(allNodes: GraphNode[], allEdges: GraphEdge[]): UseTrace
   );
 
   const startCallTrace = useCallback(
-    async (project: string, node: GraphNode) => {
+    async (node: GraphNode) => {
       setLoading(true);
       try {
-        /* 先尝试后端追踪 */
-        const result = await fetchTrace(project, node.id, "call");
+        /* 先尝试 WASM 数据库追踪 */
+        const result = await fetchTrace("", node.id, "call");
         applyTraceResult(result, "call");
       } catch {
         /* 降级为前端本地追踪 */
@@ -99,10 +99,10 @@ export function useTrace(allNodes: GraphNode[], allEdges: GraphEdge[]): UseTrace
   );
 
   const startVariableTrace = useCallback(
-    async (project: string, node: GraphNode) => {
+    async (node: GraphNode) => {
       setLoading(true);
       try {
-        const result = await fetchTrace(project, node.id, "variable");
+        const result = await fetchTrace("", node.id, "variable");
         applyTraceResult(result, "variable");
       } catch {
         localTrace(node, VARIABLE_EDGE_TYPES, "variable", "both");

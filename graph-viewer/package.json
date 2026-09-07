@@ -11,6 +11,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@ladybugdb/wasm-core": "^0.20.2",
     "@react-three/drei": "^10.7.0",
     "@react-three/fiber": "^9.5.0",
     "@react-three/postprocessing": "^3.0.4",

@@ -7,20 +7,17 @@ import { Sidebar } from "./components/Sidebar";
 import { NodeModal } from "./components/NodeModal";
 import { Button } from "./components/ui/button";
 import { generateDemoData } from "./lib/demoData";
-import { fetchProjects, fetchSchema } from "./api/client";
+import { loadLbugFile, closeDatabase } from "./api/client";
 import { useI18n } from "./lib/i18n";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
 import LightRays from "./components/LightRays";
-import type { GraphNode, GraphData, ProjectInfo } from "./lib/types";
+import type { GraphNode, GraphData } from "./lib/types";
 import type { CameraTarget } from "./components/GraphScene";
 
-const AUTO_REFRESH_INTERVAL = 10_000; /* 10秒轮询一次 */
 const EMPTY_SET = new Set<string>();
 
-type InputMode = "project" | "path";
-
 export function App() {
-  const { data, loading, error, fetchData, silentRefresh } = useGraphData();
+  const { data, loading, error, fetchData } = useGraphData();
   const { t } = useI18n();
 
   /* 筛选状态 */
@@ -37,68 +34,52 @@ export function App() {
   const [highlightedIds, setHighlightedIds] = useState<Set<string> | null>(null);
   const [cameraTarget, setCameraTarget] = useState<CameraTarget | null>(null);
 
-  /* 项目配置 */
-  const [project, setProject] = useState<string | null>(null);
-  const [lbugPath, setLbugPath] = useState<string | null>(null);
+  /* 文件加载状态 */
+  const [fileLoaded, setFileLoaded] = useState(false);
+  const [fileName, setFileName] = useState("");
+  const [fileLoading, setFileLoading] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
   const [demoMode, setDemoMode] = useState(false);
   const [demoData, setDemoData] = useState<GraphData | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
 
-  /* Header 项目下拉框 */
-  const [showProjectDropdown, setShowProjectDropdown] = useState(false);
-  const [projectSearch, setProjectSearch] = useState("");
-  const dropdownBtnRef = useRef<HTMLButtonElement>(null);
-  const dropdownPanelRef = useRef<HTMLDivElement>(null);
-  const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0 });
-
-  /* 打开下拉框时计算按钮位置，用 fixed 定位避免被 header backdrop-blur 裁剪 */
-  const openDropdown = useCallback(() => {
-    if (dropdownBtnRef.current) {
-      const rect = dropdownBtnRef.current.getBoundingClientRect();
-      setDropdownPos({ top: rect.bottom + 4, left: rect.left });
+  /* 文件加载处理 */
+  const handleFileLoad = useCallback(async (file: File) => {
+    if (!file.name.endsWith(".lbug")) {
+      setFileError("请选择 .lbug 文件");
+      return;
     }
-    setProjectSearch("");
-    setShowProjectDropdown(true);
+    setFileLoading(true);
+    setFileError(null);
+    try {
+      await loadLbugFile(file);
+      setFileName(file.name);
+      setFileLoaded(true);
+    } catch (e) {
+      setFileError(e instanceof Error ? e.message : "加载数据库失败");
+    } finally {
+      setFileLoading(false);
+    }
   }, []);
 
-  /* 点击外部关闭下拉框 */
-  useEffect(() => {
-    if (!showProjectDropdown) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        dropdownPanelRef.current && !dropdownPanelRef.current.contains(e.target as Node) &&
-        dropdownBtnRef.current && !dropdownBtnRef.current.contains(e.target as Node)
-      ) {
-        setShowProjectDropdown(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [showProjectDropdown]);
+  const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handleFileLoad(file);
+  }, [handleFileLoad]);
 
-  /* Landing page state */
-  const [inputMode, setInputMode] = useState<InputMode>("project");
-  const [discoveredProjects, setDiscoveredProjects] = useState<ProjectInfo[]>([]);
-  const [projectsLoading, setProjectsLoading] = useState(false);
-
-  /* 加载已发现项目列表 */
-  useEffect(() => {
-    setProjectsLoading(true);
-    fetchProjects()
-      .then((projects) => {
-        /* 按名称去重（保留节点数最多的），然后按节点数降序排列 */
-        const seen = new Map<string, ProjectInfo>();
-        for (const p of projects) {
-          const existing = seen.get(p.name);
-          if (!existing || p.node_count > existing.node_count) {
-            seen.set(p.name, p);
-          }
-        }
-        return Array.from(seen.values()).sort((a, b) => b.node_count - a.node_count);
-      })
-      .then((projects) => setDiscoveredProjects(projects))
-      .catch(() => setDiscoveredProjects([]))
-      .finally(() => setProjectsLoading(false));
+  /* 拖放处理 */
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(true);
   }, []);
+  const handleDragLeave = useCallback(() => setIsDragOver(false), []);
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    const file = e.dataTransfer.files[0];
+    if (file) handleFileLoad(file);
+  }, [handleFileLoad]);
 
   /* 加载数据 */
   useEffect(() => {
@@ -106,36 +87,8 @@ export function App() {
       setDemoData(generateDemoData());
       return;
     }
-    if (project) fetchData(project, maxNodes, undefined, lbugPath ?? undefined);
-  }, [project, fetchData, demoMode, lbugPath, maxNodes]);
-
-  /* 自动刷新 — 轮询 schema 检测数据变化 */
-  const prevSchemaRef = useRef<{ nodes: number; edges: number } | null>(null);
-  useEffect(() => {
-    if (!project || demoMode) return;
-    let cancelled = false;
-
-    const poll = async () => {
-      try {
-        const schema = await fetchSchema(project, lbugPath ?? undefined);
-        if (cancelled) return;
-        const cur = { nodes: schema.total_nodes, edges: schema.total_edges };
-        if (prevSchemaRef.current &&
-            (prevSchemaRef.current.nodes !== cur.nodes || prevSchemaRef.current.edges !== cur.edges)) {
-          /* 数据已变化，静默刷新 */
-          silentRefresh(project, maxNodes, undefined, lbugPath ?? undefined);
-        }
-        prevSchemaRef.current = cur;
-      } catch {
-        /* 轮询失败不影响现有视图 */
-      }
-    };
-
-    /* 立即检查一次 */
-    poll();
-    const timer = setInterval(poll, AUTO_REFRESH_INTERVAL);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [project, lbugPath, demoMode, silentRefresh]);
+    if (fileLoaded) fetchData(maxNodes);
+  }, [fileLoaded, fetchData, demoMode, maxNodes]);
 
   /* 初始化筛选器 */
   useEffect(() => {
@@ -265,31 +218,27 @@ export function App() {
 
   const enterDemoMode = useCallback(() => {
     setDemoMode(true);
-    setProject("demo");
+    setFileLoaded(true);
   }, []);
 
-  const handleProjectSelect = useCallback((projectName: string) => {
-    setProject(projectName);
-    setLbugPath(null);
-  }, []);
-
-  const handlePathSubmit = useCallback((path: string) => {
-    setLbugPath(path);
-    setProject(path);
-  }, []);
-
-  const handleBack = useCallback(() => {
-    setProject(null);
-    setLbugPath(null);
+  const handleBack = useCallback(async () => {
+    await closeDatabase();
+    setFileLoaded(false);
+    setFileName("");
     setSelectedNode(null);
     setHighlightedIds(null);
     setSelectedPath(null);
     setCameraTarget(null);
+    setFileError(null);
     clearTrace();
   }, [clearTrace]);
 
+  const handleReselectFile = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
   /* ── Landing Page ─────────────────────────────────── */
-  if (!project) {
+  if (!fileLoaded) {
     return (
       <div className="h-screen flex flex-col bg-ambient text-foreground overflow-hidden relative">
         {/* LightRays Background */}
@@ -334,108 +283,47 @@ export function App() {
               </p>
             </div>
 
-            {/* Input Card */}
+            {/* File Drop Zone */}
             <div className="glass rounded-2xl p-6 space-y-5">
-              {/* Tabs */}
-              <div className="flex gap-1 p-1 rounded-xl bg-white/[0.03] border border-white/[0.04]">
-                <button
-                  className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
-                    inputMode === "project"
-                      ? "bg-primary/10 text-primary shadow-sm"
-                      : "text-foreground/40 hover:text-foreground/60"
-                  }`}
-                  onClick={() => setInputMode("project")}
-                >
-                  {t("tab.project")}
-                </button>
-                <button
-                  className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
-                    inputMode === "path"
-                      ? "bg-primary/10 text-primary shadow-sm"
-                      : "text-foreground/40 hover:text-foreground/60"
-                  }`}
-                  onClick={() => setInputMode("path")}
-                >
-                  {t("tab.path")}
-                </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".lbug"
+                className="hidden"
+                onChange={handleFileInput}
+              />
+              <div
+                className={`flex flex-col items-center justify-center py-10 px-6 rounded-xl border-2 border-dashed transition-colors cursor-pointer ${
+                  isDragOver
+                    ? "border-primary/50 bg-primary/5"
+                    : "border-white/[0.08] hover:border-white/[0.15]"
+                }`}
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+              >
+                {fileLoading ? (
+                  <div className="flex flex-col items-center gap-3">
+                    <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                    <p className="text-sm text-foreground/50">{t("landing.loadingFile")}</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-3">
+                    <svg className="w-10 h-10 text-foreground/20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                      <polyline points="17 8 12 3 7 8" />
+                      <line x1="12" y1="3" x2="12" y2="15" />
+                    </svg>
+                    <p className="text-sm text-foreground/50">{t("landing.dropFile")}</p>
+                    <p className="text-xs text-foreground/30">{t("landing.orSelectFile")}</p>
+                  </div>
+                )}
               </div>
-
-              {/* Input */}
-              {inputMode === "project" ? (
-                <div className="space-y-4">
-                  <input
-                    className="w-full bg-white/[0.03] border border-white/[0.06] rounded-xl px-5 py-3.5 text-sm text-foreground placeholder-foreground/20 outline-none focus:border-primary/30 transition-colors"
-                    placeholder={t("input.project.placeholder")}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && e.currentTarget.value) {
-                        handleProjectSelect(e.currentTarget.value);
-                      }
-                    }}
-                  />
-                  {/* Discovered Projects */}
-                  {projectsLoading ? (
-                    <div className="flex items-center justify-center py-4">
-                      <div className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-                    </div>
-                  ) : discoveredProjects.length > 0 ? (
-                    <div className="space-y-2">
-                      <p className="text-[11px] text-foreground/25 uppercase tracking-wider px-1">{t("landing.discovered")}</p>
-                      <div className="grid gap-2 max-h-48 overflow-y-auto">
-                        {discoveredProjects.map((p) => (
-                          <button
-                            key={p.name}
-                            onClick={() => handleProjectSelect(p.name)}
-                            className={`project-card glass-subtle rounded-xl px-4 py-3 flex items-center justify-between group text-left ${
-                              p.node_count === 0 ? "opacity-40" : ""
-                            }`}
-                          >
-                            <div className="flex items-center gap-3 min-w-0">
-                              <div className={`w-2 h-2 rounded-full shrink-0 ${
-                                p.node_count > 0 ? "bg-primary/60" : "bg-foreground/15"
-                              }`} />
-                              <span className="text-sm text-foreground/70 group-hover:text-foreground/90 truncate transition-colors">
-                                {p.name}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-3 shrink-0">
-                              <span className="text-[10px] text-foreground/20 font-mono">
-                                {p.node_count > 0
-                                  ? `${p.node_count} ${t("landing.nodes")}`
-                                  : t("landing.empty")}
-                              </span>
-                              <svg
-                                className="w-3.5 h-3.5 text-foreground/15 group-hover:text-primary/50 transition-colors"
-                                viewBox="0 0 16 16"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                                strokeLinecap="round"
-                              >
-                                <path d="M6 4l4 4-4 4" />
-                              </svg>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <input
-                    className="w-full bg-white/[0.03] border border-white/[0.06] rounded-xl px-5 py-3.5 text-sm text-foreground placeholder-foreground/20 outline-none focus:border-primary/30 transition-colors font-mono"
-                    placeholder={t("input.path.placeholder")}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && e.currentTarget.value) {
-                        handlePathSubmit(e.currentTarget.value);
-                      }
-                    }}
-                  />
-                  <p className="text-[11px] text-foreground/25 leading-relaxed">
-                    {t("input.path.hint")}
-                  </p>
-                </div>
+              {fileError && (
+                <p className="text-xs text-destructive/80 text-center">{fileError}</p>
               )}
+              <p className="text-[11px] text-foreground/20 text-center">{t("landing.acceptsLbug")}</p>
 
               {/* Demo mode */}
               <div className="flex items-center gap-3 pt-2 border-t border-white/[0.04]">
@@ -446,11 +334,6 @@ export function App() {
                 <div className="h-px flex-1 bg-white/[0.03]" />
               </div>
             </div>
-
-            {/* Footer hint */}
-            <p className="text-center text-[11px] text-foreground/15">
-              {t("landing.hint")}
-            </p>
           </div>
         </div>
       </div>
@@ -479,7 +362,7 @@ export function App() {
           {/* 文字信息 */}
           <div className="space-y-2">
             <p className="text-base text-foreground/60 font-medium">{t("loading.text")}</p>
-            <p className="text-sm text-foreground/30 font-mono">{lbugPath ?? project}</p>
+            <p className="text-sm text-foreground/30 font-mono">{fileName}</p>
           </div>
           {/* 流动点动画 */}
           <div className="flex items-center justify-center gap-1.5">
@@ -515,7 +398,7 @@ export function App() {
             <p className="text-xs text-destructive/80 font-mono break-all">{error}</p>
           </div>
           <div className="flex gap-2 justify-center">
-            <Button variant="outline" size="sm" onClick={() => fetchData(project, maxNodes, undefined, lbugPath ?? undefined)}>
+            <Button variant="outline" size="sm" onClick={() => fetchData(maxNodes)}>
               {t("error.retry")}
             </Button>
             <Button variant="outline" size="sm" onClick={handleBack}>
@@ -551,62 +434,27 @@ export function App() {
               CodeNexus
             </span>
           </button>
-          {/* 项目切换下拉框 */}
-          <div>
+          {/* 文件信息 + 重新选择 */}
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-foreground/40">{t("header.file")}</span>
+            <span className="text-sm text-primary font-medium max-w-40 truncate">{fileName}</span>
             <button
-              ref={dropdownBtnRef}
-              onClick={() => { if (showProjectDropdown) { setShowProjectDropdown(false); } else { openDropdown(); } }}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/[0.08] hover:border-primary/30 transition-colors"
+              onClick={handleReselectFile}
+              className="text-xs text-foreground/30 hover:text-foreground/60 transition-colors ml-1"
+              title={t("header.selectFile")}
             >
-              <span className="text-sm text-foreground/40">{t("header.db")}</span>
-              <span className="text-sm text-primary font-medium max-w-40 truncate">
-                {lbugPath ? lbugPath.split("/").pop() : project}
-              </span>
-              <svg className="w-4 h-4 text-foreground/30" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <path d="M4 6l4 4 4-4" />
+              <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M14 2l-4 4M14 2h-4m4 0v4M2 10v3a1 1 0 001 1h9" />
               </svg>
             </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".lbug"
+              className="hidden"
+              onChange={handleFileInput}
+            />
           </div>
-          {/* 下拉面板 — 用 fixed 定位脱离 header 层叠上下文 */}
-          {showProjectDropdown && (
-            <div
-              ref={dropdownPanelRef}
-              className="fixed w-64 rounded-xl bg-background/95 backdrop-blur-xl border border-border/50 shadow-2xl z-50 overflow-hidden"
-              style={{ top: dropdownPos.top, left: dropdownPos.left }}
-            >
-                <div className="p-2 border-b border-border/30">
-                  <input
-                    className="w-full bg-white/[0.04] border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-foreground placeholder-foreground/25 outline-none focus:border-primary/30 transition-colors"
-                    placeholder={t("filter.projectPlaceholder")}
-                    value={projectSearch}
-                    onChange={(e) => setProjectSearch(e.target.value)}
-                    autoFocus
-                  />
-                </div>
-                <div className="max-h-56 overflow-y-auto">
-                  {discoveredProjects
-                    .filter((p) => p.name.toLowerCase().includes(projectSearch.toLowerCase()))
-                    .map((p) => (
-                      <button
-                        key={p.name}
-                        onClick={() => {
-                          setProject(p.name);
-                          setLbugPath(null);
-                          setShowProjectDropdown(false);
-                        }}
-                        className={`w-full flex items-center justify-between px-3 py-2.5 text-sm hover:bg-white/[0.04] transition-colors ${
-                          p.name === project ? "text-primary bg-primary/5" : "text-foreground/70"
-                        }`}
-                      >
-                        <span className="truncate">{p.name}</span>
-                        <span className="text-xs text-foreground/25 font-mono shrink-0 ml-2">
-                          {p.node_count > 0 ? `${(p.node_count / 1000).toFixed(0)}k` : "—"}
-                        </span>
-                      </button>
-                    ))}
-                </div>
-            </div>
-          )}
         </div>
 
         <div className="flex items-center gap-4">
@@ -709,11 +557,6 @@ export function App() {
                     {t("hud.clear")}
                   </Button>
                 )}
-                {/* 自动刷新指示器 */}
-                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.03] border border-white/[0.05]">
-                  <div className="w-1.5 h-1.5 rounded-full bg-primary/50 animate-pulse" />
-                  <span className="text-xs text-foreground/25">{t("header.auto")}</span>
-                </div>
               </div>
             </>
           )}
