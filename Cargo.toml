@@ -2,7 +2,7 @@
 name = "codenexus"
 version = "0.3.12"
 edition = "2021"
-rust-version = "1.95"
+rust-version = "1.97.1"
 description = "A queryable code knowledge graph tool built on LadybugDB and tree-sitter"
 authors = ["Kirky.X"]
 license = "MIT"
@@ -61,13 +61,13 @@ cross-service = ["analysis"]
 complexity = ["analysis"]
 diagram = ["analysis"]
 lsp = ["dep:lsp-types", "dep:lsp-server", "dep:crossbeam-channel", "dep:url"]
-mcp = ["dep:sdforge", "sdforge/mcp", "dep:oxiarc-zstd"]
-cli = ["dep:sdforge", "sdforge/cli", "dep:oxiarc-zstd"]
+mcp = ["dep:sdforge", "sdforge/mcp", "sdforge/inklog", "dep:oxiarc-zstd"]
+cli = ["dep:sdforge", "sdforge/cli", "sdforge/inklog", "dep:oxiarc-zstd"]
 cache = ["dep:oxcache"]
 i18n = ["dep:icu_normalizer", "dep:icu_casemap"]
 
 [dependencies]
-trait-kit = { version = "0.3", default-features = false, features = ["async"] }
+trait-kit = { version = "0.5.0-rc.2", default-features = false, features = ["async"] }
 lbug = "0.18"
 tree-sitter = "0.26"
 tree-sitter-c = { version = "0.24", optional = true }
@@ -118,11 +118,11 @@ lsp-types = { version = "0.97", optional = true }
 lsp-server = { version = "0.10", optional = true }
 crossbeam-channel = { version = "0.5", optional = true }
 url = { version = "2", optional = true }
-sdforge = { version = "0.4", default-features = false, optional = true }
+sdforge = { version = "0.5.0-rc.2", default-features = false, optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
-oxcache = { version = "0.3", default-features = false, features = ["minimal"], optional = true }
+oxcache = { version = "0.5.0-rc.2", default-features = false, features = ["minimal"], optional = true }
 oxiarc-zstd = { version = "0.3", default-features = false, optional = true }
-inklog = { version = "0.1", default-features = false }
+inklog = { version = "0.3.0-rc.2", default-features = false }
 regex = "1"
 icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"], optional = true }
 icu_casemap = { version = "2", default-features = false, features = ["compiled_data"], optional = true }

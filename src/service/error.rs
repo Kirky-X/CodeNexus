@@ -372,7 +372,7 @@ mod tests {
     #[test]
     fn exit_code_kit_build_failed_with_storage_corrupt_is_4() {
         let kit_err = KitError::BuildFailed {
-            context: "storage",
+            context: "storage".to_string(),
             source: Box::new(StorageError::Corrupt(
                 "invalid LadybugDB header".to_string(),
             )),
@@ -386,7 +386,7 @@ mod tests {
         // Rule 12: a DB lock conflict surfaced via Kit must exit 2 (not the
         // generic Kit exit 1), so CI/users can tell lock from internal error.
         let kit_err = KitError::BuildFailed {
-            context: "storage",
+            context: "storage".to_string(),
             source: Box::new(StorageError::DatabaseLocked {
                 holder_hint: "Lock is held by PID 1234".to_string(),
             }),
@@ -397,7 +397,9 @@ mod tests {
 
     #[test]
     fn exit_code_kit_missing_capability_is_1() {
-        let kit_err = KitError::MissingCapability { key: "storage" };
+        let kit_err = KitError::MissingCapability {
+            key: "storage".to_string(),
+        };
         let err: CodeNexusError = kit_err.into();
         assert_eq!(err.exit_code(), 1);
     }
@@ -933,7 +935,7 @@ mod tests {
     #[test]
     fn exit_code_kit_build_failed_with_index_database_corrupt_is_4() {
         let kit_err = KitError::BuildFailed {
-            context: "index",
+            context: "index".to_string(),
             source: Box::new(IndexError::DatabaseCorrupt("schema mismatch".to_string())),
         };
         let err: CodeNexusError = kit_err.into();
@@ -945,7 +947,7 @@ mod tests {
     #[test]
     fn exit_code_kit_build_failed_with_non_corrupt_is_1() {
         let kit_err = KitError::BuildFailed {
-            context: "query",
+            context: "query".to_string(),
             source: Box::new(QueryError::Query("bad cypher".to_string())),
         };
         let err: CodeNexusError = kit_err.into();
@@ -969,7 +971,9 @@ mod tests {
     #[cfg(any(feature = "cli", feature = "mcp"))]
     #[test]
     fn wrap_kit_error_creates_internal_with_message() {
-        let kit_err = KitError::MissingCapability { key: "storage" };
+        let kit_err = KitError::MissingCapability {
+            key: "storage".to_string(),
+        };
         let api_err = wrap_kit_error("build failed", kit_err);
         match api_err {
             ApiError::Internal { message, .. } => {

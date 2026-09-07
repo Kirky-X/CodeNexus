@@ -24,6 +24,44 @@ allow = [
 ]
 confidence-threshold = 0.8
 
+# 自研基础库 RC 版本发布时 manifest 漏写 license 字段（base 工作区 LICENSE 实证均为 MIT）。
+# 带 version 限定：base 库补发 license 字段的正式版不受此影响，届时可移除这些 clarify。
+[[licenses.clarify]]
+name = "trait-kit"
+version = "0.5.0-rc.2"
+license-files = []
+expression = "MIT"
+
+[[licenses.clarify]]
+name = "sdforge"
+version = "0.5.0-rc.2"
+license-files = []
+expression = "MIT"
+
+[[licenses.clarify]]
+name = "sdforge-macros"
+version = "0.5.0-rc.2"
+license-files = []
+expression = "MIT"
+
+[[licenses.clarify]]
+name = "oxcache"
+version = "0.5.0-rc.2"
+license-files = []
+expression = "MIT"
+
+[[licenses.clarify]]
+name = "oxcache_macros"
+version = "0.5.0-rc.2"
+license-files = []
+expression = "MIT"
+
+[[licenses.clarify]]
+name = "inklog"
+version = "0.3.0-rc.2"
+license-files = []
+expression = "MIT"
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

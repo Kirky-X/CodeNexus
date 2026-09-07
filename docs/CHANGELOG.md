@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **chore(deps): 自研基础库升级至 RC 版本** — trait-kit `0.3.0` → `0.5.0-rc.2`、sdforge `0.4.7` → `0.5.0-rc.2`、oxcache `0.3.9` → `0.5.0-rc.2`、inklog `0.1.12` → `0.3.0-rc.2`（四库依赖链锁定，联动升级，规则 25 升级前基线 4740 测试全绿）。MSRV `1.95` → `1.97.1`（`clippy.toml` `msrv` 同步）。唯一 API 适配：`KitError::BuildFailed.context` / `MissingCapability.key` 字段 `&'static str` → `String`（`src/service/error.rs` 测试代码 6 处 `.to_string()`），运行时行为不变；`load_config_or_default` / inklog builder / oxcache sync API / `#[forge]` 宏均向后兼容，零改动。新特性开启：`mcp`/`cli` feature 追加 `sdforge/inklog`（sdforge 内部日志接入 inklog 0.3.0-rc.2，同一版本已在依赖树，无树外新 crate）；评估后暂不开启：trait-kit `lifecycle/health/shutdown`（需 9+ Kit 模块实现对应 trait，列为后续独立变更）、oxcache 分布式后端（redis/dragonfly/aerospike）与 compression/macros/batch/lock/bloom（无对应场景或收益边际）、inklog `compression`（zstd-sys 与 lbug bundled zstd 符号冲突风险，现有 LZ4 `file_compress` 已满足）。传递依赖变化：+confers `0.6.0-rc.2`（trait-kit 必选）、+ICU4X i18n 栈（sys-locale/unic-langid/zerovec）、+stacker/psm，-opentelemetry 全家桶 / -secrecy / -tracing-opentelemetry；rmcp `2.2`→`3.2`、tokio `1.52`→`1.53`。验证：`cargo test` 4740 passed / 0 failed / 24 ignored（与基线一致）、`cargo clippy --all-targets` 0 error、release 二进制 111,783,896 → 112,313,304 bytes（+0.47%）、`cargo tree --duplicates` 零版本分叉。另：`deny.toml` 补 6 条 `[[licenses.clarify]]`（MIT，带版本限定）——RC manifest 漏写 `license` 字段导致 `cargo deny` licenses 失败，base 工作区 LICENSE 实证均为 MIT，正式版补字段后可移除。完整决策表见 specmark change `upgrade-base-libs-rc`（design.md D3）。
+
 ## [0.3.12] - 2026-07-30
 
 P-DB + P-DB-fix：动态 `max_db_size` + `--fresh` 标志解决 DuckDB 16 GiB 硬编码上限 + DELETE 死空间累积导致的 DB 膨胀问题（6.6 MB 源码 → 35 GB DB）。read-only 连接 max_db_size 从 16 GiB 改为 4 TiB cap，修复 >16 GiB DB 查询崩溃的 CRITICAL bug。
