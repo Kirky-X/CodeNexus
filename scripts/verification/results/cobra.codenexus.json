@@ -1,0 +1,22 @@
+{
+  "name": "cobra",
+  "node_counts_by_type": {
+    "File": 36,
+    "Function": 427,
+    "Interface": 1,
+    "Method": 168,
+    "Parameter": 289,
+    "Project": 1,
+    "Struct": 14,
+    "TypeAlias": 7,
+    "Variable": 328
+  },
+  "edge_counts_by_type": {
+    "CALLS": 1493,
+    "DATAFLOWS": 1896,
+    "DEFINES": 617
+  },
+  "file_counts_by_language": {
+    "go": 0
+  }
+}

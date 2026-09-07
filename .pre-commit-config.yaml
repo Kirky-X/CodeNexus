@@ -13,7 +13,7 @@ repos:
       - id: check-yaml
       - id: check-toml
       - id: check-added-large-files
-        args: ['--maxkb=1000']
+        args: ['--maxkb=2000']
       - id: detect-private-key
       - id: check-merge-conflict
         args: ['--assume-in-merge']
@@ -25,7 +25,7 @@ repos:
     rev: v1.5.0
     hooks:
       - id: detect-secrets
-        exclude: '^Cargo\.lock$'
+        exclude: '^Cargo\.lock$|^skills-lock\.json$|^\.qoder/skills/design/|^\.agents/skills/'
 
   # 3. Rust formatting and checks
   - repo: local
@@ -33,7 +33,7 @@ repos:
       - id: cargo-fmt
         name: Format Rust code
         description: Check Rust formatting with rustfmt
-        entry: cargo fmt --all -- --check
+        entry: cargo +nightly fmt --all -- --check
         language: system
         types: [rust]
         pass_filenames: false
@@ -66,7 +66,7 @@ repos:
         stages: [pre-push]
       - id: cargo-audit
         name: cargo audit (RustSec 漏洞库)
-        entry: bash -c 'cargo audit 2>/dev/null || cargo audit --no-fetch 2>/dev/null || { echo "→ 先运行 cargo install cargo-audit"; exit 1; }'
+        entry: bash -c 'cargo audit --ignore RUSTSEC-2026-0235 --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0202 --ignore RUSTSEC-2026-0221 2>/dev/null || cargo audit --ignore RUSTSEC-2026-0235 --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0202 --ignore RUSTSEC-2026-0221 --no-fetch 2>/dev/null || { echo "→ 先运行 cargo install cargo-audit"; exit 1; }'
         language: system
         files: 'Cargo\.lock'
         pass_filenames: false

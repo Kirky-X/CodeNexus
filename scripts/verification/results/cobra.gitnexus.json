@@ -1,0 +1,29 @@
+{
+  "name": "cobra",
+  "node_counts_by_label": {
+    "Community": 53,
+    "Const": 49,
+    "File": 54,
+    "Folder": 5,
+    "Function": 427,
+    "Interface": 1,
+    "Method": 169,
+    "Process": 83,
+    "Property": 152,
+    "Section": 131,
+    "Struct": 11,
+    "Variable": 28
+  },
+  "edge_counts_by_type": {
+    "ACCESSES": 1326,
+    "CALLS": 1922,
+    "CONTAINS": 158,
+    "DEFINES": 564,
+    "HAS_METHOD": 120,
+    "HAS_PROPERTY": 104,
+    "IMPORTS": 175,
+    "MEMBER_OF": 562,
+    "STEP_IN_PROCESS": 352
+  },
+  "file_count": 54
+}

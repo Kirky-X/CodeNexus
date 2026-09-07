@@ -72,6 +72,9 @@ logs/
 openspec/
 specmark/
 
+# Graph viewer build output
+graph-viewer/dist/
+
 # Verification harness outputs (large, sample-derived; rebuild locally)
 tools/verification/results/
 
@@ -96,3 +99,8 @@ __pycache__/
 # Tool lock files
 .mimocode/
 strix_runs/
+
+# Qoder / Mimosa / Agents local config
+.qoder/
+.mimosa/
+.agents/

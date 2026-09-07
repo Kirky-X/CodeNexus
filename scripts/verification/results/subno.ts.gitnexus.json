@@ -1,0 +1,41 @@
+{
+  "name": "subno.ts",
+  "node_counts_by_label": {
+    "Class": 164,
+    "CodeEmbedding": 2039,
+    "Community": 179,
+    "Constructor": 26,
+    "Enum": 14,
+    "File": 244,
+    "Folder": 75,
+    "Function": 838,
+    "Impl": 22,
+    "Interface": 111,
+    "Macro": 25,
+    "Method": 682,
+    "Module": 19,
+    "Process": 300,
+    "Property": 537,
+    "Route": 11,
+    "Section": 430,
+    "Struct": 58,
+    "Trait": 5,
+    "TypeAlias": 2,
+    "Typedef": 19
+  },
+  "edge_counts_by_type": {
+    "ACCESSES": 311,
+    "CALLS": 1641,
+    "CONTAINS": 734,
+    "DEFINES": 2522,
+    "EXTENDS": 17,
+    "HANDLES_ROUTE": 11,
+    "HAS_METHOD": 1020,
+    "HAS_PROPERTY": 663,
+    "IMPLEMENTS": 5,
+    "IMPORTS": 324,
+    "MEMBER_OF": 1052,
+    "STEP_IN_PROCESS": 1247
+  },
+  "file_count": 244
+}

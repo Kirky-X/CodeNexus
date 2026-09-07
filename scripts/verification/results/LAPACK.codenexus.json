@@ -1,0 +1,25 @@
+{
+  "name": "LAPACK",
+  "node_counts_by_type": {
+    "File": 6434,
+    "Function": 6545,
+    "GlobalVar": 35,
+    "Macro": 4744,
+    "Module": 2,
+    "Parameter": 59006,
+    "Project": 1,
+    "Struct": 4,
+    "Typedef": 19,
+    "Variable": 91415
+  },
+  "edge_counts_by_type": {
+    "CALLS": 23105,
+    "DATAFLOWS": 457506,
+    "DEFINES": 11349
+  },
+  "file_counts_by_language": {
+    "c": 2871,
+    "fortran": 3548,
+    "python": 1
+  }
+}

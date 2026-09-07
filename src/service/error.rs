@@ -254,10 +254,31 @@ pub fn kit_not_initialized() -> ApiError {
     ApiError::internal_error("Kit not initialized", "kit_not_initialized")
 }
 
+/// Builds the `ApiError::InvalidInput` carrying an archify-style repair
+/// receipt for ambiguous symbol resolution failures.
+///
+/// The structured diagnostics ride in `value` so CLI/MCP clients (and LLM
+/// agents) receive stable rule codes, candidate qualified names, and curated
+/// fixes instead of a bare message. `candidates` is empty when the error
+/// layer could not enumerate them (`ResolveError` carries only a count).
+#[cfg(any(feature = "cli", feature = "mcp"))]
+fn ambiguous_symbol_api_error(symbol: &str, candidates: &[String], message: String) -> ApiError {
+    let diagnostics = crate::diagnostics::ambiguous_symbol_diagnostics(symbol, candidates);
+    let value = serde_json::to_value(&diagnostics).unwrap_or(serde_json::Value::Null);
+    ApiError::InvalidInput {
+        message,
+        field: Some("symbol".to_string()),
+        value: Some(value),
+    }
+}
+
 /// Converts a [`CodeNexusError`] into an [`ApiError`] at the service boundary.
 ///
 /// - `InvalidInput` / `ProjectNotFound` / `Query` → `ApiError::InvalidInput` (exit 2)
 /// - `NotFound` / `Trace(SymbolNotFound)` → `ApiError::NotFound` (exit 4)
+/// - `Trace(AmbiguousSymbol)` / `Resolve(AmbiguousSymbol)` → `ApiError::InvalidInput`
+///   carrying an archify-style repair receipt (`field = "symbol"`, `value` =
+///   structured diagnostics with candidate qualified names as supported fixes)
 /// - All other variants → `ApiError::Internal` with `tag` as error_id and
 ///   the error's string representation in the message.
 ///
@@ -294,6 +315,17 @@ pub fn to_api_error(e: CodeNexusError, tag: &str) -> ApiError {
             resource: "symbol".to_string(),
             resource_id: Some(s),
         },
+        CodeNexusError::Trace(TraceError::AmbiguousSymbol { symbol, candidates }) => {
+            let message = format!(
+                "ambiguous symbol '{symbol}': {} candidates found",
+                candidates.len()
+            );
+            ambiguous_symbol_api_error(&symbol, &candidates, message)
+        }
+        CodeNexusError::Resolve(ResolveError::AmbiguousSymbol(symbol, count)) => {
+            let message = format!("ambiguous symbol '{symbol}': {count} candidates found");
+            ambiguous_symbol_api_error(&symbol, &[], message)
+        }
         other => {
             let message = format!("{other}");
             ApiError::internal_error(message, tag)
@@ -456,6 +488,64 @@ mod tests {
         let err = CodeNexusError::Trace(TraceError::SymbolNotFound("foo".to_string()));
         let api_err = to_api_error(err, "test");
         assert!(matches!(api_err, ApiError::NotFound { .. }));
+    }
+
+    #[cfg(any(feature = "cli", feature = "mcp"))]
+    #[test]
+    fn to_api_error_trace_ambiguous_carries_receipt() {
+        let err = CodeNexusError::Trace(TraceError::AmbiguousSymbol {
+            symbol: "handler".to_string(),
+            candidates: vec!["demo.a.handler".to_string(), "demo.b.handler".to_string()],
+        });
+        let api_err = to_api_error(err, "test");
+        match api_err {
+            ApiError::InvalidInput {
+                message,
+                field,
+                value,
+            } => {
+                assert!(
+                    message.contains("ambiguous symbol 'handler'"),
+                    "expected ambiguous message preserved, got: {message}"
+                );
+                assert_eq!(field.as_deref(), Some("symbol"));
+                let value = value.expect("receipt value must be present");
+                let diag = &value[0];
+                assert_eq!(diag["code"], "resolve/ambiguous-symbol");
+                assert_eq!(diag["subject"], "handler");
+                assert_eq!(diag["severity"], "error");
+                assert_eq!(diag["evidence"]["candidate_count"], 2);
+                let fixes = diag["supported_fixes"].as_array().expect("fixes array");
+                assert_eq!(fixes.len(), 2);
+                assert!(fixes[0].as_str().unwrap().contains("demo.a.handler"));
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[cfg(any(feature = "cli", feature = "mcp"))]
+    #[test]
+    fn to_api_error_resolve_ambiguous_carries_receipt() {
+        let err: CodeNexusError =
+            crate::resolve::ResolveError::AmbiguousSymbol("bar".to_string(), 3).into();
+        let api_err = to_api_error(err, "test");
+        match api_err {
+            ApiError::InvalidInput {
+                message,
+                field,
+                value,
+            } => {
+                assert!(
+                    message.contains("ambiguous symbol 'bar'"),
+                    "expected ambiguous message preserved, got: {message}"
+                );
+                assert_eq!(field.as_deref(), Some("symbol"));
+                let value = value.expect("receipt value must be present");
+                assert_eq!(value[0]["code"], "resolve/ambiguous-symbol");
+                assert_eq!(value[0]["evidence"]["candidate_count"], 0);
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
     }
 
     #[cfg(any(feature = "cli", feature = "mcp"))]

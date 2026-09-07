@@ -351,6 +351,8 @@ fn opens_read_only(sub_name: &str) -> bool {
             | "community"
             | "architecture"
             | "complexity"
+            | "diagram"
+            | "arch_diff"
             | "cross_service"
             | "route_map"
             | "tool_map"
@@ -532,6 +534,17 @@ const SENTINEL_DEFAULTS: &[(&str, &str, &str)] = &[
     ("cross_service", "protocol", ""),
     // — api_impact: endpoint (empty = all endpoints)
     ("api_impact", "endpoint", ""),
+    // — diagram: quality/repo_root/repo_url/title/locale default at the
+    // service layer; empty repo_root skips evidence verification.
+    ("diagram", "quality", "standard"),
+    ("diagram", "repo_root", ""),
+    ("diagram", "repo_url", ""),
+    ("diagram", "title", ""),
+    ("diagram", "locale", "en"),
+    // — arch_diff: quality defaults to standard, title defaults to the
+    // generated "<base> → <head>" caption.
+    ("arch_diff", "quality", "standard"),
+    ("arch_diff", "title", ""),
     // — dead_code: B3.5 — check_dynamic_dispatch defaults to true so trait
     // impl methods (e.g. `fmt#Display`) are excluded by default. Users can
     // opt out via `--check_dynamic_dispatch false` for adversarial testing.
@@ -785,6 +798,8 @@ mod tests {
             "community",
             "architecture",
             "complexity",
+            "diagram",
+            "arch_diff",
             "cross_service",
             "route_map",
             "tool_map",
@@ -887,6 +902,8 @@ mod tests {
             "community",
             "architecture",
             "complexity",
+            "diagram",
+            "arch_diff",
             "cross_service",
             "route_map",
             "tool_map",

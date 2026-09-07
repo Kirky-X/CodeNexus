@@ -13,6 +13,8 @@
 //! that cannot accept injected state.
 
 pub mod api_impact;
+#[cfg(feature = "diagram")]
+pub mod arch_diff;
 pub mod architecture;
 pub mod clean;
 pub mod community;
@@ -22,6 +24,8 @@ pub mod cross_service;
 pub mod daemon;
 pub mod dead_code;
 pub mod detect_changes;
+#[cfg(feature = "diagram")]
+pub mod diagram;
 pub mod error;
 pub mod export;
 pub mod hook;

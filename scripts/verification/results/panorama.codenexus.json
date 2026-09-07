@@ -1,0 +1,30 @@
+{
+  "name": "panorama",
+  "node_counts_by_type": {
+    "Class": 1151,
+    "Const": 53,
+    "File": 559,
+    "Function": 508,
+    "Interface": 117,
+    "Method": 4185,
+    "Module": 2,
+    "Parameter": 895,
+    "Project": 1,
+    "TypeAlias": 17,
+    "Variable": 6581
+  },
+  "edge_counts_by_type": {
+    "CALLS": 3988,
+    "DATAFLOWS": 13909,
+    "DEFINES": 6033,
+    "EXTENDS": 237,
+    "IMPORTS": 95,
+    "READS": 33,
+    "WRITES": 16
+  },
+  "file_counts_by_language": {
+    "python": 439,
+    "rust": 2,
+    "typescript": 118
+  }
+}

@@ -52,6 +52,7 @@ compile_error!(
 pub mod cache;
 #[cfg(feature = "daemon")]
 pub mod daemon;
+pub mod diagnostics;
 pub mod discover;
 pub mod index;
 pub mod ir;
@@ -74,6 +75,9 @@ pub use sdforge;
 
 #[cfg(feature = "analysis")]
 pub mod analysis;
+
+#[cfg(feature = "diagram")]
+pub mod diagram;
 
 #[cfg(feature = "embed")]
 pub mod embed;

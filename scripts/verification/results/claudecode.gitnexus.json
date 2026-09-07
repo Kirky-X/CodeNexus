@@ -1,0 +1,31 @@
+{
+  "name": "claudecode",
+  "node_counts_by_label": {
+    "Class": 128,
+    "CodeEmbedding": 13337,
+    "Community": 1083,
+    "File": 1921,
+    "Folder": 282,
+    "Function": 9412,
+    "Interface": 72,
+    "Method": 1804,
+    "Process": 300,
+    "Property": 630,
+    "Section": 566
+  },
+  "edge_counts_by_type": {
+    "ACCESSES": 817,
+    "CALLS": 23221,
+    "CONTAINS": 2766,
+    "DEFINES": 12046,
+    "EXTENDS": 10,
+    "HAS_METHOD": 945,
+    "HAS_PROPERTY": 642,
+    "IMPLEMENTS": 3,
+    "IMPORTS": 566,
+    "MEMBER_OF": 7038,
+    "OVERRIDES": 2,
+    "STEP_IN_PROCESS": 1486
+  },
+  "file_count": 1921
+}

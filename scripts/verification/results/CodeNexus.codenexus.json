@@ -1,0 +1,35 @@
+{
+  "name": "CodeNexus",
+  "node_counts_by_type": {
+    "Class": 2,
+    "Const": 143,
+    "Enum": 43,
+    "File": 176,
+    "Function": 4711,
+    "Impl": 121,
+    "Macro": 1,
+    "Module": 291,
+    "Parameter": 1448,
+    "Project": 1,
+    "Property": 807,
+    "Static": 5,
+    "Struct": 288,
+    "Trait": 19,
+    "TypeAlias": 72,
+    "Variable": 4308
+  },
+  "edge_counts_by_type": {
+    "CALLS": 9517,
+    "DATAFLOWS": 13132,
+    "DEFINES": 6488,
+    "HAS_PROPERTY": 807,
+    "IMPLEMENTS": 48,
+    "IMPORTS": 340,
+    "READS": 20840,
+    "WRITES": 11713
+  },
+  "file_counts_by_language": {
+    "python": 1,
+    "rust": 175
+  }
+}

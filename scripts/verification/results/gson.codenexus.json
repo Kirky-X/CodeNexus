@@ -1,0 +1,24 @@
+{
+  "name": "gson",
+  "node_counts_by_type": {
+    "Class": 667,
+    "Enum": 26,
+    "File": 262,
+    "Interface": 27,
+    "Method": 3378,
+    "Parameter": 771,
+    "Project": 1,
+    "Variable": 1386
+  },
+  "edge_counts_by_type": {
+    "CALLS": 7985,
+    "DATAFLOWS": 3875,
+    "DEFINES": 720,
+    "EXTENDS": 105,
+    "IMPLEMENTS": 102,
+    "IMPORTS": 1011
+  },
+  "file_counts_by_language": {
+    "java": 0
+  }
+}

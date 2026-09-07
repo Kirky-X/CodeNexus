@@ -1,0 +1,136 @@
+@import "tailwindcss";
+
+@theme inline {
+  /* ── Core Palette ── Neutral Dark Gray + Indigo/Cyan accent */
+  --color-background: #18181b;
+  --color-foreground: #e4e4e7;
+  --color-card: #27272a;
+  --color-card-foreground: #e4e4e7;
+  --color-popover: #27272a;
+  --color-popover-foreground: #e4e4e7;
+  --color-primary: #818cf8;
+  --color-primary-foreground: #18181b;
+  --color-secondary: #27272a;
+  --color-secondary-foreground: #a1a1aa;
+  --color-muted: #27272a;
+  --color-muted-foreground: #71717a;
+  --color-accent: #22d3ee;
+  --color-accent-foreground: #18181b;
+  --color-destructive: #f87171;
+  --color-destructive-foreground: #18181b;
+  --color-border: #2e2e33;
+  --color-input: #2e2e33;
+  --color-ring: #818cf8;
+  --radius: 0.75rem;
+  --font-sans: "Fira Sans", "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "Fira Code", "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--font-sans);
+  background: var(--color-background);
+  color: var(--color-foreground);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Ambient background gradient */
+.bg-ambient {
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(129, 140, 248, 0.06) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 50% at 80% 100%, rgba(34, 211, 238, 0.03) 0%, transparent 50%),
+    var(--color-background);
+}
+
+/* Glass morphism card */
+.glass {
+  background: rgba(39, 39, 42, 0.7);
+  backdrop-filter: blur(24px) saturate(1.2);
+  border: 1px solid rgba(129, 140, 248, 0.08);
+}
+
+.glass-subtle {
+  background: rgba(39, 39, 42, 0.5);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Tab active indicator */
+.tab-active {
+  position: relative;
+}
+.tab-active::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--color-primary);
+  border-radius: 1px 1px 0 0;
+}
+
+/* Node detail sidebar slide-in */
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.animate-slide-in-right {
+  animation: slideInRight 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Pulse animation for loading */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(129, 140, 248, 0.25); }
+  50% { box-shadow: 0 0 20px 4px rgba(129, 140, 248, 0.1); }
+}
+
+.pulse-glow {
+  animation: pulse-glow 2.5s ease-in-out infinite;
+}
+
+/* Trace path highlight animation */
+@keyframes trace-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.trace-edge {
+  animation: trace-pulse 1.5s ease-in-out infinite;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Project card hover */
+.project-card {
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.project-card:hover {
+  background: rgba(129, 140, 248, 0.05);
+  border-color: rgba(129, 140, 248, 0.15);
+  transform: translateY(-1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trace-edge { animation: none; opacity: 0.8; }
+  .project-card { transition: none; }
+  .animate-slide-in-right { animation: none; }
+}

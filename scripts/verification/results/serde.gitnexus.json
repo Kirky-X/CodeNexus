@@ -1,0 +1,36 @@
+{
+  "name": "serde",
+  "node_counts_by_label": {
+    "Community": 48,
+    "Const": 36,
+    "Enum": 180,
+    "File": 324,
+    "Folder": 37,
+    "Function": 1474,
+    "Impl": 66,
+    "Macro": 58,
+    "Module": 90,
+    "Process": 300,
+    "Property": 702,
+    "Section": 36,
+    "Static": 1,
+    "Struct": 426,
+    "Trait": 38,
+    "TypeAlias": 51
+  },
+  "edge_counts_by_type": {
+    "ACCESSES": 1050,
+    "CALLS": 1391,
+    "CONTAINS": 388,
+    "DEFINES": 1693,
+    "HAS_METHOD": 136,
+    "HAS_PROPERTY": 527,
+    "IMPLEMENTS": 153,
+    "IMPORTS": 76,
+    "MEMBER_OF": 512,
+    "METHOD_IMPLEMENTS": 104,
+    "STEP_IN_PROCESS": 1180,
+    "USES": 116
+  },
+  "file_count": 324
+}

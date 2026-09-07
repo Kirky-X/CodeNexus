@@ -1,0 +1,35 @@
+{
+  "name": "redis",
+  "node_counts_by_label": {
+    "Class": 59,
+    "Community": 865,
+    "Const": 834,
+    "Enum": 125,
+    "File": 1772,
+    "Folder": 93,
+    "Function": 13545,
+    "Macro": 5641,
+    "Method": 355,
+    "Process": 300,
+    "Property": 2995,
+    "Section": 191,
+    "Struct": 1204,
+    "Typedef": 326,
+    "Union": 19,
+    "Variable": 1152
+  },
+  "edge_counts_by_type": {
+    "ACCESSES": 484,
+    "CALLS": 24318,
+    "CONTAINS": 2033,
+    "DEFINES": 23407,
+    "EXTENDS": 42,
+    "HAS_METHOD": 240,
+    "HAS_PROPERTY": 2608,
+    "IMPORTS": 1675,
+    "MEMBER_OF": 6841,
+    "METHOD_OVERRIDES": 111,
+    "STEP_IN_PROCESS": 1708
+  },
+  "file_count": 1772
+}
