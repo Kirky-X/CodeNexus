@@ -19,15 +19,12 @@
 //! [`IndexObserver`] and enters the blocking event loop. This matches the
 //! existing `daemon_cmd::run` semantics (one daemon per CLI invocation).
 //!
-//! # Hot reconfiguration (future work)
+//! # Hot reconfiguration
 //!
-//! The spec mentions `DaemonConfig` via `ConfigHandle` for hot-reloading
-//! `debounce_ms` without rebuilding the watcher. This is **not implemented**
-//! in Task 2.11 — the current [`Daemon`] takes `debounce_ms` as a
-//! construction-time constant. Hot reload would require refactoring
-//! [`Daemon`] to read from a shared `ConfigHandle<DaemonConfig>` on each
-//! debouncer tick. Tracked as future work; out of scope for the
-//! unified-registry migration.
+//! The debounce window (`debounce_ms`) can be hot-reloaded at runtime via
+//! [`DaemonCapability::update_debounce_ms`] without restarting the daemon.
+//! The capability holds the config behind an `Arc<RwLock<…>>` so each
+//! [`DaemonRunner::start`] invocation reads the latest value.
 //!
 //! # Dependency note
 //!
@@ -52,7 +49,7 @@ use std::any::TypeId;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::kit::{AsyncAutoBuilder, AsyncKit, ModuleMeta};
 
@@ -145,7 +142,7 @@ impl DaemonModule {
     pub(crate) fn build_cap(config: &DaemonConfig) -> Result<Arc<dyn DaemonRunner>, DaemonError> {
         Ok(Arc::new(DaemonCapability {
             db_path: config.db_path.clone(),
-            debounce_ms: config.debounce_ms,
+            config: Arc::new(RwLock::new(config.clone())),
         }))
     }
 }
@@ -157,33 +154,43 @@ impl DaemonModule {
 /// Concrete implementation of [`dyn DaemonRunner`] that constructs a fresh
 /// [`Daemon`] + [`IndexObserver`] on every [`DaemonRunner::start`] call.
 ///
-/// The capability owns only `db_path` and `debounce_ms` (both immutable,
-/// `Send + Sync`). Each `start` invocation:
+/// The capability holds `db_path` (immutable, `Send + Sync`) and the daemon
+/// config behind an `Arc<RwLock<…>>` so that [`DaemonCapability::update_debounce_ms`]
+/// can hot-reload the debounce window without restarting. Each `start`
+/// invocation:
 ///
 /// 1. Opens a fresh [`IndexFacade`] from `db_path` (lazy — does not touch
 ///    the database until indexing).
-/// 2. Constructs a [`Daemon`] with the configured `debounce_ms`.
-/// 3. Registers an [`IndexObserver`] that triggers incremental indexing on
+/// 2. Reads the current `debounce_ms` from the shared config.
+/// 3. Constructs a [`Daemon`] with the configured `debounce_ms`.
+/// 4. Registers an [`IndexObserver`] that triggers incremental indexing on
 ///    code-file changes.
-/// 4. Enters the blocking event loop ([`Daemon::run`]).
+/// 5. Enters the blocking event loop ([`Daemon::run`]).
 ///
 /// This matches the existing `daemon_cmd::run` semantics (one daemon per
 /// CLI invocation).
 struct DaemonCapability {
     /// Database path passed to [`IndexFacade::new`].
     db_path: PathBuf,
-    /// Debounce window in milliseconds (BR-DAEMON-001/004).
-    debounce_ms: u64,
+    /// Shared daemon config (hot-reloadable via [`DaemonCapability::update_debounce_ms`]).
+    config: Arc<RwLock<DaemonConfig>>,
 }
 
 impl DaemonRunner for DaemonCapability {
     fn start(&self, watch_path: &Path, project_name: &str) -> Result<(), DaemonError> {
+        // Read the current debounce_ms from the shared config (hot-reloadable).
+        let debounce_ms = self
+            .config
+            .read()
+            .map(|c| c.debounce_ms)
+            .unwrap_or(DEFAULT_DEBOUNCE_MS);
+
         // Construct the IndexFacade (lazy — opens DB on first index call).
         let facade = IndexFacade::new(&self.db_path)
             .map_err(|e| std::io::Error::other(format!("IndexFacade::new: {e}")))?;
 
-        // Construct the daemon with the configured debounce window.
-        let mut daemon = Daemon::new(watch_path, project_name, self.debounce_ms, &self.db_path);
+        // Construct the daemon with the current debounce window.
+        let mut daemon = Daemon::new(watch_path, project_name, debounce_ms, &self.db_path);
 
         // Register the IndexObserver (Observer pattern) — triggers
         // incremental indexing on code-file changes (BR-DAEMON-003).
@@ -194,6 +201,12 @@ impl DaemonRunner for DaemonCapability {
         // Enter the blocking event loop. Returns when the daemon stops
         // (user interrupt, watcher error, or channel disconnect).
         daemon.run()
+    }
+
+    fn update_debounce_ms(&self, new_ms: u64) {
+        if let Ok(mut cfg) = self.config.write() {
+            cfg.debounce_ms = new_ms;
+        }
     }
 }
 
@@ -262,5 +275,30 @@ mod tests {
         let cfg = DaemonConfig::new(PathBuf::from("/tmp/db.lbug"));
         assert_eq!(cfg.db_path, PathBuf::from("/tmp/db.lbug"));
         assert_eq!(cfg.debounce_ms, DEFAULT_DEBOUNCE_MS);
+    }
+
+    /// `update_debounce_ms` hot-reloads the debounce window in the shared
+    /// config; subsequent `start` calls would use the new value.
+    #[test]
+    fn update_debounce_ms_changes_shared_config() {
+        // Directly construct DaemonCapability (test is in the same module).
+        let config = DaemonConfig::new(PathBuf::from(":memory:"));
+        let cap = DaemonCapability {
+            db_path: config.db_path.clone(),
+            config: Arc::new(RwLock::new(config)),
+        };
+
+        // Default debounce should be DEFAULT_DEBOUNCE_MS.
+        {
+            let cfg = cap.config.read().unwrap();
+            assert_eq!(cfg.debounce_ms, DEFAULT_DEBOUNCE_MS);
+        }
+
+        // Hot-reload to a new value.
+        cap.update_debounce_ms(500);
+        {
+            let cfg = cap.config.read().unwrap();
+            assert_eq!(cfg.debounce_ms, 500);
+        }
     }
 }

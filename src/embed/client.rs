@@ -52,6 +52,13 @@ pub trait EmbedClient: Send + Sync {
     /// [`EmbedError::MissingApiKey`] if authentication is required but missing,
     /// or [`EmbedError::Api`] for non-2xx responses.
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
+
+    /// Hot-reloads the embedding config at runtime (spec §Hot reconfiguration).
+    ///
+    /// The default implementation is a no-op. Concrete capabilities that hold
+    /// the config behind an `Arc<RwLock<…>>` override this to propagate the
+    /// new settings and invalidate any cached local model.
+    fn update_config(&self, _new_config: EmbeddingConfig) {}
 }
 
 // --- OpenAI-compatible request/response types ---

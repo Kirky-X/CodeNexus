@@ -30,13 +30,14 @@
 //! responsible for degradation — this mirrors the existing `semantic_search`
 //! logic.
 //!
-//! # Hot reconfiguration (future work)
+//! # Hot reconfiguration
 //!
-//! The spec mentions `EmbedConfig` via `ConfigHandle` for hot-reloading the
-//! endpoint/model. This is **not implemented** — the current capability takes
-//! `EmbeddingConfig` as a construction-time constant. Hot reload would require
-//! refactoring the capability to read from a shared `ConfigHandle`. Tracked as
-//! future work; out of scope for the unified-registry migration.
+//! The embedding config (`endpoint`, `model`, etc.) can be hot-reloaded at
+//! runtime via [`EmbedCapability::update_config`] without rebuilding the
+//! capability. The capability holds the config behind an `Arc<RwLock<…>>` so
+//! each `embed()` call reads the latest value. When the config changes, the
+//! cached local ONNX client is invalidated so the next `embed()` re-initialises
+//! with the new settings.
 //!
 //! # Dependency note
 //!
@@ -61,7 +62,7 @@
 use std::any::TypeId;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use crate::kit::{AsyncAutoBuilder, AsyncKit, ModuleMeta};
 
@@ -133,7 +134,7 @@ impl EmbedModule {
     /// capability-level tests can run without an async runtime.
     pub(crate) fn build_cap(config: &EmbeddingConfig) -> Result<Arc<dyn EmbedClient>> {
         Ok(Arc::new(EmbedCapability {
-            config: config.clone(),
+            config: Arc::new(RwLock::new(config.clone())),
             local_client: Mutex::new(None),
         }))
     }
@@ -160,8 +161,8 @@ impl EmbedModule {
 /// (matching the existing `search_cmd::semantic_search` semantics). Requires
 /// an API key — returns [`EmbedError::MissingApiKey`] if absent.
 struct EmbedCapability {
-    /// Embedding-service config (endpoint, model, API key, model path).
-    config: EmbeddingConfig,
+    /// Embedding-service config (hot-reloadable via [`EmbedCapability::update_config`]).
+    config: Arc<RwLock<EmbeddingConfig>>,
     /// Lazily-loaded local ONNX client (H10/D7).
     ///
     /// `None` = not yet loaded (or local mode not in use).
@@ -171,13 +172,20 @@ struct EmbedCapability {
 
 impl EmbedClient for EmbedCapability {
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        if self.config.is_local() {
+        // Read the current config from the shared RwLock (hot-reloadable).
+        let config = self
+            .config
+            .read()
+            .map_err(|e| EmbedError::Unavailable(format!("config rwlock poisoned: {e}")))?
+            .clone();
+
+        if config.is_local() {
             // H10/D7: local ONNX inference — lazy-load the model on first use.
             let mut guard = self.local_client.lock().map_err(|e| {
                 EmbedError::Unavailable(format!("local_client mutex poisoned: {e}"))
             })?;
             if guard.is_none() {
-                let client = LocalEmbedClient::new(&self.config)?;
+                let client = LocalEmbedClient::new(&config)?;
                 *guard = Some(client);
             }
             // unwrap is safe: we just ensured it's Some.
@@ -187,11 +195,21 @@ impl EmbedClient for EmbedCapability {
                 .embed(texts)
         } else {
             // Remote HTTP mode — create a fresh OpenAIEmbedClient per call.
-            if !self.config.has_api_key() {
+            if !config.has_api_key() {
                 return Err(EmbedError::MissingApiKey);
             }
-            let client = OpenAIEmbedClient::new(self.config.clone())?;
+            let client = OpenAIEmbedClient::new(config)?;
             client.embed(texts)
+        }
+    }
+
+    fn update_config(&self, new_config: EmbeddingConfig) {
+        if let Ok(mut cfg) = self.config.write() {
+            *cfg = new_config;
+        }
+        // Invalidate cached local client — next embed() will re-load.
+        if let Ok(mut guard) = self.local_client.lock() {
+            *guard = None;
         }
     }
 }
@@ -280,5 +298,35 @@ mod tests {
     fn embed_config_alias_matches_embedding_config() {
         let cfg: EmbedConfig = EmbeddingConfig::default();
         assert!(cfg.is_local());
+    }
+
+    /// `update_config` hot-reloads the embedding config; the cached local
+    /// client is invalidated so the next `embed()` uses the new settings.
+    #[test]
+    fn update_config_changes_shared_config() {
+        // Directly construct EmbedCapability (test is in the same module).
+        let config = EmbeddingConfig::default();
+        let cap = EmbedCapability {
+            config: Arc::new(RwLock::new(config)),
+            local_client: Mutex::new(None),
+        };
+
+        // Default should be local mode.
+        {
+            let cfg = cap.config.read().unwrap();
+            assert!(cfg.is_local());
+        }
+
+        // Hot-reload to remote mode.
+        let new_config = EmbeddingConfig {
+            endpoint: Some("https://api.openai.com/v1".to_string()),
+            ..EmbeddingConfig::default()
+        };
+        cap.update_config(new_config);
+        {
+            let cfg = cap.config.read().unwrap();
+            assert!(!cfg.is_local());
+            assert_eq!(cfg.endpoint.as_deref(), Some("https://api.openai.com/v1"));
+        }
     }
 }

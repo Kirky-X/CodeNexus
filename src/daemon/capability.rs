@@ -52,6 +52,13 @@ pub trait DaemonRunner: Send + Sync {
     /// Returns [`DaemonError::Notify`] if the watcher cannot be created or
     /// started (e.g. `watch_path` does not exist).
     fn start(&self, watch_path: &Path, project_name: &str) -> Result<(), DaemonError>;
+
+    /// Hot-reloads the debounce window at runtime (spec §Hot reconfiguration).
+    ///
+    /// The default implementation is a no-op. Concrete capabilities that hold
+    /// the config behind an `Arc<RwLock<…>>` override this to propagate the
+    /// new value so the next [`start`](DaemonRunner::start) call picks it up.
+    fn update_debounce_ms(&self, _new_ms: u64) {}
 }
 
 /// Compile-time assertion that `DaemonRunner` is object-safe and `Send + Sync`.
