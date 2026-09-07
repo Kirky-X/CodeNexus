@@ -263,9 +263,21 @@ pub struct TestInfo {
     pub line: u32,
 }
 
-/// Data-flow summary (Out of Scope — empty placeholder).
+/// Data-flow summary for a symbol.
+///
+/// Captures basic data-flow information derived from the code graph:
+/// which functions can reach this symbol (sources) and which symbols
+/// this function can reach (sinks), along with the maximum call depth.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct DataFlowSummary {}
+pub struct DataFlowSummary {
+    /// Function qualified names that can reach this symbol (upstream sources).
+    pub sources: Vec<String>,
+    /// Function qualified names reachable from this symbol (downstream sinks).
+    pub sinks: Vec<String>,
+    /// Maximum call-chain depth from any entry point to this symbol.
+    /// Zero means the symbol is itself an entry point or has no callers.
+    pub max_depth: u32,
+}
 
 /// Info about a caller (incoming edge to the symbol).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -549,8 +561,97 @@ impl<'a> ContextCollector<'a> {
         Ok(tests)
     }
 
-    fn collect_data_flow(&self, _symbol: &SymbolDefinition) -> StorageResult<DataFlowSummary> {
-        Ok(DataFlowSummary {})
+    fn collect_data_flow(&self, symbol: &SymbolDefinition) -> StorageResult<DataFlowSummary> {
+        let symbol_id = self.resolve_symbol_id(&symbol.qualified_name)?;
+        if symbol_id.is_empty() {
+            return Ok(DataFlowSummary {
+                sources: Vec::new(),
+                sinks: Vec::new(),
+                max_depth: 0,
+            });
+        }
+        let escaped_id = escape_cypher_string(&symbol_id);
+
+        // Sources: functions that call this symbol (incoming CALLS edges).
+        let sources_cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.target = '{escaped_id}' AND e.type = 'CALLS' \
+             RETURN e.source AS source;"
+        );
+        let source_rows = self.storage.query(&sources_cypher)?;
+        let mut sources = Vec::new();
+        for row in &source_rows {
+            if let Some(source_id) = row.first().and_then(|v| v.as_str()) {
+                if let Some((_name, qn)) = self.resolve_call_endpoint(source_id)? {
+                    sources.push(qn);
+                }
+            }
+        }
+
+        // Sinks: functions called by this symbol (outgoing CALLS edges).
+        let sinks_cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.source = '{escaped_id}' AND e.type = 'CALLS' \
+             RETURN e.target AS target;"
+        );
+        let sink_rows = self.storage.query(&sinks_cypher)?;
+        let mut sinks = Vec::new();
+        for row in &sink_rows {
+            if let Some(target_id) = row.first().and_then(|v| v.as_str()) {
+                if let Some((_name, qn)) = self.resolve_call_endpoint(target_id)? {
+                    sinks.push(qn);
+                }
+            }
+        }
+
+        // max_depth: longest call-chain from any entry point to this symbol.
+        // Computed via memoized DFS over the caller (incoming CALLS) graph.
+        let mut memo = std::collections::HashMap::new();
+        let max_depth = self.compute_max_depth(&symbol_id, &mut memo)?;
+
+        Ok(DataFlowSummary {
+            sources,
+            sinks,
+            max_depth,
+        })
+    }
+
+    /// Recursively computes the maximum call-chain depth for `node_id`.
+    ///
+    /// Depth 0 means the node is an entry point (no callers) or isolated.
+    /// Depth N means the longest caller chain has N hops.
+    /// Uses `memo` for caching and `path` for cycle detection.
+    fn compute_max_depth(
+        &self,
+        node_id: &str,
+        memo: &mut std::collections::HashMap<String, u32>,
+    ) -> StorageResult<u32> {
+        if let Some(&d) = memo.get(node_id) {
+            return Ok(d);
+        }
+        let escaped = escape_cypher_string(node_id);
+        let cypher = format!(
+            "MATCH (e:CodeRelation) WHERE e.target = '{escaped}' AND e.type = 'CALLS' \
+             RETURN e.source AS source;"
+        );
+        let rows = self.storage.query(&cypher)?;
+        if rows.is_empty() {
+            memo.insert(node_id.to_string(), 0);
+            return Ok(0);
+        }
+        let mut max_d = 0u32;
+        for row in &rows {
+            if let Some(caller_id) = row.first().and_then(|v| v.as_str()) {
+                if caller_id.is_empty() {
+                    continue;
+                }
+                // Recursive call — cycles collapse to 0 via the memo guard.
+                if !memo.contains_key(caller_id) {
+                    let d = self.compute_max_depth(caller_id, memo)?;
+                    max_d = max_d.max(d + 1);
+                }
+            }
+        }
+        memo.insert(node_id.to_string(), max_d);
+        Ok(max_d)
     }
 
     fn collect_callers(
@@ -1245,7 +1346,11 @@ mod tests {
 
     #[test]
     fn data_flow_summary_roundtrip() {
-        let df = DataFlowSummary {};
+        let df = DataFlowSummary {
+            sources: vec![],
+            sinks: vec![],
+            max_depth: 0,
+        };
         let json = serde_json::to_string(&df).expect("serialize");
         let back: DataFlowSummary = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(df, back);
@@ -1316,7 +1421,11 @@ mod tests {
                 file_path: "/tests/foo_test.rs".to_string(),
                 line: 1,
             }],
-            data_flow: DataFlowSummary {},
+            data_flow: DataFlowSummary {
+                sources: vec![],
+                sinks: vec![],
+                max_depth: 0,
+            },
         };
         let json = serde_json::to_string(&sc).expect("serialize");
         let back: SymbolContext = serde_json::from_str(&json).expect("deserialize");
@@ -1810,7 +1919,14 @@ mod tests {
         // No CALLS edges in this fixture, so callers/callees are empty.
         assert!(ctx.callers.is_empty());
         assert!(ctx.callees.is_empty());
-        assert_eq!(ctx.data_flow, DataFlowSummary {});
+        assert_eq!(
+            ctx.data_flow,
+            DataFlowSummary {
+                sources: vec![],
+                sinks: vec![],
+                max_depth: 0,
+            }
+        );
         // Type context is populated from the Function node.
         assert_eq!(ctx.type_context.return_type, "i32");
         // Module context is populated from the File node.
@@ -2224,6 +2340,13 @@ mod tests {
         let df = collector
             .collect_data_flow(&symbol)
             .expect("should not error");
-        assert_eq!(df, DataFlowSummary {});
+        assert_eq!(
+            df,
+            DataFlowSummary {
+                sources: vec![],
+                sinks: vec![],
+                max_depth: 0,
+            }
+        );
     }
 }

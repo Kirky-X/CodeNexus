@@ -10,6 +10,9 @@
 //!
 //! - `function_definition` → [`NodeLabel::Function`]
 //! - `class_declaration` → [`NodeLabel::Class`]
+//! - `interface_declaration` → [`NodeLabel::Class`]
+//! - `trait_declaration` → [`NodeLabel::Class`]
+//! - `enum_declaration` → [`NodeLabel::Class`]
 //! - `method_declaration` → [`NodeLabel::Method`]
 //! - `namespace_definition` → [`NodeLabel::Namespace`]
 //!
@@ -22,8 +25,6 @@
 //!
 //! - PHP has no simple visibility rule; top-level declarations default to
 //!   `is_exported = true` (module-level visibility).
-//! - Interface, trait, and enum declarations are not yet extracted (only
-//!   `class_declaration` is handled per the parsing spec).
 //! - Member call expressions (`$obj->method()`) are not captured as CallInfo;
 //!   only free function calls (`function_call_expression`) are extracted.
 
@@ -112,8 +113,11 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             };
             visit_children(node, source, &child_ctx, result);
         }
-        "class_declaration" => {
-            extract_class(node, source, ctx, result);
+        "class_declaration"
+        | "interface_declaration"
+        | "trait_declaration"
+        | "enum_declaration" => {
+            extract_class_like(node, source, ctx, result);
             let name = class_name(node, source);
             let child_ctx = VisitContext {
                 file_path: ctx.file_path,
@@ -191,7 +195,16 @@ fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &m
     result.push_node(model_node);
 }
 
-fn extract_class(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
+/// Extracts a class-like declaration (`class`, `interface`, `trait`, or
+/// `enum`) as a [`NodeLabel::Class`] node. All four PHP declaration kinds
+/// share the same `name` field in tree-sitter-php, so [`class_name`]
+/// works uniformly.
+fn extract_class_like(
+    node: Node,
+    source: &str,
+    ctx: &VisitContext<'_>,
+    result: &mut ExtractResult,
+) {
     let Some(name) = class_name(node, source) else {
         return;
     };
@@ -705,8 +718,15 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Class)
             .collect();
-        assert_eq!(classes.len(), 1, "should extract Foo class");
-        assert_eq!(classes[0].name, "Foo");
+        // Both the interface and the class are now extracted as Class nodes.
+        assert_eq!(
+            classes.len(),
+            2,
+            "should extract IFoo interface and Foo class"
+        );
+        let names: Vec<_> = classes.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"IFoo"), "should extract interface IFoo");
+        assert!(names.contains(&"Foo"), "should extract class Foo");
     }
 
     #[test]
@@ -863,8 +883,8 @@ mod tests {
 
     #[test]
     fn interface_declaration_does_not_break_extraction() {
-        // Interface declarations should not crash the extractor (they are
-        // not yet promoted to Class nodes, but the visitor should not break).
+        // Interface declarations are extracted as Class nodes; methods
+        // inside the interface are extracted with the interface as parent.
         let src =
             "<?php\ninterface IFoo { public function bar(); }\nclass Foo implements IFoo {}\n";
         let result = extract(src);
@@ -873,8 +893,92 @@ mod tests {
             .iter()
             .filter(|n| n.label == NodeLabel::Class)
             .collect();
-        assert_eq!(classes.len(), 1, "should still extract Foo class");
-        assert_eq!(classes[0].name, "Foo");
+        assert_eq!(
+            classes.len(),
+            2,
+            "should extract IFoo interface and Foo class"
+        );
+        let names: Vec<_> = classes.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"IFoo"), "should extract interface");
+        assert!(names.contains(&"Foo"), "should extract class");
+        // Interface method should be extracted.
+        let methods: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Method)
+            .collect();
+        assert_eq!(methods.len(), 1, "should extract bar method from interface");
+        assert_eq!(methods[0].name, "bar");
+    }
+
+    #[test]
+    fn interface_declaration_extracted_as_class() {
+        let src = "<?php\ninterface Renderable { public function render(); }\n";
+        let result = extract(src);
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 1, "interface should be extracted as Class");
+        assert_eq!(classes[0].name, "Renderable");
+        assert!(classes[0].is_global);
+        assert!(classes[0].is_exported);
+    }
+
+    #[test]
+    fn trait_declaration_extracted_as_class() {
+        let src = "<?php\ntrait Loggable { public function log() {} }\n";
+        let result = extract(src);
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 1, "trait should be extracted as Class");
+        assert_eq!(classes[0].name, "Loggable");
+        assert!(classes[0].is_global);
+        assert!(classes[0].is_exported);
+        // Trait method should be extracted with trait as parent.
+        let methods: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Method)
+            .collect();
+        assert_eq!(methods.len(), 1, "should extract log method from trait");
+        assert_eq!(methods[0].name, "log");
+    }
+
+    #[test]
+    fn enum_declaration_extracted_as_class() {
+        let src = "<?php\nenum Color { case Red; case Green; case Blue; }\n";
+        let result = extract(src);
+        let classes: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.label == NodeLabel::Class)
+            .collect();
+        assert_eq!(classes.len(), 1, "enum should be extracted as Class");
+        assert_eq!(classes[0].name, "Color");
+        assert!(classes[0].is_global);
+        assert!(classes[0].is_exported);
+    }
+
+    #[test]
+    fn interface_method_has_correct_parent_qn() {
+        let src = "<?php\ninterface IFoo { public function bar(); }\n";
+        let result = extract(src);
+        let method = result
+            .nodes
+            .iter()
+            .find(|n| n.label == NodeLabel::Method && n.name == "bar")
+            .expect("should find bar method");
+        // The method's FQN should be disambiguated by the interface name.
+        assert!(
+            method.qualified_name.contains("IFoo"),
+            "method FQN should reference parent interface: {}",
+            method.qualified_name
+        );
     }
 
     #[test]
