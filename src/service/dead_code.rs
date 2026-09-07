@@ -84,25 +84,59 @@ fn stale_index_diagnostics(
     }]
 }
 
+/// Parameters for dead-code detection.
+///
+/// Bundles the analysis flags so [`run_dead_code`] takes only two arguments
+/// (`kit` + `params`) instead of eight positional parameters.
+#[cfg(feature = "analysis")]
+#[derive(Debug, Clone)]
+pub struct DeadCodeParams {
+    /// Project name (as registered in the index).
+    pub project: String,
+    /// Comma-separated extra entry-point patterns (empty = defaults only).
+    pub entry: String,
+    /// Treat `pub` functions as entry points.
+    pub check_exported: bool,
+    /// Treat FFI exports as entry points.
+    pub check_ffi: bool,
+    /// Treat dynamically-dispatched calls as live.
+    pub check_dynamic_dispatch: bool,
+    /// Treat reflection / derive-macro entry points as live.
+    pub check_reflection: bool,
+    /// Comma-separated uppercase edge type list (empty = defaults).
+    pub edge_types: String,
+}
+
+#[cfg(feature = "analysis")]
+impl Default for DeadCodeParams {
+    fn default() -> Self {
+        Self {
+            project: String::new(),
+            entry: String::new(),
+            check_exported: true,
+            check_ffi: false,
+            check_dynamic_dispatch: false,
+            check_reflection: false,
+            edge_types: String::new(),
+        }
+    }
+}
+
 /// Builds a [`DeadCodeConfig`] from CLI parameters.
 ///
 /// `edge_types` is a comma-separated list of UPPERCASE DDL edge type strings
 /// (e.g. `"CALLS,USAGE,TESTS"`). An empty string means "use the default edge
 /// types" from [`DeadCodeConfig::default`].
 #[cfg(feature = "analysis")]
-fn build_dead_code_config(
-    check_exported: bool,
-    check_ffi: bool,
-    check_dynamic_dispatch: bool,
-    edge_types: &str,
-) -> DeadCodeConfig {
+fn build_dead_code_config(params: &DeadCodeParams) -> DeadCodeConfig {
     let default = DeadCodeConfig::default();
     let final_edge_types =
-        crate::model::edge_type::parse_edge_type_list(edge_types, &default.edge_types);
+        crate::model::edge_type::parse_edge_type_list(&params.edge_types, &default.edge_types);
     DeadCodeConfig {
-        check_exported,
-        check_ffi,
-        check_dynamic_dispatch,
+        check_exported: params.check_exported,
+        check_ffi: params.check_ffi,
+        check_dynamic_dispatch: params.check_dynamic_dispatch,
+        check_reflection: params.check_reflection,
         edge_types: final_edge_types,
         ..default
     }
@@ -115,15 +149,10 @@ fn build_dead_code_config(
 #[cfg(feature = "analysis")]
 pub fn run_dead_code(
     kit: &AsyncKit<AsyncReady>,
-    project: &str,
-    entry: &str,
-    check_exported: bool,
-    check_ffi: bool,
-    check_dynamic_dispatch: bool,
-    edge_types: &str,
+    params: &DeadCodeParams,
 ) -> Result<DeadCodeOutput, CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
-    let project_id = resolve_project_id(&*storage, project)?;
+    let project_id = resolve_project_id(&*storage, &params.project)?;
     // B6: fetch the full Project record to read `lastCommit` (indexed_commit)
     // and `rootPath` (for `git rev-parse HEAD` at query time). Use the O(1)
     // `get_project` lookup instead of `list_projects + find` (arch-review
@@ -132,7 +161,7 @@ pub fn run_dead_code(
     let project_record = storage
         .get_project(&project_id)
         .map_err(CodeNexusError::from)?
-        .ok_or_else(|| CodeNexusError::ProjectNotFound(project.to_string()))?;
+        .ok_or_else(|| CodeNexusError::ProjectNotFound(params.project.clone()))?;
     let indexed_commit = project_record.last_commit.clone();
     // T206: resolve rootPath with fallback for legacy relative paths so
     // `git rev-parse HEAD` runs against the actual project root, not the
@@ -141,26 +170,26 @@ pub fn run_dead_code(
     let root = resolve_project_root(&project_record.root_path, &storage_config.db_path);
     let current_head = git_head_commit(&root);
     let stale = is_stale(&indexed_commit, &current_head);
-    let config = build_dead_code_config(
-        check_exported,
-        check_ffi,
-        check_dynamic_dispatch,
-        edge_types,
-    );
+    let config = build_dead_code_config(params);
     let detector = DeadCodeDetector::with_config(&*storage, config);
     let mut entry_patterns: Vec<&str> = vec!["main", "Main", "__main__"];
-    let extras: Vec<String> = if entry.is_empty() {
+    let extras: Vec<String> = if params.entry.is_empty() {
         Vec::new()
     } else {
-        entry.split(',').map(|s| s.trim().to_string()).collect()
+        params
+            .entry
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect()
     };
     for e in &extras {
         entry_patterns.push(e.as_str());
     }
     let entries = detector.detect(&project_id, &entry_patterns)?;
-    let diagnostics = stale_index_diagnostics(project, &root, &indexed_commit, &current_head);
+    let diagnostics =
+        stale_index_diagnostics(&params.project, &root, &indexed_commit, &current_head);
     Ok(DeadCodeOutput {
-        project: project.to_string(),
+        project: params.project.clone(),
         dead_code: entries,
         indexed_commit,
         current_head,
@@ -183,19 +212,20 @@ async fn dead_code(
     check_exported: bool,
     check_ffi: bool,
     check_dynamic_dispatch: bool,
+    check_reflection: bool,
     edge_types: String,
 ) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    let output = run_dead_code(
-        &kit,
-        &project,
-        &entry,
+    let params = DeadCodeParams {
+        project,
+        entry,
         check_exported,
         check_ffi,
         check_dynamic_dispatch,
-        &edge_types,
-    )
-    .map_err(|e| to_api_error(e, "dead_code_error"))?;
+        check_reflection,
+        edge_types,
+    };
+    let output = run_dead_code(&kit, &params).map_err(|e| to_api_error(e, "dead_code_error"))?;
     let json = serde_json::to_string(&output)
         .map_err(|e| to_api_error(CodeNexusError::from(e), "dead_code_error"))?;
     println!("{json}");
@@ -232,13 +262,45 @@ mod tests {
             .expect("create project");
     }
 
+    /// Default test params: project="demo", all checks on except reflection.
+    fn test_params() -> DeadCodeParams {
+        DeadCodeParams {
+            project: "demo".to_string(),
+            entry: String::new(),
+            check_exported: true,
+            check_ffi: true,
+            check_dynamic_dispatch: true,
+            check_reflection: false,
+            edge_types: String::new(),
+        }
+    }
+
+    /// Build a `DeadCodeParams` for `build_dead_code_config` tests.
+    fn cfg_params(
+        exported: bool,
+        ffi: bool,
+        dynamic: bool,
+        reflection: bool,
+        edges: &str,
+    ) -> DeadCodeParams {
+        DeadCodeParams {
+            project: "demo".to_string(),
+            check_exported: exported,
+            check_ffi: ffi,
+            check_dynamic_dispatch: dynamic,
+            check_reflection: reflection,
+            edge_types: edges.to_string(),
+            ..DeadCodeParams::default()
+        }
+    }
+
     #[test]
     fn run_succeeds_on_empty_db() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("storage");
         seed_project(&*storage, "demo", "demo");
-        let result = run_dead_code(&kit, "demo", "", true, true, true, "");
+        let result = run_dead_code(&kit, &test_params());
         assert!(result.is_ok(), "run should succeed: {:?}", result.err());
     }
 
@@ -249,7 +311,7 @@ mod tests {
         let storage = kit.require::<StorageModule>().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_foo', project: 'demo', name: 'foo', qualifiedName: 'demo.foo', filePath: '/src/lib.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create foo");
-        let result = run_dead_code(&kit, "demo", "", true, true, true, "");
+        let result = run_dead_code(&kit, &test_params());
         assert!(result.is_ok(), "run should succeed: {:?}", result.err());
     }
 
@@ -260,15 +322,11 @@ mod tests {
         let storage = kit.require::<StorageModule>().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
         storage.execute("CREATE (:Function {id: 'f_main', project: 'demo', name: 'main', qualifiedName: 'demo.main', filePath: '/src/main.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create main");
-        let result = run_dead_code(
-            &kit,
-            "demo",
-            "custom_entry,other_entry",
-            true,
-            true,
-            true,
-            "",
-        );
+        let result = run_dead_code(&kit, &{
+            let mut p = test_params();
+            p.entry = "custom_entry,other_entry".to_string();
+            p
+        });
         assert!(result.is_ok(), "run should succeed: {:?}", result.err());
     }
 
@@ -335,8 +393,7 @@ mod tests {
         storage.execute("CREATE (:Function {id: 'f_pub', project: 'demo', name: 'pub_fn', qualifiedName: 'demo.pub_fn', filePath: '/src/lib.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: true, docstring: '', content: '', parentQn: ''});").expect("create exported");
         storage.execute("CREATE (:Function {id: 'f_priv', project: 'demo', name: 'priv_fn', qualifiedName: 'demo.priv_fn', filePath: '/src/lib.rs', startLine: 6, endLine: 10, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create private");
 
-        let output =
-            run_dead_code(&kit, "demo", "", true, true, true, "").expect("run should succeed");
+        let output = run_dead_code(&kit, &test_params()).expect("run should succeed");
         let names: Vec<&str> = output.dead_code.iter().map(|e| e.name.as_str()).collect();
         assert!(
             !names.contains(&"pub_fn"),
@@ -344,8 +401,12 @@ mod tests {
         );
         assert!(names.contains(&"priv_fn"), "private fn should be dead");
 
-        let output2 =
-            run_dead_code(&kit, "demo", "", false, true, true, "").expect("run should succeed");
+        let output2 = run_dead_code(&kit, &{
+            let mut p = test_params();
+            p.check_exported = false;
+            p
+        })
+        .expect("run should succeed");
         let names2: Vec<&str> = output2.dead_code.iter().map(|e| e.name.as_str()).collect();
         assert!(
             names2.contains(&"pub_fn"),
@@ -366,8 +427,7 @@ mod tests {
         storage.execute("CREATE (:Function {id: 'f_ffi', project: 'demo', name: 'ffi_fn', qualifiedName: 'demo.ffi_fn', filePath: '/src/lib.rs', startLine: 1, endLine: 5, signature: 'extern \"C\" fn ffi_fn()', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create ffi");
         storage.execute("CREATE (:Function {id: 'f_plain', project: 'demo', name: 'plain', qualifiedName: 'demo.plain', filePath: '/src/lib.rs', startLine: 6, endLine: 10, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create plain");
 
-        let output =
-            run_dead_code(&kit, "demo", "", true, true, true, "").expect("run should succeed");
+        let output = run_dead_code(&kit, &test_params()).expect("run should succeed");
         let names: Vec<&str> = output.dead_code.iter().map(|e| e.name.as_str()).collect();
         assert!(
             !names.contains(&"ffi_fn"),
@@ -375,8 +435,12 @@ mod tests {
         );
         assert!(names.contains(&"plain"), "plain fn should be dead");
 
-        let output2 =
-            run_dead_code(&kit, "demo", "", true, false, true, "").expect("run should succeed");
+        let output2 = run_dead_code(&kit, &{
+            let mut p = test_params();
+            p.check_ffi = false;
+            p
+        })
+        .expect("run should succeed");
         let names2: Vec<&str> = output2.dead_code.iter().map(|e| e.name.as_str()).collect();
         assert!(
             names2.contains(&"ffi_fn"),
@@ -396,8 +460,12 @@ mod tests {
 
         // B5: `a` is passed as an entry-pattern seed; `b` is reachable from
         // `a` via USAGE (in default config) → both alive.
-        let output =
-            run_dead_code(&kit, "demo", "a", true, true, true, "").expect("run should succeed");
+        let output = run_dead_code(&kit, &{
+            let mut p = test_params();
+            p.entry = "a".to_string();
+            p
+        })
+        .expect("run should succeed");
         let names: Vec<&str> = output.dead_code.iter().map(|e| e.name.as_str()).collect();
         assert!(
             !names.contains(&"b"),
@@ -410,8 +478,13 @@ mod tests {
 
         // With CALLS-only config, USAGE edge is not traversed → b unreachable
         // → b dead. `a` is still a seed → alive.
-        let output2 = run_dead_code(&kit, "demo", "a", true, true, true, "CALLS")
-            .expect("run should succeed");
+        let output2 = run_dead_code(&kit, &{
+            let mut p = test_params();
+            p.entry = "a".to_string();
+            p.edge_types = "CALLS".to_string();
+            p
+        })
+        .expect("run should succeed");
         let names2: Vec<&str> = output2.dead_code.iter().map(|e| e.name.as_str()).collect();
         assert!(
             names2.contains(&"b"),
@@ -429,8 +502,7 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("storage");
         seed_project(&*storage, "demo", "demo");
-        let output =
-            run_dead_code(&kit, "demo", "", true, true, true, "").expect("run should succeed");
+        let output = run_dead_code(&kit, &test_params()).expect("run should succeed");
         assert_eq!(output.project, "demo");
         assert!(
             output.dead_code.is_empty(),
@@ -442,7 +514,8 @@ mod tests {
 
     #[test]
     fn build_dead_code_config_parses_edge_types() {
-        let config = build_dead_code_config(true, true, true, "CALLS,USAGE,TESTS");
+        let config =
+            build_dead_code_config(&cfg_params(true, true, true, false, "CALLS,USAGE,TESTS"));
         assert!(config.check_exported);
         assert!(config.check_ffi);
         assert!(config.check_dynamic_dispatch);
@@ -454,7 +527,7 @@ mod tests {
 
     #[test]
     fn build_dead_code_config_empty_edge_types_uses_defaults() {
-        let config = build_dead_code_config(true, true, true, "");
+        let config = build_dead_code_config(&cfg_params(true, true, true, false, ""));
         assert!(config.check_exported);
         assert!(config.check_ffi);
         let default = DeadCodeConfig::default();
@@ -463,7 +536,13 @@ mod tests {
 
     #[test]
     fn build_dead_code_config_skips_invalid_edge_types() {
-        let config = build_dead_code_config(false, false, false, "CALLS,INVALID,TESTS");
+        let config = build_dead_code_config(&cfg_params(
+            false,
+            false,
+            false,
+            false,
+            "CALLS,INVALID,TESTS",
+        ));
         assert!(!config.check_exported);
         assert!(!config.check_ffi);
         assert!(!config.check_dynamic_dispatch);
@@ -474,7 +553,8 @@ mod tests {
 
     #[test]
     fn build_dead_code_config_all_invalid_keeps_defaults() {
-        let config = build_dead_code_config(true, true, true, "INVALID1,INVALID2");
+        let config =
+            build_dead_code_config(&cfg_params(true, true, true, false, "INVALID1,INVALID2"));
         let default = DeadCodeConfig::default();
         assert_eq!(
             config.edge_types, default.edge_types,
@@ -484,7 +564,8 @@ mod tests {
 
     #[test]
     fn build_dead_code_config_trims_whitespace() {
-        let config = build_dead_code_config(true, true, true, "  CALLS ,  USAGE  ");
+        let config =
+            build_dead_code_config(&cfg_params(true, true, true, false, "  CALLS ,  USAGE  "));
         assert_eq!(config.edge_types.len(), 2);
         assert!(config.edge_types.contains(&EdgeType::Calls));
         assert!(config.edge_types.contains(&EdgeType::Usage));
@@ -494,7 +575,7 @@ mod tests {
 
     #[test]
     fn build_dead_code_config_passes_check_dynamic_dispatch_true() {
-        let config = build_dead_code_config(true, true, true, "");
+        let config = build_dead_code_config(&cfg_params(true, true, true, false, ""));
         assert!(
             config.check_dynamic_dispatch,
             "check_dynamic_dispatch=true should propagate"
@@ -503,7 +584,7 @@ mod tests {
 
     #[test]
     fn build_dead_code_config_passes_check_dynamic_dispatch_false() {
-        let config = build_dead_code_config(true, true, false, "");
+        let config = build_dead_code_config(&cfg_params(true, true, false, false, ""));
         assert!(
             !config.check_dynamic_dispatch,
             "check_dynamic_dispatch=false should propagate"
@@ -520,8 +601,7 @@ mod tests {
         storage.execute("CREATE (:Method {id: 'm_fmt', project: 'demo', name: 'fmt', qualifiedName: 'demo.src.lib.rs.fmt#Display', filePath: '/src/lib.rs', startLine: 5, endLine: 10, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create trait impl");
 
         // With check_dynamic_dispatch=true (B3.5 default), trait impl is NOT dead
-        let output =
-            run_dead_code(&kit, "demo", "", true, true, true, "").expect("run should succeed");
+        let output = run_dead_code(&kit, &test_params()).expect("run should succeed");
         let names: Vec<&str> = output.dead_code.iter().map(|e| e.name.as_str()).collect();
         assert!(
             !names.contains(&"fmt"),
@@ -529,8 +609,12 @@ mod tests {
         );
 
         // With check_dynamic_dispatch=false (opt-out), trait impl IS dead
-        let output2 =
-            run_dead_code(&kit, "demo", "", true, true, false, "").expect("run should succeed");
+        let output2 = run_dead_code(&kit, &{
+            let mut p = test_params();
+            p.check_dynamic_dispatch = false;
+            p
+        })
+        .expect("run should succeed");
         let names2: Vec<&str> = output2.dead_code.iter().map(|e| e.name.as_str()).collect();
         assert!(
             names2.contains(&"fmt"),
@@ -559,6 +643,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             "".to_string(),
         ));
         assert!(result.is_ok(), "wrapper should succeed: {:?}", result.err());
@@ -576,6 +661,7 @@ mod tests {
         let result = rt.block_on(dead_code(
             "demo".to_string(),
             "".to_string(),
+            false,
             false,
             false,
             false,
@@ -614,7 +700,7 @@ mod tests {
         let storage = kit.require::<StorageModule>().expect("storage");
         // rootPath points to a non-git directory → current_head empty.
         seed_project_with(&*storage, "demo", "demo", "/nonexistent/path", "abc123");
-        let output = run_dead_code(&kit, "demo", "", true, true, true, "").expect("run");
+        let output = run_dead_code(&kit, &test_params()).expect("run");
         assert_eq!(output.indexed_commit, "abc123");
         assert_eq!(output.current_head, "", "non-git root → empty current_head");
         assert!(!output.is_stale, "current_head empty → not stale");
@@ -674,7 +760,7 @@ mod tests {
         let root = tmp.path().to_string_lossy().into_owned();
         // indexed_commit deliberately differs from current HEAD.
         seed_project_with(&*storage, "demo", "demo", &root, "abc123");
-        let output = run_dead_code(&kit, "demo", "", true, true, true, "").expect("run");
+        let output = run_dead_code(&kit, &test_params()).expect("run");
         assert_eq!(output.indexed_commit, "abc123");
         assert_eq!(output.current_head, head);
         assert!(output.is_stale, "commits differ → stale");
@@ -734,7 +820,7 @@ mod tests {
         let root = tmp.path().to_string_lossy().into_owned();
         // indexed_commit == current HEAD → fresh.
         seed_project_with(&*storage, "demo", "demo", &root, &head);
-        let output = run_dead_code(&kit, "demo", "", true, true, true, "").expect("run");
+        let output = run_dead_code(&kit, &test_params()).expect("run");
         assert_eq!(output.indexed_commit, head);
         assert_eq!(output.current_head, head);
         assert!(!output.is_stale, "commits match → fresh");
@@ -807,7 +893,7 @@ mod tests {
         // rootPath deliberately set to "." (legacy). lastCommit = current HEAD
         // so is_stale should be false once the fallback resolves the root.
         seed_project_with(&*storage, "demo", "demo", ".", &head);
-        let output = run_dead_code(&kit, "demo", "", true, true, true, "").expect("run");
+        let output = run_dead_code(&kit, &test_params()).expect("run");
         assert_eq!(
             output.current_head, head,
             "current_head must be the project's actual HEAD, not the CWD's HEAD"

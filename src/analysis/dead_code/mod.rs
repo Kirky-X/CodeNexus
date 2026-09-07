@@ -116,6 +116,22 @@ const DEFAULT_ATTRIBUTE_ENTRIES: &[&str] = &[
     "#[axum::main",
 ];
 
+/// Substrings that mark a function as invoked via reflection / derive macros
+/// (e.g. serde `Serialize` / `Deserialize`). When `check_reflection` is
+/// enabled in [`DeadCodeConfig`], functions whose `signature` contains any
+/// of these substrings are treated as live seeds — macro expansion
+/// synthesises calls invisible to the static graph.
+///
+/// tree-sitter does not expand macros, so the derive-generated code is not
+/// represented as CALLS edges. Scanning the `signature` field (which
+/// includes outer attributes collected by `collect_function_signature`)
+/// is the pragmatic detection strategy.
+const DEFAULT_REFLECTION_MARKERS: &[&str] = &[
+    "Serialize",   // serde Serialize derive
+    "Deserialize", // serde Deserialize derive
+    "#[serde",     // serde field/container annotations
+];
+
 /// Reason string recorded on every [`DeadCodeEntry`].
 const REASON_ZERO_INCOMING_CALLS: &str = "zero incoming CALLS edges";
 
@@ -137,7 +153,15 @@ pub struct DeadCodeConfig {
     /// methods are invoked via dynamic dispatch / vtable and have no static
     /// CALLS edge in the graph.
     pub check_dynamic_dispatch: bool,
-    /// Reserved for future reflection / serde detection.
+    /// When `true`, functions whose `signature` contains reflection /
+    /// derive-macro markers ([`DEFAULT_REFLECTION_MARKERS`]: `Serialize`,
+    /// `Deserialize`, `#[serde`) are treated as live seeds. Macro expansion
+    /// synthesises calls invisible to the static graph (tree-sitter does
+    /// not expand macros), so this flag reduces false positives for
+    /// projects using serde or similar derive-based frameworks.
+    ///
+    /// Default: `false` — reflection-based entry points are treated as
+    /// dead unless explicitly enabled.
     pub check_reflection: bool,
     /// When `true`, signatures containing `extern "C"` / `#[no_mangle]` are
     /// treated as FFI entry points and excluded.
@@ -739,6 +763,18 @@ impl<'a> ReachabilityAnalyzer<'a> {
         {
             return true;
         }
+        // 11. Reflection / derive-macro entry points (serde etc.).
+        //     When `check_reflection` is enabled, functions decorated with
+        //     `#[derive(Serialize)]` / `#[derive(Deserialize)]` /
+        //     `#[serde(...)]` are treated as live seeds — macro expansion
+        //     synthesises calls invisible to the static graph.
+        if self.config.check_reflection
+            && DEFAULT_REFLECTION_MARKERS
+                .iter()
+                .any(|m| func.signature.contains(m))
+        {
+            return true;
+        }
         false
     }
 
@@ -962,6 +998,16 @@ impl<'a> DeadCodeDetector<'a> {
             if config_attribute_entries
                 .iter()
                 .any(|attr| func.signature.contains(attr))
+            {
+                continue;
+            }
+            // Defense-in-depth: reflection / derive-macro entry points.
+            // Mirrors `is_seed_function` category 11 — keeps the filter
+            // loop self-consistent when `check_reflection` is enabled.
+            if self.config.check_reflection
+                && DEFAULT_REFLECTION_MARKERS
+                    .iter()
+                    .any(|m| func.signature.contains(m))
             {
                 continue;
             }
