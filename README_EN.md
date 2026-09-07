@@ -57,6 +57,9 @@ Supports **21 languages** with the default `full` preset: C, Rust, Fortran, Pyth
 | Impact analysis        | Change impact radius analysis, layered by depth                                                                          |
 | Disambiguation         | Ranked multi-match symbol resolution by confidence (auto-selects the unique match; errors if it cannot be disambiguated) |
 | Confidence tiers       | Each edge carries a tier (SameFile / ImportScoped / Global) + 0.0-1.0 score                                              |
+| Architecture diagrams  | `diagram` compiles the architecture into self-contained interactive HTML (deterministic layout, orthogonal routing, dark/light themes, focus & reach, route probe, source-evidence badges) |
+| Architecture delta     | `arch_diff` compares two indexed projects, emitting Before/Delta/After HTML plus a machine receipt (added/removed/changed with JSON Pointer fields) |
+| Repair receipts        | Errors and warnings carry structured receipts (stable rule codes + measured evidence + curated fixes) — symbol ambiguity, stale index, truncated results |
 | Cross-language FFI     | C-Fortran `bind(C)`, Rust `extern`, and other FFI call resolution                                                        |
 | Team artifacts         | `export`/`import` compressed `.graph.zst` artifacts for sharing indexes                                                  |
 | Multi-agent MCP        | `setup` auto-detects Claude Code/Cursor/Codex; `hook` emits PreToolUse/PostToolUse JSON; `mcp` stdio server              |
@@ -97,7 +100,7 @@ cargo build --release --features mcp
 | ----------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `minimal`         | —       | Minimal preset: `lang-rust` only                                                                                                                                                                                              |
 | `core`            | —       | Core preset: `lang-c` + `lang-rust` + `lang-python`                                                                                                                                                                           |
-| `full`            | enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/lsp/cli/mcp/cache/embed/i18n |
+| `full`            | enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embed/i18n |
 | `lang-c`          | —       | C language parser (tree-sitter-c)                                                                                                                                                                                             |
 | `lang-rust`       | enabled | Rust language parser (tree-sitter-rust)                                                                                                                                                                                       |
 | `lang-fortran`    | —       | Fortran language parser (tree-sitter-fortran)                                                                                                                                                                                 |
@@ -127,6 +130,7 @@ cargo build --release --features mcp
 | `api-review`      | enabled | API review toolkit (route_map/shape_check/api_impact/tool_map)                                                                                                                                                                |
 | `community`       | enabled | Community detection (Leiden modularity optimization, depends on petgraph)                                                                                                                                                     |
 | `cross-service`   | enabled | Cross-service call chain detection (HTTP route pattern matching)                                                                                                                                                              |
+| `diagram`         | enabled | Diagram pipeline: `diagram`/`arch_diff` commands, self-contained interactive HTML (depends on `analysis`)                                                                                                                      |
 | `mcp`             | enabled | MCP server via sdforge `mcp` stdio transport                                                                                                                                                                                  |
 | `cli`             | enabled | CLI binary (sdforge `cli` transport; required by the binary)                                                                                                                                                                  |
 | `cache`           | enabled | Query result caching (oxcache)                                                                                                                                                                                                |
@@ -229,9 +233,9 @@ codenexus architecture --project myproject
 | Command          | Description                                                                                                                           |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `index`          | Index a codebase into the knowledge graph (`--ram-first` for LZ4 in-memory)                                                           |
-| `query`          | Execute a Cypher query                                                                                                                |
+| `query`          | Execute a Cypher query (`--cypher`)                                                                                             |
 | `trace`          | Trace a symbol's call/data-flow paths (`--symbol`/`--trace_type`/`--depth`/`--path_filter`/`--detect_cycles`/`--cross_service`)       |
-| `impact`         | Analyze the impact radius of changing a symbol (`--edge-types`/`--max-depth`/`--include-tests` multi-dimensional + `risk_assessment`) |
+| `impact`         | Analyze the impact radius of changing a symbol (`--symbol`/`--edge-types`/`--max-depth`/`--include-tests` multi-dimensional + `risk_assessment`) |
 | `search`         | Search symbols by name or content (`--mode` exact/regex/fuzzy/graph/multi; `--fulltext` BM25; `--project` filter)                     |
 | `context`        | 360° symbol view (`--project`/`--enhanced` multi-dimensional SymbolContext)                                                           |
 | `detect_changes` | Git diff → affected symbols + risk_level                                                                                              |
@@ -250,12 +254,14 @@ codenexus architecture --project myproject
 | `complexity`     | AST complexity analysis (8 metrics + configurable thresholds, `complexity` feature)                                                   |
 | `route_map`      | HTTP route mapping (API endpoint inventory, `api-review` feature)                                                                     |
 | `shape_check`    | API shape check (request/response structure validation, `api-review` feature)                                                         |
-| `api_impact`     | API change impact analysis (`api-review` feature)                                                                                     |
+| `api_impact`     | API change impact analysis (`--endpoint` optional, omit=analyze all endpoints; `api-review` feature)                                |
 | `tool_map`       | Tool mapping (MCP tool inventory, `api-review` feature)                                                                               |
 | `community`      | Community detection (Leiden modularity optimization, `community` feature)                                                             |
 | `cross_service`  | Cross-service call chain detection (HTTP REST/gRPC/GraphQL/message queue/event bus, `cross-service` feature)                          |
 | `lsp_goto_def`   | LSP go-to-definition (rust-analyzer integration, `lsp` feature)                                                                       |
 | `lsp_hover`      | LSP hover info (rust-analyzer integration, `lsp` feature)                                                                             |
+| `diagram`        | Architecture diagram export: self-contained interactive HTML (deterministic layout + geometric quality gates + optional Git source evidence, `diagram` feature) |
+| `arch_diff`      | Architecture semantic delta: two-project comparison → Before/Delta/After HTML + machine receipt (`diagram` feature)                   |
 
 ## [Complexity Analysis](#complexity-analysis)
 
@@ -450,7 +456,7 @@ See [`.env.example`](.env.example) for a copy-paste template. CodeNexus does not
 
 ### Agent Integration
 
-Run `codenexus setup` to auto-detect installed AI agents (Claude Code, Cursor, Codex) and write the MCP configuration into the right location for each. After setup, the agent can call CodeNexus tools (`query`, `context`, `impact`, `detect_changes`, `rename`, ...) over the MCP stdio server started by `codenexus mcp`.
+Run `codenexus setup` to auto-detect installed AI agents (Claude Code, Cursor, Codex) and write the MCP configuration into the right location for each. After setup, the agent can call CodeNexus tools (`query`, `context`, `impact`, `detect_changes`, `rename`, `diagram`, `arch_diff`, ...) over the MCP stdio server started by `codenexus mcp`.
 
 For Git hooks, `codenexus hook` emits `PreToolUse`/`PostToolUse` JSON events and always exits 0, so it can be wired into a hook without blocking agent actions.
 
@@ -500,7 +506,7 @@ CodeNexus planned work, ordered by current priority:
 - [x] v0.3.3 — Internationalization module (`i18n` feature): ICU4X Unicode case folding + NFC normalization + CJK boundary detection
 - [x] v0.3.3 — Harness modernization: CI upgraded to Rust 1.91 + 6-feature matrix + dependabot + codeql + crates.io publish
 - [x] v0.3.11 — Large-repo indexing OOM fix (L1–L7 seven-layer defense): `MemoryBudget` three-level memory pressure + `Graph::nodes_view/edges_view` iterators + streaming CSV + mpsc channel parallel parsing + L5 adaptive degradation + L6 pipeline streaming (`ctx.remove` replaces `Graph::clone`) + L7 LadybugDB buffer_pool cap (4 GB) + on-demand LSP startup + RAM-first 8× amplification-factor budget. 70 GB host peak RSS reduced from 60 GB to ~4 GB.
-- [ ] Future — Web UI / graph visualization on top of the query facade
+- [ ] Future — Web UI / graph visualization on top of the query facade (`diagram`/`arch_diff` already ship architecture HTML and semantic delta; 3D graph-viewer integration and more diagram types remain planned)
 
 ## [License](#license)
 

@@ -48,6 +48,9 @@ CodeNexus 将源代码仓库索引为可查询的知识图谱。它使用 [tree-
 | 影响分析     | 变更影响半径分析，按深度分层                                                                         |
 | 歧义消解     | 多匹配符号按置信度排序消解（自动选择唯一匹配；无法唯一确定时报错）                                   |
 | 置信度分层   | 每条边携带分层（SameFile / ImportScoped / Global）+ 0.0-1.0 分数                                     |
+| 架构图导出   | `diagram` 将架构编译为自包含交互式 HTML（确定性布局/正交路由/暗亮主题/焦点与可达/路由探测/源码证据徽标）              |
+| 架构语义 Delta | `arch_diff` 对比两个已索引项目，输出 Before/Delta/After HTML + 机器回执（added/removed/changed + JSON Pointer 字段）    |
+| 诊断回执     | 错误与告警输出结构化回执（稳定规则码 + 证据 + 可执行修复话术），符号歧义/索引过期/结果截断均附带修复建议                  |
 | 跨语言 FFI   | C-Fortran bind(C)、Rust extern 等跨语言调用解析                                                      |
 | 团队制品     | `export`/`import` 压缩 `.graph.zst` 制品，共享索引                                                   |
 | 多智能体 MCP | `setup` 自动检测 Claude Code/Cursor/Codex；`hook` 输出 PreToolUse/PostToolUse JSON；`mcp` stdio 服务 |
@@ -88,7 +91,7 @@ cargo build --release --features mcp
 | ----------------- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `minimal`         | —    | 最小预设：仅 `lang-rust`                                                                                                                                                                                                   |
 | `core`            | —    | 核心预设：`lang-c` + `lang-rust` + `lang-python`                                                                                                                                                                           |
-| `full`            | 启用 | 完整预设：`core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/lsp/cli/mcp/cache/embed/i18n |
+| `full`            | 启用 | 完整预设：`core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embed/i18n |
 | `lang-c`          | —    | C 语言解析器（tree-sitter-c）                                                                                                                                                                                              |
 | `lang-rust`       | 启用 | Rust 语言解析器（tree-sitter-rust）                                                                                                                                                                                        |
 | `lang-fortran`    | —    | Fortran 语言解析器（tree-sitter-fortran）                                                                                                                                                                                  |
@@ -118,6 +121,7 @@ cargo build --release --features mcp
 | `api-review`      | 启用 | API 审查工具包（route_map/shape_check/api_impact/tool_map）                                                                                                                                                                |
 | `community`       | 启用 | 社区检测（Leiden 模块度优化，依赖 petgraph）                                                                                                                                                                               |
 | `cross-service`   | 启用 | 跨服务调用链检测（HTTP 路由模式匹配）                                                                                                                                                                                      |
+| `diagram`         | 启用 | 架构图管线：`diagram`/`arch_diff` 命令，自包含交互式 HTML（依赖 `analysis`）                                                                                                                                               |
 | `mcp`             | 启用 | MCP 服务器（sdforge `mcp` stdio 传输）                                                                                                                                                                                     |
 | `cli`             | 启用 | CLI 二进制（sdforge `cli` 传输，二进制必需）                                                                                                                                                                               |
 | `cache`           | 启用 | 查询结果缓存（oxcache）                                                                                                                                                                                                    |
@@ -249,10 +253,12 @@ codenexus architecture --project myproject
 | `cross_service`  | 跨服务调用链检测（`--protocol` 可选，省略=所有协议；HTTP REST/gRPC/GraphQL/消息队列/事件总线，`cross-service` feature） |
 | `lsp_goto_def`   | LSP 定义跳转（rust-analyzer 集成，`lsp` feature）                                                                       |
 | `lsp_hover`      | LSP 悬停信息（rust-analyzer 集成，`lsp` feature）                                                                       |
+| `diagram`        | 架构图导出：自包含交互式 HTML（确定性布局 + 几何质检 + 可选 Git 源码证据，`diagram` feature）                            |
+| `arch_diff`      | 架构语义 Delta：两项目对比 → Before/Delta/After HTML + 机器回执（`diagram` feature）                                    |
 
 ## [MCP 集成](#mcp-集成)
 
-CodeNexus 使用 [sdforge](https://crates.io/crates/sdforge) 提供 MCP（Model Context Protocol）服务器，通过 sdforge `mcp` stdio 传输暴露 **6 个工具**：
+CodeNexus 使用 [sdforge](https://crates.io/crates/sdforge) 提供 MCP（Model Context Protocol）服务器，通过 sdforge `mcp` stdio 传输暴露 **8 个工具**：
 
 | 工具           | 说明                                                |
 | -------------- | --------------------------------------------------- |
@@ -262,6 +268,8 @@ CodeNexus 使用 [sdforge](https://crates.io/crates/sdforge) 提供 MCP（Model 
 | `search`       | 按名称或内容搜索符号（结构化 / BM25 全文）          |
 | `context`      | 360° 符号视图（调用者/被调用者/所属流程）           |
 | `architecture` | 架构概览（模块边界 + 依赖方向 + 分层 + 跨服务依赖） |
+| `diagram`      | 架构图导出（返回交付回执，HTML 写入 `--output`）    |
+| `arch_diff`    | 架构语义 Delta（返回回执，HTML+回执写入 `--output`）|
 
 ```bash
 # 启动 MCP 服务（stdio）
@@ -494,7 +502,7 @@ CodeNexus 按当前优先级排序的规划工作：
 - [x] v0.3.3 — 国际化模块（`i18n` feature）：ICU4X Unicode case folding + NFC 规范化 + CJK 边界检测
 - [x] v0.3.3 — Harness 现代化：CI 升级 Rust 1.91 + 6 特性矩阵 + dependabot + codeql + crates.io 发布
 - [x] v0.3.11 — 大型仓库索引 OOM 修复（L1–L7 七层防线）：`MemoryBudget` 三级内存压力 + `Graph::nodes_view/edges_view` 迭代器 + 流式 CSV + mpsc channel 并行解析 + L5 自适应降级 + L6 管线流式化（`ctx.remove` 取代 `Graph::clone`）+ L7 LadybugDB buffer_pool 封顶（4 GB）+ LSP 按需启动 + RAM-first 8× 放大因子预算。70 GB 主机峰值内存从 60 GB 降至 ~4 GB。
-- [ ] 未来 — 基于查询门面的 Web UI / 图可视化
+- [ ] 未来 — 基于查询门面的 Web UI / 图可视化（`diagram`/`arch_diff` 已交付架构图 HTML 与语义 Delta；3D graph-viewer 集成与更多图型仍在规划中）
 
 ## [许可证](#许可证)
 
