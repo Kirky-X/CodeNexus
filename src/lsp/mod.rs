@@ -79,11 +79,9 @@ pub enum LspError {
     #[error("LSP request timed out after {0} ms")]
     Timeout(u64),
 
-    /// The LSP method is not implemented for this client. Used as the
-    /// default return value for [`LspProvider::references`] on clients
-    /// that have not yet wired up the method (e.g. `GoplsClient`,
-    /// `JdtlsClient`, `FortlsClient`, `TypeScriptLanguageClient` for
-    /// `textDocument/references` — see C9 spec R-lsp-002).
+    /// The LSP method is not implemented for this client. Reserved for
+    /// future LSP methods that have not yet been wired up; all seven
+    /// clients currently support `textDocument/references`.
     ///
     /// The string identifies the client + method (e.g.
     /// `"gopls: textDocument/references not implemented"`) so callers
@@ -157,11 +155,9 @@ pub trait LspProvider: Send + Sync {
     ///
     /// # C9 scope (R-lsp-002)
     ///
-    /// Only `RustAnalyzerClient` / `PyrightClient` / `ClangdClient`
-    /// override this default. All other clients return
-    /// [`LspError::NotImplemented`]; the default message embeds the
-    /// client name so callers can route to a fallback (e.g. tree-sitter
-    /// CALLS edge traversal) without re-querying.
+    /// All seven clients (`RustAnalyzerClient`, `PyrightClient`,
+    /// `ClangdClient`, `GoplsClient`, `JdtlsClient`, `FortlsClient`,
+    /// `TypeScriptLanguageClient`) override this default.
     ///
     /// # Caching (R-lsp-004)
     ///
