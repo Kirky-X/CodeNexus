@@ -69,7 +69,7 @@ i18n = ["dep:icu_normalizer", "dep:icu_casemap"]
 [dependencies]
 trait-kit = { version = "0.5.0-rc.2", default-features = false, features = ["async"] }
 lbug = "0.18"
-tree-sitter = "0.26"
+tree-sitter = "0.27"
 tree-sitter-c = { version = "0.24", optional = true }
 tree-sitter-rust = { version = "0.24", optional = true }
 tree-sitter-fortran = { version = "0.6", optional = true }
