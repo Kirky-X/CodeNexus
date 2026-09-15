@@ -1,8 +1,22 @@
-# Contributing to CodeNexus
+# 🤝 Contributing to CodeNexus
 
 Thanks for your interest in contributing to CodeNexus. This document describes how to set up a development environment and the conventions every pull request must follow.
 
-## Development Environment
+## 📋 目录
+
+- [Development Environment](#️-development-environment)
+- [Commit Convention — Conventional Commits](#-commit-convention--conventional-commits)
+- [Pull Request Workflow](#-pull-request-workflow)
+- [Test and Lint Requirements](#✅-test-and-lint-requirements)
+- [Code Style](#-code-style)
+- [Adding a New Language Parser](#-adding-a-new-language-parser)
+- [Reporting Issues](#-reporting-issues)
+- [Code of Conduct](#-code-of-conduct)
+- [Questions](#-questions)
+
+---
+
+## 🧰 Development Environment
 
 ### Prerequisites
 
@@ -47,7 +61,7 @@ cargo build --no-default-features --features core
 cargo build --features embed
 ```
 
-## Commit Convention — Conventional Commits
+## 📝 Commit Convention — Conventional Commits
 
 CodeNexus follows [Conventional Commits](https://conventionalcommits.org/). Every commit message must match:
 
@@ -88,7 +102,7 @@ chore(ci): pin Rust 1.95 in workflow
 
 `BREAKING CHANGE:` in the footer or `feat!:` / `fix!:` (with `!`) flag breaking changes and must include migration notes.
 
-## Pull Request Workflow
+## 🔀 Pull Request Workflow
 
 1. **Fork** the repository and clone your fork.
 2. **Branch** from `main`:
@@ -109,7 +123,7 @@ chore(ci): pin Rust 1.95 in workflow
 6. **Address review feedback** by pushing new commits (do not force-push during review unless asked).
 7. **Maintainer squash-merges** on approval. The final commit message follows Conventional Commits.
 
-## Test and Lint Requirements
+## ✅ Test and Lint Requirements
 
 CI runs these gates on every PR; they must pass locally before you push:
 
@@ -139,7 +153,7 @@ cargo test --features embed
 - Benchmarks live in `benches/` (`criterion` harness). Do not gate correctness on benchmark numbers — only on `cargo test`.
 - Tests must assert meaningful behavior (return values, graph shape, side effects), not just "did not panic".
 
-## Code Style
+## 🎨 Code Style
 
 - **Formatting:** `cargo +nightly fmt` is the source of truth. Configuration lives in [`rustfmt.toml`](rustfmt.toml): 4-space indent, 100-column width, Unix newlines, `imports_granularity = Preserve`.
 - **Editor config:** see [`.editorconfig`](.editorconfig) for editor-agnostic rules (Rust 4 spaces, Markdown 2 spaces, YAML 2 spaces, UTF-8, LF, trim trailing whitespace).
@@ -147,7 +161,7 @@ cargo test --features embed
 - **Error handling:** use `thiserror` for library error enums and `anyhow` for CLI/`main` boundaries. Do not silently swallow errors; surface them (see project rule "Fail Loud").
 - **No emojis** in source, comments, or commit messages. Keep documentation plain text.
 
-## Adding a New Language Parser
+## 🌐 Adding a New Language Parser
 
 If you want to add a new language (e.g. Go), the high-level steps are:
 
@@ -161,16 +175,16 @@ If you want to add a new language (e.g. Go), the high-level steps are:
 
 Open an issue first to discuss the scope before doing large work.
 
-## Reporting Issues
+## 🐛 Reporting Issues
 
 - Use the [GitHub issue tracker](https://github.com/Kirky-X/codenexus/issues).
 - For **security vulnerabilities**, do NOT open a public issue — see [SECURITY.md](SECURITY.md).
 - Include: CodeNexus version (`codenexus --version`), Rust version, OS, the exact command that failed, the full error output, and a minimal reproduction (a small repo or file if possible).
 
-## Code of Conduct
+## 📜 Code of Conduct
 
 Participation in this project is governed by the [Code of Conduct](CODE_OF_CONDUCT.md). By contributing, you agree to uphold it.
 
-## Questions
+## ❓ Questions
 
 Open a [GitHub Discussion](https://github.com/Kirky-X/codenexus/discussions) or an issue labeled `question`. Be patient — this project is maintained by a small team.

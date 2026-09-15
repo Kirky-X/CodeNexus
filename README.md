@@ -2,64 +2,108 @@
 
 <img src="docs/assets/CodeNexus.png" alt="CodeNexus Logo" width="200">
 
+[![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) [![Crates.io](https://img.shields.io/crates/v/codenexus.svg)](https://crates.io/crates/codenexus) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Rust Version](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](https://www.rust-lang.org)
+
+**中文** | [English](README_EN.md)
+
 **基于 LadybugDB 与 tree-sitter 的多语言代码知识图谱工具**
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) &nbsp; [![Rust Version](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](https://www.rust-lang.org) &nbsp; [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) &nbsp; [![Crates.io](https://img.shields.io/crates/v/codenexus.svg)](https://crates.io/crates/codenexus)
-
-[English](README_EN.md) | 简体中文
+[✨ 功能特性](#-功能特性) • [🚀 快速开始](#-快速开始) • [📚 文档](#-文档) • [💻 示例](#-示例) • [🤝 参与贡献](#-参与贡献)
 
 </div>
 
 ---
 
-## 目录
+<div align="center">
 
-- [简介](#简介)
-- [核心特性](#核心特性)
-- [安装](#安装)
-- [快速开始](#快速开始)
-- [CLI 命令](#cli-命令)
-- [MCP 集成](#mcp-集成)
-- [复杂度分析](#复杂度分析)
-- [死代码分析](#死代码分析)
-- [架构](#架构)
-- [支持语言](#支持语言)
-- [开发](#开发)
-- [贡献](#贡献)
-- [路线图](#路线图)
-- [许可证](#许可证)
+### 🎯 索引一次，问遍全仓
 
-## 简介
+跑一遍 `codenexus index`，符号关系即入图，剩下的追问交给图完成：
 
-CodeNexus 将源代码仓库索引为可查询的知识图谱。它使用 [tree-sitter](https://tree-sitter.github.io/) 进行多语言语法解析，[LadybugDB](https://github.com/ladybugdb/ladybugdb) 进行图存储，支持符号追踪、影响分析和数据流分析。
+<table style="width:100%; border-collapse: collapse">
+<tr>
+<td align="center" width="25%">⚡<br><b>增量管线</b><br><span style="color:#64748B">哈希比对 · 只解析变更</span></td>
+<td align="center" width="25%">🕸️<br><b>属性图模型</b><br><span style="color:#64748B">44类节点 · 30类边 · Cypher</span></td>
+<td align="center" width="25%">🧭<br><b>多跳追踪</b><br><span style="color:#64748B">调用链 · 数据流 · 污点路径</span></td>
+<td align="center" width="25%">🔌<br><b>双入口</b><br><span style="color:#64748B">30 命令 · 8 工具 · 同语义</span></td>
+</tr>
+</table>
 
-默认 `full` 预设支持 **21 种语言**：C、Rust、Fortran、Python、TypeScript、Go、Java、C++、JavaScript、Ruby、Haskell、OCaml、Scala、PHP、C#、Bash、HTML、CSS、JSON、Regex、Verilog。可通过 `lang-*` feature 选择所需语言，构建最小子集。
+</div>
 
-## 核心特性
+---
 
-| 特性         | 说明                                                                                                 |
-| ------------ | ---------------------------------------------------------------------------------------------------- |
-| 多语言解析   | 21 种语言（默认 `full` 预设），基于 tree-sitter，可用 `lang-*` feature 按需裁剪                      |
-| 图数据库     | LadybugDB 图存储，44 种节点类型 + 30 种边类型                                                        |
-| 增量索引     | SHA-256 文件哈希比对，仅重新解析变更文件                                                             |
-| 并行解析     | Rayon 并行 + 线程局部 parser 池                                                                      |
-| RAM 优先索引 | LZ4 压缩源码到内存，单次 `COPY FROM` 批量入库（`--ram_first`）                                       |
-| 符号追踪     | 调用链 (Calls) 与数据流 (DataFlows) 双向追踪                                                         |
-| 影响分析     | 变更影响半径分析，按深度分层                                                                         |
-| 歧义消解     | 多匹配符号按置信度排序消解（自动选择唯一匹配；无法唯一确定时报错）                                   |
-| 置信度分层   | 每条边携带分层（SameFile / ImportScoped / Global）+ 0.0-1.0 分数                                     |
-| 架构图导出   | `diagram` 将架构编译为自包含交互式 HTML（确定性布局/正交路由/暗亮主题/焦点与可达/路由探测/源码证据徽标）              |
-| 架构语义 Delta | `arch_diff` 对比两个已索引项目，输出 Before/Delta/After HTML + 机器回执（added/removed/changed + JSON Pointer 字段）    |
-| 诊断回执     | 错误与告警输出结构化回执（稳定规则码 + 证据 + 可执行修复话术），符号歧义/索引过期/结果截断均附带修复建议                  |
-| 跨语言 FFI   | C-Fortran bind(C)、Rust extern 等跨语言调用解析                                                      |
-| 团队制品     | `export`/`import` 压缩 `.graph.zst` 制品，共享索引                                                   |
-| 多智能体 MCP | `setup` 自动检测 Claude Code/Cursor/Codex；`hook` 输出 PreToolUse/PostToolUse JSON；`mcp` stdio 服务 |
-| 文件监视     | 守护进程模式，自动增量索引（`daemon` feature）                                                       |
-| 向量嵌入     | 默认启用的语义搜索（`embed` feature，含于 `full` 预设）                                              |
-| 污点追踪     | 跨语言多跳污点路径追踪（`TaintPathTracer`，BFS 遍历 DataFlows/Reads/Writes/FfiCalls）                |
-| 国际化       | Unicode case folding + NFC 规范化（ICU4X，`i18n` feature，含于 `full` 预设）                         |
+## 📋 目录
 
-## 安装
+- [✨ 功能特性](#-功能特性)
+- [🚀 快速开始](#-快速开始)
+- [🛠️ CLI 命令](#️-cli-命令)
+- [🔌 MCP 集成](#-mcp-集成)
+- [📚 文档](#-文档)
+- [💻 示例](#-示例)
+- [🏗️ 架构](#️-架构)
+- [🧪 测试](#-测试)
+- [📊 性能](#-性能)
+- [🔒 安全](#-安全)
+- [🗺️ 开发路线图](#️-开发路线图)
+- [🤝 参与贡献](#-参与贡献)
+- [📋 更新日志](#-更新日志)
+- [📄 许可证](#-许可证)
+- [🙏 致谢](#-致谢)
+- [📞 联系与支持](#-联系与支持)
+- [⭐ Star 历史](#-star-历史)
+
+
+---
+
+## ✨ 功能特性
+
+<table style="width:100%; border-collapse: collapse">
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🌐 <b>多语言解析</b><br><span style="color:#64748B">默认 <code>full</code> 预设支持 21 种语言（C、Rust、Fortran、Python、TypeScript、Go、Java、C++、JavaScript、Ruby、Haskell、OCaml、Scala、PHP、C#、Bash、HTML、CSS、JSON、Regex、Verilog），可用 <code>lang-*</code> feature 按需裁剪</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🕸️ <b>图数据库</b><br><span style="color:#64748B">LadybugDB 图存储，44 种节点类型 + 30 种边类型，Cypher 子集查询</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🔄 <b>增量索引</b><br><span style="color:#64748B">SHA-256 文件哈希比对，仅重新解析变更文件；Rayon 并行 + 线程局部 parser 池</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">💾 <b>RAM 优先索引</b><br><span style="color:#64748B">LZ4 压缩源码到内存，单次 <code>COPY FROM</code> 批量入库（<code>--ram_first</code>）</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🔍 <b>符号追踪</b><br><span style="color:#64748B">调用链（Calls）与数据流（DataFlows）双向追踪；跨语言多跳污点路径追踪（<code>TaintPathTracer</code>）</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🎯 <b>影响分析</b><br><span style="color:#64748B">变更影响半径分析，按深度分层，多维边类型 + 风险评估</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🧩 <b>歧义消解与置信度分层</b><br><span style="color:#64748B">多匹配符号按置信度排序消解；每条边携带分层（SameFile / ImportScoped / Global）+ 0.0-1.0 分数</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">📐 <b>架构图导出</b><br><span style="color:#64748B"><code>diagram</code> 将架构编译为自包含交互式 HTML（确定性布局 / 正交路由 / 暗亮主题 / 源码证据徽标）</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🆚 <b>架构语义 Delta</b><br><span style="color:#64748B"><code>arch_diff</code> 对比两个已索引项目，输出 Before/Delta/After HTML + 机器回执（added/removed/changed + JSON Pointer 字段）</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🧾 <b>诊断回执</b><br><span style="color:#64748B">错误与告警输出结构化回执（稳定规则码 + 证据 + 可执行修复话术），符号歧义 / 索引过期 / 结果截断均附带修复建议</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🔗 <b>跨语言 FFI</b><br><span style="color:#64748B">C-Fortran bind(C)、Rust extern 等跨语言调用解析</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">📦 <b>团队制品</b><br><span style="color:#64748B"><code>export</code> / <code>import</code> 压缩 <code>.graph.zst</code> 制品，共享索引</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🤖 <b>多智能体 MCP</b><br><span style="color:#64748B"><code>setup</code> 自动检测 Claude Code / Cursor / Codex；<code>hook</code> 输出 PreToolUse/PostToolUse JSON；<code>mcp</code> stdio 服务暴露 8 个工具</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">👁️ <b>文件监视</b><br><span style="color:#64748B">守护进程模式，自动增量索引（<code>daemon</code> feature，SIGTERM/SIGINT 优雅退出）</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🧮 <b>分析工具包</b><br><span style="color:#64748B">死代码检测（worklist 可达性 + 置信度）、架构概览、复杂度分析（8 项指标）、社区检测（Leiden）、跨服务调用链</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🧠 <b>向量嵌入</b><br><span style="color:#64748B">默认启用的语义搜索（<code>embed</code> feature，本地 ONNX 推理 + BM25 全文）</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🌍 <b>国际化</b><br><span style="color:#64748B">Unicode case folding + NFC 规范化（ICU4X，<code>i18n</code> feature，含于 <code>full</code> 预设）</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🧰 <b>LSP 增强</b><br><span style="color:#64748B">7 个 LSP 客户端（rust-analyzer、pyright、clangd、gopls、ts-lang-server、fortls、jdtls）提供超越 tree-sitter 的类型精确解析（<code>lsp</code> feature）</span></td>
+</tr>
+</table>
+
+除上述核心能力外，CodeNexus 还提供 `context` 上下文组装、`detect_changes` 变更检测、`rename` 重命名影响预检、基于 oxcache 的查询结果缓存与 inklog 结构化日志等能力；全部 30 个子命令的分组清单见 [🛠️ CLI 命令](#️-cli-命令) 一节，逐命令参数语义与可运行示例见 [📖 用户指南 · 命令详解](docs/USER_GUIDE.md#️-命令详解)。
+
+---
+
+## 🚀 快速开始
+
+### 📦 安装
 
 ```bash
 # 从 crates.io 安装（默认 full 预设，含全部 21 语言 + 所有功能）
@@ -72,9 +116,6 @@ cargo install --path .
 
 # 或直接编译
 cargo build --release
-
-# 仅构建 MCP 功能（默认 full 预设已含全部语言）
-cargo build --release --features mcp
 ```
 
 > **链接失败排查（openEuler / CentOS 等 GCC ≤ 12 系统）**：默认安装会下载预编译的 LadybugDB 二进制，它依赖较新的 `libstdc++`。若链接报 `undefined symbol: std::to_chars(..., _Float128, ...)`，用环境变量强制从源码编译即可（需安装 `cmake`）：
@@ -83,49 +124,51 @@ cargo build --release --features mcp
 > LBUG_BUILD_FROM_SOURCE=1 cargo install codenexus
 > ```
 
-### Feature 开关
+要求 Rust 1.97.1 及以上（MSRV，`Cargo.toml` `rust-version` 与 `clippy.toml` `msrv` 一致；CI 工具链当前锁定 1.95，见 `.github/workflows/ci.yml`）。
+
+#### 🔧 构建预设与 Feature 开关
 
 **预设**：`default = ["full"]`
 
-| Feature           | 默认 | 说明                                                                                                                                                                                                                       |
-| ----------------- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `minimal`         | —    | 最小预设：仅 `lang-rust`                                                                                                                                                                                                   |
-| `core`            | —    | 核心预设：`lang-c` + `lang-rust` + `lang-python`                                                                                                                                                                           |
+| Feature           | 默认 | 说明 |
+| ----------------- | ---- | ---- |
+| `minimal`         | —    | 最小预设：仅 `lang-rust` |
+| `core`            | —    | 核心预设：`lang-c` + `lang-rust` + `lang-python` |
 | `full`            | 启用 | 完整预设：`core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embed/i18n |
-| `lang-c`          | —    | C 语言解析器（tree-sitter-c）                                                                                                                                                                                              |
-| `lang-rust`       | 启用 | Rust 语言解析器（tree-sitter-rust）                                                                                                                                                                                        |
-| `lang-fortran`    | —    | Fortran 语言解析器（tree-sitter-fortran）                                                                                                                                                                                  |
-| `lang-python`     | —    | Python 语言解析器（tree-sitter-python）                                                                                                                                                                                    |
-| `lang-typescript` | —    | TypeScript 语言解析器（tree-sitter-typescript）                                                                                                                                                                            |
-| `lang-go`         | —    | Go 语言解析器（tree-sitter-go）                                                                                                                                                                                            |
-| `lang-java`       | —    | Java 语言解析器（tree-sitter-java）                                                                                                                                                                                        |
-| `lang-cpp`        | —    | C++ 语言解析器（tree-sitter-cpp）                                                                                                                                                                                          |
-| `lang-javascript` | —    | JavaScript 语言解析器（tree-sitter-javascript）                                                                                                                                                                            |
-| `lang-ruby`       | —    | Ruby 语言解析器（tree-sitter-ruby）                                                                                                                                                                                        |
-| `lang-haskell`    | —    | Haskell 语言解析器（tree-sitter-haskell）                                                                                                                                                                                  |
-| `lang-ocaml`      | —    | OCaml 语言解析器（tree-sitter-ocaml）                                                                                                                                                                                      |
-| `lang-scala`      | —    | Scala 语言解析器（tree-sitter-scala）                                                                                                                                                                                      |
-| `lang-php`        | —    | PHP 语言解析器（tree-sitter-php）                                                                                                                                                                                          |
-| `lang-csharp`     | —    | C# 语言解析器（tree-sitter-c-sharp）                                                                                                                                                                                       |
-| `lang-bash`       | —    | Bash 语言解析器（tree-sitter-bash）                                                                                                                                                                                        |
-| `lang-html`       | —    | HTML 语言解析器（tree-sitter-html）                                                                                                                                                                                        |
-| `lang-css`        | —    | CSS 语言解析器（tree-sitter-css）                                                                                                                                                                                          |
-| `lang-json`       | —    | JSON 语言解析器（tree-sitter-json）                                                                                                                                                                                        |
-| `lang-regex`      | —    | 正则语言解析器（tree-sitter-regex）                                                                                                                                                                                        |
-| `lang-verilog`    | —    | Verilog 语言解析器（tree-sitter-verilog）                                                                                                                                                                                  |
-| `daemon`          | 启用 | 文件监视守护进程（notify + notify-debouncer-full）                                                                                                                                                                         |
-| `embed`           | 启用 | 向量嵌入语义搜索（reqwest HTTP + 本地 ONNX 推理）                                                                                                                                                                          |
-| `lsp`             | 启用 | LSP 增强解析（7 个 LSP 客户端：Rust rust-analyzer、Python pyright、C/C++ clangd、Go gopls、TypeScript ts-lang-server、Fortran fortls、Java jdtls）                                                                         |
-| `analysis`        | 启用 | 死代码检测 + 架构概览（纯 Cypher 聚合）                                                                                                                                                                                    |
-| `complexity`      | 启用 | AST 复杂度分析（圈/认知/嵌套/长度/Halstead/可维护性/时间/空间复杂度，依赖 `analysis`）                                                                                                                                     |
-| `api-review`      | 启用 | API 审查工具包（route_map/shape_check/api_impact/tool_map）                                                                                                                                                                |
-| `community`       | 启用 | 社区检测（Leiden 模块度优化，依赖 petgraph）                                                                                                                                                                               |
-| `cross-service`   | 启用 | 跨服务调用链检测（HTTP 路由模式匹配）                                                                                                                                                                                      |
-| `diagram`         | 启用 | 架构图管线：`diagram`/`arch_diff` 命令，自包含交互式 HTML（依赖 `analysis`）                                                                                                                                               |
-| `mcp`             | 启用 | MCP 服务器（sdforge `mcp` stdio 传输）                                                                                                                                                                                     |
-| `cli`             | 启用 | CLI 二进制（sdforge `cli` 传输，二进制必需）                                                                                                                                                                               |
-| `cache`           | 启用 | 查询结果缓存（oxcache）                                                                                                                                                                                                    |
-| `i18n`            | 启用 | Unicode case folding + NFC 规范化（ICU4X，`full` 预设含）                                                                                                                                                                  |
+| `lang-c`          | —    | C 语言解析器（tree-sitter-c） |
+| `lang-rust`       | 启用 | Rust 语言解析器（tree-sitter-rust） |
+| `lang-fortran`    | —    | Fortran 语言解析器（tree-sitter-fortran） |
+| `lang-python`     | —    | Python 语言解析器（tree-sitter-python） |
+| `lang-typescript` | —    | TypeScript 语言解析器（tree-sitter-typescript） |
+| `lang-go`         | —    | Go 语言解析器（tree-sitter-go） |
+| `lang-java`       | —    | Java 语言解析器（tree-sitter-java） |
+| `lang-cpp`        | —    | C++ 语言解析器（tree-sitter-cpp） |
+| `lang-javascript` | —    | JavaScript 语言解析器（tree-sitter-javascript） |
+| `lang-ruby`       | —    | Ruby 语言解析器（tree-sitter-ruby） |
+| `lang-haskell`    | —    | Haskell 语言解析器（tree-sitter-haskell） |
+| `lang-ocaml`      | —    | OCaml 语言解析器（tree-sitter-ocaml） |
+| `lang-scala`      | —    | Scala 语言解析器（tree-sitter-scala） |
+| `lang-php`        | —    | PHP 语言解析器（tree-sitter-php） |
+| `lang-csharp`     | —    | C# 语言解析器（tree-sitter-c-sharp） |
+| `lang-bash`       | —    | Bash 语言解析器（tree-sitter-bash） |
+| `lang-html`       | —    | HTML 语言解析器（tree-sitter-html） |
+| `lang-css`        | —    | CSS 语言解析器（tree-sitter-css） |
+| `lang-json`       | —    | JSON 语言解析器（tree-sitter-json） |
+| `lang-regex`      | —    | 正则语言解析器（tree-sitter-regex） |
+| `lang-verilog`    | —    | Verilog 语言解析器（tree-sitter-verilog） |
+| `daemon`          | 启用 | 文件监视守护进程（notify + notify-debouncer-full） |
+| `embed`           | 启用 | 向量嵌入语义搜索（reqwest HTTP + 本地 ONNX 推理） |
+| `lsp`             | 启用 | LSP 增强解析（7 个 LSP 客户端） |
+| `analysis`        | 启用 | 死代码检测 + 架构概览（纯 Cypher 聚合） |
+| `complexity`      | 启用 | AST 复杂度分析（8 项指标，依赖 `analysis`） |
+| `api-review`      | 启用 | API 审查工具包（route_map/shape_check/api_impact/tool_map） |
+| `community`       | 启用 | 社区检测（Leiden 模块度优化，依赖 petgraph） |
+| `cross-service`   | 启用 | 跨服务调用链检测（HTTP 路由模式匹配） |
+| `diagram`         | 启用 | 架构图管线：`diagram`/`arch_diff` 命令（依赖 `analysis`） |
+| `mcp`             | 启用 | MCP 服务器（sdforge `mcp` stdio 传输） |
+| `cli`             | 启用 | CLI 二进制（sdforge `cli` 传输，二进制必需） |
+| `cache`           | 启用 | 查询结果缓存（oxcache） |
+| `i18n`            | 启用 | Unicode case folding + NFC 规范化（ICU4X） |
 
 > **日志系统**：inklog 是唯一日志后端（console + file rotation + daily 滚动 + LZ4 压缩），不再提供 tracing-subscriber 可选后端。
 
@@ -146,364 +189,338 @@ cargo build --release
 cargo build --release --features embed
 ```
 
-## 快速开始
+### 💡 最小示例
 
-> 所有子命令参数均为 **必填的 snake_case 长选项**（例如 `--symbol`、`--trace_type`）。布尔选项需显式传值（`true`/`false`）。数据库路径通过全局 `--db` 选项指定（默认值 `.codenexus/<项目名称>.lbug`，需置于子命令之前；`<项目名称>` 取 `--name`，缺失时取 `--path` 所在目录名）。
+以下命令改编自 [`examples/src/bin/basic_indexing.rs`](examples/src/bin/basic_indexing.rs) 等示例与 [📖 用户指南](docs/USER_GUIDE.md)，均可直接运行：
 
 ```bash
-# 1. 索引一个代码仓库
+# 1. 索引一个代码仓库（数据库默认写入 .codenexus/<项目名>.lbug）
 codenexus index --path /path/to/project --name myproject
 
 # 1b. RAM 优先索引（LZ4 内存压缩，适合中小仓库，更快）
 codenexus index --path /path/to/project --name myproject --ram_first true
 
-# 1c. 全新索引（删除旧 DB 文件，回收 DuckDB 死空间，解决重复 --force 导致的 DB 膨胀）
-codenexus index --path /path/to/project --name myproject --force true --fresh true
-
-# 2. 查询函数
+# 2. 查询函数（Cypher 子集）
 codenexus query --cypher "MATCH (f:Function) RETURN f.name LIMIT 10"
 
 # 3. 追踪调用链
 codenexus trace --symbol main --trace_type calls --depth 5 --path_filter "" --detect_cycles false --cross_service false
-# 3b. 增强追踪：路径过滤 + 环检测 + 跨服务
-codenexus trace --symbol main --trace_type calls --depth 5 --path_filter "/src/api/**" --detect_cycles true --cross_service true
 
-# 4. 分析变更影响（多维 + 风险评估）
-codenexus impact --symbol parse_function --depth 3 --edge_types "" --max_depth 0 --include_tests false
-codenexus impact --symbol parse_function --edge_types "CALLS,IMPLEMENTS,USES_TYPE" --max_depth 5 --include_tests true
-
-# 5. 搜索符号（5 种模式 + BM25 全文）
+# 4. 搜索符号（exact / regex / fuzzy + BM25 全文）
 codenexus search --text "parse" --limit 20 --mode exact --fulltext false --project ""
-codenexus search --text "get.*user" --mode regex --fulltext false --project ""
-codenexus search --text "getuser" --mode fuzzy --fulltext false --project ""
-codenexus search --text "authentication logic" --fulltext true --project ""
-
-# 6. 360° 符号上下文（基础 + 多维增强）
-codenexus context --symbol main --depth 1 --project "" --enhanced false
-codenexus context --symbol main --project myproject --enhanced true
-
-# 7. 检测 git diff 影响的符号
-codenexus detect_changes --path /path/to/project --mode git
-
-# 8. 重命名符号（图编辑 + 文本搜索；apply=false 即 dry-run）
-codenexus rename --from old_name --to new_name --path /path/to/project --apply false
-
-# 9. 导出 / 导入团队制品（--db 为全局选项，置于子命令之前）
-codenexus --db ./my.lbug export --output team.graph.zst --project ""
-codenexus --db ./shared.lbug import --input team.graph.zst --reindex false --path "" --name ""
-
-# 10. 多智能体 MCP 集成
-codenexus setup                    # 自动检测智能体，写入 MCP 配置
-codenexus hook                     # 输出 PreToolUse/PostToolUse JSON
-codenexus mcp                      # stdio MCP 服务（JSON-RPC 2.0）
-
-# 11. 查看索引状态
-codenexus status
-
-# 12. 启动文件监视守护进程
-codenexus daemon --path /path/to/project --name myproject
-
-# 13. 列出所有项目
-codenexus list
-
-# 14. 删除项目
-codenexus clean --project myproject
-
-# 15. 死代码检测（多边类型 + FFI/导出检测 + 置信度）
-codenexus dead_code --project myproject --entry "" --check_exported true --check_ffi true --edge_types ""
-codenexus dead_code --project myproject --edge_types "CALLS,FFI_CALLS,IMPLEMENTS,USAGE,TESTS"
-
-# 16. 跨服务调用链检测（HTTP REST / gRPC / GraphQL / 消息队列 / 事件总线）
-codenexus cross_service --project myproject                    # 省略 --protocol = 所有协议
-codenexus cross_service --project myproject --protocol grpc
-
-# 17. 架构概览（模块边界 + 依赖方向 + 分层 + 跨服务依赖）
-codenexus architecture --project myproject
 ```
 
-## [CLI 命令](#cli-命令)
+### 🧭 核心概念
 
-| 命令             | 说明                                                                                                                    |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `index`          | 索引代码仓库到知识图谱（`--ram_first` 启用 LZ4 内存模式）                                                               |
-| `query`          | 执行 Cypher 查询（`--cypher`）                                                                                          |
-| `trace`          | 追踪符号的调用/数据流路径（`--symbol`/`--trace_type`/`--depth`/`--path_filter`/`--detect_cycles`/`--cross_service`）    |
-| `impact`         | 分析符号变更的影响半径（`--symbol`/`--edge_types`/`--max_depth`/`--include_tests` 多维分析 + `risk_assessment`）        |
-| `search`         | 按名称或内容搜索符号（`--text`/`--mode` exact/regex/fuzzy/graph/multi；`--fulltext` BM25 全文；`--project` 项目过滤）   |
-| `context`        | 360° 符号视图：入度调用/导入、出度调用、所属流程（`--symbol`/`--project`/`--enhanced` 多维 SymbolContext）              |
-| `detect_changes` | git diff → 受影响符号 + risk_level                                                                                      |
-| `rename`         | 高置信度图编辑 + 文本搜索编辑（`--from`/`--to`/`--path`；`--apply false` 为 dry-run）                                   |
-| `export`         | 导出 LadybugDB 转储 → zstd 制品（`--output`；`--project` 可选；数据库由全局 `--db` 指定）                               |
-| `import`         | 导入制品 → LadybugDB（`--input`；`--reindex` 增量补齐本地差异；`--path`/`--name` 配合 `--reindex`）                     |
-| `setup`          | 自动检测已安装的智能体（Claude Code/Cursor/Codex）并写入 MCP 配置                                                       |
-| `hook`           | 输出 PreToolUse/PostToolUse JSON（exit 0，永不阻塞）                                                                    |
-| `mcp`            | sdforge-based stdio MCP 服务（`mcp` feature）                                                                           |
-| `daemon`         | 启动文件监视守护进程                                                                                                    |
-| `status`         | 查看索引状态                                                                                                            |
-| `list`           | 列出所有已索引项目                                                                                                      |
-| `clean`          | 删除项目及其索引                                                                                                        |
-| `dead_code`      | 死代码检测（多边类型 + FFI/导出检测 + High/Medium/Low 置信度，`analysis` feature）                                      |
-| `architecture`   | 架构概览（模块边界 + 依赖方向 + 分层 + 跨服务依赖，`analysis` feature）                                                 |
-| `complexity`     | AST 复杂度分析（8 项指标 + 可配置阈值，`complexity` feature）                                                           |
-| `route_map`      | HTTP 路由映射（API 端点清单，`api-review` feature）                                                                     |
-| `shape_check`    | API 形状检查（请求/响应结构验证，`api-review` feature）                                                                 |
-| `api_impact`     | API 变更影响分析（`--endpoint` 可选，省略=分析所有端点；`api-review` feature）                                          |
-| `tool_map`       | 工具映射（MCP 工具清单，`api-review` feature）                                                                          |
-| `community`      | 社区检测（`--resolution` 可选，省略=默认 0.5；Leiden 模块度优化，`community` feature）                                  |
-| `cross_service`  | 跨服务调用链检测（`--protocol` 可选，省略=所有协议；HTTP REST/gRPC/GraphQL/消息队列/事件总线，`cross-service` feature） |
-| `lsp_goto_def`   | LSP 定义跳转（rust-analyzer 集成，`lsp` feature）                                                                       |
-| `lsp_hover`      | LSP 悬停信息（rust-analyzer 集成，`lsp` feature）                                                                       |
-| `diagram`        | 架构图导出：自包含交互式 HTML（确定性布局 + 几何质检 + 可选 Git 源码证据，`diagram` feature）                            |
-| `arch_diff`      | 架构语义 Delta：两项目对比 → Before/Delta/After HTML + 机器回执（`diagram` feature）                                    |
+- **知识图谱模型**：源码被解析为 44 种节点与 30 种边构成的属性图，存入 LadybugDB，可用 Cypher 子集查询。
+- **严格 flag 风格 CLI**：无位置参数，所有子命令参数为**必填的 snake_case 长选项**（如 `--symbol`、`--trace_type`），布尔选项显式传值（`true`/`false`）。
+- **全局 `--db` 选项**：数据库路径默认 `.codenexus/<项目名称>.lbug`，需置于子命令之前；仅有一个索引时可自动发现。
+- **退出码契约**：0 成功、1 内部错误、2 无效输入 / 项目不存在 / 查询错误、4 NotFound / 数据库损坏（见 `src/service/error.rs`）。
 
-## [MCP 集成](#mcp-集成)
+> 增量索引、置信度分层等完整核心约定见 [📖 用户指南 · 核心约定](docs/USER_GUIDE.md#-核心约定)。
 
-CodeNexus 使用 [sdforge](https://crates.io/crates/sdforge) 提供 MCP（Model Context Protocol）服务器，通过 sdforge `mcp` stdio 传输暴露 **8 个工具**：
+---
 
-| 工具           | 说明                                                |
-| -------------- | --------------------------------------------------- |
-| `query`        | 执行 Cypher 查询                                    |
-| `trace`        | 追踪符号调用/数据流路径                             |
-| `impact`       | 分析符号变更影响半径（上游调用者子图）              |
-| `search`       | 按名称或内容搜索符号（结构化 / BM25 全文）          |
-| `context`      | 360° 符号视图（调用者/被调用者/所属流程）           |
-| `architecture` | 架构概览（模块边界 + 依赖方向 + 分层 + 跨服务依赖） |
-| `diagram`      | 架构图导出（返回交付回执，HTML 写入 `--output`）    |
-| `arch_diff`    | 架构语义 Delta（返回回执，HTML+回执写入 `--output`）|
+## 🛠️ CLI 命令
+
+CodeNexus 提供 **30 个子命令**，按功能分为六组：
+
+- **索引与项目管理**：`index` / `daemon` / `status` / `list` / `clean` / `export` / `import`
+- **查询与搜索**：`query` / `search` / `context`
+- **追踪与影响分析**：`trace` / `impact` / `detect_changes` / `rename`
+- **分析工具包**：`dead_code` / `architecture` / `complexity` / `community` / `cross_service`
+- **API 审查与架构图**：`route_map` / `shape_check` / `api_impact` / `tool_map` / `diagram` / `arch_diff`
+- **多智能体与 LSP**：`setup` / `hook` / `mcp` / `lsp_goto_def` / `lsp_hover`
+
+每个命令的全部参数语义与可运行示例见 [📖 用户指南 · 命令详解](docs/USER_GUIDE.md#️-命令详解)；复杂度指标与阈值表见 [📖 用户指南 · 复杂度分析](docs/USER_GUIDE.md#-复杂度分析)，死代码检测配置见 [📖 用户指南 · 死代码检测](docs/USER_GUIDE.md#-死代码检测)。
+
+---
+
+## 🔌 MCP 集成
+
+CodeNexus 使用 [sdforge](https://crates.io/crates/sdforge) 提供 MCP（Model Context Protocol）服务器，经 sdforge `mcp` stdio 传输暴露 **8 个工具**（`query` / `trace` / `impact` / `search` / `context` / `architecture` / `diagram` / `arch_diff`），与同名 CLI 命令共用同一套 `#[forge]` 定义，参数语义一致。
 
 ```bash
 # 启动 MCP 服务（stdio）
 codenexus mcp [--db <DB_PATH>]
 
-# 自动检测智能体并写入 MCP 配置
+# 自动检测已安装的 Claude Code / Cursor / Codex 并写入 MCP 配置（--force 跳过确认）
 codenexus setup
+
+# 输出 PreToolUse/PostToolUse JSON（exit 0，永不阻塞，适合作为智能体钩子）
+codenexus hook
 ```
 
-`setup` 自动检测已安装的 Claude Code（`~/.claude/`）、Cursor（`~/.cursor/`）、Codex（`~/.codex/`），并写入对应的 MCP 配置文件，指向 `codenexus mcp`。使用 `--force` 可跳过确认提示覆盖已有配置。
+各工具的能力说明见 [📖 用户指南 · 多智能体集成](docs/USER_GUIDE.md#-多智能体集成)。
 
-## [复杂度分析](#复杂度分析)
+---
 
-`complexity` 子命令对项目内所有函数计算 AST 复杂度指标，输出 JSON（含 `complexity` 数组与 `summary` 统计）。
+## 📚 文档
 
-### 指标
+| 文档 | 说明 |
+|------|------|
+| [📖 用户指南](docs/USER_GUIDE.md) | 从安装到进阶的完整使用教程（含复杂度分析与死代码检测详解） |
+| [📘 API 参考](docs/API_REFERENCE.md) | 库 crate 公开 API、Facade 接口与 CLI/MCP 对外接口 |
+| [🏗️ 架构文档](docs/ARCHITECTURE.md) | 分层结构、索引管线、图模型与架构图命令语义 |
+| [⚡ 性能指南](docs/PERFORMANCE.md) | 基准套件、实测基线、SLO 与内存优化（L1–L7 防线） |
+| [🔒 安全文档](docs/SECURITY.md) | 安全策略、漏洞报告流程与最佳实践 |
+| [❓ FAQ](docs/FAQ.md) | 常见问题解答 |
+| [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md) | 基于真实测试套件的场景穷举矩阵 |
+| [📋 更新日志](docs/CHANGELOG.md) | 每个版本的变更记录（Keep a Changelog 格式） |
+| [🤝 贡献指南](docs/CONTRIBUTING.md) | 如何参与项目开发 |
+| [📜 行为准则](docs/CODE_OF_CONDUCT.md) | 社区行为准则 |
+| [📐 架构设计文档（ADD）](docs/ADD.md) | 架构决策与设计细节 |
+| [🎯 产品需求文档（PRD）](docs/PRD.md) | 产品需求与 SLO 指标 |
+| [🧾 技术需求文档（TRD）](docs/TRD.md) | 技术需求分解 |
+| [🗄️ 数据库设计文档（DDD）](docs/DDD.md) | 图存储 Schema 设计 |
+| [🗜️ 数据库压缩实测](docs/database-compression.md) | gzip / zstd / lz4 压缩率与耗时实测 |
+| [🔬 研究笔记](docs/research/) | TaintRadar、级联漏洞链等论文笔记 |
+| [🛡️ 安全审计](docs/security/) | Strix 审计 triage 与 ReDoS 误报复核实证 |
+| [🤖 CLI 技能](skill/SKILL.md) | 面向 AI 智能体的 CLI 用法知识包（针对 v0.3.12 校验） |
+| [📈 基准测试说明](benches/README.md) | Criterion 基准套件与 SLO 阈值表 |
+| [📦 crates.io](https://crates.io/crates/codenexus) | 发布页面 |
 
-| 指标            | 字段                    | 说明                                                                    |
-| --------------- | ----------------------- | ----------------------------------------------------------------------- |
-| 圈复杂度        | `cyclomatic`            | McCabe 1976，含分支节点 + 显式出口（return/break/continue）+ 逻辑运算符 |
-| 认知复杂度      | `cognitive`             | 按嵌套层级加权的 SonarQube 风格复杂度                                   |
-| 嵌套深度        | `nesting_depth`         | 分支节点最大嵌套层数                                                    |
-| 函数长度        | `function_length`       | 起止行差 +1                                                             |
-| Halstead 复杂度 | `halstead`              | Halstead 1977：`n1/n2/N1/N2/volume/difficulty/effort/delivered_bugs`    |
-| 可维护性指数    | `maintainability_index` | Microsoft 2007 修订公式，0-100（越高越好）                              |
-| 时间复杂度      | `time_complexity`       | AST 模式估算：O(1)/O(log n)/O(n)/O(n log n)/O(n^2)/O(n^3)/O(2^n)        |
-| 空间复杂度      | `space_complexity`      | 分配模式识别：O(1)/O(n)/O(n^2)                                          |
+---
 
-每项指标按阈值分为 Green / Yellow / Red / Critical 四级，`overall_severity` 取最高级别。
+## 💻 示例
 
-### 阈值 CLI 参数
+全部 6 个可运行示例位于 [`examples/`](examples/) 目录，每个示例对应一个 `cargo run --bin` 目标（经 `examples/Cargo.toml` 注册）：
 
-| 参数                                                                                                        | 说明                                |
-| ----------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `--cyclomatic_green <N>` / `--cyclomatic_yellow <N>` / `--cyclomatic_red <N>`                               | 圈复杂度阈值                        |
-| `--cognitive_green <N>` / `--cognitive_yellow <N>` / `--cognitive_red <N>`                                  | 认知复杂度阈值                      |
-| `--nesting_green <N>` / `--nesting_yellow <N>` / `--nesting_red <N>`                                        | 嵌套深度阈值                        |
-| `--func_length_green <N>` / `--func_length_yellow <N>` / `--func_length_red <N>`                            | 函数长度阈值                        |
-| `--halstead_volume_green <N>` / `--halstead_volume_yellow <N>` / `--halstead_volume_red <N>`                | Halstead volume 阈值                |
-| `--maintainability_green <N>` / `--maintainability_yellow <N>` / `--maintainability_red <N>`                | 可维护性指数阈值（越高越好）        |
-| `--time_complexity_green <O(...)>` / `--time_complexity_yellow <O(...)>` / `--time_complexity_red <O(...)>` | 时间复杂度阈值                      |
-| `--space_complexity_yellow <O(...)>` / `--space_complexity_red <O(...)>`                                    | 空间复杂度阈值（3 级，无 Critical） |
-
-`<O(...)>` 取值：时间 `O(1)` / `O(log n)` / `O(n)` / `O(n log n)` / `O(n^2)` / `O(n^3)` / `O(2^n)`，空间 `O(1)` / `O(n)` / `O(n^2)`。所有阈值与标志参数（含 `--red_only`/`--sort_by_severity`）均可省略；省略时 `u32` 阈值与 `O(...)` 字符串阈值走默认值（见下表），`bool` 标志默认 `false`。
-
-### 默认阈值
-
-| 指标             | Green    | Yellow | Red    |
-| ---------------- | -------- | ------ | ------ |
-| cyclomatic       | 10       | 20     | 25     |
-| cognitive        | 10       | 15     | 20     |
-| nesting          | 3        | 5      | 6      |
-| func_length      | 30       | 100    | 200    |
-| halstead_volume  | 100      | 1000   | 8000   |
-| maintainability  | 85       | 65     | 25     |
-| time_complexity  | O(log n) | O(n)   | O(n^2) |
-| space_complexity | —        | O(1)   | O(n)   |
-
-> `maintainability` 阈值含义反转：MI 越高越好，`value >= green → Green`，`value >= yellow → Yellow`，`value >= red → Red`，否则 `Critical`。`space_complexity` 只有 3 级（Green/Yellow/Red），无 Critical。
-
-### 示例
+| 示例 | 文件 | 描述 |
+|------|------|------|
+| basic_indexing | `examples/src/bin/basic_indexing.rs` | 索引 Rust 源码到知识图谱，Cypher 查询函数列表 |
+| cypher_query | `examples/src/bin/cypher_query.rs` | 对图谱执行多种 Cypher 查询（按类型、按名称） |
+| symbol_search | `examples/src/bin/symbol_search.rs` | 按名称、类型搜索符号，处理空结果 |
+| call_tracing | `examples/src/bin/call_tracing.rs` | 正向追踪函数调用路径，构建调用图 |
+| impact_analysis | `examples/src/bin/impact_analysis.rs` | 分析修改某符号的影响半径（反向 BFS） |
+| export_import | `examples/src/bin/export_import.rs` | 图谱数据库的导出与导入验证 |
 
 ```bash
-# 默认阈值分析
-codenexus complexity --project myproject
+# 运行单个示例
+cargo run --manifest-path examples/Cargo.toml --bin basic_indexing
 
-# 自定义圈复杂度阈值（green=5, yellow=10, red=15）
-codenexus complexity --project myproject --cyclomatic_green 5 --cyclomatic_yellow 10 --cyclomatic_red 15
-
-# 仅显示 Red 和 Critical 级函数并按严重度排序
-codenexus complexity --project myproject --red_only true --sort_by_severity true
-
-# 自定义时间复杂度阈值（green=O(1), yellow=O(n log n), red=O(n^2)）
-codenexus complexity --project myproject --time_complexity_green "O(1)" --time_complexity_yellow "O(n log n)" --time_complexity_red "O(n^2)"
+# 运行所有示例
+for bin in basic_indexing cypher_query symbol_search call_tracing impact_analysis export_import; do
+  cargo run --manifest-path examples/Cargo.toml --bin $bin
+done
 ```
 
-## [死代码分析](#死代码分析)
+示例通过 `IndexFacade` 索引源码、`QueryFacade` 执行查询、`TraceFacade` 追踪调用，退出时临时目录自动清理。库 API 的完整说明见 [📘 API 参考](docs/API_REFERENCE.md)。
 
-`dead_code` 子命令基于工作列表（worklist）可达性传播算法识别死代码：从种子集合（入口函数 / 导出函数 / FFI 入口 / 测试函数 / trait impl 方法 / `pub use` 重导出目标 / 属性标记入口）出发 BFS 传播 liveness 到不动点，未被传播覆盖的 Function/Method 节点判定为死代码。每条死代码记录携带 High/Medium/Low 置信度分层，输出含 `indexed_commit` / `current_head` / `is_stale` 三字段标识索引新鲜度。
+---
 
-### 配置项
+## 🏗️ 架构
 
-通过 `DeadCodeConfig`（service 层 CLI 参数透传）控制检测行为，关键字段：
+CodeNexus 采用「库 + 二进制」双目标 crate：`src/lib.rs` 暴露公共 API（模型 / 解析 / 存储 / 索引 / 查询 / 追踪 / service 模块），`src/main.rs` 是 sdforge 驱动的 CLI 二进制；v0.3.2 起 CLI 与 MCP 接口经 sdforge `#[forge]` 宏统一封装在 `src/service/`，每个命令定义 core 函数 + CLI wrapper + MCP wrapper。索引方向为「文件发现 → 增量哈希 → 并行解析 → 符号解析 → 批量入库」。
 
-| 字段                     | 默认值                                                                                             | 说明                                                                                                                                                                                            |
-| ------------------------ | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `entry_patterns`         | `["main", "Main", "__main__", "wmain", "WinMain", "DLLMain"]`                                      | 入口函数名 glob 模式，匹配的 Function 视为 live 种子                                                                                                                                            |
-| `test_patterns`          | 8 项：`test_*` / `*_test` / `*_spec` / `it_*` / `sec_*` / `snap_*` / `perf_*` / `bench_*`          | 测试函数名 glob 模式，匹配的 Function 视为 live 种子                                                                                                                                            |
-| `attribute_entries`      | 6 项：`#[tool` / `#[forge` / `#[tokio::main` / `#[rocket::main` / `#[actix::main` / `#[axum::main` | 函数 `signature` 字段子串匹配，命中则视为宏展开合成的入口（tree-sitter 不展开宏，CALLS 边不可见）。`#[test]` / `#[bench]` 由 `test_patterns` 名字 glob 覆盖，故不在 `attribute_entries` 内      |
-| `check_dynamic_dispatch` | `true`                                                                                             | 检测 qualified_name 中的 `#<TypeName>` disambiguator（如 `fmt#Display`），命中则视为 trait impl 方法（vtable 动态分发，无静态 CALLS 边），跳过死代码判定。设为 `false` 时按保守模式判定为死代码 |
-| `check_exported`         | `true`                                                                                             | `isExported=true` 的 Function/Method 视为外部可见，跳过死代码判定                                                                                                                               |
-| `check_ffi`              | `true`                                                                                             | signature 含 `extern "C"` / `#[no_mangle]` 的 Function 视为 FFI 入口，跳过死代码判定                                                                                                            |
-| `edge_types`             | `CALLS` / `FfiCalls` / `Implements` / `Usage` / `Tests` / `UsesType` / `HttpCalls` / `AsyncCalls`  | 参与可达性传播的边类型白名单                                                                                                                                                                    |
+三层源码结构、索引管线流程图、图模型（44 种节点 / 30 种边与置信度分层）、核心语言提取表与 `architecture` / `diagram` / `arch_diff` 命令输出语义，详见 [🏗️ 架构文档](docs/ARCHITECTURE.md)。
 
-### 示例
+---
+
+## 🧪 测试
+
+### 🎯 测试策略
+
+分层测试策略：`src/` 内联 `#[cfg(test)]` 单元测试 → `tests/` 集成测试（CLI 子进程 E2E、全功能套件、MCP/图集成、非 ASCII 路径）→ `tests/acceptance/` 8 语言真实开源项目验收（与 gitnexus 交叉验证）→ `benches/` 7 组 Criterion 基准回归。测试分层总览与逐条场景矩阵见 [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md)。
+
+### ▶️ 运行命令（与 CI 一致）
 
 ```bash
-# 默认配置检测
-codenexus dead_code --project myproject --entry "" --check_exported true --check_ffi true --edge_types ""
+# 格式检查（nightly rustfmt，rustfmt.toml 使用 nightly-only 选项）
+cargo +nightly fmt --all -- --check
 
-# 自定义 edge_types（仅 CALLS + IMPLEMENTS）
-codenexus dead_code --project myproject --edge_types "CALLS,IMPLEMENTS"
+# Clippy 门禁（CI 按 full 与 minimal 双档执行，警告即错误）
+cargo +1.95 clippy -- -D warnings
+cargo +1.95 clippy --lib --no-default-features --features minimal -- -D warnings
 
-# 保守模式：禁用 trait impl 识别
-codenexus dead_code --project myproject --check_dynamic_dispatch false
+# 测试（CI 矩阵按 minimal / core / full / core,daemon,analysis,complexity / core,lsp,cache / full,embed 六档运行）
+cargo test --lib --verbose
+cargo test --lib --no-default-features --features "core" --verbose
+
+# 覆盖率门禁：行覆盖率不低于 95%（CI coverage job 与 pre-push 钩子执行）
+cargo llvm-cov --lib --fail-under-lines 95 --lcov --output-path lcov.info
+
+# 基准测试（--quick 达到统计显著性即停止）
+cargo bench -- --quick
+cargo bench --bench daemon_bench --features daemon -- --quick
+
+# 安全审计（CI security job：RustSec 公告 + 许可证/禁用依赖）
+cargo audit
+cargo deny check
 ```
 
-> **限制**：tree-sitter 不展开 procedural macro（`#[derive(Serialize)]` 等），derive 生成的 impl 方法会被判定为死代码（已知误报）。const fn 在 const 上下文的调用也不被 tree-sitter 识别为 CALLS 边。
+> CI 还会在每次 push/PR 上运行 CodeQL 静态分析（`.github/workflows/codeql.yml`），并在 `v*` tag 推送时触发 Release 工作流（GitHub Release + crates.io 发布）。
 
-## [架构](#架构)
+### 📊 测试规模
 
-### 三层源码结构
+截至 v0.3.12（`#[test]` / `#[tokio::test]` 函数 grep 统计）：约 4600+ 条单元测试（147 个源文件含 `#[cfg(test)]`）+ 118 条集成测试（8 个文件）+ 8 个验收项目 + 7 组 Criterion 基准；覆盖率门禁为行覆盖 ≥ 95%（CI coverage job 与 pre-push 钩子双重执行）。逐文件分解与完整统计见 [🧪 测试场景矩阵 · 统计汇总](docs/TEST_SCENARIOS.md#-统计汇总)。
 
-| 层         | 入口           | 说明                                                                       |
-| ---------- | -------------- | -------------------------------------------------------------------------- |
-| Rust SDK   | `src/lib.rs`   | 库 crate，暴露公共 API（模型/解析/存储/索引/查询/追踪/service 模块）       |
-| CLI 二进制 | `src/main.rs`  | 使用 sdforge `CliBuilder` + `inventory` 分发到 `service::*` 处理器         |
-| MCP 服务器 | `src/service/` | sdforge `#[forge]` 宏统一暴露 CLI 和 MCP 接口，由 `cli`/`mcp` feature 门控 |
+---
 
-> v0.3.2 起，CLI 和 MCP 接口通过 sdforge 的 `#[forge]` 宏统一封装在 `src/service/` 模块中，
-> 每个命令定义 core 函数 + CLI wrapper + MCP wrapper，替代了此前的 `src/cli/*_cmd.rs` 和 `src/mcp/` 模块。
+## 📊 性能
 
-### 索引管线
+基准套件为 `benches/` 下 7 组 Criterion 基准（SLO 阈值来自 `docs/PRD.md` §5.1）：实测 1000 文件冷启动索引约 3929 files/s（SLO ≥ 100）、单文件增量约 4987 files/s（SLO ≥ 500）、daemon 去抖响应约 2.76 s（SLO ≤ 3 s）；`incremental_500_of_1000` 为已知未达标项。v0.3.10–v0.3.12 落地的 L1–L7 内存防线（`MemoryBudget` 三级内存压力、流式 CSV、管线流式化、buffer_pool 封顶等）将 70 GB 主机上的索引峰值内存从约 60 GB 降至约 4 GB。完整实测基线、SLO 表与调优方法见 [⚡ 性能指南](docs/PERFORMANCE.md)，SLO 阈值表见 [`benches/README.md`](benches/README.md)。
 
-```mermaid
-graph TB
-    subgraph "用户层"
-        CLI["CLI (sdforge CliBuilder)"]
-    end
+---
 
-    subgraph "核心层"
-        IP["Index Pipeline<br/>索引流水线"]
-        Q["Query<br/>查询引擎"]
-        T["Trace<br/>追踪引擎"]
-        D["Daemon<br/>守护进程"]
-    end
+## 🔒 安全
 
-    subgraph "解析层"
-        R["Resolve<br/>符号解析 + 数据流"]
-        P["Parse<br/>tree-sitter 多语言提取"]
-    end
+### 🛡️ 安全设计
 
-    subgraph "存储层"
-        S["Storage<br/>LadybugDB"]
-        H["Hash<br/>SHA-256 增量"]
-    end
+攻击面集中在索引文件（LadybugDB 数据库、`.graph.zst` 导入制品、tree-sitter 解析输入）与进入 Cypher 子集查询的 `query` / `trace` / `impact` / `search` 用户输入；代码层面配套 Cypher / 标识符转义、图编辑 dry-run 默认与诊断回执的失败显性化。设计细节与范围界定见 [🔒 安全文档](docs/SECURITY.md)。
 
-    CLI --> IP
-    CLI --> Q
-    CLI --> T
-    CLI --> D
-    IP --> R
-    IP --> P
-    IP --> S
-    IP --> H
-    Q --> S
-    T --> S
-    D --> IP
+### ⛓️ 供应链与门禁
 
-    style CLI fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
-    style IP fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
-    style S fill:#ffcdd2,stroke:#c62828,stroke-width:2px
-    style P fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
-```
+CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`（许可证 / 禁用依赖校验）、CodeQL 静态分析与 pre-commit 密钥扫描。完整清单与忽略项说明见 [🔒 安全文档](docs/SECURITY.md#️-supply-chain-and-gates)。
 
-### 索引流程
+### 🚨 报告安全漏洞
 
-1. **文件发现** — `ignore` crate 遵守 `.gitignore` 规则
-2. **增量哈希** — SHA-256 比对，跳过未变更文件
-3. **并行解析** — Rayon 并行 + tree-sitter 提取节点/边
-4. **符号解析** — FQN 生成、调用解析、数据流分析、跨语言 FFI
-5. **批量入库** — CSV 生成 + `COPY FROM` 批量加载
+请勿通过公开 issue 报告安全漏洞。请发送邮件至 **security@kirky-x.dev**，附漏洞描述与影响、复现步骤（最小代码库或 `codenexus` 命令序列）、版本信息（`codenexus --version`、Rust 工具链、操作系统）与已知缓解措施。项目承诺 48 小时内确认、5 个工作日内给出初步评估。完整政策（支持版本、披露流程、范围界定）见 [🔒 安全文档](docs/SECURITY.md)。
 
-### 图模型
+---
 
-- **44 种节点类型**：Project, Folder, File, Module, Class, Struct, Enum, Trait, Impl, Function, Method, Variable, GlobalVar, Parameter, Const, Static, Macro, TypeAlias, Typedef, Namespace, Interface, Constructor, Property, Record, Delegate, Annotation, Template, Union, Variant, Field, Event, Handler, Middleware, Service, Endpoint, Route, Process, Database, Config, Test, Section, Community, Tool, Embedding
-- **30 种边类型**：Contains, Defines, MemberOf, Calls, FfiCalls, DataFlows, Reads, Writes, Implements, Extends, UsesType, References, Imports, Includes, HasMethod, HasProperty, Accesses, MethodOverrides, MethodImplements, StepInProcess, HandlesRoute, Fetches, HandlesTool, EntryPointOf, Usage, Tests, HttpCalls, AsyncCalls, Emits, ListensOn
-- 每条边携带置信度分数 (0.0-1.0) 和置信度分层（`SameFile` / `ImportScoped` / `Global`）
+## 🗺️ 开发路线图
 
-## [支持语言](#支持语言)
+<table style="width:100%; border-collapse: collapse">
+<tr><th style="text-align:center">状态</th><th style="text-align:left">方向</th><th style="text-align:left">条目</th></tr>
+<tr><td align="center">✅</td><td>核心索引与图模型</td><td>v0.1.0 — 多语言索引（C/Rust/Fortran/Python/TypeScript）、图模式（44 种节点类型 + 30 种边类型）、<code>query</code>/<code>trace</code>/<code>impact</code>/<code>context</code>/<code>search</code>、增量索引、RAM 优先模式、MCP 服务、团队 <code>export</code>/<code>import</code>、守护进程模式、置信度分层、歧义消解</td></tr>
+<tr><td align="center">✅</td><td>稳定性与性能加固</td><td>v0.1.x — 增量重索引覆盖、大仓库内存调优、更多语言专属边提取</td></tr>
+<tr><td align="center">✅</td><td>LSP 增强</td><td>v0.2.0 — <code>lsp</code> feature：LSP 增强提取，超越 tree-sitter 的类型精确解析（rust-analyzer 集成）</td></tr>
+<tr><td align="center">✅</td><td>语言覆盖扩展</td><td>v0.2.0 — 扩展语言覆盖（Go、Java、C++，以及 JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog），由新的 <code>lang-*</code> feature 控制</td></tr>
+<tr><td align="center">✅</td><td>分析工具包</td><td>v0.2.0 — 死代码检测、架构概览、API 审查（route_map/shape_check/api_impact/tool_map）、社区检测、跨服务链接检测</td></tr>
+<tr><td align="center">✅</td><td>复杂度分析</td><td>v0.2.1 — AST 复杂度分析：圈/认知复杂度、嵌套深度、函数长度，绿/黄/红/致命四级告警</td></tr>
+<tr><td align="center">✅</td><td>MCP 服务器</td><td>v0.3.0 — sdforge-based MCP 服务器：<code>#[forge]</code> 宏 + sdforge <code>mcp</code> stdio 传输，替代手写 JSON-RPC；6 个工具（query/trace/impact/search/context/architecture）</td></tr>
+<tr><td align="center">✅</td><td>跨语言污点追踪</td><td>v0.3.2 — 跨语言数据流端到端追踪：<code>TaintPathTracer</code> BFS 遍历 DataFlows/Reads/Writes/FfiCalls 边</td></tr>
+<tr><td align="center">✅</td><td>语义搜索</td><td>v0.3.2 — 向量嵌入默认开启语义搜索（<code>embed</code> feature 已包含在 <code>full</code> 预设中）</td></tr>
+<tr><td align="center">✅</td><td>国际化</td><td>v0.3.3 — 国际化模块（<code>i18n</code> feature）：ICU4X Unicode case folding + NFC 规范化 + CJK 边界检测</td></tr>
+<tr><td align="center">✅</td><td>Harness 现代化</td><td>v0.3.3 — CI 升级 Rust 1.91 + 6 特性矩阵 + dependabot + codeql + crates.io 发布</td></tr>
+<tr><td align="center">✅</td><td>大仓库内存防线</td><td>v0.3.11 — 大型仓库索引 OOM 修复（L1–L7 七层防线）：<code>MemoryBudget</code> 三级内存压力 + <code>Graph::nodes_view/edges_view</code> 迭代器 + 流式 CSV + mpsc channel 并行解析 + L5 自适应降级 + L6 管线流式化（<code>ctx.remove</code> 取代 <code>Graph::clone</code>）+ L7 LadybugDB buffer_pool 封顶（4 GB）+ LSP 按需启动 + RAM-first 8× 放大因子预算。70 GB 主机峰值内存从 60 GB 降至 ~4 GB</td></tr>
+<tr><td align="center">🚧</td><td>基础库升级</td><td>自研基础库升级至 RC（trait-kit / sdforge / oxcache 0.5.0-rc.2、inklog 0.3.0-rc.2）；MSRV 1.95 → 1.97.1</td></tr>
+<tr><td align="center">📋</td><td>Web UI 与图可视化</td><td>基于查询门面的 Web UI / 图可视化（<code>diagram</code>/<code>arch_diff</code> 已交付架构图 HTML 与语义 Delta；3D graph-viewer 集成与更多图型仍在规划中）</td></tr>
+</table>
 
-默认 `full` 预设编译 **21 种语言**。下表列出其中 8 种核心语言（C/Rust/Fortran/Python/TypeScript/Go/Java/C++）及其主要提取的节点/边类型；`full` 在此基础上额外启用 JavaScript、Ruby、Haskell、OCaml、Scala、PHP、C#、Bash、HTML、CSS、JSON、Regex、Verilog。
+---
 
-| 语言       | 节点类型                                                                     | 边类型                                  |
-| ---------- | ---------------------------------------------------------------------------- | --------------------------------------- |
-| C          | Function, GlobalVar, Struct, Enum, Typedef, Macro                            | Calls, Imports, Reads, Writes, Includes |
-| Rust       | Function, Struct, Enum, Trait, Impl, Const, Static, Macro, Module, TypeAlias | Calls, Imports, Reads, Writes           |
-| Fortran    | Module, Function                                                             | Calls, Imports, FfiCalls                |
-| Python     | Function, Method, Class                                                      | Calls, Imports, Extends                 |
-| TypeScript | Function, Class, Method, Interface, Enum, TypeAlias, Const                   | Calls, Imports                          |
-| Go         | Function, Method, Struct, Interface, TypeAlias                               | Defines, Calls, Imports                 |
-| Java       | Class, Interface, Enum, Method                                               | Defines, Calls, Imports                 |
-| C++        | Function, Method, Class, Struct, Namespace, Enum, Template                   | Defines, Calls, Imports                 |
+## 🤝 参与贡献
 
-## [开发](#开发)
+详细的贡献流程与代码规范请参阅 [🤝 贡献指南](docs/CONTRIBUTING.md)。
 
-```bash
-# 运行测试
-cargo test
+### 🛠️ 开发环境
 
-# 代码检查
-cargo clippy -- -D warnings
+工具链为 Rust stable 1.95+（CI 锁定 1.95；`Cargo.toml` MSRV 1.97.1）+ nightly（`cargo fmt` 使用 nightly-only 选项），系统依赖包括 C/C++ 编译器（tree-sitter grammar 构建）、`libssl-dev`、`pkg-config` 与 `protobuf-compiler`；提交前运行 `cargo +nightly fmt --all -- --check` 与 `cargo clippy -- -D warnings`；[pre-commit](https://pre-commit.com/) Git 钩子在 pre-commit 执行文件检查、私钥/密钥扫描、fmt 与 clippy，pre-push 执行 `cargo test --lib`、覆盖率门禁（≥95%）、`cargo audit` 与 `cargo deny check`；提交信息遵循 Conventional Commits（`feat`、`fix`、`perf`、`refactor`、`docs`、`test`、`chore`、`revert`）。完整环境搭建步骤见 [🤝 贡献指南 · 开发环境](docs/CONTRIBUTING.md#-development-environment)。
 
-# 格式化
-cargo +nightly fmt
+### 💖 贡献方式
 
-# 基准测试
-cargo bench
-```
+<table style="width:100%; border-collapse: collapse">
+<tr>
+<td width="33%" align="center" style="padding: 16px">
 
-## [贡献](#贡献)
+### 🐛 报告 Bug
 
-欢迎提交 Issue 和 Pull Request。请确保通过 `cargo test` 和 `cargo clippy -- -D warnings`。
+发现问题？<br>
+<a href="https://github.com/Kirky-X/codenexus/issues/new">创建 Issue</a>
 
-详细贡献指南请参考 [CONTRIBUTING.md](docs/CONTRIBUTING.md)。
+</td>
+<td width="33%" align="center" style="padding: 16px">
 
-## [路线图](#路线图)
+### 💡 功能建议
 
-CodeNexus 按当前优先级排序的规划工作：
+有好想法？<br>
+<a href="https://github.com/Kirky-X/codenexus/issues">提交功能建议</a>
 
-- [x] v0.1.0 — 多语言索引（C/Rust/Fortran/Python/TypeScript）、图模式（44 种节点类型 + 30 种边类型）、`query`/`trace`/`impact`/`context`/`search`、增量索引、RAM 优先模式、MCP 服务、团队 `export`/`import`、守护进程模式、置信度分层、歧义消解
-- [x] v0.1.x — 稳定性与性能加固：增量重索引覆盖、大仓库内存调优、更多语言专属边提取
-- [x] v0.2.0 — `lsp` feature：LSP 增强提取，超越 tree-sitter 的类型精确解析（rust-analyzer 集成）
-- [x] v0.2.0 — 扩展语言覆盖（Go、Java、C++，以及 JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog），由新的 `lang-*` feature 控制
-- [x] v0.2.0 — 分析工具包：死代码检测、架构概览、API 审查（route_map/shape_check/api_impact/tool_map）、社区检测、跨服务链接检测
-- [x] v0.2.1 — AST 复杂度分析：圈/认知复杂度、嵌套深度、函数长度，绿/黄/红/致命四级告警
-- [x] v0.3.0 — sdforge-based MCP 服务器：`#[forge]` 宏 + sdforge `mcp` stdio 传输，替代手写 JSON-RPC；6 个工具（query/trace/impact/search/context/architecture）
-- [x] v0.3.2 — 跨语言数据流端到端追踪：`TaintPathTracer` BFS 遍历 DataFlows/Reads/Writes/FfiCalls 边
-- [x] v0.3.2 — 向量嵌入默认开启语义搜索（`embed` feature 已包含在 `full` 预设中）
-- [x] v0.3.3 — 国际化模块（`i18n` feature）：ICU4X Unicode case folding + NFC 规范化 + CJK 边界检测
-- [x] v0.3.3 — Harness 现代化：CI 升级 Rust 1.91 + 6 特性矩阵 + dependabot + codeql + crates.io 发布
-- [x] v0.3.11 — 大型仓库索引 OOM 修复（L1–L7 七层防线）：`MemoryBudget` 三级内存压力 + `Graph::nodes_view/edges_view` 迭代器 + 流式 CSV + mpsc channel 并行解析 + L5 自适应降级 + L6 管线流式化（`ctx.remove` 取代 `Graph::clone`）+ L7 LadybugDB buffer_pool 封顶（4 GB）+ LSP 按需启动 + RAM-first 8× 放大因子预算。70 GB 主机峰值内存从 60 GB 降至 ~4 GB。
-- [ ] 未来 — 基于查询门面的 Web UI / 图可视化（`diagram`/`arch_diff` 已交付架构图 HTML 与语义 Delta；3D graph-viewer 集成与更多图型仍在规划中）
+</td>
+<td width="33%" align="center" style="padding: 16px">
 
-## [许可证](#许可证)
+### 🔧 提交 PR
 
-[MIT](LICENSE)
+想贡献代码？<br>
+<a href="https://github.com/Kirky-X/codenexus/pulls">Fork 并提交 PR</a>
+
+</td>
+</tr>
+</table>
+
+报告 Issue 时请附上：CodeNexus 版本（`codenexus --version`）、Rust 版本、操作系统、完整命令与错误输出、最小复现。安全漏洞请勿公开提交，见 [🔒 安全文档](docs/SECURITY.md)。
+
+<img src="https://contrib.rocks/image?repo=Kirky-X/codenexus" alt="Contributors">
+
+---
+
+## 📋 更新日志
+
+完整版本历史见 [📋 更新日志](docs/CHANGELOG.md)（遵循 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 格式，语义化版本）。
+
+| 版本 | 日期 | 要点 |
+|------|------|------|
+| Unreleased | — | 自研基础库升级至 RC（trait-kit / sdforge / oxcache 0.5.0-rc.2、inklog 0.3.0-rc.2）；MSRV 1.95 → 1.97.1 |
+| 0.3.12 | 2026-07-30 | 动态 `max_db_size` + `--fresh` 标志解决 DB 膨胀；read-only 连接 4 TiB cap 修复 >16 GiB 数据库查询崩溃；LSP hover 批量 UNWIND 更新等 P 系列修复 |
+| 0.3.11 | 2026-07-26 | L6+L7 内存优化：管线流式化 + 迭代器 API + buffer_pool 封顶，70 GB 主机峰值内存 60 GB → ~4 GB |
+| 0.3.10 | 2026-07-25 | 大仓库索引 OOM 的 L1–L5 五层防线：内存预算、图视图迭代器、流式 CSV、mpsc 并发上限、自适应降级 |
+
+---
+
+## 📄 许可证
+
+本项目采用 [MIT](LICENSE) 许可证。
+
+---
+
+## 🙏 致谢
+
+### 🌟 核心依赖
+
+CodeNexus 站在以下优秀开源项目的肩膀上：
+
+| 依赖 | 用途 |
+|------|------|
+| [lbug](https://github.com/ladybugdb/ladybugdb)（LadybugDB） | 图数据库存储 |
+| [tree-sitter](https://tree-sitter.github.io/) + 21 个语言 grammar crate | 多语言 AST 解析 |
+| [rayon](https://github.com/rayon-rs/rayon) | 数据并行 |
+| [notify](https://github.com/notify-rs/notify) / notify-debouncer-full | 文件监听与去抖 |
+| [sdforge](https://crates.io/crates/sdforge) | CLI + MCP 双传输框架（`#[forge]` 宏） |
+| [trait-kit](https://crates.io/crates/trait-kit) | 能力注册表 |
+| [oxcache](https://crates.io/crates/oxcache) | 查询结果缓存 |
+| [inklog](https://crates.io/crates/inklog) | 日志后端（console + 轮转 + LZ4 压缩） |
+| [ort](https://github.com/pykeio/ort) / tokenizers | 本地 ONNX 向量嵌入推理 |
+| [ICU4X](https://github.com/unicode-org/icu4x)（icu_normalizer / icu_casemap） | Unicode 规范化与大小写折叠 |
+| [petgraph](https://github.com/petgraph/petgraph) | 社区检测图算法 |
+| [criterion](https://github.com/bheisler/criterion.rs) | 基准测试 |
+
+### 💝 特别感谢
+
+感谢 Rust 社区与所有[贡献者](https://github.com/Kirky-X/codenexus/graphs/contributors)。
+
+---
+
+## 📞 联系与支持
+
+<table style="width:100%; max-width: 600px">
+<tr>
+<td align="center" width="33%">
+<a href="https://github.com/Kirky-X/codenexus/issues"><b style="color:#991B1B">Issues</b></a><br>
+<span style="color:#64748B">报告问题和 Bug</span>
+</td>
+<td align="center" width="33%">
+<a href="docs/FAQ.md"><b style="color:#1E40AF">文档 / FAQ</b></a><br>
+<span style="color:#64748B">提问前请先查阅</span>
+</td>
+<td align="center" width="33%">
+<a href="https://github.com/Kirky-X/codenexus"><b style="color:#1E293B">GitHub</b></a><br>
+<span style="color:#64748B">查看源代码</span>
+</td>
+</tr>
+</table>
+
+---
+
+## ⭐ Star 历史
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Kirky-X/codenexus&type=Date)](https://star-history.com/#Kirky-X/codenexus&Date)
+
+如果这个项目对您有帮助，请考虑给它一个 ⭐️！
+
+**由 Kirky.X 构建**
+
+---
+
+<sub>© 2026 Kirky.X. 保留所有权利。</sub>

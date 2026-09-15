@@ -2,73 +2,108 @@
 
 <img src="docs/assets/CodeNexus.png" alt="CodeNexus Logo" width="200">
 
+[![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) [![Crates.io](https://img.shields.io/crates/v/codenexus.svg)](https://crates.io/crates/codenexus) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Rust Version](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](https://www.rust-lang.org)
+
+[中文](README.md) | **English**
+
 **A multi-language code knowledge graph tool built on LadybugDB and tree-sitter**
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) &nbsp; [![Rust Version](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](https://www.rust-lang.org) &nbsp; [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) &nbsp; [![Crates.io](https://img.shields.io/crates/v/codenexus.svg)](https://crates.io/crates/codenexus)
-
-English | [简体中文](README.md)
+[✨ Key Features](#-key-features) • [🚀 Quick Start](#-quick-start) • [📚 Documentation](#-documentation) • [💻 Examples](#-examples) • [🤝 Contributing](#-contributing)
 
 </div>
 
 ---
 
-## Table of Contents
+<div align="center">
 
-- [Overview](#overview)
-- [Key Features](#key-features)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [CLI Commands](#cli-commands)
-- [MCP Integration](#mcp-integration)
-- [Complexity Analysis](#complexity-analysis)
-- [Dead Code Analysis](#dead-code-analysis)
-- [Architecture](#architecture)
-- [Supported Languages](#supported-languages)
-- [Development](#development)
-- [Contributing](#contributing)
-- [Roadmap](#roadmap)
-- [License](#license)
+### 🎯 Index once, query the whole repo
 
-## Overview
+Run `codenexus index` once and symbol relationships land in the graph — every question after that goes to the graph:
 
-CodeNexus indexes source code repositories into a queryable knowledge graph. It uses [tree-sitter](https://tree-sitter.github.io/) for multi-language parsing and [LadybugDB](https://github.com/ladybugdb/ladybugdb) for graph storage, supporting symbol tracing, impact analysis, and data-flow analysis.
+<table style="width:100%; border-collapse: collapse">
+<tr>
+<td align="center" width="25%">⚡<br><b>Incremental pipeline</b><br><span style="color:#64748B">hash diffing · reparse only changes</span></td>
+<td align="center" width="25%">🕸️<br><b>Property graph</b><br><span style="color:#64748B">44 node types · 30 edge types · Cypher</span></td>
+<td align="center" width="25%">🧭<br><b>Multi-hop tracing</b><br><span style="color:#64748B">call chains · data flow · taint paths</span></td>
+<td align="center" width="25%">🔌<br><b>Dual entry</b><br><span style="color:#64748B">30 CLI commands · 8 MCP tools</span></td>
+</tr>
+</table>
 
-CodeNexus turns a codebase into a structured graph of symbols and their relationships (calls, data flows, imports, FFI bindings, ...). Once indexed, you can query the graph with a Cypher subset, trace how a symbol is reached, measure the blast radius of a change, and feed the graph to AI agents through a Model Context Protocol (MCP) server.
+</div>
 
-Supports **21 languages** with the default `full` preset: C, Rust, Fortran, Python, TypeScript, Go, Java, C++, JavaScript, Ruby, Haskell, OCaml, Scala, PHP, C#, Bash, HTML, CSS, JSON, Regex, Verilog. Build a minimal subset with `lang-*` features.
+---
 
-### Typical Use Cases
+## 📋 Table of Contents
 
-- **Impact analysis before refactoring** — find every caller of a function across files and languages before editing it.
-- **Onboarding a new codebase** — index a repo, then `query`/`context`/`trace` to navigate symbols and their relationships instead of grepping.
-- **AI agent grounding** — run `codenexus mcp` so Claude Code / Cursor / Codex can call `query`, `context`, `impact`, and `detect_changes` tools with real call-graph data.
-- **Team knowledge sharing** — `export` an index as a `.graph.zst` artifact and `import` it on a teammate's machine.
+- [✨ Key Features](#-key-features)
+- [🚀 Quick Start](#-quick-start)
+- [🛠️ CLI Commands](#️-cli-commands)
+- [🔌 MCP Integration](#-mcp-integration)
+- [📚 Documentation](#-documentation)
+- [💻 Examples](#-examples)
+- [🏗️ Architecture](#️-architecture)
+- [🧪 Testing](#-testing)
+- [📊 Performance](#-performance)
+- [🔒 Security](#-security)
+- [🗺️ Roadmap](#️-roadmap)
+- [🤝 Contributing](#-contributing)
+- [📋 Changelog](#-changelog)
+- [📄 License](#-license)
+- [🙏 Acknowledgments](#-acknowledgments)
+- [📞 Contact & Support](#-contact--support)
+- [⭐ Star History](#-star-history)
 
-## Key Features
 
-| Feature                | Description                                                                                                              |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Multi-language parsing | 21 languages (default `full` preset) via tree-sitter, trimmable with `lang-*` features                                   |
-| Graph database         | LadybugDB storage with 44 node types + 30 edge types                                                                     |
-| Incremental indexing   | SHA-256 file hash diffing, re-parses only changed files                                                                  |
-| Parallel parsing       | Rayon parallelism + thread-local parser pool                                                                             |
-| RAM-first indexing     | LZ4-compress source into memory, single `COPY FROM` dump (`--ram-first`)                                                 |
-| Symbol tracing         | Bidirectional call (Calls) and data-flow (DataFlows) tracing                                                             |
-| Impact analysis        | Change impact radius analysis, layered by depth                                                                          |
-| Disambiguation         | Ranked multi-match symbol resolution by confidence (auto-selects the unique match; errors if it cannot be disambiguated) |
-| Confidence tiers       | Each edge carries a tier (SameFile / ImportScoped / Global) + 0.0-1.0 score                                              |
-| Architecture diagrams  | `diagram` compiles the architecture into self-contained interactive HTML (deterministic layout, orthogonal routing, dark/light themes, focus & reach, route probe, source-evidence badges) |
-| Architecture delta     | `arch_diff` compares two indexed projects, emitting Before/Delta/After HTML plus a machine receipt (added/removed/changed with JSON Pointer fields) |
-| Repair receipts        | Errors and warnings carry structured receipts (stable rule codes + measured evidence + curated fixes) — symbol ambiguity, stale index, truncated results |
-| Cross-language FFI     | C-Fortran `bind(C)`, Rust `extern`, and other FFI call resolution                                                        |
-| Team artifacts         | `export`/`import` compressed `.graph.zst` artifacts for sharing indexes                                                  |
-| Multi-agent MCP        | `setup` auto-detects Claude Code/Cursor/Codex; `hook` emits PreToolUse/PostToolUse JSON; `mcp` stdio server              |
-| File watching          | Daemon mode with auto-incremental indexing (`daemon` feature)                                                            |
-| Vector embedding       | Enabled-by-default semantic search (`embed` feature, included in `full` preset)                                          |
-| Taint tracing          | Cross-language multi-hop taint path tracing (`TaintPathTracer`, BFS over DataFlows/Reads/Writes/FfiCalls)                |
-| Internationalization   | Unicode case folding + NFC normalization (ICU4X, `i18n` feature, included in `full` preset)                              |
+---
 
-## Installation
+## ✨ Key Features
+
+<table style="width:100%; border-collapse: collapse">
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🌐 <b>Multi-language parsing</b><br><span style="color:#64748B">The default <code>full</code> preset supports 21 languages (C, Rust, Fortran, Python, TypeScript, Go, Java, C++, JavaScript, Ruby, Haskell, OCaml, Scala, PHP, C#, Bash, HTML, CSS, JSON, Regex, Verilog); trim it down with <code>lang-*</code> features</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🕸️ <b>Graph database</b><br><span style="color:#64748B">LadybugDB graph storage with 44 node types + 30 edge types, queryable via a Cypher subset</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🔄 <b>Incremental indexing</b><br><span style="color:#64748B">SHA-256 file hash comparison re-parses only changed files; Rayon parallelism + thread-local parser pool</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">💾 <b>RAM-first indexing</b><br><span style="color:#64748B">LZ4-compressed in-memory sources with a single <code>COPY FROM</code> bulk load (<code>--ram_first</code>)</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🔍 <b>Symbol tracing</b><br><span style="color:#64748B">Bidirectional call-chain (Calls) and data-flow (DataFlows) tracing; cross-language multi-hop taint path tracing (<code>TaintPathTracer</code>)</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🎯 <b>Impact analysis</b><br><span style="color:#64748B">Change blast-radius analysis, layered by depth, with multi-edge-type dimensions + risk assessment</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🧩 <b>Ambiguity resolution & confidence tiers</b><br><span style="color:#64748B">Multi-match symbols are resolved by ranked confidence; every edge carries a tier (SameFile / ImportScoped / Global) + 0.0-1.0 score</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">📐 <b>Architecture diagrams</b><br><span style="color:#64748B"><code>diagram</code> compiles the architecture into a self-contained interactive HTML (deterministic layout / orthogonal routing / dark & light themes / source-evidence badges)</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🆚 <b>Architecture semantic delta</b><br><span style="color:#64748B"><code>arch_diff</code> compares two indexed projects, emitting Before/Delta/After HTML + a machine receipt (added/removed/changed + JSON Pointer fields)</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🧾 <b>Diagnostic receipts</b><br><span style="color:#64748B">Errors and warnings emit structured receipts (stable rule codes + evidence + actionable fixes); symbol ambiguity / stale index / truncated results all ship repair hints</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🔗 <b>Cross-language FFI</b><br><span style="color:#64748B">C-Fortran bind(C), Rust extern, and other cross-language call resolution</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">📦 <b>Team artifacts</b><br><span style="color:#64748B"><code>export</code> / <code>import</code> compressed <code>.graph.zst</code> artifacts for sharing indexes</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🤖 <b>Multi-agent MCP</b><br><span style="color:#64748B"><code>setup</code> auto-detects Claude Code / Cursor / Codex; <code>hook</code> emits PreToolUse/PostToolUse JSON; <code>mcp</code> stdio server exposes 8 tools</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">👁️ <b>File watching</b><br><span style="color:#64748B">Daemon mode with automatic incremental indexing (<code>daemon</code> feature, graceful SIGTERM/SIGINT shutdown)</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🧮 <b>Analysis toolkit</b><br><span style="color:#64748B">Dead-code detection (worklist reachability + confidence), architecture overview, complexity analysis (8 metrics), community detection (Leiden), cross-service call chains</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🧠 <b>Vector embeddings</b><br><span style="color:#64748B">Semantic search enabled by default (<code>embed</code> feature, local ONNX inference + BM25 full-text)</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🌍 <b>Internationalization</b><br><span style="color:#64748B">Unicode case folding + NFC normalization (ICU4X, <code>i18n</code> feature, included in the <code>full</code> preset)</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🧰 <b>LSP enrichment</b><br><span style="color:#64748B">7 LSP clients (rust-analyzer, pyright, clangd, gopls, ts-lang-server, fortls, jdtls) provide type-accurate resolution beyond tree-sitter (<code>lsp</code> feature)</span></td>
+</tr>
+</table>
+
+Beyond the core capabilities above, CodeNexus also ships `context` assembly, `detect_changes` change detection, `rename` rename-impact pre-checks, oxcache-backed query-result caching, and structured logging via inklog; the grouped list of all 30 subcommands lives in the [🛠️ CLI Commands](#️-cli-commands) section, and per-command flag semantics with runnable examples are in the [📖 User Guide · Command reference](docs/USER_GUIDE.md#️-命令详解).
+
+---
+
+## 🚀 Quick Start
+
+### 📦 Installation
 
 ```bash
 # Install from crates.io (default full preset, all 21 languages + all features)
@@ -81,62 +116,61 @@ cargo install --path .
 
 # Or compile directly
 cargo build --release
-
-# Build MCP only (default full preset includes all languages)
-cargo build --release --features mcp
 ```
 
-> **Link error on openEuler / CentOS (GCC ≤ 12)?** The default install downloads a prebuilt LadybugDB binary that requires a newer `libstdc++`. If linking fails with `undefined symbol: std::to_chars(..., _Float128, ...)`, force a source build (requires `cmake`):
+> **Link failure troubleshooting (openEuler / CentOS and other GCC ≤ 12 systems)**: the default install downloads a prebuilt LadybugDB binary that requires a recent `libstdc++`. If linking fails with `undefined symbol: std::to_chars(..., _Float128, ...)`, force a source build via an environment variable (requires `cmake`):
 >
 > ```bash
 > LBUG_BUILD_FROM_SOURCE=1 cargo install codenexus
 > ```
 
-### Feature Flags
+Requires Rust 1.97.1 or later (MSRV, matching `rust-version` in `Cargo.toml` and `msrv` in `clippy.toml`; the CI toolchain is currently pinned to 1.95, see `.github/workflows/ci.yml`).
 
-**Preset**: `default = ["full"]`
+#### 🔧 Build presets and feature flags
 
-| Feature           | Default | Description                                                                                                                                                                                                                   |
-| ----------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `minimal`         | —       | Minimal preset: `lang-rust` only                                                                                                                                                                                              |
-| `core`            | —       | Core preset: `lang-c` + `lang-rust` + `lang-python`                                                                                                                                                                           |
-| `full`            | enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embed/i18n |
-| `lang-c`          | —       | C language parser (tree-sitter-c)                                                                                                                                                                                             |
-| `lang-rust`       | enabled | Rust language parser (tree-sitter-rust)                                                                                                                                                                                       |
-| `lang-fortran`    | —       | Fortran language parser (tree-sitter-fortran)                                                                                                                                                                                 |
-| `lang-python`     | —       | Python language parser (tree-sitter-python)                                                                                                                                                                                   |
-| `lang-typescript` | —       | TypeScript language parser (tree-sitter-typescript)                                                                                                                                                                           |
-| `lang-go`         | —       | Go language parser (tree-sitter-go)                                                                                                                                                                                           |
-| `lang-java`       | —       | Java language parser (tree-sitter-java)                                                                                                                                                                                       |
-| `lang-cpp`        | —       | C++ language parser (tree-sitter-cpp)                                                                                                                                                                                         |
-| `lang-javascript` | —       | JavaScript language parser (tree-sitter-javascript)                                                                                                                                                                           |
-| `lang-ruby`       | —       | Ruby language parser (tree-sitter-ruby)                                                                                                                                                                                       |
-| `lang-haskell`    | —       | Haskell language parser (tree-sitter-haskell)                                                                                                                                                                                 |
-| `lang-ocaml`      | —       | OCaml language parser (tree-sitter-ocaml)                                                                                                                                                                                     |
-| `lang-scala`      | —       | Scala language parser (tree-sitter-scala)                                                                                                                                                                                     |
-| `lang-php`        | —       | PHP language parser (tree-sitter-php)                                                                                                                                                                                         |
-| `lang-csharp`     | —       | C# language parser (tree-sitter-c-sharp)                                                                                                                                                                                      |
-| `lang-bash`       | —       | Bash language parser (tree-sitter-bash)                                                                                                                                                                                       |
-| `lang-html`       | —       | HTML language parser (tree-sitter-html)                                                                                                                                                                                       |
-| `lang-css`        | —       | CSS language parser (tree-sitter-css)                                                                                                                                                                                         |
-| `lang-json`       | —       | JSON language parser (tree-sitter-json)                                                                                                                                                                                       |
-| `lang-regex`      | —       | Regex language parser (tree-sitter-regex)                                                                                                                                                                                     |
-| `lang-verilog`    | —       | Verilog language parser (tree-sitter-verilog)                                                                                                                                                                                 |
-| `daemon`          | enabled | File-watching daemon (notify + notify-debouncer-full)                                                                                                                                                                         |
-| `embed`           | enabled | Vector embedding semantic search (reqwest HTTP + local ONNX inference)                                                                                                                                                        |
-| `lsp`             | enabled | LSP-enhanced extraction (7 LSP clients: Rust rust-analyzer, Python pyright, C/C++ clangd, Go gopls, TypeScript ts-lang-server, Fortran fortls, Java jdtls)                                                                    |
-| `analysis`        | enabled | Dead code detection + architecture overview (pure Cypher aggregation)                                                                                                                                                         |
-| `complexity`      | enabled | AST complexity analysis (cyclomatic/cognitive/nesting/length/Halstead/maintainability/time/space, depends on `analysis`)                                                                                                      |
-| `api-review`      | enabled | API review toolkit (route_map/shape_check/api_impact/tool_map)                                                                                                                                                                |
-| `community`       | enabled | Community detection (Leiden modularity optimization, depends on petgraph)                                                                                                                                                     |
-| `cross-service`   | enabled | Cross-service call chain detection (HTTP route pattern matching)                                                                                                                                                              |
-| `diagram`         | enabled | Diagram pipeline: `diagram`/`arch_diff` commands, self-contained interactive HTML (depends on `analysis`)                                                                                                                      |
-| `mcp`             | enabled | MCP server via sdforge `mcp` stdio transport                                                                                                                                                                                  |
-| `cli`             | enabled | CLI binary (sdforge `cli` transport; required by the binary)                                                                                                                                                                  |
-| `cache`           | enabled | Query result caching (oxcache)                                                                                                                                                                                                |
-| `i18n`            | enabled | Unicode case folding + NFC normalization (ICU4X, included in `full` preset)                                                                                                                                                   |
+**Presets**: `default = ["full"]`
 
-> **Logging**: inklog is the sole logging backend (console + file rotation + daily rotation + LZ4 compression); the tracing-subscriber optional backend is no longer available.
+| Feature           | Default | Description |
+| ----------------- | ------- | ----------- |
+| `minimal`         | —       | Minimal preset: `lang-rust` only |
+| `core`            | —       | Core preset: `lang-c` + `lang-rust` + `lang-python` |
+| `full`            | Enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embed/i18n |
+| `lang-c`          | —       | C parser (tree-sitter-c) |
+| `lang-rust`       | Enabled | Rust parser (tree-sitter-rust) |
+| `lang-fortran`    | —       | Fortran parser (tree-sitter-fortran) |
+| `lang-python`     | —       | Python parser (tree-sitter-python) |
+| `lang-typescript` | —       | TypeScript parser (tree-sitter-typescript) |
+| `lang-go`         | —       | Go parser (tree-sitter-go) |
+| `lang-java`       | —       | Java parser (tree-sitter-java) |
+| `lang-cpp`        | —       | C++ parser (tree-sitter-cpp) |
+| `lang-javascript` | —       | JavaScript parser (tree-sitter-javascript) |
+| `lang-ruby`       | —       | Ruby parser (tree-sitter-ruby) |
+| `lang-haskell`    | —       | Haskell parser (tree-sitter-haskell) |
+| `lang-ocaml`      | —       | OCaml parser (tree-sitter-ocaml) |
+| `lang-scala`      | —       | Scala parser (tree-sitter-scala) |
+| `lang-php`        | —       | PHP parser (tree-sitter-php) |
+| `lang-csharp`     | —       | C# parser (tree-sitter-c-sharp) |
+| `lang-bash`       | —       | Bash parser (tree-sitter-bash) |
+| `lang-html`       | —       | HTML parser (tree-sitter-html) |
+| `lang-css`        | —       | CSS parser (tree-sitter-css) |
+| `lang-json`       | —       | JSON parser (tree-sitter-json) |
+| `lang-regex`      | —       | Regex parser (tree-sitter-regex) |
+| `lang-verilog`    | —       | Verilog parser (tree-sitter-verilog) |
+| `daemon`          | Enabled | File-watching daemon (notify + notify-debouncer-full) |
+| `embed`           | Enabled | Vector embedding semantic search (reqwest HTTP + local ONNX inference) |
+| `lsp`             | Enabled | LSP-enriched parsing (7 LSP clients: rust-analyzer, pyright, clangd, gopls, ts-lang-server, fortls, jdtls) |
+| `analysis`        | Enabled | Dead-code detection + architecture overview (pure Cypher aggregation) |
+| `complexity`      | Enabled | AST complexity analysis (8 metrics, depends on `analysis`) |
+| `api-review`      | Enabled | API review toolkit (route_map/shape_check/api_impact/tool_map) |
+| `community`       | Enabled | Community detection (Leiden modularity optimization, depends on petgraph) |
+| `cross-service`   | Enabled | Cross-service call-chain detection (HTTP route pattern matching) |
+| `diagram`         | Enabled | Architecture diagram pipeline: `diagram`/`arch_diff` commands (depends on `analysis`) |
+| `mcp`             | Enabled | MCP server (sdforge `mcp` stdio transport) |
+| `cli`             | Enabled | CLI binary (sdforge `cli` transport, required for the binary) |
+| `cache`           | Enabled | Query result cache (oxcache) |
+| `i18n`            | Enabled | Unicode case folding + NFC normalization (ICU4X) |
+
+> **Logging**: inklog is the only log backend (console + file rotation + daily rolling + LZ4 compression); the optional tracing-subscriber backend has been removed.
 
 ```bash
 # Minimal build (Rust only, no daemon/analysis)
@@ -151,377 +185,342 @@ cargo build --release --no-default-features --features lang-c
 # Full build (default, all languages + all features)
 cargo build --release
 
-# Build with vector embedding
+# Build with vector embeddings
 cargo build --release --features embed
 ```
 
-## Quick Start
+### 💡 Minimal example
 
-> All subcommand flags are **required snake_case long options** (e.g. `--symbol`, `--trace_type`); boolean options take an explicit `true`/`false` value. The database path is the global `--db` option (default `.codenexus/<project>.lbug`, placed before the subcommand; `<project>` is taken from `--name`, or falls back to the `--path` directory name).
+The following commands are adapted from [`examples/src/bin/basic_indexing.rs`](examples/src/bin/basic_indexing.rs) and other examples plus the [📖 User Guide](docs/USER_GUIDE.md), and run out of the box:
 
 ```bash
-# 1. Index a codebase into the knowledge graph
+# 1. Index a repository (the database defaults to .codenexus/<project>.lbug)
 codenexus index --path /path/to/project --name myproject
 
-# 1b. RAM-first indexing (LZ4 in-memory, faster for small-medium repos)
+# 1b. RAM-first indexing (LZ4 in-memory compression, faster for small-to-medium repos)
 codenexus index --path /path/to/project --name myproject --ram_first true
 
-# 1c. Fresh index (delete old DB file, reclaim DuckDB dead space from repeated --force)
-codenexus index --path /path/to/project --name myproject --force true --fresh true
-
-# 2. Verify the index
-codenexus status
-codenexus list
-
-# 3. Start exploring
+# 2. Query functions (Cypher subset)
 codenexus query --cypher "MATCH (f:Function) RETURN f.name LIMIT 10"
-codenexus context --symbol main --depth 1 --project "" --enhanced false
-```
 
-### Common Workflows
-
-```bash
-# Trace call paths
+# 3. Trace call chains
 codenexus trace --symbol main --trace_type calls --depth 5 --path_filter "" --detect_cycles false --cross_service false
-# Enhanced tracing: path filter + cycle detection + cross-service
-codenexus trace --symbol main --trace_type calls --depth 5 --path_filter "/src/api/**" --detect_cycles true --cross_service true
 
-# Analyze change impact (multi-dimensional + risk assessment)
-codenexus impact --symbol parse_function --depth 3 --edge_types "" --max_depth 0 --include_tests false
-codenexus impact --symbol parse_function --edge_types "CALLS,IMPLEMENTS,USES_TYPE" --max_depth 5 --include_tests true
-
-# Search symbols (5 modes + BM25 full-text)
+# 4. Search symbols (exact / regex / fuzzy + BM25 full-text)
 codenexus search --text "parse" --limit 20 --mode exact --fulltext false --project ""
-codenexus search --text "get.*user" --mode regex --fulltext false --project ""
-codenexus search --text "getuser" --mode fuzzy --fulltext false --project ""
-codenexus search --text "authentication logic" --fulltext true --project ""
-
-# 360° symbol context (basic + enhanced)
-codenexus context --symbol main --depth 1 --project "" --enhanced false
-codenexus context --symbol main --project myproject --enhanced true
-
-# Detect git-diff affected symbols before committing
-codenexus detect_changes --path /path/to/project --mode git
-
-# Rename a symbol (graph-edits + text-search; --apply false = dry-run)
-codenexus rename --from old_name --to new_name --path /path/to/project --apply false
-
-# Export / import team artifacts (--db is a global option, before the subcommand)
-codenexus --db ./my.lbug export --output team.graph.zst --project ""
-codenexus --db ./shared.lbug import --input team.graph.zst --reindex false --path "" --name ""
-
-# Start file-watching daemon for auto-incremental indexing
-codenexus daemon --path /path/to/project --name myproject
-
-# Remove a project and its index
-codenexus clean --project myproject
-
-# Dead code detection (multi-edge-type + FFI/export + confidence)
-codenexus dead_code --project myproject --entry "" --check_exported true --check_ffi true
-codenexus dead_code --project myproject --edge_types "CALLS,FFI_CALLS,IMPLEMENTS,USAGE,TESTS"
-
-# Cross-service call chain detection (HTTP/gRPC/GraphQL/MQ/event bus)
-codenexus cross_service --project myproject --protocol ""
-codenexus cross_service --project myproject --protocol grpc
-
-# Architecture overview (module boundaries + dependency directions + layers)
-codenexus architecture --project myproject
 ```
 
-## [CLI Commands](#cli-commands)
+### 🧭 Core concepts
 
-| Command          | Description                                                                                                                           |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `index`          | Index a codebase into the knowledge graph (`--ram-first` for LZ4 in-memory)                                                           |
-| `query`          | Execute a Cypher query (`--cypher`)                                                                                             |
-| `trace`          | Trace a symbol's call/data-flow paths (`--symbol`/`--trace_type`/`--depth`/`--path_filter`/`--detect_cycles`/`--cross_service`)       |
-| `impact`         | Analyze the impact radius of changing a symbol (`--symbol`/`--edge-types`/`--max-depth`/`--include-tests` multi-dimensional + `risk_assessment`) |
-| `search`         | Search symbols by name or content (`--mode` exact/regex/fuzzy/graph/multi; `--fulltext` BM25; `--project` filter)                     |
-| `context`        | 360° symbol view (`--project`/`--enhanced` multi-dimensional SymbolContext)                                                           |
-| `detect_changes` | Git diff → affected symbols + risk_level                                                                                              |
-| `rename`         | Graph-edits for high-confidence + text-search edits (`--from`/`--to`/`--path`; `--apply false` = dry-run)                             |
-| `export`         | Export LadybugDB dump → zstd artifact (`--output`; `--project` optional; DB via global `--db`)                                        |
-| `import`         | Import artifact → LadybugDB (`--input`; `--reindex` with `--path`/`--name` for local diff)                                            |
-| `setup`          | Auto-detect installed agents (Claude Code/Cursor/Codex) and write MCP config                                                          |
-| `hook`           | Emit PreToolUse/PostToolUse JSON (exit 0, never blocks)                                                                               |
-| `mcp`            | stdio MCP server (JSON-RPC 2.0, protocol 2024-11-05)                                                                                  |
-| `daemon`         | Start the file-watching daemon                                                                                                        |
-| `status`         | Show indexing status                                                                                                                  |
-| `list`           | List all indexed projects                                                                                                             |
-| `clean`          | Remove a project and its index                                                                                                        |
-| `dead_code`      | Dead code detection (9 edge types + FFI/export + High/Medium/Low confidence, `analysis` feature)                                      |
-| `architecture`   | Architecture overview (module boundaries + dependency directions + layers + cross-service deps, `analysis` feature)                   |
-| `complexity`     | AST complexity analysis (8 metrics + configurable thresholds, `complexity` feature)                                                   |
-| `route_map`      | HTTP route mapping (API endpoint inventory, `api-review` feature)                                                                     |
-| `shape_check`    | API shape check (request/response structure validation, `api-review` feature)                                                         |
-| `api_impact`     | API change impact analysis (`--endpoint` optional, omit=analyze all endpoints; `api-review` feature)                                |
-| `tool_map`       | Tool mapping (MCP tool inventory, `api-review` feature)                                                                               |
-| `community`      | Community detection (Leiden modularity optimization, `community` feature)                                                             |
-| `cross_service`  | Cross-service call chain detection (HTTP REST/gRPC/GraphQL/message queue/event bus, `cross-service` feature)                          |
-| `lsp_goto_def`   | LSP go-to-definition (rust-analyzer integration, `lsp` feature)                                                                       |
-| `lsp_hover`      | LSP hover info (rust-analyzer integration, `lsp` feature)                                                                             |
-| `diagram`        | Architecture diagram export: self-contained interactive HTML (deterministic layout + geometric quality gates + optional Git source evidence, `diagram` feature) |
-| `arch_diff`      | Architecture semantic delta: two-project comparison → Before/Delta/After HTML + machine receipt (`diagram` feature)                   |
+- **Knowledge graph model**: source code is parsed into a property graph of 44 node types and 30 edge types, stored in LadybugDB and queryable via a Cypher subset.
+- **Strict flag-based CLI**: no positional arguments; every subcommand parameter is a **mandatory snake_case long option** (e.g. `--symbol`, `--trace_type`) and booleans take explicit values (`true`/`false`).
+- **Global `--db` option**: the database path defaults to `.codenexus/<project>.lbug` and must precede the subcommand; when exactly one index exists it is auto-discovered.
+- **Exit-code contract**: 0 success, 1 internal error, 2 invalid input / project not found / query error, 4 not found / database corrupt (see `src/service/error.rs`).
 
-## [Complexity Analysis](#complexity-analysis)
+> The full set of core conventions (incremental indexing, confidence tiers, etc.) is in the [📖 User Guide · Core conventions](docs/USER_GUIDE.md#-核心约定).
 
-The `complexity` subcommand computes AST complexity metrics for every function in a project, emitting JSON with a `complexity` array and a `summary` aggregate.
+---
 
-### Metrics
+## 🛠️ CLI Commands
 
-| Metric                | Field                   | Description                                                                             |
-| --------------------- | ----------------------- | --------------------------------------------------------------------------------------- |
-| Cyclomatic            | `cyclomatic`            | McCabe 1976 — branch nodes + explicit exits (return/break/continue) + logical operators |
-| Cognitive             | `cognitive`             | Nesting-weighted SonarQube-style complexity                                             |
-| Nesting depth         | `nesting_depth`         | Maximum branch-node nesting depth                                                       |
-| Function length       | `function_length`       | End line − start line + 1                                                               |
-| Halstead              | `halstead`              | Halstead 1977: `n1/n2/N1/N2/volume/difficulty/effort/delivered_bugs`                    |
-| Maintainability Index | `maintainability_index` | Microsoft 2007 revision, 0-100 (higher = better)                                        |
-| Time complexity       | `time_complexity`       | AST-pattern estimate: O(1)/O(log n)/O(n)/O(n log n)/O(n^2)/O(n^3)/O(2^n)                |
-| Space complexity      | `space_complexity`      | Allocation-pattern recognition: O(1)/O(n)/O(n^2)                                        |
+CodeNexus ships **30 subcommands**, grouped by function:
 
-Each metric is classified Green / Yellow / Red / Critical against thresholds; `overall_severity` is the maximum.
+- **Indexing & project management**: `index` / `daemon` / `status` / `list` / `clean` / `export` / `import`
+- **Query & search**: `query` / `search` / `context`
+- **Tracing & impact analysis**: `trace` / `impact` / `detect_changes` / `rename`
+- **Analysis toolkit**: `dead_code` / `architecture` / `complexity` / `community` / `cross_service`
+- **API review & diagrams**: `route_map` / `shape_check` / `api_impact` / `tool_map` / `diagram` / `arch_diff`
+- **Multi-agent & LSP**: `setup` / `hook` / `mcp` / `lsp_goto_def` / `lsp_hover`
 
-### Threshold CLI flags
+Full flag semantics and runnable examples for every command are in the [📖 User Guide · Command reference](docs/USER_GUIDE.md#️-命令详解); complexity metrics and thresholds in the [📖 User Guide · Complexity Analysis](docs/USER_GUIDE.md#-复杂度分析), dead-code configuration in the [📖 User Guide · Dead Code Detection](docs/USER_GUIDE.md#-死代码检测).
 
-| Flag                                                                                                        | Description                                        |
-| ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| `--cyclomatic_green <N>` / `--cyclomatic_yellow <N>` / `--cyclomatic_red <N>`                               | Cyclomatic thresholds                              |
-| `--cognitive_green <N>` / `--cognitive_yellow <N>` / `--cognitive_red <N>`                                  | Cognitive thresholds                               |
-| `--nesting_green <N>` / `--nesting_yellow <N>` / `--nesting_red <N>`                                        | Nesting depth thresholds                           |
-| `--func_length_green <N>` / `--func_length_yellow <N>` / `--func_length_red <N>`                            | Function length thresholds                         |
-| `--halstead_volume_green <N>` / `--halstead_volume_yellow <N>` / `--halstead_volume_red <N>`                | Halstead volume thresholds                         |
-| `--maintainability_green <N>` / `--maintainability_yellow <N>` / `--maintainability_red <N>`                | Maintainability Index thresholds (higher = better) |
-| `--time_complexity_green <O(...)>` / `--time_complexity_yellow <O(...)>` / `--time_complexity_red <O(...)>` | Time complexity thresholds                         |
-| `--space_complexity_yellow <O(...)>` / `--space_complexity_red <O(...)>`                                    | Space complexity thresholds (3-level, no Critical) |
+---
 
-`<O(...)>` values: time `O(1)` / `O(log n)` / `O(n)` / `O(n log n)` / `O(n^2)` / `O(n^3)` / `O(2^n)`, space `O(1)` / `O(n)` / `O(n^2)`. Unset flags fall back to defaults.
+## 🔌 MCP Integration
 
-### Default thresholds
-
-| Metric           | Green    | Yellow | Red    |
-| ---------------- | -------- | ------ | ------ |
-| cyclomatic       | 10       | 20     | 25     |
-| cognitive        | 10       | 15     | 20     |
-| nesting          | 3        | 5      | 6      |
-| func_length      | 30       | 100    | 200    |
-| halstead_volume  | 100      | 1000   | 8000   |
-| maintainability  | 85       | 65     | 25     |
-| time_complexity  | O(log n) | O(n)   | O(n^2) |
-| space_complexity | —        | O(1)   | O(n)   |
-
-> `maintainability` is inverted: MI higher = better, so `value >= green → Green`, `value >= yellow → Yellow`, `value >= red → Red`, else `Critical`. `space_complexity` has only 3 levels (Green/Yellow/Red), no Critical.
-
-### Examples
+CodeNexus uses [sdforge](https://crates.io/crates/sdforge) to provide an MCP (Model Context Protocol) server exposing **8 tools** (`query` / `trace` / `impact` / `search` / `context` / `architecture` / `diagram` / `arch_diff`) over the sdforge `mcp` stdio transport. The tools share the same `#[forge]` definitions as the identically named CLI commands, so parameter semantics match.
 
 ```bash
-# Analyse with default thresholds
-codenexus complexity --project myproject
+# Start the MCP server (stdio)
+codenexus mcp [--db <DB_PATH>]
 
-# Custom cyclomatic thresholds (green=5, yellow=10, red=15)
-codenexus complexity --project myproject --cyclomatic_green 5 --cyclomatic_yellow 10 --cyclomatic_red 15
+# Auto-detect installed Claude Code / Cursor / Codex and write MCP configs (--force skips the prompt)
+codenexus setup
 
-# Show only Red and Critical functions, sorted by severity
-codenexus complexity --project myproject --red_only true --sort_by_severity true
-
-# Custom time complexity thresholds (green=O(1), yellow=O(n log n), red=O(n^2))
-codenexus complexity --project myproject --time_complexity_green "O(1)" --time_complexity_yellow "O(n log n)" --time_complexity_red "O(n^2)"
+# Emit PreToolUse/PostToolUse JSON (exit 0, never blocks; meant as an agent hook)
+codenexus hook
 ```
 
-## [Dead Code Analysis](#dead-code-analysis)
+What each tool does is described in the [📖 User Guide · Multi-agent integration](docs/USER_GUIDE.md#-多智能体集成).
 
-The `dead_code` subcommand identifies dead code via a worklist reachability propagation algorithm: starting from a seed set (entry functions / exported functions / FFI entries / test functions / trait impl methods / `pub use` reexport targets / attribute-marked entries), it BFS-propagates liveness to a fixed point. Function/Method nodes not covered by propagation are reported as dead. Each entry carries High/Medium/Low confidence; the output also includes `indexed_commit` / `current_head` / `is_stale` fields to surface index staleness.
+---
 
-### Configuration
+## 📚 Documentation
 
-Detection is controlled by `DeadCodeConfig` (surfaced via service-layer CLI flags). Key fields:
+| Document | Description |
+| -------- | ----------- |
+| [📖 User Guide](docs/USER_GUIDE.md) | Complete tutorial from installation to advanced usage (incl. complexity analysis and dead-code detection) |
+| [📘 API Reference](docs/API_REFERENCE.md) | Library crate public API, facades, and CLI/MCP external interfaces |
+| [🏗️ Architecture](docs/ARCHITECTURE.md) | Layered structure, indexing pipeline, graph model, and diagram command semantics |
+| [⚡ Performance Guide](docs/PERFORMANCE.md) | Benchmark suite, measured baselines, SLOs, and the L1–L7 memory defenses |
+| [🔒 Security](docs/SECURITY.md) | Security policy, vulnerability reporting, and best practices |
+| [❓ FAQ](docs/FAQ.md) | Frequently asked questions |
+| [🧪 Test Scenario Matrix](docs/TEST_SCENARIOS.md) | Scenario matrix exhaustively derived from the real test suite |
+| [📋 Changelog](docs/CHANGELOG.md) | Release-by-release changes (Keep a Changelog format) |
+| [🤝 Contributing](docs/CONTRIBUTING.md) | How to contribute to the project |
+| [📜 Code of Conduct](docs/CODE_OF_CONDUCT.md) | Community code of conduct |
+| [📐 Architecture Design Doc (ADD)](docs/ADD.md) | Architecture decisions and design details (Chinese) |
+| [🎯 Product Requirements (PRD)](docs/PRD.md) | Product requirements and SLO metrics (Chinese) |
+| [🧾 Technical Requirements (TRD)](docs/TRD.md) | Technical requirement breakdown (Chinese) |
+| [🗄️ Database Design Doc (DDD)](docs/DDD.md) | Graph storage schema design (Chinese) |
+| [🗜️ Database Compression](docs/database-compression.md) | gzip / zstd / lz4 compression ratios and timing measurements (Chinese) |
+| [🔬 Research Notes](docs/research/) | Paper notes: TaintRadar, cascaded vulnerability chains |
+| [🛡️ Security Audits](docs/security/) | Strix audit triage with a ReDoS false-positive proof |
+| [🤖 CLI Skill](skill/SKILL.md) | Agent-facing CLI usage knowledge pack (verified against v0.3.12) |
+| [📈 Benchmark Notes](benches/README.md) | Criterion benchmark suite and SLO threshold table |
+| [📦 crates.io](https://crates.io/crates/codenexus) | Publication page |
 
-| Field                    | Default                                                                                                 | Description                                                                                                                                                                                                                                                                                                     |
-| ------------------------ | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `entry_patterns`         | `["main", "Main", "__main__", "wmain", "WinMain", "DLLMain"]`                                           | Glob patterns for entry function names; matched Functions are live seeds                                                                                                                                                                                                                                        |
-| `test_patterns`          | 8 entries: `test_*` / `*_test` / `*_spec` / `it_*` / `sec_*` / `snap_*` / `perf_*` / `bench_*`          | Glob patterns for test function names; matched Functions are live seeds                                                                                                                                                                                                                                         |
-| `attribute_entries`      | 6 entries: `#[tool` / `#[forge` / `#[tokio::main` / `#[rocket::main` / `#[actix::main` / `#[axum::main` | Substring match against the function `signature`; on hit the function is treated as a macro-synthesised entry (tree-sitter does not expand macros, so the CALLS edge is invisible). `#[test]` / `#[bench]` are covered by `test_patterns` name-globs, so they are intentionally absent from `attribute_entries` |
-| `check_dynamic_dispatch` | `true`                                                                                                  | Detect `#<TypeName>` disambiguator in `qualified_name` (e.g. `fmt#Display`); on hit the function is treated as a trait impl method (vtable dynamic dispatch, no static CALLS edge) and excluded from dead-code. Set `false` for conservative mode                                                               |
-| `check_exported`         | `true`                                                                                                  | `isExported=true` Functions/Methods are treated as externally visible and excluded                                                                                                                                                                                                                              |
-| `check_ffi`              | `true`                                                                                                  | Functions whose signature contains `extern "C"` / `#[no_mangle]` are treated as FFI entry points and excluded                                                                                                                                                                                                   |
-| `edge_types`             | `CALLS` / `FfiCalls` / `Implements` / `Usage` / `Tests` / `UsesType` / `HttpCalls` / `AsyncCalls`       | Edge-type whitelist participating in reachability propagation                                                                                                                                                                                                                                                   |
+---
 
-### Examples
+## 💻 Examples
+
+All 6 runnable examples live in [`examples/`](examples/), each registered as a `cargo run --bin` target in `examples/Cargo.toml`:
+
+| Example | File | Description |
+| ------- | ---- | ----------- |
+| basic_indexing | `examples/src/bin/basic_indexing.rs` | Index Rust source into the knowledge graph, list functions via Cypher |
+| cypher_query | `examples/src/bin/cypher_query.rs` | Run a variety of Cypher queries (by type, by name) |
+| symbol_search | `examples/src/bin/symbol_search.rs` | Search symbols by name and type, handle empty results |
+| call_tracing | `examples/src/bin/call_tracing.rs` | Trace function call paths forward, build a call graph |
+| impact_analysis | `examples/src/bin/impact_analysis.rs` | Analyze the blast radius of changing a symbol (reverse BFS) |
+| export_import | `examples/src/bin/export_import.rs` | Graph database export/import verification |
 
 ```bash
-# Default detection
-codenexus dead_code --project myproject --entry "" --check_exported true --check_ffi true --edge_types ""
+# Run a single example
+cargo run --manifest-path examples/Cargo.toml --bin basic_indexing
 
-# Custom edge_types (CALLS + IMPLEMENTS only)
-codenexus dead_code --project myproject --edge_types "CALLS,IMPLEMENTS"
-
-# Conservative mode: disable trait-impl recognition
-codenexus dead_code --project myproject --check_dynamic_dispatch false
+# Run all examples
+for bin in basic_indexing cypher_query symbol_search call_tracing impact_analysis export_import; do
+  cargo run --manifest-path examples/Cargo.toml --bin $bin
+done
 ```
 
-> **Limitations**: tree-sitter does not expand procedural macros (`#[derive(Serialize)]` etc.), so derive-generated impl methods may be reported as dead code (known false positive). const fn invocations in const context are also not recognised as CALLS edges by tree-sitter.
+Examples use `IndexFacade` to index source, `QueryFacade` to query, and `TraceFacade` to trace calls; temp directories are cleaned up on exit. Full library API details in the [📘 API Reference](docs/API_REFERENCE.md).
 
-## [Architecture](#architecture)
+---
 
-### Source Layout
+## 🏗️ Architecture
 
-CodeNexus is split across three entry points:
+CodeNexus is a dual-target "library + binary" crate: `src/lib.rs` exposes the public API (model / parse / storage / index / query / trace / service modules) and `src/main.rs` is the sdforge-driven CLI binary; since v0.3.2 the CLI and MCP interfaces are unified through the sdforge `#[forge]` macro inside `src/service/`, where each command defines a core function + CLI wrapper + MCP wrapper. Indexing flows through "file discovery → incremental hashing → parallel parsing → symbol resolution → bulk load".
 
-- `src/lib.rs` — Rust SDK interface (library crate). Embed the indexing pipeline, query facade, or trace engine in another Rust project by depending on the `codenexus` crate.
-- `src/main.rs` — CLI binary. Uses sdforge `CliBuilder` + `inventory` to dispatch to `service::*` handlers.
-- `src/service/` — Unified service layer. sdforge `#[forge]` macro exposes both CLI and MCP interfaces, gated by `cli`/`mcp` features. Each command defines a core function + CLI wrapper + MCP wrapper.
+The three-layer source structure, pipeline diagram, graph model (44 node / 30 edge types with confidence tiers), per-language extraction table, and the output semantics of `architecture` / `diagram` / `arch_diff` live in the [🏗️ Architecture doc](docs/ARCHITECTURE.md).
 
-### Indexing Pipeline
+---
 
-```mermaid
-graph TB
-    subgraph "User Layer"
-        CLI["CLI (sdforge CliBuilder)"]
-    end
+## 🧪 Testing
 
-    subgraph "Core Layer"
-        IP["Index Pipeline"]
-        Q["Query Engine"]
-        T["Trace Engine"]
-        D["Daemon"]
-    end
+### 🎯 Test strategy
 
-    subgraph "Parse Layer"
-        R["Resolve<br/>Symbol + DataFlow"]
-        P["Parse<br/>tree-sitter"]
-    end
+Layered strategy: inline `#[cfg(test)]` unit tests in `src/` → integration tests in `tests/` (CLI child-process E2E, full-feature suite, MCP/diagram integration, non-ASCII paths) → acceptance tests in `tests/acceptance/` over 8 real open-source projects (cross-validated against gitnexus) → 7 Criterion benchmark groups in `benches/` for regression guarding. The layer overview and the exhaustive scenario matrix live in the [🧪 Test Scenario Matrix](docs/TEST_SCENARIOS.md).
 
-    subgraph "Storage Layer"
-        S["Storage<br/>LadybugDB"]
-        H["Hash<br/>SHA-256"]
-    end
-
-    CLI --> IP
-    CLI --> Q
-    CLI --> T
-    CLI --> D
-    IP --> R
-    IP --> P
-    IP --> S
-    IP --> H
-    Q --> S
-    T --> S
-    D --> IP
-
-    style CLI fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
-    style IP fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
-    style S fill:#ffcdd2,stroke:#c62828,stroke-width:2px
-    style P fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
-```
-
-### Indexing Flow
-
-1. **File discovery** — `ignore` crate honors `.gitignore` rules
-2. **Incremental hashing** — SHA-256 diffing, skips unchanged files
-3. **Parallel parsing** — Rayon parallelism + tree-sitter node/edge extraction
-4. **Symbol resolution** — FQN generation, call resolution, data-flow analysis, cross-language FFI
-5. **Bulk loading** — CSV generation + `COPY FROM` batch insert
-
-### Graph Model
-
-- **44 node types**: Project, Folder, File, Module, Class, Struct, Enum, Trait, Impl, Function, Method, Variable, GlobalVar, Parameter, Const, Static, Macro, TypeAlias, Typedef, Namespace, Interface, Constructor, Property, Record, Delegate, Annotation, Template, Union, Variant, Field, Event, Handler, Middleware, Service, Endpoint, Route, Process, Database, Config, Test, Section, Community, Tool, Embedding
-- **30 edge types**: Contains, Defines, MemberOf, Calls, FfiCalls, DataFlows, Reads, Writes, Implements, Extends, UsesType, References, Imports, Includes, HasMethod, HasProperty, Accesses, MethodOverrides, MethodImplements, StepInProcess, HandlesRoute, Fetches, HandlesTool, EntryPointOf, Usage, Tests, HttpCalls, AsyncCalls, Emits, ListensOn
-- Each edge carries a confidence score (0.0-1.0) and a confidence tier (`SameFile` / `ImportScoped` / `Global`)
-
-### Supported Languages
-
-The default `full` preset compiles **21 languages**. The table below lists the core 8; `full` additionally enables JavaScript, Ruby, Haskell, OCaml, Scala, PHP, C#, Bash, HTML, CSS, JSON, Regex, and Verilog.
-
-| Language   | Node Types                                                                   | Edge Types                              |
-| ---------- | ---------------------------------------------------------------------------- | --------------------------------------- |
-| C          | Function, GlobalVar, Struct, Enum, Typedef, Macro                            | Calls, Imports, Reads, Writes, Includes |
-| Rust       | Function, Struct, Enum, Trait, Impl, Const, Static, Macro, Module, TypeAlias | Calls, Imports, Reads, Writes           |
-| Fortran    | Module, Function                                                             | Calls, Imports, FfiCalls                |
-| Python     | Function, Method, Class                                                      | Calls, Imports, Extends                 |
-| TypeScript | Function, Class, Method, Interface, Enum, TypeAlias, Const                   | Calls, Imports                          |
-| Go         | Function, Method, Struct, Interface, TypeAlias                               | Defines, Calls, Imports                 |
-| Java       | Class, Interface, Enum, Method                                               | Defines, Calls, Imports                 |
-| C++        | Function, Method, Class, Struct, Namespace, Enum, Template                   | Defines, Calls, Imports                 |
-
-## Configuration
-
-CodeNexus is a CLI tool and is configured primarily through command-line flags. A small number of environment variables are honored:
-
-| Variable            | Default            | Description                                                                                              |
-| ------------------- | ------------------ | -------------------------------------------------------------------------------------------------------- |
-| `RUST_LOG`          | `info`             | `tracing` log level (`error`/`warn`/`info`/`debug`/`trace`), supports `codenexus=debug` style filtering. |
-| `CODENEXUS_DB_PATH` | `./codenexus.lbug` | Default LadybugDB database path used when `--db` is not passed to `index`/`query`/`status`/etc.          |
-
-See [`.env.example`](.env.example) for a copy-paste template. CodeNexus does not read a `.env` file itself; that file is for shells or process managers.
-
-### Agent Integration
-
-Run `codenexus setup` to auto-detect installed AI agents (Claude Code, Cursor, Codex) and write the MCP configuration into the right location for each. After setup, the agent can call CodeNexus tools (`query`, `context`, `impact`, `detect_changes`, `rename`, `diagram`, `arch_diff`, ...) over the MCP stdio server started by `codenexus mcp`.
-
-For Git hooks, `codenexus hook` emits `PreToolUse`/`PostToolUse` JSON events and always exits 0, so it can be wired into a hook without blocking agent actions.
-
-## [Development](#development)
+### ▶️ Commands (identical to CI)
 
 ```bash
-# Run tests
-cargo test
+# Format check (nightly rustfmt; rustfmt.toml uses nightly-only options)
+cargo +nightly fmt --all -- --check
 
-# Lint (CI gate)
-cargo clippy -- -D warnings
+# Clippy gate (CI runs both the full and minimal tiers; warnings are errors)
+cargo +1.95 clippy -- -D warnings
+cargo +1.95 clippy --lib --no-default-features --features minimal -- -D warnings
 
-# Format (requires nightly rustfmt for imports_granularity/group_imports)
-cargo +nightly fmt
+# Tests (CI matrix runs minimal / core / full / core,daemon,analysis,complexity / core,lsp,cache / full,embed)
+cargo test --lib --verbose
+cargo test --lib --no-default-features --features "core" --verbose
 
-# Benchmarks
-cargo bench
+# Coverage gate: at least 95% line coverage (CI coverage job + pre-push hook)
+cargo llvm-cov --lib --fail-under-lines 95 --lcov --output-path lcov.info
+
+# Benchmarks (--quick stops once statistical significance is reached)
+cargo bench -- --quick
+cargo bench --bench daemon_bench --features daemon -- --quick
+
+# Security audits (CI security job: RustSec advisories + license/banned-deps)
+cargo audit
+cargo deny check
 ```
 
-See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the full development workflow.
+> CI also runs CodeQL static analysis on every push/PR (`.github/workflows/codeql.yml`), and the Release workflow fires on `v*` tags (GitHub Release + crates.io publish).
 
-## [Contributing](#contributing)
+### 📊 Test scale
 
-Issues and Pull Requests are welcome. Please read [CONTRIBUTING.md](docs/CONTRIBUTING.md) for:
+As of v0.3.12 (grep count of `#[test]` / `#[tokio::test]` functions): ~4600+ unit tests (147 source files contain `#[cfg(test)]` modules) + 118 integration tests (8 files) + 8 acceptance projects + 7 Criterion benchmark groups; the coverage gate is ≥95% line coverage, enforced by both the CI coverage job and the pre-push hook. The per-file breakdown and full statistics live in [🧪 Test Scenario Matrix · Statistics](docs/TEST_SCENARIOS.md#-统计汇总).
 
-- Development environment setup
-- Conventional Commits conventions
-- Pull Request workflow
-- Test and lint requirements (`cargo test` and `cargo clippy -- -D warnings` must pass)
-- Code style (`cargo +nightly fmt`)
+---
 
-By participating, you agree to abide by the [Code of Conduct](docs/CODE_OF_CONDUCT.md).
+## 📊 Performance
 
-## [Roadmap](#roadmap)
+The benchmark suite is 7 Criterion groups in `benches/` (SLO thresholds from `docs/PRD.md` §5.1): measured cold-start indexing of 1000 files is ~3929 files/s (SLO ≥ 100), single-file incremental ~4987 files/s (SLO ≥ 500), and daemon debounce response ~2.76 s (SLO ≤ 3 s); `incremental_500_of_1000` is a known gap. The L1–L7 memory defenses shipped in v0.3.10–v0.3.12 (`MemoryBudget` three-level memory pressure, streaming CSV, pipeline streaming, buffer_pool cap, etc.) reduced index peak memory on a 70 GB host from ~60 GB to ~4 GB. The full measured baseline, SLO table, and tuning recipes are in the [⚡ Performance Guide](docs/PERFORMANCE.md); the SLO threshold table in [`benches/README.md`](benches/README.md).
 
-CodeNexus planned work, ordered by current priority:
+---
 
-- [x] v0.1.0 — Multi-language indexing (C/Rust/Fortran/Python/TypeScript), graph schema (44 node types + 30 edge types), `query`/`trace`/`impact`/`context`/`search`, incremental indexing, RAM-first mode, MCP server, team `export`/`import`, daemon mode, confidence tiers, disambiguation
-- [x] v0.1.x — Stability and performance hardening: incremental reindex coverage, larger-repo memory tuning, more language-specific edge extraction
-- [x] v0.2.0 — `lsp` feature: LSP-enhanced extraction for type-accurate resolution beyond tree-sitter (rust-analyzer integration)
-- [x] v0.2.0 — Expand language coverage (Go, Java, C++) behind new `lang-*` features
-- [x] v0.2.0 — Analysis toolkit: dead-code detection, architecture overview, API review (route-map/shape-check/api-impact/tool-map), community detection, cross-service link detection
-- [x] v0.2.1 — AST complexity analysis: cyclomatic/cognitive complexity, nesting depth, function length with green/yellow/red/critical severity alerting
-- [x] v0.3.0 — sdforge-based MCP server: `#[forge]` macro + sdforge `mcp` stdio transport, replacing hand-written JSON-RPC; 6 tools (query/trace/impact/search/context/architecture)
-- [x] v0.3.2 — Cross-language data-flow tracing end-to-end: `TaintPathTracer` BFS over DataFlows/Reads/Writes/FfiCalls edges
-- [x] v0.3.2 — Vector embedding default-on semantic search (`embed` feature included in `full` preset)
-- [x] v0.3.3 — Internationalization module (`i18n` feature): ICU4X Unicode case folding + NFC normalization + CJK boundary detection
-- [x] v0.3.3 — Harness modernization: CI upgraded to Rust 1.91 + 6-feature matrix + dependabot + codeql + crates.io publish
-- [x] v0.3.11 — Large-repo indexing OOM fix (L1–L7 seven-layer defense): `MemoryBudget` three-level memory pressure + `Graph::nodes_view/edges_view` iterators + streaming CSV + mpsc channel parallel parsing + L5 adaptive degradation + L6 pipeline streaming (`ctx.remove` replaces `Graph::clone`) + L7 LadybugDB buffer_pool cap (4 GB) + on-demand LSP startup + RAM-first 8× amplification-factor budget. 70 GB host peak RSS reduced from 60 GB to ~4 GB.
-- [ ] Future — Web UI / graph visualization on top of the query facade (`diagram`/`arch_diff` already ship architecture HTML and semantic delta; 3D graph-viewer integration and more diagram types remain planned)
+## 🔒 Security
 
-## [License](#license)
+### 🛡️ Security design
 
-[MIT](LICENSE)
+The attack surface is concentrated in index files (LadybugDB databases, `.graph.zst` import artifacts, tree-sitter parse inputs) and the user input fed into Cypher-subset queries by `query` / `trace` / `impact` / `search`; on the code side this is paired with Cypher/identifier escaping, dry-run-by-default graph edits, and fail-loud diagnostic receipts. Design details and scope are in the [🔒 Security doc](docs/SECURITY.md).
 
-## Acknowledgments
+### ⛓️ Supply chain and gates
 
-CodeNexus would not be possible without these projects:
+CI enforces four gates: `cargo-audit` (RustSec advisory scanning), `cargo-deny` (license / banned-dependency checks), CodeQL static analysis, and pre-commit secret scanning. The full list and the ignored-advisory notes are in the [🔒 Security doc](docs/SECURITY.md#️-supply-chain-and-gates).
 
-- [tree-sitter](https://tree-sitter.github.io/) — incremental parsing framework that powers all language extractors
-- [LadybugDB](https://github.com/ladybugdb/ladybugdb) — graph database backing the knowledge graph
-- [Rayon](https://github.com/rayon-rs/rayon) — data-parallel parsing
-- [ignore](https://docs.rs/ignore) — `.gitignore`-aware file discovery
-- [sdforge](https://crates.io/crates/sdforge) — CLI and MCP framework
-- [Model Context Protocol](https://modelcontextprotocol.io/) — spec for the `mcp` server
-- Every tree-sitter grammar maintainer — the per-language grammar crates do the hard parsing work
+### 🚨 Reporting a vulnerability
 
-Project author: **Kirky.X** — [github.com/Kirky-X](https://github.com/Kirky-X)
+Do not report security vulnerabilities through public issues. Email **security@kirky-x.dev** instead, including a description of the vulnerability and its impact, reproduction steps (a minimal codebase or `codenexus` command sequence), version info (`codenexus --version`, Rust toolchain, OS), and any known mitigations. The project commits to acknowledging within 48 hours and giving an initial assessment within 5 business days. The full policy (supported versions, disclosure process, scope) is in the [🔒 Security doc](docs/SECURITY.md).
+
+---
+
+## 🗺️ Roadmap
+
+<table style="width:100%; border-collapse: collapse">
+<tr><th style="text-align:center">Status</th><th style="text-align:left">Area</th><th style="text-align:left">Items</th></tr>
+<tr><td align="center">✅</td><td>Core indexing & graph model</td><td>v0.1.0 — Multi-language indexing (C/Rust/Fortran/Python/TypeScript), graph schema (44 node types + 30 edge types), <code>query</code>/<code>trace</code>/<code>impact</code>/<code>context</code>/<code>search</code>, incremental indexing, RAM-first mode, MCP server, team <code>export</code>/<code>import</code>, daemon mode, confidence tiers, ambiguity resolution</td></tr>
+<tr><td align="center">✅</td><td>Stability & performance hardening</td><td>v0.1.x — Incremental re-index coverage, large-repo memory tuning, more language-specific edge extraction</td></tr>
+<tr><td align="center">✅</td><td>LSP enrichment</td><td>v0.2.0 — <code>lsp</code> feature: LSP-enriched extraction with type-accurate resolution beyond tree-sitter (rust-analyzer integration)</td></tr>
+<tr><td align="center">✅</td><td>Expanded language coverage</td><td>v0.2.0 — Expanded language coverage (Go, Java, C++, plus JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog) controlled by new <code>lang-*</code> features</td></tr>
+<tr><td align="center">✅</td><td>Analysis toolkit</td><td>v0.2.0 — Dead-code detection, architecture overview, API review (route_map/shape_check/api_impact/tool_map), community detection, cross-service link detection</td></tr>
+<tr><td align="center">✅</td><td>Complexity analysis</td><td>v0.2.1 — AST complexity analysis: cyclomatic/cognitive complexity, nesting depth, function length, green/yellow/red/critical alerts</td></tr>
+<tr><td align="center">✅</td><td>MCP server</td><td>v0.3.0 — sdforge-based MCP server: <code>#[forge]</code> macro + sdforge <code>mcp</code> stdio transport replacing hand-written JSON-RPC; 6 tools (query/trace/impact/search/context/architecture)</td></tr>
+<tr><td align="center">✅</td><td>Cross-language taint tracing</td><td>v0.3.2 — Cross-language data-flow end-to-end tracing: <code>TaintPathTracer</code> BFS over DataFlows/Reads/Writes/FfiCalls edges</td></tr>
+<tr><td align="center">✅</td><td>Semantic search</td><td>v0.3.2 — Vector embeddings on by default for semantic search (<code>embed</code> feature included in the <code>full</code> preset)</td></tr>
+<tr><td align="center">✅</td><td>Internationalization</td><td>v0.3.3 — Internationalization module (<code>i18n</code> feature): ICU4X Unicode case folding + NFC normalization + CJK boundary detection</td></tr>
+<tr><td align="center">✅</td><td>Harness modernization</td><td>v0.3.3 — CI upgrade to Rust 1.91 + 6-feature matrix + dependabot + codeql + crates.io publishing</td></tr>
+<tr><td align="center">✅</td><td>Large-repo memory defenses</td><td>v0.3.11 — Large-repo indexing OOM fix (L1–L7 seven-layer defense): <code>MemoryBudget</code> three-level memory pressure + <code>Graph::nodes_view/edges_view</code> iterators + streaming CSV + mpsc channel parallel parsing + L5 adaptive degradation + L6 pipeline streaming (<code>ctx.remove</code> replaces <code>Graph::clone</code>) + L7 LadybugDB buffer_pool cap (4 GB) + on-demand LSP startup + RAM-first 8× amplification budget. Peak memory on a 70 GB host dropped from 60 GB to ~4 GB</td></tr>
+<tr><td align="center">🚧</td><td>In-house base library upgrades</td><td>RC upgrade of in-house base libraries (trait-kit / sdforge / oxcache 0.5.0-rc.2, inklog 0.3.0-rc.2); MSRV 1.95 → 1.97.1</td></tr>
+<tr><td align="center">📋</td><td>Web UI & graph visualization</td><td>Web UI / graph visualization on top of the query facade (<code>diagram</code>/<code>arch_diff</code> already ship architecture HTML and semantic deltas; 3D graph-viewer integration and more chart types are still planned)</td></tr>
+</table>
+
+---
+
+## 🤝 Contributing
+
+For the detailed contribution process and code standards, see the [🤝 Contributing Guide](docs/CONTRIBUTING.md).
+
+### 🛠️ Development environment
+
+The toolchain is Rust stable 1.95+ (CI pins 1.95; `Cargo.toml` MSRV is 1.97.1) plus nightly (`cargo fmt` uses nightly-only options); system dependencies are a C/C++ compiler (for tree-sitter grammar builds), `libssl-dev`, `pkg-config`, and `protobuf-compiler`; run `cargo +nightly fmt --all -- --check` and `cargo clippy -- -D warnings` before committing; the [pre-commit](https://pre-commit.com/) Git hooks run file checks, private-key/secret scanning, fmt, and clippy on pre-commit, and `cargo test --lib`, the coverage gate (≥95%), `cargo audit`, and `cargo deny check` on pre-push; commit messages follow Conventional Commits (`feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `chore`, `revert`). For the full environment setup, see the [🤝 Contributing Guide · Development Environment](docs/CONTRIBUTING.md#-development-environment).
+
+### 💖 Ways to contribute
+
+<table style="width:100%; border-collapse: collapse">
+<tr>
+<td width="33%" align="center" style="padding: 16px">
+
+### 🐛 Report a Bug
+
+Found a problem?<br>
+<a href="https://github.com/Kirky-X/codenexus/issues/new">Open an Issue</a>
+
+</td>
+<td width="33%" align="center" style="padding: 16px">
+
+### 💡 Suggest a Feature
+
+Have an idea?<br>
+<a href="https://github.com/Kirky-X/codenexus/issues">Propose a Feature</a>
+
+</td>
+<td width="33%" align="center" style="padding: 16px">
+
+### 🔧 Submit a PR
+
+Want to contribute code?<br>
+<a href="https://github.com/Kirky-X/codenexus/pulls">Fork & open a PR</a>
+
+</td>
+</tr>
+</table>
+
+When filing an issue, please include: CodeNexus version (`codenexus --version`), Rust version, OS, the exact command, the full error output, and a minimal reproduction. Security vulnerabilities must not be filed publicly — see the [🔒 Security doc](docs/SECURITY.md).
+
+<img src="https://contrib.rocks/image?repo=Kirky-X/codenexus" alt="Contributors">
+
+---
+
+## 📋 Changelog
+
+The full release history lives in the [📋 Changelog](docs/CHANGELOG.md) (following the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format, semantic versioning).
+
+| Version | Date | Highlights |
+| ------- | ---- | ---------- |
+| Unreleased | — | RC upgrade of in-house base libraries (trait-kit / sdforge / oxcache 0.5.0-rc.2, inklog 0.3.0-rc.2); MSRV 1.95 → 1.97.1 |
+| 0.3.12 | 2026-07-30 | Dynamic `max_db_size` + `--fresh` flag fix DB bloat; read-only 4 TiB cap fixes crashes on >16 GiB databases; LSP hover batched UNWIND updates and the rest of the P-series fixes |
+| 0.3.11 | 2026-07-26 | L6+L7 memory work: pipeline streaming + iterator APIs + buffer_pool cap, cutting peak memory on a 70 GB host from 60 GB to ~4 GB |
+| 0.3.10 | 2026-07-25 | L1–L5 five-layer defense against OOM on large-repo indexing: memory budget, graph view iterators, streaming CSV, mpsc concurrency cap, adaptive degradation |
+
+---
+
+## 📄 License
+
+This project is licensed under the [MIT](LICENSE) license.
+
+---
+
+## 🙏 Acknowledgments
+
+### 🌟 Core dependencies
+
+CodeNexus stands on the shoulders of these excellent open-source projects:
+
+| Dependency | Purpose |
+| ---------- | ------- |
+| [lbug](https://github.com/ladybugdb/ladybugdb) (LadybugDB) | Graph database storage |
+| [tree-sitter](https://tree-sitter.github.io/) + 21 grammar crates | Multi-language AST parsing |
+| [rayon](https://github.com/rayon-rs/rayon) | Data parallelism |
+| [notify](https://github.com/notify-rs/notify) / notify-debouncer-full | File watching and debouncing |
+| [sdforge](https://crates.io/crates/sdforge) | CLI + MCP dual-transport framework (`#[forge]` macro) |
+| [trait-kit](https://crates.io/crates/trait-kit) | Capability registry |
+| [oxcache](https://crates.io/crates/oxcache) | Query result cache |
+| [inklog](https://crates.io/crates/inklog) | Log backend (console + rotation + LZ4 compression) |
+| [ort](https://github.com/pykeio/ort) / tokenizers | Local ONNX embedding inference |
+| [ICU4X](https://github.com/unicode-org/icu4x) (icu_normalizer / icu_casemap) | Unicode normalization and case mapping |
+| [petgraph](https://github.com/petgraph/petgraph) | Community-detection graph algorithms |
+| [criterion](https://github.com/bheisler/criterion.rs) | Benchmarking |
+
+### 💝 Special thanks
+
+Thanks to the Rust community and all [contributors](https://github.com/Kirky-X/codenexus/graphs/contributors).
+
+---
+
+## 📞 Contact & Support
+
+<table style="width:100%; max-width: 600px">
+<tr>
+<td align="center" width="33%">
+<a href="https://github.com/Kirky-X/codenexus/issues"><b style="color:#991B1B">Issues</b></a><br>
+<span style="color:#64748B">Report problems and bugs</span>
+</td>
+<td align="center" width="33%">
+<a href="docs/FAQ.md"><b style="color:#1E40AF">Docs / FAQ</b></a><br>
+<span style="color:#64748B">Please check here before asking</span>
+</td>
+<td align="center" width="33%">
+<a href="https://github.com/Kirky-X/codenexus"><b style="color:#1E293B">GitHub</b></a><br>
+<span style="color:#64748B">Browse the source</span>
+</td>
+</tr>
+</table>
+
+---
+
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Kirky-X/codenexus&type=Date)](https://star-history.com/#Kirky-X/codenexus&Date)
+
+If this project helps you, please consider giving it a ⭐️!
+
+**Built by Kirky.X**
+
+---
+
+<sub>© 2026 Kirky.X. All rights reserved.</sub>
