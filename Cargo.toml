@@ -196,7 +196,7 @@ inherits = "release"
 unexpected_cfgs = "allow"
 
 [workspace]
-members = ["examples"]
+members = ["examples", "graph-viewer/server"]
 # Daily commands (build/test/check) stay scoped to the main crate; examples
 # join only for workspace-wide ops (cargo clean --workspace, metadata).
 default-members = ["."]
