@@ -1,13 +1,39 @@
-# Changelog
+# 📋 CodeNexus 更新日志
 
 All notable changes to CodeNexus are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 📋 目录
+
+- [Unreleased](#unreleased)
+- [0.3.12 — 2026-07-30](#0312---2026-07-30)
+- [0.3.11 — 2026-07-26](#0311---2026-07-26)
+- [0.3.10 — 2026-07-25](#0310---2026-07-25)
+- [0.3.9 — 2026-07-21](#039---2026-07-21)
+- [0.3.8 — 2026-07-21](#038---2026-07-21)
+- [0.3.7 — 2026-07-20](#037---2026-07-20)
+- [0.3.6 — 2026-07-20](#036---2026-07-20)
+- [0.3.5 — 2026-07-17](#035---2026-07-17)
+- [0.3.4 — 2026-07-15](#034---2026-07-15)
+- [0.3.3 — 2026-07-15](#033---2026-07-15)
+- [0.3.2 — 2026-07-11](#032---2026-07-11)
+- [0.3.1 — 2026-07-10](#031---2026-07-10)
+- [0.3.0 — 2026-07-10](#030---2026-07-10)
+- [0.1.0 — 2026-06-29](#010---2026-06-29)
+
+---
+
 ## [Unreleased]
 
+### Added
+
+- **feat(analysis,cache,daemon): 吸收 base 生态四件套（RICE Top-3 落地）** — ① oxcache `#[cached]` 查询缓存：oxcache 开启 `macros` feature，`CacheModule::build_cap` 注册 `codenexus-query` 宏服务缓存（`run_query_cached`，键 = `build_kit` 写入的 DB 身份 + Cypher 文本，TTL 300s），`OxcacheStore::invalidate_all` 联动清空宏注册表（index/clean 后缓存自动失效），CLI/MCP `query` 走缓存路径；② trait-kit `lifecycle`/`health`/`shutdown` feature 启用：`CacheModule`/`StorageModule` 实现 `AsyncHealthCheck`（moka 探针往返 / lbug `RETURN 1`，与 dbnexus `LadybugConnection::health_check` 同探针），`CacheModule` 实现 `AsyncLifecycle`（bootstrap `register_lifecycle` 注册，`on_ready` build 期 / `on_shutdown` 经 `AsyncKit::shutdown_async` 逆拓扑执行，CLI handler 成功后调用），daemon 停机接入 `ShutdownCoordinator` 三阶段（StopRequests→DrainQueue→CloseConnections）；`status` 输出新增 `kit_health` 字段（仅非健康模块，`skip_serializing_if` 空省略）；③ CLI 新增布尔 `--verbose` 旗标（`ArgAction::SetTrue`），经 `KitBootstrapConfig.verbose` → `DaemonConfig.verbose_events` → daemon 每批事件 `debug!` 诊断（trait-kit `toggle` 仅同步 `Kit` 提供、`AsyncKit` 无对应 API，故走配置流而非开关后端）。inklog 文件 PII 脱敏（`pii_masking_enabled` 默认开启）与轮转/压缩/保留沿用纯配置 builder；文件级 `SamplingSink` 采样暂缓——上游缺口：builder `add_sink` 触发的 `build_with_deps` 路径不安装全局 tracing/log 前端（仅 `with_config_and_sinks` 安装），接入即全局静默，待上游修复后回归。验证：`cargo check --all-targets --all-features` 0 error、`cargo test --lib --all-features` 4570 passed / 0 failed、`query`/`daemon` 二进制冒烟（SIGTERM 分阶段停机日志齐全）。
+
 ### Changed
+
+- **chore(deps): 全量依赖升级至最新版并统一 minor 级写法** — 跨版本：`lbug` 0.18→0.20.4（自研，graph-viewer server 联动）、`tree-sitter` 0.26→0.27（`Node::kind` 改借用节点生命周期：`analysis/complexity.rs` Halstead 收集去 `&'static` 化；`LanguageError` 新增 `NotParseable` 变体：`parse/error.rs` 测试补分支）、`criterion` 0.5→0.8（7 个 bench `criterion::black_box`→`std::hint::black_box`）、`oxiarc-zstd` 0.3→0.4、`pest`/`pest_derive` 2.7→2.9、`serial_test` 3→4.0、`tree-sitter-ocaml` 0.25→0.26、`rust_decimal` 1.37→1.43、`uuid` 1.23→1.26、自研四库 rc.2→最新（trait-kit `0.5.0-rc.5`、sdforge/oxcache `0.5.0-rc.4`、inklog `0.3.0-rc.4`）；写法统一 minor 级（`"1"`→`"1.53"`、`"2"`→`"2.3"` 等，禁 major/patch 级）。例外说明：`ort` 维持 rc（2.0.0-rc.13，crates.io max_stable_version=null、1.16.3 已 yanked，rc 即最新）；自研 rc 写法必须三段式（cargo 不接受 `0.5-rc.4`）。验证：复跑 `cargo outdated` 直接依赖 0 行待更新。
 
 - **chore(deps): 自研基础库升级至 RC 版本** — trait-kit `0.3.0` → `0.5.0-rc.2`、sdforge `0.4.7` → `0.5.0-rc.2`、oxcache `0.3.9` → `0.5.0-rc.2`、inklog `0.1.12` → `0.3.0-rc.2`（四库依赖链锁定，联动升级，规则 25 升级前基线 4740 测试全绿）。MSRV `1.95` → `1.97.1`（`clippy.toml` `msrv` 同步）。唯一 API 适配：`KitError::BuildFailed.context` / `MissingCapability.key` 字段 `&'static str` → `String`（`src/service/error.rs` 测试代码 6 处 `.to_string()`），运行时行为不变；`load_config_or_default` / inklog builder / oxcache sync API / `#[forge]` 宏均向后兼容，零改动。新特性开启：`mcp`/`cli` feature 追加 `sdforge/inklog`（sdforge 内部日志接入 inklog 0.3.0-rc.2，同一版本已在依赖树，无树外新 crate）；评估后暂不开启：trait-kit `lifecycle/health/shutdown`（需 9+ Kit 模块实现对应 trait，列为后续独立变更）、oxcache 分布式后端（redis/dragonfly/aerospike）与 compression/macros/batch/lock/bloom（无对应场景或收益边际）、inklog `compression`（zstd-sys 与 lbug bundled zstd 符号冲突风险，现有 LZ4 `file_compress` 已满足）。传递依赖变化：+confers `0.6.0-rc.2`（trait-kit 必选）、+ICU4X i18n 栈（sys-locale/unic-langid/zerovec）、+stacker/psm，-opentelemetry 全家桶 / -secrecy / -tracing-opentelemetry；rmcp `2.2`→`3.2`、tokio `1.52`→`1.53`。验证：`cargo test` 4740 passed / 0 failed / 24 ignored（与基线一致）、`cargo clippy --all-targets` 0 error、release 二进制 111,783,896 → 112,313,304 bytes（+0.47%）、`cargo tree --duplicates` 零版本分叉。另：`deny.toml` 补 6 条 `[[licenses.clarify]]`（MIT，带版本限定）——RC manifest 漏写 `license` 字段导致 `cargo deny` licenses 失败，base 工作区 LICENSE 实证均为 MIT，正式版补字段后可移除。完整决策表见 specmark change `upgrade-base-libs-rc`（design.md D3）。
 
