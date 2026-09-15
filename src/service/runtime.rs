@@ -20,6 +20,24 @@ use crate::kit::{AsyncKit, AsyncReady};
 
 static KIT: Mutex<Option<Arc<AsyncKit<AsyncReady>>>> = Mutex::new(None);
 
+/// Process-global DB identity used to namespace `#[cached]` query-result
+/// keys. Set by `build_kit` so cached queries from different databases
+/// never collide within one process (tests build many kits).
+static DB_KEY: Mutex<Option<String>> = Mutex::new(None);
+
+/// Stores the DB identity for `#[cached]` query keys. Called by `build_kit`.
+pub fn set_db_key(key: String) {
+    if let Ok(mut guard) = DB_KEY.lock() {
+        *guard = Some(key);
+    }
+}
+
+/// Returns the DB identity set by the last `build_kit` call, if any.
+#[must_use]
+pub fn db_key() -> Option<String> {
+    DB_KEY.lock().ok().and_then(|guard| guard.clone())
+}
+
 /// Stores the Kit in the global `Mutex` so service handlers can access it.
 ///
 /// # Errors

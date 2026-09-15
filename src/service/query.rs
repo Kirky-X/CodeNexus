@@ -9,12 +9,16 @@ use serde_json::Value;
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::kit::{AsyncKit, AsyncReady, QueryModule};
 use crate::query::{validate_cypher_subset, QueryResult};
+#[cfg(all(any(feature = "cli", feature = "mcp"), not(feature = "cache")))]
+use crate::service::error::kit_not_initialized;
+#[cfg(any(feature = "cli", feature = "mcp"))]
+use crate::service::error::to_api_error;
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::service::error::CodeNexusError;
 #[cfg(any(feature = "cli", feature = "mcp"))]
-use crate::service::error::{kit_not_initialized, to_api_error};
-#[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::runtime::kit;
+#[cfg(all(any(feature = "cli", feature = "mcp", test), feature = "cache"))]
+use oxcache::cached;
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::forge;
@@ -47,6 +51,35 @@ pub fn run_query(kit: &AsyncKit<AsyncReady>, cypher: &str) -> Result<QueryOutput
     Ok(query_output(result))
 }
 
+/// `#[cached]`-wrapped query execution (RICE Top-1 absorption from oxcache).
+///
+/// Cache key = `(DB identity from build_kit, Cypher text)`; results are
+/// JSON-serialized into the `codenexus-query` service cache registered by
+/// [`crate::cache::CacheModule`], and cleared on graph mutations through
+/// [`crate::cache::CacheStore::invalidate_all`]. On a cache hit,
+/// `duration_ms` reflects the original execution, not the lookup.
+///
+/// Falls back to plain execution when the cache service is not registered
+/// (oxcache `#[cached]` semantics) — e.g. builds with the `cache` feature
+/// disabled at runtime paths that skip `CacheModule`.
+#[cfg(all(any(feature = "cli", feature = "mcp", test), feature = "cache"))]
+#[cached(
+    service = "codenexus-query",
+    ttl = 300,
+    sync,
+    key = "{db_key}:{cypher}"
+)]
+pub fn run_query_cached(db_key: String, cypher: String) -> Result<QueryOutput, CodeNexusError> {
+    let kit = kit().ok_or_else(CodeNexusError::kit_not_initialized)?;
+    run_query(&kit, &cypher)
+}
+
+/// DB identity for cache keys; `"unknown"` when `build_kit` hasn't run.
+#[cfg(all(any(feature = "cli", feature = "mcp", test), feature = "cache"))]
+fn cache_db_key() -> String {
+    crate::service::runtime::db_key().unwrap_or_else(|| "unknown".to_string())
+}
+
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
 #[forge(
@@ -56,8 +89,14 @@ pub fn run_query(kit: &AsyncKit<AsyncReady>, cypher: &str) -> Result<QueryOutput
     cli = true
 )]
 async fn query(cypher: String) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let result = run_query(&kit, &cypher).map_err(|e| to_api_error(e, "query_error"))?;
+    #[cfg(feature = "cache")]
+    let result = run_query_cached(cache_db_key(), cypher);
+    #[cfg(not(feature = "cache"))]
+    let result = {
+        let kit = kit().ok_or_else(kit_not_initialized)?;
+        run_query(&kit, &cypher)
+    };
+    let result = result.map_err(|e| to_api_error(e, "query_error"))?;
     let json = serde_json::to_string(&result)
         .map_err(|e| to_api_error(CodeNexusError::from(e), "query_error"))?;
     println!("{json}");
@@ -73,8 +112,13 @@ async fn query(cypher: String) -> Result<(), ApiError> {
     description = "Execute a Cypher query against the CodeNexus knowledge graph."
 )]
 async fn query_mcp(cypher: String) -> Result<QueryOutput, ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    run_query(&kit, &cypher).map_err(|e| to_api_error(e, "query_error"))
+    #[cfg(feature = "cache")]
+    return run_query_cached(cache_db_key(), cypher).map_err(|e| to_api_error(e, "query_error"));
+    #[cfg(not(feature = "cache"))]
+    {
+        let kit = kit().ok_or_else(kit_not_initialized)?;
+        run_query(&kit, &cypher).map_err(|e| to_api_error(e, "query_error"))
+    }
 }
 
 #[cfg(test)]
@@ -97,6 +141,46 @@ mod tests {
             .unwrap()
             .block_on(build_kit(&config))
             .expect("build_kit")
+    }
+
+    #[cfg(feature = "cache")]
+    #[test]
+    #[serial_test::serial(kit_init)]
+    fn run_query_cached_roundtrip_and_invalidation() {
+        use crate::cache::{CacheModule, MACRO_QUERY_SERVICE};
+
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        crate::service::runtime::force_init_kit_for_testing(kit);
+        let db_key = crate::service::runtime::db_key().expect("build_kit sets db_key");
+        let cypher = "MATCH (n) RETURN n LIMIT 3".to_string();
+
+        let first = run_query_cached(db_key.clone(), cypher.clone()).expect("first query ok");
+
+        // The result must be cached under the macro service registry.
+        let svc = oxcache::__internal_get_cache(MACRO_QUERY_SERVICE)
+            .expect("CacheModule registers the query macro service");
+        let key = format!("{db_key}:{cypher}");
+        assert!(
+            svc.get_bytes_sync(&key).expect("get").is_some(),
+            "query result should be cached under {key}"
+        );
+
+        // Graph mutations clear the macro registry via CacheStore semantics.
+        let kit = crate::service::runtime::kit().expect("kit");
+        let cache = kit.require::<CacheModule>().expect("cache capability");
+        cache.invalidate_all();
+        assert!(
+            svc.get_bytes_sync(&key).expect("get").is_none(),
+            "invalidate_all must clear the macro query cache"
+        );
+
+        // Recompute after invalidation returns the same content
+        // (duration_ms legitimately differs between executions).
+        let second = run_query_cached(db_key, cypher).expect("recompute ok");
+        assert_eq!(first.columns, second.columns);
+        assert_eq!(first.rows, second.rows);
+        crate::service::runtime::reset_kit_for_testing();
     }
 
     #[test]

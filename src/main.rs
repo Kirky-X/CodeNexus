@@ -35,8 +35,15 @@ use codenexus::kit::bootstrap::DEFAULT_DEBOUNCE_MS;
 /// Initialize the global `tracing` subscriber using inklog as the sole backend.
 ///
 /// Configures console (colored) + file output with daily rotation, 100 MB max
-/// file size, gzip compression, and 30-day retention. The log level is read
-/// from `RUST_LOG` (default: `info`).
+/// file size, gzip compression, 30-day retention, and inklog's built-in PII
+/// masking (`pii_masking_enabled` defaults to `true` on the file sink).
+/// The log level is read from `RUST_LOG` (default: `info`).
+///
+/// Note: file-sink *sampling* (`inklog::SamplingSink`) is intentionally not
+/// wired yet — it requires the builder's `add_sink` path, whose
+/// `build_with_deps` constructor does not install the global tracing/log
+/// frontend (only the pure-config `with_config_and_sinks` path does), which
+/// would silence all records. Revisit after the upstream inklog fix.
 pub fn init_logging() {
     init_inklog();
 }
@@ -100,7 +107,16 @@ fn run_cli() {
         // source of truth for the codenexus version — clap applies the last
         // call wins, so this overrides cleanly.
         .version(codenexus::version())
-        .about("CodeNexus — Code Intelligence");
+        .about("CodeNexus — Code Intelligence")
+        // Boolean --verbose flag (CliBuilder GlobalArg only supports value
+        // args). Wired to the trait-kit `daemon.verbose-events` toggle.
+        .arg(
+            sdforge::clap::Arg::new("verbose")
+                .long("verbose")
+                .action(sdforge::clap::ArgAction::SetTrue)
+                .global(true)
+                .help("守护模式输出每批文件事件的调试诊断"),
+        );
 
     // Inject sentinel default_values so users can omit optional parameters
     // on the command line (sdforge 0.4.2 marks all non-Option Body params
@@ -167,7 +183,8 @@ fn run_cli() {
     // concurrently (DuckDB/LadybugDB shared-read); writing commands keep RW.
     let config = KitBootstrapConfig::new(PathBuf::from(&db))
         .with_debounce_ms(debounce_ms)
-        .with_read_only(opens_read_only(sub_name));
+        .with_read_only(opens_read_only(sub_name))
+        .with_verbose(matches.get_flag("verbose"));
     match runtime.block_on(build_kit(&config)) {
         Ok(kit) => {
             if let Err(e) = init_kit(kit) {
@@ -203,6 +220,13 @@ fn run_cli() {
         let cli_error = CodeNexusError::from(api_error);
         eprintln!("Error: {cli_error}");
         std::process::exit(cli_error.exit_code());
+    }
+
+    // Graceful trait-kit module shutdown: drains the lifecycle `on_shutdown`
+    // hooks (cache/storage close diagnostics) in reverse topological order.
+    // Best-effort — one-shot CLI exits right after this.
+    if let Some(kit) = codenexus::service::runtime::kit() {
+        runtime.block_on(kit.shutdown_async());
     }
 }
 

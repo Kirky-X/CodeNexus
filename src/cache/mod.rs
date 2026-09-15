@@ -27,4 +27,6 @@ pub mod capability;
 pub mod module;
 
 pub use capability::{CacheKey, CacheStore};
-pub use module::{CacheConfig, CacheError, CacheModule, DEFAULT_ENTRY_MAX_BYTES};
+pub use module::{
+    CacheConfig, CacheError, CacheModule, DEFAULT_ENTRY_MAX_BYTES, MACRO_QUERY_SERVICE,
+};

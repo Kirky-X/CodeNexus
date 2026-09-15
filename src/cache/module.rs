@@ -33,7 +33,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::kit::{AsyncAutoBuilder, AsyncKit, ModuleMeta};
+use crate::kit::{AsyncAutoBuilder, AsyncKit, AsyncReady, ModuleMeta};
 
 use super::capability::CacheStore;
 
@@ -71,6 +71,12 @@ pub enum CacheError {
 /// policy is owned by the cache module, not by `MemoryBudget`. Entries
 /// larger than this are rejected by [`OxcacheStore::set`] with a `warn!` log.
 pub const DEFAULT_ENTRY_MAX_BYTES: usize = 64 * 1024;
+
+/// Registry name for the `#[cached]`-managed query-result cache
+/// (consumed by `service::query::run_query_cached`). The `#[cached]`
+/// attribute requires the same name as a string literal — a unit test
+/// asserts the two stay in sync.
+pub const MACRO_QUERY_SERVICE: &str = "codenexus-query";
 
 /// Configuration for [`CacheModule`].
 ///
@@ -151,6 +157,41 @@ impl CacheConfig {
 /// ```
 pub struct CacheModule;
 
+/// trait-kit health check: probe key round-trip proves the moka backend
+/// accepts writes and serves reads.
+impl trait_kit::core::health::AsyncHealthCheck for CacheModule {
+    fn check(cap: &Self::Capability) -> trait_kit::core::health::HealthStatus {
+        const PROBE_KEY: &str = "__kit_health_probe";
+        cap.set(PROBE_KEY, b"ok".to_vec());
+        if cap.get(PROBE_KEY).as_deref() == Some(b"ok".as_slice()) {
+            trait_kit::core::health::HealthStatus::Healthy
+        } else {
+            trait_kit::core::health::HealthStatus::unhealthy("cache probe round-trip failed")
+        }
+    }
+}
+
+/// trait-kit lifecycle: ready/shutdown diagnostics. `on_ready` failures
+/// abort the whole Kit build, so this stays a pure log statement.
+impl trait_kit::core::lifecycle::AsyncLifecycle for CacheModule {
+    fn on_ready<'a>(
+        _kit: &'a AsyncKit<AsyncReady>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>> {
+        Box::pin(async {
+            tracing::debug!("cache module ready");
+            Ok(())
+        })
+    }
+
+    fn on_shutdown<'a>(
+        _cap: &'a Self::Capability,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async {
+            tracing::debug!("cache module shut down");
+        })
+    }
+}
+
 impl ModuleMeta for CacheModule {
     const NAME: &'static str = "cache";
     fn dependencies() -> &'static [(&'static str, TypeId)] {
@@ -191,6 +232,30 @@ impl CacheModule {
             .build()
             .await
             .map_err(|e| CacheError::BuildFailed(e.to_string()))?;
+
+        // Register a dedicated instance under the `#[cached]` macro registry
+        // so annotated functions (query results) actually cache instead of
+        // bypassing. It shares the CacheConfig capacity policy and is cleared
+        // together with the main store by [`CacheStore::invalidate_all`].
+        //
+        // Register-once per process: the macro registry is global, and
+        // re-registering on every kit build would swap the instance under
+        // concurrent in-flight users (parallel tests rebuild kits constantly).
+        // First registration wins; keys are DB-namespaced so shared use
+        // across rebuilds is safe.
+        if oxcache::__internal_get_cache(MACRO_QUERY_SERVICE).is_none() {
+            let macro_cache = oxcache::Cache::builder()
+                .capacity(config.capacity)
+                .sync_mode(true)
+                .build()
+                .await
+                .map_err(|e| CacheError::BuildFailed(e.to_string()))?;
+            oxcache::internal::__internal_register_cache(
+                MACRO_QUERY_SERVICE,
+                Arc::new(macro_cache),
+            );
+        }
+
         Ok(Arc::new(OxcacheStore::new(cache, config.entry_max_bytes)))
     }
 }
@@ -260,6 +325,14 @@ impl CacheStore for OxcacheStore {
     fn invalidate_all(&self) {
         if let Err(e) = self.inner.clear_sync() {
             tracing::warn!(error = %e, "cache invalidate_all failed");
+        }
+        // `#[cached]` macro services live in a separate oxcache registry;
+        // clear them too so cached query results stay consistent after
+        // graph mutations (index / clean).
+        if let Some(svc) = oxcache::__internal_get_cache(MACRO_QUERY_SERVICE) {
+            if let Err(e) = svc.clear_sync() {
+                tracing::warn!(error = %e, "macro query cache invalidate failed");
+            }
         }
     }
 }

@@ -97,6 +97,17 @@ impl ModuleMeta for StorageModule {
     }
 }
 
+/// trait-kit health check: a table-free `RETURN 1` Cypher round-trip proves
+/// the underlying LadybugDB connection is readable.
+impl trait_kit::core::health::AsyncHealthCheck for StorageModule {
+    fn check(cap: &Self::Capability) -> trait_kit::core::health::HealthStatus {
+        match cap.query("RETURN 1") {
+            Ok(_) => trait_kit::core::health::HealthStatus::Healthy,
+            Err(e) => trait_kit::core::health::HealthStatus::unhealthy(e.to_string()),
+        }
+    }
+}
+
 impl AsyncAutoBuilder for StorageModule {
     type Capability = Arc<dyn Storage>;
     type Error = StorageError;

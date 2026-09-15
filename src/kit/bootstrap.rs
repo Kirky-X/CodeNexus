@@ -105,6 +105,10 @@ pub struct KitBootstrapConfig {
     /// when the `embed` feature is enabled.
     #[cfg(feature = "embed")]
     pub embedding_config: EmbeddingConfig,
+
+    /// Enables per-batch debug diagnostics in the daemon event loop
+    /// (CLI `--verbose`). Flows into `DaemonConfig::verbose_events`.
+    pub verbose: bool,
 }
 
 impl KitBootstrapConfig {
@@ -122,6 +126,7 @@ impl KitBootstrapConfig {
             read_only: false,
             #[cfg(feature = "embed")]
             embedding_config: EmbeddingConfig::from_env(),
+            verbose: false,
         }
     }
 
@@ -146,6 +151,13 @@ impl KitBootstrapConfig {
     #[must_use]
     pub fn with_embedding_config(mut self, config: EmbeddingConfig) -> Self {
         self.embedding_config = config;
+        self
+    }
+
+    /// Enables the `daemon.verbose-events` toggle after the Kit is built.
+    #[must_use]
+    pub fn with_verbose(mut self, verbose: bool) -> Self {
+        self.verbose = verbose;
         self
     }
 }
@@ -245,6 +257,7 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
         kit.set_config(DaemonConfig {
             db_path: config.db_path.clone(),
             debounce_ms: config.debounce_ms,
+            verbose_events: config.verbose,
         });
         kit.register::<DaemonModule>()?;
     }
@@ -264,9 +277,23 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
     {
         kit.set_config(CacheConfig::default());
         kit.register::<CacheModule>()?;
+        // trait-kit lifecycle: ready/shutdown diagnostics for the cache
+        // module (on_ready fires in build(), on_shutdown in
+        // `shutdown_async()` — invoked by the CLI after handler dispatch).
+        kit.register_lifecycle::<CacheModule>();
     }
 
-    kit.build().await
+    let built = kit.build().await?;
+
+    // Process-global DB identity so `#[cached]` query keys are namespaced
+    // per database (tests and daemon rebuilds must not share cached rows).
+    crate::service::runtime::set_db_key(format!(
+        "{}#ro={}",
+        config.db_path.display(),
+        config.read_only
+    ));
+
+    Ok(built)
 }
 
 // ---------------------------------------------------------------------------

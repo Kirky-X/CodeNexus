@@ -17,7 +17,8 @@ use notify_debouncer_full::notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::flag;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
+use trait_kit::kit::{ShutdownCoordinator, ShutdownPhase};
 use tree_sitter::{InputEdit, Node, Point, Tree};
 
 use crate::daemon::error::DaemonError;
@@ -270,6 +271,8 @@ pub struct Daemon {
     observers: Vec<Box<dyn EventObserver + Send>>,
     /// 停止标志（用于优雅关闭和测试）。
     stop: Arc<AtomicBool>,
+    /// 每批事件调试诊断开关（trait-kit toggle `daemon.verbose-events`）。
+    verbose: AtomicBool,
     /// 最近 10 个事件间隔（滑动窗口），用于 EMA 计算。
     event_intervals: VecDeque<Duration>,
     /// 当前自适应防抖窗口（EMA 更新，clamp [100ms, 500ms]）。
@@ -300,11 +303,17 @@ impl Daemon {
             db_path: db_path.as_ref().to_path_buf(),
             observers: Vec::new(),
             stop: Arc::new(AtomicBool::new(false)),
+            verbose: AtomicBool::new(false),
             event_intervals: VecDeque::with_capacity(EVENT_INTERVALS_CAPACITY),
             debounce_window: Duration::from_millis(INITIAL_DEBOUNCE_WINDOW_MS),
             last_event_at: None,
             tree_cache: TreeCache::new(),
         }
+    }
+
+    /// 设置每批事件的调试诊断开关（CLI `--verbose` 经配置流传入）。
+    pub fn set_verbose(&self, verbose: bool) {
+        self.verbose.store(verbose, Ordering::Relaxed);
     }
 
     /// 添加一个观察者。
@@ -479,7 +488,12 @@ impl Daemon {
                 break;
             }
             match rx.recv_timeout(tick) {
-                Ok(Ok(events)) => self.process_debounced_events(&events),
+                Ok(Ok(events)) => {
+                    if self.verbose.load(Ordering::Relaxed) {
+                        debug!(count = events.len(), "处理防抖事件批次");
+                    }
+                    self.process_debounced_events(&events);
+                }
                 Ok(Err(errors)) => {
                     for err in &errors {
                         warn!(error = %err, "文件监视器错误");
@@ -492,7 +506,31 @@ impl Daemon {
                 }
             }
         }
+        self.run_shutdown_phases();
         Ok(())
+    }
+
+    /// trait-kit `ShutdownCoordinator` 分阶段停机：停止接收 → 排空队列 →
+    /// 关闭连接。钩子当前记录结构化诊断；后续真实清理（如显式关闭图库
+    /// 连接池）挂在对应阶段即可。
+    fn run_shutdown_phases(&self) {
+        let coordinator = ShutdownCoordinator::new();
+        coordinator.set_global_timeout(Duration::from_secs(10));
+        coordinator.register_hook(ShutdownPhase::StopRequests, || {
+            info!("停机阶段 1/3：停止接收新文件事件");
+        });
+        coordinator.register_hook(ShutdownPhase::DrainQueue, || {
+            info!("停机阶段 2/3：排空防抖事件队列");
+        });
+        coordinator.register_hook(ShutdownPhase::CloseConnections, || {
+            info!("停机阶段 3/3：关闭图数据库连接");
+        });
+        let result = coordinator.shutdown();
+        info!(
+            ok = result.is_ok(),
+            timed_out = ?result.timed_out_phases(),
+            "分阶段停机完成"
+        );
     }
 
     /// 运行事件循环指定时间后自动停止（用于测试）。

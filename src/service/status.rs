@@ -28,6 +28,10 @@ use sdforge::prelude::ApiError;
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct StatusOutput {
     pub projects: Vec<ProjectOutput>,
+    /// trait-kit module health (`health_report()`), `name=status` entries.
+    /// Empty when every module reports healthy (normal case).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub kit_health: Vec<String>,
 }
 
 /// JSON-serializable view of a project with staleness info.
@@ -139,6 +143,12 @@ pub fn run_status(kit: &AsyncKit<AsyncReady>) -> Result<StatusOutput, CodeNexusE
                 let stale = is_stale(&p.last_commit, &current_head);
                 ProjectOutput::from_record(p, current_head, stale)
             })
+            .collect(),
+        kit_health: kit
+            .health_report()
+            .iter()
+            .filter(|(_, status)| !status.is_healthy())
+            .map(|(module, status)| format!("{module}={}", status.as_status_name()))
             .collect(),
     };
     Ok(output)
@@ -299,10 +309,21 @@ mod tests {
                 current_head: "def".into(),
                 stale: true,
             }],
+            kit_health: vec!["storage=unhealthy".into()],
         };
         let json = serde_json::to_string(&output).unwrap();
         assert!(json.contains("\"projects\""));
         assert!(json.contains("\"stale\":true"));
+        assert!(json.contains("\"kit_health\""));
+        assert!(json.contains("storage=unhealthy"));
+
+        // Healthy kit (empty kit_health) omits the field entirely.
+        let healthy = StatusOutput {
+            kit_health: Vec::new(),
+            ..Default::default()
+        };
+        let healthy_json = serde_json::to_string(&healthy).unwrap();
+        assert!(!healthy_json.contains("kit_health"));
         assert!(json.contains("\"current_head\":\"def\""));
     }
 

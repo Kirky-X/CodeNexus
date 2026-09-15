@@ -72,6 +72,8 @@ pub struct DaemonConfig {
     /// Debounce window in milliseconds. Defaults to
     /// [`DEFAULT_DEBOUNCE_MS`] (2000ms) when not specified.
     pub debounce_ms: u64,
+    /// Per-batch debug diagnostics in the event loop (CLI `--verbose`).
+    pub verbose_events: bool,
 }
 
 impl DaemonConfig {
@@ -82,6 +84,7 @@ impl DaemonConfig {
         Self {
             db_path,
             debounce_ms: DEFAULT_DEBOUNCE_MS,
+            verbose_events: false,
         }
     }
 }
@@ -177,11 +180,11 @@ struct DaemonCapability {
 impl DaemonRunner for DaemonCapability {
     fn start(&self, watch_path: &Path, project_name: &str) -> Result<(), DaemonError> {
         // Read the current debounce_ms from the shared config (hot-reloadable).
-        let debounce_ms = self
+        let (debounce_ms, verbose_events) = self
             .config
             .read()
-            .map(|c| c.debounce_ms)
-            .unwrap_or(DEFAULT_DEBOUNCE_MS);
+            .map(|c| (c.debounce_ms, c.verbose_events))
+            .unwrap_or((DEFAULT_DEBOUNCE_MS, false));
 
         // Construct the IndexFacade (lazy — opens DB on first index call).
         let facade = IndexFacade::new(&self.db_path)
@@ -189,6 +192,7 @@ impl DaemonRunner for DaemonCapability {
 
         // Construct the daemon with the current debounce window.
         let mut daemon = Daemon::new(watch_path, project_name, debounce_ms, &self.db_path);
+        daemon.set_verbose(verbose_events);
 
         // Register the IndexObserver (Observer pattern) — triggers
         // incremental indexing on code-file changes.
