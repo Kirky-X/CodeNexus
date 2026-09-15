@@ -48,7 +48,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use codenexus::index::IndexFacade;
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use std::hint::black_box;
 
 #[cfg(feature = "daemon")]
 use codenexus::daemon::{Daemon, DaemonEvent, EventObserver};

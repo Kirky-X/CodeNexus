@@ -1587,7 +1587,7 @@ fn extern_language(node: Node, source: &str) -> Language {
         }
     }
     // Also check direct string_literal children (older grammar versions).
-    for i in 0..node.child_count() as u32 {
+    for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
             if child.kind() == "string_literal" {
                 let text = node_text(child, source).unwrap_or("");
@@ -1654,7 +1654,7 @@ fn is_external_pub(node: Node) -> bool {
                 // visibility_modifier's children include the `pub` token,
                 // followed by optional `(`, restriction path, `)`. If any
                 // `(` token is present, there's a restriction.
-                for j in 0..child.child_count() as u32 {
+                for j in 0..child.child_count() {
                     if let Some(token) = child.child(j) {
                         if token.kind() == "(" {
                             return false;

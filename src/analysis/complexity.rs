@@ -568,7 +568,7 @@ pub fn calc_halstead(
         .and_then(|kind| find_first_node_of_kind(root, kind))
         .unwrap_or(root);
 
-    let mut ops_distinct: HashSet<&'static str> = HashSet::new();
+    let mut ops_distinct: HashSet<&str> = HashSet::new();
     let mut ops_total: u32 = 0;
     let mut operands_distinct: HashSet<String> = HashSet::new();
     let mut operands_total: u32 = 0;
@@ -613,10 +613,10 @@ pub fn calc_halstead(
     }
 }
 
-fn collect_halstead(
-    node: Node<'_>,
+fn collect_halstead<'a>(
+    node: Node<'a>,
     source: &[u8],
-    ops_distinct: &mut HashSet<&'static str>,
+    ops_distinct: &mut HashSet<&'a str>,
     ops_total: &mut u32,
     operands_distinct: &mut HashSet<String>,
     operands_total: &mut u32,

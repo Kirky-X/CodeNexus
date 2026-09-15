@@ -34,7 +34,8 @@ use std::time::{Duration, Instant};
 
 use codenexus::daemon::{Daemon, DaemonEvent, EventObserver, DEFAULT_DEBOUNCE_MS};
 use codenexus::index::IndexFacade;
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput};
+use std::hint::black_box;
 use tempfile::TempDir;
 
 use common::generate_large_repo;

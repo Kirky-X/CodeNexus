@@ -129,6 +129,7 @@ mod tests {
         match err {
             ParseError::LanguageSet { source, .. } => match source {
                 tree_sitter::LanguageError::Version(v) => assert_eq!(v, 42),
+                other_lang => panic!("expected Version, got {other_lang:?}"),
             },
             other => panic!("expected LanguageSet, got {other:?}"),
         }

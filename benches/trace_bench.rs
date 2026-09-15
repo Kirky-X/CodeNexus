@@ -14,7 +14,8 @@
 
 use codenexus::model::{Edge, EdgeType, Graph, Node, NodeLabel};
 use codenexus::trace::{ImpactAnalyzer, ImpactConfig, TraceFacade, TraceType};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 
 /// Builds an in-memory graph with `size` functions in a linear call chain:
 /// `func_0` calls `func_1` calls ... `func_{size-1}`.

@@ -12,7 +12,8 @@
 //! `edges_from` across all reachable nodes.
 
 use codenexus::model::{Edge, EdgeType, Graph, Node, NodeLabel};
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use std::hint::black_box;
 
 const NODE_COUNT: usize = 10_000;
 const EDGE_PER_NODE: usize = 5;

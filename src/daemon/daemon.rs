@@ -663,12 +663,8 @@ fn byte_to_point(source: &str, byte_offset: usize) -> Point {
 fn count_tree_nodes(node: &Node) -> usize {
     let mut count = 1usize;
     let n = node.child_count();
-    for i in 0..n {
-        // tree-sitter 0.26: `child_count` 返回 usize 但 `child` 接收 u32。
-        let Ok(idx) = u32::try_from(i) else {
-            // 节点数 > u32::MAX 不现实，停止遍历。
-            break;
-        };
+    for idx in 0..n {
+        // tree-sitter 0.27: `child_count` 与 `child` 均为 u32。
         if let Some(child) = node.child(idx) {
             count += count_tree_nodes(&child);
         }

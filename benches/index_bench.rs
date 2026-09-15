@@ -16,7 +16,8 @@
 use std::path::Path;
 
 use codenexus::index::IndexFacade;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 use tempfile::TempDir;
 
 /// Writes `count` trivial Rust files (`file_0.rs` .. `file_{n-1}.rs`) into

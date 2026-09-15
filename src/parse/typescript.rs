@@ -798,7 +798,7 @@ fn extract_variable_declaration(node: Node, source: &str, result: &mut ExtractRe
 fn is_const_declaration(node: Node) -> bool {
     // tree-sitter-typescript: lexical_declaration := choice('const','let','var') + declarators
     // The keyword is the first child (unnamed token with kind "const"/"let"/"var").
-    for i in 0..node.child_count() as u32 {
+    for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
             if child.is_named() {
                 // First unnamed token already passed; no keyword found.
