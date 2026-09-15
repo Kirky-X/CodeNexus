@@ -529,6 +529,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codenexus-examples"
+version = "0.1.0"
+dependencies = [
+ "codenexus",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "codespan-reporting"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

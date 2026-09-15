@@ -195,6 +195,12 @@ inherits = "release"
 [lints.rust]
 unexpected_cfgs = "allow"
 
+[workspace]
+members = ["examples"]
+# Daily commands (build/test/check) stay scoped to the main crate; examples
+# join only for workspace-wide ops (cargo clean --workspace, metadata).
+default-members = ["."]
+
 # Local development: uncomment to use path deps for base libraries.
 # MUST be commented out before publishing to crates.io.
 # [patch.crates-io]
