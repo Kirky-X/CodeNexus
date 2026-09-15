@@ -53,7 +53,6 @@
 - [📞 联系与支持](#-联系与支持)
 - [⭐ Star 历史](#-star-历史)
 
-
 ---
 
 ## ✨ 功能特性
@@ -441,8 +440,6 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 </table>
 
 报告 Issue 时请附上：CodeNexus 版本（`codenexus --version`）、Rust 版本、操作系统、完整命令与错误输出、最小复现。安全漏洞请勿公开提交，见 [🔒 安全文档](docs/SECURITY.md)。
-
-<img src="https://contrib.rocks/image?repo=Kirky-X/codenexus" alt="Contributors">
 
 ---
 

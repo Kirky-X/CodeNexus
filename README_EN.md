@@ -53,7 +53,6 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 - [📞 Contact & Support](#-contact--support)
 - [⭐ Star History](#-star-history)
 
-
 ---
 
 ## ✨ Key Features
@@ -441,8 +440,6 @@ Want to contribute code?<br>
 </table>
 
 When filing an issue, please include: CodeNexus version (`codenexus --version`), Rust version, OS, the exact command, the full error output, and a minimal reproduction. Security vulnerabilities must not be filed publicly — see the [🔒 Security doc](docs/SECURITY.md).
-
-<img src="https://contrib.rocks/image?repo=Kirky-X/codenexus" alt="Contributors">
 
 ---
 
