@@ -44,7 +44,7 @@ pub enum TraceError {
 
     /// A storage-layer error while loading the subgraph for tracing.
     ///
-    /// Added in T6/Phase-2 Task 2.10 so that [`TraceCapability`](super::module::TraceCapability)
+    /// Added so that [`TraceCapability`](super::module::TraceCapability)
     /// can propagate database failures from [`load_graph_for_symbol`](super::graph_loader::load_graph_for_symbol)
     /// without depending on the CLI error type.
     Storage(StorageError),

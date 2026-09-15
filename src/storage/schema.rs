@@ -48,7 +48,7 @@ pub fn is_reserved_keyword(name: &str) -> bool {
 /// returns it borrowed. Use this whenever a table or column name is spliced
 /// into a Cypher statement.
 ///
-/// # Security note (T202-B security-review LOW-1)
+/// # Security note
 ///
 /// This function ONLY handles reserved-keyword escaping — it does NOT sanitise
 /// arbitrary user input. Callers MUST pass values that are known-safe
@@ -64,7 +64,7 @@ pub fn is_reserved_keyword(name: &str) -> bool {
 /// Returns [`Cow::Borrowed`] when no escaping is needed (the common case —
 /// only `MACRO` and `UNION` are reserved), avoiding a heap allocation per
 /// call. The previous `String` return forced `to_string()` on every
-/// non-keyword input (perf-review M1: ~12 wasted allocations per
+/// non-keyword input (~12 wasted allocations per
 /// `route_map` call on bulwark-class graphs).
 #[must_use]
 pub fn escape_identifier(name: &str) -> std::borrow::Cow<'_, str> {
@@ -80,7 +80,7 @@ pub fn escape_identifier(name: &str) -> std::borrow::Cow<'_, str> {
 /// by every prior local copy (graph_loader, repository, fulltext, structured,
 /// disambiguation, rename_cmd) before consolidation here.
 ///
-/// # T202 security-review LOW-1: control character hardening
+/// # Control character hardening
 ///
 /// The openCypher spec only mandates escaping `\` and `'` inside single-quoted
 /// string literals. LadybugDB's Cypher engine follows the spec and treats
@@ -96,7 +96,7 @@ pub fn escape_identifier(name: &str) -> std::borrow::Cow<'_, str> {
 pub fn escape_cypher_string(s: &str) -> String {
     // Order matters: backslash first so we do not double-escape escapes
     // introduced by later steps, then single quote, then control chars.
-    // NUL is escaped last (tiangang security-review LOW-1): Cypher string
+    // NUL is escaped last: Cypher string
     // literals treat `\0` as a literal NUL byte in some implementations,
     // which can confuse downstream consumers (logs, audit trails). Escaping
     // to the Cypher escape sequence `\\0` ensures round-trip fidelity and
@@ -194,7 +194,7 @@ pub fn index_ddl() -> Vec<String> {
         // load_edge_reason, trace::graph_loader::fetch_edges_for_node) hit these
         // instead of full-scanning the CodeRelation table. Without them, the
         // bulwark-class graph (94k edges) turns every "targeted" lookup into a
-        // 60k+ row linear scan (perf-review C1).
+        // 60k+ row linear scan.
         "CREATE INDEX idx_rel_source ON CodeRelation(source);".to_string(),
         "CREATE INDEX idx_rel_target ON CodeRelation(target);".to_string(),
         // --- FTS indexes (DDD §6): BM25 over symbol `content` columns ---
@@ -237,7 +237,7 @@ pub fn index_ddl() -> Vec<String> {
 /// Note: `embedding_table_ddl()` is NOT pushed separately here — it is already
 /// included in [`node_table_ddl`] through the `Embedding` variant. Pushing it
 /// again would emit a duplicate `CREATE NODE TABLE Embedding` statement and
-/// break schema init (Task 2.1 regression).
+/// break schema init.
 #[must_use]
 pub fn all_init_ddl() -> Vec<String> {
     let mut ddl: Vec<String> = node_table_ddl().into_iter().map(|(_, stmt)| stmt).collect();
@@ -787,7 +787,7 @@ mod tests {
 
     #[test]
     fn escape_cypher_string_escapes_control_characters() {
-        // T202 security-review LOW-1: \n / \r / \t are escaped to their
+        // \n / \r / \t are escaped to their
         // literal backslash sequences so logs and audit trails remain
         // parseable. The Cypher engine interprets these escape sequences
         // back to the original bytes — round-trip semantics preserved.
@@ -801,7 +801,7 @@ mod tests {
         );
         // Empty string is a no-op.
         assert_eq!(escape_cypher_string(""), "");
-        // NUL byte is escaped (tiangang security-review LOW-1):
+        // NUL byte is escaped:
         // prevents embedded NUL from terminating C-string views over the
         // escaped value, and ensures round-trip via Cypher's `\0` escape.
         assert_eq!(escape_cypher_string("a\0b"), "a\\0b");
@@ -1102,8 +1102,8 @@ mod tests {
         let ddl = all_init_ddl();
         // 44 node tables (incl. Embedding via ddl_for_label) + 1 relation
         // + 39 indexes (20 secondary + 18 FTS + 1 VECTOR) = 84
-        // (v0.3.7: added idx_rel_source + idx_rel_target for targeted WHERE
-        // e.target/e.source lookups — perf-review C1)
+        // (added idx_rel_source + idx_rel_target for targeted WHERE
+        // e.target/e.source lookups)
         assert_eq!(ddl.len(), 84, "expected 84 DDL statements total");
         assert!(ddl.iter().any(|s| s.contains("CREATE NODE TABLE Project")));
         assert!(ddl.iter().any(|s| s.contains("CodeRelation")));

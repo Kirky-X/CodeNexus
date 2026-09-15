@@ -166,7 +166,7 @@ impl ScopeChain {
 }
 
 // ---------------------------------------------------------------------------
-// ScopeResolver trait + per-language implementations (Task 2.6, design.md D3)
+// ScopeResolver trait + per-language implementations
 // ---------------------------------------------------------------------------
 
 /// Immutable context carried through the tree-sitter walk, used by
@@ -195,7 +195,7 @@ pub struct ScopeContext<'a> {
 /// scope return `None`.
 ///
 /// This trait replaces the manual `current_func`/`current_parent` threading in
-/// extractors (design.md D3). Extractors call the registry to obtain the scope
+/// extractors. Extractors call the registry to obtain the scope
 /// of each visited node, then thread the scope info through the walk.
 ///
 /// # Object safety
@@ -1196,7 +1196,7 @@ mod tests {
         assert!(qn.contains("main"));
     }
 
-    // --- C8: ScopeChain HashMap index (T160-T162) ---
+    // --- ScopeChain HashMap index ---
     //
     // The following tests verify the O(1) HashMap index added to ScopeChain.
     // `push`/`pop` must keep the index in sync with the Vec so that
@@ -1398,7 +1398,7 @@ mod tests {
 }
 
 // ---------------------------------------------------------------------------
-// ScopeResolver tests (Task 2.6)
+// ScopeResolver tests
 // ---------------------------------------------------------------------------
 
 #[cfg(all(

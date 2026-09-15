@@ -268,7 +268,7 @@ impl ProjectSymbolTable {
     }
 
     /// Returns exported entries matching `name` that are in scope via
-    /// `#include` relationships (BUG-C4 fix, v0.3.0).
+    /// `#include` relationships.
     ///
     /// A symbol in file B is a valid resolution target for a call in file A
     /// if A `#include`s B (directly or transitively). This method:
@@ -363,12 +363,12 @@ impl ProjectSymbolTable {
     ///
     /// * `results` - The extraction results containing import information.
     ///
-    /// # Resolution strategy (deterministic — Rule 5)
+    /// # Resolution strategy (deterministic)
     ///
     /// Only Rust module paths are resolved here (the CalNexus regression
     /// case). Other languages' re-exports are handled by the existing
     /// `ImportResolver` REEXPORTS edge creation, which feeds into
-    /// dead_code's B7 seed via Cypher query — no symbol-table annotation
+    /// dead_code's re-export seed via Cypher query — no symbol-table annotation
     /// needed. File path matching uses suffix match with path boundary
     /// check to bridge absolute (production `file_path`) vs relative
     /// (candidate) gap, matching `imports.rs::find_best_suffix_match`.
@@ -427,7 +427,7 @@ impl ProjectSymbolTable {
 /// `pub use cli::run` in `src/lib.rs` produces `source_file = "cli::run"`).
 /// Non-Rust specifiers (file paths, external modules) return empty — they
 /// are handled by `ImportResolver`'s REEXPORTS edge creation and the
-/// dead_code B7 Cypher seed.
+/// dead_code re-export Cypher seed.
 ///
 /// # Candidates (tried in order, longest first for suffix-match priority)
 ///
@@ -745,7 +745,7 @@ mod tests {
         assert!(project.lookup_exported("missing").is_empty());
     }
 
-    // --- lookup_exported_in_scope (BUG-C4 fix, v0.3.0) ---
+    // --- lookup_exported_in_scope ---
 
     use crate::resolve::includes_graph::IncludesGraph;
 

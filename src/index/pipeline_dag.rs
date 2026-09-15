@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Pipeline DAG runner (T9 H2, design.md D2).
+//! Pipeline DAG runner.
 //!
 //! Replaces the manual 9-step sequence in [`super::pipeline`] with a typed
 //! [`Phase`] trait and a [`Pipeline`] runner that uses Kahn's topological sort
-//! to determine execution order and detects cycles (fail-loud, Rule 12).
+//! to determine execution order and detects cycles (fail-loud).
 //!
 //! # Design
 //!
@@ -31,10 +31,10 @@
 //!   [`PipelineCtx`] under the phase's `NAME` before calling [`Pipeline::run`].
 //! - **Derived phases**: set `Input = ()` (caller inserts `()`) and read dep
 //!   outputs from `ctx` inside `run` via [`PipelineCtx::get`]. This keeps the
-//!   `Phase` trait signature faithful to design.md D2 (5 items, no
+//!   `Phase` trait signature (5 items, no
 //!   `build_input` method) while supporting multi-dep wiring.
 //!
-//! Task 2.5 refactors the existing pipeline steps into typed `Phase`
+//! The existing pipeline steps are refactored into typed `Phase`
 //! implementations using this runner.
 
 use std::any::Any;
@@ -42,13 +42,13 @@ use std::collections::{BTreeSet, HashMap};
 
 use thiserror::Error;
 
-/// Errors raised by the pipeline DAG runner (T9 H2).
+/// Errors raised by the pipeline DAG runner.
 #[derive(Debug, Error)]
 pub enum PhaseError {
     /// A cycle was detected in the phase dependency graph.
     ///
     /// The message lists the phases involved in the cycle (fail-loud,
-    /// Rule 12 — never silently skip a cyclic phase).
+    /// Never silently skip a cyclic phase).
     #[error("cycle detected in pipeline DAG involving phases: [{0}]")]
     Cycle(String),
 
@@ -84,7 +84,7 @@ pub enum PhaseError {
     ///
     /// The error is stored as `Box<dyn Error + Send + Sync>` so callers can
     /// downcast it back to the original error type (e.g. `IndexError`) to
-    /// preserve specific error variants and exit codes (Rule 12: fail loud).
+    /// preserve specific error variants and exit codes (fail loud).
     #[error("phase `{phase}` failed: {inner}")]
     ExecutionFailed {
         /// The phase that raised the error.
@@ -94,7 +94,7 @@ pub enum PhaseError {
     },
 }
 
-/// Type-erased storage for pipeline intermediate values (design.md D2 risk
+/// Type-erased storage for pipeline intermediate values (risk
 /// mitigation: "Pipeline 内部用 `Box<dyn Any>` 存储 intermediate results").
 ///
 /// Each value is keyed by the producing phase's `NAME`. Phases read dep
@@ -141,7 +141,7 @@ impl PipelineCtx {
     ///
     /// Used by the runner to extract a phase's `Input` before calling `run`.
     /// If the stored value's type does not match `T`, the entry is left
-    /// intact (Rule 12: a wiring bug must not silently destroy data).
+    /// intact (a wiring bug must not silently destroy data).
     pub fn remove<T>(&mut self, name: &str) -> Option<T>
     where
         T: Any + Send + Sync,
@@ -189,7 +189,7 @@ impl std::fmt::Debug for PipelineCtx {
     }
 }
 
-/// A phase in the indexing pipeline DAG (T9 H2, design.md D2).
+/// A phase in the indexing pipeline DAG.
 ///
 /// Each phase declares its typed `Input`/`Output`, a unique `NAME`, and the
 /// names of phases it depends on. The [`Pipeline`] runner executes phases in
@@ -238,7 +238,7 @@ pub trait Phase: Send + Sync + 'static {
     /// Names of phases whose outputs this phase consumes.
     ///
     /// Returns a `&'static [&'static str]` so the runner can reference the
-    /// slice without allocation (design.md D2: "name slice 而非类型集合").
+    /// slice without allocation.
     fn deps() -> &'static [&'static str];
 
     /// Executes the phase.
@@ -288,7 +288,7 @@ where
     }
 }
 
-/// Pipeline runner with Kahn topological sort and cycle detection (T9 H2).
+/// Pipeline runner with Kahn topological sort and cycle detection.
 ///
 /// Phases are registered by name; [`Pipeline::run`] topologically sorts them
 /// (deterministic alphabetical order among ready phases) and executes each in
@@ -311,7 +311,7 @@ impl Pipeline {
     /// # Errors
     ///
     /// Returns [`PhaseError::DuplicatePhase`] if a phase with the same name is
-    /// already registered (fail-loud, Rule 12).
+    /// already registered (fail-loud).
     pub fn register<P>(&mut self, phase: P) -> Result<(), PhaseError>
     where
         P: Phase,

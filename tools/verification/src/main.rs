@@ -103,7 +103,7 @@ const TYPE_MAP_PATH: &str = "tools/verification/type_map.json";
 /// Default queries directory.
 const QUERIES_DIR: &str = "tools/verification/queries";
 
-/// Task 8.1: Full single-sample orchestrator.
+/// Full single-sample orchestrator.
 ///
 /// Wires together: CodeNexus index+extract → gitnexus reference fetch →
 /// query comparison → report generation. Produces three output files:

@@ -1,8 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! trait-kit module for the Query subsystem (T6/unified-architecture
-//! Phase 2, Task 2.9; v0.3.3 AsyncKit migration).
+//! trait-kit module for the Query subsystem.
 //!
 //! Implements [`ModuleMeta`] + [`AsyncAutoBuilder`] for [`QueryModule`],
 //! wiring the existing [`QueryFacade`] (Facade pattern) into the unified
@@ -28,7 +27,7 @@ use super::{QueryResult, SearchResult};
 // Config
 // ---------------------------------------------------------------------------
 
-/// Configuration for [`QueryModule`] (Task 2.9).
+/// Configuration for [`QueryModule`].
 ///
 /// Stored in Kit via `AsyncKit::set_config` and read in
 /// [`AsyncAutoBuilder::build`].
@@ -61,7 +60,7 @@ impl QueryConfig {
 // Module (ModuleMeta + AsyncAutoBuilder)
 // ---------------------------------------------------------------------------
 
-/// trait-kit module tag for the Query subsystem (Task 2.9).
+/// trait-kit module tag for the Query subsystem.
 ///
 /// Zero-sized marker — construction logic lives in
 /// [`QueryModule::build_cap`]. Register in Kit via:
@@ -182,7 +181,7 @@ impl QueryEngine for QueryCapability {
             .fulltext_search(text, project, limit)
     }
 
-    /// Hybrid BM25 + semantic search (Task 2.14 / AC-SEARCH-002).
+    /// Hybrid BM25 + semantic search.
     #[cfg(feature = "embed")]
     fn semantic_search(
         &self,

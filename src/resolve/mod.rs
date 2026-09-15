@@ -11,15 +11,14 @@
 //! - [`error`]: [`ResolveError`] and [`Result`](error::Result) alias.
 //! - [`fqn`]: [`FqnGenerator`] for ADD §7.1 FQN generation.
 //! - [`includes_graph`]: [`IncludesGraph`] for C++ `#include` tracking and
-//!   scope-aware cross-file call resolution (BUG-C4 fix).
+//!   scope-aware cross-file call resolution.
 //! - [`scope`]: [`Scope`] and [`ScopeChain`] for nested scope resolution.
 //! - [`symbol_table`]: [`SymbolEntry`], [`FileSymbolTable`],
 //!   [`ProjectSymbolTable`] for symbol indexing.
 //! - [`calls`]: [`CallResolver`] for resolving CALLS edges (ADR-011).
 //! - [`dataflow`]: [`DataFlowResolver`] for resolving DataFlows edges
-//!   (BR-TRACE-001~004).
 //! - [`cross_lang`]: [`FfiResolver`] for resolving FfiCalls edges across
-//!   languages (ADD §7.4, BR-TRACE-008).
+//!   languages (ADD §7.4).
 //! - [`orchestrator`]: top-level orchestration functions
 //!   ([`build_symbol_table`], [`resolve_all`]).
 
@@ -29,7 +28,7 @@ pub mod module;
 // Cross-language FFI resolution is only meaningful when both C and Rust are
 // compiled in (Rust extern "C" -> C definitions). Gate the entire module so
 // leaner builds (e.g. `--features minimal`) don't reference unavailable
-// `Language::C` / `Language::Rust` variants (unified-architecture Phase 1).
+// `Language::C` / `Language::Rust` variants.
 #[cfg(all(feature = "lang-c", feature = "lang-rust"))]
 pub mod cross_lang;
 pub mod dataflow;

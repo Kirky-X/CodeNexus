@@ -15,7 +15,7 @@
 #![cfg_attr(not(feature = "full"), allow(dead_code, unused_imports, unused_mut))]
 
 // Compile-time assertion: at least one language feature must be enabled
-// (unified-architecture Phase 1). Without any `lang-*` feature the crate has
+// Without any `lang-*` feature the crate has
 // no tree-sitter grammars and cannot parse anything; fail fast with a clear
 // message instead of emitting downstream "variant not found" errors.
 #[cfg(not(any(

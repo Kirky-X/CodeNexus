@@ -44,7 +44,7 @@ pub struct ImpactOutput {
     pub affected: Vec<ImpactNode>,
     /// True when `load_graph` hit the `MAX_SUBGRAPH_NODES` cap and returned a
     /// truncated subgraph. Always serialized (no skip) so incompleteness is
-    /// explicit — rule 12: never hide a degraded result behind a default.
+    /// explicit — never hide a degraded result behind a default.
     pub truncated: bool,
     /// Archify-style repair receipts (e.g. `impact/truncated` when the
     /// subgraph was capped and results are incomplete).
@@ -178,7 +178,7 @@ pub fn run_impact(
         let (graph, truncated) = trace_engine.load_graph(symbol, load_depth, MAX_SUBGRAPH_NODES)?;
 
         let effective_depth = config.max_depth;
-        // Verify symbol exists to avoid silent empty-result success (rule 12).
+        // Verify symbol exists to avoid silent empty-result success.
         let start_id = find_start_node_id(&graph, symbol)
             .ok_or_else(|| CodeNexusError::NotFound(format!("symbol not found: {symbol}")))?;
         let analyzer = ImpactAnalyzer::with_config(&graph, config);
@@ -191,7 +191,7 @@ pub fn run_impact(
     } else {
         let (graph, truncated) =
             trace_engine.load_graph(symbol, depth as usize, MAX_SUBGRAPH_NODES)?;
-        // Verify symbol exists to avoid silent empty-result success (rule 12).
+        // Verify symbol exists to avoid silent empty-result success.
         if find_start_node_id(&graph, symbol).is_none() {
             return Err(CodeNexusError::NotFound(format!(
                 "symbol not found: {symbol}"
@@ -358,7 +358,7 @@ mod tests {
         assert_eq!(output.edge_count, 0, "no edges at depth 0");
     }
 
-    // ===== T040: build_impact_config unit tests =====
+    // ===== build_impact_config unit tests =====
 
     #[test]
     fn build_impact_config_defaults_on_empty_params() {
@@ -411,7 +411,7 @@ mod tests {
         );
     }
 
-    // ===== T040: find_start_node_id unit tests =====
+    // ===== find_start_node_id unit tests =====
 
     #[test]
     fn find_start_node_id_matches_qualified_name() {
@@ -446,7 +446,7 @@ mod tests {
         assert_eq!(id, None);
     }
 
-    // ===== T040: run_impact enhanced mode tests =====
+    // ===== run_impact enhanced mode tests =====
 
     #[test]
     fn run_impact_enhanced_returns_risk_assessment() {

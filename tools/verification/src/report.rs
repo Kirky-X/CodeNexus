@@ -1,7 +1,7 @@
 //! Markdown report generator (tasks 6.1-6.4).
 //!
 //! Produces per-sample Markdown reports and an aggregate batch report. The
-//! severity model (Rule 5: deterministic, not model-decided):
+//! severity model (deterministic, not model-decided):
 //!
 //! - **critical**: query result set differs OR a comparable type is entirely
 //!   missing from one side (count = 0 on one side, > 0 on the other).
@@ -72,7 +72,7 @@ fn pct(codenexus: u64, gitnexus: u64) -> String {
     format!("{:.2}%", (larger - smaller) / larger * 100.0)
 }
 
-/// Task 6.1: Generate a per-sample Markdown report.
+/// Generate a per-sample Markdown report.
 ///
 /// The report contains:
 /// 1. Summary header (OVERALL PASS/FAIL + per-severity counts)
@@ -273,7 +273,7 @@ pub fn generate_report(
     full
 }
 
-/// Task 6.3: Write a per-sample Markdown report to `results/<name>.report.md`.
+/// Write a per-sample Markdown report to `results/<name>.report.md`.
 pub fn write_report(name: &str, markdown: &str) -> Result<PathBuf> {
     let dir = Path::new("tools/verification/results");
     std::fs::create_dir_all(dir)?;
@@ -283,7 +283,7 @@ pub fn write_report(name: &str, markdown: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Task 6.4: Generate an aggregate batch report ranking samples by severity.
+/// Generate an aggregate batch report ranking samples by severity.
 ///
 /// Writes to `tools/verification/results/_aggregate.report.md`.
 pub fn generate_aggregate_report(summaries: &[SampleSummary]) -> String {

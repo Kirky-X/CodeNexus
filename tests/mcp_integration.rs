@@ -195,7 +195,7 @@ fn mcp_server_initializes_and_lists_tools() {
         "impact",
         "search",
         "context",
-        // absorb-archify: diagram pipeline exposed over MCP.
+        // Diagram pipeline exposed over MCP.
         "diagram",
         "arch_diff",
     ];

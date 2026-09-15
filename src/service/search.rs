@@ -78,7 +78,7 @@ pub fn run_search(
             results,
         })
     } else {
-        // Non-empty mode: parse strictly, reject unknown values (rule 12).
+        // Non-empty mode: parse strictly, reject unknown values.
         let search_mode = SearchMode::from_str(mode)
             .map_err(|e| CodeNexusError::InvalidInput(format!("invalid search mode: {e}")))?;
         let storage = kit.require::<StorageModule>()?;
@@ -275,7 +275,7 @@ mod tests {
         assert!(v["qualifiedName"].is_null());
     }
 
-    // ===== T039: run_search with mode parameter =====
+    // ===== run_search with mode parameter =====
 
     #[test]
     fn run_search_with_exact_mode_finds_symbol() {
@@ -318,7 +318,7 @@ mod tests {
     fn run_search_with_invalid_mode_returns_error() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        // Non-empty but invalid mode must error (rule 12: never silently fall back).
+        // Non-empty but invalid mode must error (never silently fall back).
         let err = run_search(&kit, "foo", false, 10, "invalid_mode", "")
             .expect_err("invalid mode should error");
         assert!(

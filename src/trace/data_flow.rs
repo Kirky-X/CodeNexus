@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Data-flow tracer (trace/data_flow.rs) implementing PRD §4.2 / AC-TRACE-002.
+//! Data-flow tracer (trace/data_flow.rs) implementing PRD §4.2.
 //!
 //! Provides [`DataFlowTracer`] for performing BFS traversal over `DataFlows`,
 //! `Reads`, and `Writes` edges from a starting symbol, with a configurable
-//! depth limit (AC-TRACE-004). Each traversal produces a list of [`TracePath`]s
+//! depth limit. Each traversal produces a list of [`TracePath`]s
 //! recording the nodes and edges visited along the way.
 
 use crate::model::{EdgeType, Graph, NodeId};
@@ -13,8 +13,7 @@ use crate::model::{EdgeType, Graph, NodeId};
 use super::bfs::bfs_trace;
 use super::TracePath;
 
-/// BFS tracer over `DataFlows` / `Reads` / `Writes` edges (PRD §4.2,
-/// AC-TRACE-002/004, BR-TRACE-001~006).
+/// BFS tracer over `DataFlows` / `Reads` / `Writes` edges (PRD §4.2).
 ///
 /// Holds an immutable borrow of the [`Graph`] and exposes [`trace`] which
 /// returns every path reachable from `start_id` within `depth` hops.
@@ -85,7 +84,7 @@ mod tests {
 
     #[test]
     fn trace_dataflows_returns_path() {
-        // AC-TRACE-002 (dataflow portion): x dataflows to y -> path x->y.
+        // X dataflows to y -> path x->y.
         let mut g = Graph::new();
         g.add_node(make_var("x", "x"));
         g.add_node(make_var("y", "y"));
@@ -132,7 +131,7 @@ mod tests {
 
     #[test]
     fn trace_depth_limit_respected() {
-        // AC-TRACE-004: depth limit respected.
+        // Depth limit respected.
         let mut g = Graph::new();
         g.add_node(make_var("x", "x"));
         g.add_node(make_var("y", "y"));
@@ -254,7 +253,7 @@ mod tests {
 
     #[test]
     fn trace_param_dataflow() {
-        // BR-TRACE-001: var -> param dataflow
+        // Var -> param dataflow
         let mut g = Graph::new();
         g.add_node(make_var("x", "x"));
         g.add_node(make_param("p", "p"));

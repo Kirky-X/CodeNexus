@@ -12,7 +12,7 @@
 //! # History
 //!
 //! This module was extracted from `src/cli/trace_cmd.rs` during the
-//! trait-kit unified-registry migration (T6 Phase 2, Task 2.10) so that
+//! trait-kit unified-registry migration so that
 //! `TraceCapability` can load a subgraph without depending on the CLI
 //! layer (which would create a circular dependency `trace → cli → trace`).
 
@@ -76,7 +76,7 @@ pub fn load_graph_for_symbol(
     }
     // `truncated` is set true only when BFS hits the `max_nodes` cap; callers
     // surface it so a capped subgraph is never mistaken for a complete one
-    // (rule 12: failures must be explicit, not hidden behind a default).
+    // (failures must be explicit, not hidden behind a default).
     let mut truncated = false;
 
     // Phase 2: BFS-expand to collect reachable node ids within `depth` hops.

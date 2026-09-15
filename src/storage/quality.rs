@@ -54,7 +54,7 @@ impl QualityReport {
 
 /// Runs data quality checks against a [`Storage`] capability.
 ///
-/// Owned by `index_cmd::run` (T6/Phase-2 Task 2.14) — accepts `&dyn Storage`
+/// Owned by `index_cmd::run` — accepts `&dyn Storage`
 /// so it can resolve the storage capability from a [`Kit`](crate::kit::Kit)
 /// instead of constructing a [`Repository`](super::Repository) ad-hoc.
 pub struct QualityChecker<'a> {

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Trace engine benchmarks (Task 15).
+//! Trace engine benchmarks.
 //!
 //! Measures [`TraceFacade::trace`] latency over an in-memory call chain. The
 //! target SLO is P99 <= 500ms; criterion's `trace` group surfaces the per-call
@@ -43,7 +43,7 @@ fn build_call_chain(size: usize) -> Graph {
 
 /// Builds a deep call chain where every non-root node also calls back to
 /// `func_0`. Each back-edge is a cycle rejected by `path_contains`, stressing
-/// the cycle-detection hot path (MED-002): O(1) with the path_set vs O(depth)
+/// the cycle-detection hot path: O(1) with the path_set vs O(depth)
 /// with a parent-chain walk.
 fn build_call_chain_with_back_edges(size: usize) -> Graph {
     let mut g = Graph::new();
@@ -113,7 +113,7 @@ fn bench_trace_path_contains(c: &mut Criterion) {
     // 120-node chain with a back-edge to the root from every non-root node:
     // each BFS expansion rejects one cyclic edge via path_contains. At depth
     // 100 the baseline O(depth) walk dominates; the O(1) HashSet lookup
-    // (MED-002) removes that cost.
+    // removes that cost.
     let graph = build_call_chain_with_back_edges(120);
     let facade = TraceFacade::new(&graph);
 
@@ -133,7 +133,7 @@ fn bench_trace_path_contains(c: &mut Criterion) {
 /// Builds a high-fanin graph that models the bulwark regression scenario:
 /// one target node `target` with `fanout` direct callers, where every
 /// caller also fans out to `fanout` transitive callers. This stresses
-/// the `MAX_NODES_LIMIT=5000` cap introduced in v0.3.8 — without the cap,
+/// the `MAX_NODES_LIMIT=5000` cap — without the cap,
 /// `analyze_impact` would materialize O(fanout^2) nodes and blow up
 /// memory on the first BFS hop.
 fn build_high_fanin_graph(fanout: usize) -> Graph {
@@ -201,7 +201,7 @@ fn build_high_fanin_graph(fanout: usize) -> Graph {
 /// M2: impact on a ~5000-node high-fanin graph (bulwark regression guard).
 ///
 /// Verifies that `analyze_impact` completes in bounded time on the kind of
-/// graph that triggered the v0.3.8 cap raise (1000 → 5000). The benchmark
+/// graph that triggered the cap raise (1000 → 5000). The benchmark
 /// also asserts the result respects `MAX_NODES_LIMIT` — a regression that
 /// removes the cap would cause this benchmark to OOM or exceed the assertion.
 fn bench_impact_5000_node_subgraph(c: &mut Criterion) {

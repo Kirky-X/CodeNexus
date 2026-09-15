@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Call-graph tracer (trace/call_graph.rs) implementing PRD §4.2 / AC-TRACE-001.
+//! Call-graph tracer (trace/call_graph.rs) implementing PRD §4.2.
 //!
 //! Provides [`CallGraphTracer`] for performing BFS traversal over `Calls` and
 //! `FfiCalls` edges from a starting symbol, with a configurable depth limit
-//! (AC-TRACE-004). Each traversal produces a list of [`TracePath`]s recording
+//! Each traversal produces a list of [`TracePath`]s recording
 //! the nodes and edges visited along the way.
 
 use std::collections::{HashMap, VecDeque};
@@ -16,7 +16,7 @@ use crate::model::{EdgeType, Graph, NodeId};
 use super::bfs::{bfs_trace, WorkItem};
 use super::{TraceCycle, TraceEdge, TraceNode, TracePath};
 
-/// BFS tracer over `Calls` / `FfiCalls` edges (PRD §4.2, AC-TRACE-001/003/004).
+/// BFS tracer over `Calls` / `FfiCalls` edges (PRD §4.2).
 ///
 /// Holds an immutable borrow of the [`Graph`] and exposes [`trace`] which
 /// returns every path reachable from `start_id` within `depth` hops.
@@ -62,7 +62,6 @@ impl<'a> CallGraphTracer<'a> {
     }
 
     /// Detects cycles in the call graph using DFS white/gray/black coloring
-    /// (R-trace-002).
     ///
     /// Traverses `Calls` and `FfiCalls` edges. When a gray node (currently on
     /// the DFS stack) is encountered via a back edge, a [`TraceCycle`] is
@@ -169,7 +168,7 @@ impl<'a> CallGraphTracer<'a> {
     }
 
     /// Performs a BFS traversal from `start_id` that includes `HttpCalls` and
-    /// reverse `HandlesRoute` edges for cross-service tracing (R-trace-003).
+    /// reverse `HandlesRoute` edges for cross-service tracing.
     ///
     /// In addition to `Calls` and `FfiCalls`, this method follows:
     /// - `HttpCalls` edges (forward: Function → Route)
@@ -310,7 +309,7 @@ mod tests {
 
     #[test]
     fn trace_a_returns_path_a_to_b() {
-        // AC-TRACE-001: A calls B -> trace A returns path A->B.
+        // A calls B -> trace A returns path A->B.
         let g = graph_a_calls_b();
         let tracer = CallGraphTracer::new(&g);
         let paths = tracer.trace(&"a".to_string(), 3);
@@ -343,7 +342,7 @@ mod tests {
 
     #[test]
     fn trace_a_depth_1_returns_only_a_to_b() {
-        // AC-TRACE-004: A calls B, B calls C -> trace A depth 1 returns only A->B.
+        // A calls B, B calls C -> trace A depth 1 returns only A->B.
         let g = graph_a_calls_b_calls_c();
         let tracer = CallGraphTracer::new(&g);
         let paths = tracer.trace(&"a".to_string(), 1);
@@ -355,7 +354,7 @@ mod tests {
 
     #[test]
     fn trace_respects_depth_limit() {
-        // AC-TRACE-004: depth limit respected — no path exceeds depth.
+        // Depth limit respected — no path exceeds depth.
         let g = graph_a_calls_b_calls_c();
         let tracer = CallGraphTracer::new(&g);
         let depth = 1;
@@ -367,7 +366,7 @@ mod tests {
 
     #[test]
     fn trace_ffi_calls_returns_path_with_ffi_edge() {
-        // AC-TRACE-003 (call-graph portion): A ffi_calls B -> path with FfiCalls.
+        // A ffi_calls B -> path with FfiCalls.
         let mut g = Graph::new();
         g.add_node(make_func("a", "a"));
         g.add_node(make_func("b", "b"));
@@ -569,7 +568,7 @@ mod tests {
         assert_eq!(paths[0].depth, 1);
     }
 
-    // --- T034: detect_cycles (R-trace-002) ---
+    // --- detect_cycles ---
 
     #[test]
     fn detect_cycles_abc_cycle_returns_trace_cycle() {
@@ -694,7 +693,7 @@ mod tests {
         assert!(tracer.detect_cycles().is_empty());
     }
 
-    // --- T035: trace_cross_service (R-trace-003) ---
+    // --- trace_cross_service ---
 
     fn make_route(id: &str, name: &str) -> Node {
         Node::builder(NodeLabel::Route, name, format!("proj.{name}"))
@@ -1411,7 +1410,7 @@ mod tests {
     }
 
     // ====================================================================
-    // C2: trace 共享 path_set — 等价性表征测试
+    // Trace 共享 path_set — 等价性表征测试
     // ====================================================================
 
     /// Builds a linear call chain `n0 -> n1 -> ... -> n{size-1}` with `size`
@@ -1449,7 +1448,7 @@ mod tests {
 
     #[test]
     fn test_call_graph_shares_path_set_with_bfs_linear_1000() {
-        // C2 T100: 1000-node linear chain. call_graph.trace and bfs_trace
+        // 1000-node linear chain. call_graph.trace and bfs_trace
         // (with Calls|FfiCalls filter) must return equivalent path sets:
         // same count, same depth multiset, no duplicate nodes per path.
         use crate::trace::bfs::bfs_trace;
@@ -1487,7 +1486,7 @@ mod tests {
 
     #[test]
     fn test_call_graph_shares_path_set_with_bfs_diamond() {
-        // C2 T100: diamond graph exercises branching + merge. call_graph
+        // Diamond graph exercises branching + merge. call_graph
         // and bfs_trace must agree on path count and depth multiset.
         use crate::trace::bfs::bfs_trace;
         let g = build_diamond_graph();

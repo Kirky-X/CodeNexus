@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Integration tests for the `diagram` command (absorb-archify T022).
+//! Integration tests for the `diagram` command.
 //!
 //! Exercises `run_diagram` end-to-end against a seeded LadybugDB: module
 //! typing from real layer facts, cycle/cross-service edge variants, and the

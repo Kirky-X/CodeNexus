@@ -740,9 +740,9 @@ mod tests {
         c.shutdown().unwrap();
     }
 
-    // ---- C9: references method (T170 / T171a) ----
+    // ---- references method ----
 
-    /// T170 — `references` must return every impl-site location the
+    /// `references` must return every impl-site location the
     /// `rust-analyzer` server reports for a trait method.
     ///
     /// Scenario: user invokes references on `fmt` declared in
@@ -791,7 +791,7 @@ mod tests {
         let _ = c.shutdown();
     }
 
-    /// T171a — `references` results must be cached for 5 minutes keyed by
+    /// `references` results must be cached for 5 minutes keyed by
     /// `(uri, line, column)`. Second call within the TTL window must not
     /// hit the LSP server; after the TTL elapses the cache must invalidate
     /// and the next call must dispatch a fresh request.

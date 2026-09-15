@@ -182,7 +182,7 @@ mod tests {
         assert!(json.contains("\"overview\""));
     }
 
-    // ===== T041: Enhanced architecture fields tests =====
+    // ===== Enhanced architecture fields tests =====
 
     #[test]
     fn run_architecture_includes_module_boundaries() {

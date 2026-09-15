@@ -95,7 +95,7 @@ struct VisitContext<'a> {
     project: &'a str,
     current_func: Option<&'a str>,
     current_parent: Option<&'a str>,
-    /// Scope resolver registry (design.md D3).
+    /// Scope resolver registry.
     resolver: &'a ScopeResolverRegistry,
 }
 
@@ -103,7 +103,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
     match node.kind() {
         "function_definition" => {
             // Use ScopeResolver to detect C++ namespace/class/struct blocks
-            // misparsed as function_definition (design.md D3). The resolver
+            // misparsed as function_definition. The resolver
             // returns the appropriate NodeLabel, centralizing the quirk.
             let scope_ctx = ScopeContext {
                 source,
@@ -182,7 +182,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             extract_struct(node, source, ctx, result);
             // Pass the struct name as current_parent to children when a body exists.
             if node.child_by_field_name("body").is_some() {
-                // Use ScopeResolver to get the struct name (design.md D3).
+                // Use ScopeResolver to get the struct name.
                 let scope_ctx = ScopeContext {
                     source,
                     file_path: ctx.file_path,
@@ -215,7 +215,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "init_declarator" => {
             // A local `int x = 1;` writes the declarator's identifier
-            // (BR-TRACE-006). Only attribute the write when inside a function
+            // Only attribute the write when inside a function
             // body (current_func is Some).
             if let Some(func) = ctx.current_func {
                 if let Some(name) = declarator_name(node, source) {
@@ -234,7 +234,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             visit_children(node, source, ctx, result);
         }
         "assignment_expression" => {
-            // `x = ...;` writes the left-hand identifier (BR-TRACE-006). Only
+            // `x = ...;` writes the left-hand identifier. Only
             // simple identifier targets are captured; field/index writes are
             // ignored.
             if let Some(func) = ctx.current_func {
@@ -257,7 +257,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "identifier" => {
             // A bare identifier in an expression position is a variable read
-            // (BR-TRACE-005). Name-defining positions (declarators, call
+            // Name-defining positions (declarators, call
             // functions, assignment left) are excluded by `is_read_position`.
             if let Some(func) = ctx.current_func {
                 if is_read_position(node) {
@@ -713,7 +713,7 @@ fn declarator_name(node: Node, source: &str) -> Option<String> {
         "identifier" => node_text(node, source).map(String::from),
         "function_declarator" => {
             let inner = node.child_by_field_name("declarator")?;
-            // B9 fix: detect nested function_declarator (function returning
+            // Detect nested function_declarator (function returning
             // function), which is invalid in C. This pattern occurs when a
             // macro invocation like `API_SUFFIX(cblas_caxpy)` is misparsed by
             // tree-sitter-c as a function_declarator wrapping another
@@ -797,7 +797,7 @@ fn identifier_text(node: Node, source: &str) -> Option<String> {
 /// Returns `true` if a bare `identifier` node sits in a read (expression)
 /// position rather than a name-defining position (declarator, callee, write
 /// target). Minimal version: only checks the direct parent kind, matching the
-/// rust_extractor convention (design.md Decision 4, Open Question 2).
+/// rust_extractor convention.
 fn is_read_position(node: Node) -> bool {
     let Some(parent) = node.parent() else {
         return false;
@@ -836,7 +836,7 @@ fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> 
     FqnGenerator::generate(project, file_path, name, Language::C, parent)
 }
 
-// `dedupe_qn` is shared across all extractors — see `parse::dedupe_qn` (MED-002).
+// `dedupe_qn` is shared across all extractors — see `parse::dedupe_qn`.
 
 /// Combines a parent scope context with a child scope name (ADR-005).
 /// Returns `Some("{parent}_{child}")` when both are present, the non-`None`
@@ -856,7 +856,7 @@ fn add_definition_edges(
     node: &ModelNode,
     result: &mut ExtractResult,
 ) {
-    // B1 fix: only emit DEFINES (file -> definition). The previous CONTAINS
+    // Only emit DEFINES (file -> definition). The previous CONTAINS
     // emission was redundant — for (file, node) pairs, CONTAINS and DEFINES
     // carry identical semantics, producing duplicate edges that inflated
     // verification diffs against gitnexus (see triage.md §B1).
@@ -1041,7 +1041,7 @@ typedef unsigned short int flex_uint16_t;
 
     #[test]
     fn creates_defines_edges() {
-        // B1 fix: CONTAINS emission removed; only DEFINES remains.
+        // CONTAINS emission removed; only DEFINES remains.
         let result = extract(C_SOURCE);
         let defines_count = result
             .edges
@@ -1243,7 +1243,7 @@ typedef unsigned short int flex_uint16_t;
 
     #[test]
     fn read_in_function_has_dotted_fqn_reader_qn() {
-        // Spec: C 函数内 identifier 读取提取 (BR-TRACE-005)。
+        // Spec: C 函数内 identifier 读取提取。
         let src = "int caller(int x) {\n    return x;\n}\n";
         let ext = CExtractor::new();
         let result = ext
@@ -1273,7 +1273,7 @@ typedef unsigned short int flex_uint16_t;
 
     #[test]
     fn write_in_function_init_declarator_has_dotted_fqn_writer_qn() {
-        // Spec: C 函数内 init_declarator 写入提取 (BR-TRACE-006)。
+        // Spec: C 函数内 init_declarator 写入提取。
         let src = "void caller(void) {\n    int y = 1;\n}\n";
         let ext = CExtractor::new();
         let result = ext
@@ -1304,7 +1304,7 @@ typedef unsigned short int flex_uint16_t;
 
     #[test]
     fn write_in_function_assignment_has_dotted_fqn_writer_qn() {
-        // Spec: C 函数内 assignment_expression 写入提取 (BR-TRACE-006)。
+        // Spec: C 函数内 assignment_expression 写入提取。
         let src = "void caller(void) {\n    int y;\n    y = 2;\n}\n";
         let ext = CExtractor::new();
         let result = ext
@@ -1478,7 +1478,7 @@ static void cJSON_skip_whitespace(const char *buffer) {
 
     #[test]
     fn macro_invocation_not_extracted_as_function() {
-        // B9 fix: `void API_SUFFIX(cblas_caxpy)(int x) { ... }` is a LAPACK
+        // `void API_SUFFIX(cblas_caxpy)(int x) { ... }` is a LAPACK
         // CBLAS pattern where API_SUFFIX is a macro. tree-sitter-c (without
         // preprocessing) parses this as a nested function_declarator (function
         // returning function), which is invalid C. The extractor must NOT

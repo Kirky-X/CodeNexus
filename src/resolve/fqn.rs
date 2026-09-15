@@ -152,7 +152,6 @@ impl FqnGenerator {
         // the package path directly. (ADR-001: full filename is retained, so
         // the comparison is against the full "__init__.py" not "__init__".)
         // Gated by `lang-python` since it references `Language::Python`
-        // (unified-architecture Phase 1).
         #[cfg(feature = "lang-python")]
         if language == Language::Python && segments.last().is_some_and(|s| s == "__init__.py") {
             segments.pop();

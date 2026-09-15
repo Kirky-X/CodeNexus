@@ -5,7 +5,7 @@
 //!
 //! Wraps the [`ignore`] crate to walk repositories while honoring
 //! `.gitignore`/`.codenexusignore` rules and the `ALWAYS_SKIP_DIRS` allowlist
-//! (ADR-012, BR-INDEX-006).
+//! (ADR-012).
 
 mod error;
 mod walker;

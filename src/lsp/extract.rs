@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 /// Extracts the first non-empty line from an LSP [`Hover`] response as the
-/// `semantic_type` string (R-lsp-004). Truncates to 200 chars to keep the
+/// `semantic_type` string Truncates to 200 chars to keep the
 /// property lean.
 ///
 /// Shared by the service-layer LSP enhancement (`service::index::enhance_with_lsp`) and
 /// the mock-testable pipeline unit (`index::pipeline::enhance_with_lsp`) so the
-/// extraction contract is defined once (Rule 8: no duplicate implementations).
+/// extraction contract is defined once (no duplicate implementations).
 pub fn extract_hover_text(hover: &lsp_types::Hover) -> Option<String> {
     use lsp_types::{HoverContents, MarkedString};
 

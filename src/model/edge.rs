@@ -10,7 +10,7 @@ use std::str::FromStr;
 use super::{EdgeType, NodeId};
 
 /// Confidence tier classifying the strength of an edge based on the
-/// caller↔callee file/import scope (design.md D4, T9 H4).
+/// caller↔callee file/import scope.
 ///
 /// The tier is a categorical classification complementing the numeric
 /// `Edge::confidence` score. Resolvers populate the tier during resolution;
@@ -37,7 +37,7 @@ pub enum ConfidenceTier {
 }
 
 impl ConfidenceTier {
-    /// Returns the default confidence score for this tier (design.md D4).
+    /// Returns the default confidence score for this tier.
     ///
     /// - [`SameFile`](Self::SameFile) → 0.95
     /// - [`ImportScoped`](Self::ImportScoped) → 0.90
@@ -95,7 +95,7 @@ pub struct Edge {
     pub edge_type: EdgeType,
     /// Confidence score in `[0.0, 1.0]`.
     pub confidence: f32,
-    /// Confidence tier classifying the edge by caller↔callee scope (design.md D4).
+    /// Confidence tier classifying the edge by caller↔callee scope.
     /// Defaults to [`ConfidenceTier::Global`]; resolvers override during resolution.
     #[serde(default)]
     pub confidence_tier: ConfidenceTier,

@@ -1,8 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! trait-kit module for the Resolver subsystem (T6/unified-architecture
-//! Phase 2, Task 2.8; v0.3.3 AsyncKit migration).
+//! trait-kit module for the Resolver subsystem.
 //!
 //! Implements [`ModuleMeta`] + [`AsyncAutoBuilder`] for [`ResolverModule`],
 //! wiring the existing free functions [`build_symbol_table`](super::build_symbol_table)
@@ -27,7 +26,7 @@ use crate::model::Graph;
 // Module (ModuleMeta + AsyncAutoBuilder)
 // ---------------------------------------------------------------------------
 
-/// trait-kit module tag for the Resolver subsystem (Task 2.8).
+/// trait-kit module tag for the Resolver subsystem.
 ///
 /// Zero-sized marker — construction logic lives in
 /// [`ResolverModule::build_cap`]. Register in Kit via:

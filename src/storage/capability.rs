@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Storage capability trait (T6/unified-architecture Phase 2, Task 2.3).
+//! Storage capability trait.
 //!
 //! Defines [`Storage`], the capability trait object stored in
 //! [`Kit`](crate::kit::Kit) under [`StorageKey`](crate::kit::StorageKey). The
-//! concrete implementation (Task 2.4) wraps a [`StorageConnection`] (or
+//! concrete implementation wraps a [`StorageConnection`] (or
 //! [`Repository`]) and is registered as `Arc<dyn Storage>`.
 //!
 //! # Why operations, not a connection borrow
@@ -38,7 +38,7 @@ use super::repository::{FunctionRecord, ProjectRecord};
 /// [`StorageConnection`](super::StorageConnection).
 ///
 /// Every method mirrors an existing method on [`StorageConnection`] or
-/// [`Repository`](super::Repository); the concrete impl (Task 2.4) delegates
+/// [`Repository`](super::Repository); the concrete impl delegates
 /// to them.
 pub trait Storage: Send + Sync {
     /// Initializes the full CodeNexus schema. Idempotent.

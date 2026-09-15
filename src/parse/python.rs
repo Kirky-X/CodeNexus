@@ -22,10 +22,10 @@
 //! - `import_statement` / `import_from_statement` → [`ImportInfo`]
 //! - `call` → [`CallInfo`]
 //! - `assignment` → [`AssignInfo`]
-//! - `assignment` left → [`WriteInfo`] (BR-TRACE-006)
-//! - `augmented_assignment` left → [`WriteInfo`] (BR-TRACE-006, `+=` etc.)
-//! - `for_statement` left → [`WriteInfo`] (loop variable, BR-TRACE-006)
-//! - expression-position `identifier` → [`ReadInfo`] (BR-TRACE-005)
+//! - `assignment` left → [`WriteInfo`]
+//! - `augmented_assignment` left → [`WriteInfo`] (`+=` etc.)
+//! - `for_statement` left → [`WriteInfo`] (loop variable)
+//! - expression-position `identifier` → [`ReadInfo`]
 //!
 //! # Known limitations
 //!
@@ -108,7 +108,7 @@ struct VisitContext<'a> {
     project: &'a str,
     current_func: Option<&'a str>,
     current_parent: Option<&'a str>,
-    /// Scope resolver registry (design.md D3). Used to identify scope-introducing
+    /// Scope resolver registry. Used to identify scope-introducing
     /// nodes and extract their scope info, replacing manual name extraction.
     resolver: &'a ScopeResolverRegistry,
 }
@@ -117,7 +117,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
     match node.kind() {
         "function_definition" => {
             extract_function(node, source, ctx, result);
-            // Use ScopeResolver to get the function name (design.md D3),
+            // Use ScopeResolver to get the function name,
             // replacing manual name-field extraction.
             let scope_ctx = ScopeContext {
                 source,
@@ -143,7 +143,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             extract_class(node, source, ctx, result);
             // 把类名纳入 current_parent，使不同类的同名方法生成不同 FQN
             // （修复 P0 python-static-class-methods 碰撞）。
-            // Use ScopeResolver to get the class name (design.md D3).
+            // Use ScopeResolver to get the class name.
             let scope_ctx = ScopeContext {
                 source,
                 file_path: ctx.file_path,
@@ -177,7 +177,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "assignment" => {
             // extract_assignment preserves the existing AssignInfo extraction.
-            // BR-TRACE-006: a simple-identifier left-hand side is a write,
+            // A simple-identifier left-hand side is a write,
             // captured only inside a function body. Tuple/list destructuring
             // is skipped (only simple identifiers are captured). The right-hand
             // expression's identifiers are captured as reads by the
@@ -202,7 +202,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             visit_children(node, source, ctx, result);
         }
         "augmented_assignment" => {
-            // `x += 1` writes the left-hand identifier (BR-TRACE-006). Per the
+            // `x += 1` writes the left-hand identifier. Per the
             // simplified spec, only the write is recorded (the implicit read of
             // `x` is intentionally not double-counted). Only simple-identifier
             // left sides inside a function body are captured. The right-hand
@@ -227,7 +227,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             visit_children(node, source, ctx, result);
         }
         "for_statement" => {
-            // `for i in iterable:` writes the loop variable (BR-TRACE-006).
+            // `for i in iterable:` writes the loop variable.
             // Only a simple-identifier left side is captured; tuple unpacking
             // (`for k, v in ...`) is skipped. The iterable's identifiers are
             // captured as reads by the `identifier` branch during
@@ -252,7 +252,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "identifier" => {
             // A bare identifier in an expression position is a variable read
-            // (BR-TRACE-005). Name-defining positions (assignment left,
+            // Name-defining positions (assignment left,
             // augmented-assignment left, for-loop left, def/class name, callee,
             // attribute name, import name) are excluded by
             // `is_python_read_position`.
@@ -331,7 +331,7 @@ fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &m
         .language(Language::Python)
         .project(ctx.project)
         .is_global(matches!(scope, FunctionScope::Module));
-    // B8 fix: set parentQn for Method nodes so class_methods.cql can find them
+    // Set parentQn for Method nodes so class_methods.cql can find them
     // (CodeNexus doesn't emit HAS_METHOD edges; parentQn is the linkage).
     if is_method {
         if let Some(parent) = ctx.current_parent {
@@ -687,7 +687,7 @@ fn identifier_text(node: Node, source: &str) -> Option<String> {
 /// Returns `true` if a bare `identifier` node sits in a read (expression)
 /// position rather than a name-defining position (assignment left,
 /// augmented-assignment left, for-loop left, def/class name, callee, attribute
-/// name, import name). Mirrors the c.rs convention (design.md Decision 4, Open
+/// name, import name). Mirrors the c.rs convention(
 /// Question 2): only the direct parent kind is inspected, plus field checks for
 /// the assignment left / call function / attribute object cases.
 fn is_python_read_position(node: Node) -> bool {
@@ -758,7 +758,7 @@ fn combine_scope(parent: Option<&str>, child: Option<&str>) -> Option<String> {
     }
 }
 
-// `dedupe_qn` is shared across all extractors — see `parse::dedupe_qn` (MED-002).
+// `dedupe_qn` is shared across all extractors — see `parse::dedupe_qn`.
 
 fn add_definition_edges(
     file_path: &str,
@@ -766,7 +766,7 @@ fn add_definition_edges(
     node: &ModelNode,
     result: &mut ExtractResult,
 ) {
-    // B1 fix: only emit DEFINES (file -> definition). The previous CONTAINS
+    // Only emit DEFINES (file -> definition). The previous CONTAINS
     // emission was redundant — for (file, node) pairs, CONTAINS and DEFINES
     // carry identical semantics, producing duplicate edges that inflated
     // verification diffs against gitnexus (see triage.md §B1).
@@ -1007,7 +1007,7 @@ class Foo(metaclass=Meta):
 
     #[test]
     fn creates_defines_edges() {
-        // B1 fix: CONTAINS emission removed; only DEFINES remains.
+        // CONTAINS emission removed; only DEFINES remains.
         let result = extract(PYTHON_SOURCE);
         let defines_count = result
             .edges
@@ -1274,7 +1274,7 @@ class Foo(metaclass=Meta):
 
     #[test]
     fn read_in_function_has_dotted_fqn_reader_qn() {
-        // Spec: Python 函数内 identifier 读取提取 (BR-TRACE-005)。
+        // Spec: Python 函数内 identifier 读取提取。
         let src = "def caller(x):\n    y = x + 1\n    return y\n";
         let ext = PythonExtractor::new();
         let result = ext
@@ -1304,7 +1304,7 @@ class Foo(metaclass=Meta):
 
     #[test]
     fn write_in_function_assignment_has_dotted_fqn_writer_qn() {
-        // Spec: Python 函数内 assignment 写入提取 (BR-TRACE-006)。
+        // Spec: Python 函数内 assignment 写入提取。
         let src = "def caller(x):\n    y = x + 1\n    return y\n";
         let ext = PythonExtractor::new();
         let result = ext
@@ -1334,7 +1334,7 @@ class Foo(metaclass=Meta):
 
     #[test]
     fn augmented_assignment_is_write() {
-        // Spec: Python augmented_assignment 写入提取 (BR-TRACE-006)。
+        // Spec: Python augmented_assignment 写入提取。
         let src = "def caller(x):\n    y = x\n    y += 1\n    return y\n";
         let ext = PythonExtractor::new();
         let result = ext
@@ -1357,7 +1357,7 @@ class Foo(metaclass=Meta):
 
     #[test]
     fn for_loop_target_is_write() {
-        // Spec: Python for_statement 循环变量写入提取 (BR-TRACE-006)。
+        // Spec: Python for_statement 循环变量写入提取。
         let src =
             "def looper():\n    s = 0\n    for i in range(10):\n        s = s + i\n    return s\n";
         let ext = PythonExtractor::new();

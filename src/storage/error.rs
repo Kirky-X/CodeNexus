@@ -62,7 +62,7 @@ pub enum StorageError {
     /// its file lock — another codenexus process holds the exclusive write
     /// lock. Distinct from transient query-time locks (handled by retry): this
     /// is a hard open failure. Maps to exit code 2 with a clear message
-    /// (Rule 12: fail loud — must not be hidden behind a generic `Kit`/exit-1
+    /// (fail loud — must not be hidden behind a generic `Kit`/exit-1
     /// error).
     #[error("database is locked by another process: {holder_hint}")]
     DatabaseLocked { holder_hint: String },

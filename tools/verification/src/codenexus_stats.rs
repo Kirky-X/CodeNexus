@@ -112,26 +112,26 @@ pub fn run_single(repo: &Path, name: &str, language: &str, resume: bool) -> Resu
         stats.file_counts_by_language = count_files_by_language(repo, language);
         stats
     } else {
-        // Task 3.1: run index
+        // Run index
         run_index(repo, name)?;
 
-        // Task 3.2: extract stats
+        // Extract stats
         let mut stats = extract_stats(db_path, name)?;
         stats.file_counts_by_language = count_files_by_language(repo, language);
         stats
     };
 
-    // Task 3.3: write results
+    // Write results
     let path = write_results(name, &stats)?;
     eprintln!("[ok] wrote {path:?}");
     Ok(stats)
 }
 
-/// Task 3.1: Invoke `cargo run --bin codenexus -- index <repo> --name <name>`.
+/// Invoke `cargo run --bin codenexus -- index <repo> --name <name>`.
 ///
 /// Uses `cargo run` rather than a bare `codenexus` binary because the latter
 /// is not installed in PATH in this environment. Captures stdout/stderr and
-/// returns an explicit error on non-zero exit (Rule 12: fail loud).
+/// returns an explicit error on non-zero exit (fail loud).
 ///
 /// **Multi-project coexistence**: CodeNexus supports multiple projects in the
 /// same DB by design (see `ac_index_003_multiple_projects_coexist` in
@@ -168,7 +168,7 @@ pub fn run_index(repo_path: &Path, name: &str) -> Result<()> {
         .context("failed to spawn `cargo run --bin codenexus`")?;
 
     if !output.status.success() {
-        // Rule 12: surface stderr explicitly, do not swallow.
+        // Surface stderr explicitly, do not swallow.
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
         anyhow::bail!(
@@ -185,7 +185,7 @@ pub fn run_index(repo_path: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Task 3.2: Open the LadybugDB index and extract node/edge counts by type.
+/// Open the LadybugDB index and extract node/edge counts by type.
 ///
 /// CodeNexus stores each node type in a separate table (e.g. `Function`,
 /// `Class`, ...) and all edges in a single `CodeRelation` table with a `type`
@@ -246,7 +246,7 @@ pub fn extract_stats(db_path: &Path, name: &str) -> Result<CodeNexusStats> {
             }
             Err(e) => {
                 // Table may not exist if the label was never created; surface
-                // as a warning but do not abort (Rule 12: visible, not fatal).
+                // as a warning but do not abort (visible, not fatal).
                 eprintln!("[warn] count for {table} failed: {e}");
             }
         }
@@ -296,7 +296,7 @@ pub fn extract_stats(db_path: &Path, name: &str) -> Result<CodeNexusStats> {
 /// # Errors
 ///
 /// Returns an error if the project name is not found in the Project table.
-/// This is a fail-loud signal (Rule 12): a missing project means the index
+/// This is a fail-loud signal: a missing project means the index
 /// step failed silently or the wrong DB was opened. We must NOT silently
 /// return zero counts — that would hide the failure behind plausible-looking
 /// numbers.
@@ -325,7 +325,7 @@ pub fn lookup_project_id(
 
 /// Convert a `serde_json::Value` to `u64`, handling the LadybugDB quirk where
 /// `UInt64` values are serialized as JSON strings (see `connection.rs:267`).
-/// Falls back to 0 on unparseable input (Rule 12: visible — caller sees 0
+/// Falls back to 0 on unparseable input (visible — caller sees 0
 /// count in the report, which surfaces the gap rather than hiding it).
 fn json_to_u64(v: &serde_json::Value) -> u64 {
     if let Some(u) = v.as_u64() {
@@ -341,7 +341,6 @@ fn json_to_u64(v: &serde_json::Value) -> u64 {
 }
 
 /// Count source files by language based on file extensions in the repo.
-/// (Task 3.2 sub-requirement: `file_counts_by_language`.)
 fn count_files_by_language(repo_path: &Path, primary_lang: &str) -> BTreeMap<String, u64> {
     let mut counts: BTreeMap<String, u64> = BTreeMap::new();
     let walker = ignore::WalkBuilder::new(repo_path)
@@ -372,7 +371,7 @@ fn count_files_by_language(repo_path: &Path, primary_lang: &str) -> BTreeMap<Str
     counts
 }
 
-/// Task 3.3: Write stats to `tools/verification/results/<name>.codenexus.json`.
+/// Write stats to `tools/verification/results/<name>.codenexus.json`.
 pub fn write_results(name: &str, stats: &CodeNexusStats) -> Result<PathBuf> {
     let dir = Path::new("tools/verification/results");
     std::fs::create_dir_all(dir)?;
@@ -462,7 +461,7 @@ mod tests {
 
     #[test]
     fn json_to_u64_falls_back_to_zero_for_unparseable() {
-        // Rule 12: visible 0, not silent drop. Non-numeric strings → 0.
+        // Visible 0, not silent drop. Non-numeric strings → 0.
         assert_eq!(
             json_to_u64(&serde_json::Value::String("not-a-number".into())),
             0
@@ -495,7 +494,7 @@ mod tests {
 
     #[test]
     fn lookup_project_id_errors_when_name_missing() {
-        // Rule 12: fail loud when the project is not in the DB — returning
+        // Fail loud when the project is not in the DB — returning
         // zero counts would hide a silent index failure behind plausible
         // numbers. Covers the `ok_or_else` error branch.
         let dir = tempfile::tempdir().unwrap();
@@ -587,7 +586,7 @@ mod tests {
     #[test]
     fn extract_stats_errors_when_project_missing() {
         // No Project rows at all → lookup_project_id fails → extract_stats
-        // must propagate the error (Rule 12). Covers the `?` propagation.
+        // must propagate the error. Covers the `?` propagation.
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("empty-stats.lbug");
         let _ = codenexus::storage::repository::Repository::open(&db_path).unwrap();

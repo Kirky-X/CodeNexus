@@ -5,7 +5,7 @@
 //!
 //! Matches HTTP route patterns against string literals found in caller
 //! function bodies, then persists `CROSS_SERVICE_CALLS` edges into the
-//! `CodeRelation` table. v0.2.0 scope is HTTP REST only — gRPC/GraphQL/tRPC
+//! `CodeRelation` table. Current scope is HTTP REST only — gRPC/GraphQL/tRPC
 //! detection is explicitly out of scope per the analysis spec.
 //!
 //! # Algorithm
@@ -27,7 +27,7 @@
 //!
 //! # Deterministic matching
 //!
-//! Per Rule 5 (确定性逻辑禁止交给模型), route matching is implemented with
+//! Per the deterministic-logic rule (确定性逻辑禁止交给模型), route matching is implemented with
 //! explicit string segmentation — no regex engine is invoked. The match
 //! outcome is fully determined by the pattern and literal bytes.
 
@@ -532,7 +532,7 @@ impl<'a> CrossServiceDetector<'a> {
 
     /// Maps a `(match_type, protocol)` pair to a [`Confidence`] level.
     ///
-    /// Scoring matrix (per R-cross_service-005):
+    /// Scoring matrix:
     /// - **High**: `Exact` match on `HttpRest` or `Grpc`.
     /// - **Medium**: `Parameterized` match on any protocol, or `Exact`
     ///   match on a non-HTTP/gRPC protocol.
@@ -620,7 +620,7 @@ struct CallerRow {
 }
 
 // ---------------------------------------------------------------------------
-// Route pattern matching (deterministic, no regex — Rule 5)
+// Route pattern matching (deterministic, no regex)
 // ---------------------------------------------------------------------------
 
 /// Attempts to match `pattern` against `literal`, returning the match type.
@@ -992,7 +992,7 @@ mod tests {
     }
 
     // ====================================================================
-    // R-analysis-005: route pattern matching unit tests
+    // Route pattern matching unit tests
     // ====================================================================
 
     #[test]
@@ -1102,7 +1102,7 @@ mod tests {
     }
 
     // ====================================================================
-    // R-analysis-005: CrossServiceLinker::link storage integration
+    // CrossServiceLinker::link storage integration
     // ====================================================================
 
     #[test]
@@ -1545,7 +1545,7 @@ mod tests {
     }
 
     // ====================================================================
-    // T008: Multi-protocol types
+    // Multi-protocol types
     // ====================================================================
 
     #[test]
@@ -1654,7 +1654,7 @@ mod tests {
     }
 
     // ====================================================================
-    // T009: gRPC detection
+    // gRPC detection
     // ====================================================================
 
     #[test]
@@ -1744,7 +1744,7 @@ mod tests {
     }
 
     // ====================================================================
-    // T010: GraphQL detection
+    // GraphQL detection
     // ====================================================================
 
     #[test]
@@ -1860,7 +1860,7 @@ mod tests {
     }
 
     // ====================================================================
-    // T011: Message queue detection
+    // Message queue detection
     // ====================================================================
 
     #[test]
@@ -1992,7 +1992,7 @@ mod tests {
     }
 
     // ====================================================================
-    // T012: Event bus detection
+    // Event bus detection
     // ====================================================================
 
     #[test]
@@ -2120,7 +2120,7 @@ mod tests {
     }
 
     // ====================================================================
-    // T013: Confidence scoring (R-cross_service-005)
+    // Confidence scoring
     // ====================================================================
 
     fn make_detector() -> CrossServiceDetector<'static> {
@@ -2201,7 +2201,7 @@ mod tests {
     }
 
     // ====================================================================
-    // T013: detect_all sorts by confidence descending (R-cross_service-006)
+    // detect_all sorts by confidence descending
     // ====================================================================
 
     #[test]

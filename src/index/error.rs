@@ -93,7 +93,7 @@ impl From<crate::storage::error::StorageError> for IndexError {
 }
 
 /// Converts a [`PhaseError`] into an [`IndexError`], preserving the original
-/// [`IndexError`] variant when possible (Rule 12: fail loud).
+/// [`IndexError`] variant when possible (fail loud).
 ///
 /// Phases box their [`IndexError`] into [`PhaseError::ExecutionFailed`]; this
 /// impl downcasts it back so the CLI produces the correct exit code.
@@ -281,7 +281,7 @@ mod tests {
     fn from_phase_error_execution_failed_with_index_error_preserves_variant() {
         // When a phase boxes an IndexError, the From impl downcasts it back
         // so the CLI produces the correct exit code for the original variant
-        // (Rule 12: fail loud, preserve the original error type).
+        // (fail loud, preserve the original error type).
         let original = IndexError::Parse("syntax error".to_string());
         let phase_err: crate::index::pipeline_dag::PhaseError =
             crate::index::pipeline_dag::PhaseError::ExecutionFailed {

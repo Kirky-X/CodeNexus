@@ -8,30 +8,30 @@
 //!
 //! # Business rules (PRD §4.2.4)
 //!
-//! - BR-TRACE-001: Parameter passing - Variable -> Parameter, DataFlows edge.
+//! - Parameter passing - Variable -> Parameter, DataFlows edge.
 //!   `foo(var)` -> var flows to foo's parameter.
-//! - BR-TRACE-002: Return assignment - Function -> Variable, DataFlows edge.
+//! - Return assignment - Function -> Variable, DataFlows edge.
 //!   `x = foo()` -> foo's return flows to x.
-//! - BR-TRACE-003: Variable assignment - Variable -> Variable, DataFlows edge.
+//! - Variable assignment - Variable -> Variable, DataFlows edge.
 //!   `x = y` -> y flows to x.
-//! - BR-TRACE-004: Function assignment - Function -> Variable, DataFlows edge.
-//!   `x = foo()` (same as BR-TRACE-002).
-//! - BR-TRACE-005: Variable read - Function -> Variable, Reads edge.
-//! - BR-TRACE-006: Variable write - Function -> Variable, Writes edge.
+//! - Function assignment - Function -> Variable, DataFlows edge.
+//!   `x = foo()` (same as).
+//! - Variable read - Function -> Variable, Reads edge.
+//! - Variable write - Function -> Variable, Writes edge.
 
 use crate::ir::ExtractResult;
 use crate::model::{ConfidenceTier, Edge, EdgeType, Graph, Language, Node, NodeLabel};
 use crate::resolve::{fqn::FqnGenerator, ProjectSymbolTable};
 
-/// Confidence for a return-assignment data flow edge (BR-TRACE-002/004).
+/// Confidence for a return-assignment data flow edge.
 const CONFIDENCE_RETURN_ASSIGN: f32 = 0.90;
-/// Confidence for a variable-assignment data flow edge (BR-TRACE-003).
+/// Confidence for a variable-assignment data flow edge.
 const CONFIDENCE_VAR_ASSIGN: f32 = 0.85;
-/// Confidence for a parameter-passing data flow edge (BR-TRACE-001).
+/// Confidence for a parameter-passing data flow edge.
 const CONFIDENCE_ARG_PASS: f32 = 0.80;
-/// Confidence for a variable-read edge (BR-TRACE-005, Function -> Variable).
+/// Confidence for a variable-read edge (Function -> Variable).
 const CONFIDENCE_READS: f32 = 0.75;
-/// Confidence for a variable-write edge (BR-TRACE-006, Function -> Variable).
+/// Confidence for a variable-write edge (Function -> Variable).
 const CONFIDENCE_WRITES: f32 = 0.75;
 
 /// Resolves data flow edges from extraction results.
@@ -60,11 +60,11 @@ impl<'a> DataFlowResolver<'a> {
     /// graph.
     ///
     /// Processes:
-    /// - Assignments: return assignments (BR-TRACE-002/004) and variable
-    ///   assignments (BR-TRACE-003).
-    /// - Call arguments: parameter passing (BR-TRACE-001).
-    /// - Variable reads: Reads edges (BR-TRACE-005).
-    /// - Variable writes: Writes edges (BR-TRACE-006).
+    /// - Assignments: return assignments and variable
+    ///   assignments.
+    /// - Call arguments: parameter passing.
+    /// - Variable reads: Reads edges.
+    /// - Variable writes: Writes edges.
     ///
     /// Edges are added directly to `graph` (no return value). This avoids the
     /// anti-pattern of cloning each edge into both the graph and a return
@@ -80,7 +80,7 @@ impl<'a> DataFlowResolver<'a> {
             let file = &result.file_path;
             let language = result.language;
 
-            // Process assignments (BR-TRACE-002, BR-TRACE-003, BR-TRACE-004).
+            // Process assignments.
             for assign in &result.assignments {
                 let edge = if assign.is_return_assign {
                     // x = foo() -> DataFlows edge foo -> x
@@ -109,7 +109,7 @@ impl<'a> DataFlowResolver<'a> {
                 }
             }
 
-            // Process call arguments (BR-TRACE-001).
+            // Process call arguments.
             for call in &result.calls {
                 for (arg_index, arg) in call.args.iter().enumerate() {
                     // Only create data flow edges for variable arguments,
@@ -148,7 +148,7 @@ impl<'a> DataFlowResolver<'a> {
             }
         }
 
-        // Process variable reads (BR-TRACE-005) and writes (BR-TRACE-006).
+        // Process variable reads and writes.
         self.resolve_reads(results, graph);
         self.resolve_writes(results, graph);
     }
@@ -156,7 +156,7 @@ impl<'a> DataFlowResolver<'a> {
     /// Resolves a return assignment: `x = foo()` -> DataFlows edge from foo
     /// to x.
     ///
-    /// Implements BR-TRACE-002 and BR-TRACE-004.
+    /// Implements and.
     ///
     /// # Arguments
     ///
@@ -191,7 +191,7 @@ impl<'a> DataFlowResolver<'a> {
 
     /// Resolves a variable assignment: `x = y` -> DataFlows edge from y to x.
     ///
-    /// Implements BR-TRACE-003.
+    /// Implements.
     ///
     /// # Arguments
     ///
@@ -226,7 +226,7 @@ impl<'a> DataFlowResolver<'a> {
     /// Resolves parameter passing: `foo(var)` -> DataFlows edge from var to
     /// foo's parameter.
     ///
-    /// Implements BR-TRACE-001.
+    /// Implements.
     ///
     /// # Arguments
     ///
@@ -265,7 +265,7 @@ impl<'a> DataFlowResolver<'a> {
     /// Resolves variable reads: function reads variable -> Reads edge
     /// (Function -> Variable).
     ///
-    /// Implements BR-TRACE-005. For each [`ReadInfo`], the enclosing function
+    /// Implements. For each [`ReadInfo`], the enclosing function
     /// (identified by `reader_qn`, which holds the function name) is looked up
     /// in the symbol table to obtain its FQN; the variable is resolved via
     /// [`resolve_var_identifier`](Self::resolve_var_identifier). If the reader
@@ -304,7 +304,7 @@ impl<'a> DataFlowResolver<'a> {
     /// Resolves variable writes: function writes variable -> Writes edge
     /// (Function -> Variable).
     ///
-    /// Implements BR-TRACE-006. For each [`WriteInfo`], the enclosing function
+    /// Implements. For each [`WriteInfo`], the enclosing function
     /// (identified by `writer_qn`, which holds the function name) is looked up
     /// in the symbol table to obtain its FQN; the variable is resolved via
     /// [`resolve_var_identifier`](Self::resolve_var_identifier). If the writer
@@ -491,7 +491,7 @@ mod tests {
         assert!(!is_identifier("foo()"));
     }
 
-    // --- resolve_return_assign (BR-TRACE-002, BR-TRACE-004) ---
+    // --- resolve_return_assign ---
 
     #[test]
     fn resolve_return_assign_creates_dataflows_edge() {
@@ -569,7 +569,7 @@ mod tests {
         assert_eq!(edge.source, "proj.b.rs.foo");
     }
 
-    // --- resolve_var_assign (BR-TRACE-003) ---
+    // --- resolve_var_assign ---
 
     #[test]
     fn resolve_var_assign_creates_dataflows_edge() {
@@ -706,7 +706,7 @@ mod tests {
         );
     }
 
-    // --- resolve_arg_pass (BR-TRACE-001) ---
+    // --- resolve_arg_pass ---
 
     #[test]
     fn resolve_arg_pass_creates_dataflows_edge() {
@@ -781,21 +781,21 @@ mod tests {
         let bar_node = make_node("bar", "a.rs", "proj", NodeLabel::Function);
         let mut result = make_result("a.rs", vec![foo_node, bar_node]);
 
-        // x = foo() -> return assignment (BR-TRACE-002)
+        // x = foo() -> return assignment
         result.assignments.push(AssignInfo {
             target_name: "x".to_string(),
             source_name: "foo".to_string(),
             line: 5,
             is_return_assign: true,
         });
-        // y = z -> variable assignment (BR-TRACE-003)
+        // y = z -> variable assignment
         result.assignments.push(AssignInfo {
             target_name: "y".to_string(),
             source_name: "z".to_string(),
             line: 6,
             is_return_assign: false,
         });
-        // bar(var) -> parameter passing (BR-TRACE-001)
+        // bar(var) -> parameter passing
         result.calls.push(CallInfo {
             caller_qn: Some("proj.a.foo".to_string()),
             callee_name: "bar".to_string(),
@@ -963,7 +963,7 @@ mod tests {
         assert_eq!(graph.edge_count(), 2);
     }
 
-    // --- AC-TRACE-002: x passed to foo param -> DataFlows edge ---
+    // --- x passed to foo param -> DataFlows edge ---
 
     #[test]
     fn ac_trace_002_dataflow_path_x_to_foo_param() {
@@ -1002,7 +1002,7 @@ mod tests {
         );
     }
 
-    // --- resolve_reads (BR-TRACE-005) ---
+    // --- resolve_reads ---
 
     #[test]
     fn resolve_reads_creates_reads_edge() {
@@ -1105,7 +1105,7 @@ mod tests {
         assert_eq!(edge.target, "proj.a.rs.x");
     }
 
-    // --- resolve_writes (BR-TRACE-006) ---
+    // --- resolve_writes ---
 
     #[test]
     fn resolve_writes_creates_writes_edge() {
@@ -1184,19 +1184,19 @@ mod tests {
         );
     }
 
-    // --- resolve_dataflows integration (BR-TRACE-005/006) ---
+    // --- resolve_dataflows integration ---
 
     #[test]
     fn resolve_dataflows_includes_reads_and_writes() {
         let foo_node = make_node("foo", "a.rs", "proj", NodeLabel::Function);
         let mut result = make_result("a.rs", vec![foo_node]);
-        // foo reads x (BR-TRACE-005)
+        // foo reads x
         result.reads.push(ReadInfo {
             reader_qn: Some("foo".to_string()),
             var_name: "x".to_string(),
             line: 3,
         });
-        // foo writes y (BR-TRACE-006)
+        // foo writes y
         result.writes.push(WriteInfo {
             writer_qn: Some("foo".to_string()),
             var_name: "y".to_string(),
@@ -1452,7 +1452,7 @@ mod tests {
         );
     }
 
-    // --- resolve_dataflows: call arg processing (BR-TRACE-001 integration) ---
+    // --- resolve_dataflows: call arg processing (integration) ---
 
     #[test]
     fn resolve_dataflows_processes_call_args_creating_parameter_node() {

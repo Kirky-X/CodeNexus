@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Cross-file type FQN resolution (design.md H6).
+//! Cross-file type FQN resolution.
 //!
 //! Provides [`TypeResolver`] for resolving dangling type-reference edges
 //! (`Extends`/`Implements`/`UsesType`) to their actual cross-file definition
@@ -58,7 +58,6 @@ const RESOLVABLE_EDGE_TYPES: [EdgeType; 3] =
     [EdgeType::Extends, EdgeType::Implements, EdgeType::UsesType];
 
 /// Resolves dangling type-reference edges to their actual cross-file FQNs
-/// (design.md H6).
 ///
 /// Construct with [`TypeResolver::new`] passing a reference to the
 /// [`ProjectSymbolTable`], then call

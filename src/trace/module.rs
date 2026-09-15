@@ -1,8 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! trait-kit module for the Trace subsystem (T6/unified-architecture
-//! Phase 2, Task 2.10; v0.3.3 AsyncKit migration).
+//! trait-kit module for the Trace subsystem.
 //!
 //! Implements [`ModuleMeta`] + [`AsyncAutoBuilder`] for [`TraceModule`],
 //! wiring the existing [`TraceFacade`] (Facade pattern) into the unified Kit
@@ -18,7 +17,7 @@
 //! existing `trace_cmd::run` semantics — every CLI invocation loads a fresh
 //! subgraph from the database. A future optimization could cache the graph
 //! behind an `RwLock` with explicit invalidation hooks; out of scope for
-//! Task 2.10.
+//! now.
 //!
 //! # Dependency note
 //!
@@ -27,10 +26,9 @@
 //! The concrete [`TraceCapability`] is self-contained, however: it opens its
 //! own [`Repository`](crate::storage::Repository) from the supplied
 //! `db_path` and loads the subgraph itself. Therefore `dependencies = &[]`
-//! at the type level; the bootstrap (Task 2.13) enforces build ordering
+//! at the type level; the bootstrap enforces build ordering
 //! (Storage → ... → Resolver → Trace). This mirrors the
-//! [`QueryModule`](crate::query::module::QueryModule) design (Task 2.9) —
-//! see `design.md` D1 for the rationale.
+//! [`QueryModule`](crate::query::module::QueryModule) design.
 //!
 //! [`load_graph_for_symbol`]: super::graph_loader::load_graph_for_symbol
 
@@ -56,14 +54,14 @@ use serde::{Deserialize, Serialize};
 // Config
 // ---------------------------------------------------------------------------
 
-/// Configuration for [`TraceModule`] (Task 2.10) and [`TraceEngine`](super::facade::TraceEngine) (T032).
+/// Configuration for [`TraceModule`] and [`TraceEngine`](super::facade::TraceEngine).
 ///
 /// Stored in Kit via `AsyncKit::set_config` and read in
 /// [`AsyncAutoBuilder::build`]. The Trace engine needs only the database
 /// path — the capability loads a fresh subgraph per `trace` call via
 /// [`load_graph_for_symbol`].
 ///
-/// T032 extends this config with advanced tracing options: `max_depth`,
+/// Advanced tracing options extend this config: `max_depth`,
 /// `edge_types`, `path_filter`, `detect_cycles`, `cross_service`. These
 /// fields are consumed by the advanced [`TraceEngine`] struct and the
 /// service layer; the kit module ignores them (uses only `db_path`).
@@ -79,7 +77,7 @@ pub struct TraceConfig {
     pub max_depth: u32,
     /// Edge types to traverse during tracing (default `[Calls]`).
     pub edge_types: Vec<EdgeType>,
-    /// Optional path filter (R-trace-001).
+    /// Optional path filter.
     pub path_filter: Option<PathFilter>,
     /// Whether to detect cycles during tracing (default `false`).
     pub detect_cycles: bool,
@@ -129,7 +127,7 @@ impl TraceConfig {
 // Module (ModuleMeta + AsyncAutoBuilder)
 // ---------------------------------------------------------------------------
 
-/// trait-kit module tag for the Trace subsystem (Task 2.10).
+/// trait-kit module tag for the Trace subsystem.
 ///
 /// Zero-sized marker — construction logic lives in
 /// [`TraceModule::build_cap`] (called from the [`AsyncAutoBuilder`] impl).
@@ -234,7 +232,7 @@ impl TraceEngine for TraceCapability {
         depth: usize,
         max_nodes: usize,
     ) -> std::result::Result<(crate::model::Graph, bool), TraceError> {
-        // Delegate to the shared graph loader (Task 2.10 graph_loader.rs).
+        // Delegate to the shared graph loader (`graph_loader.rs`).
         // `impact_cmd::run` uses this to obtain the raw Graph for
         // ImpactAnalyzer, which cannot be expressed via `trace()` (that
         // returns a TraceResult, not the graph itself). The returned `bool` is

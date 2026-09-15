@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! File discovery walker (ADR-012, BR-INDEX-006).
+//! File discovery walker (ADR-012).
 //!
 //! Wraps the [`ignore`] crate to walk a repository tree while honoring
 //! `.gitignore`/`.codenexusignore` rules and the [`ALWAYS_SKIP_DIRS`]
@@ -16,7 +16,7 @@ use crate::model::Language;
 
 use super::error::DiscoverError;
 
-/// Directory names that are always pruned during discovery (BR-INDEX-006).
+/// Directory names that are always pruned during discovery.
 ///
 /// These directories typically hold build artifacts, dependencies, or
 /// editor/IDE state that should never be indexed.
@@ -158,7 +158,6 @@ pub fn is_code_file(path: &Path) -> Option<Language> {
 }
 
 /// Returns `true` if `dir_name` is in the hardcoded [`ALWAYS_SKIP_DIRS`] list
-/// (BR-INDEX-006).
 #[must_use]
 pub fn should_skip_dir(dir_name: &str) -> bool {
     ALWAYS_SKIP_DIRS.contains(&dir_name)
@@ -216,7 +215,7 @@ mod tests {
 
     #[test]
     fn respects_gitignore_ac_index_004() {
-        // AC-INDEX-004: .gitignore with "target/" skips target/ files.
+        // .gitignore with "target/" skips target/ files.
         // Use an empty skip list so ALWAYS_SKIP_DIRS does not mask the
         // .gitignore behavior.
         let tmp = TempDir::new().unwrap();
@@ -272,7 +271,7 @@ mod tests {
 
     #[test]
     fn skips_all_always_skip_dirs_br_index_006() {
-        // BR-INDEX-006: ALWAYS_SKIP_DIRS are pruned even without a .gitignore.
+        // ALWAYS_SKIP_DIRS are pruned even without a.gitignore.
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         for dir in ALWAYS_SKIP_DIRS {

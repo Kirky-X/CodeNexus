@@ -11,18 +11,18 @@ pub const API_KEY_ENV: &str = "CODENEXUS_EMBED_API_KEY";
 /// Environment variable name for the embedding API key (fallback, OpenAI).
 pub const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 
-/// Environment variable name for the embedding endpoint (H10/D7).
+/// Environment variable name for the embedding endpoint.
 ///
 /// When set, forces remote HTTP mode. When unset, defaults to local ONNX
 /// inference via `ort`.
 pub const EMBED_ENDPOINT_ENV: &str = "CODENEXUS_EMBED_ENDPOINT";
 
-/// Environment variable name for the local model file path (H10/D7).
+/// Environment variable name for the local model file path.
 ///
 /// Overrides [`DEFAULT_MODEL_PATH`] when set.
 pub const EMBED_MODEL_PATH_ENV: &str = "CODENEXUS_EMBED_MODEL_PATH";
 
-/// Default path to the bundled `arctic-embed-xs` ONNX model file (H10/D7).
+/// Default path to the bundled `arctic-embed-xs` ONNX model file.
 ///
 /// Relative to the current working directory. The model is NOT bundled in the
 /// repository (90 MB) — it must be downloaded separately and placed at this
@@ -33,7 +33,7 @@ pub const EMBED_MODEL_PATH_ENV: &str = "CODENEXUS_EMBED_MODEL_PATH";
 /// convention; users can override via `CODENEXUS_EMBED_MODEL_PATH`.
 pub const DEFAULT_MODEL_PATH: &str = "assets/arctic-embed-xs.onnx";
 
-/// Default path to the HuggingFace tokenizer JSON file (H10/D7).
+/// Default path to the HuggingFace tokenizer JSON file.
 ///
 /// Co-located with the model file (same directory, `tokenizer.json` filename).
 /// Derived from [`DEFAULT_MODEL_PATH`] at runtime.
@@ -42,7 +42,7 @@ pub const DEFAULT_TOKENIZER_FILENAME: &str = "tokenizer.json";
 /// Configuration for the embedding subsystem.
 #[derive(Debug, Clone)]
 pub struct EmbeddingConfig {
-    /// Base URL of the OpenAI-compatible embedding API (H10/D7).
+    /// Base URL of the OpenAI-compatible embedding API.
     ///
     /// `None` → local ONNX inference via `ort` (offline mode, default).
     /// `Some(url)` → remote HTTP via [`OpenAIEmbedClient`](crate::embed::client::OpenAIEmbedClient).
@@ -53,7 +53,7 @@ pub struct EmbeddingConfig {
     ///
     /// Ignored in local mode.
     pub api_key: Option<String>,
-    /// Path to the local ONNX model file (H10/D7).
+    /// Path to the local ONNX model file.
     ///
     /// When `endpoint` is `None`, this points to the `arctic-embed-xs` ONNX
     /// model. Defaults to [`DEFAULT_MODEL_PATH`] when `None`.
@@ -63,7 +63,7 @@ pub struct EmbeddingConfig {
 impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
-            // H10/D7: default to local (offline) inference.
+            // Default to local (offline) inference.
             endpoint: None,
             model: "arctic-embed-xs".to_string(),
             api_key: None,
@@ -99,13 +99,13 @@ impl EmbeddingConfig {
         }
     }
 
-    /// Returns `true` if configured for local (offline) ONNX inference (H10/D7).
+    /// Returns `true` if configured for local (offline) ONNX inference.
     #[must_use]
     pub fn is_local(&self) -> bool {
         self.endpoint.is_none()
     }
 
-    /// Returns `true` if configured for remote HTTP inference (H10/D7).
+    /// Returns `true` if configured for remote HTTP inference.
     #[must_use]
     pub fn is_remote(&self) -> bool {
         self.endpoint.is_some()
@@ -119,7 +119,7 @@ impl EmbeddingConfig {
         self.api_key.is_some()
     }
 
-    /// Returns the resolved model file path (H10/D7).
+    /// Returns the resolved model file path.
     ///
     /// Uses [`EmbeddingConfig::model_path`] if set, otherwise falls back to
     /// [`DEFAULT_MODEL_PATH`].
@@ -130,7 +130,7 @@ impl EmbeddingConfig {
             .unwrap_or_else(|| PathBuf::from(DEFAULT_MODEL_PATH))
     }
 
-    /// Returns the resolved tokenizer file path (H10/D7).
+    /// Returns the resolved tokenizer file path.
     ///
     /// Derived from the model path: same directory, [`DEFAULT_TOKENIZER_FILENAME`].
     #[must_use]
@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn config_default_is_local_offline() {
-        // H10/D7: default is local (offline) — no endpoint, no API key.
+        // Default is local (offline) — no endpoint, no API key.
         let cfg = EmbeddingConfig::default();
         assert!(cfg.is_local(), "default should be local (offline)");
         assert!(!cfg.is_remote(), "default should not be remote");

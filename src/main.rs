@@ -26,7 +26,7 @@ const FALLBACK_PROJECT_NAME: &str = "codenexus";
 
 // `DEFAULT_DEBOUNCE_MS` is sourced from the daemon module when the `daemon`
 // feature is enabled, or from the kit bootstrap fallback otherwise — avoiding
-// a third hardcoded copy of the 2000ms default (BR-DAEMON-001).
+// a third hardcoded copy of the 2000ms default.
 #[cfg(feature = "daemon")]
 use codenexus::daemon::DEFAULT_DEBOUNCE_MS;
 #[cfg(not(feature = "daemon"))]
@@ -98,7 +98,7 @@ fn run_cli() {
         // Override sdforge CliBuilder's injected version/about (builder.rs
         // hardcodes 0.4.2 from the sdforge crate). Cargo.toml is the single
         // source of truth for the codenexus version — clap applies the last
-        // call wins, so this overrides cleanly. See R-cli-002.
+        // call wins, so this overrides cleanly.
         .version(codenexus::version())
         .about("CodeNexus — Code Intelligence");
 
@@ -113,7 +113,7 @@ fn run_cli() {
         Some(name) => name,
         None => {
             // No subcommand provided — print hint to stdout and exit 0
-            // so callers can detect "no-op" via exit code (rule 12).
+            // so callers can detect "no-op" via exit code.
             println!("Use --help to see available commands");
             std::process::exit(0);
         }
@@ -175,7 +175,7 @@ fn run_cli() {
             }
         }
         Err(e) => {
-            // Rule 12: a DB lock conflict must surface as exit 2 with a clear
+            // A DB lock conflict must surface as exit 2 with a clear
             // message, not hide behind the generic kit_not_initialized exit 1.
             if let Some(hint) = extract_db_locked_hint(&e) {
                 eprintln!("[error] 数据库被锁定，无法打开：{hint}");
@@ -230,7 +230,7 @@ fn extract_global_arg(
 /// - Exactly one file → use it (common case: single indexed project in CWD).
 /// - Zero or multiple files → fall back to [`FALLBACK_PROJECT_NAME`], which
 ///   `validate_db_exists` will reject with a clear "run `codenexus index`"
-///   message (Rule 12: failures must surface, not silently succeed).
+///   message (failures must surface, not silently succeed).
 ///
 /// This fixes the bulwark regression where `query`/`list` without `--db`
 /// returned exit 4 NotFound even though `.codenexus/bulwark.lbug` existed —
@@ -320,7 +320,7 @@ fn sanitize_project_name(name: &str) -> String {
 /// Commands that require an existing database file. `index`/`import` create
 /// one (LadybugDB create-on-open); `setup`/`lsp_*`/`hook`/`mcp` don't query
 /// the graph. Without this gate, `list --db <missing>` silently builds an
-/// empty DB and returns `[]` with exit 0 — a silent success (Rule 12).
+/// empty DB and returns `[]` with exit 0 — a silent success.
 ///
 /// Includes both read-only commands (see [`opens_read_only`]) and read-write
 /// commands that operate on an existing DB (`clean`, `rename`, `daemon`,
@@ -362,7 +362,7 @@ fn opens_read_only(sub_name: &str) -> bool {
 }
 
 /// Walks the [`KitError`] source chain for [`StorageError::DatabaseLocked`]
-/// (Rule 12). Returns the holder hint so the CLI can exit 2 with a clear
+/// Returns the holder hint so the CLI can exit 2 with a clear
 /// message instead of falling through to the generic `kit_not_initialized`
 /// exit 1 when another process holds the DB write lock.
 fn extract_db_locked_hint(e: &KitError) -> Option<String> {
@@ -390,7 +390,7 @@ fn validate_db_exists(db: &str, sub_name: &str) -> Result<(), String> {
     }
 }
 
-/// Deletes the DB file for `--fresh` mode (Rule 12: space reclamation).
+/// Deletes the DB file for `--fresh` mode (space reclamation).
 ///
 /// Returns `Ok(true)` if the file was deleted, `Ok(false)` if it did not
 /// exist (not an error — `--fresh` only ensures a clean state), or `Err` on
@@ -432,10 +432,10 @@ fn delete_db_for_fresh(db: &str) -> std::io::Result<bool> {
 /// Only the `index` command supports `--fresh` (the `import` command has no
 /// `fresh` parameter in its `#[forge]` signature, so sdforge does not
 /// register it; `try_get_one` returns `Err` → no-op). Other commands would
-/// lose data without re-indexing (Rule 12).
+/// lose data without re-indexing.
 ///
 /// Exits with code 6 if `--db` points at a non-`.lbug` file (safety), or code
-/// 5 if deletion fails (Rule 12: failure must surface, not be swallowed).
+/// 5 if deletion fails (failure must surface, not be swallowed).
 /// Code 4 is reserved for NotFound (validate_db_exists).
 fn handle_fresh_flag(sub_name: &str, sub_matches: &sdforge::clap::ArgMatches, db: &str) {
     if sub_name != "index" {
@@ -545,7 +545,7 @@ const SENTINEL_DEFAULTS: &[(&str, &str, &str)] = &[
     // generated "<base> → <head>" caption.
     ("arch_diff", "quality", "standard"),
     ("arch_diff", "title", ""),
-    // — dead_code: B3.5 — check_dynamic_dispatch defaults to true so trait
+    // — dead_code: check_dynamic_dispatch defaults to true so trait
     // impl methods (e.g. `fmt#Display`) are excluded by default. Users can
     // opt out via `--check_dynamic_dispatch false` for adversarial testing.
     ("dead_code", "check_dynamic_dispatch", "true"),

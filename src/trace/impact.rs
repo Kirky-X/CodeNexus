@@ -66,7 +66,7 @@ fn expand_path(link: &Rc<PathLink>) -> Vec<String> {
     path
 }
 
-// ===== Multi-dimensional impact types (T024-T027) =====
+// ===== Multi-dimensional impact types =====
 
 /// Configuration for multi-dimensional impact analysis.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -92,7 +92,7 @@ const MAX_NODES_LIMIT: usize = 5000;
 /// Default `max_depth` value used by [`ImpactConfig::default`].
 ///
 /// Extracted from the `5` literal previously hard-coded in `Default::default()`
-/// so tests can reference the same source of truth (perf-review M3:
+/// so tests can reference the same source of truth (
 /// test constants were coupled to `Default::default()` via duplicated
 /// literals — changing the default would silently break tests or, worse,
 /// tests would pass while runtime behaviour diverged from the documented
@@ -739,7 +739,7 @@ mod tests {
         assert_eq!(impacted.len(), 2);
     }
 
-    // ===== T024: Serialization tests for multi-dimensional impact types =====
+    // ===== Serialization tests for multi-dimensional impact types =====
 
     #[test]
     fn impact_config_default_has_expected_values() {
@@ -875,7 +875,7 @@ mod tests {
         assert!(!analyzer.config.include_tests);
     }
 
-    // ===== T025: Multi-edge-type upstream tracing tests =====
+    // ===== Multi-edge-type upstream tracing tests =====
 
     #[test]
     fn trace_upstream_calls_edge_type() {
@@ -1045,7 +1045,7 @@ mod tests {
         assert_eq!(result.affected.len(), 2);
     }
 
-    // ===== T026: Type dependency impact tracing tests =====
+    // ===== Type dependency impact tracing tests =====
 
     #[test]
     fn trace_type_dependency_finds_users() {
@@ -1116,7 +1116,7 @@ mod tests {
         assert_eq!(b_node.depth, 2);
     }
 
-    // ===== T027: Risk assessment tests =====
+    // ===== Risk assessment tests =====
 
     #[test]
     fn risk_assessment_60_affected_is_critical() {

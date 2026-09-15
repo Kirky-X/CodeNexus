@@ -93,7 +93,7 @@ impl ParserFactory {
         Ok(parser)
     }
 
-    /// Creates a [`Parser`] intended for incremental parsing (C1, T091).
+    /// Creates a [`Parser`] intended for incremental parsing.
     ///
     /// # Specification vs tree-sitter API reality
     ///
@@ -764,7 +764,7 @@ mod tests {
         assert!(!t2.root_node().has_error());
     }
 
-    // --- C1: tree-sitter incremental parsing support (T090/T091) ---
+    // --- tree-sitter incremental parsing support ---
 
     /// Counts every node in a tree (recursive walk) for cross-parse comparison.
     ///
@@ -791,11 +791,11 @@ mod tests {
     #[cfg(feature = "lang-rust")]
     #[test]
     fn test_create_incremental_parser_returns_parser_with_old_tree_support() {
-        // T090: `create_incremental_parser` returns a `Parser` that, when fed
+        // `create_incremental_parser` returns a `Parser` that, when fed
         // `parser.parse(new_source, Some(&edited_old_tree))`, produces a `Tree`
         // whose node count equals a full re-parse of the same source.
         //
-        // Spec deviation (rule 7 conflict): the C1 spec literally says
+        // Spec deviation: the C1 spec literally says
         // `parser.parse(new_source, Some(&old_tree))` without a `Tree::edit`
         // step. tree-sitter 0.26 docs say: "If the text of the document has
         // changed since `old_tree` was created, then you **must** edit
@@ -809,7 +809,7 @@ mod tests {
             .parse(original_source, None)
             .expect("parse original source");
 
-        // Create an incremental parser, passing the old tree (T091 entry point).
+        // Create an incremental parser, passing the old tree.
         let mut inc_parser =
             ParserFactory::create_incremental_parser(Language::Rust, Some(&old_tree))
                 .expect("create_incremental_parser");

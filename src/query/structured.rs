@@ -9,7 +9,7 @@
 //! [`NodeLabel`] in a distinct table, "search all symbols by name" is
 //! implemented as a fan-out across the relevant tables followed by a merge.
 //!
-//! [`SearchEngine`] provides the multi-mode search dispatcher (T019–T023).
+//! [`SearchEngine`] provides the multi-mode search dispatcher.
 
 use super::error::{QueryError, Result};
 use super::SearchResult;
@@ -836,7 +836,7 @@ fn parse_node_label(name: &str) -> Option<NodeLabel> {
 /// Returns `" AND n.project = '<escaped>'"` when `project` is non-empty, or
 /// an empty `String` when `project` is empty — meaning "search across all
 /// projects" rather than filtering every real node out via `n.project = ''`
-/// (R-search-001). Mirrors the `Option<&str>` None branch of
+/// Mirrors the `Option<&str>` None branch of
 /// [`StructuredSearcher::search_by_name`].
 fn and_project_clause(project: &str) -> String {
     if project.is_empty() {
@@ -846,7 +846,7 @@ fn and_project_clause(project: &str) -> String {
     }
 }
 
-/// Computes name relevance for multi-signal scoring (R-search-004).
+/// Computes name relevance for multi-signal scoring.
 ///
 /// - Exact case-insensitive match → 1.0
 /// - Prefix or substring match → 0.8
@@ -866,7 +866,7 @@ fn compute_name_relevance(name: &str, query: &str) -> f64 {
     }
 }
 
-/// Computes module proximity for multi-signal scoring (R-search-004).
+/// Computes module proximity for multi-signal scoring.
 ///
 /// - `file_pattern` is provided and matches the candidate's `file_path` → 1.0
 /// - Otherwise (no pattern or no match) → 0.5
@@ -957,7 +957,7 @@ mod tests {
 
     #[test]
     fn search_by_name_ac_search_001_returns_parse_symbols() {
-        // AC-SEARCH-001: search "parse" returns symbols containing "parse".
+        // Search "parse" returns symbols containing "parse".
         let repo = fresh_repo();
         repo.save_nodes_stream(
             &[
@@ -1468,7 +1468,7 @@ mod tests {
         assert!(results.iter().any(|r| r.name == "parse"));
     }
 
-    // --- T019: multi-mode search types ---
+    // --- multi-mode search types ---
 
     use crate::kit::StorageModule;
     use crate::storage::StorageConfig;
@@ -1587,7 +1587,7 @@ mod tests {
 
     #[test]
     fn search_engine_exact_returns_results_when_project_filter_empty() {
-        // R-search-001 (T001): project 空字符串不得过滤光真实符号。
+        // Project 空字符串不得过滤光真实符号。
         // 真实 CLI 场景：codenexus search "parse"（不传 --project）→
         // run_search 把 project_id 置为 ""。旧行为 search_exact 构造
         // `AND n.project = ''`，过滤掉所有 project 非空的节点 → 返回空。
@@ -2133,7 +2133,7 @@ mod tests {
 
     #[test]
     fn search_engine_multi_signal_exact_high_degree_same_module_with_tests() {
-        // R-search-004: exact match + high degree + same module + has tests
+        // Exact match + high degree + same module + has tests
         // → score approaches 1.0.
         let storage = build_storage();
         let handler = Node::builder(NodeLabel::Function, "handler", "demo.handler")
@@ -2179,7 +2179,7 @@ mod tests {
 
     #[test]
     fn search_engine_multi_signal_substring_low_degree_different_module_no_tests() {
-        // R-search-004: fuzzy match + low degree + different module + no tests
+        // Fuzzy match + low degree + different module + no tests
         // → score < 0.5.
         let storage = build_storage();
         let func = Node::builder(
@@ -3409,7 +3409,7 @@ mod tests {
 
     #[test]
     fn search_exact_logs_warning_on_per_table_query_error() {
-        // T002: a failed per-table query must be logged (warn), not silently
+        // A failed per-table query must be logged (warn), not silently
         // swallowed. Reuses the DROP TABLE Class fixture from the continue test.
         let storage = build_storage();
         let func = Node::builder(NodeLabel::Function, "parse", "demo.parse")

@@ -26,9 +26,9 @@ pub struct Graph {
     pub nodes: HashMap<NodeId, Node>,
     /// Edges in insertion order.
     pub edges: Vec<Edge>,
-    /// Outgoing edge indices keyed by source node id (MED-002).
+    /// Outgoing edge indices keyed by source node id.
     adjacency_out: HashMap<NodeId, Vec<usize>>,
-    /// Incoming edge indices keyed by target node id (MED-002).
+    /// Incoming edge indices keyed by target node id.
     adjacency_in: HashMap<NodeId, Vec<usize>>,
 }
 
@@ -206,7 +206,7 @@ impl Graph {
     ///
     /// Nodes are NOT removed — only edges. This is used by the CLI
     /// `--min-confidence` filter to drop low-confidence edges before trace /
-    /// impact analysis (design.md D4). The adjacency index is rebuilt
+    /// impact analysis. The adjacency index is rebuilt
     /// afterwards to stay consistent.
     pub fn retain_edges<F>(&mut self, f: F)
     where
@@ -216,7 +216,7 @@ impl Graph {
         self.rebuild_index();
     }
 
-    /// Rebuilds the adjacency index from `edges` (MED-002).
+    /// Rebuilds the adjacency index from `edges`.
     ///
     /// Call this after mutating the `edges` field directly (it is `pub`
     /// for backwards compatibility). `add_edge` and `retain_edges` already

@@ -19,7 +19,7 @@
 use crate::model::EdgeType;
 use crate::storage::capability::Storage;
 use crate::storage::error::Result as StorageResult;
-// arch-review LOW-1: import from `storage` root rather than the deeper
+// Import from `storage` root rather than the deeper
 // `storage::schema` path — `escape_cypher_string` is a pure utility that
 // the storage module re-exports as part of its public API, and consumers
 // should not reach across submodule boundaries.
@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 /// zero incoming CALLS edges (test functions are always invoked by the test
 /// runner, which is not modelled as a CALLS edge in the graph).
 ///
-/// B2 fix: expanded beyond `test_*`/`*_test`/`*_spec` to cover the common
+/// Expanded beyond `test_*`/`*_test`/`*_spec` to cover the common
 /// Rust test prefixes used by CalNexus and similar projects:
 /// - `it_*` — integration tests
 /// - `sec_*` — security tests
@@ -75,7 +75,6 @@ const TEST_ATTRIBUTE_MARKERS: &[&str] = &["#[test", "#[tokio::test", "#[rstest"]
 /// majority of functions (no outer attributes), short-circuiting before the
 /// `TEST_ATTRIBUTE_MARKERS.iter().any(...)` loop. On bulwark this saves ~115k
 /// unnecessary `contains` scans across 19k functions × 2 call sites
-/// (perf-review L1).
 fn has_test_attribute_marker(signature: &str) -> bool {
     signature.contains("#[")
         && TEST_ATTRIBUTE_MARKERS
@@ -84,7 +83,7 @@ fn has_test_attribute_marker(signature: &str) -> bool {
 }
 
 /// Default entry-point attribute substrings scanned for in a function's
-/// `signature` field (T182-B / B4.5 deferred).
+/// `signature` field.
 ///
 /// These attributes register the decorated function as an external entry
 /// point via macro expansion:
@@ -167,7 +166,7 @@ pub struct DeadCodeConfig {
     /// treated as FFI entry points and excluded.
     pub check_ffi: bool,
     /// Substrings scanned for in a function's `signature` field to recognise
-    /// attribute-marked entry points (T182-B / B4.5 deferred). When any
+    /// attribute-marked entry points. When any
     /// substring matches, the function is treated as a live seed (macro
     /// expansion synthesises an external call to it that is invisible to
     /// the static graph). Defaults to [`DEFAULT_ATTRIBUTE_ENTRIES`]
@@ -190,7 +189,7 @@ impl Default for DeadCodeConfig {
                 .map(|s| (*s).to_string())
                 .collect(),
             check_exported: true,
-            // B3.5: Trait impl methods (e.g. `fmt#Display`) are invoked via
+            // Trait impl methods (e.g. `fmt#Display`) are invoked via
             // dynamic dispatch / vtable and have no static CALLS edge in the
             // graph. Default to `true` to align with rustc's dead_code lint
             // (which treats trait impls as reachable). Users can opt out via
@@ -198,7 +197,7 @@ impl Default for DeadCodeConfig {
             check_dynamic_dispatch: true,
             check_reflection: false,
             check_ffi: true,
-            // T182-B / B4.5: attribute-marked entry points. Defaults mirror
+            // Attribute-marked entry points. Defaults mirror
             // `DEFAULT_ATTRIBUTE_ENTRIES` (rmcp `#[tool]`, CodeNexus `#[forge]`,
             // async-runtime entry macros). Users can extend via
             // `DeadCodeConfig { attribute_entries: ..., ..Default::default() }`.
@@ -251,7 +250,7 @@ pub struct DeadCodeEntry {
     pub confidence: Confidence,
 }
 
-/// Batch-prefetched metadata for dead-code analysis (perf-1 + arch-1 + B7).
+/// Batch-prefetched metadata for dead-code analysis.
 ///
 /// Replaces the previous N+1 per-function Cypher query pattern with a
 /// single bulk query that is shared by [`ReachabilityAnalyzer`] and
@@ -259,7 +258,7 @@ pub struct DeadCodeEntry {
 ///
 /// - `outgoing_edges` — all `CodeRelation` edges of configured types,
 ///   grouped by `source` id (`HashMap<String, HashSet<String>>`).
-/// - `reexport_target_ids` (B7) — `Function`/`Method` ids that are the
+/// - `reexport_target_ids` — `Function`/`Method` ids that are the
 ///   `target` of a `REEXPORTS` edge (File→Function). These are live
 ///   entry-point seeds: the symbol is reachable from outside the current
 ///   crate/module via the re-export.
@@ -267,7 +266,7 @@ pub struct DeadCodeEntry {
 /// `exported_ids` and `ffi_entry_ids` are derived in Rust from the already
 /// loaded `FunctionRow` list (no extra Cypher round-trips).
 ///
-/// # Design boundary (arch-review LOW-2)
+/// # Design boundary
 ///
 /// 4 fields is the soft cap. If a future task adds a 5th prefetch
 /// category, split into `ExportedCache` / `FfiCache` / `EdgeCache` /
@@ -281,12 +280,12 @@ pub struct DeadCodeEntry {
 /// re-queried `is_exported`/`is_ffi_entry` for each dead candidate (2N
 /// more). Total: ~4N + 2N + V = 6N+V round-trips.
 ///
-/// After (perf-1 + perf-review MEDIUM-1/2 + B7): `load_all_functions`
+/// After optimization: `load_all_functions`
 /// issues 2 Cypher queries (Function + Method labels — LadybugDB's Cypher
 /// subset does not support `OR` label expressions) and returns
 /// `isExported` / `signature` alongside the existing fields.
 /// `BatchPrefetch::load` then issues 2 Cypher queries: one for
-/// `outgoing_edges`, one for B7 `reexport_target_ids`. BatchPrefetch
+/// `outgoing_edges`, one for `reexport_target_ids`. BatchPrefetch
 /// therefore contributes 4 of the 6 total round-trips in
 /// [`DeadCodeDetector::detect`] (the other 2 are
 /// `load_edge_targets_by_category` for confidence scoring and
@@ -300,9 +299,7 @@ pub struct DeadCodeEntry {
 /// `DeadCodeDetector`. The shared `BatchPrefetch` + `load_all_functions`
 /// eliminate the duplication. Field access is mediated by `is_exported`
 /// / `is_ffi_entry` / `outgoing_edges` / `is_reexport_target` methods so
-/// the internal `HashSet`/`HashMap` choice is not leaked to callers
-/// (arch-review
-/// MEDIUM-3).
+/// the internal `HashSet`/`HashMap` choice is not leaked to callers.
 pub(crate) struct BatchPrefetch {
     /// Ids of `Function`/`Method` nodes with `isExported=true`.
     exported_ids: std::collections::HashSet<String>,
@@ -311,9 +308,9 @@ pub(crate) struct BatchPrefetch {
     ffi_entry_ids: std::collections::HashSet<String>,
     /// Outgoing edges grouped by source id. Targets are deduplicated
     /// (`HashSet`) so a multi-edge (e.g. CALLS + USAGE) source→target
-    /// pair only propagates once (perf-review MEDIUM-6).
+    /// pair only propagates once.
     outgoing_edges: std::collections::HashMap<String, std::collections::HashSet<String>>,
-    /// B7: Ids of `Function`/`Method` nodes that are the `target` of a
+    /// Ids of `Function`/`Method` nodes that are the `target` of a
     /// `REEXPORTS` edge (File→Function, created by `resolve/imports.rs`
     /// for `pub use` / `export ... from`). These are live entry-point
     /// seeds — the symbol is reachable from outside the current
@@ -323,14 +320,14 @@ pub(crate) struct BatchPrefetch {
 
 impl BatchPrefetch {
     /// Builds the prefetch cache from an already-loaded `functions` list
-    /// plus Cypher round-trips for `outgoing_edges` and (B7)
+    /// plus Cypher round-trips for `outgoing_edges` and
     /// `reexport_target_ids`.
     ///
     /// `exported_ids` and `ffi_entry_ids` are derived in Rust from
     /// `functions` (no extra Cypher) — this collapses the previous 5
     /// prefetch-related round-trips (load_exported_ids × 2 +
     /// load_ffi_entry_ids × 2 + load_outgoing_edges × 1) into 2
-    /// (perf-review MEDIUM-1 + B7). At the `detect` level the overall
+    /// At the `detect` level the overall
     /// reduction is 7 → 6 round-trips (the other 4 are
     /// `load_all_functions` × 2, `load_edge_targets_by_category` × 1,
     /// `load_file_languages` × 1).
@@ -338,7 +335,7 @@ impl BatchPrefetch {
     /// # Errors
     ///
     /// Returns [`StorageError`] if either the `outgoing_edges` or the
-    /// B7 `reexport_target_ids` query fails.
+    /// `reexport_target_ids` query fails.
     pub(crate) fn load(
         storage: &dyn Storage,
         project: &str,
@@ -356,7 +353,7 @@ impl BatchPrefetch {
             }
         }
         let outgoing_edges = load_outgoing_edges(storage, project, &config.edge_types)?;
-        // B7: bulk-load REEXPORTS edge targets (File→Function). These are
+        // Bulk-load REEXPORTS edge targets (File→Function). These are
         // live entry-point seeds — the re-exported symbol is reachable
         // from outside the current crate/module via the re-export.
         let reexport_target_ids = load_reexport_target_ids(storage, project)?;
@@ -381,7 +378,7 @@ impl BatchPrefetch {
         self.ffi_entry_ids.contains(id)
     }
 
-    /// B7: Returns `true` if `id` is the target of a `REEXPORTS` edge
+    /// Returns `true` if `id` is the target of a `REEXPORTS` edge
     /// (i.e. the symbol is re-exported via `pub use` / `export ... from`
     /// and thus reachable from outside the current crate/module).
     #[must_use]
@@ -403,7 +400,7 @@ impl BatchPrefetch {
         self.ffi_entry_ids.len()
     }
 
-    /// B7: Returns the number of re-export target ids in the cache
+    /// Returns the number of re-export target ids in the cache
     /// (test/diagnostic).
     #[cfg(test)]
     #[must_use]
@@ -425,7 +422,7 @@ impl BatchPrefetch {
 /// Used by [`ReachabilityAnalyzer::propagate`] for O(1) HashMap lookup per
 /// worklist pop (vs the previous O(1) Cypher round-trip per pop). Targets
 /// are stored in a `HashSet` so a multi-edge source→target pair (e.g.
-/// CALLS + USAGE) only appears once (perf-review MEDIUM-6).
+/// CALLS + USAGE) only appears once.
 fn load_outgoing_edges(
     storage: &dyn Storage,
     project: &str,
@@ -458,7 +455,7 @@ fn load_outgoing_edges(
     Ok(map)
 }
 
-/// B7: Loads the `target` ids of all `REEXPORTS` edges for `project`.
+/// Loads the `target` ids of all `REEXPORTS` edges for `project`.
 ///
 /// `REEXPORTS` edges are File→Function (created by `resolve/imports.rs`
 /// for `pub use` / `export ... from`). The target Function ids are live
@@ -472,7 +469,7 @@ fn load_reexport_target_ids(
     project: &str,
 ) -> StorageResult<std::collections::HashSet<String>> {
     let escaped = escape_cypher_string(project);
-    // B7 review (perf LOW-3): use EdgeType::Reexports.as_db_type() as the
+    // use EdgeType::Reexports.as_db_type() as the
     // single source of truth for the DDL type string, so future renames
     // don't silently break this query.
     let reexport_type = EdgeType::Reexports.as_db_type();
@@ -486,7 +483,7 @@ fn load_reexport_target_ids(
         if row.is_empty() {
             continue;
         }
-        // B7 review (perf LOW-1): skip empty target ids instead of
+        // Skip empty target ids instead of
         // allocating an empty String for each malformed row.
         if let Some(s) = row[0].as_str().filter(|s| !s.is_empty()) {
             set.insert(s.to_string());
@@ -498,7 +495,7 @@ fn load_reexport_target_ids(
 /// Loads all `Function` and `Method` nodes for `project`, including the
 /// `isExported` flag and `signature` text needed to derive
 /// [`BatchPrefetch`] `exported_ids` / `ffi_entry_ids` without additional
-/// Cypher round-trips (perf-review MEDIUM-1).
+/// Cypher round-trips.
 ///
 /// Two Cypher queries (one per label) because LadybugDB's Cypher subset
 /// does not support `OR` label expressions.
@@ -548,7 +545,7 @@ fn load_all_functions(storage: &dyn Storage, project: &str) -> StorageResult<Vec
     Ok(out)
 }
 
-/// Worklist-based reachability analyzer (B5).
+/// Worklist-based reachability analyzer.
 ///
 /// Replaces the single-layer `referenced_ids` check with a proper
 /// worklist propagation algorithm aligned with rustc's
@@ -610,23 +607,23 @@ impl<'a> ReachabilityAnalyzer<'a> {
 
     /// Collects all nine seed categories into the worklist.
     ///
-    /// Categories (aligned with design.md D1 + B0/B4/B7 + T182-B/B4.5):
+    /// Categories:
     /// 1. Entry functions (name matches `entry_patterns` or `config.entry_patterns`)
     /// 2. Test functions (name matches `test_patterns` or `DEFAULT_TEST_PATTERNS`)
-    /// 3. B0: test module function (`#tests` disambiguator)
-    /// 4. B4: integration test file (`tests/`, `test/`, `src/test/`)
-    /// 5. B3: trait impl methods (`#<TypeName>` disambiguator, when `check_dynamic_dispatch`)
+    /// 3. test module function (`#tests` disambiguator)
+    /// 4. integration test file (`tests/`, `test/`, `src/test/`)
+    /// 5. trait impl methods (`#<TypeName>` disambiguator, when `check_dynamic_dispatch`)
     /// 6. Exported functions (`isExported=true`, when `check_exported`)
     /// 7. FFI entries (signature contains `extern "C"` / `#[no_mangle]`, when `check_ffi`)
-    /// 8. B7: re-export targets (`REEXPORTS` edge targets, always checked)
-    /// 9. T182-B: attribute-marked entry points (signature contains any
+    /// 8. re-export targets (`REEXPORTS` edge targets, always checked)
+    /// 9. attribute-marked entry points (signature contains any
     ///    `config.attribute_entries` substring, e.g. `#[tool` / `#[forge` /
     ///    `#[tokio::main`)
     ///
     /// Fully in-memory after [`BatchPrefetch::load`] — no Cypher round-trips
-    /// (arch-review MEDIUM-2: removed the dead `StorageResult` return).
+    /// (removed the dead `StorageResult` return).
     ///
-    /// # OCP trade-off (T202 arch-review LOW-2)
+    /// # OCP trade-off
     ///
     /// The 9 seed categories are explicitly enumerated in
     /// [`is_seed_function`]. Adding a new seed type requires editing that
@@ -676,18 +673,18 @@ impl<'a> ReachabilityAnalyzer<'a> {
     /// All checks are O(1) HashSet lookups against the prefetched caches —
     /// no Cypher round-trips.
     ///
-    /// Seed categories (in execution order — arch-review LOW-1):
+    /// Seed categories (in execution order):
     /// 1. Entry functions (name matches `entry_patterns` or `DEFAULT_ENTRY_PATTERNS`)
     /// 2. Test functions (name matches `test_patterns` or `DEFAULT_TEST_PATTERNS`)
-    /// 3. Test module function (`#tests` disambiguator — B0)
-    /// 4. Integration test file (B4 — `tests/`, `test/`, `src/test/`)
+    /// 3. Test module function (`#tests` disambiguator)
+    /// 4. Integration test file (`tests/`, `test/`, `src/test/`)
     /// 5. Test-attribute-marked functions (signature contains `#[test` /
-    ///    `#[tokio::test` / `#[rstest` — closes bulwark 1376/1387 FPs)
-    /// 6. Trait impl method (B3 — `#<TypeName>` disambiguator, when `check_dynamic_dispatch`)
+    ///    `#[tokio::test` / `#[rstest`)
+    /// 6. Trait impl method (`#<TypeName>` disambiguator, when `check_dynamic_dispatch`)
     /// 7. Exported functions (`isExported=true`, when `check_exported`)
     /// 8. FFI entries (signature contains `extern "C"` / `#[no_mangle]`, when `check_ffi`)
-    /// 9. Re-export targets (B7 — `REEXPORTS` edge targets, always checked)
-    /// 10. T182-B: attribute-marked entry points (signature contains any
+    /// 9. Re-export targets (`REEXPORTS` edge targets, always checked)
+    /// 10. attribute-marked entry points (signature contains any
     ///     `attribute_entries` substring, e.g. `#[tool` / `#[forge` /
     ///     `#[tokio::main`)
     fn is_seed_function(
@@ -711,11 +708,11 @@ impl<'a> ReachabilityAnalyzer<'a> {
         {
             return true;
         }
-        // 3. B0: test module function (`#tests` disambiguator)
+        // 3. test module function (`#tests` disambiguator)
         if is_test_module_function(&func.qualified_name) {
             return true;
         }
-        // 4. B4: integration test file
+        // 4. integration test file
         if is_integration_test_file(&func.file_path) {
             return true;
         }
@@ -729,7 +726,7 @@ impl<'a> ReachabilityAnalyzer<'a> {
         if has_test_attribute_marker(&func.signature) {
             return true;
         }
-        // 6. B3: Trait impl method (`#<TypeName>` disambiguator)
+        // 6. Trait impl method (`#<TypeName>` disambiguator)
         if self.config.check_dynamic_dispatch && is_trait_impl_method(&func.qualified_name) {
             return true;
         }
@@ -741,7 +738,7 @@ impl<'a> ReachabilityAnalyzer<'a> {
         if self.config.check_ffi && self.prefetch.is_ffi_entry(&func.id) {
             return true;
         }
-        // 9. B7: Re-export targets (batch-prefetched). Always checked —
+        // 9. Re-export targets (batch-prefetched). Always checked —
         // `pub use` / `export ... from` makes the symbol reachable from
         // outside the current crate/module, so it's a live entry point
         // regardless of `check_exported` (which gates `pub fn`, a
@@ -749,7 +746,7 @@ impl<'a> ReachabilityAnalyzer<'a> {
         if self.prefetch.is_reexport_target(&func.id) {
             return true;
         }
-        // 10. T182-B: attribute-marked entry points. Macro expansion
+        // 10. attribute-marked entry points. Macro expansion
         // synthesises an external call to the decorated fn that is
         // invisible to the static graph (tree-sitter does not expand
         // macros), so the attribute itself is the entry-point signal.
@@ -792,7 +789,7 @@ impl<'a> ReachabilityAnalyzer<'a> {
     /// query count but ~1ms in wall time, so V pops = V ms on CalNexus).
     pub(crate) fn propagate(&mut self) {
         while let Some(id) = self.worklist.pop_front() {
-            // Skip if already live (perf-review LOW-1: avoid `id.clone()`
+            // Skip if already live (avoid `id.clone()`
             // by checking containment before inserting).
             if self.live_set.contains(&id) {
                 continue;
@@ -811,8 +808,7 @@ impl<'a> ReachabilityAnalyzer<'a> {
     }
 
     /// Consumes the analyzer and returns ownership of the live set,
-    /// avoiding a full `HashSet::clone` in the caller (perf-review
-    /// MEDIUM-3).
+    /// avoiding a full `HashSet::clone` in the caller.
     #[must_use]
     pub(crate) fn into_live_set(self) -> std::collections::HashSet<String> {
         self.live_set
@@ -846,14 +842,14 @@ impl<'a> DeadCodeDetector<'a> {
     /// incoming CALLS edges (e.g. `"main"`, `"__main__"`). Test-function
     /// patterns (`test_*`, `*_test`, `*_spec`) are always excluded.
     ///
-    /// # Performance (perf-1 + perf-review MEDIUM-1 + B7)
+    /// # Performance
     ///
     /// All Cypher round-trips are batched:
     ///
     /// - `load_all_functions` (2 queries: Function + Method labels) —
     ///   also returns `isExported` / `signature` so `exported_ids` /
     ///   `ffi_entry_ids` are derived in Rust without extra queries.
-    /// - `BatchPrefetch::load` (2 queries: outgoing_edges + B7
+    /// - `BatchPrefetch::load` (2 queries: outgoing_edges
     ///   reexport_target_ids).
     /// - `load_edge_targets_by_category` (1 query: confidence scoring).
     /// - `load_file_languages` (1 query: language resolution).
@@ -874,9 +870,9 @@ impl<'a> DeadCodeDetector<'a> {
         // cache can derive exported_ids / ffi_entry_ids in Rust.
         let functions = load_all_functions(self.storage, project)?;
 
-        // (b) Batch-prefetch outgoing_edges (1 Cypher) + B7 reexport_target_ids
+        // (b) Batch-prefetch outgoing_edges (1 Cypher) + reexport_target_ids
         // (1 Cypher); derive exported_ids / ffi_entry_ids from `functions`
-        // (perf-review MEDIUM-1: collapses 4 Cypher round-trips into 0 by
+        // (collapses 4 Cypher round-trips into 0 by
         // reusing the already-loaded rows). Shared between ReachabilityAnalyzer
         // and the filter loop below — eliminates the DRY violation where
         // is_exported / is_ffi_entry / load_functions were duplicated
@@ -886,12 +882,12 @@ impl<'a> DeadCodeDetector<'a> {
         // (c) B5: Worklist reachability propagation from seeds.
         // Replaces single-layer `referenced_ids` check with proper BFS
         // propagation aligned with rustc's `MarkSymbolVisitor`. Functions
-        // not in `live_set` are dead (subject to additional B0-B4 filters
+        // not in `live_set` are dead (subject to additional filters
         // below as defense-in-depth).
         let mut analyzer = ReachabilityAnalyzer::new(&prefetch, &self.config, &functions);
         analyzer.collect_seeds(entry_patterns);
         analyzer.propagate();
-        // perf-review MEDIUM-3: consume the analyzer instead of cloning
+        // Consume the analyzer instead of cloning
         // the live_set (avoids one O(V) HashSet allocation + copy).
         let live_set = analyzer.into_live_set();
 
@@ -914,7 +910,7 @@ impl<'a> DeadCodeDetector<'a> {
             .iter()
             .map(|s| s.as_str())
             .collect();
-        // T182-B: config.attribute_entries substring list for defense-in-depth
+        // Config.attribute_entries substring list for defense-in-depth
         // (seeds already short-circuit liveness via `is_seed_function` above;
         // this gate exists so a future code path that bypasses the worklist
         // still respects attribute-marked entry points).
@@ -925,13 +921,13 @@ impl<'a> DeadCodeDetector<'a> {
             .map(|s| s.as_str())
             .collect();
         let mut entries = Vec::new();
-        // perf-review LOW-1: hoist the constant reason string out of the
+        // Hoist the constant reason string out of the
         // loop to avoid re-allocating an identical String per dead candidate
         // (dead candidates are typically < 100, but the clone is still
         // cheaper than a fresh to_string + heap allocation each iteration).
         let reason_zero_incoming = REASON_ZERO_INCOMING_CALLS.to_string();
         for func in &functions {
-            // B5: primary gate — function is live if reachable from any seed.
+            // Primary gate — function is live if reachable from any seed.
             // The worklist propagation is the sole determinant of liveness;
             // `referenced_ids` is retained only for confidence scoring.
             if live_set.contains(&func.id) {
@@ -947,7 +943,7 @@ impl<'a> DeadCodeDetector<'a> {
             {
                 continue;
             }
-            // B0 fix: Functions inside `mod tests` blocks have a `#tests` (or
+            // Functions inside `mod tests` blocks have a `#tests` (or
             // `#tests_<MockName>`) disambiguator in their qualified_name (e.g.
             // `demo.src.lib.rs.foo#tests`). These are test-module-scoped and
             // should NOT be flagged as dead. This was the largest false-positive
@@ -955,7 +951,7 @@ impl<'a> DeadCodeDetector<'a> {
             if is_test_module_function(&func.qualified_name) {
                 continue;
             }
-            // B4 fix: Integration tests live in well-known test directories
+            // Integration tests live in well-known test directories
             // (e.g. Rust `tests/*.rs`, Python `tests/test_*.py`, Java
             // `src/test/java/`). They are discovered and invoked by the
             // language's test runner (`cargo test`, `pytest`, `go test`) and
@@ -983,14 +979,14 @@ impl<'a> DeadCodeDetector<'a> {
             if self.config.check_ffi && prefetch.is_ffi_entry(&func.id) {
                 continue;
             }
-            // B3 fix: Trait impl methods (e.g. `fmt#Display`, `complete#ReplHelper`)
+            // Trait impl methods (e.g. `fmt#Display`, `complete#ReplHelper`)
             // have a `#<TypeName>` disambiguator. When check_dynamic_dispatch=true,
             // treat them as live — they are called via dynamic dispatch / vtable
             // and have no static CALLS edge in the graph.
             if self.config.check_dynamic_dispatch && is_trait_impl_method(&func.qualified_name) {
                 continue;
             }
-            // T182-B defense-in-depth: attribute-marked entry points. Mirrors
+            // Defense-in-depth: attribute-marked entry points. Mirrors
             // `is_seed_function` category 9 — keeps the filter loop
             // self-consistent if `live_set` ever diverges from the seed list
             // (e.g. via a future config that disables worklist seeding but
@@ -1170,7 +1166,7 @@ impl<'a> DeadCodeDetector<'a> {
 ///
 /// `is_exported` and `signature` are loaded alongside the identity fields
 /// so [`BatchPrefetch`] can derive `exported_ids` / `ffi_entry_ids` in
-/// Rust without additional Cypher round-trips (perf-review MEDIUM-1).
+/// Rust without additional Cypher round-trips.
 pub(crate) struct FunctionRow {
     id: String,
     name: String,
@@ -1190,7 +1186,7 @@ fn matches_any_pattern(name: &str, patterns: &[&str]) -> bool {
 }
 
 /// Returns `true` if `qualified_name` has a `#tests` or `#tests_*` disambiguator,
-/// indicating the function lives inside a `mod tests` block (B0 fix).
+/// indicating the function lives inside a `mod tests` block.
 ///
 /// Examples:
 /// - `demo.src.lib.rs.foo#tests` → `true`
@@ -1206,7 +1202,7 @@ fn is_test_module_function(qualified_name: &str) -> bool {
 }
 
 /// Returns `true` if `qualified_name` has a `#<TypeName>` disambiguator that is
-/// NOT a `#tests` marker, indicating a trait impl method (B3 fix).
+/// NOT a `#tests` marker, indicating a trait impl method.
 ///
 /// Examples:
 /// - `demo.src.lib.rs.fmt#Display` → `true` (impl Display)
@@ -1221,7 +1217,7 @@ fn is_trait_impl_method(qualified_name: &str) -> bool {
     !disambiguator.is_empty() && disambiguator != "tests" && !disambiguator.starts_with("tests_")
 }
 
-/// Returns `true` if `file_path` indicates an integration test file (B4 fix).
+/// Returns `true` if `file_path` indicates an integration test file.
 ///
 /// Integration tests are discovered and invoked by the language's test runner
 /// (e.g. `cargo test` for Rust, `pytest` for Python, `go test` for Go) and
@@ -1245,7 +1241,7 @@ fn is_trait_impl_method(qualified_name: &str) -> bool {
 /// - `src/test/java/FooTest.java` → `true` (Java test)
 /// - `tests/helpers/mod.rs` → `true` (Rust test helper module)
 fn is_integration_test_file(file_path: &str) -> bool {
-    // perf-review LOW-2: short-circuit the `replace` allocation when the
+    // Short-circuit the `replace` allocation when the
     // path contains no backslashes (the common case on Linux/macOS).
     let normalized: std::borrow::Cow<'_, str> = if file_path.contains('\\') {
         std::borrow::Cow::Owned(file_path.replace('\\', "/"))
@@ -1292,7 +1288,7 @@ fn glob_helper(p: &[char], t: &[char]) -> bool {
     }
 }
 
-// T202 arch-review MEDIUM-2: tests extracted to `tests.rs` to keep the
+// Tests extracted to `tests.rs` to keep the
 // implementation file focused. The test module accesses internals via
 // `use super::*` (re-exports below are not needed because `mod.rs` still
 // holds the implementation — when this module is further split into

@@ -1,8 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! trait-kit module for the Indexer subsystem (T6/unified-architecture
-//! Phase 2, Task 2.7; v0.3.3 AsyncKit migration).
+//! trait-kit module for the Indexer subsystem.
 //!
 //! Implements [`ModuleMeta`] + [`AsyncAutoBuilder`] for [`IndexerModule`],
 //! wiring the existing [`IndexFacade`] (Facade pattern) into the unified
@@ -26,7 +25,7 @@ use crate::storage::StorageError;
 // Config
 // ---------------------------------------------------------------------------
 
-/// Configuration for [`IndexerModule`] (Task 2.7).
+/// Configuration for [`IndexerModule`].
 ///
 /// Stored in Kit via `AsyncKit::set_config` and read in
 /// [`AsyncAutoBuilder::build`].
@@ -52,7 +51,7 @@ impl IndexConfig {
 // Module (ModuleMeta + AsyncAutoBuilder)
 // ---------------------------------------------------------------------------
 
-/// trait-kit module tag for the Indexer subsystem (Task 2.7).
+/// trait-kit module tag for the Indexer subsystem.
 ///
 /// Zero-sized marker — construction logic lives in
 /// [`IndexerModule::build_cap`]. Register in Kit via:

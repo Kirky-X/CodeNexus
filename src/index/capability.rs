@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Indexer capability trait (T6/unified-architecture Phase 2, Task 2.3).
+//! Indexer capability trait.
 //!
 //! Defines [`Indexer`], the capability trait object stored in
 //! [`Kit`](crate::kit::Kit) under [`IndexerKey`](crate::kit::IndexerKey). The
-//! concrete impl (Task 2.7) wraps [`IndexFacade`].
+//! concrete impl wraps [`IndexFacade`].
 //!
 //! [`IndexFacade`]: super::IndexFacade
 
@@ -18,7 +18,7 @@ use super::pipeline::IndexResult;
 ///
 /// Stored in [`Kit`](crate::kit::Kit) as `Arc<dyn Indexer>` under
 /// [`IndexerKey`](crate::kit::IndexerKey). Requires `StorageKey` +
-/// `ExtractorKey`. The concrete impl (Task 2.7) wraps
+/// `ExtractorKey`. The concrete impl wraps
 /// [`IndexFacade`](super::IndexFacade).
 pub trait Indexer: Send + Sync {
     /// Runs the full index pipeline (no incremental diffing).

@@ -40,7 +40,7 @@ use sdforge::prelude::ApiError;
 ///
 /// Returns `Err(TraceError::AmbiguousSymbol)` when more than one node shares
 /// the short `name` and no unique `qualified_name` match disambiguates —
-/// previously this silently picked the first match. R-rename-002.
+/// previously this silently picked the first match.
 fn resolve_start_id(graph: &Graph, symbol: &str) -> Result<Option<NodeId>, TraceError> {
     let by_name: Vec<&Node> = graph.nodes.values().filter(|n| n.name == symbol).collect();
     if by_name.len() == 1 {
@@ -557,7 +557,7 @@ mod tests {
         assert_eq!(compute_new_qn("demo.foobar", "bar", "baz"), "demo.foobar");
     }
 
-    // --- compute_new_qn: `#` member separator (R-rename-001) ---
+    // --- compute_new_qn: `#` member separator ---
 
     #[test]
     fn compute_new_qn_replaces_segment_before_hash() {
@@ -987,7 +987,7 @@ mod tests {
         );
         // Two nodes share the short name "foo" with no unique QN match → must
         // surface AmbiguousSymbol listing both candidates rather than silently
-        // picking one (R-rename-002).
+        // picking one.
         let result = resolve_start_id(&graph, "foo");
         let candidates = match result {
             Err(TraceError::AmbiguousSymbol { candidates, .. }) => candidates,

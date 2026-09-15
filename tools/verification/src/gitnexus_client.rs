@@ -4,7 +4,7 @@
 //! JSON response (markdown table or `[]` or `{"error": "..."}`), and exposes
 //! `fetch_reference()` to obtain node/edge/file counts for comparison.
 //!
-//! # Error model (Rule 12: Fail Loud)
+//! # Error model (Fail Loud)
 //!
 //! - **Repo not indexed**: subprocess exits non-zero with stderr containing
 //!   `Repository "<name>" not found`. We return an explicit error instructing
@@ -69,7 +69,7 @@ struct CypherJson {
 }
 
 /// Substrings that indicate the gitnexus LadybugDB index is corrupt / unusable
-/// rather than merely missing a label. Mirrors the design.md risk note about
+/// rather than merely missing a label. Mirrors the risk note about
 /// 8 TiB mmap errors and the observed `UNREACHABLE_CODE` WAL assertion.
 const CORRUPTION_PATTERNS: &[&str] = &[
     "mmap for size",
@@ -79,7 +79,7 @@ const CORRUPTION_PATTERNS: &[&str] = &[
     "file is encrypted or is not a database",
 ];
 
-/// Task 4.1: Execute a Cypher query against gitnexus via subprocess.
+/// Execute a Cypher query against gitnexus via subprocess.
 ///
 /// Returns the parsed response. Caller decides how to handle `Error`.
 ///
@@ -190,7 +190,7 @@ fn split_row(line: &str) -> Vec<String> {
         .collect()
 }
 
-/// Task 4.2: Fetch reference stats for `repo_name` from gitnexus.
+/// Fetch reference stats for `repo_name` from gitnexus.
 ///
 /// Runs three queries:
 /// 1. `MATCH (n) RETURN label(n), count(*)` → node_counts_by_label
@@ -301,7 +301,7 @@ pub fn fetch_reference(repo_name: &str, gitnexus_binary: Option<&Path>) -> Resul
     })
 }
 
-/// Task 4.4: Write reference stats to `tools/verification/results/<name>.gitnexus.json`.
+/// Write reference stats to `tools/verification/results/<name>.gitnexus.json`.
 pub fn write_reference(name: &str, stats: &GitnexusStats) -> Result<PathBuf> {
     let dir = Path::new("tools/verification/results");
     std::fs::create_dir_all(dir)?;
@@ -317,7 +317,7 @@ pub fn write_reference(name: &str, stats: &GitnexusStats) -> Result<PathBuf> {
 /// orchestrator's `--resume` path when a fresh `gitnexus cypher` fetch is
 /// unavailable (e.g. gitnexus DB version mismatch between the indexed DB
 /// and the installed binary). Returns an error if the file does not exist
-/// or is not valid JSON (Rule 12: fail loud — silently treating a missing
+/// or is not valid JSON (fail loud — silently treating a missing
 /// reference as zero counts would produce a misleading PASS report).
 pub fn load_reference(name: &str) -> Result<GitnexusStats> {
     let dir = Path::new("tools/verification/results");

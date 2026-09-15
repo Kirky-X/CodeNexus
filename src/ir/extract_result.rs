@@ -45,11 +45,11 @@ pub struct ExtractResult {
     pub assignments: Vec<AssignInfo>,
     /// Extern/FFI declarations (for cross-language analysis).
     pub externs: Vec<ExternInfo>,
-    /// Variable reads within function bodies (BR-TRACE-005).
+    /// Variable reads within function bodies.
     pub reads: Vec<ReadInfo>,
-    /// Variable writes within function bodies (BR-TRACE-006).
+    /// Variable writes within function bodies.
     pub writes: Vec<WriteInfo>,
-    /// Set of `qualified_name`s already inserted into `nodes` (MED-002).
+    /// Set of `qualified_name`s already inserted into `nodes`.
     /// Maintained by [`push_node`](Self::push_node); used by
     /// `dedupe_qn` for O(1) duplicate-FQN detection instead of an O(N)
     /// linear scan over `nodes`.
@@ -91,7 +91,7 @@ impl ExtractResult {
     /// Pushes a node and registers its `qualified_name` in [`seen_qns`](Self::seen_qns).
     ///
     /// All extractors should use this instead of `self.nodes.push(...)` so that
-    /// `dedupe_qn` can detect duplicate FQNs in O(1) (MED-002). The set is
+    /// `dedupe_qn` can detect duplicate FQNs in O(1). The set is
     /// consulted by `dedupe_qn` to decide whether to append a `#L{line}`
     /// disambiguator suffix.
     pub fn push_node(&mut self, node: Node) {

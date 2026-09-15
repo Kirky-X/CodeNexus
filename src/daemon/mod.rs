@@ -4,7 +4,7 @@
 //! File-watching daemon (Observer pattern).
 //!
 //! Uses [`notify_debouncer_full`] (ADR-013) to watch repositories and trigger
-//! incremental indexing with configurable debounce (BR-DAEMON-001/004).
+//! incremental indexing with configurable debounce.
 //!
 //! # 状态机（ADD §4.2）
 //!
@@ -25,7 +25,7 @@
 //! [`IndexObserver`] 是内置观察者，收到事件后调用 [`IndexFacade::index_incremental`]
 //! 触发增量索引。
 //!
-//! # trait-kit integration (Task 2.11)
+//! # trait-kit integration
 //!
 //! When the `daemon` feature is enabled, [`capability::DaemonRunner`] is the
 //! capability trait stored in [`Kit`](crate::kit::Kit) under

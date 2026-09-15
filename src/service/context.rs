@@ -88,7 +88,7 @@ pub fn run_context_enhanced(
 /// When `project` is non-empty, validates the project exists (name or id)
 /// before running — returns `ProjectNotFound` (exit 2) if not found. This
 /// catches typos and non-existent projects early instead of silently
-/// returning results from a different project (Rule 12).
+/// returning results from a different project.
 #[cfg(feature = "cli")]
 #[forge(
     name = "context",
@@ -283,7 +283,7 @@ mod tests {
         assert_eq!(output.node.name, "unique_name");
     }
 
-    // ===== T038: run_context_enhanced with ContextCollector =====
+    // ===== run_context_enhanced with ContextCollector =====
 
     #[test]
     fn run_context_enhanced_fails_on_unknown_symbol() {
@@ -348,7 +348,7 @@ mod tests {
         assert!(json.contains("\"callees\""));
     }
 
-    // ===== T012: enhanced context resolves project name → id =====
+    // ===== enhanced context resolves project name → id =====
 
     #[test]
     fn run_context_enhanced_resolves_project_name_to_id() {
@@ -463,7 +463,7 @@ mod tests {
 
     // Verifies the project-validation gate (non-enhanced mode): when --project
     // names a non-existent project, returns ProjectNotFound before even
-    // loading the graph. Rule 12: fail loud, don't silently return data from
+    // loading the graph. fail loud, don't silently return data from
     // an unrelated project.
     #[serial_test::serial(kit_init)]
     #[test]

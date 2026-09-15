@@ -153,17 +153,17 @@ pub fn run_dead_code(
 ) -> Result<DeadCodeOutput, CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;
     let project_id = resolve_project_id(&*storage, &params.project)?;
-    // B6: fetch the full Project record to read `lastCommit` (indexed_commit)
+    // Fetch the full Project record to read `lastCommit` (indexed_commit)
     // and `rootPath` (for `git rev-parse HEAD` at query time). Use the O(1)
-    // `get_project` lookup instead of `list_projects + find` (arch-review
-    // HIGH-1: previous code triggered a second full scan even though
+    // `get_project` lookup instead of `list_projects + find`
+    // (previous code triggered a second full scan even though
     // `resolve_project_id` already did one internally).
     let project_record = storage
         .get_project(&project_id)
         .map_err(CodeNexusError::from)?
         .ok_or_else(|| CodeNexusError::ProjectNotFound(params.project.clone()))?;
     let indexed_commit = project_record.last_commit.clone();
-    // T206: resolve rootPath with fallback for legacy relative paths so
+    // Resolve rootPath with fallback for legacy relative paths so
     // `git rev-parse HEAD` runs against the actual project root, not the
     // process CWD. See `status::resolve_project_root` for the heuristic.
     let storage_config = kit.config::<StorageConfig>()?;
@@ -382,7 +382,7 @@ mod tests {
         );
     }
 
-    // ===== T036: run_dead_code with config parameters =====
+    // ===== run_dead_code with config parameters =====
 
     #[test]
     fn run_dead_code_with_check_exported_excludes_exported() {
@@ -458,7 +458,7 @@ mod tests {
         storage.execute("CREATE (:Function {id: 'f_b', project: 'demo', name: 'b', qualifiedName: 'demo.b', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a', target: 'f_b', type: 'USAGE', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 1, project: 'demo'});").expect("create edge");
 
-        // B5: `a` is passed as an entry-pattern seed; `b` is reachable from
+        // `a` is passed as an entry-pattern seed; `b` is reachable from
         // `a` via USAGE (in default config) → both alive.
         let output = run_dead_code(&kit, &{
             let mut p = test_params();
@@ -510,7 +510,7 @@ mod tests {
         );
     }
 
-    // ===== T036: build_dead_code_config unit tests =====
+    // ===== build_dead_code_config unit tests =====
 
     #[test]
     fn build_dead_code_config_parses_edge_types() {
@@ -571,7 +571,7 @@ mod tests {
         assert!(config.edge_types.contains(&EdgeType::Usage));
     }
 
-    // ===== B3.5: check_dynamic_dispatch propagation tests =====
+    // ===== check_dynamic_dispatch propagation tests =====
 
     #[test]
     fn build_dead_code_config_passes_check_dynamic_dispatch_true() {
@@ -600,7 +600,7 @@ mod tests {
         // Trait impl method (e.g. `impl Display for X { fn fmt() {} }`)
         storage.execute("CREATE (:Method {id: 'm_fmt', project: 'demo', name: 'fmt', qualifiedName: 'demo.src.lib.rs.fmt#Display', filePath: '/src/lib.rs', startLine: 5, endLine: 10, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create trait impl");
 
-        // With check_dynamic_dispatch=true (B3.5 default), trait impl is NOT dead
+        // With check_dynamic_dispatch=true(default), trait impl is NOT dead
         let output = run_dead_code(&kit, &test_params()).expect("run should succeed");
         let names: Vec<&str> = output.dead_code.iter().map(|e| e.name.as_str()).collect();
         assert!(
@@ -671,7 +671,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    // --- B6: index freshness (indexed_commit / current_head / is_stale) ---
+    // --- index freshness (indexed_commit / current_head / is_stale) ---
 
     /// Helper: create a project row with custom `rootPath` and `lastCommit`.
     fn seed_project_with(
@@ -826,7 +826,7 @@ mod tests {
         assert!(!output.is_stale, "commits match → fresh");
     }
 
-    /// T206: legacy indexes stored `rootPath = "."`. Without
+    /// Legacy indexes stored `rootPath = "."`. Without
     /// [`resolve_project_root`], `git rev-parse HEAD` would run in the
     /// process CWD (which might be a different git repo) and return the
     /// wrong commit, causing false `is_stale=true`. This test verifies the

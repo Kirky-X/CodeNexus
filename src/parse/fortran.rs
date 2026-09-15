@@ -18,9 +18,9 @@
 //! - `use_statement` → [`ImportInfo`]
 //! - `subroutine_call` / `call_statement` → [`CallInfo`]
 //! - `use iso_c_binding` → [`ExternInfo`] (FFI detection)
-//! - `assignment_statement` left → [`WriteInfo`] (BR-TRACE-006)
-//! - `do_loop` loop variable → [`WriteInfo`] (BR-TRACE-006)
-//! - expression-position `identifier` → [`ReadInfo`] (BR-TRACE-005)
+//! - `assignment_statement` left → [`WriteInfo`]
+//! - `do_loop` loop variable → [`WriteInfo`]
+//! - expression-position `identifier` → [`ReadInfo`]
 
 use std::collections::HashSet;
 
@@ -247,7 +247,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             visit_children(node, source, ctx, result);
         }
         "assignment_statement" => {
-            // `x = expr` writes the left-hand identifier (BR-TRACE-006). Only
+            // `x = expr` writes the left-hand identifier. Only
             // simple identifier targets are captured; array/struct writes are
             // ignored. Only attribute a write when inside a function body
             // (current_func is Some). The right-hand expression's identifiers
@@ -272,7 +272,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             visit_children(node, source, ctx, result);
         }
         "do_loop" => {
-            // `do i = 1, 10 ... end do` writes the loop variable (BR-TRACE-006).
+            // `do i = 1, 10 ... end do` writes the loop variable.
             // The loop variable is the first `identifier` inside the
             // `loop_control_expression` child of the `do_statement`. `do while`
             // loops have no loop variable and are skipped here. The loop body's
@@ -296,7 +296,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "identifier" => {
             // A bare identifier in an expression position is a variable read
-            // (BR-TRACE-005). Name-defining positions (assignment left, loop
+            // Name-defining positions (assignment left, loop
             // control variable, declaration declarator, callee) are excluded by
             // `is_fortran_read_position`.
             if let Some(func) = ctx.current_func {
@@ -523,7 +523,7 @@ fn extract_program(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mu
 // ---------------------------------------------------------------------------
 
 /// Extracts FFI binding names from `bind(C)` declarations on subroutines and
-/// functions (BR-TRACE-008).
+/// functions.
 ///
 /// Scans the `language_binding` child of a subroutine/function statement for
 /// the `bind(C)` attribute. If present, collects the Fortran symbol name and
@@ -723,7 +723,7 @@ fn identifier_text(node: Node, source: &str) -> Option<String> {
 /// Returns `true` if a bare `identifier` node sits in a read (expression)
 /// position rather than a name-defining position (assignment left, loop control
 /// variable, declaration declarator, callee). Mirrors the c.rs convention
-/// (design.md Decision 4, Open Question 2): only the direct parent kind is
+///: only the direct parent kind is
 /// inspected, plus a field check for the assignment left / call function cases.
 fn is_fortran_read_position(node: Node) -> bool {
     let Some(parent) = node.parent() else {
@@ -793,7 +793,7 @@ fn combine_scope(parent: Option<&str>, child: Option<&str>) -> Option<String> {
     }
 }
 
-// `dedupe_qn` is shared across all extractors — see `parse::dedupe_qn` (MED-002).
+// `dedupe_qn` is shared across all extractors — see `parse::dedupe_qn`.
 
 fn add_definition_edges(
     file_path: &str,
@@ -801,7 +801,7 @@ fn add_definition_edges(
     node: &ModelNode,
     result: &mut ExtractResult,
 ) {
-    // B1 fix: only emit DEFINES (file -> definition). The previous CONTAINS
+    // Only emit DEFINES (file -> definition). The previous CONTAINS
     // emission was redundant — for (file, node) pairs, CONTAINS and DEFINES
     // carry identical semantics, producing duplicate edges that inflated
     // verification diffs against gitnexus (see triage.md §B1).
@@ -1036,7 +1036,7 @@ end function"#;
 
     #[test]
     fn creates_defines_edges() {
-        // B1 fix: CONTAINS emission removed; only DEFINES remains.
+        // CONTAINS emission removed; only DEFINES remains.
         let result = extract(FORTRAN_SOURCE);
         let defines_count = result
             .edges
@@ -1158,7 +1158,7 @@ end function"#;
     #[test]
     fn call_in_program_has_program_caller_qn() {
         // Spec intent: 顶层调用 caller_qn 为 None。Fortran 语义冲突 surfaced
-        // (Rule 7/12): Fortran 要求每条可执行语句必须位于 program/subroutine/
+        // (Fortran 要求每条可执行语句必须位于 program/subroutine/
         // function 内，且 program 被当作 NodeLabel::Function（见模块文档第 11
         // 行）。因此 Fortran 不存在 Python/TypeScript 意义上的"模块顶层调用"。
         // 这里验证等价语义：program 内的调用 caller_qn 应为 program 自身的
@@ -1241,7 +1241,7 @@ end function"#;
 
     #[test]
     fn read_in_subroutine_has_dotted_fqn_reader_qn() {
-        // Spec: Fortran 子程序内 identifier 读取提取 (BR-TRACE-005)。
+        // Spec: Fortran 子程序内 identifier 读取提取。
         let src = "subroutine caller(x)\n    integer, intent(in) :: x\n    integer :: y\n    y = x + 1\nend subroutine\n";
         let ext = FortranExtractor::new();
         let result = ext
@@ -1271,7 +1271,7 @@ end function"#;
 
     #[test]
     fn write_in_subroutine_assignment_has_dotted_fqn_writer_qn() {
-        // Spec: Fortran 子程序内 assignment_statement 写入提取 (BR-TRACE-006)。
+        // Spec: Fortran 子程序内 assignment_statement 写入提取。
         let src = "subroutine caller(x)\n    integer, intent(in) :: x\n    integer :: y\n    y = x + 1\nend subroutine\n";
         let ext = FortranExtractor::new();
         let result = ext
@@ -1301,7 +1301,7 @@ end function"#;
 
     #[test]
     fn do_loop_variable_is_captured_as_write() {
-        // Spec: Fortran do_loop 循环变量写入提取 (BR-TRACE-006)。
+        // Spec: Fortran do_loop 循环变量写入提取。
         let src = "subroutine looper()\n    integer :: i, s\n    do i = 1, 10\n        s = s + i\n    end do\nend subroutine\n";
         let ext = FortranExtractor::new();
         let result = ext

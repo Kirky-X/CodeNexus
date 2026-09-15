@@ -145,7 +145,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             visit_children(node, source, &child_ctx, result);
         }
         "enum_specifier" => {
-            // BUG-C2: enum_specifier was not handled, so C++ enums were
+            // enum_specifier was not handled, so C++ enums were
             // silently dropped. Extract as Enum node (gitnexus extracts enums).
             extract_type(node, source, ctx, result, NodeLabel::Enum);
             let name = type_name(node, source);
@@ -217,7 +217,7 @@ fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &m
     // walk the ancestor chain to distinguish class/struct scope from
     // namespace scope (mirrors python.rs `is_inside_class`).
     let is_inside = is_inside_class_or_struct(node);
-    // BUG-C1: out-of-class method definitions (`void Foo::bar() {}`) have a
+    // Out-of-class method definitions (`void Foo::bar() {}`) have a
     // qualified_identifier declarator. Detect the qualifier (class name) so
     // these are classified as Method, not Function.
     let qualifier = extract_qualifier(node, source);
@@ -238,7 +238,7 @@ fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &m
     let signature = node_text(node, source)
         .map(signature_first_line)
         .map(String::from);
-    // BUG-C4 (resolved, v0.3.0): C++ free functions are now is_exported=true
+    // C++ free functions are now is_exported=true
     // to enable cross-file call resolution. Over-resolution is prevented by
     // scope-aware lookup_exported_in_scope which filters by
     // #include reachability via IncludesGraph. Methods remain is_exported=false.
@@ -456,7 +456,7 @@ fn is_inside_class_or_struct(node: Node) -> bool {
 }
 
 /// Extracts the qualifier (class/namespace name) from a function_definition
-/// whose declarator is a `qualified_identifier` (BUG-C1).
+/// whose declarator is a `qualified_identifier`.
 ///
 /// For `void Foo::bar() {}`, returns `Some("Foo")`. For a plain function
 /// `void bar() {}`, returns `None`. Unwraps intermediate declarator nodes
@@ -1020,7 +1020,7 @@ mod tests {
 
     #[test]
     fn enum_is_extracted_as_top_level_node() {
-        // BUG-C2: enum_specifier should be extracted as an Enum node.
+        // enum_specifier should be extracted as an Enum node.
         // Previously enum was not extracted at all (the old test pinned the
         // missing behavior). gitnexus extracts enums; without this, C++
         // enum counts are zero in CodeNexus.
@@ -1036,7 +1036,7 @@ mod tests {
 
     #[test]
     fn out_of_class_method_definition_is_classified_as_method() {
-        // BUG-C1: `void Foo::bar() {}` is an out-of-class method definition.
+        // `void Foo::bar() {}` is an out-of-class method definition.
         // The declarator is a qualified_identifier (Foo::bar). The previous
         // is_inside_class_or_struct only checked ancestors, not the declarator,
         // so this was misclassified as Function. It should be Method with
@@ -1159,7 +1159,7 @@ mod tests {
 
     #[test]
     fn cpp_free_function_is_exported() {
-        // BUG-C4 (resolved, v0.3.0): C++ free functions are now is_exported=true
+        // C++ free functions are now is_exported=true
         // to enable cross-file call resolution. Over-resolution is prevented by
         // scope-aware lookup_exported_in_scope via IncludesGraph.
         let result = extract("int add(int a, int b) { return a + b; }\n");
@@ -1269,7 +1269,7 @@ mod tests {
     #[test]
     fn cpp_multifile_call_graph_resolved() {
         // End-to-end test for multi-file C++ call graph with #include
-        // scoping (BUG-C4 fix verification).
+        // scoping.
         //
         // Scenario (header-only definition — common C++ pattern like STL):
         // - main.cpp: #includes "foo.h", calls foo()

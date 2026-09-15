@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn execute_ac_query_001_returns_function_names() {
-        // AC-QUERY-001: query "MATCH (f:Function) RETURN f.name LIMIT 10"
+        // Query "MATCH (f:Function) RETURN f.name LIMIT 10"
         // returns function names.
         let repo = fresh_repo();
         let mut nodes = Vec::new();

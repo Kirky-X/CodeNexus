@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Search strategies (Strategy pattern, SubTask 16.3).
+//! Search strategies (Strategy pattern).
 //!
 //! Provides three pluggable search strategies:
 //! - [`Bm25Strategy`]: BM25 full-text search (LadybugDB FTS, fallback to CONTAINS).
@@ -18,7 +18,7 @@
 //!
 //! Given two ranked lists, the fused score for a document `d` is:
 //! ```text
-//! rrf_score(d) = sum( 1 / (k + rank_i(d)) )  for each list i
+//! rrf_score(d) = sum(1 / (k + rank_i(d)) ) for each list i
 //! ```
 //! where `k = 60` (standard constant) and `rank_i(d)` is the 1-based rank of
 //! `d` in list `i` (or 0 if absent).
@@ -36,15 +36,13 @@ use super::{EmbedError, Result, EMBEDDING_DIM};
 const RRF_K: u32 = 60;
 
 /// Weight for the base (BM25 + semantic RRF) score in multi-signal fusion
-/// (R-search-002). Explicit constant per Rule 5 (deterministic logic).
+/// Explicit constant (deterministic logic).
 const BASE_WEIGHT: f64 = 0.5;
 
 /// Weight for the centrality signal (CALLS in-degree) in multi-signal fusion
-/// (R-search-002).
 const CENTRALITY_WEIGHT: f64 = 0.3;
 
 /// Weight for the file heat signal (IMPORTS count) in multi-signal fusion
-/// (R-search-002).
 const FILE_HEAT_WEIGHT: f64 = 0.2;
 
 /// The search strategy to use.
@@ -54,7 +52,7 @@ pub enum SearchStrategyType {
     Bm25,
     /// Vector semantic search only.
     Semantic,
-    /// Hybrid: BM25 + semantic fused via RRF (AC-SEARCH-002).
+    /// Hybrid: BM25 + semantic fused via RRF.
     Hybrid,
 }
 
@@ -216,13 +214,13 @@ impl<'a, C: ?Sized + EmbedClient> SearchStrategy for SemanticStrategy<'a, C> {
     }
 }
 
-/// Hybrid search strategy: BM25 + semantic fused via RRF (AC-SEARCH-002).
+/// Hybrid search strategy: BM25 + semantic fused via RRF.
 ///
 /// Runs both BM25 and semantic search, then fuses the ranked lists using
 /// Reciprocal Rank Fusion. On Windows (or when vector support is unavailable),
 /// this degrades to BM25-only.
 ///
-/// # Multi-signal scoring (R-search-002)
+/// # Multi-signal scoring
 ///
 /// When [`with_centrality`](Self::with_centrality) and/or
 /// [`with_file_heat`](Self::with_file_heat) are enabled, the fused RRF score
@@ -329,7 +327,7 @@ impl<'a, C: ?Sized + EmbedClient> SearchStrategy for HybridStrategy<'a, C> {
 }
 
 // ---------------------------------------------------------------------------
-// Multi-signal scoring (R-search-002)
+// Multi-signal scoring
 // ---------------------------------------------------------------------------
 
 /// Returns results unchanged if neither signal is enabled or no project filter
@@ -351,7 +349,7 @@ fn apply_multi_signal_if_enabled(
     apply_multi_signal_scoring(conn, results, project, enable_centrality, enable_file_heat)
 }
 
-/// Applies the multi-signal scoring formula (R-search-002):
+/// Applies the multi-signal scoring formula:
 ///
 /// `final_score = 0.5 * base_score + 0.3 * centrality_score + 0.2 * file_heat_score`
 ///
@@ -1072,7 +1070,7 @@ mod tests {
         assert!(result.is_none(), "should return None for missing node");
     }
 
-    // --- Degradation (SubTask 16.4) ---
+    // --- Degradation ---
 
     #[test]
     fn degradation_semantic_falls_back_to_bm25_on_windows_check() {
@@ -1107,7 +1105,7 @@ mod tests {
 
     #[test]
     fn degradation_embedding_service_unavailable_continues() {
-        // SubTask 16.4: embedding service unavailable → skip embedding, continue.
+        // Embedding service unavailable → skip embedding, continue.
         let conn = fresh_conn();
         seed_fixture(&conn);
         let client =
@@ -1117,7 +1115,7 @@ mod tests {
         let _ = strategy.search("parse", None, 10);
     }
 
-    // --- Multi-signal scoring (R-search-002) ---
+    // --- Multi-signal scoring ---
 
     /// Seeds a project + two same-named functions (`foo` in /a.rs, `bar` in
     /// /b.rs) where `foo` has 3 CALLS in-edges and `bar` has 0. Both functions

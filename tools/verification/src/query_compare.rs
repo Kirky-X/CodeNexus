@@ -97,7 +97,7 @@ pub fn extract_query_for_side(content: &str, side: Side) -> Result<String> {
 /// Execute a Cypher query against CodeNexus and return `(symbol_name, file_path)` tuples.
 ///
 /// Uses the first two columns of each row. Missing values become empty
-/// strings (Rule 12: visible, not silent — empty rows are still recorded
+/// strings (visible, not silent — empty rows are still recorded
 /// so a missing column shows up as `("","")` rather than being dropped).
 ///
 /// If `project_id` is provided, all `__PID__` placeholders in `cql` are
@@ -470,7 +470,7 @@ LIMIT 50
     fn execute_codenexus_query_falls_back_to_empty_when_column_value_is_null() {
         // Insert a Project with only `name` set; query `name` and a column
         // that exists in the schema but is null (`rootPath`). The row-mapping
-        // closure must coerce null → "" (Rule 12: visible empty, not drop).
+        // closure must coerce null → "" (visible empty, not drop).
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("null.lbug");
         let repo =

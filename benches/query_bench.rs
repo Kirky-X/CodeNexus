@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Query engine benchmarks (Task 15).
+//! Query engine benchmarks.
 //!
 //! Measures [`QueryFacade`] Cypher execution and structured search latency
 //! over a pre-indexed fixture. The target SLO is P99 <= 200ms; criterion's

@@ -8,7 +8,7 @@
 //! - **Remote HTTP** ([`OpenAIEmbedClient`]): calls an OpenAI-compatible
 //!   embedding API via `reqwest`. API keys are read from environment variables
 //!   and never persisted (TRD §6.1).
-//! - **Local ONNX** ([`LocalEmbedClient`], H10/D7): runs `arctic-embed-xs`
+//! - **Local ONNX** ([`LocalEmbedClient`]): runs `arctic-embed-xs`
 //!   inference locally via `ort` (ONNX Runtime). Works fully offline — no API
 //!   key, no network access required. The model file must be present on disk.
 //!
@@ -23,7 +23,7 @@
 //! - [`storage`]: [`EmbeddingStorage`] stores/retrieves `FLOAT[384]` vectors in
 //!   the LadybugDB `Embedding` table (DDD §5.9).
 //! - [`search`]: [`SearchStrategy`] trait with [`Bm25Strategy`],
-//!   [`SemanticStrategy`], and [`HybridStrategy`] (RRF fusion, AC-SEARCH-002).
+//!   [`SemanticStrategy`], and [`HybridStrategy`] (RRF fusion).
 //!
 //! # Degradation
 //!
@@ -31,9 +31,9 @@
 //! [`search::is_vector_supported`] returns `false` and the search strategy
 //! degrades to BM25-only. If the embedding service is unreachable (remote
 //! mode) or the model file is missing (local mode), indexing continues
-//! without embeddings (SubTask 16.4).
+//! without embeddings.
 //!
-//! # trait-kit integration (Task 2.12)
+//! # trait-kit integration
 //!
 //! When the `embed` feature is enabled, [`client::EmbedClient`] is the
 //! capability trait stored in [`Kit`](crate::kit::Kit) under

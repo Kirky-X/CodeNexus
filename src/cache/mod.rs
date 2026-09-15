@@ -1,8 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Cache module — multi-level cache integration via oxcache (T017,
-//! v0.3.3-sibling-crate-optimization Phase 3).
+//! Cache module — multi-level cache integration via oxcache.
 //!
 //! Feature-gated behind the `cache` cargo feature. When enabled, a
 //! [`CacheModule`] is registered in the AsyncKit during `build_kit`,

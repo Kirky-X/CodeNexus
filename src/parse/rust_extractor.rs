@@ -25,9 +25,8 @@
 //! - `call_expression` → [`CallInfo`]
 //! - `let_declaration` → [`AssignInfo`]
 //! - `extern_item` / `extern_block` → [`ExternInfo`]
-//! - identifier in expression position → [`ReadInfo`] (BR-TRACE-005)
+//! - identifier in expression position → [`ReadInfo`]
 //! - `let_declaration` pattern / `assignment_expression` left → [`WriteInfo`]
-//!   (BR-TRACE-006)
 
 use tree_sitter::Node;
 
@@ -101,7 +100,6 @@ struct VisitContext<'a> {
     project: &'a str,
     current_func: Option<&'a str>,
     current_parent: Option<&'a str>,
-    /// design.md D3.
     resolver: &'a ScopeResolverRegistry,
 }
 
@@ -109,7 +107,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
     match node.kind() {
         "function_item" => {
             extract_function(node, source, ctx, result);
-            // Use ScopeResolver to get the function name (design.md D3).
+            // Use ScopeResolver to get the function name.
             let scope_ctx = ScopeContext {
                 source,
                 file_path: ctx.file_path,
@@ -141,7 +139,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "trait_item" => {
             extract_named_item(node, NodeLabel::Trait, source, ctx, result);
-            // Use ScopeResolver to get the trait name (design.md D3).
+            // Use ScopeResolver to get the trait name.
             let scope_ctx = ScopeContext {
                 source,
                 file_path: ctx.file_path,
@@ -163,7 +161,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             visit_children(node, source, &child_ctx, result);
         }
         "impl_item" => {
-            // Use ScopeResolver to get the impl type name (design.md D3).
+            // Use ScopeResolver to get the impl type name.
             let scope_ctx = ScopeContext {
                 source,
                 file_path: ctx.file_path,
@@ -224,7 +222,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "identifier" => {
             // A bare identifier in an expression position is a variable read
-            // (BR-TRACE-005). Name-defining positions (patterns, call
+            // Name-defining positions (patterns, call
             // functions, field names) are excluded by `is_read_position`.
             if let Some(func) = ctx.current_func {
                 if is_read_position(node) {
@@ -243,7 +241,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             visit_children(node, source, ctx, result);
         }
         "macro_invocation" => {
-            // B1 fix: tree-sitter-rust parses macro arguments (`println!(...)`,
+            // Tree-sitter-rust parses macro arguments (`println!(...)`,
             // `format!(...)`, `json!(...)`) as `token_tree` nodes, which
             // contain raw tokens that are NOT parsed as `call_expression`.
             // This means function calls inside macro arguments (e.g.
@@ -262,7 +260,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         "mod_item" => {
             // 模块名纳入 current_parent 以区分同名 impl（P0-1），并创建 Module 节点（P2-1）。
             extract_named_item(node, NodeLabel::Module, source, ctx, result);
-            // Use ScopeResolver to get the module name (design.md D3).
+            // Use ScopeResolver to get the module name.
             let scope_ctx = ScopeContext {
                 source,
                 file_path: ctx.file_path,
@@ -313,7 +311,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
 /// dead-code detector scans `signature` for `#[tool` / `#[forge` /
 /// `#[tokio::main` substrings to recognise macro-synthesised entry points,
 /// so without this prepend every `#[tool]` / `#[forge]` function would be
-/// a false positive (T182-B).
+/// a false positive.
 ///
 /// Walks `prev_sibling()` backwards collecting consecutive `attribute_item`
 /// nodes, reverses the collected slice (so attributes appear in source
@@ -352,7 +350,7 @@ fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &m
         return;
     };
     let is_exported = is_pub(node);
-    // T182-B: prepend leading `attribute_item` siblings (`#[tool(...)]`,
+    // Prepend leading `attribute_item` siblings (`#[tool(...)]`,
     // `#[forge(...)]`, `#[tokio::main]`, etc.) to the signature text.
     // tree-sitter-rust 0.24 tokenises outer attributes as sibling
     // `attribute_item` nodes (not children of `function_item`), so
@@ -427,7 +425,7 @@ fn extract_impl(
     let trait_name = node
         .child_by_field_name("trait")
         .and_then(|n| node_text(n, source).map(String::from));
-    // B2 fix: only model inherent impls (`impl Type {}`), not trait impls
+    // Only model inherent impls (`impl Type {}`), not trait impls
     // (`impl Trait for Type {}`). gitnexus only indexes inherent impls —
     // verified via cross-validation. Methods inside trait impls are still
     // extracted by visit_children (called unconditionally after extract_impl),
@@ -568,11 +566,11 @@ fn extract_use(node: Node, source: &str, result: &mut ExtractResult) {
     };
     let path = use_path(arg, source).unwrap_or_default();
     let names = use_imported_names(arg, source);
-    // B7: `pub use foo::bar` is an external re-export — the symbol is
+    // `pub use foo::bar` is an external re-export — the symbol is
     // reachable from outside the current crate via the re-export, so it
     // is a live entry point for dead-code analysis.
     //
-    // B7 review (security LOW-2): `pub(crate) use` / `pub(super) use` /
+    // `pub(crate) use` / `pub(super) use` /
     // `pub(in path) use` are NOT external re-exports — they only widen
     // visibility within the crate/module, and crate-internal reachability
     // is already covered by CALLS edges. Treating them as external
@@ -602,12 +600,12 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
     // function calls are tracked). See triage.md §C2. Also handles
     // generic_function wrapping a field_expression (e.g. `.collect::<Vec<_>>()`).
     //
-    // T182-A fix: do NOT short-circuit before `extract_function_ref_args`.
+    // Do NOT short-circuit before `extract_function_ref_args`.
     // When the stdlib filter matches (e.g. `.map(fn_name)`), the method call
     // itself is filtered (no CallInfo for `map`), but bare-identifier
     // arguments (e.g. `fn_name`) are still potential function references and
     // must be extracted. Short-circuiting caused 15/27 dead-code false
-    // positives in T182 sampling (every `.map(signature_first_line)` /
+    // positives (every `.map(signature_first_line)` /
     // `.map(row_to_function)` etc. lost its CALLS edge to the referenced
     // function).
     if !(is_field_expression_call(func_node) && is_stdlib_method(&callee)) {
@@ -627,7 +625,7 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
     // callee_name doesn't match a function in the symbol table, so variables
     // passed as arguments (e.g. `foo(x)`) are silently filtered.
     //
-    // T182-A: now invoked unconditionally (both for stdlib-filtered and
+    // Now invoked unconditionally (both for stdlib-filtered and
     // preserved method calls) so closure-passing patterns like
     // `.map(transform_fn)` / `.filter(predicate)` / `.for_each(consumer)`
     // generate CALLS edges to the referenced functions.
@@ -922,7 +920,7 @@ fn sanitize_route_id(s: &str) -> String {
         .collect()
 }
 
-/// B1 fix: extracts function calls from inside macro arguments.
+/// Extracts function calls from inside macro arguments.
 ///
 /// tree-sitter-rust parses macro arguments (`println!(...)`, `format!(...)`,
 /// `json!(...)`) as `token_tree` nodes. Inside `token_tree`, a function call
@@ -1011,7 +1009,7 @@ fn extract_calls_from_macro(
     }
 }
 
-/// Recursively extracts function calls from a `token_tree` node (B1 fix).
+/// Recursively extracts function calls from a `token_tree` node.
 ///
 /// This handles nested macros and complex expressions inside macro arguments.
 fn extract_calls_from_token_tree(
@@ -1057,7 +1055,7 @@ fn extract_calls_from_token_tree(
     }
 }
 
-/// Extracts argument count from a macro call's `token_tree` (B1 fix).
+/// Extracts argument count from a macro call's `token_tree`.
 ///
 /// Since `token_tree` doesn't parse arguments as expressions, we count
 /// top-level commas to estimate the argument count. This is a best-effort
@@ -1426,7 +1424,7 @@ fn extract_let(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ex
         line: node.start_position().row as u32 + 1,
         is_return_assign,
     });
-    // A let binding also writes the bound variable (BR-TRACE-006). Only
+    // A let binding also writes the bound variable. Only
     // attribute the write when inside a function body.
     if let Some(func) = ctx.current_func {
         result.writes.push(WriteInfo {
@@ -1438,7 +1436,7 @@ fn extract_let(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ex
 }
 
 /// Extracts a `WriteInfo` from the left-hand side of an `assignment_expression`
-/// (e.g. `x = ...`), attributing the write to `current_func` (BR-TRACE-006).
+/// (e.g. `x = ...`), attributing the write to `current_func`.
 /// Only simple identifier targets are captured; field/index writes are
 /// ignored.
 fn extract_assignment(
@@ -1472,7 +1470,7 @@ fn identifier_text(node: Node, source: &str) -> Option<String> {
 }
 
 /// Returns `true` if the identifier `node` is in a value-read position within
-/// its parent expression (BR-TRACE-005).
+/// its parent expression.
 ///
 /// Name-defining positions (let patterns, call functions, field names,
 /// assignment left-hand sides) are excluded so only genuine variable reads
@@ -1632,7 +1630,7 @@ fn is_pub(node: Node) -> bool {
     false
 }
 
-/// B7 review (security LOW-2): Returns true only for `pub` visibility
+/// Returns true only for `pub` visibility
 /// without a `(...) ` restriction.
 ///
 /// - `pub fn foo()` → true (external — visible outside the crate)
@@ -1893,7 +1891,7 @@ fn add_definition_edges(
     node: &ModelNode,
     result: &mut ExtractResult,
 ) {
-    // B1 fix: only emit DEFINES (file -> definition). The previous CONTAINS
+    // Only emit DEFINES (file -> definition). The previous CONTAINS
     // emission was redundant — for (file, node) pairs, CONTAINS and DEFINES
     // carry identical semantics, producing duplicate edges that inflated
     // verification diffs against gitnexus (see triage.md §B1).
@@ -1975,10 +1973,10 @@ fn contains_scientific(ast: &AstNode) -> bool { true }
         );
     }
 
-    /// T182-A: Verifies CallInfo extraction for function-reference arguments
+    /// Verifies CallInfo extraction for function-reference arguments
     /// passed to stdlib iterator adaptors (`.map(fn_name)`, `.filter(pred)`,
     /// etc.). The closure-passing pattern is pervasive in the CodeNexus
-    /// codebase (15/27 dead-code false positives in T182 sampling).
+    /// codebase (15/27 dead-code false positives).
     ///
     /// Root cause: `extract_call` short-circuits on stdlib method filter
     /// (`is_field_expression_call && is_stdlib_method`) BEFORE calling
@@ -2014,7 +2012,7 @@ fn main() {
         );
     }
 
-    /// T182-A: Verifies CallInfo extraction covers common iterator adaptors
+    /// Verifies CallInfo extraction covers common iterator adaptors
     /// that take function-reference arguments. Mirrors real CodeNexus
     /// call sites: `.map(signature_first_line)`, `.filter(predicate)`,
     /// `.then(callback)`, `.and_then(fallible)`, `.or_else(fallback)`,
@@ -2046,7 +2044,7 @@ fn main() {
         }
     }
 
-    /// T182-B: Verifies `extract_function` prepends leading `attribute_item`
+    /// Verifies `extract_function` prepends leading `attribute_item`
     /// siblings (`#[tool(...)]`, `#[forge(...)]`, `#[tokio::main]`) to the
     /// `signature` field of the resulting Function node. tree-sitter-rust 0.24
     /// tokenises outer attributes as sibling `attribute_item` nodes (not
@@ -2101,7 +2099,7 @@ async fn architecture(project: String) -> Result<(), ApiError> {
         );
     }
 
-    /// T182-B: Verifies the common async-runtime / web-framework entry
+    /// Verifies the common async-runtime / web-framework entry
     /// attributes (`#[tokio::main]`, `#[rocket::main]`, `#[actix::main]`,
     /// `#[axum::main]`) are captured in the signature. These macros
     /// synthesise a synchronous `main` that calls the decorated async fn,
@@ -2134,7 +2132,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    /// T182-B: Verifies that a plain function with no leading attributes
+    /// Verifies that a plain function with no leading attributes
     /// produces the same signature as before (regression guard for
     /// `collect_function_signature`).
     #[test]
@@ -2375,7 +2373,7 @@ fn caller(name: &str) {
 
     #[test]
     fn creates_defines_edges() {
-        // B1 fix: CONTAINS emission removed; only DEFINES remains.
+        // CONTAINS emission removed; only DEFINES remains.
         let result = extract(RUST_SOURCE);
         let defines_count = result
             .edges
@@ -2502,11 +2500,11 @@ fn caller(name: &str) {
         }
     }
 
-    // ===== B1: function calls inside macro arguments =====
+    // ===== function calls inside macro arguments =====
 
     #[test]
     fn b1_extracts_function_call_inside_println_macro() {
-        // B1 fix: function calls inside `println!` macro arguments must be
+        // Function calls inside `println!` macro arguments must be
         // extracted as CallInfo. tree-sitter-rust parses macro arguments as
         // `token_tree` nodes, which contain raw tokens that are NOT parsed as
         // `call_expression`. This test verifies that the extractor descends
@@ -2529,7 +2527,7 @@ fn main() {
 
     #[test]
     fn b1_extracts_function_call_inside_format_macro() {
-        // B1 fix: function calls inside `format!` macro arguments must be
+        // Function calls inside `format!` macro arguments must be
         // extracted. This was the root cause of `error_kind_prefix` being
         // flagged as dead code in CalNexus (called inside `format!(...)`).
         let src = r#"fn prefix(kind: &str) -> &'static str { kind }
@@ -2550,7 +2548,7 @@ fn main() {
 
     #[test]
     fn b1_extracts_function_call_inside_json_macro() {
-        // B1 fix: function calls inside `json!` (serde_json::json!) macro
+        // Function calls inside `json!` (serde_json::json!) macro
         // arguments must be extracted. This was the root cause of
         // `dmatrix_to_json` being flagged as dead code in CalNexus.
         let src = r#"fn to_json(x: i32) -> i32 { x }
@@ -2571,7 +2569,7 @@ fn main() {
 
     #[test]
     fn b1_extracts_function_call_inside_nested_macro() {
-        // B1 fix: function calls inside nested macros (e.g. `println!` inside
+        // Function calls inside nested macros (e.g. `println!` inside
         // another macro) must also be extracted.
         let src = r#"fn helper() -> i32 { 42 }
 macro_rules! debug_print {
@@ -2668,7 +2666,7 @@ fn main() {
 
     #[test]
     fn trait_impl_does_not_create_impl_node() {
-        // B2 fix: trait impls (impl Trait for Type) do not create Impl nodes,
+        // trait impls (impl Trait for Type) do not create Impl nodes,
         // matching gitnexus which only models inherent impls. Methods inside
         // trait impls are still extracted as Function nodes.
         let result = extract(RUST_SOURCE);
@@ -3052,7 +3050,7 @@ impl Foo { fn bar(&self) -> i32 { self.bar } }
         }
     }
 
-    // --- reads/writes extraction (BR-TRACE-005 / BR-TRACE-006) ---
+    // --- reads/writes extraction (/) ---
 
     #[test]
     fn extracts_reads_from_binary_expression() {
@@ -4270,7 +4268,7 @@ impl Repo {
         assert_eq!(result.imports.len(), 3, "should extract 3 use declarations");
     }
 
-    // B7 T070: `pub use` must record `is_reexport=true` so the dead-code
+    // `pub use` must record `is_reexport=true` so the dead-code
     // analyzer can treat re-exported symbols as live entry points.
     #[test]
     fn pub_use_marked_as_reexport() {
@@ -4284,7 +4282,7 @@ impl Repo {
         );
     }
 
-    // B7 T070: ordinary `use` must keep `is_reexport=false` (default).
+    // ordinary `use` must keep `is_reexport=false` (default).
     #[test]
     fn plain_use_not_marked_as_reexport() {
         let src = "use crate::network::fetch;";
@@ -4297,7 +4295,7 @@ impl Repo {
         );
     }
 
-    // B7 review (security LOW-2): `pub(crate) use` is NOT an external
+    // `pub(crate) use` is NOT an external
     // re-export — it only widens visibility within the current crate, and
     // crate-internal reachability is already covered by CALLS edges.
     // Treating it as an external re-export over-approximated liveness
@@ -4315,7 +4313,7 @@ impl Repo {
         );
     }
 
-    // B7 review (security LOW-2): `pub(super) use` is also not an external
+    // `pub(super) use` is also not an external
     // re-export (restriction to parent module).
     #[test]
     fn pub_super_use_not_marked_as_external_reexport() {
@@ -4329,7 +4327,7 @@ impl Repo {
         );
     }
 
-    // B7-review audit LOW-3: `pub(in path) use` is also not an external
+    // `pub(in path) use` is also not an external
     // re-export (restriction to a specific ancestor module). is_external_pub
     // detects any `(` token in visibility_modifier, so pub(in path) is
     // correctly treated as restricted (not external).

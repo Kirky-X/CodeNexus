@@ -1010,7 +1010,7 @@ impl<'a> ArchitectureAnalyzer<'a> {
 }
 
 /// Maps a [`ServiceProtocol`] to its canonical string label for
-/// [`CrossServiceDep::protocol`]. Deterministic mapping (Rule 5) — no
+/// [`CrossServiceDep::protocol`]. Deterministic mapping — no
 /// `Display` impl dependency.
 fn protocol_to_string(protocol: &ServiceProtocol) -> String {
     match protocol {
@@ -1704,7 +1704,7 @@ mod tests {
         assert_eq!(helper.qualified_name, "demo.Class.helper");
     }
 
-    // --- T028: multi-dimensional architecture type tests ---
+    // --- multi-dimensional architecture type tests ---
 
     #[test]
     fn module_boundary_serializes_all_fields() {
@@ -1860,7 +1860,7 @@ mod tests {
         );
     }
 
-    // --- T029: module boundary detection tests ---
+    // --- module boundary detection tests ---
 
     #[test]
     fn detect_module_boundaries_cohesion_5_internal_2_external() {
@@ -1929,7 +1929,7 @@ mod tests {
         );
     }
 
-    // --- T030: dependency direction analysis tests ---
+    // --- dependency direction analysis tests ---
 
     #[test]
     fn analyze_dependency_directions_detects_circular() {
@@ -1986,7 +1986,7 @@ mod tests {
         }
     }
 
-    // --- T031: layer detection tests ---
+    // --- layer detection tests ---
 
     #[test]
     fn detect_layers_controller_handling_route() {
@@ -3037,7 +3037,7 @@ mod tests {
         );
     }
 
-    // --- module_layer_map (absorb-archify T010) ---
+    // --- module_layer_map ---
 
     #[test]
     fn module_layer_map_dominates_by_controller() {

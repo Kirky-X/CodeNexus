@@ -1,8 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! trait-kit module for the Cache subsystem (T017,
-//! v0.3.3-sibling-crate-optimization Phase 3).
+//! trait-kit module for the Cache subsystem.
 //!
 //! Implements [`ModuleMeta`] + [`AsyncAutoBuilder`] for [`CacheModule`],
 //! wiring an oxcache moka memory cache into the unified Kit registry as
@@ -73,7 +72,7 @@ pub enum CacheError {
 /// larger than this are rejected by [`OxcacheStore::set`] with a `warn!` log.
 pub const DEFAULT_ENTRY_MAX_BYTES: usize = 64 * 1024;
 
-/// Configuration for [`CacheModule`] (T017).
+/// Configuration for [`CacheModule`].
 ///
 /// Stored in Kit via `AsyncKit::set_config` and read in
 /// [`AsyncAutoBuilder::build`]. Defaults to 10,000 entries (matching
@@ -134,7 +133,7 @@ impl CacheConfig {
 // Module (ModuleMeta + AsyncAutoBuilder)
 // ---------------------------------------------------------------------------
 
-/// trait-kit module tag for the Cache subsystem (T017).
+/// trait-kit module tag for the Cache subsystem.
 ///
 /// Zero-sized marker — construction logic lives in
 /// [`CacheModule::build_cap`] (called from the [`AsyncAutoBuilder`] impl).

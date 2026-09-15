@@ -1,18 +1,17 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! trait-kit bootstrap (T6/unified-architecture Phase 2, Task 2.13;
-//! v0.3.3 AsyncKit migration).
+//! trait-kit bootstrap.
 //!
 //! Provides [`build_kit`], the single entry point that assembles every
 //! subsystem module into an [`AsyncKit<AsyncReady>`] in fixed dependency
-//! order. CLI handlers (Task 2.14) and integration tests (Task 2.15) call
+//! order. CLI handlers and integration tests call
 //! this once and then resolve capabilities via [`AsyncKit::require`] instead
 //! of constructing subsystems ad-hoc.
 //!
 //! # Assembly order
 //!
-//! Per `design.md` D1, modules are registered in this exact order:
+//! Modules are registered in this exact order:
 //!
 //! ```text
 //! Storage → Parser → Extractor → Indexer → Resolver
@@ -70,7 +69,7 @@ use crate::cache::CacheConfig;
 // Bootstrap config
 // ---------------------------------------------------------------------------
 
-/// Aggregated configuration for [`build_kit`] (Task 2.13).
+/// Aggregated configuration for [`build_kit`].
 ///
 /// Collects every parameter the 9 trait-kit modules need:
 ///
@@ -93,7 +92,7 @@ pub struct KitBootstrapConfig {
     /// Pass `":memory:"` for an in-memory database (useful for tests).
     pub db_path: PathBuf,
 
-    /// Debounce window in milliseconds for the daemon (BR-DAEMON-001/004).
+    /// Debounce window in milliseconds for the daemon.
     /// Only consulted when the `daemon` feature is enabled.
     pub debounce_ms: u64,
 
@@ -167,7 +166,7 @@ pub const DEFAULT_DEBOUNCE_MS: u64 = 2000;
 // ---------------------------------------------------------------------------
 
 /// Assemble every trait-kit module into a fresh [`AsyncKit`] in fixed
-/// dependency order (Task 2.13 / design.md D1).
+/// dependency order.
 ///
 /// # Order
 ///
@@ -203,36 +202,36 @@ pub const DEFAULT_DEBOUNCE_MS: u64 = 2000;
 pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncReady>, KitError> {
     let mut kit = AsyncKit::new();
 
-    // 1. Storage — opens Repository, initializes schema (Task 2.4).
+    // 1. Storage — opens Repository, initializes schema.
     kit.set_config(StorageConfig {
         db_path: config.db_path.clone(),
         read_only: config.read_only,
     });
     kit.register::<StorageModule>()?;
 
-    // 2. Parser — stateless ParserFactory (Task 2.5).
+    // 2. Parser — stateless ParserFactory.
     kit.register::<ParserFactoryModule>()?;
 
-    // 3. Extractor — stateless dispatcher (Task 2.6).
+    // 3. Extractor — stateless dispatcher.
     kit.register::<ExtractorRegistryModule>()?;
 
-    // 4. Indexer — IndexFacade with db_path (Task 2.7).
+    // 4. Indexer — IndexFacade with db_path.
     kit.set_config(IndexConfig {
         db_path: config.db_path.clone(),
     });
     kit.register::<IndexerModule>()?;
 
-    // 5. Resolver — stateless free functions (Task 2.8).
+    // 5. Resolver — stateless free functions.
     kit.register::<ResolverModule>()?;
 
-    // 6. Query — QueryFacade with db_path (Task 2.9).
+    // 6. Query — QueryFacade with db_path.
     kit.set_config(QueryConfig {
         db_path: config.db_path.clone(),
         read_only: config.read_only,
     });
     kit.register::<QueryModule>()?;
 
-    // 7. Trace — loads fresh subgraph per trace call (Task 2.10).
+    // 7. Trace — loads fresh subgraph per trace call.
     kit.set_config(TraceConfig {
         db_path: config.db_path.clone(),
         read_only: config.read_only,
@@ -240,7 +239,7 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
     });
     kit.register::<TraceModule>()?;
 
-    // 8. Daemon (feature-gated) — owns db_path + debounce_ms (Task 2.11).
+    // 8. Daemon (feature-gated) — owns db_path + debounce_ms.
     #[cfg(feature = "daemon")]
     {
         kit.set_config(DaemonConfig {
@@ -250,7 +249,7 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
         kit.register::<DaemonModule>()?;
     }
 
-    // 9. Embed (feature-gated) — owns EmbeddingConfig (Task 2.12).
+    // 9. Embed (feature-gated) — owns EmbeddingConfig.
     #[cfg(feature = "embed")]
     {
         kit.set_config(config.embedding_config.clone());
@@ -258,7 +257,7 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
     }
 
     // 10. Cache (feature-gated) — moka memory cache for content-addressed
-    // caching (T017, v0.3.3). Leaf module — no upstream dependencies.
+    // caching. Leaf module — no upstream dependencies.
     // Registered last so all subsystems that might query the cache are
     // already present.
     #[cfg(feature = "cache")]
@@ -444,7 +443,7 @@ mod tests {
     }
 
     /// `KitBootstrapConfig::new` defaults `debounce_ms` to
-    /// `DEFAULT_DEBOUNCE_MS` (2000ms, BR-DAEMON-001).
+    /// `DEFAULT_DEBOUNCE_MS` (2000ms).
     #[test]
     fn bootstrap_config_new_defaults_debounce_ms() {
         let config = KitBootstrapConfig::new(PathBuf::from("/tmp/db.lbug"));
@@ -506,7 +505,7 @@ mod tests {
             "EmbedModule missing with embed feature"
         );
         let embed = kit.require_embed().expect("require_embed");
-        // H10/D7: default is local mode; without a model file, embed() must
+        // Default is local mode; without a model file, embed() must
         // return Unavailable (not MissingApiKey — no API key needed locally).
         let result = embed.embed(&["hello"]);
         assert!(
@@ -518,7 +517,7 @@ mod tests {
     #[cfg(feature = "embed")]
     #[tokio::test]
     async fn build_kit_embed_remote_without_key_returns_missing_api_key() {
-        // H10/D7: remote mode (endpoint=Some) without API key → MissingApiKey.
+        // Remote mode (endpoint=Some) without API key → MissingApiKey.
         std::env::remove_var(crate::embed::API_KEY_ENV);
         std::env::remove_var(crate::embed::OPENAI_API_KEY_ENV);
         std::env::set_var(

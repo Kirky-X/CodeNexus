@@ -32,7 +32,7 @@
 //!
 //! `sysinfo` abstracts Linux `/proc/meminfo`, macOS `host_statistics` and
 //! Windows `GlobalMemoryStatusEx` behind a single API; no platform-specific
-//! code is used here (Rule 11).
+//! code is used here.
 
 use serde::{Deserialize, Serialize};
 

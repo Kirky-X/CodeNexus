@@ -1,15 +1,14 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Incremental indexing via BLAKE3 hash diffing (BR-INDEX-001~003, ADR-009).
+//! Incremental indexing via BLAKE3 hash diffing (ADR-009).
 //!
 //! Compares the set of source files on disk against the `(path, hash)` pairs
 //! stored in the database for a project, classifying each file as
 //! [`FileDiff::changed`], [`FileDiff::added`], [`FileDiff::unchanged`], or
 //! [`FileDiff::deleted`]. The pipeline uses this classification to skip
-//! unchanged files (BR-INDEX-001), delete nodes for removed files
-//! (BR-INDEX-002), and force a full re-parse when `--force` is set
-//! (BR-INDEX-003).
+//! unchanged files, delete nodes for removed files,
+//! and force a full re-parse when `--force` is set.
 
 use std::collections::HashMap;
 
@@ -25,17 +24,17 @@ use crate::index::hash::compute_file_hash;
 ///
 /// - `changed` → re-parse and replace nodes for these files.
 /// - `added` → parse and insert nodes for these files.
-/// - `unchanged` → skip (BR-INDEX-001).
-/// - `deleted` → remove nodes and edges for these paths (BR-INDEX-002).
+/// - `unchanged` → skip.
+/// - `deleted` → remove nodes and edges for these paths.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileDiff {
     /// Files whose hash differs from the stored hash (re-parse required).
     pub changed: Vec<FileInfo>,
     /// Files present on disk but absent from the database (new files).
     pub added: Vec<FileInfo>,
-    /// Files whose hash matches the stored hash (skip, BR-INDEX-001).
+    /// Files whose hash matches the stored hash (skip).
     pub unchanged: Vec<FileInfo>,
-    /// Paths present in the database but absent on disk (BR-INDEX-002).
+    /// Paths present in the database but absent on disk.
     pub deleted: Vec<String>,
 }
 
@@ -90,7 +89,7 @@ enum FileClass {
 /// * `db_hashes` - `(path, hash)` pairs loaded from the database via
 ///   [`crate::storage::Repository::get_all_file_hashes`].
 /// * `force` - When `true`, every disk file is classified as `changed`
-///   regardless of its hash (BR-INDEX-003, `--force`). `deleted` is still
+///   regardless of its hash (`--force`). `deleted` is still
 ///   computed.
 ///
 /// # Errors
@@ -100,9 +99,9 @@ enum FileClass {
 ///
 /// # Classification rules
 ///
-/// - BR-INDEX-001: hash matches DB → `unchanged` (skip).
-/// - BR-INDEX-002: in DB but not on disk → `deleted`.
-/// - BR-INDEX-003: `force=true` → all disk files go to `changed`.
+/// - hash matches DB → `unchanged` (skip).
+/// - in DB but not on disk → `deleted`.
+/// - `force=true` → all disk files go to `changed`.
 /// - New file (not in DB) → `added`.
 /// - Hash differs → `changed`.
 ///
@@ -132,7 +131,7 @@ pub fn diff_files(
     // classified independently; results are collected in disk_files order
     // (rayon preserves source order on `collect`).
     //
-    // T202 security-review LOW-2 + MEDIUM-1: `compute_file_hash` rejects
+    // `compute_file_hash` rejects
     // symlinks (path traversal) and oversized files (OOM) with
     // `InvalidInput`. We skip those files (warn + treat as unchanged so
     // they don't trigger re-parse) rather than failing the entire scan
@@ -158,14 +157,14 @@ pub fn diff_files(
                 Err(err) => return Err(err),
             };
             if force {
-                // BR-INDEX-003: --force ignores hashes; every disk file is changed.
+                // --force ignores hashes; every disk file is changed.
                 return Ok(Some(FileClass::Changed));
             }
             let class = match db_map.get(file.relative_path.as_str()) {
                 None => FileClass::Added,
                 Some(db_hash) => {
                     if *db_hash == disk_hash {
-                        // BR-INDEX-001: hash matches → skip.
+                        // Hash matches → skip.
                         FileClass::Unchanged
                     } else {
                         // Hash differs → re-parse.
@@ -201,7 +200,7 @@ pub fn diff_files(
         }
     }
 
-    // BR-INDEX-002: in DB but not on disk → deleted.
+    // In DB but not on disk → deleted.
     for (path, _) in db_hashes {
         if !seen_on_disk.contains_key(path.as_str()) {
             diff.deleted.push(path.clone());

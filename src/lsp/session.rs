@@ -221,7 +221,7 @@ fn wait_with_timeout(child: &mut Child, timeout_ms: u64) -> bool {
 /// on) are reaped by init when CodeNexus exits; D-state processes self-reap
 /// once the syscall returns (LOW-4: D-state is the *cause*, zombie is one
 /// possible *result* — the warning now mentions both instead of conflating
-/// them). The warning makes the orphan visible to the user (Rule 12:
+/// them). The warning makes the orphan visible to the user (
 /// fail-loud).
 ///
 /// # LOW-2 / LOW-3
@@ -269,7 +269,7 @@ fn force_kill_and_wait(child: &mut Child) {
 /// `initialize_session` failure path (`client.rs`), so an unbounded wait
 /// would hang the entire CLI.
 ///
-/// # L6-3 review follow-up (fail-loud, Rule 12)
+/// # L6-3 review follow-up (fail-loud)
 ///
 /// On timeout, emits a warning to stderr via [`kill_and_warn`] so the user
 /// knows the child may be orphaned (zombie reaped by init when CodeNexus
@@ -296,7 +296,7 @@ pub(crate) fn shutdown_session(mut session: Session) {
 
 /// Send a raw (untyped) request — used for the `shutdown` handshake.
 ///
-/// # L6-3 review follow-up (fail-loud, Rule 12)
+/// # L6-3 review follow-up (fail-loud)
 ///
 /// On channel-disconnected (writer thread panicked / server closed stdin),
 /// emits a warning to stderr instead of silently dropping the send error.
@@ -374,7 +374,7 @@ pub(crate) fn extract_first_location(
 }
 
 /// Send `textDocument/references` and return every location the server
-/// reports. `include_declaration` is `false` (C9 R-lsp-003: callers want
+/// reports. `include_declaration` is `false` (callers want
 /// impl/call sites, not the declaration itself).
 ///
 /// Returns `Ok(Vec::new())` when the server responds with `null` (no
@@ -401,7 +401,7 @@ pub(crate) fn send_references_request(
 /// Shared `textDocument/references` implementation with cache lookup.
 ///
 /// Encapsulates the cache-check → dispatch → cache-populate sequence used
-/// by `RustAnalyzerClient`, `PyrightClient`, `ClangdClient` (C9 R-lsp-002).
+/// by `RustAnalyzerClient`, `PyrightClient`, `ClangdClient`.
 /// Extracted to avoid triplicating the same ~22 lines across three client
 /// structs — `definition`/`hover`/`type_definition` still duplicate per
 /// client (pre-existing pattern, out of C9 scope to refactor).

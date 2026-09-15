@@ -1,15 +1,15 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! BLAKE3 file content hashing (ADR-009, T206 algorithm upgrade) and FastCDC
-//! content-defined chunking (Phase C5, T130-T133).
+//! BLAKE3 file content hashing (ADR-009) and FastCDC
+//! content-defined chunking.
 //!
 //! Provides deterministic BLAKE3 digests used by the incremental indexer to
-//! detect file changes (BR-INDEX-001~003). Hashes are returned as lowercase
+//! detect file changes. Hashes are returned as lowercase
 //! hexadecimal strings (64 characters), matching the format stored in the
 //! `File` node's `hash` property.
 //!
-//! T206 replaced the previous SHA-256 implementation with BLAKE3 — same
+//! BLAKE3 replaced the previous SHA-256 implementation — same
 //! 32-byte digest length, 5–10× faster on SIMD-capable CPUs, and equally
 //! deterministic across runs and machines.
 //!
@@ -72,27 +72,27 @@ const GEAR_TABLE: [u64; 256] = generate_gear_table();
 /// Maximum file size (10 MB) accepted by the in-memory hashing entry points
 /// ([`compute_file_hash`], [`chunked_hash`], [`compute_file_hash_incremental`]).
 ///
-/// T202 security-review MEDIUM-1: bounds memory when indexing untrusted
+/// Bounds memory when indexing untrusted
 /// source trees. Files larger than this are rejected with
 /// [`std::io::ErrorKind::InvalidInput`] — callers should skip them and log
 /// a warning. Streaming I/O (mmap-backed chunking) is tracked as future
-/// work (C5-followup). The 10 MB ceiling is conservative: Rust source files
+/// work. The 10 MB ceiling is conservative: Rust source files
 /// rarely exceed 1 MB, and even generated code stays under 5 MB.
 pub const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
 /// Validates that `path` is a regular file (not a symlink) and within
 /// [`MAX_FILE_SIZE`] before any `fs::read` call.
 ///
-/// T202 security-review LOW-2 + MEDIUM-1:
-/// - **LOW-2 (path traversal)**: `symlink_metadata` does not follow
+/// Security rationale:
+/// - **Path traversal**: `symlink_metadata` does not follow
 ///   symlinks, so we can detect and reject them. This prevents a malicious
 ///   repository from containing a symlink that points outside the project
 ///   tree (e.g., to `/etc/passwd`) and tricking the indexer into hashing
 ///   (and potentially logging) sensitive files.
-/// - **MEDIUM-1 (OOM)**: bounding file size at [`MAX_FILE_SIZE`] prevents
+/// - **OOM**: bounding file size at [`MAX_FILE_SIZE`] prevents
 ///   a pathologically large file from triggering OOM when `fs::read` slurps
 ///   it into memory. Callers that need to hash larger files should use the
-///   streaming API once it lands (C5-followup).
+///   streaming API once it lands.
 ///
 /// # Errors
 ///
@@ -238,12 +238,12 @@ fn build_cache_key(path: &Path) -> Option<String> {
 /// lowercase 64-character hex string.
 #[must_use]
 pub fn compute_content_hash(content: &[u8]) -> String {
-    // T206: BLAKE3 replaces SHA-256 — same 32-byte digest, 5–10× faster.
+    // BLAKE3 replaces SHA-256 — same 32-byte digest, 5–10× faster.
     // `blake3::hash` is the single-shot entry point (no incremental updates
     // needed here).
     let digest = blake3::hash(content);
     // 32 bytes → 64 hex chars, lowercase.
-    // perf-review LOW-3: lookup-table encoding avoids the `write!` macro's
+    // Lookup-table encoding avoids the `write!` macro's
     // format machinery overhead (measured ~5% of total hash time on 1MB
     // inputs; not the bottleneck but a cheap win).
     const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -279,7 +279,7 @@ pub fn compute_content_hash(content: &[u8]) -> String {
 /// Reads the entire file into memory via [`std::fs::read`]. File size is
 /// bounded by [`MAX_FILE_SIZE`] (10 MB) — files exceeding this are rejected
 /// with [`std::io::ErrorKind::InvalidInput`] before the read. Streaming I/O
-/// (mmap-backed chunking) is tracked as future work (C5-followup).
+/// (mmap-backed chunking) is tracked as future work.
 ///
 /// # Errors
 ///
@@ -397,9 +397,9 @@ fn find_cut_point(data: &[u8]) -> usize {
 /// hashes (sorted ascending for stability), producing a single
 /// deterministic digest for the file regardless of chunk boundary drift.
 ///
-/// # Why every chunk is re-hashed (deviation from spec T132)
+/// # Why every chunk is re-hashed (a deliberate deviation from the original spec)
 ///
-/// Spec T132 says "only re-hash changed chunks", but FastCDC's cut-point
+/// The original spec said "only re-hash changed chunks", but FastCDC's cut-point
 /// search (see [`find_cut_point`]) starts scanning at [`MIN_CHUNK_SIZE`]:
 /// bytes in `[start, start + MIN_CHUNK_SIZE)` do **not** influence the
 /// cut point. Therefore identical `(start, end)` boundaries do **not**
@@ -410,11 +410,11 @@ fn find_cut_point(data: &[u8]) -> usize {
 /// on change detection).
 ///
 /// To preserve correctness, this implementation re-hashes every chunk on
-/// every call. Performance still meets the C5 target: a 1MB file splits
+/// every call. Performance still meets the target: a 1MB file splits
 /// into ~256 chunks of ~4KB, and BLAKE3 throughput (~1GB/s on modern
 /// SIMD-capable CPUs) yields ~4µs per chunk → ~1ms total, well within
 /// the spec's ~5ms goal. The `old_chunks` parameter is retained as part
-/// of the incremental API contract (T132) and is returned to the caller
+/// of the incremental API contract and is returned to the caller
 /// along with the new chunks for change-detection and caching at higher
 /// layers.
 ///
@@ -451,7 +451,7 @@ pub fn compute_file_hash_incremental(
     // cannot reuse `old_chunks` hashes by matching `(start, end)`.
     let new_chunks = chunk_content(&content);
     let file_hash = aggregate_chunk_hashes(&new_chunks);
-    // `old_chunks` is part of the API contract (T132) but is not used
+    // `old_chunks` is part of the API contract but is not used
     // for hash reuse (see docstring). Reference it to silence
     // unused-variable warnings while keeping the parameter public.
     let _ = old_chunks;
@@ -596,7 +596,7 @@ mod tests {
 
     #[test]
     fn compute_file_hash_rejects_symlink() {
-        // T202 security-review LOW-2: symlinks are rejected to prevent
+        // Symlinks are rejected to prevent
         // path traversal (a malicious repo could symlink to /etc/passwd).
         let target = NamedTempFile::new().unwrap();
         fs::write(target.path(), b"sensitive content").unwrap();
@@ -611,7 +611,7 @@ mod tests {
 
     #[test]
     fn compute_file_hash_rejects_oversized_file() {
-        // T202 security-review MEDIUM-1: files > MAX_FILE_SIZE are rejected
+        // Files > MAX_FILE_SIZE are rejected
         // to prevent OOM. We cannot materialize a > 10 MB file in unit
         // tests without slowing the suite, so we temporarily lower the
         // ceiling via a sparse file whose reported size exceeds MAX_FILE_SIZE.
@@ -647,7 +647,7 @@ mod tests {
         );
     }
 
-    // --- FastCDC: chunked_hash (T130 Red) ---
+    // --- FastCDC: chunked_hash ---
 
     /// Helper: fill `dst` with deterministic pseudo-random bytes derived from
     /// a xorshift64 PRNG seeded with `seed`. Deterministic across runs and
@@ -884,7 +884,7 @@ mod tests {
         );
     }
 
-    // --- FastCDC: compute_file_hash_incremental (T130 Red) ---
+    // --- FastCDC: compute_file_hash_incremental ---
 
     #[test]
     fn test_compute_file_hash_incremental_empty_file() {

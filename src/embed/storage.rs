@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Vector storage in the LadybugDB `Embedding` table (SubTask 16.2).
+//! Vector storage in the LadybugDB `Embedding` table.
 //!
 //! [`EmbeddingStorage`] stores and retrieves `FLOAT[384]` vectors (DDD §5.9).
 //! When the LadybugDB VECTOR extension is unavailable, similarity search falls

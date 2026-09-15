@@ -1,8 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Integration test for `build_kit` (Task 2.15 / unified-architecture
-//! Phase 2).
+//! Integration test for `build_kit`.
 //!
 //! Verifies spec `specs/trait-kit-unified-registry/spec.md` scenario
 //! "All nine capability keys resolvable through Kit":

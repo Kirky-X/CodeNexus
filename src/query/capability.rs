@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! QueryEngine capability trait (T6/unified-architecture Phase 2, Task 2.3).
+//! QueryEngine capability trait.
 //!
 //! Defines [`QueryEngine`], the capability trait object stored in
 //! [`Kit`](crate::kit::Kit) under [`QueryKey`](crate::kit::QueryKey). The
-//! concrete impl (Task 2.9) wraps [`QueryFacade`].
+//! concrete impl wraps [`QueryFacade`].
 //!
 //! [`QueryFacade`]: super::QueryFacade
 
@@ -18,7 +18,7 @@ use super::{QueryResult, SearchResult};
 ///
 /// Stored in [`Kit`](crate::kit::Kit) as `Arc<dyn QueryEngine>` under
 /// [`QueryKey`](crate::kit::QueryKey). Requires `StorageKey`. The concrete
-/// impl (Task 2.9) wraps [`QueryFacade`](super::QueryFacade).
+/// impl wraps [`QueryFacade`](super::QueryFacade).
 pub trait QueryEngine: Send + Sync {
     /// Executes a raw Cypher query.
     fn cypher(&self, query: &str) -> std::result::Result<QueryResult, QueryError>;
@@ -57,7 +57,7 @@ pub trait QueryEngine: Send + Sync {
     /// Hybrid BM25 + semantic search (requires `embed` feature at compile time).
     ///
     /// When the `embed` feature is compiled in, this runs [`HybridStrategy`]
-    /// (BM25 + vector RRF fusion, AC-SEARCH-002) using the supplied
+    /// (BM25 + vector RRF fusion) using the supplied
     /// `embed_client`. The caller is responsible for resolving the embed
     /// capability from the [`Kit`](crate::kit::Kit) and deciding whether to
     /// invoke this method (e.g. only when an API key is configured).

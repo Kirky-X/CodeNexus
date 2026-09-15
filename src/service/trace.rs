@@ -484,7 +484,7 @@ mod tests {
         assert_eq!(output.symbol, "demo.root");
     }
 
-    // ===== T042: Enhanced trace tests =====
+    // ===== Enhanced trace tests =====
 
     #[test]
     fn build_path_filter_empty_returns_none() {

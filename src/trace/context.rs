@@ -214,7 +214,7 @@ pub fn collect_processes(graph: &Graph, start_id: &NodeId) -> Vec<RelatedNodeOut
     out
 }
 
-// ===== Multi-dimensional context types (T014-T018) =====
+// ===== Multi-dimensional context types =====
 
 /// A symbol's definition (name, signature, source, location).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1263,7 +1263,7 @@ mod tests {
         assert_eq!(processes[2].name, "z_process");
     }
 
-    // ===== T014: Serialization tests for multi-dimensional context types =====
+    // ===== Serialization tests for multi-dimensional context types =====
 
     #[test]
     fn symbol_definition_roundtrip() {
@@ -1459,7 +1459,7 @@ mod tests {
         kit.require::<StorageModule>().expect("require_storage")
     }
 
-    // ===== T015: collect_symbol_definition tests =====
+    // ===== collect_symbol_definition tests =====
 
     #[test]
     fn collect_symbol_definition_returns_function() {
@@ -1578,7 +1578,7 @@ mod tests {
         assert!(result.starts_with('x'));
     }
 
-    // ===== T016: collect_type_context tests =====
+    // ===== collect_type_context tests =====
 
     #[test]
     fn parse_parameters_extracts_two_params() {
@@ -1671,7 +1671,7 @@ mod tests {
         assert_eq!(tc.implements[0], "Display");
     }
 
-    // ===== T017: collect_module_context tests =====
+    // ===== collect_module_context tests =====
 
     #[test]
     fn derive_module_path_strips_extension_and_dots() {
@@ -1745,7 +1745,7 @@ mod tests {
         assert!(err.to_string().contains("file not found"));
     }
 
-    // ===== T018: collect_test_context tests =====
+    // ===== collect_test_context tests =====
 
     #[test]
     fn collect_test_context_with_tests_edge() {

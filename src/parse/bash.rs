@@ -611,7 +611,7 @@ mod tests {
 
     #[test]
     fn function_with_subshell() {
-        // Exercises traversal through subshell `( ... )` nodes.
+        // Exercises traversal through subshell `(... )` nodes.
         let result = extract("run_in_subshell() { ( cd /tmp && ls ); }\n");
         let funcs: Vec<_> = result
             .nodes
@@ -725,7 +725,7 @@ mod tests {
 
     #[test]
     fn function_with_arithmetic_expansion() {
-        // Function body with $(( ... )) arithmetic.
+        // Function body with $((... )) arithmetic.
         let result = extract("compute() { RESULT=$((1 + 2)); echo $RESULT; }\n");
         let funcs: Vec<_> = result
             .nodes

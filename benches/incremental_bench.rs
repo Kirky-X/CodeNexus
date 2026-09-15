@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Incremental indexing benchmarks (Task 3, design.md Decision 1).
+//! Incremental indexing benchmarks.
 //!
 //! Covers three PRD 5.1 scenarios on a 1000-file fixture spread across the 5
 //! supported languages (C/Rust/Fortran/Python/TypeScript):
@@ -34,7 +34,7 @@ use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion
 
 use common::generate_large_repo;
 
-/// Total fixture size for all three scenarios (design.md Decision 1).
+/// Total fixture size for all three scenarios.
 const FILE_COUNT: usize = 1000;
 
 /// Project name used for every indexing run; the project node is created on
@@ -72,7 +72,6 @@ fn modify_files(dir: &Path, count: usize) {
 }
 
 /// Cold-start baseline: index 1000 fresh files into an empty database
-/// (design.md Decision 1, PRD SLO >= 100 files/s).
 ///
 /// Both the fixture generation and the database open happen inside the
 /// measured routine — the SLO covers the user-visible "first index" wall
@@ -105,7 +104,7 @@ fn bench_cold_start_1000(c: &mut Criterion) {
 }
 
 /// Single-file incremental: pre-index 1000 files, modify 1, re-index with
-/// `force=false` (design.md Decision 1, PRD SLO >= 500 files/s).
+/// `force=false`.
 ///
 /// The pre-index (warm-up) and the file modification happen in setup, so the
 /// measured routine is purely the incremental re-index that should skip 999
@@ -147,7 +146,7 @@ fn bench_incremental_1_of_1000(c: &mut Criterion) {
 }
 
 /// Mid-load incremental: pre-index 1000 files, modify 500, re-index with
-/// `force=false` (design.md Decision 1, PRD SLO >= 100 files/s).
+/// `force=false`.
 ///
 /// 500 files is half the repository — the incremental pass must re-parse
 /// half the files and skip the other half, exercising the diff/skip path at

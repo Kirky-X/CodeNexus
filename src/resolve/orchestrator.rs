@@ -146,7 +146,7 @@ pub fn build_symbol_table(results: &[ExtractResult], project: &str) -> ProjectSy
 /// * `project` - The project name.
 /// * `graph` - The graph to add resolved edges to.
 /// * `includes_graph` - C++ `#include` graph for scope-aware call resolution
-///   (BUG-C4 fix, v0.3.0). Built by `build_includes_edges` before this call.
+///   Built by `build_includes_edges` before this call.
 pub fn resolve_all(
     results: &[ExtractResult],
     symbol_table: &ProjectSymbolTable,
@@ -173,7 +173,7 @@ pub fn resolve_all(
     let import_resolver = ImportResolver::new(project);
     import_resolver.resolve_imports(results, graph);
     // Type resolution fixes dangling Extends/Implements/UsesType edges
-    // (design.md H6). Runs after other resolvers so it can fix edges created
+    // Runs after other resolvers so it can fix edges created
     // by the parse phase. Edges are mutated directly in `graph`.
     let type_resolver = TypeResolver::new(symbol_table);
     type_resolver.resolve_types(results, graph);
@@ -687,7 +687,7 @@ mod tests {
         );
     }
 
-    // --- C1: prune unresolvable dangling type edges ---
+    // --- prune unresolvable dangling type edges ---
 
     #[test]
     fn resolve_all_prunes_unresolvable_dangling_type_edges() {
@@ -874,7 +874,7 @@ fn contains_scientific(ast: &AstNode) -> bool { true }
         // Use absolute path to mirror production. Note: extract_from_source's
         // signature is (file_path_str, source, language, project).
         // Cross-platform: use temp_dir() instead of hardcoding /home/kirky/...
-        // (rule 31: no platform-specific paths).
+        // (no platform-specific paths).
         let dir = tempfile::tempdir().expect("tempdir");
         let file_path_buf = dir.path().join("scientific.rs");
         let file_path = file_path_buf.to_string_lossy();

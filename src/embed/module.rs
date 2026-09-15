@@ -1,15 +1,14 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! trait-kit module for the Embed subsystem (T6/unified-architecture
-//! Phase 2, Task 2.12; H10/D7 local ONNX support; v0.3.3 AsyncKit migration).
+//! trait-kit module for the Embed subsystem.
 //!
 //! Implements [`ModuleMeta`] + [`AsyncAutoBuilder`] for [`EmbedModule`],
 //! wiring the existing [`EmbedClient`] trait (Strategy pattern) into the
 //! unified Kit registry as `Arc<dyn EmbedClient>` under
 //! [`EmbedModule`](crate::kit::EmbedModule).
 //!
-//! # Capability lifecycle (H10/D7)
+//! # Capability lifecycle
 //!
 //! [`EmbedCapability`] owns an [`EmbeddingConfig`] and chooses the backend:
 //!
@@ -17,7 +16,7 @@
 //!   [`LocalEmbedClient`] (ort + arctic-embed-xs) on the first `embed()` call.
 //!   The loaded client is cached behind a [`Mutex`] for reuse. If the model
 //!   file is missing, `embed()` returns [`EmbedError::Unavailable`] with a
-//!   clear message (Rule 12).
+//!   clear message.
 //! - **Remote mode** (`endpoint = Some(url)`): creates a fresh
 //!   [`OpenAIEmbedClient`] per call (matches existing `search_cmd` semantics).
 //!   Requires an API key — returns [`EmbedError::MissingApiKey`] if absent.
@@ -47,12 +46,11 @@
 //! embedding-service config and does not touch the database directly
 //! (storage operations are orchestrated by `search_cmd` via
 //! `QueryFacade::connection()`). Therefore `dependencies = &[]` at the type
-//! level; the bootstrap (Task 2.13) enforces build ordering
+//! level; the bootstrap enforces build ordering
 //! (Storage → ... → Embed). This mirrors the
 //! [`QueryModule`](crate::query::module::QueryModule),
 //! [`TraceModule`](crate::trace::module::TraceModule), and
-//! [`DaemonModule`](crate::daemon::module::DaemonModule) design — see
-//! `design.md` D1 for the rationale.
+//! [`DaemonModule`](crate::daemon::module::DaemonModule) design.
 //!
 //! [`EmbeddingStorage`]: super::EmbeddingStorage
 //! [`OpenAIEmbedClient`]: super::OpenAIEmbedClient
@@ -76,8 +74,8 @@ use super::{EmbedError, EmbeddingConfig, Result};
 /// Re-export of [`EmbeddingConfig`] under the trait-kit convention name.
 ///
 /// The spec calls this `EmbedConfig`, but the codebase has called it
-/// `EmbeddingConfig` since SubTask 16.1. We follow the codebase convention
-/// (Rule 11: convention beats novelty) and re-export under a shorter alias
+/// `EmbeddingConfig`. We follow the codebase convention
+/// (convention beats novelty) and re-export under a shorter alias
 /// so trait-kit consumers can write `embed::EmbedConfig`.
 pub type EmbedConfig = EmbeddingConfig;
 
@@ -85,7 +83,7 @@ pub type EmbedConfig = EmbeddingConfig;
 // Module (ModuleMeta + AsyncAutoBuilder)
 // ---------------------------------------------------------------------------
 
-/// trait-kit module tag for the Embed subsystem (Task 2.12).
+/// trait-kit module tag for the Embed subsystem.
 ///
 /// Zero-sized marker — construction logic lives in
 /// [`EmbedModule::build_cap`] (called from the [`AsyncAutoBuilder`] impl).
@@ -146,7 +144,7 @@ impl EmbedModule {
 
 /// Concrete implementation of [`dyn EmbedClient`] that routes to either
 /// [`LocalEmbedClient`] (offline ONNX) or [`OpenAIEmbedClient`] (remote HTTP)
-/// based on [`EmbeddingConfig::endpoint`] (H10/D7).
+/// based on [`EmbeddingConfig::endpoint`].
 ///
 /// # Local mode (endpoint = None, default)
 ///
@@ -163,7 +161,7 @@ impl EmbedModule {
 struct EmbedCapability {
     /// Embedding-service config (hot-reloadable via [`EmbedCapability::update_config`]).
     config: Arc<RwLock<EmbeddingConfig>>,
-    /// Lazily-loaded local ONNX client (H10/D7).
+    /// Lazily-loaded local ONNX client.
     ///
     /// `None` = not yet loaded (or local mode not in use).
     /// `Some(client)` = loaded and cached for reuse.
@@ -180,7 +178,7 @@ impl EmbedClient for EmbedCapability {
             .clone();
 
         if config.is_local() {
-            // H10/D7: local ONNX inference — lazy-load the model on first use.
+            // Local ONNX inference — lazy-load the model on first use.
             let mut guard = self.local_client.lock().map_err(|e| {
                 EmbedError::Unavailable(format!("local_client mutex poisoned: {e}"))
             })?;

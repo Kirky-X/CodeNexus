@@ -9,7 +9,7 @@
 //! Callers customize behavior via the `edge_filter` closure and the optional
 //! `sink` parameter.
 //!
-//! # Path sharing (MED-003)
+//! # Path sharing
 //!
 //! Each [`WorkItem`] holds an `Rc` reference to its parent, forming a
 //! persistent linked list. Expanding a child shares the parent chain via
@@ -19,7 +19,7 @@
 //! `WorkPath` design required. The full [`TracePath`] is materialized via
 //! [`WorkItem::build_path`] only when a result is recorded.
 //!
-//! # Cycle detection (MED-002)
+//! # Cycle detection
 //!
 //! Each [`WorkItem`] also carries an `Rc<HashSet<NodeId>>` of every node on
 //! its path, so [`WorkItem::path_contains`] is O(1) instead of an O(depth)
@@ -36,7 +36,7 @@ use crate::model::{EdgeType, Graph, NodeId};
 use super::{TraceEdge, TraceNode, TracePath};
 
 /// Internal BFS work item: holds the current node/edge and a shared
-/// reference to the parent, forming a persistent path chain (MED-003).
+/// reference to the parent, forming a persistent path chain.
 ///
 /// Reused by [`call_graph::CallGraphTracer`] (C2) so both trace engines share
 /// the same O(1) cycle-detection and O(1) child-expansion data structures.
@@ -48,7 +48,7 @@ pub(crate) struct WorkItem {
     edge: Option<TraceEdge>,
     pub(crate) depth: usize,
     parent: Option<Rc<WorkItem>>,
-    /// O(1) membership set for cycle detection (MED-002). Each child clones
+    /// O(1) membership set for cycle detection. Each child clones
     /// the parent set and inserts its own id so [`path_contains`](Self::path_contains)
     /// is a HashSet lookup instead of an O(depth) parent-chain walk.
     path_set: Rc<HashSet<NodeId>>,
@@ -88,7 +88,7 @@ impl WorkItem {
         self.edge.is_some()
     }
 
-    /// Returns true if `id` is on this path (O(1) HashSet lookup, MED-002).
+    /// Returns true if `id` is on this path (O(1) HashSet lookup).
     pub(crate) fn path_contains(&self, id: &NodeId) -> bool {
         self.path_set.contains(id)
     }

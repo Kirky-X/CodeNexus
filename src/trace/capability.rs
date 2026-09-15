@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! TraceEngine capability trait (T6/unified-architecture Phase 2, Task 2.3).
+//! TraceEngine capability trait.
 //!
 //! Defines [`TraceEngine`], the capability trait object stored in
 //! [`Kit`](crate::kit::Kit) under [`TraceKey`](crate::kit::TraceKey). The
-//! concrete impl (Task 2.10) wraps [`TraceFacade`] over an owned/shared
+//! concrete impl wraps [`TraceFacade`] over an owned/shared
 //! [`Graph`].
 //!
 //! [`TraceFacade`]: super::TraceFacade
@@ -21,7 +21,7 @@ use super::TraceResult;
 ///
 /// Stored in [`Kit`](crate::kit::Kit) as `Arc<dyn TraceEngine>` under
 /// [`TraceKey`](crate::kit::TraceKey). Requires `StorageKey` + `ResolverKey`.
-/// The concrete impl (Task 2.10) wraps [`TraceFacade`](super::TraceFacade)
+/// The concrete impl wraps [`TraceFacade`](super::TraceFacade)
 /// over an owned/shared [`Graph`](crate::model::Graph) — the facade currently
 /// borrows a `&Graph`, so the migration owns or shares one.
 pub trait TraceEngine: Send + Sync {
@@ -37,7 +37,7 @@ pub trait TraceEngine: Send + Sync {
     /// Loads the subgraph reachable from `symbol` within `depth` hops from
     /// the database.
     ///
-    /// Used by `impact_cmd::run` (Task 2.14) to obtain the raw [`Graph`] for
+    /// Used by `impact_cmd::run` to obtain the raw [`Graph`] for
     /// [`ImpactAnalyzer`](super::ImpactAnalyzer), which cannot be expressed
     /// via [`trace`](Self::trace) (that returns a [`TraceResult`], not the
     /// graph itself). The concrete impl delegates to

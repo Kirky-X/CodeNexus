@@ -177,7 +177,7 @@ mod tests {
         assert!(json.contains("\"matches\""));
     }
 
-    // ===== T037: run_cross_service with protocol filter =====
+    // ===== run_cross_service with protocol filter =====
 
     #[test]
     fn run_cross_service_with_empty_protocol_returns_all_matches() {

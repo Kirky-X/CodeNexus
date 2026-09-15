@@ -1,10 +1,10 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Graph adjacency-index benchmarks (MED-002).
+//! Graph adjacency-index benchmarks.
 //!
 //! Measures `edges_from` / `edges_to` / `neighbors` latency on a large
-//! in-memory graph. Before MED-002 these were O(E) full scans; the
+//! in-memory graph. Before these were O(E) full scans; the
 //! adjacency index makes them O(deg(n)).
 //!
 //! Graph shape: N nodes, each with K outgoing edges to the next K nodes
@@ -91,7 +91,7 @@ fn bench_edges_from(c: &mut Criterion) {
     group.sample_size(50);
 
     // Single-node hotspot: one edges_from call on a node with K outgoing
-    // edges, but the graph has N*K total edges. Pre-MED-002 this scans
+    // edges, but the graph has N*K total edges. Pre- this scans
     // all N*K edges every call.
     let f0 = "f0".to_string();
     group.bench_function("single_node", |b| {

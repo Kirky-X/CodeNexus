@@ -9,7 +9,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 /// The 31 edge type variants defined in DDD §7.2 (14 original + 10 added in
-/// T9 H1 unified graph schema + 6 added for analysis + 1 added in B7 for
+/// unified graph schema + 6 added for analysis + 1 for
 /// re-exports).
 ///
 /// Each variant maps to an UPPERCASE DDL type string used in the LadybugDB
@@ -30,7 +30,7 @@ pub enum EdgeType {
     References,
     Imports,
     Includes,
-    // --- T9 H1: 10 new edge types for richer graph semantics ---
+    // ---: 10 new edge types for richer graph semantics ---
     /// Class/struct/trait owns a method (structural, explicit in syntax).
     HasMethod,
     /// Class/struct/trait owns a property/field (structural).
@@ -64,7 +64,7 @@ pub enum EdgeType {
     Emits,
     /// Function listens on an event/message (inferred).
     ListensOn,
-    // --- B7: re-export edge for dead-code reachability ---
+    // --- re-export edge for dead-code reachability ---
     /// File re-exports a symbol from another file (Rust `pub use`,
     /// TypeScript `export ... from`). The target is the re-exported
     /// Function/Method node; the source is the importing File node.
@@ -169,7 +169,7 @@ impl EdgeType {
             // Type-system edges — resolved with high certainty.
             EdgeType::Implements => (0.90, 1.0),
             EdgeType::Extends => (0.90, 1.0),
-            // Call edges — same-language resolution (BR-TRACE-007).
+            // Call edges — same-language resolution.
             EdgeType::Calls => (0.80, 0.95),
             // Type / reference usage — requires symbol resolution.
             EdgeType::UsesType => (0.80, 0.90),
@@ -181,7 +181,7 @@ impl EdgeType {
             // Variable read / write access — inferred from usage.
             EdgeType::Reads => (0.70, 0.80),
             EdgeType::Writes => (0.70, 0.80),
-            // --- T9 H1: 10 new edge types ---
+            // ---: 10 new edge types ---
             // Structural ownership — explicit in syntax.
             EdgeType::HasMethod => (0.95, 1.0),
             EdgeType::HasProperty => (0.95, 1.0),
@@ -210,7 +210,7 @@ impl EdgeType {
             EdgeType::Emits => (0.75, 0.85),
             // Event subscription — inferred from call patterns.
             EdgeType::ListensOn => (0.75, 0.85),
-            // B7: Re-export — structural, explicit in syntax (like Imports).
+            // Re-export — structural, explicit in syntax (like Imports).
             EdgeType::Reexports => (0.95, 1.0),
         }
     }
@@ -476,7 +476,7 @@ mod tests {
         assert_eq!(EdgeType::DataFlows.confidence_range(), (0.80, 0.90));
         assert_eq!(EdgeType::Reads.confidence_range(), (0.70, 0.80));
         assert_eq!(EdgeType::Writes.confidence_range(), (0.70, 0.80));
-        // T9 H1 new edge types
+        // new edge types
         assert_eq!(EdgeType::HasMethod.confidence_range(), (0.95, 1.0));
         assert_eq!(EdgeType::HasProperty.confidence_range(), (0.95, 1.0));
         assert_eq!(EdgeType::Accesses.confidence_range(), (0.70, 0.80));
@@ -498,7 +498,7 @@ mod tests {
 
     #[test]
     fn calls_confidence_range_includes_project_confidence() {
-        // BR-TRACE-007: Calls confidence range is 0.80-0.95.
+        // Calls confidence range is 0.80-0.95.
         // CONFIDENCE_PROJECT = 0.80 should be within range.
         let (min, max) = EdgeType::Calls.confidence_range();
         let confidence_project: f32 = 0.80;

@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Resolver capability trait (T6/unified-architecture Phase 2, Task 2.3).
+//! Resolver capability trait.
 //!
 //! Defines [`Resolver`], the capability trait object stored in
 //! [`Kit`](crate::kit::Kit) under [`ResolverKey`](crate::kit::ResolverKey).
-//! The concrete impl (Task 2.8) wraps the free functions
+//! The concrete impl wraps the free functions
 //! [`build_symbol_table`](super::build_symbol_table) and
 //! [`resolve_all`](super::resolve_all).
 
@@ -19,7 +19,7 @@ use super::symbol_table::ProjectSymbolTable;
 ///
 /// Stored in [`Kit`](crate::kit::Kit) as `Arc<dyn Resolver>` under
 /// [`ResolverKey`](crate::kit::ResolverKey). Requires `StorageKey`. The
-/// concrete impl (Task 2.8) delegates to
+/// concrete impl delegates to
 /// [`build_symbol_table`](super::build_symbol_table) and
 /// [`resolve_all`](super::resolve_all).
 pub trait Resolver: Send + Sync {
@@ -30,7 +30,7 @@ pub trait Resolver: Send + Sync {
     /// `graph` in place.
     ///
     /// `includes_graph` provides C++ `#include` scope information for
-    /// call resolution (BUG-C4 fix, v0.3.0).
+    /// call resolution.
     ///
     /// # L6 memory-overflow fix
     ///

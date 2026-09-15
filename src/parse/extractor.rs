@@ -101,7 +101,7 @@ pub fn extract_from_source(
 }
 
 /// Upgrades a `.h` file from C to C++ when its content contains C++-only
-/// syntax (BUG-C3). `.h` is ambiguous between C and C++; `from_extension`
+/// syntax `.h` is ambiguous between C and C++; `from_extension`
 /// maps it to C by default. This function inspects the source for C++-only
 /// keywords (`namespace`, `template`, `class`, access specifiers) and
 /// upgrades to Cpp when found, so C++ class/struct definitions in headers
@@ -624,12 +624,12 @@ mod tests {
         assert_eq!(result.nodes.len(), 1);
     }
 
-    // --- BUG-C3: .h file C/C++ content detection ---
+    // ---.h file C/C++ content detection ---
 
     #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
     #[test]
     fn extract_from_source_upgrades_h_with_class_to_cpp() {
-        // BUG-C3: .h files with C++ syntax (class/namespace/template) should
+        // .h files with C++ syntax (class/namespace/template) should
         // be parsed as C++, not C. Without this, C++ class/struct definitions
         // in .h files are lost (fmt class=77 vs 414, struct=268 vs 576).
         let src = "class Foo { public: int x; };\n";

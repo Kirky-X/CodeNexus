@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 //! CacheStore capability trait — abstract cache interface for storage,
-//! query, AST, and embed caching (T017, v0.3.3).
+//! query, AST, and embed caching.
 //!
 //! Stored in AsyncKit as `Arc<dyn CacheStore>` via [`CacheModule`]. The
 //! trait is intentionally synchronous (no `async` methods) because the

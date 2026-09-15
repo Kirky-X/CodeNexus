@@ -12,7 +12,7 @@
 //!
 //! Every node table carries a `project` column (DDD §2.3). All repository
 //! read/delete methods accept a `project` parameter and filter on it, ensuring
-//! that data from one project never leaks into another (BR-INDEX-004).
+//! that data from one project never leaks into another.
 
 use super::capability::Storage;
 use super::connection::{SchemaInitReport, StorageConnection};
@@ -255,7 +255,7 @@ impl Repository {
     ///
     /// Streams the CSV directly to a temp file via [`write_edges_csv_stream`],
     /// avoiding the intermediate `String` allocation. Duplicate edges are
-    /// skipped during streaming (BR-INDEX-005); a warning is printed to
+    /// skipped during streaming; a warning is printed to
     /// stderr when any duplicates are skipped (fail-loud principle).
     ///
     /// # L6 memory-overflow fix
@@ -343,7 +343,7 @@ impl Repository {
     /// Deletes a project and every node whose `project` column matches its id.
     ///
     /// Also deletes `CodeRelation` rows belonging to the project. This
-    /// implements the multi-project isolation cleanup (BR-INDEX-004).
+    /// implements the multi-project isolation cleanup.
     pub fn delete_project(&self, project_id: &str) -> Result<()> {
         let escaped = escape_cypher_string(project_id);
         // Delete CodeRelation rows for the project.
@@ -372,7 +372,7 @@ impl Repository {
 
     /// Returns the stored hash for a file in the given project, or `None`.
     ///
-    /// Used by the incremental indexer to detect changes (BR-INDEX-001).
+    /// Used by the incremental indexer to detect changes.
     pub fn get_file_hash(&self, file_path: &str, project: &str) -> Result<Option<String>> {
         let cypher = format!(
             "MATCH (f:File) WHERE f.filePath = '{}' AND f.project = '{}' RETURN f.hash AS hash;",
@@ -419,7 +419,7 @@ impl Repository {
     ///
     /// Also deletes `CodeRelation` rows whose `source` or `target` references
     /// a deleted node. Used by the incremental indexer when a file is removed
-    /// or re-parsed (BR-INDEX-002).
+    /// or re-parsed.
     pub fn delete_file_nodes(&self, file_path: &str, project: &str) -> Result<()> {
         let path_escaped = escape_cypher_string(file_path);
         let proj_escaped = escape_cypher_string(project);
@@ -432,7 +432,7 @@ impl Repository {
             }
             // Skip tables without a `filePath` column (e.g. Process, Community,
             // Embedding) — querying `n.filePath` against them raises a binder
-            // error. Deterministic column check per Rule 5 instead of relying
+            // error. Deterministic column check instead of relying
             // on error-message matching.
             if !node_table_columns(label).contains(&"filePath") {
                 continue;
@@ -499,7 +499,7 @@ impl Repository {
     /// # Arguments
     ///
     /// * `paths` - Relative file paths whose nodes should be removed.
-    /// * `project` - Project id isolating the delete (BR-INDEX-004).
+    /// * `project` - Project id isolating the delete.
     ///
     /// # Errors
     ///
@@ -1246,7 +1246,7 @@ mod tests {
         assert!(funcs.is_empty());
     }
 
-    // --- multi-project isolation (BR-INDEX-004) ---
+    // --- multi-project isolation ---
 
     #[test]
     fn multi_project_isolation_br_index_004() {

@@ -1,10 +1,9 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Kit — unified capability & configuration registry (T6/unified-architecture
-//! Phase 2).
+//! Kit — unified capability & configuration registry.
 //!
-//! This module re-exports the trait-kit 0.3 `AsyncKit` API (see design.md D5)
+//! This module re-exports the trait-kit 0.3 `AsyncKit` API
 //! and the 9 subsystem module types used for capability lookup.
 //!
 //! ## AsyncKit vs. Kit
@@ -19,11 +18,11 @@
 //! Capability and config lookup uses the module type directly (e.g.,
 //! `kit.require::<StorageModule>()` and `kit.set_config::<StorageConfig>()`).
 
-// `trait-kit` is a hard dependency (Task 2.16 removed the in-tree shim once
+// `trait-kit` is a hard dependency (the in-tree shim was removed once
 // all modules migrated to `build_kit`). No feature gating needed.
 extern crate trait_kit;
 
-// Bootstrap (Task 2.13) — wires all 9 modules into a fresh AsyncKit in
+// Bootstrap — wires all 9 modules into a fresh AsyncKit in
 // dependency order. Re-exported at the kit module root so callers can
 // write `codenexus::kit::build_kit` and `codenexus::kit::KitBootstrapConfig`.
 pub mod bootstrap;

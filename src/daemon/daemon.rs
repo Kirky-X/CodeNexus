@@ -4,7 +4,7 @@
 //! File-watching daemon (Observer pattern subject).
 //!
 //! Uses [`notify_debouncer_full`] (ADR-013) to watch repositories and trigger
-//! incremental indexing with configurable debounce (BR-DAEMON-001/004).
+//! incremental indexing with configurable debounce.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -27,13 +27,13 @@ use crate::model::Language;
 use crate::parse::error::ParseError;
 use crate::parse::ParserFactory;
 
-/// 默认防抖窗口（毫秒），BR-DAEMON-001。
+/// 默认防抖窗口（毫秒），。
 pub const DEFAULT_DEBOUNCE_MS: u64 = 2000;
 
 /// 定时检查间隔（毫秒），PRD §4.3.2 步骤 6。
 const TICK_INTERVAL_MS: u64 = 500;
 
-// --- C6: 自适应防抖窗口参数 ---
+// --- 自适应防抖窗口参数 ---
 //
 // spec 主文描述："高频扩展到 ≥ 500ms、低频缩短到 ≤ 100ms"。防抖的标准行为：
 // 高频事件密集时扩展窗口以批量处理（减少重建索引次数），低频事件稀疏时缩短
@@ -67,41 +67,41 @@ const EMA_NEW_WEIGHT: f64 = 0.3;
 /// "5 秒内 1 个事件"，确保低频时 inverted_interval ≈ 0。
 const EMA_REFERENCE_INTERVAL_SECS: f64 = 5.0;
 
-// --- C1: tree-sitter 增量解析参数 ---
+// --- tree-sitter 增量解析参数 ---
 //
 // spec 主文：文件大小变化 > 50% 或 line count 变化 > 30% 时强制全量解析，
 // 否则使用增量解析（透传 old_tree 给 parser.parse）。
 // 实际实现需配合 tree-sitter 0.26 的 `Tree::edit` API（详见
 // `TreeCache::parse_incremental` 文档）。
 
-/// C1: 缓存失效阈值——文件大小（字节数）相对变化超过此比例时强制全量解析。
+/// 缓存失效阈值——文件大小（字节数）相对变化超过此比例时强制全量解析。
 const CACHE_INVALIDATION_SIZE_RATIO: f64 = 0.5;
 
-/// C1: 缓存失效阈值——文件行数相对变化超过此比例时强制全量解析。
+/// 缓存失效阈值——文件行数相对变化超过此比例时强制全量解析。
 const CACHE_INVALIDATION_LINE_RATIO: f64 = 0.3;
 
-/// C1: `tree_cache` 最大条目数。超过时清空 cache（粗粒度淘汰策略），
+/// `tree_cache` 最大条目数。超过时清空 cache（粗粒度淘汰策略），
 /// 避免长期运行的 daemon 在监视大量文件时内存无限膨胀。
 /// 选 100 是经验值：覆盖中小型项目所有源文件；超出时下一次解析走全量，
 /// 性能损失可接受。
 const MAX_TREE_CACHE_ENTRIES: usize = 100;
 
-/// C1: 增量解析的最大源文件大小（1 MB）。超过此大小的文件直接走全量
+/// 增量解析的最大源文件大小（1 MB）。超过此大小的文件直接走全量
 /// 解析，跳过 `compute_input_edit` 的 O(N) 字节级 diff。
 ///
-/// T202 security-review LOW-3: `compute_input_edit` 在 daemon 主循环中
+/// `compute_input_edit` 在 daemon 主循环中
 /// 同步执行，对大文件（如生成的代码、minified JS）会阻塞事件处理
 /// ~100ms。1 MB 阈值覆盖典型源文件（Rust 通常 < 100KB），同时避免
 /// 大文件阻塞。文件超出阈值不影响正确性——只是走全量解析路径。
 const MAX_INCREMENTAL_PARSE_SIZE: usize = 1024 * 1024;
 
-/// C1: Tree-sitter 增量解析缓存。
+/// Tree-sitter 增量解析缓存。
 ///
 /// 封装 `file_path → (Tree, source_text)` 映射 + 增量解析逻辑。
 /// [`Daemon`] 持有此 struct 作为可选能力，[`IndexObserver`] 可选择性
 /// 调用 [`TreeCache::parse_incremental`] 加速重复解析。
 ///
-/// T202 arch-review MEDIUM-1: 提取 `TreeCache` 改善 Daemon SRP。
+/// 提取 `TreeCache` 改善 Daemon SRP。
 /// Daemon 不再直接持有 `HashMap`，而是委托 `TreeCache` 管理缓存和
 /// 增量解析逻辑。Daemon 仍保留 `parse_file_incremental` 方法作为
 /// 薄委托，保持现有 API 不变（测试无需修改）。
@@ -133,15 +133,15 @@ impl TreeCache {
     /// 解析文件并以 `path` 为 key 缓存 `Tree`，下次调用若变化较小
     /// 则走 tree-sitter 增量解析；变化较大时强制全量解析（缓存失效）。
     ///
-    /// # 缓存失效策略（spec T093）
+    /// # 缓存失效策略
     ///
     /// - 文件大小（字节数）相对变化 > 50% → 全量解析
     /// - 文件行数相对变化 > 30% → 全量解析
     /// - 文件大小 > [`MAX_INCREMENTAL_PARSE_SIZE`] → 全量解析
-    ///   （T202 security-review LOW-3：避免 O(N) 字节级 diff 阻塞）
+    ///   （避免 O(N) 字节级 diff 阻塞）
     /// - 否则 → 增量解析（`Tree::edit` + `parser.parse(source, Some(&old_tree))`）
     ///
-    /// # Spec deviation (rule 7 conflict)
+    /// # Spec deviation
     ///
     /// spec 主文描述"文件变更时优先使用增量解析"，但 tree-sitter 0.26 文档
     /// 明确："If the text of the document has changed since `old_tree` was
@@ -151,7 +151,7 @@ impl TreeCache {
     /// old_source 与 new_source（公共前缀 + 公共后缀）构造 `InputEdit`，
     /// 编辑缓存的 `old_tree`，再传入 `parser.parse`。
     ///
-    /// # Architecture note (rule 7, T202 arch-review MEDIUM-1)
+    /// # Architecture note
     ///
     /// `TreeCache` 封装了 tree-sitter 增量解析的所有状态和逻辑。
     /// [`Daemon`] 在观察者模式中是"主题"（subject），原本不直接做解析；
@@ -200,7 +200,7 @@ impl TreeCache {
                 };
 
                 // spec: 大小变化 > 50% 或行数变化 > 30% → 全量。
-                // T202 security-review LOW-3: 超过 MAX_INCREMENTAL_PARSE_SIZE
+                // 超过 MAX_INCREMENTAL_PARSE_SIZE
                 // 也强制全量，避免 compute_input_edit 的 O(N) 字节级 diff
                 // 阻塞 daemon 主循环（大文件 ~100ms 延迟）。
                 new_byte_len <= MAX_INCREMENTAL_PARSE_SIZE
@@ -262,7 +262,7 @@ pub struct Daemon {
     watch_path: PathBuf,
     /// 项目名称。
     project_name: String,
-    /// 防抖窗口（毫秒），BR-DAEMON-001/004。
+    /// 防抖窗口（毫秒），。
     debounce_ms: u64,
     /// 数据库路径。
     db_path: PathBuf,
@@ -270,14 +270,14 @@ pub struct Daemon {
     observers: Vec<Box<dyn EventObserver + Send>>,
     /// 停止标志（用于优雅关闭和测试）。
     stop: Arc<AtomicBool>,
-    /// C6: 最近 10 个事件间隔（滑动窗口），用于 EMA 计算。
+    /// 最近 10 个事件间隔（滑动窗口），用于 EMA 计算。
     event_intervals: VecDeque<Duration>,
-    /// C6: 当前自适应防抖窗口（EMA 更新，clamp [100ms, 500ms]）。
+    /// 当前自适应防抖窗口（EMA 更新，clamp [100ms, 500ms]）。
     debounce_window: Duration,
-    /// C6: 上次事件触发时间，用于计算 last_interval。
+    /// 上次事件触发时间，用于计算 last_interval。
     last_event_at: Option<Instant>,
-    /// C1: Tree-sitter 增量解析缓存（封装在 [`TreeCache`] 中）。
-    /// T202 arch-review MEDIUM-1: 提取 TreeCache 改善 SRP。
+    /// Tree-sitter 增量解析缓存（封装在 [`TreeCache`] 中）。
+    /// 提取 TreeCache 改善 SRP。
     tree_cache: TreeCache,
 }
 
@@ -342,7 +342,7 @@ impl Daemon {
         &self.db_path
     }
 
-    /// C6: 返回当前自适应防抖窗口（基于 EMA 更新，clamp [100ms, 500ms]）。
+    /// 返回当前自适应防抖窗口（基于 EMA 更新，clamp [100ms, 500ms]）。
     ///
     /// 与 [`Daemon::debounce_ms`](Self::debounce_ms) 的区别：
     /// `debounce_ms` 是构造时配置的固定防抖窗口（传给底层
@@ -353,7 +353,7 @@ impl Daemon {
         self.debounce_window
     }
 
-    /// C6: 返回最近 10 个事件间隔（滑动窗口）。
+    /// 返回最近 10 个事件间隔（滑动窗口）。
     ///
     /// 第一个事件触发后不更新 `debounce_window`（无前一个事件，无法计算
     /// 间隔），因此 `event_intervals` 长度 ≤ 触发次数 - 1。
@@ -366,7 +366,7 @@ impl Daemon {
         self.event_intervals.iter().copied().collect()
     }
 
-    /// C6: 用 EMA 公式更新自适应防抖窗口。
+    /// 用 EMA 公式更新自适应防抖窗口。
     ///
     /// 计算与上一个事件的时间间隔 `last_interval`，push 到
     /// `event_intervals`（保留最近 10 个），用反转 EMA 公式
@@ -410,10 +410,10 @@ impl Daemon {
         self.last_event_at = Some(now);
     }
 
-    /// C1: 解析文件并以 `path` 为 key 缓存 `Tree`，下次调用若变化较小
+    /// 解析文件并以 `path` 为 key 缓存 `Tree`，下次调用若变化较小
     /// 则走 tree-sitter 增量解析；变化较大时强制全量解析（缓存失效）。
     ///
-    /// T202 arch-review MEDIUM-1: 实际逻辑已提取到 [`TreeCache::parse_incremental`]，
+    /// 实际逻辑已提取到 [`TreeCache::parse_incremental`]，
     /// 本方法仅作为薄委托保持现有 API 不变（测试无需修改）。详见
     /// [`TreeCache::parse_incremental`] 的文档注释（含 spec deviation、
     /// 缓存失效策略、安全考量）。
@@ -425,13 +425,13 @@ impl Daemon {
         self.tree_cache.parse_incremental(path, source)
     }
 
-    /// C1: 返回 `tree_cache` 中缓存的条目数（仅供测试和诊断）。
+    /// 返回 `tree_cache` 中缓存的条目数（仅供测试和诊断）。
     #[must_use]
     pub fn tree_cache_len(&self) -> usize {
         self.tree_cache.len()
     }
 
-    /// C1: 清空 `tree_cache`（用于测试或显式失效）。
+    /// 清空 `tree_cache`（用于测试或显式失效）。
     pub fn clear_tree_cache(&mut self) {
         self.tree_cache.clear();
     }
@@ -529,12 +529,12 @@ impl Daemon {
 
     /// 处理一批防抖后的事件：过滤非代码文件，通知所有观察者。
     fn process_debounced_events(&mut self, events: &[DebouncedEvent]) {
-        // C6: 空批次直接 return，不更新自适应防抖窗口（无事件触发）。
+        // 空批次直接 return，不更新自适应防抖窗口（无事件触发）。
         if events.is_empty() {
             return;
         }
 
-        // C6: 每次事件触发后用 EMA 公式更新自适应防抖窗口。
+        // 每次事件触发后用 EMA 公式更新自适应防抖窗口。
         // 注意：即使所有事件被过滤（非代码文件），底层 notify 已触发，
         // 仍视为"事件触发"。
         self.update_adaptive_debounce(Instant::now());
@@ -546,7 +546,7 @@ impl Daemon {
             return;
         }
 
-        // LOG-005：记录每个 daemon 事件（在通知观察者之前）。
+        // 记录每个 daemon 事件（在通知观察者之前）。
         for event in &daemon_events {
             let (change_type, path) = match event {
                 DaemonEvent::Create(p) => ("create", p.display()),
@@ -579,7 +579,7 @@ impl Daemon {
     }
 }
 
-// --- C1: tree-sitter 增量解析辅助函数（free functions，无 &self 状态） ---
+// --- tree-sitter 增量解析辅助函数（free functions，无 &self 状态） ---
 
 /// 从文件路径推断 [`Language`]：取扩展名，调用 [`Language::from_extension`]。
 /// 无扩展名或不识别时返回 `None`。
@@ -1300,7 +1300,7 @@ mod tests {
         );
     }
 
-    // --- LOG-005: daemon_event 事件发出验证 ---
+    // --- daemon_event 事件发出验证 ---
 
     #[test]
     #[cfg(feature = "lang-c")]
@@ -1436,7 +1436,7 @@ mod tests {
         let _ = raise(sig);
     }
 
-    // --- C6: 自适应防抖窗口测试 ---
+    // --- 自适应防抖窗口测试 ---
     //
     // 反转 EMA 实现符合 spec 主文描述：高频（last_interval 小）→ inverted
     // 大 → 窗口扩展到 clamp 上限 500ms；低频（last_interval 大）→ inverted
@@ -1592,17 +1592,17 @@ mod tests {
         );
     }
 
-    // --- C1: tree-sitter incremental parsing in daemon (T092/T093) ---
+    // --- tree-sitter incremental parsing in daemon ---
 
     #[cfg(feature = "lang-rust")]
     #[test]
     fn test_watcher_uses_incremental_parsing_on_file_change() {
-        // T092: `Daemon::parse_file_incremental` populates `tree_cache` on
+        // `Daemon::parse_file_incremental` populates `tree_cache` on
         // first call (full parse) and reuses it on second call (incremental
         // parse). C1 spec requires the incremental parse to take < 10% of
         // the full parse time.
         //
-        // Spec deviation (rule 7 conflict): spec literally says
+        // Spec deviation: spec literally says
         // `parser.parse(new_source, Some(&cached_tree))` without `Tree::edit`.
         // tree-sitter 0.26 requires `Tree::edit(InputEdit)` to sync edits;
         // `parse_file_incremental` builds the InputEdit by diffing the cached
@@ -1630,7 +1630,7 @@ mod tests {
         let modified = format!("{original}{appended}");
 
         // Measure 10 full parses (cold cache each time) and take min.
-        // Increased from 5 → 10 samples after CI flake (v0.3.8 release):
+        // Increased from 5 → 10 samples after a CI flake:
         // on a shared GitHub Actions runner, CPU scheduling noise caused
         // inc_min to occasionally land within 0.003ms of the 60% threshold,
         // failing the assertion despite the test being correct. More samples
@@ -1686,7 +1686,7 @@ mod tests {
 
         // C1 spec target: < 10%. Actual measured: ~50% for 100KB Rust source.
         //
-        // Spec deviation (rule 7 conflict): tree-sitter 0.26 `Tree::edit` is
+        // Spec deviation: tree-sitter 0.26 `Tree::edit` is
         // O(N) — it updates byte ranges of every node in the tree, regardless
         // of how small the edit is. For a 100KB file with ~36k nodes, this
         // alone takes ~10ms, which is already ~40% of the full parse time.
@@ -1698,9 +1698,9 @@ mod tests {
         // (b) a tree-sitter version with O(1) `Tree::edit`. Neither holds
         // today, so we use 75% as a stable upper bound that:
         //   - still verifies incremental is meaningfully faster than full
-        //     (rule 12: failure made explicit — 50% < 75% < 100%)
+        //     (failure made explicit — 50% < 75% < 100%)
         //   - tolerates CI CPU scheduling noise (min-of-10 vs min-of-10,
-        //     raised from 60% after v0.3.8 CI flake where inc_min landed
+        //     raised from 60% after a CI flake where inc_min landed
         //     within 0.003ms of the 60% threshold on a shared runner)
         //   - documents the spec gap explicitly for future revision
         //
@@ -1719,7 +1719,7 @@ mod tests {
     #[cfg(feature = "lang-rust")]
     #[test]
     fn test_parse_file_incremental_caches_tree_on_first_call() {
-        // T093 sanity: first call populates tree_cache.
+        // Sanity: first call populates tree_cache.
         let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
         assert_eq!(daemon.tree_cache_len(), 0, "cache should start empty");
         let source = "fn first() {}\n";
@@ -1736,7 +1736,7 @@ mod tests {
     #[cfg(feature = "lang-rust")]
     #[test]
     fn test_parse_file_incremental_reuses_cache_on_small_change() {
-        // T093 sanity: small change (1 line appended to 100-line file) keeps
+        // Sanity: small change (1 line appended to 100-line file) keeps
         // the cache entry, and the second parse uses the incremental path.
         let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
         let original: String = (0..100)
@@ -1759,7 +1759,7 @@ mod tests {
     #[cfg(feature = "lang-rust")]
     #[test]
     fn test_parse_file_incremental_invalidates_on_large_size_change() {
-        // T093: file size change > 50% → force full parse (still updates cache).
+        // File size change > 50% → force full parse (still updates cache).
         let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
         let small = "fn a() {}\n";
         let _ = daemon
@@ -1779,7 +1779,7 @@ mod tests {
     #[cfg(feature = "lang-rust")]
     #[test]
     fn test_parse_file_incremental_invalidates_on_large_line_change() {
-        // T093: line count change > 30% → force full parse.
+        // Line count change > 30% → force full parse.
         let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
         // 10 lines.
         let original: String = (0..10).map(|i| format!("fn f{i}() {{}}\n")).collect();
@@ -1799,7 +1799,7 @@ mod tests {
     #[cfg(feature = "lang-rust")]
     #[test]
     fn test_parse_file_incremental_returns_error_for_unsupported_language() {
-        // T093 error path: unknown extension → UnsupportedLanguage.
+        // Error path: unknown extension → UnsupportedLanguage.
         let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
         let result = daemon.parse_file_incremental("readme.unknownext", "content");
         assert!(
@@ -1816,7 +1816,7 @@ mod tests {
     #[cfg(feature = "lang-rust")]
     #[test]
     fn test_parse_file_incremental_returns_error_for_no_extension() {
-        // T093 error path: no extension → UnsupportedLanguage.
+        // Error path: no extension → UnsupportedLanguage.
         let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
         let result = daemon.parse_file_incremental("Makefile", "all:");
         assert!(
@@ -1828,7 +1828,7 @@ mod tests {
     #[cfg(feature = "lang-rust")]
     #[test]
     fn test_tree_cache_clears_when_max_entries_exceeded() {
-        // T093 capacity protection: when cache reaches MAX_TREE_CACHE_ENTRIES
+        // Capacity protection: when cache reaches MAX_TREE_CACHE_ENTRIES
         // and a new key is inserted, the cache is cleared first.
         let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
         // Fill cache up to MAX_TREE_CACHE_ENTRIES.

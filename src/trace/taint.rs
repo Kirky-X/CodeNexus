@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 //! Taint path tracer (trace/taint.rs) — cross-language multi-hop taint
-//! tracking (v0.3.0).
+//! tracking.
 //!
 //! Provides [`TaintPathTracer`] for performing BFS traversal over
 //! `DataFlows`, `Reads`, `Writes`, and `FfiCalls` edges from a source symbol
@@ -22,7 +22,7 @@ use super::bfs::bfs_trace;
 use super::TracePath;
 
 /// BFS tracer over `DataFlows` / `Reads` / `Writes` / `FfiCalls` edges for
-/// source-to-sink taint analysis (v0.3.0).
+/// source-to-sink taint analysis.
 ///
 /// Holds an immutable borrow of the [`Graph`] and exposes:
 /// - [`trace_taint`]: returns all paths from `source` to `sink` within

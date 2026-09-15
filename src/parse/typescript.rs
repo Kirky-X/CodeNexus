@@ -22,10 +22,10 @@
 //! - `import_statement` → [`ImportInfo`]
 //! - `call_expression` → [`CallInfo`]
 //! - `lexical_declaration` / `variable_declaration` → [`AssignInfo`]
-//! - `assignment_expression` left → [`WriteInfo`] (BR-TRACE-006)
-//! - `variable_declarator` name → [`WriteInfo`] (init, BR-TRACE-006)
-//! - `update_expression` argument → [`WriteInfo`] (`++`/`--`, BR-TRACE-006)
-//! - expression-position `identifier` → [`ReadInfo`] (BR-TRACE-005)
+//! - `assignment_expression` left → [`WriteInfo`]
+//! - `variable_declarator` name → [`WriteInfo`] (init)
+//! - `update_expression` argument → [`WriteInfo`] (`++`/`--`)
+//! - expression-position `identifier` → [`ReadInfo`]
 
 use tree_sitter::Node;
 
@@ -224,11 +224,11 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             // Produce an ImportInfo so IMPORTS edges are created (same as
             // `import { foo } from './mod'`).
             //
-            // B7: `is_reexport=true` marks these as live entry points for
+            // `is_reexport=true` marks these as live entry points for
             // dead-code analysis (the symbol is reachable from outside the
             // current module via the re-export).
             //
-            // B7 review (security LOW-1): parse `export_clause` to extract
+            // Parse `export_clause` to extract
             // named export specifiers. For `export { foo, bar } from './mod'`,
             // only `foo` and `bar` are re-exported (precise). For
             // `export * from './mod'`, `imported_names` stays empty and the
@@ -290,7 +290,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             // nodes (arrow_function / function expression values) in addition
             // to the existing AssignInfo records.
             extract_lexical_declaration(node, source, ctx, result);
-            // BR-TRACE-006: each `variable_declarator`'s simple-identifier name
+            // Each `variable_declarator`'s simple-identifier name
             // is a write (initialization). Only attribute a write when inside a
             // function body (current_func is Some); top-level const/let/var are
             // handled by extract_lexical_declaration as Const/Function nodes.
@@ -336,7 +336,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "assignment_expression" => {
             // extract_assignment preserves the existing AssignInfo extraction
-            // (P2-2). BR-TRACE-006: the left-hand simple identifier is a write,
+            // the left-hand simple identifier is a write,
             // captured only inside a function body. The right-hand expression's
             // identifiers are captured as reads by the `identifier` branch
             // during `visit_children`.
@@ -361,7 +361,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "update_expression" => {
             // `x++` / `++x` / `x--` / `--x` writes the operand identifier
-            // (BR-TRACE-006). Only simple identifiers are captured; member
+            // Only simple identifiers are captured; member
             // updates (`obj.x++`) are ignored. Only attribute a write when
             // inside a function body.
             if let Some(func) = ctx.current_func {
@@ -384,7 +384,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "identifier" => {
             // A bare identifier in an expression position is a variable read
-            // (BR-TRACE-005). Name-defining positions (declarator name,
+            // Name-defining positions (declarator name,
             // assignment left, update operand, callee, member property) are
             // excluded by `is_ts_read_position`.
             if let Some(func) = ctx.current_func {
@@ -420,7 +420,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
 }
 
 /// Builds a TypeScript `Function` node, emits its `Defines`/`Contains` edges,
-/// and pushes it into `result` (MED-003: shared by `extract_function` and the
+/// and pushes it into `result` (shared by `extract_function` and the
 /// `export_statement` anonymous-default-export handler).
 #[allow(clippy::too_many_arguments)]
 fn build_and_push_function(
@@ -567,7 +567,7 @@ fn extract_method(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
         .language(Language::TypeScript)
         .project(ctx.project)
         .is_global(false);
-    // B8 fix: set parentQn for Method nodes so class_methods.cql can find them
+    // Set parentQn for Method nodes so class_methods.cql can find them
     // (CodeNexus doesn't emit HAS_METHOD edges; parentQn is the linkage).
     if let Some(parent) = ctx.current_parent {
         builder = builder.parent_qn(parent);
@@ -692,7 +692,7 @@ fn collect_imported_names(node: Node, source: &str, names: &mut Vec<String>) {
     }
 }
 
-/// B7 review (security LOW-1): Extracts named export specifiers from a
+/// Extracts named export specifiers from a
 /// TypeScript `export_statement`'s `export_clause` child.
 ///
 /// - `export { foo, bar } from './mod'` → `["foo", "bar"]`
@@ -1099,7 +1099,7 @@ fn identifier_text(node: Node, source: &str) -> Option<String> {
 /// Returns `true` if a bare `identifier` node sits in a read (expression)
 /// position rather than a name-defining position (declarator name, assignment
 /// left, update operand, callee, member property). Mirrors the c.rs convention
-/// (design.md Decision 4, Open Question 2): only the direct parent kind is
+///: only the direct parent kind is
 /// inspected, plus field checks for the assignment left / call function /
 /// member object cases.
 fn is_ts_read_position(node: Node) -> bool {
@@ -1157,7 +1157,7 @@ fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> 
     FqnGenerator::generate(project, file_path, name, Language::TypeScript, parent)
 }
 
-// `dedupe_qn` is shared across all extractors — see `parse::dedupe_qn` (MED-002).
+// `dedupe_qn` is shared across all extractors — see `parse::dedupe_qn`.
 
 fn add_definition_edges(
     file_path: &str,
@@ -1165,7 +1165,7 @@ fn add_definition_edges(
     node: &ModelNode,
     result: &mut ExtractResult,
 ) {
-    // B1 fix: only emit DEFINES (file -> definition). The previous CONTAINS
+    // Only emit DEFINES (file -> definition). The previous CONTAINS
     // emission was redundant — for (file, node) pairs, CONTAINS and DEFINES
     // carry identical semantics, producing duplicate edges that inflated
     // verification diffs against gitnexus (see triage.md §B1).
@@ -1327,7 +1327,7 @@ const result = add(1, 2);
 
     #[test]
     fn creates_defines_edges() {
-        // B1 fix: CONTAINS emission removed; only DEFINES remains.
+        // CONTAINS emission removed; only DEFINES remains.
         let result = extract(TS_SOURCE);
         let defines_count = result
             .edges
@@ -1832,7 +1832,7 @@ function setupSecond() {
 
     #[test]
     fn read_in_function_has_dotted_fqn_reader_qn() {
-        // Spec: TypeScript 函数内 identifier 读取提取 (BR-TRACE-005)。
+        // Spec: TypeScript 函数内 identifier 读取提取。
         // Uses `return x;` (not `let y = x + 1;`) so the read sits in a
         // return_statement rather than a variable_declarator value — the
         // latter would scope reader_qn to `caller#y` because the TS
@@ -1867,7 +1867,7 @@ function setupSecond() {
 
     #[test]
     fn write_in_function_let_declaration_has_dotted_fqn_writer_qn() {
-        // Spec: TypeScript 函数内 lexical_declaration 写入提取 (BR-TRACE-006)。
+        // Spec: TypeScript 函数内 lexical_declaration 写入提取。
         let src = "function caller(x: number): number {\n    let y = x + 1;\n    return y;\n}\n";
         let ext = TypeScriptExtractor::new();
         let result = ext
@@ -1897,7 +1897,7 @@ function setupSecond() {
 
     #[test]
     fn write_in_function_assignment_has_dotted_fqn_writer_qn() {
-        // Spec: TypeScript 函数内 assignment_expression 写入提取 (BR-TRACE-006)。
+        // Spec: TypeScript 函数内 assignment_expression 写入提取。
         let src = "function caller(): number {\n    let y = 1;\n    y = y * 2;\n    return y;\n}\n";
         let ext = TypeScriptExtractor::new();
         let result = ext
@@ -1920,7 +1920,7 @@ function setupSecond() {
 
     #[test]
     fn update_expression_is_write() {
-        // Spec: TypeScript update_expression 写入提取 (BR-TRACE-006)。
+        // Spec: TypeScript update_expression 写入提取。
         let src =
             "function caller(x: number): number {\n    let y = x;\n    y++;\n    return y;\n}\n";
         let ext = TypeScriptExtractor::new();
@@ -1948,7 +1948,7 @@ function setupSecond() {
     fn extracts_export_named_from_reexport() {
         // `export { foo } from './mod'` should produce an ImportInfo with
         // source_file="./mod" (same File→File IMPORTS edge as `import`).
-        // B7-review audit MEDIUM: also assert imported_names content so
+        // Also assert imported_names content so
         // extract_ts_export_specifiers is verified at parser layer (not
         // just resolver layer).
         let src = "export { foo } from './mod';\n";

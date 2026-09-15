@@ -9,7 +9,7 @@
 //! CodeNexus stores symbol taxonomy as the [`NodeLabel`] enum, which is the
 //! label set materialized in the LadybugDB schema. [`map_lsp_symbol_kind`]
 //! translates between the two taxonomies so that LSP-derived semantic
-//! information can be persisted on graph nodes (R-lsp-004) without leaking
+//! information can be persisted on graph nodes without leaking
 //! LSP-specific identifiers into the storage layer.
 //!
 //! [`model`]: crate::model
@@ -25,7 +25,7 @@ use crate::model::NodeLabel;
 /// `SymbolKind::NULL`). Persisting `None` is meaningful — it tells the
 /// indexer to leave `semantic_type` unset rather than guessing.
 ///
-/// # Mapping table (specmark spec.md R-lsp-003)
+/// # Mapping table
 ///
 /// | LSP SymbolKind       | CodeNexus NodeLabel |
 /// |----------------------|---------------------|
@@ -108,7 +108,7 @@ pub fn map_lsp_symbol_kind(kind: lsp_types::SymbolKind) -> Option<NodeLabel> {
 
 #[cfg(test)]
 mod tests {
-    //! R-lsp-003 acceptance tests.
+    //! Acceptance tests for the mapping table.
     //!
     //! These tests do NOT touch a real LSP server — they only exercise the
     //! pure mapping function. CI runs them on every push; the
@@ -119,7 +119,7 @@ mod tests {
     use crate::model::NodeLabel;
     use lsp_types::SymbolKind;
 
-    // --- R-lsp-003 mandatory mappings (specmark spec.md) ---
+    // --- Mandatory mappings ---
 
     #[test]
     fn map_function_kind() {
@@ -190,7 +190,7 @@ mod tests {
         );
     }
 
-    // --- Extended mappings (R-lsp-003 table, optional rows) ---
+    // --- Extended mappings (optional rows) ---
 
     #[test]
     fn map_namespace_kind() {
@@ -248,7 +248,7 @@ mod tests {
         );
     }
 
-    // --- R-lsp-003: unknown/unsupported kinds must return None ---
+    // --- Unknown/unsupported kinds must return None ---
 
     #[test]
     fn map_unknown_kind_returns_none() {

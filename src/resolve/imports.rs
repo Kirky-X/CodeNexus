@@ -10,9 +10,9 @@
 //! `ImportInfo::source_file` to a target File node in the graph, and creates a
 //! `File → File` IMPORTS edge when both endpoints are found. Unresolved imports
 //! (external modules, missing files) are logged at `warn` level and skipped —
-//! they do not panic (Rule 12: failures must be explicit, not silent).
+//! they do not panic (failures must be explicit, not silent).
 //!
-//! # Resolution strategy (deterministic — Rule 5)
+//! # Resolution strategy (deterministic)
 //!
 //! 1. **Direct match**: `source_file` exactly matches a File node's `file_path`
 //!    or `name` (e.g. `"b.rs"`, `"./utils.rs"`).
@@ -39,11 +39,11 @@ use crate::model::{ConfidenceTier, Edge, EdgeType, Graph, Language, NodeLabel};
 /// Matches the lower bound of `EdgeType::Imports::confidence_range()` = (0.95, 1.0).
 const CONFIDENCE_IMPORTS: f32 = 0.95;
 
-/// Confidence for a REEXPORTS edge (B7). Structural, explicit in syntax —
+/// Confidence for a REEXPORTS edge. Structural, explicit in syntax —
 /// matches the lower bound of `EdgeType::Reexports::confidence_range()` = (0.95, 1.0).
 const CONFIDENCE_REEXPORTS: f32 = 0.95;
 
-/// B7 review (arch-review MEDIUM-2 + security LOW-3): when a wildcard
+/// When a wildcard
 /// re-export (`pub use foo::*` / `export * from './mod'`) targets more
 /// than this many functions, log a `warn!` so barrel-style modules with
 /// 1000+ re-exports are surfaced. The threshold is advisory — edges are
@@ -96,7 +96,7 @@ impl<'a> ImportResolver<'a> {
     ///   contain File nodes (created by the scope phase).
     pub fn resolve_imports(&self, results: &[ExtractResult], graph: &mut Graph) {
         let file_index = build_file_index(graph);
-        // B7: Build (file_id, function_name) → function_id index for REEXPORTS
+        // Build (file_id, function_name) → function_id index for REEXPORTS
         // edge creation. Re-exports target specific Function nodes (not File
         // nodes), so we need to resolve `imported_names` to their Function ids.
         let func_index = build_function_index(graph, &file_index);
@@ -104,13 +104,13 @@ impl<'a> ImportResolver<'a> {
         // Deduplicate by (source_file_id, target_file_id) — one IMPORTS edge
         // per file pair, regardless of how many symbols are imported.
         let mut seen_pairs: HashSet<(String, String)> = HashSet::new();
-        // B7: Separate dedup set for REEXPORTS edges keyed by
+        // Separate dedup set for REEXPORTS edges keyed by
         // (source_file_id, function_id) — a single file may re-export
         // multiple functions, each producing its own REEXPORTS edge.
         let mut seen_reexport_pairs: HashSet<(String, String)> = HashSet::new();
 
         for result in results {
-            // Scheme C (v0.3.0): C++ #include edges are handled by ResolvePhase
+            // C++ #include edges are handled by ResolvePhase
             // as EdgeType::Includes (scope-aware). Skip C++ here to avoid
             // duplicate IMPORTS edges — see phases.rs ResolvePhase::run.
             #[cfg(feature = "lang-cpp")]
@@ -168,7 +168,7 @@ impl<'a> ImportResolver<'a> {
                     graph.add_edge(edge);
                 }
 
-                // B7: REEXPORTS edge for `pub use` / `export ... from`.
+                // REEXPORTS edge for `pub use` / `export ... from`.
                 // Targets are Function nodes in the resolved file. When
                 // `imported_names` is non-empty, only those named functions
                 // are re-exported; when empty (wildcard `pub use foo::*`),
@@ -220,7 +220,7 @@ fn build_file_index(graph: &Graph) -> HashMap<String, String> {
     index
 }
 
-/// B7: Builds a lookup map from `file_id` → (`function_name` → `function_id`).
+/// Builds a lookup map from `file_id` → (`function_name` → `function_id`).
 ///
 /// Used by [`resolve_reexport_targets`] to resolve `pub use foo::bar`'s
 /// `bar` to its Function node id. `file_id` is the File node id that owns
@@ -229,9 +229,9 @@ fn build_file_index(graph: &Graph) -> HashMap<String, String> {
 /// Both `Function` and `Method` labels are indexed — `pub use` can re-export
 /// either. When multiple functions share the same name in the same file
 /// (e.g. overloaded methods, generics), the first one encountered wins;
-/// a `warn!` is emitted so the ambiguity is visible (arch-review LOW-3).
+/// a `warn!` is emitted so the ambiguity is visible.
 ///
-/// # Performance (perf-review MEDIUM-1 + MEDIUM-2 + MEDIUM-3)
+/// # Performance
 ///
 /// - Nested `HashMap<String, HashMap<String, String>>` (was a flat
 ///   `HashMap<(String, String), String>`) so wildcard lookups are
@@ -245,7 +245,7 @@ fn build_function_index(
     file_index: &HashMap<String, String>,
 ) -> HashMap<String, HashMap<String, String>> {
     use std::collections::hash_map::Entry;
-    // perf-review MEDIUM-2: pre-normalise file_index keys once so the
+    // Pre-normalise file_index keys once so the
     // per-function suffix match doesn't re-allocate for every key.
     let normalised_index: HashMap<String, String> = file_index
         .iter()
@@ -259,12 +259,12 @@ fn build_function_index(
             };
             // Resolve Function.file_path → owning File node id. Try direct
             // match first, then suffix match via the shared helper
-            // (arch-review MEDIUM-1: DRY with find_file_in_index).
+            // (DRY with find_file_in_index).
             let file_id = file_index.get(fp).cloned().or_else(|| {
                 find_best_suffix_match(&normalised_index, fp).map(|(_, id)| id.clone())
             });
             let Some(file_id) = file_id else { continue };
-            // arch-review LOW-3: log duplicate function names so the
+            // Log duplicate function names so the
             // "first wins" ambiguity is visible (dead-code may false-negative
             // on the shadowed method).
             match index.entry(file_id).or_default().entry(node.name.clone()) {
@@ -280,7 +280,7 @@ fn build_function_index(
     index
 }
 
-/// B7: Resolves the Function ids that a re-export statement targets.
+/// Resolves the Function ids that a re-export statement targets.
 ///
 /// - When `imported_names` is non-empty (e.g. `pub use foo::bar`), returns
 ///   the Function ids matching those names in `target_file_id`.
@@ -292,7 +292,7 @@ fn build_function_index(
 /// tracked by the function index — dead-code analysis only cares about
 /// Function/Method reachability).
 ///
-/// # Performance (perf-review MEDIUM-1 + MEDIUM-3)
+/// # Performance
 ///
 /// Nested `HashMap<String, HashMap<String, String>>` enables O(1) file
 /// lookup + O(K) name lookup (K = `imported_names.len()`), with zero
@@ -308,7 +308,7 @@ fn resolve_reexport_targets(
     };
     if imported_names.is_empty() {
         // Wildcard re-export: every function in the target file.
-        // arch-review MEDIUM-2 + security LOW-3: warn on barrel-scale
+        // Warn on barrel-scale
         // re-exports so the cost is visible (advisory — edges still created).
         let count = by_file.len();
         if count > WILDCARD_REEXPORT_WARN_THRESHOLD {
@@ -329,9 +329,9 @@ fn resolve_reexport_targets(
 }
 
 /// Finds the longest suffix-matching key in `file_index` for `path`, with
-/// path-boundary check (Rule 5 determinism).
+/// path-boundary check (determinism).
 ///
-/// B7 review (arch-review MEDIUM-1): extracted as a shared helper so
+/// Extracted as a shared helper so
 /// [`find_file_in_index`] and [`build_function_index`] no longer duplicate
 /// the suffix-matching algorithm. Both callers need to bridge the absolute
 /// (production `file_path`) vs relative (`file_index` keys) gap, and both
@@ -394,21 +394,21 @@ fn find_file_in_index(
     // e.g. path = "/home/dev/projects/CodeNexus/src/lib.rs"
     //      file_index key = "src/lib.rs"
     //
-    // Pick the LONGEST suffix match (most specific) for determinism (Rule 5):
+    // Pick the LONGEST suffix match (most specific) for determinism:
     // HashMap iteration order is non-deterministic, so returning the first
     // match would produce different results across runs when multiple keys
     // suffix-match the same path (e.g. "index.ts" and "src/index.ts" both
     // match "/proj/src/index.ts").
     // Boundary check accepts both `/` and `\` for cross-platform support.
     //
-    // B7 review (arch-review MEDIUM-1): delegates to find_best_suffix_match
+    // Delegates to find_best_suffix_match
     // to share the algorithm with build_function_index (DRY).
     find_best_suffix_match(file_index, path).map(|(rel, id)| (id.clone(), rel.clone()))
 }
 
 /// Resolves an `ImportInfo::source_file` to a target File node id.
 ///
-/// Deterministic resolution (Rule 5) — no LLM, no fuzzy matching:
+/// Deterministic resolution — no LLM, no fuzzy matching:
 ///
 /// 1. Direct match against the file index (handles `"b.rs"`, `"./utils.ts"`).
 /// 2. Rust module paths (`crate::`, `self::`, `super::`) resolve to
@@ -681,7 +681,7 @@ fn resolve_rust_module_path(
     // REEXPORTS edge is created, causing dead_code false positives
     // (cli.rs::run judged dead despite being the crate root entry point via
     // re-export). On CalNexus this was 100% false-positive rate on cli.rs
-    // (11 functions) because the B7 re-export seed never fired.
+    // (11 functions) because the re-export seed never fired.
     //
     // Boundary: only attempt if the path contains `::` and doesn't contain
     // `/` or `.` (file path markers). External crates (std, serde, etc.)
@@ -1702,7 +1702,7 @@ mod tests {
 
     #[test]
     fn find_file_in_index_multiple_suffix_matches_picks_longest() {
-        // Determinism (Rule 5): when multiple keys suffix-match the same path,
+        // Determinism: when multiple keys suffix-match the same path,
         // pick the longest (most specific) to avoid HashMap order non-determinism.
         let mut index = HashMap::new();
         index.insert("index.ts".to_string(), "id-root".to_string());
@@ -1905,7 +1905,7 @@ mod tests {
         assert_eq!(edge.target, "src/config.js");
     }
 
-    // --- C++ #include: skipped by ImportResolver (scheme C, v0.3.0) ---
+    // --- C++ #include: skipped by ImportResolver ---
     // C++ #include is handled by ResolvePhase as EdgeType::Includes edges.
     // ImportResolver skips Language::Cpp results entirely — these tests
     // verify that NO IMPORTS edges are created for C++ #include directives,
@@ -1914,7 +1914,7 @@ mod tests {
     #[test]
     fn resolve_imports_skips_cpp_include_by_basename() {
         // C++ #include "format.h" — previously resolved via suffix matching
-        // to IMPORTS edge. Scheme C: skipped entirely (INCLUDES edge built
+        // to IMPORTS edge. skipped entirely (INCLUDES edge built
         // by ResolvePhase instead).
         let mut std_result = make_result_cpp("include/fmt/std.h");
         std_result.imports.push(crate::ir::ImportInfo {
@@ -1942,7 +1942,7 @@ mod tests {
     #[test]
     fn resolve_imports_skips_cpp_include_by_partial_path() {
         // C++ #include "fmt/format.h" — previously resolved via partial path
-        // suffix matching. Scheme C: skipped entirely.
+        // suffix matching. skipped entirely.
         let mut top_result = make_result_cpp("src/main.cpp");
         top_result.imports.push(crate::ir::ImportInfo {
             source_file: "fmt/format.h".to_string(),
@@ -1969,7 +1969,7 @@ mod tests {
     #[test]
     fn resolve_imports_skips_cpp_system_include() {
         // C++ #include <iostream> — system header, no matching File node.
-        // Scheme C: C++ is skipped entirely, so no IMPORTS edge regardless.
+        // C++ is skipped entirely, so no IMPORTS edge regardless.
         let mut main_result = make_result_cpp("src/main.cpp");
         main_result.imports.push(crate::ir::ImportInfo {
             source_file: "iostream".to_string(),
@@ -1994,7 +1994,7 @@ mod tests {
 
     #[test]
     fn resolve_imports_skips_cpp_include_even_when_target_exists() {
-        // Scheme C regression guard: even when a matching file exists,
+        // Regression guard: even when a matching file exists,
         // C++ #include must NOT produce an IMPORTS edge. The INCLUDES edge
         // is built separately by ResolvePhase::build_includes_edges.
         let mut main_result = make_result_cpp("src/main.cpp");
@@ -2265,7 +2265,7 @@ mod tests {
         assert_eq!(strip_js_style_extension("src/a.cjs"), "src/a");
     }
 
-    // --- B7 review (arch-review HIGH-2): REEXPORTS edge unit tests ---
+    // --- REEXPORTS edge unit tests ---
 
     /// Builds a Function node with the given id, name, and file_path.
     fn make_function_node(id: &str, name: &str, file_path: &str, project: &str) -> Node {
@@ -2277,7 +2277,7 @@ mod tests {
             .build()
     }
 
-    /// B7 review: `pub use foo::bar` (is_reexport=true, imported_names=["bar"])
+    /// `pub use foo::bar` (is_reexport=true, imported_names=["bar"])
     /// creates exactly one File→Function REEXPORTS edge targeting `bar`'s
     /// Function node id. No REEXPORTS edge for non-reexport imports.
     #[test]
@@ -2315,7 +2315,7 @@ mod tests {
         assert_eq!(reexports[0].confidence_tier, ConfidenceTier::ImportScoped);
     }
 
-    /// B7 review: `pub use foo::*` (is_reexport=true, imported_names=[])
+    /// `pub use foo::*` (is_reexport=true, imported_names=[])
     /// creates one REEXPORTS edge per Function in the target file.
     #[test]
     fn wildcard_pub_use_creates_reexports_edges_to_all_functions() {
@@ -2354,7 +2354,7 @@ mod tests {
         assert!(targets.contains("fn-qux"));
     }
 
-    /// B7 review: ordinary `use foo::bar` (is_reexport=false) does NOT
+    /// Ordinary `use foo::bar` (is_reexport=false) does NOT
     /// create any REEXPORTS edge — only IMPORTS.
     #[test]
     fn plain_use_does_not_create_reexports_edge() {
@@ -2386,7 +2386,7 @@ mod tests {
         assert_eq!(graph.edge_count(), 1, "should still create 1 IMPORTS edge");
     }
 
-    /// B7 review: duplicate `pub use foo::bar` (same source file, same target
+    /// Duplicate `pub use foo::bar` (same source file, same target
     /// function) creates only ONE REEXPORTS edge (dedup via seen_reexport_pairs).
     #[test]
     fn duplicate_pub_use_dedups_reexports_edges() {
@@ -2424,7 +2424,6 @@ mod tests {
         );
     }
 
-    /// B7 review (perf-review MEDIUM-1+MEDIUM-3 + arch-review MEDIUM-1):
     /// `build_function_index` returns a nested `HashMap<file_id, HashMap<name, func_id>>`.
     /// Direct unit test: absolute file_path resolves to relative file_index
     /// key via `find_best_suffix_match`, and the function is indexed under
@@ -2456,7 +2455,7 @@ mod tests {
         assert_eq!(by_file.get("bar"), Some(&"fn-bar".to_string()));
     }
 
-    /// B7 review: `resolve_reexport_targets` with empty `imported_names`
+    /// `resolve_reexport_targets` with empty `imported_names`
     /// (wildcard) returns all Function ids under `target_file_id`. With
     /// non-empty `imported_names`, returns only the named Function ids.
     #[test]
@@ -2494,7 +2493,7 @@ mod tests {
         );
     }
 
-    /// B7 review (arch-review MEDIUM-1): `find_best_suffix_match` is the
+    /// `find_best_suffix_match` is the
     /// shared helper used by both `find_file_in_index` and
     /// `build_function_index`. Direct unit test verifies the longest-match
     /// determinism and boundary check.
@@ -2504,7 +2503,7 @@ mod tests {
         index.insert("index.ts".to_string(), "id-root".to_string());
         index.insert("src/index.ts".to_string(), "id-src".to_string());
 
-        // Longest match wins (determinism — Rule 5).
+        // Longest match wins (determinism).
         let best = find_best_suffix_match(&index, "/home/dev/proj/src/index.ts");
         assert_eq!(best.map(|(_, id)| id.as_str()), Some("id-src"));
 

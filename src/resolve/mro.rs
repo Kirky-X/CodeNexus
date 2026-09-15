@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Method Resolution Order (MRO) per-language (design.md D5, H5).
+//! Method Resolution Order (MRO) per-language.
 //!
 //! Provides [`MroStrategy`] enum and [`mro_for`] language mapping, plus
 //! [`MroResolver`] for computing linearized ancestor sequences by walking
@@ -19,7 +19,7 @@
 
 use crate::model::{EdgeType, Graph, Language, NodeId};
 
-/// Method Resolution Order strategy (design.md D5).
+/// Method Resolution Order strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum MroStrategy {
     /// DFS pre-order, first occurrence wins (Rust / C / TypeScript).
@@ -33,7 +33,7 @@ pub enum MroStrategy {
     None,
 }
 
-/// Returns the MRO strategy for the given language (design.md D5).
+/// Returns the MRO strategy for the given language.
 #[must_use]
 pub fn mro_for(lang: Language) -> MroStrategy {
     match lang {
@@ -88,7 +88,7 @@ pub fn mro_for(lang: Language) -> MroStrategy {
         // Scala single inheritance (extends) + trait mixing → FirstWins.
         #[cfg(feature = "lang-scala")]
         Language::Scala => MroStrategy::FirstWins,
-        // Ruby mixin-based inheritance (include/extend) → RubyMixin (design.md D5).
+        // Ruby mixin-based inheritance (include/extend) → RubyMixin.
         #[cfg(feature = "lang-ruby")]
         Language::Ruby => MroStrategy::RubyMixin,
         // Haskell (typeclasses) and OCaml have no classical OO inheritance → None.
@@ -241,7 +241,7 @@ impl<'a> MroResolver<'a> {
                     }
                 }
                 // Inconsistent hierarchy (no valid candidate). Fail-loud:
-                // return partial result (design.md D5: "None 跳过 MRO,
+                // return partial result(
                 // fail-loud，不静默").
                 // Single-line for coverage: tarpaulin attribute continuation
                 None => break,
@@ -370,7 +370,7 @@ mod tests {
         assert!(resolver.compute_mro(&"a".to_string()).is_empty());
     }
 
-    // --- C3: single inheritance chain ---
+    // --- single inheritance chain ---
 
     #[test]
     fn c3_single_chain() {
@@ -386,7 +386,7 @@ mod tests {
         assert_eq!(mro, vec!["b".to_string(), "c".to_string()]);
     }
 
-    // --- C3: diamond ---
+    // --- diamond ---
 
     #[test]
     fn c3_diamond() {
@@ -406,11 +406,11 @@ mod tests {
         add_extends(&mut g, "c", "d");
         let resolver = MroResolver::new(&g, MroStrategy::C3);
         let mro = resolver.compute_mro(&"a".to_string());
-        // C3: A, B, C, D
+        // A, B, C, D
         assert_eq!(mro, vec!["b".to_string(), "c".to_string(), "d".to_string()]);
     }
 
-    // --- C3: no parents ---
+    // --- no parents ---
 
     #[test]
     fn c3_no_parents() {
@@ -490,7 +490,7 @@ mod tests {
         assert_eq!(mro_for(Language::Cpp), MroStrategy::FirstWins);
     }
 
-    // --- C3: inconsistent hierarchy (fail-loud partial result) ---
+    // --- inconsistent hierarchy (fail-loud partial result) ---
 
     #[test]
     fn c3_inconsistent_hierarchy_returns_partial() {
@@ -528,7 +528,7 @@ mod tests {
         );
     }
 
-    // --- C3: head appears in tail is skipped (is_in_tail branch) ---
+    // --- head appears in tail is skipped (is_in_tail branch) ---
 
     #[test]
     fn c3_diamond_skips_head_in_tail() {

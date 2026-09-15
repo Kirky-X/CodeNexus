@@ -55,7 +55,7 @@ pub use typescript_ls::TypeScriptLanguageClient;
 
 use std::path::Path;
 
-/// LSP integration errors (Rule 12: failures must be explicit).
+/// LSP integration errors (failures must be explicit).
 ///
 /// Every variant carries enough context to diagnose the failure without
 /// needing to grep server logs.
@@ -93,15 +93,15 @@ pub enum LspError {
 /// JSON-RPC round-trip timeout (specmark spec.md §Constraints: 5 seconds).
 ///
 /// Exposed as a `pub const` so tests and downstream callers can reference the
-/// exact threshold rather than hard-coding a magic number (Rule 5:
+/// exact threshold rather than hard-coding a magic number (
 /// deterministic thresholds must be explicit).
 pub const REQUEST_TIMEOUT_MS: u64 = 5_000;
 
 /// Uniform abstraction over LSP server backends.
 ///
-/// `RustAnalyzerClient` is the v0.2.0 reference implementation; the trait
-/// exists so the indexing pipeline (R-lsp-004) and CLI commands can depend
-/// on a stable shape that v0.3.0+ can extend with `GoplsClient`,
+/// `RustAnalyzerClient` is the reference implementation; the trait
+/// exists so the indexing pipeline and CLI commands can depend
+/// on a stable shape that future versions can extend with `GoplsClient`,
 /// `PyrightClient`, etc. without touching call sites.
 ///
 /// # Line/column convention
@@ -153,13 +153,13 @@ pub trait LspProvider: Send + Sync {
     /// at `(file, line, col)`. Returns `Ok(Vec::new())` when the server
     /// reports no references (e.g. unused symbol, built-in primitive).
     ///
-    /// # C9 scope (R-lsp-002)
+    /// # Scope
     ///
     /// All seven clients (`RustAnalyzerClient`, `PyrightClient`,
     /// `ClangdClient`, `GoplsClient`, `JdtlsClient`, `FortlsClient`,
     /// `TypeScriptLanguageClient`) override this default.
     ///
-    /// # Caching (R-lsp-004)
+    /// # Caching
     ///
     /// Implementations MUST consult their [`ReferencesCache`] before
     /// dispatching the LSP request, and store the result on miss. Cache

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Typed [`Phase`] implementations for the indexing pipeline (Task 2.5).
+//! Typed [`Phase`] implementations for the indexing pipeline.
 //!
 //! Refactors the 9-step sequence in [`super::pipeline`] into 6 typed phases
 //! executed by the [`DagPipeline`](super::pipeline_dag::Pipeline) runner:
@@ -10,7 +10,7 @@
 //! 2. [`ParsePhase`] — parallel-parse changed+added files.
 //! 3. [`ScopeResolutionPhase`] — build in-memory graph (nodes + per-file edges).
 //! 4. [`ResolvePhase`] — resolve calls/dataflow/FFI edges.
-//! 5. [`ConfidencePhase`] — pass-through (Task 2.8 adds real confidence scoring).
+//! 5. [`ConfidencePhase`] — pass-through (real confidence scoring not yet implemented).
 //! 6. [`LoadPhase`] — persist nodes/edges to the database, build [`IndexResult`].
 //!
 //! # Input wiring
@@ -111,7 +111,7 @@ pub struct ResolveOutput {
     pub files_parsed: usize,
     /// Number of files skipped (for IndexResult).
     pub files_skipped: usize,
-    /// C++ `#include` graph for scope-aware call resolution (BUG-C4 fix).
+    /// C++ `#include` graph for scope-aware call resolution.
     /// Populated by `build_includes_edges`; consumed by `CallResolver`.
     pub includes_graph: IncludesGraph,
 }
@@ -128,7 +128,7 @@ pub struct LoadOutput {
 
 /// Boxes an [`IndexError`] into a [`PhaseError::ExecutionFailed`] so the
 /// pipeline runner can carry it to the caller, which downcasts it back
-/// (preserving the exact variant and exit code, Rule 12).
+/// (preserving the exact variant and exit code).
 fn phase_err(phase: &'static str, e: IndexError) -> PhaseError {
     PhaseError::ExecutionFailed {
         phase,
@@ -450,13 +450,13 @@ impl Phase for ScopeResolutionPhase {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: build INCLUDES edges for C++ #include (scheme C, v0.3.0)
+// Helper: build INCLUDES edges for C++ #include
 // ---------------------------------------------------------------------------
 
 /// Builds `EdgeType::Includes` edges for C++ `#include` directives and
 /// populates an [`IncludesGraph`] for downstream scope-aware resolution.
 ///
-/// Scheme C (v0.3.0): C++ `#include` is handled separately from other
+/// C++ `#include` is handled separately from other
 /// languages' import statements. [`ImportResolver`] skips C++ results (no
 /// IMPORTS edges for C++); this function builds INCLUDES edges instead.
 /// Other languages (TS/Rust/Python/Go/Java) are unaffected — they continue
@@ -510,7 +510,7 @@ fn build_includes_edges(
         }
 
         for result in results {
-            // Only C++ #include produces INCLUDES edges (scheme C).
+            // Only C++ #include produces INCLUDES edges.
             // C and other languages are handled by ImportResolver as IMPORTS.
             if result.language != Language::Cpp {
                 continue;
@@ -631,7 +631,7 @@ impl Phase for ResolvePhase {
         // Safety of `remove`: if a future phase adds `scope` to its `deps()`,
         // `topo_sort` will still order it after `resolve`, but the
         // `ctx.get::<ScopeOutput>("scope")` call in that phase will return
-        // `None` → `MissingInput`. This is fail-loud (Rule 12) and will be
+        // `None` → `MissingInput`. This is fail-loud and will be
         // caught the first time the new phase is exercised.
         //
         // Order: `remove` first so the mutable borrow ends before the
@@ -672,11 +672,11 @@ impl Phase for ResolvePhase {
         // pipeline for large repos.
         let mut graph = scope.graph;
 
-        // Scheme C (v0.3.0): Build INCLUDES edges for C++ #include directives.
+        // Build INCLUDES edges for C++ #include directives.
         // C++ #include is handled separately from IMPORTS (which is for
         // TS/Rust/Python/Go/Java) because #include establishes a scope-visible
         // relationship that CallResolver uses for cross-file call resolution
-        // (BUG-C4 fix). ImportResolver skips C++ results, so no IMPORTS edges
+        // ImportResolver skips C++ results, so no IMPORTS edges
         // are created for C++ — only INCLUDES edges here.
         //
         // MUST run before resolve_all so the IncludesGraph is available to
@@ -696,8 +696,8 @@ impl Phase for ResolvePhase {
         // lookups succeed despite the path-format difference. See
         // TypeResolver::resolve_types for details.
         //
-        // v0.3.0: includes_graph is passed to CallResolver for scope-aware
-        // call resolution (BUG-C4 fix). Files with #include edges use
+        // includes_graph is passed to CallResolver for scope-aware
+        // call resolution Files with #include edges use
         // lookup_exported_in_scope; others use lookup_exported (backward compat).
         //
         // L3 fix: `resolve_all` adds resolved edges to `graph` directly and
@@ -740,12 +740,12 @@ impl Phase for ResolvePhase {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 5: ConfidencePhase (pass-through, Task 2.8 adds real impl)
+// Phase 5: ConfidencePhase (pass-through placeholder)
 // ---------------------------------------------------------------------------
 
 /// Phase 5: confidence scoring (pass-through placeholder).
 ///
-/// Task 2.8 will add real confidence tier assignment to edges. For now this
+/// Real confidence tier assignment is not yet implemented; for now this
 /// phase is a no-op that ensures LoadPhase runs after ResolvePhase.
 pub struct ConfidencePhase;
 
@@ -758,7 +758,7 @@ impl Phase for ConfidencePhase {
     }
 
     fn run(&self, _: Self::Input, _ctx: &mut PipelineCtx) -> Result<Self::Output, PhaseError> {
-        // Pass-through — real confidence scoring added in Task 2.8.
+        // Pass-through — real confidence scoring not yet implemented.
         Ok(())
     }
 }
@@ -934,7 +934,7 @@ fn lookup_or_create_project_id(
 /// the File nodes (and their hashes) from prior runs, which the incremental
 /// indexer depends on.
 ///
-/// T206: canonicalizes `root` to an absolute path before writing it into the
+/// Canonicalizes `root` to an absolute path before writing it into the
 /// Project node's `rootPath` property. This prevents downstream staleness
 /// checks (`status`/`dead_code`) from running `git rev-parse HEAD` against the
 /// process's CWD when the caller passed a relative path like `.`. Falls back
@@ -1118,7 +1118,7 @@ mod tests {
         }
     }
 
-    // --- build_includes_edges (scheme C: C++ #include → INCLUDES edges) ---
+    // --- build_includes_edges(C++ #include → INCLUDES edges) ---
 
     /// Creates a File node with id = file_path = name (mirrors imports.rs tests).
     fn make_file_node(path: &str, project: &str, lang: Language) -> Node {

@@ -355,7 +355,7 @@ mod daemon_hot_update {
         }
     }
 
-    // --- BR-DAEMON-003: hot update detects new code file ---
+    // --- hot update detects new code file ---
 
     #[test]
     fn daemon_hot_update_detects_new_file() {
@@ -415,7 +415,7 @@ mod daemon_hot_update {
         );
     }
 
-    // --- BR-DAEMON-003: hot update detects modified file (re-index) ---
+    // --- hot update detects modified file (re-index) ---
 
     #[test]
     fn daemon_hot_update_detects_modified_file() {

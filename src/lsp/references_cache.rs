@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! LSP `textDocument/references` result cache (C9, R-lsp-004).
+//! LSP `textDocument/references` result cache.
 //!
 //! Caches `Vec<lsp_types::Location>` results keyed by `(uri, line, column)`
 //! for up to `TTL` (default 5 minutes). Bounds memory with an LRU policy
@@ -30,17 +30,17 @@ use std::time::{Duration, Instant};
 
 use lsp_types::Location;
 
-/// Default cache TTL: 5 minutes (specmark `specs/lsp/spec.md` R-lsp-004).
+/// Default cache TTL: 5 minutes.
 pub const DEFAULT_TTL: Duration = Duration::from_secs(300);
 
-/// Default LRU capacity (specmark `specs/lsp/spec.md` R-lsp-004).
+/// Default LRU capacity.
 pub const DEFAULT_CAPACITY: usize = 1_000;
 
 /// Abstract time source so tests can fast-forward without sleeping.
 ///
 /// Production code uses [`SystemClock`]; tests inject [`MockClock`].
 ///
-/// # Implementor safety contract (T202 security-review LOW-4)
+/// # Implementor safety contract
 ///
 /// `now()` is invoked while [`ReferencesCache`] holds its internal `Mutex`
 /// guard. Implementations **must not** acquire any lock that could be held
@@ -111,7 +111,7 @@ impl Clock for MockClock {
     }
 }
 
-/// Cache key: `(uri, line, column)` — the triple specmark R-lsp-004 mandates.
+/// Cache key: `(uri, line, column)` — the mandated triple.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CacheKey {
     /// File URI (`file://...`) exactly as the LSP server sees it.
@@ -169,7 +169,7 @@ struct CacheInner {
     lru: VecDeque<CacheKey>,
     /// Reverse index: `uri → set of keys with that uri`.
     ///
-    /// T202 perf-review LOW-2: `invalidate_uri` was previously O(N) over all
+    /// `invalidate_uri` was previously O(N) over all
     /// entries (filter + clone each matching key). With this reverse index
     /// it is O(K) where K is the number of entries for that uri (typically
     /// 1-10 for a single file). Maintained in lock-step with `entries` and
@@ -178,10 +178,10 @@ struct CacheInner {
 }
 
 impl ReferencesCache {
-    /// Default LRU capacity (1000 entries, per spec R-lsp-004).
+    /// Default LRU capacity (1000 entries).
     pub const DEFAULT_CAPACITY: usize = DEFAULT_CAPACITY;
 
-    /// Default TTL (5 minutes, per spec R-lsp-004).
+    /// Default TTL (5 minutes).
     pub const DEFAULT_TTL: Duration = DEFAULT_TTL;
 
     /// Creates a cache with system clock, default TTL (5 min) and default
@@ -278,7 +278,7 @@ impl ReferencesCache {
     /// Invalidates all entries for `uri` (called when `textDocument/didChange`
     /// fires for that file). Returns the number of entries evicted.
     ///
-    /// T202 perf-review LOW-2: O(K) where K is the number of entries for
+    /// O(K) where K is the number of entries for
     /// `uri` (typically 1-10 for a single file), instead of O(N) over the
     /// entire cache. Backed by the `by_uri` reverse index.
     pub fn invalidate_uri(&self, uri: &str) -> usize {
@@ -476,7 +476,7 @@ mod tests {
 
     #[test]
     fn invalidate_uri_after_lru_evict_does_not_count_evicted_keys() {
-        // T202 perf-review LOW-2: when an entry is LRU-evicted, it must be
+        // When an entry is LRU-evicted, it must be
         // removed from the `by_uri` reverse index so that a later
         // `invalidate_uri` for that uri does not double-count it.
         let clock = Arc::new(MockClock::new());
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn invalidate_uri_after_lazy_expiration_does_not_count_expired_keys() {
-        // T202 perf-review LOW-2: when an entry is lazily expired on read,
+        // When an entry is lazily expired on read,
         // it must be removed from `by_uri` so that a later `invalidate_uri`
         // for that uri does not count the expired key.
         let clock = Arc::new(MockClock::new());

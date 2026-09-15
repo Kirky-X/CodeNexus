@@ -1,8 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! trait-kit module for the Daemon subsystem (T6/unified-architecture
-//! Phase 2, Task 2.11; v0.3.3 AsyncKit migration).
+//! trait-kit module for the Daemon subsystem.
 //!
 //! Implements [`ModuleMeta`] + [`AsyncAutoBuilder`] for [`DaemonModule`],
 //! wiring the existing [`Daemon`] + [`IndexObserver`] (Observer pattern)
@@ -32,11 +31,10 @@
 //! triggers incremental indexing via [`IndexFacade`]). The concrete
 //! [`DaemonCapability`] is self-contained, however: it constructs its own
 //! [`IndexFacade`] from the supplied `db_path`. Therefore
-//! `dependencies = &[]` at the type level; the bootstrap (Task 2.13)
+//! `dependencies = &[]` at the type level; the bootstrap
 //! enforces build ordering (Storage → ... → Indexer → Daemon). This mirrors
 //! the [`QueryModule`](crate::query::module::QueryModule) and
 //! [`TraceModule`](crate::trace::module::TraceModule) design — see
-//! `design.md` D1 for the rationale.
 //!
 //! [`QueryCapability`]: crate::query::module::QueryCapability
 //! [`TraceCapability`]: crate::trace::module::TraceCapability
@@ -61,17 +59,17 @@ use crate::index::IndexFacade;
 // Config
 // ---------------------------------------------------------------------------
 
-/// Configuration for [`DaemonModule`] (Task 2.11).
+/// Configuration for [`DaemonModule`].
 ///
 /// Stored in Kit via `AsyncKit::set_config` and read in
 /// [`AsyncAutoBuilder::build`]. The Daemon needs the database path (for
 /// [`IndexFacade`]) and the debounce window in milliseconds
-/// (BR-DAEMON-001/004).
+/// ().
 #[derive(Debug, Clone)]
 pub struct DaemonConfig {
     /// Filesystem path to the LadybugDB database directory.
     pub db_path: PathBuf,
-    /// Debounce window in milliseconds (BR-DAEMON-001/004). Defaults to
+    /// Debounce window in milliseconds. Defaults to
     /// [`DEFAULT_DEBOUNCE_MS`] (2000ms) when not specified.
     pub debounce_ms: u64,
 }
@@ -92,7 +90,7 @@ impl DaemonConfig {
 // Module (ModuleMeta + AsyncAutoBuilder)
 // ---------------------------------------------------------------------------
 
-/// trait-kit module tag for the Daemon subsystem (Task 2.11).
+/// trait-kit module tag for the Daemon subsystem.
 ///
 /// Zero-sized marker — construction logic lives in
 /// [`DaemonModule::build_cap`] (called from the [`AsyncAutoBuilder`] impl).
@@ -193,7 +191,7 @@ impl DaemonRunner for DaemonCapability {
         let mut daemon = Daemon::new(watch_path, project_name, debounce_ms, &self.db_path);
 
         // Register the IndexObserver (Observer pattern) — triggers
-        // incremental indexing on code-file changes (BR-DAEMON-003).
+        // incremental indexing on code-file changes.
         let observer =
             IndexObserver::new(facade, project_name.to_string(), watch_path.to_path_buf());
         daemon.add_observer(Box::new(observer));
@@ -235,7 +233,7 @@ mod tests {
     ///
     /// This is the only `start` code path that is safe to exercise in a unit
     /// test: all other paths enter the blocking event loop. End-to-end
-    /// coverage lives in the `kit_bootstrap` integration test (Task 1.7).
+    /// coverage lives in the `kit_bootstrap` integration test.
     #[test]
     fn capability_start_nonexistent_watch_path_returns_error() {
         let cap = DaemonModule::build_cap(&DaemonConfig::new(PathBuf::from(":memory:")))

@@ -114,7 +114,7 @@ mod tests {
     fn run_list_returns_empty_when_project_table_dropped() {
         // Simulates a corrupted/uninitialized DB where Project table is gone.
         // The service layer converts "table missing" errors into empty list
-        // (Rule 12: explicit empty > silent error) so CLI exits 0 with `[]`.
+        // (explicit empty > silent error) so CLI exits 0 with `[]`.
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");

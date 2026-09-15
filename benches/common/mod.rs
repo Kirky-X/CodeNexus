@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Shared benchmark fixtures (design.md Decision 6).
+//! Shared benchmark fixtures.
 //!
 //! Provides three helpers reused across `incremental_bench`, `memory_bench`,
 //! and `daemon_bench`:
@@ -12,7 +12,7 @@
 //! - [`open_test_db`] — opens a fresh LadybugDB database in a temp dir.
 //! - [`measure_peak_rss`] — samples the current process's resident set size
 //!   every 100 ms while `f` runs and returns the peak (bytes), using the
-//!   `sysinfo` crate for cross-platform RSS access (design.md Decision 2).
+//!   `sysinfo` crate for cross-platform RSS access.
 //!
 //! `open_test_db` is part of the shared fixture API required by the
 //! performance-benchmark-coverage-spec but is not directly consumed by the
@@ -41,7 +41,7 @@ use tempfile::TempDir;
 const LANGUAGES: &[&str] = &["rs", "c", "f90", "py", "ts"];
 
 /// Generates a temp repository containing `file_count` source files spread
-/// evenly across the 5 supported languages (design.md Decision 1 / spec
+/// evenly across the 5 supported languages(
 /// `generate_large_repo`).
 ///
 /// Each file carries a minimal parseable symbol definition (`fn`/`int`/
@@ -73,8 +73,7 @@ fn minimal_symbol(ext: &str, i: usize) -> String {
     }
 }
 
-/// Opens a fresh LadybugDB database inside a temp directory (design.md
-/// Decision 6 / spec `open_test_db`).
+/// Opens a fresh LadybugDB database inside a temp directory.
 ///
 /// Returns the [`TempDir`] (caller owns it so the database files survive for
 /// the benchmark's lifetime) and the open [`StorageConnection`]. Schema
@@ -91,7 +90,7 @@ pub fn open_test_db() -> (TempDir, StorageConnection) {
 }
 
 /// Measures the peak resident set size (RSS, in bytes) of the current process
-/// while `f` runs (design.md Decision 2 / spec `measure_peak_rss`).
+/// while `f` runs.
 ///
 /// Spawns a background thread that polls `sysinfo` every 100 ms for the
 /// current process's RSS and tracks the maximum observed value. After `f`
@@ -100,7 +99,7 @@ pub fn open_test_db() -> (TempDir, StorageConnection) {
 ///
 /// RSS is sampled at the process level, so it includes allocations made by
 /// LadybugDB's C FFI as well as Rust allocations (this is why `sysinfo` was
-/// chosen over a custom `GlobalAlloc` — see design.md Decision 2).
+/// chosen over a custom `GlobalAlloc`).
 pub fn measure_peak_rss<F: FnOnce()>(f: F) -> u64 {
     let peak: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
     let stop: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));

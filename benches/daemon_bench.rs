@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Daemon mode benchmarks (Task 5, design.md Decision 4).
+//! Daemon mode benchmarks.
 //!
 //! Feature-gated: the file is compiled only when the `daemon` feature is on
 //! (Cargo.toml `required-features = ["daemon"]`). The two scenarios exercise
@@ -51,7 +51,7 @@ const FILE_COUNT: usize = 1_000;
 /// `modify_file` targets the correct extension for each `file_{i}`.
 const LANGUAGES: &[&str] = &["rs", "c", "f90", "py", "ts"];
 
-/// Debounce window (ms) — matches BR-DAEMON-001 default. The latency scenario
+/// Debounce window (ms) — matches default. The latency scenario
 /// expects per-iteration wall time to be at least this long.
 const DEBOUNCE_MS: u64 = DEFAULT_DEBOUNCE_MS;
 
@@ -194,7 +194,7 @@ fn modify_file(dir: &Path, i: usize) {
 // ---------------------------------------------------------------------------
 
 /// Measures the wall-time latency from a single file modification to the
-/// observer's `on_events` callback firing (design.md Decision 4).
+/// observer's `on_events` callback firing.
 ///
 /// Each iteration mutates one file, waits for `index_count` to advance, then
 /// stops the daemon. criterion's per-iteration time therefore captures the
@@ -238,8 +238,7 @@ fn bench_debounce_response_latency(c: &mut Criterion) {
 // Scenario 2: indexing_event_queue_throughput
 // ---------------------------------------------------------------------------
 
-/// Measures event-queue throughput while the daemon is under load (design.md
-/// Decision 4 — "indexing期间不丢事件").
+/// Measures event-queue throughput while the daemon is under load
 ///
 /// Each iteration rapidly mutates `THROUGHPUT_EVENT_COUNT` files (all within
 /// one debounce window), waits for the observer to process them, then asserts
@@ -280,7 +279,7 @@ fn bench_indexing_event_queue_throughput(c: &mut Criterion) {
                 }
 
                 let processed_events = state.event_count.load(Ordering::SeqCst) - initial_events;
-                // design.md Decision 4: assert no events lost. notify may
+                // assert no events lost. notify may
                 // coalesce identical paths but should not drop distinct file
                 // modifications within a debounce window.
                 assert!(

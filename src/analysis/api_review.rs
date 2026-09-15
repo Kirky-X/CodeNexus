@@ -227,7 +227,7 @@ impl<'a> ApiReviewer<'a> {
         let endpoints = self.load_endpoints_with_schema(project)?;
 
         // (b) Load CALLS edges with their `reason` field in a single query
-        //     (perf-review H2: was N+1 — one Cypher query per endpoint ×
+        //     (was N+1 — one Cypher query per endpoint ×
         //     matching CALLS edge). Build a HashMap<target_id, Vec<reason>>
         //     so each endpoint lookup is O(1) instead of triggering another
         //     round-trip.
@@ -490,7 +490,7 @@ impl<'a> ApiReviewer<'a> {
     /// Finds the handler id for a specific endpoint/route via a targeted
     /// `WHERE e.target = ...` query over the edge types in
     /// [`HANDLER_LIKE_EDGE_TYPES`] (HANDLES + HANDLES_ROUTE). Hits the
-    /// `idx_rel_target` index added in v0.3.7 (perf-review C1).
+    /// `idx_rel_target` index.
     ///
     /// Returns the handler (source) id if a matching edge exists.
     fn find_handler_for_target(
@@ -613,7 +613,7 @@ impl<'a> ApiReviewer<'a> {
     /// Loads all `CALLS` edges for `project` together with their `reason`
     /// field (the actual schema). Used by [`shape_check`](Self::shape_check)
     /// to build a `HashMap<target_id, Vec<reason>>` in one round-trip instead
-    /// of one Cypher query per endpoint × matching edge (perf-review H2).
+    /// of one Cypher query per endpoint × matching edge.
     ///
     /// Returns a vector of `(target_id, reason)` tuples. Empty `reason`
     /// values are preserved here; the caller filters them as needed.
@@ -700,7 +700,7 @@ impl<'a> ApiReviewer<'a> {
     /// Searches the labels in [`CALLER_LIKE_LABELS`] (`Function`, `Method`,
     /// `Handler`). The `caller_ids` slice is materialised into a `HashSet`
     /// once so each per-row membership check is O(1) instead of the previous
-    /// `Vec::contains` O(N) scan (perf-review H1: bulwark-class graphs hit
+    /// `Vec::contains` O(N) scan (bulwark-class graphs hit
     /// this with 19k Function rows × 270 caller ids = 5M comparisons).
     fn load_caller_info(
         &self,

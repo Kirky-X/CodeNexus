@@ -9,7 +9,7 @@
 //! ([`super::pipeline_dag`]), computing BLAKE3 file hashes for incremental
 //! indexing (ADR-009) and applying the diff logic from [`super::incremental`].
 //!
-//! # Pipeline phases (Task 2.5, design.md D2)
+//! # Pipeline phases
 //!
 //! The 9-step sequence from ADD §4.1 is now split into 6 typed phases
 //! (defined in [`super::phases`]), executed by the [`DagPipeline`] runner in
@@ -19,7 +19,7 @@
 //! 2. [`ParsePhase`] — parallel-parse changed+added files.
 //! 3. [`ScopeResolutionPhase`] — build in-memory graph (nodes + per-file edges).
 //! 4. [`ResolvePhase`] — resolve calls/dataflow/FFI edges.
-//! 5. [`ConfidencePhase`] — pass-through (Task 2.8 adds real confidence).
+//! 5. [`ConfidencePhase`] — pass-through (real confidence scoring not yet implemented).
 //! 6. [`LoadPhase`] — persist nodes/edges to the database, build [`IndexResult`].
 
 use std::path::{Path, PathBuf};
@@ -46,7 +46,7 @@ use super::phases::{
 };
 use super::pipeline_dag::{Phase, Pipeline as DagPipeline, PipelineCtx};
 
-/// Maximum number of retry attempts for database-locked errors (Task 5).
+/// Maximum number of retry attempts for database-locked errors.
 ///
 /// A database operation that fails with a "locked" error is retried up to
 /// `DEFAULT_MAX_RETRIES` times with exponential backoff
@@ -94,7 +94,7 @@ fn is_lock_conflict(msg: &str) -> bool {
         || msg.contains("Only one write transaction at a time")
 }
 
-/// Executes a database operation with retry on lock (Task 5).
+/// Executes a database operation with retry on lock.
 ///
 /// Retries up to `max_retries` times with exponential backoff
 /// (100ms, 200ms, 400ms, ...). A failure classified by [`is_lock_conflict`]
@@ -243,7 +243,7 @@ impl IndexFacade {
     /// phase, but always (re)creates the project node.
     pub fn index(&self, path: &Path, project_name: &str, force: bool) -> Result<IndexResult> {
         // Repository::open runs init_schema internally; retry on transient
-        // database locks (Task 5).
+        // database locks.
         let repository = with_retry(DEFAULT_MAX_RETRIES, || {
             Repository::open(&self.db_path).map_err(IndexError::from)
         })?;
@@ -398,9 +398,9 @@ impl Pipeline {
     ///
     /// * `path` - The repository root to index.
     /// * `project_name` - The project display name (also used as the DB
-    ///   `project` column for multi-project isolation, BR-INDEX-004).
+    ///   `project` column for multi-project isolation).
     /// * `force` - When `true`, every disk file is re-parsed regardless of its
-    ///   hash (BR-INDEX-003, `--force`).
+    ///   hash (`--force`).
     ///
     /// # Errors
     ///
@@ -659,26 +659,26 @@ pub(crate) fn now_unix_seconds() -> i64 {
 }
 
 // ---------------------------------------------------------------------------
-// R-lsp-004: LSP semantic_type enhancement (mock-testable pure unit)
+// LSP semantic_type enhancement (mock-testable pure unit)
 // ---------------------------------------------------------------------------
 //
 // NOTE: The DB-backed wiring that actually runs `rust-analyzer` after an index
 // run lives in `src/service/index.rs::enhance_with_lsp`. This
 // pure function is the mock-injectable core: it takes a `&dyn LspProvider`
-// and a `&mut [Node]` slice so the graceful-degradation contract (R-lsp-004:
+// and a `&mut [Node]` slice so the graceful-degradation contract (
 // "LSP server 启动失败时，索引不中断" / "LSP 查询超时时，跳过该符号的语义
 // 增强，不中断索引") can be unit-tested without spawning a real rust-analyzer
 // subprocess. The CLI handler has its own DB-backed implementation; this pure
 // function exists solely for unit-testing the graceful-degradation contract
 // with a mock provider.
 
-/// LSP-driven `semantic_type` enhancement for in-memory nodes (R-lsp-004).
+/// LSP-driven `semantic_type` enhancement for in-memory nodes.
 ///
 /// For each `Function`/`Method` node whose `file_path` ends in `.rs`, queries
 /// the provider's `hover` and writes the first non-empty line of the response
 /// (truncated to 200 chars) into `node.properties["semantic_type"]`.
 ///
-/// # Failure semantics (Rule 12: failures must be explicit, never silent)
+/// # Failure semantics (failures must be explicit, never silent)
 ///
 /// - **`provider.start()` returns `LspError::ServerStart`** → logs a
 ///   `tracing::warn!` and returns `Ok(())` immediately (graceful degradation:
@@ -708,7 +708,7 @@ pub(crate) fn enhance_with_lsp(
 
     // 1. Start the LSP server. Any start failure is non-fatal — the index is
     //    already complete, so we log a warning and return Ok to signal
-    //    "enhancement skipped, index succeeded" (R-lsp-004 graceful
+    //    "enhancement skipped, index succeeded" (graceful
     //    degradation). shutdown() is NOT called: nothing was started.
     if let Err(err) = provider.start(workspace) {
         warn!(
@@ -720,7 +720,7 @@ pub(crate) fn enhance_with_lsp(
 
     // 2. Enhance each Rust Function/Method node with hover-derived
     //    semantic_type. Per-symbol failures (Timeout/Communication) skip the
-    //    symbol but never abort the run (R-lsp-004).
+    //    symbol but never abort the run.
     for node in nodes.iter_mut() {
         let is_target = matches!(node.label, NodeLabel::Function | NodeLabel::Method);
         let is_rust = node
@@ -746,7 +746,7 @@ pub(crate) fn enhance_with_lsp(
             }
             Ok(None) => {}
             Err(LspError::Timeout(_)) | Err(LspError::Communication(_)) => {
-                // Per-symbol failure — skip and continue (Rule 12: explicit
+                // Per-symbol failure — skip and continue (explicit
                 // skip, not silent success).
             }
             Err(LspError::ServerStart(_)) => {
@@ -754,7 +754,7 @@ pub(crate) fn enhance_with_lsp(
             }
             Err(LspError::NotImplemented(_)) => {
                 // `hover` is implemented on all clients; treat as skip if a
-                // future client opts out (defensive — see C9 R-lsp-002).
+                // future client opts out (defensive).
             }
         }
     }
@@ -852,12 +852,12 @@ mod tests {
         assert!(s.contains("IndexResult"));
     }
 
-    // --- IndexFacade / Pipeline: AC-INDEX-001 ---
+    // --- IndexFacade / Pipeline ---
 
     #[cfg(all(feature = "lang-c", feature = "lang-fortran"))]
     #[test]
     fn ac_index_001_indexes_c_rust_fortran_files() {
-        // AC-INDEX-001: Index a codebase with C/Rust/Fortran files → all
+        // Index a codebase with C/Rust/Fortran files → all
         // indexed, graph created.
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
@@ -881,7 +881,7 @@ mod tests {
         assert!(!result.project_id.is_empty(), "project_id should be set");
     }
 
-    // --- AC-INDEX-002: incremental re-index only parses changed file ---
+    // --- incremental re-index only parses changed file ---
 
     #[test]
     fn ac_index_002_incremental_only_parses_changed_file() {
@@ -917,7 +917,7 @@ mod tests {
         assert_eq!(third.files_skipped, 1, "the other file is skipped");
     }
 
-    // --- AC-INDEX-003: multiple projects coexist in the same DB ---
+    // --- multiple projects coexist in the same DB ---
 
     #[test]
     fn ac_index_003_multiple_projects_coexist() {
@@ -948,7 +948,7 @@ mod tests {
         assert!(names.contains(&"project_b".to_string()));
     }
 
-    // --- AC-INDEX-005: --force re-parses all files ---
+    // --- --force re-parses all files ---
 
     #[test]
     fn ac_index_005_force_re_parses_all_files() {
@@ -1231,7 +1231,7 @@ mod tests {
         assert!(facade.is_ok(), "facade creation should succeed");
     }
 
-    // --- Multi-file re-index with deletion (BR-INDEX-002) ---
+    // --- Multi-file re-index with deletion ---
 
     #[test]
     fn re_index_detects_deleted_files() {
@@ -1366,7 +1366,7 @@ mod tests {
         assert_eq!(second.files_indexed + second.files_skipped, 2);
     }
 
-    // --- LOG-001 / LOG-006: tracing event emission ---
+    // --- tracing event emission ---
 
     #[test]
     fn log_001_index_started_event_emitted() {
@@ -1441,7 +1441,7 @@ mod tests {
         );
     }
 
-    // --- SubTask 17.4: with_retry database-lock retry behavior (Task 5) ---
+    // --- with_retry database-lock retry behavior ---
 
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -1523,7 +1523,7 @@ mod tests {
         );
     }
 
-    // --- R-lsp-004: enhance_with_lsp graceful degradation + writes ---
+    // --- enhance_with_lsp graceful degradation + writes ---
 
     /// What `MockLspProvider::hover` returns on each call.
     #[cfg(feature = "lsp")]
@@ -1634,7 +1634,7 @@ mod tests {
             .build()
     }
 
-    /// R-lsp-004: "LSP server 启动失败时，索引不中断".
+    /// "LSP server 启动失败时，索引不中断".
     ///
     /// A mock whose `start()` returns `Err(LspError::ServerStart(_))` must
     /// cause `enhance_with_lsp` to return `Ok(())` (graceful degradation),
@@ -1679,7 +1679,7 @@ mod tests {
         );
     }
 
-    /// R-lsp-004: "LSP 查询超时时，跳过该符号的语义增强，不中断索引".
+    /// "LSP 查询超时时，跳过该符号的语义增强，不中断索引".
     ///
     /// A mock whose `hover()` returns `Err(LspError::Timeout)` must cause the
     /// symbol to be skipped (no `semantic_type` written) but enhancement must
@@ -1719,7 +1719,7 @@ mod tests {
         );
     }
 
-    /// R-lsp-004: successful hover response must be written to the node's
+    /// Successful hover response must be written to the node's
     /// `semantic_type` property.
     ///
     /// The mock returns a hover carrying `"fn add(a: i32, b: i32) -> i32"`;
@@ -1766,7 +1766,7 @@ mod tests {
         );
     }
 
-    /// R-lsp-004: an empty node list (or a list with no Rust Function/Method
+    /// An empty node list (or a list with no Rust Function/Method
     /// nodes) must return `Ok(())` without calling `hover()`. `shutdown()`
     /// must still be called so the LSP server is reaped.
     #[test]
@@ -1800,7 +1800,7 @@ mod tests {
         );
     }
 
-    /// Real rust-analyzer integration test (R-lsp-004 happy path).
+    /// Real rust-analyzer integration test (happy path).
     ///
     /// Spawns a real `rust-analyzer` against a temp workspace containing one
     /// `fn add(a: i32, b: i32) -> i32`, calls `enhance_with_lsp`, and asserts

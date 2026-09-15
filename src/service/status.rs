@@ -86,7 +86,7 @@ pub(crate) fn is_stale(last_commit: &str, current_head: &str) -> bool {
 /// Resolves a project's root directory with fallback for legacy relative
 /// `rootPath` values.
 ///
-/// T206: older indexes stored `rootPath = "."` because the indexer didn't
+/// Older indexes stored `rootPath = "."` because the indexer didn't
 /// canonicalize the path. When such an index is queried from a different
 /// CWD, `git rev-parse HEAD` would run against the wrong directory and
 /// produce false `is_stale=true` results. This function detects that case
@@ -339,7 +339,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    /// T206: legacy indexes stored `rootPath = "."`. Without
+    /// Legacy indexes stored `rootPath = "."`. Without
     /// [`resolve_project_root`], `git rev-parse HEAD` would run in the
     /// process CWD (which might be a different git repo) and return the
     /// wrong commit, causing false `stale=true`. This test verifies the

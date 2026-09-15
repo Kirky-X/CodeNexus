@@ -1,13 +1,13 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Embedding service client (SubTask 16.1, H10/D7).
+//! Embedding service client.
 //!
 //! Defines the [`EmbedClient`] trait and three implementations:
 //! - [`OpenAIEmbedClient`]: calls an OpenAI-compatible HTTP embedding API via
 //!   [`reqwest::blocking`]. The API key is read from the environment and never
 //!   persisted (TRD §6.1). Used when [`EmbeddingConfig::endpoint`] is `Some`.
-//! - [`LocalEmbedClient`] (H10/D7): runs `arctic-embed-xs` inference locally
+//! - [`LocalEmbedClient`]: runs `arctic-embed-xs` inference locally
 //!   via `ort` (ONNX Runtime). Works fully offline. Used when
 //!   [`EmbeddingConfig::endpoint`] is `None`.
 //! - [`MockEmbedClient`]: returns deterministic vectors for testing without
@@ -85,7 +85,7 @@ struct EmbeddingData {
 /// API key is held in memory only and never written to disk (TRD §6.1).
 ///
 /// Only used when [`EmbeddingConfig::endpoint`] is `Some` (remote HTTP mode).
-/// For local offline inference, see [`LocalEmbedClient`] (H10/D7).
+/// For local offline inference, see [`LocalEmbedClient`].
 pub struct OpenAIEmbedClient {
     config: EmbeddingConfig,
     http: reqwest::blocking::Client,
@@ -217,10 +217,10 @@ impl std::fmt::Debug for OpenAIEmbedClient {
 }
 
 // ---------------------------------------------------------------------------
-// LocalEmbedClient (H10/D7)
+// LocalEmbedClient
 // ---------------------------------------------------------------------------
 
-/// Local ONNX-based embedding client (H10/D7).
+/// Local ONNX-based embedding client.
 ///
 /// Runs `arctic-embed-xs` inference locally using [`ort`] (ONNX Runtime) and
 /// HuggingFace [`tokenizers`]. Requires no network access — the model and
@@ -539,7 +539,7 @@ impl std::fmt::Debug for MockEmbedClient {
 }
 
 // ---------------------------------------------------------------------------
-// CachedEmbedClient (T021)
+// CachedEmbedClient
 // ---------------------------------------------------------------------------
 
 /// Serializes a `Vec<f32>` to little-endian bytes for cache storage.
@@ -576,7 +576,7 @@ fn deserialize_vec(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-/// Embedding client wrapper that caches vectors by text content hash (T021).
+/// Embedding client wrapper that caches vectors by text content hash.
 ///
 /// Wraps an inner [`EmbedClient`] and a [`CacheStore`](crate::cache::CacheStore).
 /// On `embed`, each input text is looked up in the cache by
@@ -727,7 +727,7 @@ mod tests {
 
     #[test]
     fn openai_client_new_without_endpoint_returns_error() {
-        // H10/D7: default config is local mode (endpoint=None).
+        // Default config is local mode (endpoint=None).
         // OpenAIEmbedClient should reject local-mode configs.
         let cfg = EmbeddingConfig::default();
         let result = OpenAIEmbedClient::new(cfg);
@@ -768,7 +768,7 @@ mod tests {
     #[test]
     fn openai_client_from_env_without_endpoint_errors() {
         let _lock = crate::embed::ENV_TEST_LOCK.lock().unwrap();
-        // H10/D7: without CODENEXUS_EMBED_ENDPOINT, from_env returns local-mode
+        // Without CODENEXUS_EMBED_ENDPOINT, from_env returns local-mode
         // config, which OpenAIEmbedClient rejects.
         std::env::remove_var("CODENEXUS_EMBED_ENDPOINT");
         std::env::remove_var("CODENEXUS_EMBED_API_KEY");
@@ -829,7 +829,7 @@ mod tests {
         );
     }
 
-    // --- LocalEmbedClient (H10/D7) ---
+    // --- LocalEmbedClient ---
 
     #[test]
     fn local_client_new_without_model_returns_unavailable() {
@@ -930,7 +930,7 @@ mod tests {
         assert_send_sync::<Box<dyn EmbedClient>>();
     }
 
-    // --- CachedEmbedClient (T021) ---
+    // --- CachedEmbedClient ---
 
     #[cfg(feature = "cache")]
     mod cached_tests {

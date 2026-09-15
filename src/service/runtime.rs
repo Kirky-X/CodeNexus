@@ -13,7 +13,6 @@
 //! therefore `!Send + !Sync`. A `static Mutex<Option<Arc<Kit>>>` requires
 //! `Send + Sync`, so we store `AsyncKit<AsyncReady>` instead — it is backed
 //! by `Arc<RwLock<...>>` and implements `Send + Sync`. See `kit/mod.rs` and
-//! `design.md` D5 for the rationale.
 
 use std::sync::{Arc, Mutex};
 

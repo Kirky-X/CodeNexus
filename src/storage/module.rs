@@ -1,8 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! trait-kit module for the Storage subsystem (T6/unified-architecture
-//! Phase 2, Task 2.4; v0.3.3 AsyncKit migration).
+//! trait-kit module for the Storage subsystem.
 //!
 //! Implements [`ModuleMeta`] + [`AsyncAutoBuilder`] for [`StorageModule`],
 //! wiring the existing [`Repository`] (which owns a [`StorageConnection`])
@@ -37,7 +36,7 @@ use super::repository::{FunctionRecord, ProjectRecord, Repository};
 // Config
 // ---------------------------------------------------------------------------
 
-/// Configuration for [`StorageModule`] (Task 2.4).
+/// Configuration for [`StorageModule`].
 ///
 /// Stored in Kit via `AsyncKit::set_config` and read in
 /// [`AsyncAutoBuilder::build`].
@@ -73,7 +72,7 @@ impl StorageConfig {
 // Module (ModuleMeta + AsyncAutoBuilder)
 // ---------------------------------------------------------------------------
 
-/// trait-kit module tag for the Storage subsystem (Task 2.4).
+/// trait-kit module tag for the Storage subsystem.
 ///
 /// Zero-sized marker — construction logic lives in
 /// [`StorageModule::build_cap`] (called from the [`AsyncAutoBuilder`]

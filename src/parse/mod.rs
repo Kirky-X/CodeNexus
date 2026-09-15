@@ -22,7 +22,7 @@
 //!   [`AssignInfo`], [`ExternInfo`], [`ReadInfo`], [`WriteInfo`]).
 //! - [`c`], [`rust_extractor`], [`fortran`], [`python`], [`typescript`]:
 //!   language-specific [`Extractor`] implementations. Each is gated by its
-//!   `lang-*` Cargo feature (unified-architecture Phase 1); only the
+//!   `lang-*` Cargo feature; only the
 //!   languages compiled into the current build are available.
 //! - [`dispatcher`]: [`get_extractor`] dispatches by [`Language`].
 //! - [`parallel`]: [`parallel_parse`] parses batches of files in parallel with

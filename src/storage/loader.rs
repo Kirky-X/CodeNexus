@@ -86,7 +86,7 @@ impl CsvLoader {
     }
 }
 
-/// Sanitizes a string field for LadybugDB COPY compatibility (B6 workaround).
+/// Sanitizes a string field for LadybugDB COPY compatibility.
 ///
 /// LadybugDB's COPY parser does not correctly handle RFC 4180 quoted fields:
 /// - Backslashes are treated as C-style escape chars (breaks C macro line
@@ -115,7 +115,7 @@ impl CsvLoader {
 /// semantically significant, and newlines/tabs in indexed metadata fields
 /// (signatures, docstrings, content snapshots) are not semantically loaded —
 /// the structural line range is preserved in the dedicated `startLine` and
-/// `endLine` columns. See `tools/verification/results/triage.md` §B6.
+/// `endLine` columns.
 fn sanitize_for_ladybugdb(s: String) -> String {
     if !s.contains('\\')
         && !s.contains('"')
@@ -137,7 +137,7 @@ fn sanitize_for_ladybugdb(s: String) -> String {
 /// The header row contains the column names from [`node_table_columns`] for the
 /// given `label`. Each subsequent row contains the field values extracted by
 /// [`node_to_row`], sanitized via [`sanitize_for_ladybugdb`] to avoid the
-/// LadybugDB COPY parser bug (B6). Uses tab-delimited format (see
+/// LadybugDB COPY parser bug. Uses tab-delimited format (see
 /// [`CSV_DELIMITER`] for rationale).
 ///
 /// The caller owns `writer`; this function flushes the `csv::Writer` buffer
@@ -233,7 +233,7 @@ pub struct NodeCsvStats {
 /// Statistics from streaming an edges CSV (L4 of the memory-overflow fix).
 ///
 /// Returned by [`write_edges_csv_stream`] so callers can log dedup metrics
-/// (BR-INDEX-005, fail-loud principle) without inspecting the CSV content.
+/// (fail-loud principle) without inspecting the CSV content.
 ///
 /// # L6-3 architecture fix
 ///
@@ -857,7 +857,7 @@ mod tests {
 
     #[test]
     fn write_nodes_csv_sanitizes_tabs_in_fields() {
-        // B6 workaround: tabs are replaced with spaces by sanitize_for_ladybugdb
+        // Tabs are replaced with spaces by sanitize_for_ladybugdb
         // to prevent delimiter collision and forced quoting (LadybugDB COPY
         // cannot parse multi-line quoted fields that result from tab-quoted fields).
         let node = Node::builder(NodeLabel::Function, "foo\tbar", "qn")
@@ -878,7 +878,7 @@ mod tests {
 
     #[test]
     fn write_nodes_csv_sanitizes_quotes_in_fields() {
-        // B6 workaround: double-quotes are replaced with single-quotes before
+        // Double-quotes are replaced with single-quotes before
         // CSV writing to avoid LadybugDB COPY parser corruption on Python
         // method signatures (subno.ts sample).
         let node = Node::builder(NodeLabel::Function, "foo\"bar", "qn")
@@ -897,7 +897,7 @@ mod tests {
 
     #[test]
     fn write_nodes_csv_sanitizes_backslashes_for_ladybugdb() {
-        // B6 workaround: backslashes are replaced with forward slashes before
+        // Backslashes are replaced with forward slashes before
         // CSV writing to avoid LadybugDB COPY parser treating them as C-style
         // escape chars (breaks C macro line continuations in redis sample).
         let node = Node::builder(NodeLabel::Macro, "MY_MACRO", "proj.MY_MACRO")
@@ -918,7 +918,7 @@ mod tests {
 
     #[test]
     fn write_nodes_csv_sanitizes_newlines_in_fields() {
-        // B6 workaround: newlines are replaced with spaces by sanitize_for_ladybugdb
+        // Newlines are replaced with spaces by sanitize_for_ladybugdb
         // to prevent multi-line quoted fields (which LadybugDB COPY cannot parse).
         let node = Node::builder(NodeLabel::Function, "foo", "qn")
             .id("id1")
@@ -1015,7 +1015,7 @@ mod tests {
 
     #[test]
     fn write_edges_csv_sanitizes_special_chars_in_reason() {
-        // B6 workaround: newlines in edge reason fields are replaced with spaces
+        // Newlines in edge reason fields are replaced with spaces
         // to prevent multi-line quoted fields (LadybugDB COPY cannot parse them).
         let edge = Edge::builder("s", "t", EdgeType::Calls, "p")
             .reason("arg, index=0\nnext line")
@@ -2123,7 +2123,7 @@ mod tests {
     /// `write_edges_csv_stream` (HashSet key = `(&source, &target, EdgeType,
     /// start_line)`). If the production dedup key changes, update this
     /// reference too — otherwise the byte-identical regression tests would
-    /// pass even when production diverges. (arch-review LOW-6.)
+    /// pass even when production diverges.
     fn write_edges_csv_stream_via_vec_reference<'a, W: Write, I>(
         edges: I,
         writer: W,
@@ -2176,7 +2176,7 @@ mod tests {
     /// `write_nodes_csv_stream` (HashSet key = `node.id.as_str()`). If the
     /// production dedup key changes, update this reference too — otherwise
     /// the byte-identical regression tests would pass even when production
-    /// diverges. (arch-review LOW-6.)
+    /// diverges.
     fn write_nodes_csv_stream_via_vec_reference<'a, W: Write, I>(
         nodes: I,
         label: NodeLabel,

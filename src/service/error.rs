@@ -6,7 +6,7 @@
 //! [`CodeNexusError`] wraps all subsystem errors and surfaces a uniform
 //! [`exit_code`](CodeNexusError::exit_code) for `main.rs`.
 //!
-//! # Exit codes (v0.3.2 unified CLI)
+//! # Exit codes
 //!
 //! | Code | Meaning                | Variants                              |
 //! |------|------------------------|---------------------------------------|
@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn exit_code_kit_build_failed_with_storage_locked_is_2() {
-        // Rule 12: a DB lock conflict surfaced via Kit must exit 2 (not the
+        // A DB lock conflict surfaced via Kit must exit 2 (not the
         // generic Kit exit 1), so CI/users can tell lock from internal error.
         let kit_err = KitError::BuildFailed {
             context: "storage".to_string(),

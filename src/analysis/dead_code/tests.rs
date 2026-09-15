@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Tests for `dead_code` (extracted from `mod.rs` in T202 arch-review
-//! MEDIUM-2). The parent `mod.rs` declares `#[cfg(test)] mod tests;`, so
+//! Tests for `dead_code` (extracted from `mod.rs`).
+//! The parent `mod.rs` declares `#[cfg(test)] mod tests;`, so
 //! this file's contents are `dead_code::tests::*`. `use super::*` pulls in
 //! every item defined in `mod.rs`.
 
@@ -252,7 +252,7 @@ fn detect_finds_dead_function() {
     );
 }
 
-// T182-B: Function nodes whose signature carries an entry-point
+// Function nodes whose signature carries an entry-point
 // attribute (`#[tool(...)]` / `#[forge(...)]` / `#[tokio::main]` /
 // `#[rocket::main]` / `#[actix::main]` / `#[axum::main]` etc.) must
 // NOT be reported dead. These attributes register the function as an
@@ -261,7 +261,7 @@ fn detect_finds_dead_function() {
 // a synchronous `main` that calls the async fn). tree-sitter does not
 // expand macros, so the synthesised CALLS edge is invisible to the
 // graph — dead_code must treat the attribute itself as the entry-point
-// signal (B4.5 deferred task, T045/T046 spec).
+// signal.
 #[test]
 fn b_tool_attribute_marked_functions_treated_as_live() {
     let db = fresh_db_path();
@@ -328,7 +328,7 @@ fn b_tool_attribute_marked_functions_treated_as_live() {
     );
 }
 
-// T182-B: Verifies that the common async-runtime / web-framework entry
+// Verifies that the common async-runtime / web-framework entry
 // attributes (`#[tokio::main]`, `#[rocket::main]`, `#[actix::main]`,
 // `#[axum::main]`) are also recognised as entry-point seeds. These
 // macros synthesise a synchronous `main` that calls the decorated async
@@ -395,7 +395,7 @@ fn b_async_runtime_entry_attributes_treated_as_live() {
     }
 }
 
-// T182-B: Verifies the attribute seed check is a substring match (not
+// Verifies the attribute seed check is a substring match (not
 // exact match), so both `#[tool]` (bare) and `#[tool(...)]` (with
 // arguments) are recognised. Also verifies that `#[cfg(...)]` /
 // `#[derive(...)]` (non-entry-point attributes) do NOT falsely mark a
@@ -446,7 +446,7 @@ fn b_attribute_seed_uses_substring_match_and_ignores_non_entry_attributes() {
     );
 }
 
-// B7: a Function with no incoming CALLS edges but targeted by a
+// A Function with no incoming CALLS edges but targeted by a
 // REEXPORTS edge (File→Function, created by `resolve/imports.rs`
 // for `pub use` / `export ... from`) must NOT be reported dead —
 // the symbol is reachable from outside the current crate/module.
@@ -478,7 +478,7 @@ fn detect_excludes_reexport_targets() {
     );
 }
 
-// B7: BatchPrefetch correctly loads REEXPORTS edge targets into
+// BatchPrefetch correctly loads REEXPORTS edge targets into
 // `reexport_target_ids` and `is_reexport_target` returns true for them.
 #[test]
 fn batch_prefetch_loads_reexport_targets() {
@@ -678,7 +678,7 @@ fn detect_filters_by_project() {
     assert!(!names.contains(&"b"), "b is in other project");
 }
 
-// --- T002: DeadCodeConfig / Confidence tests ---
+// --- DeadCodeConfig / Confidence tests ---
 
 #[test]
 fn dead_code_config_default_values() {
@@ -708,7 +708,7 @@ fn dead_code_config_default_values() {
     // Exported / FFI checks are on by default.
     assert!(cfg.check_exported, "check_exported should default to true");
     assert!(cfg.check_ffi, "check_ffi should default to true");
-    // B3.5: Dynamic-dispatch (trait impl recognition) is ON by default,
+    // Dynamic-dispatch (trait impl recognition) is ON by default,
     // aligning with rustc's dead_code lint which treats trait impls as
     // reachable via vtable.
     assert!(
@@ -716,8 +716,7 @@ fn dead_code_config_default_values() {
         "check_dynamic_dispatch should default to true (B3.5)"
     );
     assert!(!cfg.check_reflection);
-    // Edge types must include all variants used for "used" detection
-    // per R-dead_code-001.
+    // Edge types must include all variants used for "used" detection.
     assert!(cfg.edge_types.contains(&EdgeType::Calls));
     assert!(cfg.edge_types.contains(&EdgeType::FfiCalls));
     assert!(cfg.edge_types.contains(&EdgeType::Implements));
@@ -757,7 +756,7 @@ fn confidence_rejects_invalid_variant() {
 
 #[test]
 fn detect_sets_confidence_high_for_zero_incoming() {
-    // Until T007 refines scoring, zero-incoming entries are High.
+    // Zero-incoming entries are High.
     let db = fresh_db_path();
     let kit = build_kit_for_db(&db);
     create_function(&kit, "f_foo", "demo", "foo", "demo.foo", "/src/lib.rs", 1);
@@ -794,11 +793,11 @@ fn with_config_accepts_custom_config() {
     assert_eq!(result.len(), 1, "a should be dead with empty patterns");
 }
 
-// --- T003: multi-edge-type reference detection tests ---
+// --- multi-edge-type reference detection tests ---
 
 #[test]
 fn detect_usage_edge_prevents_dead_code() {
-    // B5: a USAGE edge propagates reachability from a seed source to its
+    // A USAGE edge propagates reachability from a seed source to its
     // target. `bar` is configured as an entry-pattern seed; `foo` is
     // reachable from `bar` via USAGE, so neither is dead.
     let db = fresh_db_path();
@@ -821,7 +820,7 @@ fn detect_usage_edge_prevents_dead_code() {
 
 #[test]
 fn detect_handles_route_edge_prevents_dead_code() {
-    // B5: a HANDLES_ROUTE edge propagates reachability from a seed source
+    // A HANDLES_ROUTE edge propagates reachability from a seed source
     // to its target. `reg` is configured as an entry-pattern seed;
     // `handler` is reachable from `reg` via HANDLES_ROUTE.
     let db = fresh_db_path();
@@ -852,7 +851,7 @@ fn detect_handles_route_edge_prevents_dead_code() {
 
 #[test]
 fn detect_tests_edge_prevents_dead_code() {
-    // B5: a TESTS edge propagates reachability from a seed source to its
+    // A TESTS edge propagates reachability from a seed source to its
     // target. `ttest` is configured as an entry-pattern seed; `target` is
     // reachable from `ttest` via TESTS.
     let db = fresh_db_path();
@@ -891,7 +890,7 @@ fn detect_tests_edge_prevents_dead_code() {
 
 #[test]
 fn detect_all_edge_types_exhaustive_no_incoming_is_dead() {
-    // R-dead_code-001: a function with no incoming edges of ANY type is dead.
+    // A function with no incoming edges of ANY type is dead.
     let db = fresh_db_path();
     let kit = build_kit_for_db(&db);
     create_function(
@@ -1061,11 +1060,11 @@ fn load_referenced_ids_collects_targets_across_multiple_edge_types() {
     );
 }
 
-// --- T004: exported function detection tests ---
+// --- exported function detection tests ---
 
 #[test]
 fn detect_excludes_exported_functions() {
-    // R-dead_code-002: isExported=true with no incoming edges → NOT dead.
+    // isExported=true with no incoming edges → NOT dead.
     let db = fresh_db_path();
     let kit = build_kit_for_db(&db);
     create_function_with_flags(
@@ -1171,11 +1170,11 @@ fn batch_prefetch_exported_ids_distinguishes_pub_from_priv() {
     );
 }
 
-// --- T005: FFI entry point detection tests ---
+// --- FFI entry point detection tests ---
 
 #[test]
 fn detect_excludes_ffi_entry_extern_c() {
-    // R-dead_code-003: signature with `extern "C"` → NOT dead.
+    // Signature with `extern "C"` → NOT dead.
     let db = fresh_db_path();
     let kit = build_kit_for_db(&db);
     create_function_with_flags(
@@ -1212,7 +1211,7 @@ fn detect_excludes_ffi_entry_extern_c() {
 
 #[test]
 fn detect_excludes_ffi_entry_no_mangle() {
-    // R-dead_code-003: signature with `#[no_mangle]` → NOT dead.
+    // Signature with `#[no_mangle]` → NOT dead.
     let db = fresh_db_path();
     let kit = build_kit_for_db(&db);
     create_function_with_flags(
@@ -1386,11 +1385,11 @@ fn batch_prefetch_distinguishes_ffi_from_plain() {
     );
 }
 
-// --- T006: expanded entry point pattern tests ---
+// --- expanded entry point pattern tests ---
 
 #[test]
 fn detect_excludes_all_default_entry_patterns() {
-    // R-dead_code-004: all 6 default entry patterns must be excluded.
+    // All 6 default entry patterns must be excluded.
     for entry_name in ["main", "Main", "__main__", "wmain", "WinMain", "DLLMain"] {
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
@@ -1429,7 +1428,7 @@ fn detect_excludes_all_default_entry_patterns() {
 
 #[test]
 fn detect_excludes_custom_entry_patterns_parameter() {
-    // R-dead_code-004: custom entry_patterns parameter still works.
+    // Custom entry_patterns parameter still works.
     let db = fresh_db_path();
     let kit = build_kit_for_db(&db);
     create_function(
@@ -1500,11 +1499,11 @@ fn detect_merges_parameter_and_config_entry_patterns() {
     assert!(names.contains(&"dead_fn"), "dead_fn is dead");
 }
 
-// --- T007: confidence scoring tests ---
+// --- confidence scoring tests ---
 
 #[test]
 fn detect_confidence_high_for_zero_incoming_edges() {
-    // R-dead_code-005: no incoming edges of ANY type → High.
+    // No incoming edges of ANY type → High.
     let db = fresh_db_path();
     let kit = build_kit_for_db(&db);
     create_function(&kit, "f_foo", "demo", "foo", "demo.foo", "/src/lib.rs", 1);
@@ -1525,7 +1524,7 @@ fn detect_confidence_high_for_zero_incoming_edges() {
 
 #[test]
 fn detect_confidence_medium_for_non_calls_edge_only() {
-    // R-dead_code-005: has USAGE but no CALLS → Medium.
+    // Has USAGE but no CALLS → Medium.
     // Config with edge_types=[Calls] only: USAGE doesn't count as "used".
     let db = fresh_db_path();
     let kit = build_kit_for_db(&db);
@@ -1555,7 +1554,7 @@ fn detect_confidence_medium_for_non_calls_edge_only() {
 
 #[test]
 fn detect_confidence_low_for_calls_edge_with_empty_config() {
-    // R-dead_code-005: has CALLS but config doesn't check CALLS → Low.
+    // Has CALLS but config doesn't check CALLS → Low.
     let db = fresh_db_path();
     let kit = build_kit_for_db(&db);
     create_function(&kit, "f_foo", "demo", "foo", "demo.foo", "/src/lib.rs", 1);
@@ -1886,11 +1885,11 @@ fn detect_excludes_ffi_method_nodes() {
     );
 }
 
-// --- B0: #tests disambiguator recognition (CalNexus 66% false positives) ---
+// --- #tests disambiguator recognition (CalNexus 66% false positives) ---
 
 #[test]
 fn detect_excludes_functions_inside_mod_tests_block() {
-    // B0 fix: In Rust, `mod tests { fn foo() {} }` produces a QN with
+    // In Rust, `mod tests { fn foo() {} }` produces a QN with
     // `#tests` disambiguator (e.g. `demo.src.lib.rs.foo#tests`). These are
     // test-module-scoped functions and should NOT be flagged as dead.
     // This was the largest false-positive source on CalNexus (239/360 = 66%).
@@ -1940,11 +1939,11 @@ fn detect_excludes_functions_inside_mod_tests_block() {
     assert!(names.contains(&"plain"), "plain (no disambiguator) is dead");
 }
 
-// --- B2: expanded test patterns (it_*/sec_*/snap_*/perf_*/bench_*) ---
+// --- expanded test patterns (it_*/sec_*/snap_*/perf_*/bench_*) ---
 
 #[test]
 fn detect_excludes_expanded_test_prefix_patterns() {
-    // B2 fix: CalNexus uses it_*/sec_*/snap_*/perf_*/bench_* prefixes
+    // CalNexus uses it_*/sec_*/snap_*/perf_*/bench_* prefixes
     // for integration/security/snapshot/performance/benchmark tests.
     // DEFAULT_TEST_PATTERNS must cover these.
     let db = fresh_db_path();
@@ -2029,11 +2028,11 @@ fn detect_excludes_expanded_test_prefix_patterns() {
     assert!(names.contains(&"plain"), "plain (no test prefix) is dead");
 }
 
-// --- B3: trait impl method recognition ---
+// --- trait impl method recognition ---
 
 #[test]
 fn detect_excludes_trait_impl_methods_when_dynamic_dispatch_enabled() {
-    // B3 fix: Trait impl methods (e.g. `impl Display for X { fn fmt() {} }`)
+    // Trait impl methods (e.g. `impl Display for X { fn fmt() {} }`)
     // produce Method nodes with disambiguator `#Display`, `#ReplHelper`, etc.
     // These are called via dynamic dispatch and should NOT be flagged as dead
     // when check_dynamic_dispatch=true.
@@ -2092,8 +2091,8 @@ fn detect_excludes_trait_impl_methods_when_dynamic_dispatch_enabled() {
 
 #[test]
 fn detect_flags_trait_impl_methods_when_dynamic_dispatch_disabled() {
-    // B3: when check_dynamic_dispatch=false (opt-out), trait impl methods
-    // ARE flagged as dead. Default is `true` since B3.5, so we must
+    // When check_dynamic_dispatch=false (opt-out), trait impl methods
+    // ARE flagged as dead. Default is `true`, so we must
     // explicitly disable it here.
     let db = fresh_db_path();
     let kit = build_kit_for_db(&db);
@@ -2121,7 +2120,7 @@ fn detect_flags_trait_impl_methods_when_dynamic_dispatch_disabled() {
     );
 }
 
-// --- B4: integration test file recognition ---
+// --- integration test file recognition ---
 
 #[test]
 fn is_integration_test_file_recognizes_rust_tests_dir() {
@@ -2166,7 +2165,7 @@ fn is_integration_test_file_handles_windows_paths() {
 
 #[test]
 fn detect_excludes_integration_test_functions_in_tests_dir() {
-    // B4 fix: Functions in `tests/` directory are integration tests
+    // Functions in `tests/` directory are integration tests
     // discovered by `cargo test` / `pytest` / `go test`. They have no
     // static CALLS edge and should NOT be flagged as dead.
     let db = fresh_db_path();
@@ -2219,7 +2218,7 @@ fn detect_excludes_integration_test_functions_in_tests_dir() {
     );
 }
 
-// ===== B5: worklist reachability propagation =====
+// ===== worklist reachability propagation =====
 
 /// B5 core: verifies that worklist propagation marks indirectly
 /// reachable functions as live, while unreachable functions (even if
@@ -2279,14 +2278,14 @@ fn test_reachability_propagation_basic() {
     );
 }
 
-/// B5: trait impl methods are seeds when `check_dynamic_dispatch=true`.
+/// trait impl methods are seeds when `check_dynamic_dispatch=true`.
 /// Verifies the trait impl method is in `live_set` and any function it
 /// calls is also reachable.
 #[test]
 fn test_reachability_with_trait_impl() {
     let db = fresh_db_path();
     let kit = build_kit_for_db(&db);
-    // Trait impl method (B3 seed) calls a free function.
+    // Trait impl method calls a free function.
     // qualified_name has `#Display` disambiguator.
     create_method(
         &kit,
@@ -2310,11 +2309,11 @@ fn test_reachability_with_trait_impl() {
     create_calls_edge(&kit, "e1", "m_fmt", "f_helper", "demo");
 
     let storage = storage(&kit);
-    // Default config has check_dynamic_dispatch=true (B3.5).
+    // Default config has check_dynamic_dispatch=true.
     let detector = DeadCodeDetector::new(&*storage);
     let result = detector.detect("demo", &[]).expect("detect");
     let names: Vec<&str> = result.iter().map(|e| e.name.as_str()).collect();
-    // Trait impl method is a seed (B3).
+    // Trait impl method is a seed.
     assert!(
         !names.contains(&"fmt"),
         "B5: trait impl method fmt#Display is seed: {:?}",
@@ -2328,7 +2327,7 @@ fn test_reachability_with_trait_impl() {
     );
 }
 
-/// B5: private unused functions (no incoming edges, not a seed) are
+/// Private unused functions (no incoming edges, not a seed) are
 /// correctly flagged as dead. This is the most basic case — verifies
 /// the analyzer does not over-approximate the live set.
 #[test]
@@ -2641,7 +2640,7 @@ fn detect_uses_batch_prefetch_for_exported_function_liveness() {
     );
 }
 
-// --- has_test_attribute_marker direct unit tests (arch-review L5) ---
+// --- has_test_attribute_marker direct unit tests ---
 
 #[test]
 fn has_test_attribute_marker_detects_all_markers() {

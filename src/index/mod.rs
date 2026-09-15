@@ -11,13 +11,12 @@
 //!
 //! - [`error`]: [`IndexError`] and [`Result`](error::Result) alias.
 //! - [`hash`]: BLAKE3 file/content hashing (ADR-009).
-//! - [`incremental`]: [`FileDiff`] and [`diff_files`] for incremental indexing
-//!   (BR-INDEX-001~003).
+//! - [`incremental`]: [`FileDiff`] and [`diff_files`] for incremental indexing.
 //! - [`pipeline`]: [`IndexFacade`] (Facade), [`Pipeline`], [`IndexResult`].
 //! - [`pipeline_dag`]: [`Phase`] trait + [`DagPipeline`] runner with Kahn
-//!   topological sort (T9 H2, design.md D2).
+//!   topological sort.
 //! - [`phases`]: 6 typed [`Phase`] implementations (Scan, Parse, ScopeResolution,
-//!   Resolve, Confidence, Load) for Task 2.5.
+//!   Resolve, Confidence, Load).
 //! - [`budget`]: [`MemoryBudget`] + [`Pressure`] — the explicit "memory as a
 //!   bounded resource" model used by every phase to decide when to flush /
 //!   batch / degrade (L1 of the memory-overflow fix).

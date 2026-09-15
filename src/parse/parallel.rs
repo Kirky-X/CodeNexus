@@ -653,7 +653,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // LOG-002: file_parsed event emission
+    // file_parsed event emission
     // -----------------------------------------------------------------------
 
     // Thread-local storage for the tracing `DefaultGuard` on rayon worker
@@ -940,7 +940,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // LOG-002 (ram-first): file_parsed_ram_first event emission
+    // file_parsed_ram_first event emission
     // -----------------------------------------------------------------------
 
     #[test]

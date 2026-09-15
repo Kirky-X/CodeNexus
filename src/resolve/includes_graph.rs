@@ -10,7 +10,7 @@
 //!
 //! # Purpose
 //!
-//! BUG-C4 (reverted in v0.2.2): C++ free functions had `is_exported=false`
+//! C++ free functions had `is_exported=false`
 //! because [`ProjectSymbolTable::lookup_exported`] returned ALL same-name
 //! functions across the entire project, causing massive over-resolution
 //! (fmt CALLS 1,852 → 5,002, +54%). The fix requires scoping cross-file
@@ -200,7 +200,7 @@ impl<T, S> SetCount for HashSet<T, S> {
 /// `"fmt/format.h"`), the file issuing the include (`calling_file`), and the
 /// list of all files in the project, returns the matched file path or `None`.
 ///
-/// # Resolution strategy (deterministic — Rule 5)
+/// # Resolution strategy (deterministic)
 ///
 /// 1. **Suffix match with boundary check**: `source_file` is matched as a
 ///    suffix of each file path in `all_files`, with a path boundary check

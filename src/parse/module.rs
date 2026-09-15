@@ -1,8 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! trait-kit module for the Parser subsystem (T6/unified-architecture
-//! Phase 2, Task 2.5; v0.3.3 AsyncKit migration).
+//! trait-kit module for the Parser subsystem.
 //!
 //! Implements [`ModuleMeta`] + [`AsyncAutoBuilder`] for
 //! [`ParserFactoryModule`] and [`ExtractorRegistryModule`], wiring the
@@ -30,7 +29,7 @@ use super::parser_factory::ParserFactory;
 // ParserFactoryModule
 // ===========================================================================
 
-/// trait-kit module tag for the Parser subsystem (Task 2.5).
+/// trait-kit module tag for the Parser subsystem.
 ///
 /// Zero-sized marker — construction logic lives in the [`AsyncAutoBuilder`]
 /// impl. Register in Kit via:
@@ -90,10 +89,10 @@ impl ParserRegistry for ParserRegistryCapability {
 }
 
 // ===========================================================================
-// ExtractorRegistryModule (Task 2.6)
+// ExtractorRegistryModule
 // ===========================================================================
 
-/// trait-kit module tag for the Extractor registry (Task 2.6).
+/// trait-kit module tag for the Extractor registry.
 pub struct ExtractorRegistryModule;
 
 impl ModuleMeta for ExtractorRegistryModule {
@@ -226,7 +225,7 @@ mod tests {
         assert!(!required.supported_languages().is_empty());
     }
 
-    // --- ExtractorRegistryModule tests (Task 2.6) ---
+    // --- ExtractorRegistryModule tests ---
 
     #[cfg(any(
         feature = "lang-c",

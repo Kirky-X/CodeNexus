@@ -6,7 +6,7 @@
 use crate::ir::ExtractResult;
 
 /// Returns a de-duplicated qualified name, appending `#L{line}` if `qn` has
-/// already been registered in `result.seen_qns` (MED-002).
+/// already been registered in `result.seen_qns`.
 ///
 /// Previously each extractor had its own O(N) implementation that scanned
 /// `result.nodes` linearly on every call, making total extraction O(N²). This

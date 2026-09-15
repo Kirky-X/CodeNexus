@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Indexing pipeline benchmarks (Task 15).
+//! Indexing pipeline benchmarks.
 //!
 //! Measures [`IndexFacade::index`] throughput on a fixture of small Rust
 //! files. The target SLO is >= 100 files/second; criterion's `index` group

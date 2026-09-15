@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Index observer: triggers incremental indexing on file changes (BR-DAEMON-003).
+//! Index observer: triggers incremental indexing on file changes.
 
 use std::path::PathBuf;
 
@@ -10,10 +10,10 @@ use tracing::{info, warn};
 use crate::daemon::event::{DaemonEvent, EventObserver};
 use crate::index::{IndexError, IndexFacade, IndexResult};
 
-/// 索引观察者：收到事件后触发增量索引（BR-DAEMON-003）。
+/// 索引观察者：收到事件后触发增量索引（）。
 ///
 /// 每次被通知时，调用 [`IndexFacade::index_incremental`] 对项目根目录
-/// 执行增量索引。索引期间设置 `is_indexing` 标志（BR-DAEMON-003）。
+/// 执行增量索引。索引期间设置 `is_indexing` 标志（）。
 pub struct IndexObserver {
     /// 索引门面。
     facade: IndexFacade,
@@ -21,7 +21,7 @@ pub struct IndexObserver {
     project_name: String,
     /// 监视的项目根目录。
     watch_path: PathBuf,
-    /// 是否正在索引中（BR-DAEMON-003）。
+    /// 是否正在索引中（）。
     is_indexing: bool,
     /// 索引触发次数。
     index_count: usize,
@@ -45,7 +45,7 @@ impl IndexObserver {
         }
     }
 
-    /// 返回是否正在索引中（BR-DAEMON-003）。
+    /// 返回是否正在索引中（）。
     #[must_use]
     pub fn is_indexing(&self) -> bool {
         self.is_indexing
@@ -72,7 +72,7 @@ impl IndexObserver {
 
 impl EventObserver for IndexObserver {
     fn on_events(&mut self, _events: &[DaemonEvent]) {
-        // BR-DAEMON-003：索引期间暂停事件处理。
+        //：索引期间暂停事件处理。
         self.is_indexing = true;
         self.index_count += 1;
 

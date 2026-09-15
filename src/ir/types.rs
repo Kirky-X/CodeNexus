@@ -18,7 +18,7 @@ pub struct ImportInfo {
     pub imported_names: Vec<String>,
     /// The 1-based line number of the import statement.
     pub line: u32,
-    /// B7: `true` when the statement is a re-export (Rust `pub use foo::bar;`,
+    /// `true` when the statement is a re-export (Rust `pub use foo::bar;`,
     /// TypeScript `export { foo } from './mod'`). Re-exported symbols are
     /// treated as live entry points by dead-code analysis (the symbol is
     /// reachable from outside the current crate/module via the re-export).
@@ -27,10 +27,9 @@ pub struct ImportInfo {
 }
 
 impl Default for ImportInfo {
-    /// B7 review (arch-review LOW-4): provides `Default` so future field
+    /// Provides `Default` so future field
     /// additions don't force a shotgun-surgery update of every construction
-    /// site. Existing callers still spell out all fields explicitly (Rule 24
-    /// — business-scene coverage), but new fields can use `..Default::default()`.
+    /// site. Existing callers still spell out all fields explicitly,
     fn default() -> Self {
         Self {
             source_file: String::new(),
@@ -59,7 +58,7 @@ pub struct CallInfo {
 /// Information about a variable assignment extracted from source.
 ///
 /// Captured for later resolution of DataFlows/Reads/Writes edges
-/// (BR-TRACE-002, BR-TRACE-003).
+/// ().
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AssignInfo {
     /// The name of the variable being assigned.
@@ -69,14 +68,13 @@ pub struct AssignInfo {
     /// The 1-based line number of the assignment.
     pub line: u32,
     /// Whether this assignment captures a function return value
-    /// (BR-TRACE-002 return assignment).
+    /// (return assignment).
     pub is_return_assign: bool,
 }
 
 /// Information about an extern/FFI declaration extracted from source.
 ///
-/// Captured for later cross-language FFI resolution (ADD §7.4,
-/// BR-TRACE-008).
+/// Captured for later cross-language FFI resolution (ADD §7.4).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExternInfo {
     /// The foreign language being interfaced with.
@@ -91,8 +89,8 @@ pub struct ExternInfo {
 
 /// Information about a variable read within a function body.
 ///
-/// Captured for later resolution of Reads edges (Function -> Variable,
-/// BR-TRACE-005). `reader_qn` holds the name of the enclosing function/
+/// Captured for later resolution of Reads edges (Function -> Variable).
+/// `reader_qn` holds the name of the enclosing function/
 /// method (resolved against the symbol table during resolution).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ReadInfo {
@@ -107,8 +105,8 @@ pub struct ReadInfo {
 
 /// Information about a variable write within a function body.
 ///
-/// Captured for later resolution of Writes edges (Function -> Variable,
-/// BR-TRACE-006). `writer_qn` holds the name of the enclosing function/
+/// Captured for later resolution of Writes edges (Function -> Variable).
+/// `writer_qn` holds the name of the enclosing function/
 /// method (resolved against the symbol table during resolution).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WriteInfo {

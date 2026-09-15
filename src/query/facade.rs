@@ -253,7 +253,7 @@ mod tests {
 
     #[test]
     fn facade_cypher_ac_query_001() {
-        // AC-QUERY-001 via the facade.
+        // via the facade.
         let facade = fresh_facade();
         seed_fixture(&facade);
         let result = facade
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn facade_search_ac_search_001() {
-        // AC-SEARCH-001 via the facade.
+        // via the facade.
         let facade = fresh_facade();
         seed_fixture(&facade);
         let results = facade.search("parse", None, 100).expect("search");
@@ -399,7 +399,7 @@ mod tests {
         assert!(s.contains("QueryFacade"));
     }
 
-    // --- LOG-003: query_executed event emission ---
+    // --- query_executed event emission ---
 
     #[test]
     fn log_003_cypher_emits_query_executed() {

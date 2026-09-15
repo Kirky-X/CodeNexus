@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! DaemonRunner capability trait (T6/unified-architecture Phase 2, Task 2.11).
+//! DaemonRunner capability trait.
 //!
 //! Defines [`DaemonRunner`], the capability trait object stored in
 //! [`Kit`](crate::kit::Kit) under [`DaemonKey`](crate::kit::DaemonKey) when
-//! the `daemon` feature is enabled. The concrete impl (Task 2.11) wraps the
+//! the `daemon` feature is enabled. The concrete impl wraps the
 //! existing [`Daemon`] + [`IndexObserver`] (Observer pattern) so that the
 //! unified Kit can hand a pre-configured daemon handle to `daemon_cmd::run`
 //! instead of having the CLI construct subsystems ad-hoc.
@@ -31,10 +31,10 @@ use super::DaemonError;
 /// Stored in [`Kit`](crate::kit::Kit) as `Arc<dyn DaemonRunner>` under
 /// [`DaemonKey`](crate::kit::DaemonKey) when the `daemon` feature is enabled.
 /// Conceptually requires `StorageKey` + `IndexerKey`; the concrete impl
-/// (Task 2.11) is self-contained — it opens its own [`IndexFacade`] from the
+/// is self-contained — it opens its own [`IndexFacade`] from the
 /// supplied `db_path` and constructs a fresh [`Daemon`] per `start` call.
 /// Therefore `Requirements = NoRequirements` at the type level; the bootstrap
-/// (Task 2.13) enforces build ordering (Storage → ... → Indexer → Daemon).
+/// enforces build ordering (Storage → ... → Indexer → Daemon).
 ///
 /// [`IndexFacade`]: crate::index::IndexFacade
 /// [`Daemon`]: super::Daemon

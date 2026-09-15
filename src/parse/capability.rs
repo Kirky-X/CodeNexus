@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Parse capability traits (T6/unified-architecture Phase 2, Task 2.3).
+//! Parse capability traits.
 //!
 //! Defines [`ParserRegistry`] and [`ExtractorRegistry`], the capability trait
 //! objects stored in [`Kit`](crate::kit::Kit) under [`ParserKey`] and
@@ -28,7 +28,7 @@ use super::extractor::Extractor;
 /// Capability trait for the Parser subsystem (tree-sitter parser factory).
 ///
 /// Stored in [`Kit`](crate::kit::Kit) as `Arc<dyn ParserRegistry>` under
-/// [`ParserKey`](crate::kit::ParserKey). The concrete impl (Task 2.5) wraps
+/// [`ParserKey`](crate::kit::ParserKey). The concrete impl wraps
 /// [`ParserFactory`](super::ParserFactory); the thread-local
 /// [`ParserPool`](super::ParserPool) remains a per-thread cache on top.
 pub trait ParserRegistry: Send + Sync {
@@ -42,7 +42,7 @@ pub trait ParserRegistry: Send + Sync {
 /// Capability trait for the Extractor registry (per-language dispatch).
 ///
 /// Stored in [`Kit`](crate::kit::Kit) as `Arc<dyn ExtractorRegistry>` under
-/// [`ExtractorKey`](crate::kit::ExtractorKey). The concrete impl (Task 2.6)
+/// [`ExtractorKey`](crate::kit::ExtractorKey). The concrete impl
 /// wraps [`get_extractor`](super::get_extractor). Requires `ParserKey`.
 pub trait ExtractorRegistry: Send + Sync {
     /// Returns a boxed [`Extractor`] for the given [`Language`].

@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! 端到端集成测试：索引 → 查询 → 追踪全流程（SubTask 17.1）。
+//! 端到端集成测试：索引 → 查询 → 追踪全流程。
 //!
-//! 本测试覆盖 AC-INDEX-001（C/Rust/Fortran 代码库端到端索引）、
-//! AC-INDEX-003（多项目共存互不干扰）、AC-QUERY-001（Cypher 查询）、
-//! AC-SEARCH-001（结构化搜索）等验收标准。
+//! 本测试覆盖 C/Rust/Fortran 代码库端到端索引、
+//! 多项目共存互不干扰、Cypher 查询、
+//! 结构化搜索等验收标准。
 
 use std::fs;
 use std::path::Path;
@@ -15,7 +15,7 @@ use codenexus::model::NodeLabel;
 use codenexus::query::QueryFacade;
 use tempfile::TempDir;
 
-// SubTask 17.3: tracing capture helpers (used by index_emits_all_log_events).
+// Tracing capture helpers (used by index_emits_all_log_events).
 use crossbeam_channel::unbounded;
 use inklog::domain::core::LoggerSubscriber;
 use inklog::{LogRecord, Metrics};
@@ -87,7 +87,7 @@ int c_bridge(int input);
     );
 }
 
-// --- AC-INDEX-001: 端到端索引 ---
+// --- 端到端索引 ---
 
 #[test]
 fn index_multilang_repo_succeeds() {
@@ -143,7 +143,7 @@ fn index_creates_project_node() {
     );
 }
 
-// --- AC-INDEX-003: 多项目隔离 ---
+// --- 多项目隔离 ---
 
 #[test]
 fn multi_project_isolation() {
@@ -192,7 +192,7 @@ fn multi_project_isolation() {
     );
 }
 
-// --- AC-INDEX-004: .gitignore 跳过 ---
+// ---.gitignore 跳过 ---
 
 #[test]
 fn gitignore_target_dir_skipped() {
@@ -214,7 +214,7 @@ fn gitignore_target_dir_skipped() {
     );
 }
 
-// --- AC-QUERY-001: Cypher 查询 ---
+// --- Cypher 查询 ---
 
 #[test]
 fn cypher_query_after_index() {
@@ -238,7 +238,7 @@ fn cypher_query_after_index() {
     assert!(!result.rows.is_empty(), "应返回至少一行");
 }
 
-// --- AC-SEARCH-001: 结构化搜索 ---
+// --- 结构化搜索 ---
 
 #[test]
 fn structured_search_by_name() {
@@ -446,7 +446,7 @@ end module math_utils
     assert!(result.files_indexed >= 1, "应索引 Fortran 文件");
 }
 
-// --- SubTask 17.3: end-to-end LOG event verification (LOG-001/002/006) ---
+// --- end-to-end LOG event verification ---
 
 // Thread-local storage for the tracing `DefaultGuard` on rayon worker
 // threads. Each worker thread sets its own subscriber via
@@ -483,9 +483,9 @@ fn drain_to_string(rx: &crossbeam_channel::Receiver<Arc<LogRecord>>) -> String {
 
 /// Verifies that `codenexus index` emits all LOG events defined in the spec
 /// when run with RUST_LOG=debug:
-/// - LOG-001: `index_started` and `index_completed` (info, main thread)
-/// - LOG-002: `file_parsed` (debug, rayon worker thread — one per file)
-/// - LOG-006: `performance` with `files_per_second` (info, main thread)
+/// - `index_started` and `index_completed` (info, main thread)
+/// - `file_parsed` (debug, rayon worker thread — one per file)
+/// - `performance` with `files_per_second` (info, main thread)
 ///
 /// Because `parallel_parse` uses rayon worker threads that do NOT inherit the
 /// current thread's tracing subscriber, this test builds a custom rayon thread
@@ -501,13 +501,13 @@ fn index_emits_all_log_events() {
     let (async_tx, _async_rx) = unbounded::<Arc<LogRecord>>();
     let metrics = Arc::new(Metrics::new());
 
-    // Subscriber for the main thread (captures LOG-001 and LOG-006).
+    // Subscriber for the main thread (captures `index_started` and `index_completed`).
     let main_layer = LoggerSubscriber::new(console_tx.clone(), async_tx.clone(), metrics.clone())
         .with_filter(LevelFilter::DEBUG);
     let main_registry = tracing_subscriber::registry().with(main_layer);
 
     // Custom rayon pool: each worker installs an inklog LoggerSubscriber
-    // sharing the same console channel, so LOG-002 file_parsed events on
+    // sharing the same console channel, so file_parsed events on
     // worker threads are captured too.
     let console_tx_for_handler = console_tx.clone();
     let async_tx_for_handler = async_tx.clone();
@@ -543,17 +543,17 @@ fn index_emits_all_log_events() {
 
     let captured = drain_to_string(&console_rx);
 
-    // LOG-001: index_started
+    // index_started
     assert!(
         captured.contains("index_started"),
         "LOG-001: index_started event missing, got: {captured:?}"
     );
-    // LOG-001: index_completed
+    // index_completed
     assert!(
         captured.contains("index_completed"),
         "LOG-001: index_completed event missing, got: {captured:?}"
     );
-    // LOG-002: file_parsed (at least one per parsed file)
+    // file_parsed (at least one per parsed file)
     assert!(
         captured.contains("file_parsed"),
         "LOG-002: file_parsed event missing, got: {captured:?}"
@@ -563,7 +563,7 @@ fn index_emits_all_log_events() {
         file_parsed_count >= 2,
         "LOG-002: expected at least 2 file_parsed events (one per file), got {file_parsed_count}"
     );
-    // LOG-006: performance
+    // Performance
     assert!(
         captured.contains("performance"),
         "LOG-006: performance event missing, got: {captured:?}"
@@ -574,10 +574,10 @@ fn index_emits_all_log_events() {
     );
 }
 
-// --- BR-TRACE-005/006: Reads/Writes edges in graph (multi-language e2e) ---
+// --- Reads/Writes edges in graph (multi-language e2e) ---
 
 /// Verifies that indexing a multi-language repo produces READS and WRITES
-/// edges in the graph (BR-TRACE-005 / BR-TRACE-006). Each language fixture
+/// edges in the graph (/). Each language fixture
 /// contains a function that reads a parameter and writes a local variable,
 /// so the resolver should emit at least one of each edge type.
 #[test]
@@ -696,7 +696,7 @@ async fn ffi_trace_returns_cross_language_path() {
     // Load the trace graph around "c_bridge" and verify FfiCalls edge exists.
     let trace = kit.require::<TraceModule>().expect("require_trace");
     // 1000 = test-specific max_nodes argument (MAX_SUBGRAPH_NODES was raised
-    // from 1000 to 5000 in v0.3.7 after bulwark testing showed high-fanin
+    // from 1000 to 5000 after bulwark testing showed high-fanin
     // symbols hit the first-hop cap). load_graph returns (Graph, truncated).
     let (graph, _truncated) = trace.load_graph("c_bridge", 3, 1000).expect("load_graph");
 

@@ -131,7 +131,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "type_declaration" => {
             // A type_declaration groups one or more type_spec nodes
-            // (`type ( Foo struct{}, Bar interface{} )`).
+            // (`type (Foo struct{}, Bar interface{} )`).
             visit_children(node, source, ctx, result);
         }
         "type_spec" => {
@@ -275,7 +275,7 @@ fn extract_type_spec(node: Node, source: &str, ctx: &VisitContext<'_>, result: &
 fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
     // import_declaration has two forms:
     //   1. `import "fmt"`      — single import (import_spec is a direct child)
-    //   2. `import ( ... )`    — import list (import_spec children are inside
+    //   2. `import (... )` — import list (import_spec children are inside
     //                            an `import_spec_list` node)
     // tree-sitter-go represents both with import_spec children; we walk all
     // named descendants of kind `import_spec`.
@@ -285,7 +285,7 @@ fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
             if child.kind() == "import_spec" {
                 push_import(child, source, line, result);
             } else if child.kind() == "import_spec_list" {
-                // `import ( ... )` form: import_spec_list contains import_spec children.
+                // `import (... )` form: import_spec_list contains import_spec children.
                 for j in 0..child.named_child_count() as u32 {
                     if let Some(spec) = child.named_child(j) {
                         if spec.kind() == "import_spec" {
@@ -581,7 +581,7 @@ mod tests {
 
     #[test]
     fn extracts_grouped_type_declaration() {
-        // `type ( Foo struct{}; Bar interface{} )` produces two type_specs.
+        // `type (Foo struct{}; Bar interface{} )` produces two type_specs.
         let result = extract("package main\ntype (\n\tFoo struct{}\n\tBar interface{}\n)\n");
         let structs: Vec<_> = result
             .nodes

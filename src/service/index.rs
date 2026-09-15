@@ -60,7 +60,7 @@ impl From<IndexResult> for IndexOutput {
 /// that function spawns one thread per active provider without a semaphore,
 /// relying on the bound being small (≤8) and LSP startup being IO-bound.
 /// Adding a 9th provider without raising this const would cause the assert
-/// in `build_lsp_providers` to fire (arch-review LOW-3).
+/// in `build_lsp_providers` to fire.
 #[cfg(feature = "lsp")]
 const MAX_LSP_PROVIDERS: usize = 8;
 
@@ -81,7 +81,7 @@ fn build_lsp_providers() -> Vec<(&'static str, Box<dyn LspProvider>)> {
         ("f90", Box::new(FortlsClient::new())),
         ("java", Box::new(JdtlsClient::new())),
     ];
-    // arch-review LOW-3: assert the semaphore-free bound expected by
+    // Assert the semaphore-free bound expected by
     // `start_active_providers_parallel`. Adding a new provider without
     // raising MAX_LSP_PROVIDERS will trip this assert at startup.
     assert!(
@@ -211,7 +211,7 @@ fn build_batch_semantic_type_update(batch: &[(String, String)], project: &str) -
         return String::new();
     }
     let proj = escape_cypher_string(project);
-    // Dynamic capacity estimate (perf-review M-03): 16 bytes fixed overhead
+    // Dynamic capacity estimate: 16 bytes fixed overhead
     // per `{id: '', sem: ''}` map + actual id/sem lengths (post-escape).
     // Pre-size to avoid reallocation; overshoot by ~10% for separator bytes.
     let estimated: usize = batch
@@ -225,7 +225,7 @@ fn build_batch_semantic_type_update(batch: &[(String, String)], project: &str) -
         if i > 0 {
             rows.push_str(", ");
         }
-        // write! directly into `rows` (perf-review M-01): avoids the temporary
+        // write! directly into `rows`: avoids the temporary
         // String allocation that `format!` would produce per entry. For 500
         // entries per batch this saves ~500 × ~100 B = ~50 KB of churn per
         // flush, compounding to ~10 MB across 100k symbols.
@@ -279,7 +279,7 @@ fn build_batch_semantic_type_update(batch: &[(String, String)], project: &str) -
 /// When the batch `execute` succeeds, `*enhanced += batch.len()` (all rows
 /// updated in one statement). `exec` is called exactly once.
 ///
-/// # Batch failure → per-row fallback (Rule 12: failure must be visible)
+/// # Batch failure → per-row fallback (failure must be visible)
 ///
 /// When the batch `execute` fails, an `[warn]` line is emitted to stderr
 /// with the error detail so operators can diagnose why the batch path did
@@ -310,7 +310,7 @@ fn flush_semantic_type_batch<F>(
     // Defensive: empty statement only happens when batch was empty (already
     // returned above). If a future bug produces an empty statement for a
     // non-empty batch, skip exec and clear batch rather than calling exec("").
-    // (arch-review LOW-5: `debug_assert` is compiled out in release, so the
+    // (`debug_assert` is compiled out in release, so the
     // explicit `if` is the production guard.)
     if stmt.is_empty() {
         debug_assert!(false, "non-empty batch must produce non-empty statement");
@@ -321,13 +321,13 @@ fn flush_semantic_type_batch<F>(
         Ok(()) => {
             // Batch path: one round-trip updated all rows.
             // `processed` is bounded by `LSP_HOVER_BATCH_SIZE = 500` (compile-time
-            // const), so `as u32` cannot overflow (perf-review L-02).
+            // const), so `as u32` cannot overflow.
             *enhanced += processed as u32;
         }
         Err(e) => {
-            // Rule 12: batch failure must be visible — emit warning with the
+            // Batch failure must be visible — emit warning with the
             // error detail so operators can diagnose why UNWIND path was skipped.
-            // (arch-review MEDIUM-3: previously this branch was silent.)
+            // (previously this branch was silent.)
             eprintln!(
                 "[warn] P-01 batch UNWIND failed ({e:?}), falling back to per-row execute for {processed} symbols"
             );
@@ -384,7 +384,7 @@ fn flush_semantic_type_batch<F>(
 /// The number of providers whose `start()` returned `Ok(())`. Always
 /// `<= active_exts.len()`.
 ///
-/// # Shutdown contract for panicked providers (arch-review MEDIUM-2)
+/// # Shutdown contract for panicked providers
 ///
 /// When a provider's `start()` panics, the panic is caught via
 /// `catch_unwind` and converted to `LspError::ServerStart`. The provider
@@ -538,7 +538,7 @@ fn resolve_abs_file_path(workspace: &Path, file_path_str: &str) -> std::path::Pa
 /// the function returns. `Arc<PathBuf>` clones held by `entries` keep the
 /// underlying `PathBuf` alive until `entries` is dropped.
 ///
-/// # Allocation discipline (perf-review H-01)
+/// # Allocation discipline
 ///
 /// `intern` first probes with `get(&path)` (zero allocation on hit). Only
 /// on miss does it allocate the owned `PathBuf` for insertion. This avoids
@@ -577,7 +577,7 @@ impl PathInterner {
     fn intern(&mut self, path: std::path::PathBuf) -> std::sync::Arc<std::path::PathBuf> {
         // Hit path: clone the existing Arc (atomic refcount increment, ~5 ns).
         // Zero PathBuf allocation — the entry() form would allocate an owned
-        // key for lookup even on hit (perf-review H-01: 290k hits × 80 B =
+        // key for lookup even on hit (290k hits × 80 B =
         // 23.2 MB of wasted String allocations).
         if let Some(arc) = self.map.get(&path) {
             return arc.clone();
@@ -643,7 +643,7 @@ fn enhance_with_lsp(
 
     // Pre-extract (id, abs_file, line) tuples and collect the set of
     // extensions that actually need an LSP server. Rows that fail
-    // `extract_lsp_row_fields` are counted as skipped (Rule 12: explicit
+    // `extract_lsp_row_fields` are counted as skipped (explicit
     // skip, not silent success — same behaviour as pre-L7-6).
     //
     // P-02: build `ext_map` once (HashMap<&str, &dyn LspProvider>) so the
@@ -747,7 +747,7 @@ fn enhance_with_lsp(
                 }
                 Err(LspError::NotImplemented(_)) => {
                     // `hover` is implemented on all current clients; defensive
-                    // skip for future opt-outs (C9 R-lsp-002 pattern).
+                    // skip for future opt-outs.
                     skipped += 1;
                 }
             }
@@ -873,7 +873,7 @@ pub(crate) fn index_core(
         eprintln!("[warn] post-quality-check checkpoint failed: {err}");
     }
 
-    // R-lsp-004: LSP-enhanced semantic_type extraction.
+    // LSP-enhanced semantic_type extraction.
     #[cfg(feature = "lsp")]
     if lsp {
         if let Err(err) = enhance_with_lsp(path_ref, &fresh_repo, name) {

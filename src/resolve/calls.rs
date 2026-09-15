@@ -14,7 +14,7 @@
 //!
 //! # Business rules
 //!
-//! - BR-TRACE-007: Same-language function call -> CALLS edge (confidence
+//! - Same-language function call -> CALLS edge (confidence
 //!   0.80-0.95).
 //! - Confidence: exact match 0.95, import match 0.90, project-level match 0.80.
 
@@ -47,7 +47,7 @@ pub struct CallResolver<'a> {
     project: &'a str,
     /// Imports indexed by caller file path, used by [`resolve_call`].
     imports: HashMap<String, Vec<ImportInfo>>,
-    /// C++ `#include` graph for scope-aware call resolution (BUG-C4 fix, v0.3.0).
+    /// C++ `#include` graph for scope-aware call resolution.
     /// When non-empty for a caller file, step 3 (project-level exported lookup)
     /// uses `lookup_exported_in_scope` instead of `lookup_exported` to prevent
     /// over-resolution.
@@ -87,7 +87,7 @@ impl<'a> CallResolver<'a> {
     }
 
     /// Sets the C++ `#include` graph for scope-aware call resolution
-    /// (BUG-C4 fix, v0.3.0). When the caller file has outgoing #include
+    /// When the caller file has outgoing #include
     /// edges in this graph, step 3 (project-level exported lookup) uses
     /// [`lookup_exported_in_scope`] instead of [`lookup_exported`] to
     /// prevent over-resolution.
@@ -119,12 +119,12 @@ impl<'a> CallResolver<'a> {
     /// * `results` - The extraction results containing call information.
     /// * `graph` - The graph to add resolved CALLS edges to.
     pub fn resolve_calls(&self, results: &[ExtractResult], graph: &mut Graph) {
-        // B3 fix: deduplicate by (caller_qn, callee_qn) pair. gitnexus stores
+        // Deduplicate by (caller_qn, callee_qn) pair. gitnexus stores
         // one CALLS edge per (caller, callee) pair, ignoring how many call
         // sites exist. Without dedup, CodeNexus created one edge per call site
         // (per CallInfo), inflating edge counts by ~23% (9144 total vs 6998
         // unique pairs on the CodeNexus self-index). The first call site's
-        // line number is preserved. See tools/verification/results/triage.md §B3.
+        // line number is preserved.
         let mut seen_pairs: HashSet<(String, String)> = HashSet::new();
         for result in results {
             let caller_file = &result.file_path;
@@ -236,7 +236,7 @@ impl<'a> CallResolver<'a> {
         }
 
         // 3. Project-level exported lookup (confidence 0.80, Global)
-        // BUG-C4 fix (v0.3.0): For C++ files with #include relationships,
+        // For C++ files with #include relationships,
         // use scope-aware lookup to prevent over-resolution. A symbol in
         // file B is only a valid target for a call in file A if A #includes
         // B (directly or transitively). For files without #include edges
@@ -579,14 +579,14 @@ mod tests {
         assert_eq!(tier, ConfidenceTier::Global);
     }
 
-    // --- resolve_call: scope-aware lookup (BUG-C4 fix, v0.3.0) ---
+    // --- resolve_call: scope-aware lookup ---
 
     #[test]
     fn resolve_call_cpp_scoped() {
         // main.cpp calls foo(). foo.h defines foo() (exported).
         // bar.cpp also defines foo() (exported). main.cpp #includes foo.h
         // but NOT bar.cpp. Resolution should point to foo.h's foo, not
-        // bar.cpp's (BUG-C4: over-resolution fix).
+        // bar.cpp's (over-resolution fix).
         use crate::resolve::symbol_table::SymbolEntry;
 
         let mut table = ProjectSymbolTable::new();
@@ -903,7 +903,7 @@ mod tests {
 
     #[test]
     fn resolve_calls_deduplicates_same_callee_pair() {
-        // B3 fix: multiple call sites of the same (caller, callee) pair
+        // Multiple call sites of the same (caller, callee) pair
         // should produce only one CALLS edge, matching gitnexus behavior.
         let foo_node = make_node("foo", "a.rs", "proj", NodeLabel::Function);
         let bar_node = make_node("bar", "a.rs", "proj", NodeLabel::Function);
@@ -983,7 +983,7 @@ mod tests {
         assert_eq!(neighbors[0].id, bar_qn);
     }
 
-    // --- AC-TRACE-001: A calls B -> CALLS edge A->B in graph ---
+    // --- A calls B -> CALLS edge A->B in graph ---
 
     #[test]
     fn ac_trace_001_call_path_a_to_b() {

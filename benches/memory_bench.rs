@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Memory footprint benchmarks (Task 4, design.md Decision 3).
+//! Memory footprint benchmarks.
 //!
 //! Covers three PRD 5.1 memory scenarios:
 //!
@@ -13,7 +13,7 @@
 //!
 //! # `BENCH_RUN_IGNORED` instead of `--ignored`
 //!
-//! design.md Decision 3 assumed `cargo bench -- --ignored` would opt into the
+//! The original design assumed `cargo bench -- --ignored` would opt into the
 //! long-running 10k scenarios. criterion 0.5's `--ignored` flag actually
 //! **skips every benchmark** (see `cargo bench -- --help`: "currently means
 //! skip all benchmarks") — it does not behave like libtest's `--ignored`. To
@@ -59,18 +59,17 @@ use common::{generate_large_repo, measure_peak_rss};
 const PROJECT_NAME: &str = "memory_bench";
 
 /// 1 GB in bytes — SLO upper bound for `first_index_10k_files_peak`
-/// (design.md Decision 3).
 const ONE_GB: u64 = 1_073_741_824;
 
 /// 200 MB in bytes — SLO upper bound for each sample in
-/// `daemon_sustained_10_increments` (design.md Decision 3).
+/// `daemon_sustained_10_increments`.
 const TWO_HUNDRED_MB: u64 = 209_715_200;
 
 /// 50 MB in bytes — max allowed RSS growth across the 10 incremental
-/// re-indexes, verifying there is no memory leak (design.md Decision 3).
+/// re-indexes, verifying there is no memory leak.
 const FIFTY_MB: u64 = 52_428_800;
 
-/// Fixture size for the 10k-file scenario (design.md Decision 3).
+/// Fixture size for the 10k-file scenario.
 const LARGE_REPO_FILE_COUNT: usize = 10_000;
 
 /// Fixture size for `ram_first_vs_default_comparison`. 1000 files keeps the
@@ -104,8 +103,8 @@ fn modify_rust_file(dir: &Path, i: usize) {
 // Scenario 1: first_index_10k_files_peak (ignored)
 // ---------------------------------------------------------------------------
 
-/// Peak RSS while indexing 10 000 files from a cold database (design.md
-/// Decision 3, PRD SLO <= 1 GB).
+/// Peak RSS while indexing 10 000 files from a cold database
+/// (PRD SLO <= 1 GB).
 ///
 /// Marked ignored because generating + indexing 10 000 files takes minutes;
 /// run with `BENCH_RUN_IGNORED=1 cargo bench --bench memory_bench -- --quick`.
@@ -187,7 +186,7 @@ struct DaemonSustainedState {
     handle: std::thread::JoinHandle<()>,
 }
 
-/// Daemon-driven sustained-load RSS scenario (design.md Decision 3, PRD SLO
+/// Daemon-driven sustained-load RSS scenario(
 /// <=200 MB per sample, <=50 MB growth across 10 increments).
 ///
 /// Spawns a real [`Daemon`] watching the fixture dir, mutates one file per
@@ -226,7 +225,7 @@ fn bench_daemon_sustained_10_increments(c: &mut Criterion) {
                     index_count: Arc::clone(&index_count),
                 };
 
-                // debounce_ms = 2000 (BR-DAEMON-001 default). The daemon
+                // debounce_ms = 2000 (default). The daemon
                 // watches the fixture dir recursively.
                 let mut daemon = Daemon::new(
                     dir.path(),
@@ -289,7 +288,7 @@ fn bench_daemon_sustained_10_increments(c: &mut Criterion) {
                 let _ = state.handle.join();
 
                 // Assert RSS growth across all increments is within 50 MB,
-                // catching leaks (design.md Decision 3).
+                // catching leaks.
                 if let (Some(&first), Some(&last)) = (rss_samples.first(), rss_samples.last()) {
                     let growth = last.saturating_sub(first);
                     let growth_mb = growth / 1024 / 1024;
@@ -313,7 +312,7 @@ fn bench_daemon_sustained_10_increments(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 /// Compares peak RSS of [`IndexFacade::index`] vs [`IndexFacade::index_ram_first`]
-/// on the same 1000-file fixture (design.md Decision 3, ADR-024).
+/// on the same 1000-file fixture.
 ///
 /// Both runs go through [`measure_peak_rss`]; the routine reports the two
 /// peaks and their delta so a regression in the LZ4 compression path is

@@ -222,7 +222,7 @@ impl<'a> FullTextSearcher<'a> {
     /// `file` as substrings) — a plain single-substring `CONTAINS('parseFile')`
     /// would miss it.
     ///
-    /// C4: BM25F scores each matching field independently and sums the
+    /// BM25F scores each matching field independently and sums the
     /// weighted scores via [`bm25f_score`], so `symbol_name` matches
     /// (weight 3.5) outrank `comment` matches (weight 0.5) even when both
     /// fields match the query token.
@@ -906,7 +906,7 @@ mod tests {
     #[test]
     fn fallback_contains_search_rejects_query_that_tokenizes_to_empty() {
         // H11: a query consisting only of separators tokenizes to empty and
-        // must error (Rule 12: fail loud) rather than silently returning all
+        // must error (fail loud) rather than silently returning all
         // rows.
         let repo = fresh_repo();
         let searcher = FullTextSearcher::new(repo.connection());
@@ -962,7 +962,7 @@ mod tests {
 
     #[test]
     fn fts_name_indexes_covers_all_symbol_tables() {
-        // R-search-001: FTS_NAME_INDEXES must contain 15 entries covering all
+        // FTS_NAME_INDEXES must contain 15 entries covering all
         // symbol-bearing node labels (excluding Impl which has no meaningful
         // name for search).
         assert_eq!(
@@ -998,7 +998,7 @@ mod tests {
 
     #[test]
     fn search_finds_struct_by_name() {
-        // R-search-001: saving a Struct named "Point" and searching "Point"
+        // Saving a Struct named "Point" and searching "Point"
         // must return a result with label == "Struct".
         let repo = fresh_repo();
         repo.save_nodes_stream(
@@ -1115,7 +1115,7 @@ mod tests {
 
     #[test]
     fn search_across_multiple_label_types() {
-        // R-search-001: saving Function + Struct + Enum with a shared name
+        // Saving Function + Struct + Enum with a shared name
         // token and searching that token must return all three label types.
         let repo = fresh_repo();
         repo.save_nodes_stream(

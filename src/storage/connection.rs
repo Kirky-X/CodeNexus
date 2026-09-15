@@ -45,7 +45,7 @@ pub struct SchemaInitReport {
 }
 
 /// Returns `true` if the error message indicates a **database lock conflict**
-/// at open time (Rule 12: fail loud).
+/// at open time (fail loud).
 ///
 /// LadybugDB/DuckDB reports an open-time lock failure when another process
 /// holds the exclusive write lock on the same file DB. Recognized patterns
@@ -128,7 +128,7 @@ impl StorageConnection {
     /// Shared open implementation parameterized by read-only mode.
     ///
     /// On `Database::new` failure, a lock conflict is mapped to
-    /// [`StorageError::DatabaseLocked`] (exit 2, Rule 12 — must not hide behind
+    /// [`StorageError::DatabaseLocked`] (exit 2 — must not hide behind
     /// a generic exit-1 error), a corruption pattern to
     /// [`StorageError::Corrupt`] (exit 4), otherwise the raw
     /// [`StorageError::Database`] is returned.
@@ -191,7 +191,7 @@ impl StorageConnection {
             // The resulting `Mmap for size 8796093022208 failed` panic
             // surfaces in ~120 tests via `.expect("in_memory ...")`. Pin both
             // to small explicit values so parallel in-memory DBs stay within
-            // reasonable per-process limits (Rule 12: fail loud, not silent).
+            // reasonable per-process limits (fail loud, not silent).
             SystemConfig::default()
                 .buffer_pool_size(256 * 1024 * 1024)
                 .max_db_size(1024 * 1024 * 1024)
@@ -381,7 +381,7 @@ impl StorageConnection {
 /// only on some restricted containers), falls back to the L7-5 fixed
 /// 4 GiB default. This is conservative: it assumes a large host where
 /// 4 GiB is safe, and lets the caller's OOM killer handle truly
-/// memory-constrained environments (Rule 12: fail loud, not silent).
+/// memory-constrained environments (fail loud, not silent).
 fn compute_buffer_pool_size() -> u64 {
     const FLOOR: u64 = 256 * 1024 * 1024; // 256 MiB
     const CAP: u64 = 4 * 1024 * 1024 * 1024; // 4 GiB
@@ -1076,7 +1076,7 @@ mod tests {
 
     /// `is_db_locked` must detect LadybugDB/DuckDB open-time lock messages —
     /// the stable error strings DuckDB emits when another process holds the
-    /// exclusive write lock on the same file DB (Rule 12: surface as
+    /// exclusive write lock on the same file DB (surface as
     /// DatabaseLocked/exit 2, not a generic exit 1).
     #[test]
     fn is_db_locked_detects_open_time_lock_messages() {
@@ -1125,7 +1125,7 @@ mod tests {
     // -------------------------------------------------------------------------
     // 目的：实证 lbug 0.18.2 在 codenexus 现有「Arc/共享 &StorageConnection +
     // 每操作新建短连接」模式下的真实并发行为，为「去掉 Mutex<Repository> 全局
-    // 锁」的改造提供确定性依据（Rule 5：别猜）。三个探针分别回答：
+    // 锁」的改造提供确定性依据（别猜）。三个探针分别回答：
     //   1. 读读并发是否安全（去锁的收益前提）
     //   2. 写写并发报错文案是什么（验证 with_retry 的 "locked"/"Lock" 匹配
     //      在 0.18.2 是否仍成立 —— 潜在 bug）

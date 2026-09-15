@@ -4,11 +4,11 @@
 //! Cross-language FFI resolution (resolve/cross_lang.rs).
 //!
 //! Provides [`FfiResolver`] for resolving cross-language FFI calls to
-//! FfiCalls edges (ADD §7.4, BR-TRACE-008).
+//! FfiCalls edges (ADD §7.4).
 //!
 //! # Business rules
 //!
-//! - BR-TRACE-008: Cross-language call -> FFI_CALLS edge.
+//! - Cross-language call -> FFI_CALLS edge.
 //! - Confidence: signature match 0.85 (lowered by up to 0.15 when parameter
 //!   types mismatch), name-only match 0.70.
 //! - C↔Rust: Rust extern "C" calls C functions.
@@ -355,7 +355,7 @@ impl<'a> FfiResolver<'a> {
     /// - **NameAndSignature** (confidence 0.85 minus type-mismatch penalty):
     ///   name match with matching parameter count. When parameter types also
     ///   match, confidence is 0.85; each unmatched type lowers it by up to
-    ///   0.15 total (ADD §7.4, BR-TRACE-008).
+    ///   0.15 total (ADD §7.4).
     /// - **NameOnly** (confidence 0.70): name match without signature match
     ///   (or when either signature is unavailable).
     /// - **NoMatch**: no name match in the target language.
@@ -1345,7 +1345,7 @@ mod tests {
         assert_eq!(edge.confidence_tier, ConfidenceTier::Global);
     }
 
-    // --- AC-TRACE-003: Rust extern "C" -> C function FfiCalls edge ---
+    // --- Rust extern "C" -> C function FfiCalls edge ---
 
     #[test]
     fn ac_trace_003_rust_extern_c_calls_c_function() {
@@ -1409,7 +1409,7 @@ mod tests {
 
     #[test]
     fn ac_trace_003_with_signature_match() {
-        // Variant of AC-TRACE-003 where the extern signature matches the C
+        // Variant where the extern signature matches the C
         // definition signature, yielding confidence 0.85.
         let rust_func_qn =
             FqnGenerator::generate("proj", "src/main.rs", "rust_func", Language::Rust, None);
@@ -1457,7 +1457,7 @@ mod tests {
         assert!((edge.confidence - 0.85).abs() < 1e-6);
     }
 
-    // --- Fortran <-> C FFI tests (BR-TRACE-008) ---
+    // --- Fortran <-> C FFI tests ---
 
     #[test]
     fn resolve_extern_fortran_calls_c_function() {
@@ -1500,7 +1500,7 @@ mod tests {
         assert!(graph.edges.is_empty());
     }
 
-    // --- TypeMapper tests (ADD §7.4, BR-TRACE-008) ---
+    // --- TypeMapper tests (ADD §7.4) ---
 
     #[test]
     fn type_mapper_canonical_type_c_int_maps_to_int32() {

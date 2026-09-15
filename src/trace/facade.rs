@@ -8,7 +8,7 @@
 //! symbol by name and request a [`TraceType`]; the facade resolves the symbol
 //! to a node id and delegates to the appropriate tracer(s).
 //!
-//! Also provides advanced tracing types (T032): [`PathFilter`],
+//! Also provides advanced tracing types: [`PathFilter`],
 //! [`TraceCycle`], and [`TraceEngine`] for configurable tracing over a
 //! [`Storage`] reference.
 
@@ -25,9 +25,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-// ===== Advanced tracing types (T032) =====
+// ===== Advanced tracing types =====
 
-/// Filter applied to trace paths (R-trace-001).
+/// Filter applied to trace paths.
 ///
 /// All fields are optional; `None` means "no filtering on this dimension".
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -42,7 +42,7 @@ pub struct PathFilter {
     pub symbol_pattern: Option<String>,
 }
 
-/// A cycle detected in the call graph (R-trace-002).
+/// A cycle detected in the call graph.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TraceCycle {
     /// Node names along the cycle, starting and ending at the same node.
@@ -51,7 +51,7 @@ pub struct TraceCycle {
     pub edge_types: Vec<EdgeType>,
 }
 
-/// Advanced trace engine backed by a [`Storage`] reference (design.md §8).
+/// Advanced trace engine backed by a [`Storage`] reference.
 ///
 /// Holds an immutable borrow of a `dyn Storage` and a [`TraceConfig`].
 /// [`TraceEngine::new`] uses default config; [`TraceEngine::with_config`]
@@ -89,7 +89,7 @@ impl<'a> TraceEngine<'a> {
         self.storage
     }
 
-    /// Filters trace paths by the given [`PathFilter`] (R-trace-001).
+    /// Filters trace paths by the given [`PathFilter`].
     ///
     /// Delegates to the standalone [`apply_path_filter`].
     pub fn apply_path_filter(
@@ -101,7 +101,7 @@ impl<'a> TraceEngine<'a> {
     }
 }
 
-// ===== Path filtering (T033) =====
+// ===== Path filtering =====
 
 /// Converts a glob pattern to a regex string.
 ///
@@ -181,7 +181,7 @@ fn node_passes_filter(node: &super::TraceNode, filter: &PathFilter) -> bool {
     true
 }
 
-/// Filters trace paths by the given [`PathFilter`] (R-trace-001).
+/// Filters trace paths by the given [`PathFilter`].
 ///
 /// For each path, nodes that fail the filter are removed. Edges between
 /// consecutive remaining nodes are preserved; non-consecutive gaps drop the
@@ -476,7 +476,7 @@ mod tests {
 
     #[test]
     fn facade_trace_calls_returns_call_path() {
-        // AC-TRACE-001: A calls B -> trace A --type calls returns A->B path.
+        // A calls B -> trace A --type calls returns A->B path.
         let g = graph_a_calls_b_and_dataflow();
         let facade = TraceFacade::new(&g);
         let result = facade.trace("a", TraceType::Calls, 3).unwrap();
@@ -620,11 +620,11 @@ mod tests {
         assert!(matches!(result, Err(TraceError::InvalidDepth(0))));
     }
 
-    // --- TraceFacade: AC-TRACE-004 depth limit ---
+    // --- TraceFacade: depth limit ---
 
     #[test]
     fn facade_trace_respects_depth_limit() {
-        // AC-TRACE-004: --depth 2 -> paths depth <= 2.
+        // --depth 2 -> paths depth <= 2.
         let mut g = Graph::new();
         g.add_node(make_func("a", "a"));
         g.add_node(make_func("b", "b"));
@@ -713,7 +713,7 @@ mod tests {
         assert_eq!(result.paths[0].edges[0].edge_type, "DATAFLOWS");
     }
 
-    // --- T032: Advanced tracing types ---
+    // --- Advanced tracing types ---
 
     fn build_storage() -> std::sync::Arc<dyn Storage> {
         use crate::kit::StorageModule;
@@ -865,7 +865,7 @@ mod tests {
         assert!(json.contains("\"Calls\""));
     }
 
-    // --- T033: Path filtering ---
+    // --- Path filtering ---
 
     use crate::trace::{TraceEdge, TraceNode, TracePath};
 
