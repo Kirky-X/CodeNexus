@@ -33,3 +33,35 @@ path = "src/bin/impact_analysis.rs"
 [[bin]]
 name = "export_import"
 path = "src/bin/export_import.rs"
+
+[[bin]]
+name = "project_lifecycle"
+path = "src/bin/project_lifecycle.rs"
+
+[[bin]]
+name = "code_analysis"
+path = "src/bin/code_analysis.rs"
+
+[[bin]]
+name = "architecture_diagram"
+path = "src/bin/architecture_diagram.rs"
+
+[[bin]]
+name = "api_surface"
+path = "src/bin/api_surface.rs"
+
+[[bin]]
+name = "symbol_context"
+path = "src/bin/symbol_context.rs"
+
+[[bin]]
+name = "git_integration"
+path = "src/bin/git_integration.rs"
+
+[[bin]]
+name = "daemon_watch"
+path = "src/bin/daemon_watch.rs"
+
+[[bin]]
+name = "setup_mcp"
+path = "src/bin/setup_mcp.rs"
