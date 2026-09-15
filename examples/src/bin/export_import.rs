@@ -49,7 +49,8 @@ fn main() {
     println!("  Imported DB to: {}", import_path.display());
     println!();
 
-    let import_query = codenexus::query::QueryFacade::new(&import_path).expect("imported QueryFacade");
+    let import_query =
+        codenexus::query::QueryFacade::new(&import_path).expect("imported QueryFacade");
     let qr = import_query
         .cypher("MATCH (f:Function) RETURN f.name")
         .expect("cypher failed");

@@ -64,7 +64,8 @@ fn build_graph_from_db(query: &codenexus::query::QueryFacade) -> Graph {
         }
     }
 
-    let cypher = "MATCH (e:CodeRelation) RETURN e.source, e.target, e.type, e.confidence, e.project";
+    let cypher =
+        "MATCH (e:CodeRelation) RETURN e.source, e.target, e.type, e.confidence, e.project";
     if let Ok(qr) = query.cypher(cypher) {
         for row in &qr.rows {
             let source = row[0].as_str().unwrap_or("").to_string();
@@ -103,7 +104,11 @@ fn main() {
     let query = open_query(&ctx);
     let graph = build_graph_from_db(&query);
 
-    println!("Graph: {} nodes, {} edges\n", graph.node_count(), graph.edge_count());
+    println!(
+        "Graph: {} nodes, {} edges\n",
+        graph.node_count(),
+        graph.edge_count()
+    );
 
     println!("--- Impact Analysis: parse (depth=5) ---");
     if let Some(parse_node) = graph.nodes.values().find(|n| n.name == "parse") {
@@ -142,7 +147,12 @@ fn main() {
             println!("  Paths: {}", result.paths.len());
             for (i, path) in result.paths.iter().enumerate() {
                 let names: Vec<&str> = path.nodes.iter().map(|n| n.name.as_str()).collect();
-                println!("    Path {}: {} (depth={})", i + 1, names.join(" -> "), path.depth);
+                println!(
+                    "    Path {}: {} (depth={})",
+                    i + 1,
+                    names.join(" -> "),
+                    path.depth
+                );
             }
         }
         Err(e) => println!("  Error: {e}"),

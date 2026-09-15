@@ -63,7 +63,8 @@ fn build_graph_from_db(query: &codenexus::query::QueryFacade) -> Graph {
         }
     }
 
-    let cypher = "MATCH (e:CodeRelation) RETURN e.source, e.target, e.type, e.confidence, e.project";
+    let cypher =
+        "MATCH (e:CodeRelation) RETURN e.source, e.target, e.type, e.confidence, e.project";
     if let Ok(qr) = query.cypher(cypher) {
         for row in &qr.rows {
             let source = row[0].as_str().unwrap_or("").to_string();
@@ -102,7 +103,11 @@ fn main() {
     let query = open_query(&ctx);
     let graph = build_graph_from_db(&query);
 
-    println!("Graph: {} nodes, {} edges\n", graph.node_count(), graph.edge_count());
+    println!(
+        "Graph: {} nodes, {} edges\n",
+        graph.node_count(),
+        graph.edge_count()
+    );
 
     println!("--- Forward call trace: main (depth=5) ---");
     let facade = TraceFacade::new(&graph);
@@ -139,9 +144,17 @@ fn print_trace_result(result: &codenexus::trace::TraceResult) {
     println!("  Paths found: {}", result.paths.len());
     for (i, path) in result.paths.iter().enumerate() {
         let node_names: Vec<&str> = path.nodes.iter().map(|n| n.name.as_str()).collect();
-        println!("    Path {}: {} (depth={})", i + 1, node_names.join(" -> "), path.depth);
+        println!(
+            "    Path {}: {} (depth={})",
+            i + 1,
+            node_names.join(" -> "),
+            path.depth
+        );
         for edge in &path.edges {
-            println!("      Edge: {} confidence={:.2}", edge.edge_type, edge.confidence);
+            println!(
+                "      Edge: {} confidence={:.2}",
+                edge.edge_type, edge.confidence
+            );
         }
     }
     println!();

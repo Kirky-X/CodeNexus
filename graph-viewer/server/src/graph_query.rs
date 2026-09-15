@@ -8,7 +8,9 @@ use std::path::Path;
 use lbug::{Connection, Database, Value};
 use serde_json::Value as JsonValue;
 
-use super::{GraphData, GraphEdge, GraphNode, LabelCount, SchemaInfo, TracePath, TraceResult, TypeCount};
+use super::{
+    GraphData, GraphEdge, GraphNode, LabelCount, SchemaInfo, TracePath, TraceResult, TypeCount,
+};
 
 /// 创建只读数据库连接配置
 fn read_only_config() -> lbug::SystemConfig {
@@ -82,12 +84,42 @@ fn get_f64(columns: &[String], row: &[JsonValue], name: &str) -> Option<f64> {
 
 /// 可查询的节点类型（按优先级排序）
 const QUERYABLE_LABELS: &[&str] = &[
-    "Function", "Method", "Class", "Struct", "Enum", "Trait", "Interface",
-    "Impl", "Constructor", "Variable", "GlobalVar", "Const", "Static",
-    "Macro", "TypeAlias", "Namespace", "Module", "Test", "Handler",
-    "Middleware", "Service", "Endpoint", "Route", "Event", "Property",
-    "Field", "Record", "Template", "Union", "Variant", "Annotation",
-    "Delegate", "Typedef", "Section", "Database", "Config",
+    "Function",
+    "Method",
+    "Class",
+    "Struct",
+    "Enum",
+    "Trait",
+    "Interface",
+    "Impl",
+    "Constructor",
+    "Variable",
+    "GlobalVar",
+    "Const",
+    "Static",
+    "Macro",
+    "TypeAlias",
+    "Namespace",
+    "Module",
+    "Test",
+    "Handler",
+    "Middleware",
+    "Service",
+    "Endpoint",
+    "Route",
+    "Event",
+    "Property",
+    "Field",
+    "Record",
+    "Template",
+    "Union",
+    "Variant",
+    "Annotation",
+    "Delegate",
+    "Typedef",
+    "Section",
+    "Database",
+    "Config",
 ];
 
 /// 球面半径
@@ -129,7 +161,8 @@ pub fn query_graph(
 
     /* 多类型节点查询 — 按优先级依次查询，合并结果 */
     let mut nodes = Vec::new();
-    let mut name_to_id: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut name_to_id: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     let mut node_counter = 0usize;
 
     /* 每个类型分配的配额 */
@@ -157,7 +190,6 @@ pub fn query_graph(
         if rows.is_empty() {
             continue;
         }
-
 
         for row in &rows {
             if nodes.len() >= limit {
@@ -203,12 +235,18 @@ pub fn query_graph(
                 qualified_name: get_str(&cols, row, "qualified_name"),
                 start_line: get_f64(&cols, row, "start_line").map(|v| v as u32),
                 end_line: get_f64(&cols, row, "end_line").map(|v| v as u32),
-                x: 0.0, y: 0.0, z: 0.0,
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
             });
         }
     }
 
-    eprintln!("[INFO] Queried {} node types, got {} nodes", QUERYABLE_LABELS.len(), nodes.len());
+    eprintln!(
+        "[INFO] Queried {} node types, got {} nodes",
+        QUERYABLE_LABELS.len(),
+        nodes.len()
+    );
 
     /* 查询边 — 至少一端匹配已加载节点，缺失端点自动补充为 stub 节点 */
     let edges = query_all_edges(&conn, limit as u64, &mut nodes, &mut name_to_id)?;
@@ -276,7 +314,9 @@ fn query_all_edges(
                     qualified_name: Some(src_name),
                     start_line: None,
                     end_line: None,
-                    x: 0.0, y: 0.0, z: 0.0,
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
                 });
                 synth_id
             }
@@ -296,7 +336,9 @@ fn query_all_edges(
                     qualified_name: Some(tgt_name),
                     start_line: None,
                     end_line: None,
-                    x: 0.0, y: 0.0, z: 0.0,
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
                 });
                 synth_id
             }
@@ -313,10 +355,14 @@ fn query_all_edges(
         });
         edge_counter += 1;
     }
-    eprintln!("[INFO] Edge scan: {} rows, {} edges matched, {} total nodes", rows.len(), edges.len(), nodes.len());
+    eprintln!(
+        "[INFO] Edge scan: {} rows, {} edges matched, {} total nodes",
+        rows.len(),
+        edges.len(),
+        nodes.len()
+    );
     Ok(edges)
 }
-
 
 /// 查询 schema 统计信息
 pub fn query_schema(db_path: &Path) -> Result<SchemaInfo, Box<dyn std::error::Error>> {
@@ -331,7 +377,10 @@ pub fn query_schema(db_path: &Path) -> Result<SchemaInfo, Box<dyn std::error::Er
             if let Some(row) = rows.first() {
                 let count = get_f64(&cols, row, "cnt").unwrap_or(0.0) as u64;
                 if count > 0 {
-                    node_labels.push(LabelCount { label: label.to_string(), count });
+                    node_labels.push(LabelCount {
+                        label: label.to_string(),
+                        count,
+                    });
                 }
             }
         }
@@ -339,15 +388,16 @@ pub fn query_schema(db_path: &Path) -> Result<SchemaInfo, Box<dyn std::error::Er
     node_labels.sort_by(|a, b| b.count.cmp(&a.count));
 
     /* 边总数 — 从 CodeRelation 表查询 */
-    let (cols, rows) = query_rows(
-        &conn,
-        "MATCH (r:CodeRelation) RETURN count(*) AS cnt",
-    )?;
-    let total_edges: u64 = rows.first().map(|row| {
-        get_f64(&cols, row, "cnt").unwrap_or(0.0) as u64
-    }).unwrap_or(0);
+    let (cols, rows) = query_rows(&conn, "MATCH (r:CodeRelation) RETURN count(*) AS cnt")?;
+    let total_edges: u64 = rows
+        .first()
+        .map(|row| get_f64(&cols, row, "cnt").unwrap_or(0.0) as u64)
+        .unwrap_or(0);
     let mut edge_types = Vec::new();
-    edge_types.push(TypeCount { r#type: "ALL".to_string(), count: total_edges });
+    edge_types.push(TypeCount {
+        r#type: "ALL".to_string(),
+        count: total_edges,
+    });
 
     let total_nodes: u64 = node_labels.iter().map(|l| l.count).sum();
 

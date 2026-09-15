@@ -44,7 +44,9 @@ fn main() {
     let db_path = temp_dir.path().join("codenexus.lbug");
 
     let facade = IndexFacade::new(&db_path).expect("IndexFacade::new");
-    let result = facade.index(&source_dir, "demo-project", true).expect("index");
+    let result = facade
+        .index(&source_dir, "demo-project", true)
+        .expect("index");
 
     println!("=== Indexing Complete ===");
     println!("  Files indexed:  {}", result.files_indexed);

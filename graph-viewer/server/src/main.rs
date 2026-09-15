@@ -204,7 +204,11 @@ async fn scan_projects(state: &AppState) {
                             root_path: search_path.to_string_lossy().to_string(),
                             db_path: canonical,
                         });
-                        tracing::info!("发现项目: {} -> {}", name, projects.last().unwrap().db_path.display());
+                        tracing::info!(
+                            "发现项目: {} -> {}",
+                            name,
+                            projects.last().unwrap().db_path.display()
+                        );
                     }
                 }
             }
@@ -241,13 +245,16 @@ fn resolve_db_path<'a>(
         if !p.exists() {
             return Err(format!("文件不存在: {}", path));
         }
-        let name = p.file_stem()
+        let name = p
+            .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "unknown".to_string());
         return Ok((p, name));
     }
     let name = project_name.ok_or("需要提供 project 或 lbug_path 参数")?;
-    let project = projects.iter().find(|p| p.name == name)
+    let project = projects
+        .iter()
+        .find(|p| p.name == name)
         .ok_or_else(|| format!("项目 '{}' 未找到", name))?;
     Ok((project.db_path.clone(), name.to_string()))
 }
@@ -266,12 +273,20 @@ async fn get_graph(
         Err(e) => return (StatusCode::NOT_FOUND, Json(ApiError { error: e })).into_response(),
     };
 
-    match graph_query::query_graph(&db_path, &project_name, query.max_nodes, query.file_path.as_deref()) {
+    match graph_query::query_graph(
+        &db_path,
+        &project_name,
+        query.max_nodes,
+        query.file_path.as_deref(),
+    ) {
         Ok(data) => (StatusCode::OK, Json(serde_json::to_value(data).unwrap())).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiError { error: e.to_string() }),
-        ).into_response(),
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
     }
 }
 
@@ -282,21 +297,21 @@ async fn get_schema(
     let project_name = params.get("project").cloned();
     let lbug_path = params.get("lbug_path").cloned();
     let projects = state.projects.read().await;
-    let (db_path, _) = match resolve_db_path(
-        &projects,
-        project_name.as_deref(),
-        lbug_path.as_deref(),
-    ) {
-        Ok(v) => v,
-        Err(e) => return (StatusCode::NOT_FOUND, Json(ApiError { error: e })).into_response(),
-    };
+    let (db_path, _) =
+        match resolve_db_path(&projects, project_name.as_deref(), lbug_path.as_deref()) {
+            Ok(v) => v,
+            Err(e) => return (StatusCode::NOT_FOUND, Json(ApiError { error: e })).into_response(),
+        };
 
     match graph_query::query_schema(&db_path) {
         Ok(schema) => (StatusCode::OK, Json(serde_json::to_value(schema).unwrap())).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiError { error: e.to_string() }),
-        ).into_response(),
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
     }
 }
 
@@ -328,7 +343,10 @@ async fn get_trace(
         Ok(result) => (StatusCode::OK, Json(serde_json::to_value(result).unwrap())).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiError { error: e.to_string() }),
-        ).into_response(),
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
     }
 }
