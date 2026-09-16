@@ -98,10 +98,17 @@ export class LbugDatabase {
    * @param file 浏览器 File 对象
    * @param bufferPoolSize DB 缓冲池上限（字节），0 = 引擎默认。
    *        内存受限设备按 {@link computeLoadBudget} 的预算传入
+   * @param onStage 加载阶段回调（copy=写 MEMFS，open=打开数据库），
+   *        供 Worker 层向主线程转发进度
    */
-  static async fromFile(file: File, bufferPoolSize = 0): Promise<LbugDatabase> {
+  static async fromFile(
+    file: File,
+    bufferPoolSize = 0,
+    onStage?: (stage: "copy" | "open") => void,
+  ): Promise<LbugDatabase> {
     const mod = await getLbugModule();
     const fs = mod.getFS();
+    onStage?.("copy");
 
     /* 写入 WASM 虚拟文件系统。
      * 优先分块流式写入（8MB/块）：File 按需切片读取，不在 JS 堆持有
@@ -131,6 +138,7 @@ export class LbugDatabase {
     }
 
     /* 以只读模式打开数据库（bufferPoolSize 封顶 DB 缓冲，保护低内存设备） */
+    onStage?.("open");
     try {
       const db = new mod.Database(vfsPath, bufferPoolSize, 0, true, true);
       const conn = new mod.Connection(db);

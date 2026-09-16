@@ -52,7 +52,7 @@ export function App() {
   /* 内存预算 — 大文件加载时钳制节点上限并启用省内存档 */
   const [loadBudget, setLoadBudget] = useState<LoadBudget | null>(null);
   /* 加载阶段 — 大文件加载分两步给出反馈，避免黑盒假死感 */
-  const [loadStage, setLoadStage] = useState<"copy" | "analyze" | null>(null);
+  const [loadStage, setLoadStage] = useState<"copy" | "open" | "analyze" | null>(null);
 
   /* 文件加载处理 */
   const handleFileLoad = useCallback(async (file: File) => {
@@ -67,8 +67,7 @@ export function App() {
       const budget = computeLoadBudget(file.size, detectMemoryProfile());
       setLoadBudget(budget);
       if (maxNodes > budget.maxNodesCap) setMaxNodes(budget.maxNodesCap);
-      setLoadStage("copy");
-      await loadLbugFile(file, budget);
+      await loadLbugFile(file, budget, (stage) => setLoadStage(stage));
       setLoadStage("analyze");
       setFileName(file.name);
       setFileLoaded(true); /* 触发 fetchData：关系分析 + 布局 */
@@ -386,6 +385,7 @@ export function App() {
           <div className="space-y-2">
             <p className="text-base text-foreground/60 font-medium">
               {loadStage === "copy" ? t("loading.stageCopy")
+                : loadStage === "open" ? t("loading.stageOpen")
                 : loadStage === "analyze" ? t("loading.stageAnalyze")
                 : t("loading.text")}
             </p>
