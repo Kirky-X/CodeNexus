@@ -6,7 +6,7 @@
 
 import type { GraphData } from "../lib/types";
 import type { LoadBudget } from "../lib/memoryBudget";
-import LbugWorker from "../lib/lbug.worker?worker&inline";
+import LbugWorker from "../lib/lbug.worker?worker";
 
 /* 模块级状态 */
 let worker: Worker | null = null;

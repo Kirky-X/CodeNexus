@@ -1,9 +1,11 @@
-/* LadybugDB WASM 管理层 — 使用 sync 变体，直接在主线程加载和查询 .lbug 文件
+/* LadybugDB WASM 管理层 — sync 变体运行于 Web Worker 内（由 lbug.worker.ts 加载）
  *
- * sync 变体无需 Web Worker，直接访问 Emscripten 虚拟文件系统。
- * 所有数据库操作同步执行，适合本地文件查询场景。
+ * 直接访问 Emscripten 虚拟文件系统，所有数据库操作同步执行。
+ * WASM 以静态导入引入：动态导入在 inline worker（blob 上下文）中
+ * 会被构建为无法解析的相对 specifier。
  */
 
+import lbugSyncDefault from "@ladybugdb/wasm-core/sync";
 import type {
   Database as LbugDB,
   Connection as LbugConn,
@@ -36,8 +38,9 @@ interface EmscriptenFS {
   unlink?(path: string): void;
 }
 
-/* WASM 模块 — 延迟加载 */
-let lbugModule: LbugSyncModule | null = null;
+/* WASM 模块实例 — 引擎在 worker 内常驻 */
+const lbugModule = lbugSyncDefault as unknown as LbugSyncModule;
+let initPromise: Promise<void> | null = null;
 
 /* 虚拟文件系统路径 — 直接写入根目录，避免需要 mkdir */
 const VFS_ROOT = "/";
@@ -46,21 +49,18 @@ const VFS_ROOT = "/";
 let vfsFileCounter = 0;
 
 /**
- * 获取 WASM 模块实例（单例，延迟加载）
+ * 确保 WASM 模块已初始化（幂等）
  */
 async function getLbugModule(): Promise<LbugSyncModule> {
-  if (lbugModule) return lbugModule;
-
+  if (!initPromise) initPromise = lbugModule.init();
   try {
-    const ns = await import("@ladybugdb/wasm-core/sync");
-    const mod = (ns as unknown as { default: LbugSyncModule }).default;
-    await mod.init();
-    lbugModule = mod;
-    return mod;
+    await initPromise;
   } catch (err) {
+    initPromise = null;
     console.error("[lbugWasm] WASM 模块初始化失败:", err);
     throw new Error(`WASM 引擎初始化失败: ${err instanceof Error ? err.message : String(err)}`);
   }
+  return lbugModule;
 }
 
 /**

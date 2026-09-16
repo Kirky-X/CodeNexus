@@ -11,6 +11,11 @@ export default defineConfig({
     include: ["src/**/*.test.{ts,tsx}"],
   },
   plugins: [react(), tailwindcss()],
+  /* worker 用 ES 格式：lbug.worker 内含动态导入（WASM 引擎依赖），
+   * 默认 iife 不支持代码分割 */
+  worker: {
+    format: "es",
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
