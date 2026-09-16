@@ -4,7 +4,7 @@
  */
 
 import type { LbugDatabase } from "./lbugWasm";
-import type { GraphNode, GraphEdge, GraphData, SchemaInfo, TraceResult, TracePath } from "./types";
+import type { GraphNode, GraphEdge, GraphData, SchemaInfo } from "./types";
 
 /* ── 常量 ─────────────────────────────────────────── */
 
@@ -380,103 +380,5 @@ export function querySchema(db: LbugDatabase): SchemaInfo {
     edge_types: [{ type: "ALL", count: totalEdges }],
     total_nodes: totalNodes,
     total_edges: totalEdges,
-  };
-}
-
-/* ── 追踪查询 ─────────────────────────────────────── */
-
-/**
- * 执行追踪查询
- * 对齐后端 graph_query.rs::query_trace
- */
-export function queryTrace(
-  db: LbugDatabase,
-  projectName: string,
-  nodeName: string,
-  mode: string,
-  direction: string,
-  maxDepth = 10,
-): TraceResult {
-  const edgeTypes =
-    mode === "call"
-      ? ["CALLS", "FFI_CALLS", "HTTP_CALLS", "ASYNC_CALLS"]
-      : mode === "variable"
-        ? ["READS", "WRITES", "ACCESSES", "DATAFLOWS"]
-        : ["CALLS", "READS", "WRITES", "ACCESSES"];
-
-  const pattern =
-    direction === "downstream"
-      ? `(a)-[r:${edgeTypes.join("|")}*1..${maxDepth}]->(b)`
-      : direction === "upstream"
-        ? `(a)<-[r:${edgeTypes.join("|")}*1..${maxDepth}]-(b)`
-        : `(a)-[r:${edgeTypes.join("|")}*1..${maxDepth}]-(b)`;
-
-  const cypher =
-    `MATCH ${pattern} WHERE a.name = '${escapeCypherStr(nodeName)}' AND a.project = '${escapeCypherStr(projectName)}' ` +
-    `RETURN DISTINCT b.name AS target_name LIMIT 100`;
-
-  let rows: Record<string, unknown>[];
-  try {
-    rows = db.query(cypher);
-  } catch {
-    rows = [];
-  }
-
-  const targetNames = rows
-    .map((r) => getStr(r, "target_name"))
-    .filter((s): s is string => !!s);
-
-  /* 查询起点节点 */
-  const originNode = querySingleNode(db, nodeName, projectName);
-
-  const paths: TracePath[] = [];
-  for (const targetName of targetNames) {
-    try {
-      const targetNode = querySingleNode(db, targetName, projectName);
-      paths.push({ nodes: [originNode, targetNode], edges: [] });
-    } catch {
-      /* 目标节点不存在 */
-    }
-  }
-
-  return {
-    origin: originNode,
-    paths,
-    direction: (direction === "downstream" || direction === "upstream" ? direction : "both") as TraceResult["direction"],
-  };
-}
-
-/** 查询单个节点 */
-function querySingleNode(
-  db: LbugDatabase,
-  nodeName: string,
-  projectName: string,
-): GraphNode {
-  const cypher =
-    `MATCH (n) WHERE n.name = '${escapeCypherStr(nodeName)}' ` +
-    `RETURN n.name AS name, n.qualifiedName AS qualified_name, n.filePath AS file_path, ` +
-    `n.project AS project, n.startLine AS start_line, n.endLine AS end_line, ` +
-    `labels(n) AS labels ` +
-    `LIMIT 1`;
-
-  const rows = db.query(cypher);
-  if (rows.length === 0) {
-    throw new Error(`节点 '${nodeName}' 未找到`);
-  }
-
-  const row = rows[0];
-  const name = getStr(row, "name") ?? nodeName;
-  const label = parseLabel(row, "Node");
-
-  return {
-    id: name,
-    label: label as GraphNode["label"],
-    name,
-    file_path: getStr(row, "file_path"),
-    project: getStr(row, "project") ?? projectName,
-    qualified_name: getStr(row, "qualified_name"),
-    start_line: getNum(row, "start_line"),
-    end_line: getNum(row, "end_line"),
-    x: 0, y: 0, z: 0,
   };
 }

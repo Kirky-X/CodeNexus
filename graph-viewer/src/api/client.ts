@@ -1,8 +1,8 @@
 /* WASM 图数据客户端 — 在浏览器内直接查询 .lbug 数据库 */
 
-import type { GraphData, SchemaInfo, TraceResult, TraceMode } from "../lib/types";
+import type { GraphData, SchemaInfo } from "../lib/types";
 import { LbugDatabase } from "../lib/lbugWasm";
-import { queryGraph, querySchema, queryTrace } from "../lib/graphQuery";
+import { queryGraph, querySchema } from "../lib/graphQuery";
 import type { LoadBudget } from "../lib/memoryBudget";
 
 /* 模块级状态 — 当前打开的数据库与其加载预算 */
@@ -72,19 +72,4 @@ export async function fetchSchema(
 ): Promise<SchemaInfo> {
   const db = getDb();
   return querySchema(db);
-}
-
-/**
- * 执行追踪查询
- */
-export async function fetchTrace(
-  _project: string,
-  nodeId: string,
-  mode: TraceMode,
-  direction: "downstream" | "upstream" | "both" = "both",
-  maxDepth = 10,
-  _lbugPath?: string,
-): Promise<TraceResult> {
-  const db = getDb();
-  return queryTrace(db, db.fileName, nodeId, mode, direction, maxDepth);
 }
