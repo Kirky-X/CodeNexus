@@ -54,7 +54,7 @@ impl From<&Edge> for TraceEdge {
     ///
     /// Shared by all trace engines (bfs, call_graph, data_flow, taint) and
     /// service-layer trace callers so the edge-type string formatting lives
-    /// in exactly one place (C2 LOW-1).
+    /// in exactly one place (C2 ).
     fn from(e: &Edge) -> Self {
         Self {
             edge_type: e.edge_type.as_db_type().to_string(),

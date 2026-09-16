@@ -215,7 +215,7 @@ impl<'a> CommunityDetector<'a> {
         let mut weights: HashMap<(String, String), f64> = HashMap::new();
         // BTreeSet keeps node names in sorted order at insertion time, so
         // `into_iter()` below yields them deterministically without a
-        // separate `.sort()` call (LOW-003: replaces HashSet + Vec::sort).
+        // separate `.sort()` call (replaces HashSet + Vec::sort).
         // Deterministic node ordering is required in *production* too — not
         // just tests — so that repeated runs on the same DB produce the
         // same community ids.
@@ -275,7 +275,7 @@ fn leiden(graph: &UnGraph<String, f64>, resolution: f64) -> Vec<usize> {
 /// Uses iterative DFS over `graph` restricted to `nodes` (no recursion →
 /// no stack-overflow risk). An empty node set is considered connected by
 /// convention. Uses `Vec<bool>` scratch buffers indexed by node id for
-/// O(1) membership tests (LOW-001/LOW-004: previously used HashSet with
+/// O(1) membership tests (previously used HashSet with
 /// hashing overhead).
 #[cfg(test)]
 fn is_connected_subgraph(graph: &UnGraph<String, f64>, nodes: &[NodeIndex]) -> bool {
@@ -406,7 +406,7 @@ fn modularity_core(graph: &UnGraph<String, f64>, resolution: f64, mode: RefineMo
         let num_work_nodes = work.node_count();
         // Degree of each node, with self-loops counted twice (standard
         // convention). Single iteration over `edges(ni)`: self-loops are
-        // counted twice in-place (LOW-002: previously iterated
+        // counted twice in-place (previously iterated
         // `edges_connecting(ni, ni)` separately).
         let degrees: Vec<f64> = (0..num_work_nodes)
             .map(|i| {
@@ -426,7 +426,7 @@ fn modularity_core(graph: &UnGraph<String, f64>, resolution: f64, mode: RefineMo
 
         // Σ_tot per community (sum of member degrees, including self-loop
         // double-counting). Maintained incrementally as nodes move between
-        // communities (HIGH-001: previously rebuilt O(N) per node → O(N²)
+        // communities (previously rebuilt O(N) per node → O(N²)
         // per pass; now O(1) update per move).
         // Community ids in `node_to_comm` are always < `num_work_nodes`
         // (initially each node is its own community; moves only target
@@ -490,7 +490,7 @@ fn modularity_core(graph: &UnGraph<String, f64>, resolution: f64, mode: RefineMo
                 }
 
                 if best_comm != v_comm {
-                    // Incremental Σ_tot update (HIGH-001): O(1) per move
+                    // Incremental Σ_tot update O(1) per move
                     // instead of O(N) rebuild on the next iteration.
                     comm_tot[v_comm] -= k_v;
                     comm_tot[best_comm] += k_v;
@@ -500,7 +500,7 @@ fn modularity_core(graph: &UnGraph<String, f64>, resolution: f64, mode: RefineMo
             }
         }
 
-        // Phase 1.5 (Leiden refinement, C3): split each community into its
+        // (Leiden refinement, C3): split each community into its
         // internally connected sub-communities. This guarantees the
         // connectivity invariant that plain Louvain may violate. Skipped
         // in [`RefineMode::Plain`] (pure Louvain mode).
@@ -602,7 +602,7 @@ fn modularity_core(graph: &UnGraph<String, f64>, resolution: f64, mode: RefineMo
 /// Takes ownership of `partition` (avoids the previous
 /// `partition.to_vec()` clone). Uses reusable `Vec<bool>` scratch buffers
 /// instead of per-community `HashSet` allocation, and `BTreeMap`
-/// for deterministic community iteration order (LOW-5).
+/// for deterministic community iteration order.
 fn refine_partition_connected(
     graph: &petgraph::Graph<(), f64, petgraph::Undirected>,
     mut partition: Vec<usize>,
@@ -612,7 +612,7 @@ fn refine_partition_connected(
         return partition;
     }
     // Group nodes by community. BTreeMap for deterministic iteration order
-    // (LOW-5: HashMap iteration order is non-deterministic across runs due
+    // (HashMap iteration order is non-deterministic across runs due
     // to random seeding, which could affect which component retains the
     // original community id).
     use std::collections::BTreeMap;
@@ -1560,7 +1560,7 @@ mod tests {
     }
 
     // ====================================================================
-    // Round 4 — M-6/M-7/M-8 supplementary tests (review follow-up)
+    // Round 4 — supplementary tests (review follow-up)
     // ====================================================================
 
     // ---- leiden() basic scenarios (mirror the louvain() ones) ----

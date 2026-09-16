@@ -155,7 +155,7 @@ impl<'a> SearchEngine<'a> {
             SearchMode::GraphEnhanced => self.search_graph_enhanced(project, params)?,
             SearchMode::MultiSignal => {
                 let mut hits = self.search_graph_enhanced(project, params)?;
-                // A-04: batch-load TESTS targets + qn→node_id map once, then
+                // batch-load TESTS targets + qn→node_id map once, then
                 // score each candidate via in-memory HashSet/HashMap lookups.
                 // Old path fired 17 storage queries per candidate (16 label
                 // lookups + 1 TESTS edge count); new path fires 17 total.
@@ -492,7 +492,7 @@ impl<'a> SearchEngine<'a> {
     ///
     /// `tested_ids` and `qn_to_id` are batch-loaded once per MultiSignal
     /// search by [`SearchEngine::search`]; this method performs only
-    /// in-memory lookups (A-04 batch refactor).
+    /// in-memory lookups (batch refactor).
     fn score_multi_signal(
         &self,
         candidate: &SearchResult,
@@ -517,7 +517,7 @@ impl<'a> SearchEngine<'a> {
     }
 
     /// Batch-loads the set of node ids that are targets of `TESTS` edges in
-    /// `project`. Single Cypher query regardless of candidate count (A-04).
+    /// `project`. Single Cypher query regardless of candidate count.
     ///
     /// # Errors
     ///
@@ -543,7 +543,7 @@ impl<'a> SearchEngine<'a> {
     /// Batch-resolves `qualifiedName → node_id` for the supplied `qns` in
     /// `project`. Fans out across [`SYMBOL_LABELS`] once per label (16
     /// queries) regardless of candidate count, replacing the old per-
-    /// candidate lookup (A-04).
+    /// candidate lookup.
     fn load_qn_to_node_id_map(&self, project: &str, qns: &[&str]) -> HashMap<String, String> {
         if qns.is_empty() {
             return HashMap::new();
@@ -2249,7 +2249,7 @@ mod tests {
         }
     }
 
-    // ===== A-04 batch: load_tested_node_ids + load_qn_to_node_id_map =====
+    // ===== batch: load_tested_node_ids + load_qn_to_node_id_map =====
 
     #[test]
     fn load_tested_node_ids_returns_all_targets_for_project() {

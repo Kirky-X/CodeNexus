@@ -1846,7 +1846,7 @@ mod tests {
     }
 
     // Covers the DQ violation reporting branch in index_core (lines 248-258).
-    // Pre-populates the DB with a File node that has an empty hash (DQ-006
+    // Pre-populates the DB with a File node that has an empty hash (
     // violation), then calls index_core. The DQ check should detect the
     // violation and trigger the `if !dq_report.is_clean()` branch.
     #[cfg(feature = "lang-rust")]
@@ -1869,7 +1869,7 @@ mod tests {
             .block_on(build_kit(&config))
             .expect("build_kit");
 
-        // Pre-populate the DB with a DQ-006 violation: a File node with empty
+        // Pre-populate the DB with a violation: a File node with empty
         // hash. Use a separate project name to avoid conflicts with the
         // indexer. The data is committed via a fresh Repository connection
         // (LadybugDB auto-commits each execute), so the fresh_repo opened

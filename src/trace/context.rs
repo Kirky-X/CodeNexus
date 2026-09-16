@@ -816,7 +816,7 @@ impl<'a> ContextCollector<'a> {
     }
 
     /// Resolves a node's name by id using a single label-less MATCH query
-    /// (A-09: replaces 12 per-label queries with 1).
+    /// (replaces 12 per-label queries with 1).
     /// Falls back to the id itself if no matching node is found.
     fn resolve_node_name(&self, node_id: &str) -> StorageResult<String> {
         if node_id.is_empty() {
@@ -1945,7 +1945,7 @@ mod tests {
         );
     }
 
-    // ===== A-01: collect_callers / collect_callees tests =====
+    // ===== collect_callers / collect_callees tests =====
 
     fn create_caller_callee_fixture(s: &dyn Storage) {
         s.execute("CREATE (:Function {id: 'fn_a', project: 'demo', name: 'func_a', qualifiedName: 'demo.func_a', filePath: '/src/a.rs', startLine: 1, endLine: 10, signature: 'fn func_a()', returnType: 'void', isExported: true, docstring: '', content: '', parentQn: ''});").expect("create a");
@@ -2045,7 +2045,7 @@ mod tests {
         assert!(names.contains(&"caller2"));
     }
 
-    // ===== A-09: resolve_node_name single-query tests =====
+    // ===== resolve_node_name single-query tests =====
 
     #[test]
     fn resolve_node_name_finds_function() {

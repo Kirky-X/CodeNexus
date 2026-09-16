@@ -79,10 +79,9 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 /// `[]` on uninitialized DBs. The storage layer keeps strict semantics —
 /// [`QualityChecker::check_project_isolation`](crate::storage::quality::QualityChecker)
 /// relies on the error propagating to detect Project-table-drop violations
-/// (DQ-005).
 ///
 /// Matches the same substrings as the tolerance logic previously embedded in
-/// `Repository::list_projects` (reverted because it masked DQ-005 violations).
+/// `Repository::list_projects` (reverted because it masked violations).
 #[must_use]
 pub fn is_table_missing_error(err: &StorageError) -> bool {
     let msg = err.to_string();

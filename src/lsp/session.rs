@@ -219,16 +219,15 @@ fn wait_with_timeout(child: &mut Child, timeout_ms: u64) -> bool {
 /// bounds the wait to `timeout_ms` and, on timeout, leaves the OS to reap
 /// the orphaned process: zombies (already-exited children not yet waited
 /// on) are reaped by init when CodeNexus exits; D-state processes self-reap
-/// once the syscall returns (LOW-4: D-state is the *cause*, zombie is one
+/// once the syscall returns (D-state is the *cause*, zombie is one
 /// possible *result* — the warning now mentions both instead of conflating
 /// them). The warning makes the orphan visible to the user (
 /// fail-loud).
 ///
-/// # LOW-2 / LOW-3
 ///
-/// Both `provider.shutdown()` (LOW-2, reaches here via
+/// Both `provider.shutdown()` (reaches here via
 /// [`shutdown_session`] → [`force_kill_and_wait`]) and direct `child.kill()`
-/// callers (LOW-3, [`kill_session`] on the initialize-failure path) emit
+/// callers ([`kill_session`] on the initialize-failure path) emit
 /// the stderr warning via this helper — no kill site is silent.
 fn kill_and_warn(child: &mut Child, timeout_ms: u64, context: &str) {
     let _ = child.kill();

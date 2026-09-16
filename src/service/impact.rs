@@ -231,7 +231,7 @@ async fn impact(
     name = "impact",
     version = "0.3.5",
     tool_name = "impact",
-    description = "Analyze the blast radius (upstream callers) of changing a symbol."
+    description = "Analyze the blast radius (upstream dependents) of changing a symbol. Params: symbol (required); depth — graph-load depth (default 3); edge_types — comma-separated uppercase edge types, e.g. CALLS,IMPLEMENTS (empty = defaults); max_depth — 0 = default analysis depth 5 and legacy output, >0 switches to enhanced output with risk_assessment and the affected list; include_tests — count test callers."
 )]
 async fn impact_mcp(
     symbol: String,

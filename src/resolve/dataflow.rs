@@ -128,7 +128,7 @@ impl<'a> DataFlowResolver<'a> {
                     ) {
                         edge.start_line = Some(call.line);
                         // Create the Parameter node so the edge target is not
-                        // orphaned (DQ-004).
+                        // orphaned.
                         let param_qn = edge.target.clone();
                         // Single-line for coverage: tarpaulin attribute continuation
                         let param_node = Node::builder(
@@ -841,7 +841,7 @@ mod tests {
 
     #[test]
     fn resolve_dataflows_creates_parameter_node_for_arg_pass() {
-        // DQ-004: resolve_dataflows must create a Parameter node for each
+        // resolve_dataflows must create a Parameter node for each
         // arg-pass edge so the edge target is not orphaned.
         let foo_node = make_node("foo", "a.rs", "proj", NodeLabel::Function);
         let mut result = make_result("a.rs", vec![foo_node]);
@@ -1494,7 +1494,7 @@ mod tests {
         assert!((edge.confidence - 0.80).abs() < 1e-6);
         assert_eq!(edge.start_line, Some(5));
 
-        // Parameter node should be materialized in the graph (DQ-004).
+        // Parameter node should be materialized in the graph.
         let param = graph
             .get_node(&"proj.a.rs.bar.param0".to_string())
             .expect("Parameter node should be created");

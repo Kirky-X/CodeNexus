@@ -52,7 +52,7 @@ impl From<ProjectRecord> for ProjectOutput {
 /// list instead of erroring — the CLI `list` command should exit 0 with a
 /// clean `[]` output. The "table missing" detection lives at the service
 /// layer (not storage) so [`QualityChecker::check_project_isolation`] keeps
-/// strict semantics for DQ-005 violation detection.
+/// strict semantics for violation detection.
 #[cfg(any(feature = "cli", test))]
 pub fn run_list(kit: &AsyncKit<AsyncReady>) -> Result<Vec<ProjectOutput>, CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;

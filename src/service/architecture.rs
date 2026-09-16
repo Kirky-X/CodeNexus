@@ -77,7 +77,7 @@ async fn architecture(project: String) -> Result<(), ApiError> {
     name = "architecture",
     version = "0.3.5",
     tool_name = "architecture",
-    description = "Show high-level architecture overview of a project."
+    description = "Show a high-level architecture overview of a project: module boundaries, dependency directions, entry points, hotspots. Params: project — project name or id (empty = all projects)."
 )]
 async fn architecture_mcp(project: String) -> Result<ArchitectureOutput, ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;

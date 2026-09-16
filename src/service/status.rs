@@ -124,7 +124,7 @@ pub(crate) fn resolve_project_root(root_path: &str, db_path: &Path) -> PathBuf {
 /// 0 with a clean `{"projects":[]}` output. The "table missing" detection
 /// lives at the service layer (not storage) so
 /// [`QualityChecker::check_project_isolation`] keeps strict semantics for
-/// DQ-005 violation detection.
+/// violation detection.
 #[cfg(any(feature = "cli", test))]
 pub fn run_status(kit: &AsyncKit<AsyncReady>) -> Result<StatusOutput, CodeNexusError> {
     let storage = kit.require::<StorageModule>()?;

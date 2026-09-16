@@ -1430,7 +1430,7 @@ mod tests {
         );
     }
 
-    // --- 信号处理测试 (BUG-002) ---
+    // --- 信号处理测试 ---
 
     #[test]
     fn register_signal_handlers_returns_ok() {
@@ -1892,7 +1892,7 @@ mod tests {
     #[cfg(feature = "lang-rust")]
     #[test]
     fn test_clear_tree_cache_empties_cache() {
-        // T093 manual cache clearing.
+        // manual cache clearing.
         let mut daemon = Daemon::new("/repo", "demo", 2000, "/tmp/db.lbug");
         let _ = daemon
             .parse_file_incremental("a.rs", "fn a() {}\n")
