@@ -4,6 +4,8 @@
 
 ## Supported Languages
 
+21 languages (each gated by a `lang-*` Cargo feature; all enabled by `full`):
+
 | Language | Extensions | Key extractions |
 |----------|-----------|-----------------|
 | C | `.c`, `.h` | Functions, calls, `#include`, typedef, globals |
@@ -14,6 +16,19 @@
 | Go | `.go` | `func`, `struct`, `interface`, `import` |
 | Java | `.java` | `class`, `method`, `import`, `package` |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.c++`, `.hpp`, `.hh`, `.hxx`, `.h++` | `class`, `function`, `#include`, `namespace`, `template` |
+| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | `function`, `class`, `method`, `variable`, `import`/`export` |
+| Ruby | `.rb` | `class`, `method`, `module` (namespace) |
+| Haskell | `.hs` | function, `module`, `data`/`newtype`, `type` |
+| OCaml | `.ml` | function, `module`, `type`, `let` |
+| Scala | `.scala`, `.sbt` | `class`, `trait`, `def` |
+| PHP | `.php` | `class`, `function`, `method`, `namespace` |
+| C# | `.cs`, `.csx` | `class`, `struct`, `interface`, `enum`, `method`, `namespace` |
+| Bash | `.sh`, `.bash` | shell `function`, global variables |
+| HTML | `.html`, `.htm` | element identifiers/properties (anchors for web graphs) |
+| CSS | `.css`, `.scss` | selectors, rules (namespace/class) |
+| JSON | `.json`, `.jsonc` | object keys as properties |
+| Regex | `.regex` | pattern constants |
+| Verilog | `.v`, `.sv` | `module`, function/task, ports |
 
 > Static analysis limitation: For Rust in particular, trait-object `dyn` dispatch and many cross-module calls are not captured by tree-sitter. The resulting call graph is a lower bound. The reserved `--lsp true` flag and the `lsp_goto_def`/`lsp_hover` commands point at the future LSP-augmented path.
 

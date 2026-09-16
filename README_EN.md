@@ -25,7 +25,7 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 <td align="center" width="25%">⚡<br><b>Incremental pipeline</b><br><span style="color:#64748B">hash diffing · reparse only changes</span></td>
 <td align="center" width="25%">🕸️<br><b>Property graph</b><br><span style="color:#64748B">44 node types · 30 edge types · Cypher</span></td>
 <td align="center" width="25%">🧭<br><b>Multi-hop tracing</b><br><span style="color:#64748B">call chains · data flow · taint paths</span></td>
-<td align="center" width="25%">🔌<br><b>Dual entry</b><br><span style="color:#64748B">30 CLI commands · 8 MCP tools</span></td>
+<td align="center" width="25%">🔌<br><b>Dual entry</b><br><span style="color:#64748B">29 CLI commands + serve mode · 10 MCP tools</span></td>
 </tr>
 </table>
 
@@ -83,7 +83,7 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 <td width="50%" style="vertical-align:top; padding: 12px">📦 <b>Team artifacts</b><br><span style="color:#64748B"><code>export</code> / <code>import</code> compressed <code>.graph.zst</code> artifacts for sharing indexes</span></td>
 </tr>
 <tr>
-<td width="50%" style="vertical-align:top; padding: 12px">🤖 <b>Multi-agent MCP</b><br><span style="color:#64748B"><code>setup</code> auto-detects Claude Code / Cursor / Codex; <code>hook</code> emits PreToolUse/PostToolUse JSON; <code>mcp</code> stdio server exposes 8 tools</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🤖 <b>Multi-agent MCP</b><br><span style="color:#64748B"><code>setup</code> auto-detects Claude Code / Cursor / Codex; <code>hook</code> emits PreToolUse/PostToolUse JSON; <code>mcp</code> stdio server exposes 10 tools with parameter semantics in each tool description</span></td>
 <td width="50%" style="vertical-align:top; padding: 12px">👁️ <b>File watching</b><br><span style="color:#64748B">Daemon mode with automatic incremental indexing (<code>daemon</code> feature, graceful SIGTERM/SIGINT shutdown)</span></td>
 </tr>
 <tr>
@@ -96,7 +96,7 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 </tr>
 </table>
 
-Beyond the core capabilities above, CodeNexus also ships `context` assembly, `detect_changes` change detection, `rename` rename-impact pre-checks, oxcache-backed query-result caching, and structured logging via inklog; the grouped list of all 30 subcommands lives in the [🛠️ CLI Commands](#️-cli-commands) section, and per-command flag semantics with runnable examples are in the [📖 User Guide · Command reference](docs/USER_GUIDE.md#️-命令详解).
+Beyond the core capabilities above, CodeNexus also ships `context` assembly, `detect_changes` change detection, `rename` rename-impact pre-checks, oxcache-backed query-result caching, and structured logging via inklog; the grouped list of all 29 subcommands (plus the `mcp` serve mode) lives in the [🛠️ CLI Commands](#️-cli-commands) section, and per-command flag semantics with runnable examples are in the [📖 User Guide · Command reference](docs/USER_GUIDE.md#️-命令详解).
 
 ---
 
@@ -202,17 +202,20 @@ codenexus index --path /path/to/project --name myproject --ram_first true
 # 2. Query functions (Cypher subset)
 codenexus query --cypher "MATCH (f:Function) RETURN f.name LIMIT 10"
 
-# 3. Trace call chains
-codenexus trace --symbol main --trace_type calls --depth 5 --path_filter "" --detect_cycles false --cross_service false
+# 3. Trace call chains (optional flags have built-in defaults: depth=5, no path filter)
+codenexus trace --symbol main --trace_type calls
 
-# 4. Search symbols (exact / regex / fuzzy + BM25 full-text)
-codenexus search --text "parse" --limit 20 --mode exact --fulltext false --project ""
+# 4. Search symbols (exact / regex / fuzzy + BM25 full-text; limit defaults to 50)
+codenexus search --text "parse" --mode exact
+codenexus search --text "authentication logic" --fulltext true
 ```
+
+> 💡 **Tip**: add `.codenexus/` to your project's `.gitignore` (the index database and logs both live there). You can also create `.codenexus/config.json` to pin per-project defaults (e.g. `ram_first`, complexity thresholds) — see the [📖 User Guide · Configuration file](docs/USER_GUIDE.md#️-配置文件).
 
 ### 🧭 Core concepts
 
 - **Knowledge graph model**: source code is parsed into a property graph of 44 node types and 30 edge types, stored in LadybugDB and queryable via a Cypher subset.
-- **Strict flag-based CLI**: no positional arguments; every subcommand parameter is a **mandatory snake_case long option** (e.g. `--symbol`, `--trace_type`) and booleans take explicit values (`true`/`false`).
+- **Strict flag-based CLI**: no positional arguments; parameters are snake_case long options (e.g. `--symbol`, `--trace_type`) and booleans take explicit values (`true`/`false`). Optional parameters carry built-in defaults (e.g. `trace --depth 5`, `search --limit 50` — full list via each command's `--help`) and can be pinned per project via `.codenexus/config.json`.
 - **Global `--db` option**: the database path defaults to `.codenexus/<project>.lbug` and must precede the subcommand; when exactly one index exists it is auto-discovered.
 - **Exit-code contract**: 0 success, 1 internal error, 2 invalid input / project not found / query error, 4 not found / database corrupt (see `src/service/error.rs`).
 
@@ -222,7 +225,7 @@ codenexus search --text "parse" --limit 20 --mode exact --fulltext false --proje
 
 ## 🛠️ CLI Commands
 
-CodeNexus ships **30 subcommands**, grouped by function:
+CodeNexus ships **29 subcommands** (plus the `codenexus mcp` serve mode), grouped by function:
 
 - **Indexing & project management**: `index` / `daemon` / `status` / `list` / `clean` / `export` / `import`
 - **Query & search**: `query` / `search` / `context`
@@ -237,7 +240,7 @@ Full flag semantics and runnable examples for every command are in the [📖 Use
 
 ## 🔌 MCP Integration
 
-CodeNexus uses [sdforge](https://crates.io/crates/sdforge) to provide an MCP (Model Context Protocol) server exposing **8 tools** (`query` / `trace` / `impact` / `search` / `context` / `architecture` / `diagram` / `arch_diff`) over the sdforge `mcp` stdio transport. The tools share the same `#[forge]` definitions as the identically named CLI commands, so parameter semantics match.
+CodeNexus uses [sdforge](https://crates.io/crates/sdforge) to provide an MCP (Model Context Protocol) server exposing **10 tools** (`query` / `trace` / `impact` / `search` / `context` / `architecture` / `diagram` / `arch_diff` / `dead_code` / `detect_changes`) over the sdforge `mcp` stdio transport. The tools share the same `#[forge]` definitions as the identically named CLI commands; each tool description documents its parameter semantics and defaults, and the server opens the database read-only so it can run alongside a writer.
 
 ```bash
 # Start the MCP server (stdio)
@@ -283,7 +286,7 @@ What each tool does is described in the [📖 User Guide · Multi-agent integrat
 
 ## 💻 Examples
 
-All 6 runnable examples live in [`examples/`](examples/), each registered as a `cargo run --bin` target in `examples/Cargo.toml`:
+All 14 runnable examples live in [`examples/`](examples/), each registered as a `cargo run --bin` target in `examples/Cargo.toml`:
 
 | Example | File | Description |
 | ------- | ---- | ----------- |
@@ -292,14 +295,22 @@ All 6 runnable examples live in [`examples/`](examples/), each registered as a `
 | symbol_search | `examples/src/bin/symbol_search.rs` | Search symbols by name and type, handle empty results |
 | call_tracing | `examples/src/bin/call_tracing.rs` | Trace function call paths forward, build a call graph |
 | impact_analysis | `examples/src/bin/impact_analysis.rs` | Analyze the blast radius of changing a symbol (reverse BFS) |
+| symbol_context | `examples/src/bin/symbol_context.rs` | 360° symbol view (callers / callees / execution flows), subgraph loading and symbol disambiguation |
 | export_import | `examples/src/bin/export_import.rs` | Graph database export/import verification |
+| project_lifecycle | `examples/src/bin/project_lifecycle.rs` | Project lifecycle: index multiple projects → list → resolve by name → remove |
+| code_analysis | `examples/src/bin/code_analysis.rs` | Code-quality trio: complexity / dead code / community detection |
+| api_surface | `examples/src/bin/api_surface.rs` | API surface analysis: route map / schema check / API impact / cross-service calls / MCP tool map |
+| architecture_diagram | `examples/src/bin/architecture_diagram.rs` | Architecture overview + self-contained interactive HTML diagram + two-project architecture diff |
+| daemon_watch | `examples/src/bin/daemon_watch.rs` | File-watching daemon: `notify` debounce → incremental indexing (Observer pattern) → graceful stop |
+| git_integration | `examples/src/bin/git_integration.rs` | Git integration: map `git diff` changed lines to affected symbols with risk grading |
+| setup_mcp | `examples/src/bin/setup_mcp.rs` | MCP onboarding: auto-detect installed AI coding agents and write MCP server config |
 
 ```bash
 # Run a single example
 cargo run --manifest-path examples/Cargo.toml --bin basic_indexing
 
 # Run all examples
-for bin in basic_indexing cypher_query symbol_search call_tracing impact_analysis export_import; do
+for bin in basic_indexing cypher_query symbol_search call_tracing impact_analysis symbol_context export_import project_lifecycle code_analysis api_surface architecture_diagram daemon_watch git_integration setup_mcp; do
   cargo run --manifest-path examples/Cargo.toml --bin $bin
 done
 ```

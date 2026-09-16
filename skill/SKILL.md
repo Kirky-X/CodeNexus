@@ -9,7 +9,7 @@ description: "Code knowledge graph indexer and query tool. Use when indexing cod
 
 ## Description
 
-CodeNexus is a code knowledge graph indexing tool. It parses source code (C, Rust, Fortran, Python, TypeScript, Go, Java, C++) using tree-sitter, builds a queryable graph in LadybugDB, and supports call-chain tracing, data-flow analysis, cross-language FFI tracking, semantic search, change-impact analysis, refactoring proposals, LSP integration, and MCP server integration.
+CodeNexus is a code knowledge graph indexing tool. It parses source code (21 languages via tree-sitter — C, Rust, Fortran, Python, TypeScript, Go, Java, C++, JavaScript, Ruby, Haskell, OCaml, Scala, PHP, C#, Bash, HTML, CSS, JSON, Regex, Verilog) and builds a queryable graph in LadybugDB, supporting call-chain tracing, data-flow analysis, cross-language FFI tracking, semantic search, change-impact analysis, refactoring proposals, LSP integration, and MCP server integration.
 
 Use this Skill when you need to index a codebase, query its structure, trace function calls or data flow, analyze the impact of changes, search for symbols, watch files for incremental updates, manage projects, export/import graph artifacts, inspect a symbol's 360° context, detect symbols affected by git changes, propose renames, query an LSP server, or set up MCP integration with AI agents.
 
@@ -18,10 +18,10 @@ Use this Skill when you need to index a codebase, query its structure, trace fun
 - **No positional arguments.** Everything is a named flag. `codenexus query "MATCH ..."` fails; use `codenexus query --cypher "MATCH ..."`.
 - **Booleans take a value**: `--force true`, `--fresh true` (index only — drops existing DB file before init to reclaim DuckDB dead space), `--apply true`, `--cross_service false` (trace-only), `--embed false`, `--ram_first false`, `--enhanced false`, `--include_tests false` (impact).
 - **Project filter accepts BOTH name and id.** All commands that take `--project <VALUE>` resolve the value via `resolve_project_id` (in `src/service/project.rs`): if the value matches a stored project `name`, the canonical project `id` is used; otherwise the value is treated as a raw project id. Pass `--project ""` (empty string) only where explicitly documented to disable the filter.
-- **Plain-typed params are required.** Function parameters with plain `String`/`u32`/`bool` types (no `Option<T>`) map to **mandatory** CLI flags with no built-in defaults. Empty strings are allowed where the source explicitly handles them (e.g. `--edge_types ""`, `--path_filter ""`, `--protocol ""`).
+- **Plain-typed params have built-in defaults for common commands.** Optional flags no longer need placeholder values: `trace` defaults `--depth 5` / `--path_filter ""` / `--detect_cycles false` / `--cross_service false`; `search` defaults `--limit 50` / `--mode ""` / `--fulltext false` / `--project ""`; `impact` defaults `--depth 3` / `--edge_types ""` / `--max_depth 0` / `--include_tests false`; `context` defaults `--depth 1` / `--project ""` / `--enhanced false`; `index` booleans (`--force`/`--lsp`/`--embed`/`--ram_first`/`--fresh`) default `false`; `detect_changes --mode` defaults `unstaged`. Per-project overrides go in `.codenexus/config.json` (`command_defaults.<command>.<flag>`; CLI flags always win). Remaining params (e.g. complexity thresholds) default to `0`/`""` sentinels meaning "use built-in default" — see each command's `--help`.
 - **Global options** on every command: `--db <DB_PATH>` and `--debounce-ms <MS>` (default `2000`, daemon-only relevance — safe to ignore otherwise).
 - **Default DB path** (when `--db` is omitted): `.codenexus/<project>.lbug`, where `<project>` is sanitized from the `--name` arg passed to `index`/`daemon` (preferred), or the dirname of the `--path` arg, or the fallback `codenexus`. The `.codenexus/` directory is auto-created. Example: `codenexus index --path /home/me/myrepo --name myrepo ...` resolves to `.codenexus/myrepo.lbug`. To override, pass `--db /custom/path.lbug`. ⚠️ `--name` is **`index`/`daemon`-only** — `search` uses `--text`+`--fulltext`+`--mode` (no `--name` flag). As of v0.3.7, when no `--name`/`--path` is available **and** `.codenexus/` contains exactly one `.lbug` file, that file is auto-selected (so `query`/`list`/`search` work without `--db` on a freshly-indexed project); if multiple `.lbug` files exist, the `codenexus` fallback is used and `--db` must be passed explicitly.
-- **Stderr noise**: every connection prints warnings like `inklog ... Failed to set log crate logger` and `storage::connection - skipping unsupported DDL statement`. These are benign; filter with `2>/dev/null` to see clean JSON, or `2>&1 | grep -v "WARN\|skipping unsupported"`.
+- **Stderr carries all logs (info included) plus per-phase index progress lines** like `[codenexus] [3/7] ParsePhase ok (1.2s)`; warnings such as `inklog ... Failed to set log crate logger` and `storage::connection - skipping unsupported DDL statement` are benign. **stdout is always the pure JSON channel** — `codenexus <cmd> > out.json` needs no filtering. Log file: `.codenexus/logs/codenexus.log`.
 - **JSON output**: every command that returns a result prints a single JSON object/array to stdout (commands like `daemon`, `hook`, `mcp` are streaming/long-running and do not emit a final JSON blob).
 
 ## Prerequisites
@@ -40,17 +40,13 @@ cd codenexus
 cargo build --release
 ```
 
-The binary is at `target/release/codenexus` (or `~/.cargo/bin/codenexus` if installed via `cargo install`). For semantic search (optional), install with:
+The binary is at `target/release/codenexus` (or `~/.cargo/bin/codenexus` if installed via `cargo install`). Semantic search (vector embeddings) is already included in the default `full` preset — no extra flag needed.
 
-```bash
-cargo install codenexus --features embed
-```
-
-Feature presets: `minimal` (Rust only), `core` (C+Rust+Python), `full` (all 8 languages + daemon + analysis + complexity + api-review + community + cross-service + lsp + mcp). The `mcp` feature enables the sdforge-based MCP server (`codenexus mcp`). At least one `lang-*` feature is required — the crate fails to compile otherwise.
+Feature presets: `minimal` (Rust only), `core` (C+Rust+Python), `full` (all 21 languages + daemon + analysis + complexity + api-review + community + cross-service + lsp + mcp). The `mcp` feature enables the sdforge-based MCP server (`codenexus mcp`). At least one `lang-*` feature is required — the crate fails to compile otherwise.
 
 ## Command Quick Reference
 
-CodeNexus has **28 subcommands** grouped into eight functional areas. **All required flags and detailed output schemas are documented in [`references/commands.md`](references/commands.md).** Run `codenexus <command> --help` for the auto-generated flag list.
+CodeNexus has **29 subcommands** (plus the `codenexus mcp` serve mode) grouped into functional areas. **All required flags and detailed output schemas are documented in [`references/commands.md`](references/commands.md).** Run `codenexus <command> --help` for the auto-generated flag list.
 
 | Command | Area | One-line description |
 |---------|------|----------------------|
@@ -73,6 +69,8 @@ CodeNexus has **28 subcommands** grouped into eight functional areas. **All requ
 | `tool_map` | Analysis | List MCP tool definitions and their handler functions. |
 | `shape_check` | Analysis | Validate API endpoint shape consistency (pagination envelope, error shape). |
 | `api_impact` | Analysis | Trace which callers would be affected by a given API endpoint change. |
+| `diagram` | Analysis | Render a self-contained interactive architecture HTML from the indexed graph. |
+| `arch_diff` | Analysis | Render an architecture diff HTML between two indexed project snapshots. |
 | `detect_changes` | Refactoring | Run `git diff` and map touched files/lines to indexed symbols with risk classification. |
 | `rename` | Refactoring | Propose graph + text edits for renaming a symbol. Dry-run by default; `--apply true` writes to disk. |
 | `lsp_goto_def` | LSP | Query LSP Go-to-Definition at a file/line/col. Auto-detects language server. |
@@ -98,10 +96,10 @@ Detailed documentation is split into supporting files that load on demand. The m
 
 | Reference | Contents |
 |-----------|----------|
-| [`references/commands.md`](references/commands.md) | Full flag list, options, output schemas, and notes for all 28 subcommands. |
+| [`references/commands.md`](references/commands.md) | Full flag list, options, output schemas, and notes for all 29 subcommands (+ `mcp` serve mode). |
 | [`references/storage-model.md`](references/storage-model.md) | `CodeRelation` NODE TABLE design, 44 node types, 24 edge types, confidence tiers. |
 | [`references/workflows.md`](references/workflows.md) | Nine end-to-end workflows: indexing, daemon, multi-project, FFI, refactoring, team artifacts, MCP, complexity audit, API surface. |
-| [`references/appendix.md`](references/appendix.md) | Supported languages (8), exit codes, full known-issues table, example programs. |
+| [`references/appendix.md`](references/appendix.md) | Supported languages (21), exit codes, full known-issues table, example programs. |
 
 ## Storage Model (essential for `query` users)
 

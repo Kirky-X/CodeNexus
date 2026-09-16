@@ -1,6 +1,6 @@
 # 📖 CodeNexus 用户指南
 
-**CodeNexus** 将源代码仓库索引为可查询的知识图谱：tree-sitter 多语言解析、LadybugDB 图存储，支持 Cypher 查询、调用链追踪、影响分析、语义搜索与多智能体 MCP 集成。本指南从安装入门一路走到全部 30 个子命令的用法、复杂度分析与死代码检测详解，以及故障排查。
+**CodeNexus** 将源代码仓库索引为可查询的知识图谱：tree-sitter 多语言解析、LadybugDB 图存储，支持 Cypher 查询、调用链追踪、影响分析、语义搜索与多智能体 MCP 集成。本指南从安装入门一路走到全部 29 个子命令（外加 `mcp` 服务模式）的用法、复杂度分析与死代码检测详解，以及故障排查。
 
 ## 📋 目录
 
@@ -19,6 +19,7 @@
 - [架构图与语义 Delta](#-架构图与语义-delta)
 - [多智能体集成](#-多智能体集成)
 - [环境变量](#-环境变量)
+- [配置文件](#️-配置文件)
 - [故障排查](#-故障排查)
 - [延伸阅读](#-延伸阅读)
 
@@ -31,7 +32,7 @@
 | 内容 | 说明 |
 |:-----|:-----|
 | **快速上手** | 5 分钟完成安装并索引第一个仓库 |
-| **全部命令** | 30 个子命令的参数与示例 |
+| **全部命令** | 29 个子命令（+ `mcp` 服务模式）的参数与示例 |
 | **深度分析** | 复杂度分析、死代码检测的指标与阈值 |
 | **智能体集成** | MCP 服务、setup 自动接入与 hook |
 
@@ -102,10 +103,10 @@ codenexus context --symbol main --project myproject --enhanced true
 - **无位置参数**。一切都是命名 flag：`codenexus query "MATCH ..."` 会失败，必须写 `codenexus query --cypher "MATCH ..."`。
 - **布尔参数显式传值**：`--force true`、`--fresh true`（仅 `index`）、`--apply true`、`--cross_service false`（仅 `trace`）、`--embed false`、`--ram_first false`、`--enhanced false`、`--include_tests false`（`impact`）。
 - **`--project` 接受名称或 id**：所有带 `--project <VALUE>` 的命令经 `resolve_project_id`（`src/service/project.rs`）解析：匹配已存项目 `name` 则用其规范 `id`，否则按原始 project id 处理。仅在有文档明确说明处才可传 `--project ""` 关闭过滤。
-- **普通类型参数为必填**：源码中 `String`/`u32`/`bool` 类型（非 `Option<T>`）的参数映射为**无默认值的必填 flag**；源码显式处理空串的参数（如 `--edge_types ""`、`--path_filter ""`、`--protocol ""`）允许传空串。
+- **可选参数自带默认值**：高频命令的"可选"参数已内置默认值，无需传占位 flag——`trace`：`--depth 5`、`--path_filter ""`、`--detect_cycles false`、`--cross_service false`；`search`：`--limit 50`、`--mode ""`、`--fulltext false`、`--project ""`；`impact`：`--depth 3`、`--edge_types ""`、`--max_depth 0`、`--include_tests false`；`context`：`--depth 1`、`--project ""`、`--enhanced false`；`index` 的 `--force`/`--lsp`/`--embed`/`--ram_first` 默认 `false`；`detect_changes --mode` 默认 `unstaged`；其余（complexity 阈值等）见各命令 `--help`。默认值可用 `.codenexus/config.json` 按项目覆盖（见 [配置文件](#️-配置文件)）。
 - **全局选项**：`--db <DB_PATH>` 与 `--debounce-ms <MS>`（默认 `2000`，仅 daemon 相关）适用于每个命令。
-- **默认数据库路径**（省略 `--db` 时）：`.codenexus/<project>.lbug`，`<project>` 取 `index`/`daemon` 的 `--name`（优先）或 `--path` 目录名，兜底 `codenexus`。v0.3.7 起，无 `--name`/`--path` 可用且 `.codenexus/` 中恰好只有一个 `.lbug` 文件时自动选中该文件；存在多个时回退到 `codenexus` 并要求显式 `--db`。
-- **stderr 噪音**：每次连接会打印 `inklog ... Failed to set log crate logger`、`storage::connection - skipping unsupported DDL statement` 等警告，属良性输出；需要干净 JSON 时用 `2>/dev/null` 过滤。
+- **默认数据库路径**（省略 `--db` 时）：`.codenexus/<project>.lbug`，`<project>` 取 `index`/`daemon` 的 `--name`（优先）或 `--path` 目录名，兜底 `codenexus`。v0.3.7 起，无 `--name`/`--path` 可用且 `.codenexus/` 中恰好只有一个 `.lbug` 文件时自动选中该文件；存在多个时回退到 `codenexus` 并要求显式 `--db`。配置文件 `general.db` 可为非标准路径兜底。
+- **stderr 噪音**：所有日志（含 info 级与索引逐阶段进度行 `[codenexus] [i/n] <phase> ok`）都输出到 stderr，stdout 永远只有命令本身的 JSON，重定向无需过滤；日志文件在 `.codenexus/logs/codenexus.log`。stderr 中 `inklog ... Failed to set log crate logger` 等警告属良性输出。
 - **退出码契约**（`src/service/error.rs`）：`0` 成功；`1` 内部错误 / I/O / JSON / Kit 错误；`2` 无效输入 / 项目不存在 / 查询、追踪、存储、解析错误；`4` NotFound / 数据库损坏；`--fresh` 删除失败另有 5/6 退出码。
 
 ---
@@ -307,11 +308,11 @@ codenexus setup --force
 # 输出 PreToolUse/PostToolUse JSON（exit 0，永不阻塞，适合作为智能体钩子）
 codenexus hook
 
-# 启动 stdio MCP 服务（8 个工具：query/trace/impact/search/context/architecture/diagram/arch_diff）
+# 启动 stdio MCP 服务（10 个工具：query/trace/impact/search/context/architecture/diagram/arch_diff/dead_code/detect_changes）
 codenexus mcp [--db <DB_PATH>]
 ```
 
-`setup` 检测 `~/.claude/`、`~/.cursor/`、`~/.codex/` 三个目录判断已安装的智能体。MCP 工具与 CLI 命令共用同一套 `#[forge]` 定义（`src/service/`），参数语义一致。
+`setup` 检测 `~/.claude/`、`~/.cursor/`、`~/.codex/` 三个目录判断已安装的智能体。MCP 工具与 CLI 命令共用同一套 `#[forge]` 定义（`src/service/`），每个工具的 description 内置参数语义与默认值说明；服务器以只读方式打开数据库，可与写入进程并存。
 
 LSP 增强命令（`lsp` feature）：
 
@@ -321,6 +322,36 @@ LSP 增强命令（`lsp` feature）：
 | `lsp_hover` | LSP 悬停信息（类型签名等语义增强） |
 
 > LSP 服务不可用的环境中（语言服务进程启动即退出），`lsp_goto_def`/`lsp_hover` 可能以 exit 2（`LSP communication error: server connection closed`）失败——这是环境/配置问题，不是工具逻辑缺陷。LSP 服务按需启动：纯 Rust 仓库只启动 rust-analyzer。
+
+---
+
+## 🗂️ 配置文件
+
+CodeNexus 支持 per-project 配置文件 `.codenexus/config.json`（与索引库同目录）。所有配置项的优先级为：**显式 CLI flag > 配置文件 > 内置默认值**；文件缺失时完全无感，格式错误只打 `[warn]` 并回退内置默认值，不会中断命令。
+
+```json
+{
+  "general": {
+    "db": ".codenexus/team.lbug",
+    "debounce_ms": 2000,
+    "verbose": false
+  },
+  "command_defaults": {
+    "index": { "ram_first": true, "force": false },
+    "complexity": { "cyclomatic_red": 25 },
+    "trace": { "depth": 5 }
+  }
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `general.db` | 省略 `--db` 且无法从 `--name`/`--path` 推导、也未发现唯一 `.lbug` 文件时使用的兜底数据库路径（典型用途：数据库放在非标准位置，免去每条读命令都带 `--db`） |
+| `general.debounce_ms` | `--debounce-ms` 的兜底值（daemon 去抖毫秒数） |
+| `general.verbose` | `--verbose` 的兜底值（daemon 每批文件事件的调试诊断） |
+| `command_defaults.<命令>.<参数>` | 该子命令对应 flag 的默认值（参数必须注册在该命令上，值为字符串/数字/布尔）；显式传入的 flag 永远优先 |
+
+> 💡 建议把 `.codenexus/` 加入项目 `.gitignore`：索引库（`.lbug`）、日志（`logs/codenexus.log`）与本配置文件都在这个目录下，其中前两者不应入库。
 
 ---
 

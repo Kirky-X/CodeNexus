@@ -4,7 +4,7 @@
 
 ## Commands
 
-CodeNexus has **28 subcommands** grouped into eight functional areas.
+CodeNexus has **29 subcommands** (plus the `codenexus mcp` serve mode, documented under MCP & agent integration) grouped into functional areas.
 
 ### Indexing & project management
 
@@ -366,6 +366,46 @@ Both `--project` and `--endpoint` are **required**.
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
 **Output (JSON):** `project`, `endpoint`, `impact[]` (each entry has caller symbol + edge type + path)
+
+### Architecture diagrams
+
+#### diagram — Render an interactive architecture HTML
+
+Renders a self-contained interactive architecture diagram (HTML) from the indexed graph: layered module overview with edge types, quality-gated diagnostics, and optional git evidence.
+
+```bash
+codenexus diagram --project <NAME_OR_ID> --output <HTML_PATH> [--quality standard|showcase] [--repo_root <PATH>] [--repo_url <URL>] [--title <TITLE>] [--locale en|zh-CN] [--db <DB_PATH>]
+```
+
+**Options:**
+- `--project <NAME_OR_ID>` — Project name or id (required)
+- `--output <HTML_PATH>` — Path of the HTML file to write (required)
+- `--quality <PROFILE>` — `standard` (default) or `showcase` (stricter label clearance + curated fixes). Empty string = `standard` (required)
+- `--repo_root <PATH>` — Git repository root for evidence verification; empty string skips evidence (required)
+- `--repo_url <URL>` — Repository URL for evidence links (required; empty = omit)
+- `--title <TITLE>` — Diagram title (required; empty = generated caption)
+- `--locale <LOCALE>` — `en` (default) or `zh-CN` (required)
+- `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
+
+**Output (JSON):** `project`, `output_path`, `receipt` (pipeline diagnostics receipt)
+
+#### arch_diff — Render an architecture diff HTML between two projects
+
+Runs the delta pipeline against two indexed projects (base → head) and writes a self-contained HTML architecture diff with a delta receipt.
+
+```bash
+codenexus arch_diff --base_project <NAME_OR_ID> --head_project <NAME_OR_ID> --output <HTML_PATH> [--quality standard|showcase] [--title <TITLE>] [--db <DB_PATH>]
+```
+
+**Options:**
+- `--base_project <NAME_OR_ID>` — Base (before) project name or id (required)
+- `--head_project <NAME_OR_ID>` — Head (after) project name or id (required)
+- `--output <HTML_PATH>` — Path of the delta HTML to write (required)
+- `--quality <PROFILE>` — `standard` (default) or `showcase` (required)
+- `--title <TITLE>` — Diff caption (required; empty = `"<base> → <head> architecture diff"`)
+- `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
+
+**Output (JSON):** `base_project`, `head_project`, `output_path`, `receipt_path`, `receipt`
 
 ### Refactoring
 

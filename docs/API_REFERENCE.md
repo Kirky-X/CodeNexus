@@ -174,14 +174,14 @@ crate 根另外导出：
 
 ## 🖥️ CLI / MCP 对外接口
 
-CLI 与 MCP 共用 `src/service/` 中 `#[forge]` 宏定义的同一套命令（core 函数 + CLI wrapper + MCP wrapper）。30 个 CLI 子命令、8 个 MCP 工具（query / trace / impact / search / context / architecture / diagram / arch_diff）与全部参数的语义见 [📖 用户指南](USER_GUIDE.md)。
+CLI 与 MCP 共用 `src/service/` 中 `#[forge]` 宏定义的同一套命令（core 函数 + CLI wrapper + MCP wrapper）。29 个 CLI 子命令（外加 `mcp` 服务模式）、10 个 MCP 工具（query / trace / impact / search / context / architecture / diagram / arch_diff / dead_code / detect_changes）与全部参数的语义见 [📖 用户指南](USER_GUIDE.md)。
 
 关键契约：
 
-- **参数风格**：无位置参数，必填 snake_case 长选项，布尔显式传值。
+- **参数风格**：无位置参数，snake_case 长选项，布尔显式传值；可选参数带内置默认值（如 `trace --depth 5`、`search --limit 50`），并可用 `.codenexus/config.json` 按项目固化（优先级：CLI flag > 配置文件 > 内置默认）。
 - **全局选项**：`--db <DB_PATH>`、`--debounce-ms <MS>`。
 - **退出码**：见下节；MCP 工具以回执/错误对象返回，不使用进程退出码。
-- **输出**：结果命令向 stdout 输出单个 JSON 对象/数组；`daemon`、`hook`、`mcp` 为流式/常驻。
+- **输出**：结果命令向 stdout 输出单个 JSON 对象/数组（所有日志走 stderr，重定向安全）；`daemon`、`hook`、`mcp` 为流式/常驻。
 
 ---
 

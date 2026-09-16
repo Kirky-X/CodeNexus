@@ -83,7 +83,7 @@
 <td width="50%" style="vertical-align:top; padding: 12px">📦 <b>团队制品</b><br><span style="color:#64748B"><code>export</code> / <code>import</code> 压缩 <code>.graph.zst</code> 制品，共享索引</span></td>
 </tr>
 <tr>
-<td width="50%" style="vertical-align:top; padding: 12px">🤖 <b>多智能体 MCP</b><br><span style="color:#64748B"><code>setup</code> 自动检测 Claude Code / Cursor / Codex；<code>hook</code> 输出 PreToolUse/PostToolUse JSON；<code>mcp</code> stdio 服务暴露 8 个工具</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🤖 <b>多智能体 MCP</b><br><span style="color:#64748B"><code>setup</code> 自动检测 Claude Code / Cursor / Codex；<code>hook</code> 输出 PreToolUse/PostToolUse JSON；<code>mcp</code> stdio 服务暴露 10 个工具（参数语义写入工具描述）</span></td>
 <td width="50%" style="vertical-align:top; padding: 12px">👁️ <b>文件监视</b><br><span style="color:#64748B">守护进程模式，自动增量索引（<code>daemon</code> feature，SIGTERM/SIGINT 优雅退出）</span></td>
 </tr>
 <tr>
@@ -96,7 +96,7 @@
 </tr>
 </table>
 
-除上述核心能力外，CodeNexus 还提供 `context` 上下文组装、`detect_changes` 变更检测、`rename` 重命名影响预检、基于 oxcache 的查询结果缓存与 inklog 结构化日志等能力；全部 30 个子命令的分组清单见 [🛠️ CLI 命令](#️-cli-命令) 一节，逐命令参数语义与可运行示例见 [📖 用户指南 · 命令详解](docs/USER_GUIDE.md#️-命令详解)。
+除上述核心能力外，CodeNexus 还提供 `context` 上下文组装、`detect_changes` 变更检测、`rename` 重命名影响预检、基于 oxcache 的查询结果缓存与 inklog 结构化日志等能力；全部 29 个子命令（外加 `mcp` 服务模式）的分组清单见 [🛠️ CLI 命令](#️-cli-命令) 一节，逐命令参数语义与可运行示例见 [📖 用户指南 · 命令详解](docs/USER_GUIDE.md#️-命令详解)。
 
 ---
 
@@ -202,17 +202,20 @@ codenexus index --path /path/to/project --name myproject --ram_first true
 # 2. 查询函数（Cypher 子集）
 codenexus query --cypher "MATCH (f:Function) RETURN f.name LIMIT 10"
 
-# 3. 追踪调用链
-codenexus trace --symbol main --trace_type calls --depth 5 --path_filter "" --detect_cycles false --cross_service false
+# 3. 追踪调用链（可选参数已有内置默认值：depth=5、无路径过滤）
+codenexus trace --symbol main --trace_type calls
 
-# 4. 搜索符号（exact / regex / fuzzy + BM25 全文）
-codenexus search --text "parse" --limit 20 --mode exact --fulltext false --project ""
+# 4. 搜索符号（exact / regex / fuzzy + BM25 全文；limit 默认 50）
+codenexus search --text "parse" --mode exact
+codenexus search --text "authentication logic" --fulltext true
 ```
+
+> 💡 **建议**：把 `.codenexus/` 加入项目的 `.gitignore`（索引库与日志都在这个目录里，不应入库）。也可以创建 `.codenexus/config.json` 固化每项目的常用参数（如 `ram_first`、复杂度阈值），详见 [📖 用户指南 · 配置文件](docs/USER_GUIDE.md#️-配置文件)。
 
 ### 🧭 核心概念
 
 - **知识图谱模型**：源码被解析为 44 种节点与 30 种边构成的属性图，存入 LadybugDB，可用 Cypher 子集查询。
-- **严格 flag 风格 CLI**：无位置参数，所有子命令参数为**必填的 snake_case 长选项**（如 `--symbol`、`--trace_type`），布尔选项显式传值（`true`/`false`）。
+- **严格 flag 风格 CLI**：无位置参数，参数为 snake_case 长选项（如 `--symbol`、`--trace_type`），布尔选项显式传值（`true`/`false`）。可选参数自带内置默认值（如 `trace --depth 5`、`search --limit 50`，完整清单见各命令 `--help`），并可用 `.codenexus/config.json` 按项目固化。
 - **全局 `--db` 选项**：数据库路径默认 `.codenexus/<项目名称>.lbug`，需置于子命令之前；仅有一个索引时可自动发现。
 - **退出码契约**：0 成功、1 内部错误、2 无效输入 / 项目不存在 / 查询错误、4 NotFound / 数据库损坏（见 `src/service/error.rs`）。
 
@@ -222,7 +225,7 @@ codenexus search --text "parse" --limit 20 --mode exact --fulltext false --proje
 
 ## 🛠️ CLI 命令
 
-CodeNexus 提供 **30 个子命令**，按功能分为六组：
+CodeNexus 提供 **29 个子命令**（外加 `codenexus mcp` 服务模式），按功能分为六组：
 
 - **索引与项目管理**：`index` / `daemon` / `status` / `list` / `clean` / `export` / `import`
 - **查询与搜索**：`query` / `search` / `context`
@@ -237,7 +240,7 @@ CodeNexus 提供 **30 个子命令**，按功能分为六组：
 
 ## 🔌 MCP 集成
 
-CodeNexus 使用 [sdforge](https://crates.io/crates/sdforge) 提供 MCP（Model Context Protocol）服务器，经 sdforge `mcp` stdio 传输暴露 **8 个工具**（`query` / `trace` / `impact` / `search` / `context` / `architecture` / `diagram` / `arch_diff`），与同名 CLI 命令共用同一套 `#[forge]` 定义，参数语义一致。
+CodeNexus 使用 [sdforge](https://crates.io/crates/sdforge) 提供 MCP（Model Context Protocol）服务器，经 sdforge `mcp` stdio 传输暴露 **10 个工具**（`query` / `trace` / `impact` / `search` / `context` / `architecture` / `diagram` / `arch_diff` / `dead_code` / `detect_changes`），与同名 CLI 命令共用同一套 `#[forge]` 定义；每个工具的描述包含参数语义与默认值，服务器以只读方式打开数据库，可与写入进程并存。
 
 ```bash
 # 启动 MCP 服务（stdio）
@@ -283,7 +286,7 @@ codenexus hook
 
 ## 💻 示例
 
-全部 6 个可运行示例位于 [`examples/`](examples/) 目录，每个示例对应一个 `cargo run --bin` 目标（经 `examples/Cargo.toml` 注册）：
+全部 14 个可运行示例位于 [`examples/`](examples/) 目录，每个示例对应一个 `cargo run --bin` 目标（经 `examples/Cargo.toml` 注册）：
 
 | 示例 | 文件 | 描述 |
 |------|------|------|
@@ -292,14 +295,22 @@ codenexus hook
 | symbol_search | `examples/src/bin/symbol_search.rs` | 按名称、类型搜索符号，处理空结果 |
 | call_tracing | `examples/src/bin/call_tracing.rs` | 正向追踪函数调用路径，构建调用图 |
 | impact_analysis | `examples/src/bin/impact_analysis.rs` | 分析修改某符号的影响半径（反向 BFS） |
+| symbol_context | `examples/src/bin/symbol_context.rs` | 符号 360° 视图：调用方 / 被调方 / 执行流，以及子图加载与符号消歧 |
 | export_import | `examples/src/bin/export_import.rs` | 图谱数据库的导出与导入验证 |
+| project_lifecycle | `examples/src/bin/project_lifecycle.rs` | 项目生命周期：索引多个项目 → 列出 → 按名解析 → 删除 |
+| code_analysis | `examples/src/bin/code_analysis.rs` | 代码质量分析三件套：复杂度 / 死代码 / 社区检测 |
+| api_surface | `examples/src/bin/api_surface.rs` | API/Web 服务面分析：路由表 / schema 校验 / API 影响 / 跨服务调用 / MCP 工具表 |
+| architecture_diagram | `examples/src/bin/architecture_diagram.rs` | 架构总览 + 自包含交互式架构图 HTML + 双项目架构 diff |
+| daemon_watch | `examples/src/bin/daemon_watch.rs` | 文件监视守护：`notify` 防抖 → 增量索引（Observer 模式）→ 优雅停止 |
+| git_integration | `examples/src/bin/git_integration.rs` | Git 集成：把 `git diff` 的变更行映射到受影响符号并做风险分级 |
+| setup_mcp | `examples/src/bin/setup_mcp.rs` | MCP 接入配置：自动探测已安装的 AI coding agent 并写入 MCP server 配置 |
 
 ```bash
 # 运行单个示例
 cargo run --manifest-path examples/Cargo.toml --bin basic_indexing
 
 # 运行所有示例
-for bin in basic_indexing cypher_query symbol_search call_tracing impact_analysis export_import; do
+for bin in basic_indexing cypher_query symbol_search call_tracing impact_analysis symbol_context export_import project_lifecycle code_analysis api_surface architecture_diagram daemon_watch git_integration setup_mcp; do
   cargo run --manifest-path examples/Cargo.toml --bin $bin
 done
 ```

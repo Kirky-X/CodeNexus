@@ -24,7 +24,7 @@
 | **多语言解析** | tree-sitter，默认 `full` 预设 21 种语言 |
 | **图存储** | LadybugDB，44 种节点类型 + 30 种边类型 |
 | **查询分析** | Cypher 子集查询、调用链/数据流追踪、影响分析、语义搜索 |
-| **智能体集成** | MCP 服务器（8 个工具）+ setup 自动接入 Claude Code / Cursor / Codex |
+| **智能体集成** | MCP 服务器（10 个工具）+ setup 自动接入 Claude Code / Cursor / Codex |
 
 **了解更多**：[用户指南](USER_GUIDE.md)。
 
@@ -80,7 +80,7 @@ cargo build --release --no-default-features --features lang-c    # 仅 C
 
 ### ❓ 为什么所有参数都必须写成长选项？
 
-CLI 是**严格 flag 风格**：没有位置参数，源码中 `String`/`u32`/`bool` 类型（非 `Option<T>`）的参数映射为无默认值的必填 flag，布尔必须显式传值。例如：
+CLI 是**严格 flag 风格**：没有位置参数，参数为 snake_case 长选项，布尔必须显式传值。例如：
 
 ```bash
 # ✗ 错误：位置参数
@@ -93,7 +93,7 @@ codenexus query --cypher "MATCH (f:Function) RETURN f.name LIMIT 10"
 codenexus index --path ./myrepo --name myrepo --ram_first true
 ```
 
-完整约定见 [用户指南 · 核心约定](USER_GUIDE.md#-核心约定)。
+高频命令的**可选参数已内置默认值**（如 `trace --depth` 默认 5、`search --limit` 默认 50、`impact --max_depth` 默认 0），无需再传 `--path_filter ""` 这类占位 flag；完整默认值清单见各命令 `--help`。需要按项目固化参数时，用 `.codenexus/config.json`（见 [用户指南 · 配置文件](USER_GUIDE.md#️-配置文件)）。完整约定见 [用户指南 · 核心约定](USER_GUIDE.md#-核心约定)。
 
 ### ❓ `--project` 传项目名还是项目 id？
 
@@ -101,7 +101,7 @@ codenexus index --path ./myrepo --name myrepo --ram_first true
 
 ### ❓ 命令输出的 stderr 里有警告正常吗？
 
-正常。每次连接会打印 `inklog ... Failed to set log crate logger`、`storage::connection - skipping unsupported DDL statement` 等良性警告。需要干净 JSON 时：`codenexus query ... 2>/dev/null`。
+正常。所有日志（含 info 级）都走 stderr，stdout 永远只有命令本身的 JSON 输出——重定向 `> out.json` 无需任何过滤。stderr 中的 `inklog ... Failed to set log crate logger`、`storage::connection - skipping unsupported DDL statement` 等为良性警告，人工查看时可用 `2>/dev/null` 屏蔽；索引时还会输出 `[codenexus] [i/n] <phase> ok` 逐阶段进度行，同样在 stderr。日志文件写入 `.codenexus/logs/codenexus.log`（每日轮转，30 天保留）。
 
 ### ❓ 怎么知道命令失败的原因和退出码？
 
@@ -109,7 +109,7 @@ codenexus index --path ./myrepo --name myrepo --ram_first true
 
 ### ❓ MCP 模式下有哪些工具？
 
-8 个：`query`、`trace`、`impact`、`search`、`context`、`architecture`、`diagram`、`arch_diff`。与 CLI 命令共用同一套 `#[forge]` 定义，参数语义一致。用 `codenexus setup` 自动写入 Claude Code / Cursor / Codex 的 MCP 配置。
+10 个：`query`、`trace`、`impact`、`search`、`context`、`architecture`、`diagram`、`arch_diff`、`dead_code`、`detect_changes`。与 CLI 命令共用同一套 `#[forge]` 定义，每个工具的 description 内置参数语义与默认值说明；服务器以**只读**方式打开数据库，可与 `index`/`daemon` 写入进程并存。用 `codenexus setup` 自动写入 Claude Code / Cursor / Codex 的 MCP 配置。
 
 ---
 
