@@ -12,8 +12,8 @@ interface NodeTooltipProps {
 export function NodeTooltip({ node }: NodeTooltipProps) {
   const { t } = useI18n();
   return (
-    <Html position={[node.x, node.y + 15, node.z]} center distanceFactor={400} style={{ pointerEvents: "none" }}>
-      <div className="bg-background/95 border border-border/50 rounded-lg px-3 py-2 backdrop-blur-md shadow-xl min-w-[160px] pointer-events-none">
+    <Html position={[node.x, node.y + 15, node.z]} center style={{ pointerEvents: "none" }}>
+      <div className="bg-background/95 border border-border/50 rounded-lg px-2.5 py-1.5 backdrop-blur-md shadow-xl pointer-events-none">
         <div className="flex items-center gap-1.5 mb-1">
           <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colorForLabel(node.label) }} />
           <span className="text-[11px] font-semibold text-foreground truncate">{node.name}</span>
