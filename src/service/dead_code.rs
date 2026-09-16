@@ -13,24 +13,24 @@ use crate::diagnostics::{Diagnostic, Severity};
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 #[cfg(all(test, feature = "cli", feature = "analysis"))]
 use crate::model::EdgeType;
-#[cfg(all(feature = "cli", feature = "analysis"))]
+#[cfg(all(any(feature = "cli", feature = "mcp"), feature = "analysis"))]
 use crate::service::error::kit_not_initialized;
-#[cfg(all(feature = "cli", feature = "analysis"))]
+#[cfg(all(any(feature = "cli", feature = "mcp"), feature = "analysis"))]
 use crate::service::error::to_api_error;
 #[cfg(feature = "analysis")]
 use crate::service::error::CodeNexusError;
 #[cfg(feature = "analysis")]
 use crate::service::project::resolve_project_id;
-#[cfg(all(feature = "cli", feature = "analysis"))]
+#[cfg(all(any(feature = "cli", feature = "mcp"), feature = "analysis"))]
 use crate::service::runtime::kit;
 #[cfg(feature = "analysis")]
 use crate::service::status::{git_head_commit, is_stale, resolve_project_root};
 #[cfg(feature = "analysis")]
 use crate::storage::StorageConfig;
 
-#[cfg(all(feature = "cli", feature = "analysis"))]
+#[cfg(all(any(feature = "cli", feature = "mcp"), feature = "analysis"))]
 use sdforge::forge;
-#[cfg(all(feature = "cli", feature = "analysis"))]
+#[cfg(all(any(feature = "cli", feature = "mcp"), feature = "analysis"))]
 use sdforge::prelude::ApiError;
 
 /// JSON-serializable dead-code output.
@@ -230,6 +230,37 @@ async fn dead_code(
         .map_err(|e| to_api_error(CodeNexusError::from(e), "dead_code_error"))?;
     println!("{json}");
     Ok(())
+}
+
+/// MCP wrapper — returns result for MCP protocol.
+#[cfg(all(feature = "mcp", feature = "analysis"))]
+#[forge(
+    name = "dead_code",
+    version = "0.3.5",
+    tool_name = "dead_code",
+    description = "Detect unreferenced (dead) functions with confidence levels and entry-point analysis. Params: project — name or id (required); entry — comma-separated extra entry-point patterns; check_exported — treat pub functions as live; check_ffi — treat FFI exports as live; check_dynamic_dispatch — treat trait-dispatch calls as live; check_reflection — treat reflection/derive-macro entry points as live; edge_types — comma-separated uppercase edge types (empty = defaults)."
+)]
+#[allow(clippy::too_many_arguments)]
+async fn dead_code_mcp(
+    project: String,
+    entry: String,
+    check_exported: bool,
+    check_ffi: bool,
+    check_dynamic_dispatch: bool,
+    check_reflection: bool,
+    edge_types: String,
+) -> Result<DeadCodeOutput, ApiError> {
+    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let params = DeadCodeParams {
+        project,
+        entry,
+        check_exported,
+        check_ffi,
+        check_dynamic_dispatch,
+        check_reflection,
+        edge_types,
+    };
+    run_dead_code(&kit, &params).map_err(|e| to_api_error(e, "dead_code_error"))
 }
 
 #[cfg(all(test, feature = "cli", feature = "analysis"))]

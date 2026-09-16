@@ -109,7 +109,7 @@ async fn query(cypher: String) -> Result<(), ApiError> {
     name = "query",
     version = "0.3.5",
     tool_name = "query",
-    description = "Execute a Cypher query against the CodeNexus knowledge graph."
+    description = "Execute a read-only Cypher-subset query against the knowledge graph. Write clauses (CREATE/DELETE/SET/MERGE/REMOVE) and CALL procedures are rejected; UNION and multi-label OR are not supported by the subset. Params: cypher (required) — a MATCH/RETURN query."
 )]
 async fn query_mcp(cypher: String) -> Result<QueryOutput, ApiError> {
     #[cfg(feature = "cache")]
@@ -215,7 +215,14 @@ mod tests {
         // LadybugDB may return empty result or succeed; either is acceptable.
         match result {
             Ok(output) => {
-                assert!(output.rows.is_empty(), "empty DB should have no rows");
+                // A freshly initialized DB contains exactly one bookkeeping
+                // row (the SchemaMeta version stamp), so `MATCH (n)` may
+                // return it — assert no user-graph rows exist.
+                assert!(
+                    output.rows.len() <= 1,
+                    "empty DB should have no user rows (at most the schema-meta stamp), got: {:?}",
+                    output.rows
+                );
             }
             Err(CodeNexusError::Query(_)) => {
                 // LadybugDB might reject some constructs — acceptable.

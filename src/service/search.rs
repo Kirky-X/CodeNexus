@@ -133,7 +133,7 @@ async fn search(
     name = "search",
     version = "0.3.5",
     tool_name = "search",
-    description = "Search for symbols by name (structured) or content (BM25 full-text)."
+    description = "Search for symbols by name or content. Params: text (required); fulltext — false: structured name search, true: BM25 full-text content search; mode — exact|regex|fuzzy|graph|multi (empty = legacy name/BM25 path); limit — max results (default 50); project — project name or id (empty = all projects)."
 )]
 async fn search_mcp(
     text: String,

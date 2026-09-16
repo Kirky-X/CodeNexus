@@ -48,21 +48,40 @@ compile_error!(
      or a preset like `--features minimal`/`core`/`full`."
 );
 
+// ---------------------------------------------------------------------------
+// Public API surface
+//
+// `kit` / `model` / `service` (facades + errors) form the supported public
+// API; `index`/`query` facades are re-exported below. The remaining modules
+// are implementation details that stay `pub` for 0.3.x compatibility (and
+// for the fuzz harness / graph-viewer) but are `#[doc(hidden)]`: they do not
+// appear in docs and are free to change in a future major version.
+// ---------------------------------------------------------------------------
+
 #[cfg(feature = "cache")]
+#[doc(hidden)]
 pub mod cache;
 #[cfg(feature = "daemon")]
+#[doc(hidden)]
 pub mod daemon;
+#[doc(hidden)]
 pub mod diagnostics;
+#[doc(hidden)]
 pub mod discover;
 pub mod index;
+#[doc(hidden)]
 pub mod ir;
 pub mod kit;
 pub mod model;
+#[doc(hidden)]
 pub mod parse;
 pub mod query;
+#[doc(hidden)]
 pub mod resolve;
 pub mod service;
+#[doc(hidden)]
 pub mod storage;
+#[doc(hidden)]
 pub mod trace;
 
 pub use service::error::CodeNexusError;
@@ -74,15 +93,18 @@ pub use service::error::CodeNexusError;
 pub use sdforge;
 
 #[cfg(feature = "analysis")]
+#[doc(hidden)]
 pub mod analysis;
 
 #[cfg(feature = "diagram")]
+#[doc(hidden)]
 pub mod diagram;
 
 #[cfg(feature = "embed")]
 pub mod embed;
 
 #[cfg(feature = "lsp")]
+#[doc(hidden)]
 pub mod lsp;
 
 /// Test log capture utilities backed by inklog's `LoggerSubscriber`.

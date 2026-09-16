@@ -50,7 +50,13 @@ pub fn run_clean(kit: &AsyncKit<AsyncReady>, project: &str) -> Result<CleanOutpu
     description = "Remove a project and its index by name or id.",
     cli = true
 )]
-async fn clean(project: String) -> Result<(), ApiError> {
+async fn clean(project: String, rebuild: bool) -> Result<(), ApiError> {
+    // `rebuild = true` is intercepted in `main.rs` BEFORE the Kit is built
+    // (it deletes the whole DB file, which requires no open handles) and
+    // exits there — this wrapper only runs for the default project-removal
+    // path. The parameter must still be declared here so the CLI registers
+    // the flag.
+    let _ = rebuild;
     let kit = kit().ok_or_else(kit_not_initialized)?;
     let output = run_clean(&kit, &project).map_err(|e| to_api_error(e, "clean_error"))?;
     let json =
@@ -166,7 +172,7 @@ mod tests {
         init_kit(kit).expect("init_kit");
 
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let result = rt.block_on(clean("demo".to_string()));
+        let result = rt.block_on(clean("demo".to_string(), false));
         assert!(result.is_ok(), "wrapper should succeed: {:?}", result.err());
 
         reset_kit_for_testing();
@@ -180,7 +186,7 @@ mod tests {
 
         reset_kit_for_testing();
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let result = rt.block_on(clean("demo".to_string()));
+        let result = rt.block_on(clean("demo".to_string(), false));
         assert!(result.is_err(), "wrapper should fail without kit");
         reset_kit_for_testing();
     }

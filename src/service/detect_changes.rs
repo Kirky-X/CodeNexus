@@ -14,20 +14,21 @@ use std::process::Command;
 use std::str::FromStr;
 
 use serde::Serialize;
-use serde_json::Value;
 
 use crate::kit::StorageModule;
+#[cfg(any(feature = "cli", feature = "mcp"))]
+use crate::kit::{AsyncKit, AsyncReady};
 use crate::model::NodeLabel;
 use crate::service::error::CodeNexusError;
-#[cfg(feature = "cli")]
-use crate::service::error::{kit_not_initialized, to_api_error, wrap_error, wrap_kit_error};
-#[cfg(feature = "cli")]
+#[cfg(any(feature = "cli", feature = "mcp"))]
+use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
+#[cfg(any(feature = "cli", feature = "mcp"))]
 use crate::service::runtime::kit;
 use crate::storage::schema::node_table_columns;
 
-#[cfg(feature = "cli")]
+#[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::forge;
-#[cfg(feature = "cli")]
+#[cfg(any(feature = "cli", feature = "mcp"))]
 use sdforge::prelude::ApiError;
 
 /// Git diff mode.
@@ -335,44 +336,42 @@ pub struct AffectedSymbolOutput {
     pub risk_level: String,
 }
 
-/// CLI wrapper — prints result to stdout as JSON.
-#[cfg(feature = "cli")]
-#[forge(
-    name = "detect_changes",
-    version = "0.3.5",
-    description = "Detect symbols affected by uncommitted git changes and classify their risk.",
-    cli = true
-)]
-async fn detect_changes(path: String, mode: String) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let repo_root = Path::new(&path);
+/// Core logic — maps the git diff at `path` to affected symbols (shared by
+/// the CLI and MCP wrappers).
+///
+/// # Errors
+///
+/// - [`CodeNexusError::InvalidInput`] — `path` is not a directory or `mode`
+///   is not one of `unstaged`/`staged`/`head`.
+/// - [`CodeNexusError::Io`] — `git diff` failed or git is unavailable.
+/// - [`CodeNexusError::Kit`] — the storage capability is unavailable.
+#[cfg(any(feature = "cli", feature = "mcp"))]
+fn run_detect_changes(
+    kit: &AsyncKit<AsyncReady>,
+    path: &str,
+    mode: &str,
+) -> Result<DetectChangesOutput, CodeNexusError> {
+    let repo_root = Path::new(path);
     if !repo_root.is_dir() {
-        return Err(ApiError::InvalidInput {
-            message: format!("path is not a directory: {path}"),
-            field: Some("path".to_string()),
-            value: Some(Value::String(path)),
-        });
+        return Err(CodeNexusError::InvalidInput(format!(
+            "path is not a directory: {path}"
+        )));
     }
-    let diff_mode = DiffMode::from_cli_str(&mode).ok_or_else(|| ApiError::InvalidInput {
-        message: format!("unknown diff mode '{mode}' (expected unstaged/staged/head)"),
-        field: Some("mode".to_string()),
-        value: Some(Value::String(mode.clone())),
+    let diff_mode = DiffMode::from_cli_str(mode).ok_or_else(|| {
+        CodeNexusError::InvalidInput(format!(
+            "unknown diff mode '{mode}' (expected unstaged/staged/head)"
+        ))
     })?;
 
-    let diff_output =
-        run_git_diff(repo_root, diff_mode).map_err(|e| to_api_error(e, "detect_changes_error"))?;
+    let diff_output = run_git_diff(repo_root, diff_mode)?;
     let hunks = parse_unified_diff(&diff_output);
     let files_changed = hunks.len();
 
-    let storage = kit
-        .require::<StorageModule>()
-        .map_err(|e| wrap_kit_error("Failed to resolve storage capability", e))?;
+    let storage = kit.require::<StorageModule>()?;
     let mut affected: Vec<AffectedSymbolOutput> = Vec::new();
     for (rel_path, ranges) in &hunks {
         let abs_path = repo_root.join(rel_path);
-        for sym in find_symbols_in_ranges(&*storage, rel_path, &abs_path, ranges)
-            .map_err(|e| to_api_error(e, "detect_changes_error"))?
-        {
+        for sym in find_symbols_in_ranges(&*storage, rel_path, &abs_path, ranges)? {
             affected.push(sym);
         }
     }
@@ -388,19 +387,47 @@ async fn detect_changes(path: String, mode: String) -> Result<(), ApiError> {
             && a.start_line == b.start_line
     });
 
-    let output = DetectChangesOutput {
-        path,
-        mode,
+    Ok(DetectChangesOutput {
+        path: path.to_string(),
+        mode: mode.to_string(),
         files_changed,
         affected,
-    };
+    })
+}
+
+/// CLI wrapper — prints result to stdout as JSON.
+#[cfg(feature = "cli")]
+#[forge(
+    name = "detect_changes",
+    version = "0.3.5",
+    description = "Detect symbols affected by uncommitted git changes and classify their risk.",
+    cli = true
+)]
+async fn detect_changes(path: String, mode: String) -> Result<(), ApiError> {
+    let kit = kit().ok_or_else(kit_not_initialized)?;
+    let output = run_detect_changes(&kit, &path, &mode)
+        .map_err(|e| to_api_error(e, "detect_changes_error"))?;
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
     Ok(())
 }
 
+/// MCP wrapper — returns result for MCP protocol.
+#[cfg(feature = "mcp")]
+#[forge(
+    name = "detect_changes",
+    version = "0.3.5",
+    tool_name = "detect_changes",
+    description = "Map uncommitted git changes to indexed symbols with risk classification (low/medium/high by incoming edge count). Params: path — repository root (required); mode — unstaged|staged|head (default unstaged)."
+)]
+async fn detect_changes_mcp(path: String, mode: String) -> Result<DetectChangesOutput, ApiError> {
+    let kit = kit().ok_or_else(kit_not_initialized)?;
+    run_detect_changes(&kit, &path, &mode).map_err(|e| to_api_error(e, "detect_changes_error"))
+}
+
 #[cfg(test)]
+#[cfg(any(feature = "cli", feature = "mcp"))]
 mod tests {
     use super::*;
     use crate::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
@@ -421,59 +448,14 @@ mod tests {
             .expect("build_kit")
     }
 
-    /// Core logic mirroring the service function, taking explicit params
-    /// (no DetectChangesArgs) so tests can exercise error paths without the
-    /// `#[forge]` macro wrapper.
+    /// Thin delegate to the production [`run_detect_changes`] core, kept so
+    /// existing error-path tests keep their name and `Result<(), _>` shape.
     fn detect_changes_core(
         kit: &AsyncKit<AsyncReady>,
         path: &str,
         mode: &str,
     ) -> Result<(), CodeNexusError> {
-        let repo_root = Path::new(path);
-        if !repo_root.is_dir() {
-            return Err(CodeNexusError::InvalidInput(format!(
-                "path is not a directory: {path}"
-            )));
-        }
-        let diff_mode = DiffMode::from_cli_str(mode).ok_or_else(|| {
-            CodeNexusError::InvalidInput(format!(
-                "unknown diff mode '{mode}' (expected unstaged/staged/head)"
-            ))
-        })?;
-
-        let diff_output = run_git_diff(repo_root, diff_mode)?;
-        let hunks = parse_unified_diff(&diff_output);
-        let files_changed = hunks.len();
-
-        let storage = kit.require::<StorageModule>()?;
-        let mut affected: Vec<AffectedSymbolOutput> = Vec::new();
-        for (rel_path, ranges) in &hunks {
-            let abs_path = repo_root.join(rel_path);
-            for sym in find_symbols_in_ranges(&*storage, rel_path, &abs_path, ranges)? {
-                affected.push(sym);
-            }
-        }
-        affected.sort_by(|a, b| {
-            a.qualified_name
-                .cmp(&b.qualified_name)
-                .then_with(|| a.file_path.cmp(&b.file_path))
-                .then_with(|| a.start_line.cmp(&b.start_line))
-        });
-        affected.dedup_by(|a, b| {
-            a.qualified_name == b.qualified_name
-                && a.file_path == b.file_path
-                && a.start_line == b.start_line
-        });
-
-        let output = DetectChangesOutput {
-            path: path.to_string(),
-            mode: mode.to_string(),
-            files_changed,
-            affected,
-        };
-        let json = serde_json::to_string(&output)?;
-        println!("{json}");
-        Ok(())
+        run_detect_changes(kit, path, mode).map(|_| ())
     }
 
     // --- DiffMode ---

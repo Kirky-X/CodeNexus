@@ -242,7 +242,7 @@ async fn diagram(
     name = "diagram",
     version = "0.3.12",
     tool_name = "diagram",
-    description = "Render a self-contained interactive architecture HTML from the indexed graph."
+    description = "Render a self-contained interactive architecture HTML from the indexed graph and return the receipt. Params: project (required); output — HTML file path (required); quality — draft|standard|high (default standard); repo_root — repository root for source-evidence verification (empty = skip); repo_url — base URL for source links; title (default project name); locale — BCP-47 (default en)."
 )]
 #[allow(clippy::too_many_arguments)]
 async fn diagram_mcp(
@@ -369,7 +369,7 @@ mod tests {
         seed_two_modules(&*storage);
         let out_dir = TempDir::new().unwrap();
         let target = out_dir.path().join("arch.html");
-        let out = run_diagram(
+        let _out = run_diagram(
             &kit,
             "demo",
             target.to_str().unwrap(),

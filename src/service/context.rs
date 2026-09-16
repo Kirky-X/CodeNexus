@@ -131,22 +131,45 @@ async fn context(
 }
 
 /// MCP wrapper — returns result for MCP protocol.
+///
+/// Mirrors the CLI branching: `enhanced=true` returns the multi-dimensional
+/// [`SymbolContext`] (requires a resolvable `project`), otherwise the legacy
+/// BFS [`ContextOutput`]. The two shapes differ, so the tool returns a JSON
+/// value either way. When `project` is non-empty it is validated up front so
+/// a typo surfaces as `ProjectNotFound` instead of silently returning data
+/// from an unrelated project.
 #[cfg(feature = "mcp")]
 #[forge(
     name = "context",
     version = "0.3.5",
     tool_name = "context",
-    description = "Show a 360-degree view of a symbol (callers, callees, processes)."
+    description = "Show a 360-degree view of a symbol: node details, incoming and outgoing edges, execution processes. Params: symbol (required); depth — BFS expansion hops (default 1); project — project name or id (empty = no validation); enhanced — true = multi-dimensional context (type/module/test/data-flow), requires a resolvable project and returns a different JSON shape."
 )]
-#[allow(unused_variables)]
 async fn context_mcp(
     symbol: String,
     depth: u32,
     project: String,
     enhanced: bool,
-) -> Result<ContextOutput, ApiError> {
+) -> Result<serde_json::Value, ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    run_context(&kit, &symbol, depth).map_err(|e| to_api_error(e, "context_error"))
+    if enhanced {
+        let result = run_context_enhanced(&kit, &project, &symbol)
+            .map_err(|e| to_api_error(e, "context_error"))?;
+        serde_json::to_value(&result)
+            .map_err(|e| to_api_error(CodeNexusError::from(e), "context_error"))
+    } else {
+        if !project.trim().is_empty() {
+            let storage = kit
+                .require::<StorageModule>()
+                .map_err(|e| to_api_error(CodeNexusError::from(e), "context_error"))?;
+            resolve_project_id(&*storage, &project)
+                .map_err(|e| to_api_error(e, "context_error"))?;
+        }
+        let result =
+            run_context(&kit, &symbol, depth).map_err(|e| to_api_error(e, "context_error"))?;
+        serde_json::to_value(&result)
+            .map_err(|e| to_api_error(CodeNexusError::from(e), "context_error"))
+    }
 }
 
 #[cfg(test)]

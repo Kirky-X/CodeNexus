@@ -250,7 +250,7 @@ async fn trace(
     name = "trace",
     version = "0.3.5",
     tool_name = "trace",
-    description = "Trace a symbol's call and/or data-flow paths."
+    description = "Trace a symbol's call or data-flow paths in the graph. Params: symbol (required); trace_type — calls|dataflow|all (required); depth — max hops, clamped to 10 (default 5); path_filter — glob on file paths (empty = no filter); detect_cycles — report re-entrant paths; cross_service — also traverse HttpCalls edges."
 )]
 async fn trace_mcp(
     symbol: String,
