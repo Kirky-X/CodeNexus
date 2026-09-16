@@ -38,6 +38,7 @@ pub mod gopls;
 pub mod jdtls;
 pub mod pyright;
 pub(crate) mod references_cache;
+pub mod server_spec;
 pub(crate) mod session;
 pub mod types;
 pub mod typescript_ls;
@@ -50,6 +51,7 @@ pub use gopls::GoplsClient;
 pub use jdtls::JdtlsClient;
 pub use pyright::PyrightClient;
 pub use references_cache::{CacheKey, Clock, MockClock, ReferencesCache, SystemClock};
+pub use server_spec::{LspServerSpec, ServerClient};
 pub use types::map_lsp_symbol_kind;
 pub use typescript_ls::TypeScriptLanguageClient;
 
