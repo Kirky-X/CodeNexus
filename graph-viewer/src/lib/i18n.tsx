@@ -48,6 +48,7 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "header.callTrace": "Call Trace",
     "header.variableTrace": "Variable Trace",
     "header.selectFile": "Select File",
+    "header.clearTrace": "Clear trace",
     /* Graph HUD */
     "hud.nodes": "nodes",
     "hud.edges": "edges",
@@ -84,6 +85,9 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "modal.references": "References",
     "modal.referencedBy": "Referenced By",
     "modal.noConnections": "No connections found",
+    "modal.close": "Close",
+    "modal.callTrace": "Call Trace",
+    "modal.variableTrace": "Variable Trace",
     /* NodeTooltip */
     "tooltip.project": "Project:",
     /* NODE_LABEL_GROUPS */
@@ -122,6 +126,7 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "header.callTrace": "调用追踪中",
     "header.variableTrace": "变量追踪中",
     "header.selectFile": "选择文件",
+    "header.clearTrace": "清除追踪",
     /* Graph HUD */
     "hud.nodes": "节点",
     "hud.edges": "边",
@@ -158,6 +163,9 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "modal.references": "引用",
     "modal.referencedBy": "被引用",
     "modal.noConnections": "无连接关系",
+    "modal.close": "关闭",
+    "modal.callTrace": "函数调用追踪",
+    "modal.variableTrace": "变量使用追踪",
     /* NodeTooltip */
     "tooltip.project": "项目:",
     /* NODE_LABEL_GROUPS */

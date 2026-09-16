@@ -101,7 +101,7 @@ export function App() {
   /* 追踪 */
   const activeNodes = demoMode ? (demoData?.nodes ?? []) : (data?.nodes ?? []);
   const activeEdges = demoMode ? (demoData?.edges ?? []) : (data?.edges ?? []);
-  const { traceNodeIds, traceEdgeIds, traceMode, clearTrace } =
+  const { traceNodeIds, traceEdgeIds, traceMode, clearTrace, startCallTrace, startVariableTrace } =
     useTrace(activeNodes, activeEdges);
 
   const activeData = demoMode ? demoData : data;
@@ -265,7 +265,7 @@ export function App() {
             <span className="text-lg font-semibold tracking-tight text-foreground/90">CodeNexus</span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-foreground/25 font-mono">{t("nav.subtitle")}</span>
+            <span className="text-sm text-foreground/50 font-mono">{t("nav.subtitle")}</span>
             <LanguageSwitcher />
           </div>
         </nav>
@@ -442,6 +442,7 @@ export function App() {
               onClick={handleReselectFile}
               className="text-xs text-foreground/30 hover:text-foreground/60 transition-colors ml-1"
               title={t("header.selectFile")}
+              aria-label={t("header.selectFile")}
             >
               <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <path d="M14 2l-4 4M14 2h-4m4 0v4M2 10v3a1 1 0 001 1h9" />
@@ -463,7 +464,7 @@ export function App() {
               <span className="text-sm text-primary/80">
                 {traceMode === "call" ? t("header.callTrace") : t("header.variableTrace")}
               </span>
-              <button onClick={clearTrace} className="text-primary/30 hover:text-primary/70 transition-colors">
+              <button onClick={clearTrace} aria-label={t("header.clearTrace")} className="text-primary/30 hover:text-primary/70 transition-colors">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                   <path d="M4 4l8 8M12 4l-8 8" />
                 </svg>
@@ -534,14 +535,13 @@ export function App() {
                 onNodeClick={handleNodeClick}
               />
 
-              {/* HUD */}
-              <div className="absolute top-3 left-3 text-sm text-white/20 pointer-events-none font-mono space-y-0.5">
-                <p>{filteredData.nodes.length.toLocaleString()} {t("hud.nodes")} / {filteredData.edges.length.toLocaleString()} {t("hud.edges")}</p>
+              {/* HUD — 计数已在 header 展示，这里只放筛选与追踪的补充信息 */}
+              <div className="absolute top-3 left-3 text-sm text-white/40 pointer-events-none font-mono space-y-0.5">
                 {activeData.nodes.length > filteredData.nodes.length && (
-                  <p className="text-white/15">{t("hud.filtered")} {activeData.nodes.length.toLocaleString()} {t("hud.filteredSuffix")}</p>
+                  <p>{t("hud.filtered")} {activeData.nodes.length.toLocaleString()} {t("hud.filteredSuffix")}</p>
                 )}
                 {traceNodeIds.size > 0 && (
-                  <p className="text-primary/40">{t("hud.trace")} {traceNodeIds.size} {t("hud.traceNodes")}, {traceEdgeIds.size} {t("hud.traceEdges")}</p>
+                  <p className="text-primary/60">{t("hud.trace")} {traceNodeIds.size} {t("hud.traceNodes")}, {traceEdgeIds.size} {t("hud.traceEdges")}</p>
                 )}
               </div>
 
@@ -568,6 +568,9 @@ export function App() {
             node={selectedNode}
             allNodes={filteredData.nodes}
             allEdges={filteredData.edges}
+            traceMode={traceMode}
+            onCallTrace={() => startCallTrace(selectedNode)}
+            onVariableTrace={() => startVariableTrace(selectedNode)}
             onClose={() => {
               setSelectedNode(null);
               setHighlightedIds(null);

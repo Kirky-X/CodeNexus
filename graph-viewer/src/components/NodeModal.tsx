@@ -1,16 +1,20 @@
 /* 节点详情侧边栏 — 点击节点后右侧滑出的信息面板 */
 
 import { useMemo } from "react";
+import { Link2, Crosshair, X } from "lucide-react";
 import { colorForLabel, colorForEdgeType } from "../lib/colors";
 import { useI18n } from "../lib/i18n";
-import type { GraphNode, GraphEdge } from "../lib/types";
+import type { GraphNode, GraphEdge, TraceMode } from "../lib/types";
 
 interface NodeModalProps {
   node: GraphNode;
   allNodes: GraphNode[];
   allEdges: GraphEdge[];
+  traceMode: TraceMode;
   onClose: () => void;
   onNavigate: (node: GraphNode) => void;
+  onCallTrace: () => void;
+  onVariableTrace: () => void;
 }
 
 interface Connection {
@@ -19,7 +23,7 @@ interface Connection {
   direction: "inbound" | "outbound";
 }
 
-export function NodeModal({ node, allNodes, allEdges, onClose, onNavigate }: NodeModalProps) {
+export function NodeModal({ node, allNodes, allEdges, traceMode, onClose, onNavigate, onCallTrace, onVariableTrace }: NodeModalProps) {
   const { t } = useI18n();
   const connections = useMemo(() => {
     const nodeMap = new Map<string, GraphNode>();
@@ -40,6 +44,10 @@ export function NodeModal({ node, allNodes, allEdges, onClose, onNavigate }: Nod
 
   const outbound = connections.filter((c) => c.direction === "outbound");
   const inbound = connections.filter((c) => c.direction === "inbound");
+
+  /* 可追踪的节点类型 */
+  const canCallTrace = ["Function", "Method", "Constructor"].includes(node.label);
+  const canVariableTrace = ["Variable", "GlobalVar", "Parameter", "Const", "Static", "Property"].includes(node.label);
 
   return (
     <div className="w-[340px] border-l border-border/30 flex flex-col h-full bg-background/95 backdrop-blur-md shrink-0 animate-slide-in-right">
@@ -63,11 +71,10 @@ export function NodeModal({ node, allNodes, allEdges, onClose, onNavigate }: Nod
           </div>
           <button
             onClick={onClose}
+            aria-label={t("modal.close")}
             className="text-foreground/30 hover:text-foreground/70 transition-colors p-1.5 rounded-lg hover:bg-white/[0.05]"
           >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <path d="M4 4l8 8M12 4l-8 8" />
-            </svg>
+            <X size={14} strokeWidth={2} strokeLinecap="round" />
           </button>
         </div>
 
@@ -96,6 +103,38 @@ export function NodeModal({ node, allNodes, allEdges, onClose, onNavigate }: Nod
           )}
         </div>
 
+        {/* Trace actions */}
+        {(canCallTrace || canVariableTrace) && (
+          <div className="flex flex-wrap gap-2 mt-3">
+            {canCallTrace && (
+              <button
+                onClick={onCallTrace}
+                className={`inline-flex items-center gap-1.5 h-6 px-2 rounded-md text-[11px] font-medium transition-colors ${
+                  traceMode === "call"
+                    ? "bg-primary text-primary-foreground"
+                    : "border border-border text-foreground/70 hover:bg-white/[0.04]"
+                }`}
+              >
+                <Link2 size={11} />
+                {t("modal.callTrace")}
+              </button>
+            )}
+            {canVariableTrace && (
+              <button
+                onClick={onVariableTrace}
+                className={`inline-flex items-center gap-1.5 h-6 px-2 rounded-md text-[11px] font-medium transition-colors ${
+                  traceMode === "variable"
+                    ? "bg-primary text-primary-foreground"
+                    : "border border-border text-foreground/70 hover:bg-white/[0.04]"
+                }`}
+              >
+                <Crosshair size={11} />
+                {t("modal.variableTrace")}
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Connection stats */}
         <div className="flex gap-5 mt-3 pt-2.5 border-t border-border/20">
           {[
@@ -104,7 +143,7 @@ export function NodeModal({ node, allNodes, allEdges, onClose, onNavigate }: Nod
             { label: t("modal.total"), value: connections.length, color: "text-foreground" },
           ].map((s) => (
             <div key={s.label}>
-              <p className="text-[10px] text-foreground/25 uppercase tracking-widest mb-0.5">{s.label}</p>
+              <p className="text-[10px] text-foreground/45 uppercase tracking-widest mb-0.5">{s.label}</p>
               <p className={`text-lg font-semibold tabular-nums ${s.color}`}>{s.value}</p>
             </div>
           ))}
@@ -120,7 +159,7 @@ export function NodeModal({ node, allNodes, allEdges, onClose, onNavigate }: Nod
           <ConnectionGroup title={t("modal.referencedBy")} icon="<-" connections={inbound} onNavigate={onNavigate} />
         )}
         {connections.length === 0 && (
-          <p className="text-[13px] text-foreground/25 text-center py-12">{t("modal.noConnections")}</p>
+          <p className="text-[13px] text-foreground/40 text-center py-12">{t("modal.noConnections")}</p>
         )}
       </div>
     </div>
@@ -146,15 +185,15 @@ function ConnectionGroup({
 
   return (
     <div className="mb-4">
-      <p className="text-[13px] font-medium text-foreground/40 mb-2.5 flex items-center gap-1.5">
-        <span className="text-foreground/20">{icon}</span>
+      <p className="text-[13px] font-medium text-foreground/50 mb-2.5 flex items-center gap-1.5">
+        <span className="text-foreground/30">{icon}</span>
         {title}
-        <span className="text-foreground/15 text-[11px]">({connections.length})</span>
+        <span className="text-foreground/30 text-[11px]">({connections.length})</span>
       </p>
       <div className="space-y-2">
         {grouped.map(([type, conns]) => (
           <div key={type}>
-            <p className="text-[11px] text-foreground/25 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+            <p className="text-[11px] text-foreground/45 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: colorForEdgeType(type) }} />
               {type.replace(/_/g, " ").toLowerCase()}
             </p>
@@ -172,7 +211,7 @@ function ConnectionGroup({
                   <span className="text-[13px] text-foreground/60 group-hover:text-foreground/90 truncate transition-colors">
                     {c.node.name}
                   </span>
-                  <span className="text-[11px] text-foreground/15 ml-auto shrink-0">{c.node.label}</span>
+                  <span className="text-[11px] text-foreground/35 ml-auto shrink-0">{c.node.label}</span>
                 </button>
               ))}
             </div>
