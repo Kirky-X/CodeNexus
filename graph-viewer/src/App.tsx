@@ -262,7 +262,7 @@ export function App() {
   /* ── Landing Page ─────────────────────────────────── */
   if (!fileLoaded) {
     return (
-      <div className="h-screen flex flex-col bg-ambient text-foreground overflow-hidden relative">
+      <div className="grain h-screen flex flex-col bg-ambient text-foreground overflow-hidden relative">
         {/* LightRays Background */}
         <div style={{ width: '100%', height: '100%', position: 'absolute', inset: 0, zIndex: 0 }}>
           <LightRays
@@ -283,77 +283,83 @@ export function App() {
         {/* Navigation */}
         <nav className="flex items-center justify-between px-8 py-5 shrink-0 relative" style={{ zIndex: 1 }}>
           <div className="flex items-center gap-3">
-            <img src="/CodeNexus.png" alt="CodeNexus" className="w-9 h-9 rounded-lg object-contain opacity-90" />
-            <span className="text-lg font-semibold tracking-tight text-foreground/90">CodeNexus</span>
+            <img src="/CodeNexus.png" alt="CodeNexus" className="w-9 h-9 rounded-xl object-contain ring-1 ring-white/10" />
+            <span className="text-lg font-semibold tracking-tight text-foreground">CodeNexus</span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-foreground/50 font-mono">{t("nav.subtitle")}</span>
+            <span className="text-[11px] uppercase tracking-[0.22em] text-foreground/45 font-medium">{t("nav.subtitle")}</span>
             <LanguageSwitcher />
           </div>
         </nav>
 
         {/* Hero */}
         <div className="flex-1 flex items-center justify-center px-6 relative" style={{ zIndex: 1 }}>
-          <div className="w-full max-w-2xl space-y-10">
+          <div className="w-full max-w-2xl space-y-12">
             {/* Title */}
-            <div className="text-center space-y-3">
-              <h1 className="text-4xl md:text-5xl font-semibold tracking-tight text-foreground/90 leading-tight">
+            <div className="text-center space-y-5">
+              <span className="rise rise-1 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-1 text-[10px] uppercase tracking-[0.22em] font-medium text-foreground/55">
+                <span className="w-1.5 h-1.5 rounded-full bg-accent shadow-[0_0_8px_rgba(34,211,238,0.8)]" />
+                {t("nav.subtitle")}
+              </span>
+              <h1 className="rise rise-2 text-5xl md:text-6xl font-semibold tracking-[-0.03em] leading-[1.05] bg-gradient-to-b from-white via-white to-white/55 bg-clip-text text-transparent">
                 {t("hero.title")}
               </h1>
-              <p className="text-base text-foreground/40 max-w-md mx-auto">
+              <p className="rise rise-3 text-base text-foreground/45 max-w-md mx-auto leading-relaxed">
                 {t("hero.subtitle")}
               </p>
             </div>
 
-            {/* File Drop Zone */}
-            <div className="glass rounded-2xl p-6 space-y-5">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".lbug"
-                className="hidden"
-                onChange={handleFileInput}
-              />
-              <div
-                className={`flex flex-col items-center justify-center py-10 px-6 rounded-xl border-2 border-dashed transition-colors cursor-pointer ${
-                  isDragOver
-                    ? "border-primary/50 bg-primary/5"
-                    : "border-white/[0.08] hover:border-white/[0.15]"
-                }`}
-                onClick={() => fileInputRef.current?.click()}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-              >
-                {fileLoading ? (
-                  <div className="flex flex-col items-center gap-3">
-                    <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-                    <p className="text-sm text-foreground/50">{t("landing.loadingFile")}</p>
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center gap-3">
-                    <svg className="w-10 h-10 text-foreground/20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-                      <polyline points="17 8 12 3 7 8" />
-                      <line x1="12" y1="3" x2="12" y2="15" />
-                    </svg>
-                    <p className="text-sm text-foreground/50">{t("landing.dropFile")}</p>
-                    <p className="text-xs text-foreground/30">{t("landing.orSelectFile")}</p>
-                  </div>
+            {/* File Drop Zone — 双层嵌套：外壳铝槽 + 内芯玻璃板 */}
+            <div className="rise rise-4 rounded-[1.75rem] bg-white/[0.03] p-1.5 ring-1 ring-white/10 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.7)]">
+              <div className="rounded-[1.375rem] bg-[#101014]/90 backdrop-blur-xl p-5 space-y-4 shadow-[inset_0_1px_1px_rgba(255,255,255,0.06)]">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".lbug"
+                  className="hidden"
+                  onChange={handleFileInput}
+                />
+                <div
+                  className={`group flex flex-col items-center justify-center py-9 px-6 rounded-[0.95rem] border border-dashed transition-all duration-500 cursor-pointer ${
+                    isDragOver
+                      ? "border-primary/60 bg-primary/[0.07] shadow-[0_0_40px_-8px_rgba(129,140,248,0.35)]"
+                      : "border-white/[0.12] hover:border-white/25 hover:bg-white/[0.02]"
+                  }`}
+                  onClick={() => fileInputRef.current?.click()}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                >
+                  {fileLoading ? (
+                    <div className="flex flex-col items-center gap-3">
+                      <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                      <p className="text-sm text-foreground/50">{t("landing.loadingFile")}</p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center gap-3">
+                      <svg className="w-9 h-9 text-foreground/25 transition-colors duration-500 group-hover:text-primary/60" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                        <polyline points="17 8 12 3 7 8" />
+                        <line x1="12" y1="3" x2="12" y2="15" />
+                      </svg>
+                      <p className="text-sm text-foreground/55">{t("landing.dropFile")}</p>
+                      <p className="text-xs text-foreground/30">{t("landing.orSelectFile")}</p>
+                    </div>
+                  )}
+                </div>
+                {fileError && (
+                  <p className="text-xs text-destructive/80 text-center">{fileError}</p>
                 )}
-              </div>
-              {fileError && (
-                <p className="text-xs text-destructive/80 text-center">{fileError}</p>
-              )}
-              <p className="text-[11px] text-foreground/20 text-center">{t("landing.acceptsLbug")}</p>
+                <p className="text-[11px] text-foreground/25 text-center">{t("landing.acceptsLbug")}</p>
 
-              {/* Demo mode */}
-              <div className="flex items-center gap-3 pt-2 border-t border-white/[0.04]">
-                <div className="h-px flex-1 bg-white/[0.03]" />
-                <Button variant="outline" size="sm" onClick={enterDemoMode} className="text-xs">
-                  {t("landing.demo")}
-                </Button>
-                <div className="h-px flex-1 bg-white/[0.03]" />
+                {/* Demo mode */}
+                <div className="flex items-center gap-3 pt-1">
+                  <div className="h-px flex-1 bg-gradient-to-r from-transparent to-white/10" />
+                  <Button variant="outline" size="sm" onClick={enterDemoMode} className="text-xs rounded-full px-4 active:scale-[0.98]">
+                    {t("landing.demo")}
+                  </Button>
+                  <div className="h-px flex-1 bg-gradient-to-l from-transparent to-white/10" />
+                </div>
               </div>
             </div>
           </div>
@@ -457,9 +463,9 @@ export function App() {
 
   /* ── Graph View ────────────────────────────────────── */
   return (
-    <div className="h-screen flex flex-col bg-background text-foreground">
+    <div className="grain h-screen flex flex-col bg-background text-foreground">
       {/* Header */}
-      <header className="flex items-center justify-between px-6 h-16 border-b border-border/40 bg-background/80 backdrop-blur-md shrink-0">
+      <header className="flex items-center justify-between px-6 h-16 border-b border-white/[0.06] bg-background/80 backdrop-blur-md shrink-0">
         <div className="flex items-center gap-5">
           <button onClick={handleBack} className="flex items-center gap-3 group">
             <img src="/CodeNexus.png" alt="CodeNexus" className="w-10 h-10 rounded-lg object-contain opacity-80 group-hover:opacity-100 transition-opacity" />
@@ -470,7 +476,7 @@ export function App() {
           {/* 文件信息 + 重新选择 */}
           <div className="flex items-center gap-2">
             <span className="text-sm text-foreground/40">{t("header.file")}</span>
-            <span className="text-sm text-primary font-medium max-w-40 truncate">{fileName}</span>
+            <span className="text-xs text-primary font-medium max-w-40 truncate rounded-full bg-primary/[0.08] px-2.5 py-1">{fileName}</span>
             <button
               onClick={handleReselectFile}
               className="text-xs text-foreground/30 hover:text-foreground/60 transition-colors ml-1"

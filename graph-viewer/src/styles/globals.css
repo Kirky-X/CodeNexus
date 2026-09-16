@@ -22,8 +22,9 @@
   --color-input: #2e2e33;
   --color-ring: #818cf8;
   --radius: 0.75rem;
-  --font-sans: "Fira Sans", "Inter", system-ui, -apple-system, sans-serif;
-  --font-mono: "Fira Code", "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-sans: "Outfit Variable", "Outfit", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --ease-premium: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 html, body, #root {
@@ -129,7 +130,33 @@ html, body, #root {
   transform: translateY(-1px);
 }
 
+/* ── 质感层：细噪点（固定层，不随滚动，pointer-events 穿透） ── */
+.grain::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0.028;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ── 着陆页入场编排：上浮消隐，逐级延迟 ── */
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(18px); filter: blur(6px); }
+  to { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+.rise {
+  opacity: 0;
+  animation: rise-in 0.9s var(--ease-premium, cubic-bezier(0.32,0.72,0,1)) forwards;
+}
+.rise-1 { animation-delay: 0.05s; }
+.rise-2 { animation-delay: 0.16s; }
+.rise-3 { animation-delay: 0.3s; }
+.rise-4 { animation-delay: 0.44s; }
+
 @media (prefers-reduced-motion: reduce) {
+  .rise { opacity: 1; animation: none; }
   .trace-edge { animation: none; opacity: 0.8; }
   .project-card { transition: none; }
   .animate-slide-in-right { animation: none; }

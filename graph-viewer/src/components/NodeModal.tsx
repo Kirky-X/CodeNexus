@@ -109,10 +109,10 @@ export function NodeModal({ node, allNodes, allEdges, traceMode, onClose, onNavi
             {canCallTrace && (
               <button
                 onClick={onCallTrace}
-                className={`inline-flex items-center gap-1.5 h-6 px-2 rounded-md text-[11px] font-medium transition-colors ${
+                className={`inline-flex items-center gap-1.5 h-7 px-3.5 rounded-full text-[11px] font-medium transition-all duration-300 active:scale-[0.97] ${
                   traceMode === "call"
-                    ? "bg-primary text-primary-foreground"
-                    : "border border-border text-foreground/70 hover:bg-white/[0.04]"
+                    ? "bg-primary text-primary-foreground shadow-[0_0_16px_-2px_rgba(129,140,248,0.5)]"
+                    : "border border-white/10 text-foreground/70 hover:bg-white/[0.04] hover:border-white/20"
                 }`}
               >
                 <Link2 size={11} />
@@ -122,10 +122,10 @@ export function NodeModal({ node, allNodes, allEdges, traceMode, onClose, onNavi
             {canVariableTrace && (
               <button
                 onClick={onVariableTrace}
-                className={`inline-flex items-center gap-1.5 h-6 px-2 rounded-md text-[11px] font-medium transition-colors ${
+                className={`inline-flex items-center gap-1.5 h-7 px-3.5 rounded-full text-[11px] font-medium transition-all duration-300 active:scale-[0.97] ${
                   traceMode === "variable"
-                    ? "bg-primary text-primary-foreground"
-                    : "border border-border text-foreground/70 hover:bg-white/[0.04]"
+                    ? "bg-primary text-primary-foreground shadow-[0_0_16px_-2px_rgba(129,140,248,0.5)]"
+                    : "border border-white/10 text-foreground/70 hover:bg-white/[0.04] hover:border-white/20"
                 }`}
               >
                 <Crosshair size={11} />
