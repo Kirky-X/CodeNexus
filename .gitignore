@@ -77,7 +77,11 @@ specmark/
 
 # Graph viewer build output
 graph-viewer/dist/
+graph-viewer/node_modules/
 *.tsbuildinfo
+
+# Graph viewer local GUI test evidence (screenshots, rebuildable)
+graph-viewer/gui-test-screenshots/
 
 # Verification harness outputs (large, sample-derived; rebuild locally)
 tools/verification/results/
