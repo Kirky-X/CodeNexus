@@ -13,6 +13,11 @@ use super::{
 };
 
 /// 创建只读数据库连接配置
+/// (columns, rows) tuple returned by [`query_rows`].
+type QueryRows = (Vec<String>, Vec<Vec<JsonValue>>);
+
+type QueryResult = Result<QueryRows, Box<dyn std::error::Error>>;
+
 fn read_only_config() -> lbug::SystemConfig {
     lbug::SystemConfig::default()
         .buffer_pool_size(256 * 1024 * 1024)
@@ -22,10 +27,7 @@ fn read_only_config() -> lbug::SystemConfig {
 }
 
 /// 执行 Cypher 查询，返回 (列名列表, 行数据)
-fn query_rows(
-    conn: &Connection,
-    cypher: &str,
-) -> Result<(Vec<String>, Vec<Vec<JsonValue>>), Box<dyn std::error::Error>> {
+fn query_rows(conn: &Connection, cypher: &str) -> QueryResult {
     let mut result = conn.query(cypher)?;
     let columns = result.get_column_names();
     let mut rows = Vec::new();
@@ -166,7 +168,7 @@ pub fn query_graph(
     let mut node_counter = 0usize;
 
     /* 每个类型分配的配额 */
-    let per_type_limit = (limit / 6).max(50).min(500);
+    let per_type_limit = (limit / 6).clamp(50, 500);
 
     for label in QUERYABLE_LABELS {
         if nodes.len() >= limit {
@@ -273,7 +275,7 @@ fn query_all_edges(
     name_to_id: &mut std::collections::HashMap<String, String>,
 ) -> Result<Vec<GraphEdge>, Box<dyn std::error::Error>> {
     /* 扫描更多边以提高命中率 */
-    let scan_limit = (limit * 200).max(10_000).min(200_000);
+    let scan_limit = (limit * 200).clamp(10_000, 200_000);
     let cypher = format!(
         "MATCH (r:CodeRelation) RETURN r.source AS src_name, r.target AS tgt_name, r.type AS edge_type LIMIT {}",
         scan_limit
@@ -373,19 +375,19 @@ pub fn query_schema(db_path: &Path) -> Result<SchemaInfo, Box<dyn std::error::Er
     let mut node_labels = Vec::new();
     for label in QUERYABLE_LABELS {
         let cypher = format!("MATCH (n:{}) RETURN count(*) AS cnt", label);
-        if let Ok((cols, rows)) = query_rows(&conn, &cypher) {
-            if let Some(row) = rows.first() {
-                let count = get_f64(&cols, row, "cnt").unwrap_or(0.0) as u64;
-                if count > 0 {
-                    node_labels.push(LabelCount {
-                        label: label.to_string(),
-                        count,
-                    });
-                }
+        if let Ok((cols, rows)) = query_rows(&conn, &cypher)
+            && let Some(row) = rows.first()
+        {
+            let count = get_f64(&cols, row, "cnt").unwrap_or(0.0) as u64;
+            if count > 0 {
+                node_labels.push(LabelCount {
+                    label: label.to_string(),
+                    count,
+                });
             }
         }
     }
-    node_labels.sort_by(|a, b| b.count.cmp(&a.count));
+    node_labels.sort_by_key(|a| std::cmp::Reverse(a.count));
 
     /* 边总数 — 从 CodeRelation 表查询 */
     let (cols, rows) = query_rows(&conn, "MATCH (r:CodeRelation) RETURN count(*) AS cnt")?;
@@ -393,11 +395,10 @@ pub fn query_schema(db_path: &Path) -> Result<SchemaInfo, Box<dyn std::error::Er
         .first()
         .map(|row| get_f64(&cols, row, "cnt").unwrap_or(0.0) as u64)
         .unwrap_or(0);
-    let mut edge_types = Vec::new();
-    edge_types.push(TypeCount {
+    let edge_types = vec![TypeCount {
         r#type: "ALL".to_string(),
         count: total_edges,
-    });
+    }];
 
     let total_nodes: u64 = node_labels.iter().map(|l| l.count).sum();
 
