@@ -292,9 +292,62 @@ impl OxcacheStore {
     }
 }
 
+/// Well-known key namespaces (`"<namespace>:<rest>"` key convention).
+const KNOWN_NAMESPACES: [&str; 3] = ["cypher", "ast", "embed"];
+
+impl OxcacheStore {
+    /// Current generation counter for `ns`. Bumped by
+    /// [`invalidate_namespace`](CacheStore::invalidate_namespace); entries
+    /// written under older generations become unreachable (and age out via
+    /// TTL/eviction) without requiring backend-side key enumeration, which
+    /// oxcache does not expose synchronously.
+    fn generation(&self, ns: &str) -> u64 {
+        self.inner
+            .get_bytes_sync(&format!("__gen__:{ns}"))
+            .ok()
+            .flatten()
+            .and_then(|b| String::from_utf8(b).ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0)
+    }
+
+    fn bump_generation(&self, ns: &str) {
+        let next = self.generation(ns).wrapping_add(1).to_string();
+        if let Err(e) = self
+            .inner
+            .set_bytes_sync(&format!("__gen__:{ns}"), next.into_bytes(), None)
+        {
+            tracing::warn!(ns = %ns, error = %e, "cache generation bump failed");
+        }
+    }
+
+    /// Maps a logical key to its storage key, factoring in the namespace
+    /// generation. Keys without a `ns:` prefix pass through unchanged.
+    fn qualify(&self, key: &str) -> String {
+        match key.split_once(':') {
+            Some((ns, rest)) if KNOWN_NAMESPACES.contains(&ns) => {
+                format!("{ns}:g{}:{rest}", self.generation(ns))
+            }
+            _ => key.to_string(),
+        }
+    }
+
+    fn clear_macro_query_cache(&self) {
+        // `#[cached]` macro services live in a separate oxcache registry;
+        // clear them so cached query results stay consistent after graph
+        // mutations (index / clean / write-query).
+        if let Some(svc) = oxcache::__internal_get_cache(MACRO_QUERY_SERVICE) {
+            if let Err(e) = svc.clear_sync() {
+                tracing::warn!(error = %e, "macro query cache invalidate failed");
+            }
+        }
+    }
+}
+
 impl CacheStore for OxcacheStore {
     fn get(&self, key: &str) -> Option<Vec<u8>> {
-        match self.inner.get_bytes_sync(key) {
+        let storage_key = self.qualify(key);
+        match self.inner.get_bytes_sync(&storage_key) {
             Ok(val) => val,
             Err(e) => {
                 tracing::warn!(key = %key, error = %e, "cache get failed");
@@ -317,7 +370,8 @@ impl CacheStore for OxcacheStore {
             );
             return;
         }
-        if let Err(e) = self.inner.set_bytes_sync(key, val, None) {
+        let storage_key = self.qualify(key);
+        if let Err(e) = self.inner.set_bytes_sync(&storage_key, val, None) {
             tracing::warn!(key = %key, error = %e, "cache set failed");
         }
     }
@@ -326,13 +380,19 @@ impl CacheStore for OxcacheStore {
         if let Err(e) = self.inner.clear_sync() {
             tracing::warn!(error = %e, "cache invalidate_all failed");
         }
-        // `#[cached]` macro services live in a separate oxcache registry;
-        // clear them too so cached query results stay consistent after
-        // graph mutations (index / clean).
-        if let Some(svc) = oxcache::__internal_get_cache(MACRO_QUERY_SERVICE) {
-            if let Err(e) = svc.clear_sync() {
-                tracing::warn!(error = %e, "macro query cache invalidate failed");
-            }
+        self.clear_macro_query_cache();
+    }
+
+    fn invalidate_namespace(&self, ns: &str) {
+        // Generation bump: entries under the previous generation become
+        // unreachable without enumerating keys (oxcache has no sync key
+        // listing). Content-addressed namespaces (`ast:`/`embed:`) are NOT
+        // touched by a `cypher` invalidation — their entries remain valid.
+        self.bump_generation(ns);
+        if ns == "cypher" {
+            // Cached query results via `#[cached]` share the cypher
+            // namespace's invalidation semantics.
+            self.clear_macro_query_cache();
         }
     }
 }
@@ -425,6 +485,35 @@ mod tests {
         cap.invalidate_all();
         assert!(cap.get("k1").is_none());
         assert!(cap.get("k2").is_none());
+    }
+
+    /// Namespace isolation: `invalidate_namespace("cypher")` drops `cypher:`
+    /// entries but leaves content-addressed namespaces (`ast:`) intact.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn capability_invalidate_namespace_is_scoped() {
+        let cap = build_cache().await;
+        cap.set("cypher:abc", b"query-result".to_vec());
+        cap.set("ast:rust:def", b"ast-sexp".to_vec());
+        cap.set("embed:123", b"vector".to_vec());
+
+        cap.invalidate_namespace("cypher");
+
+        assert!(
+            cap.get("cypher:abc").is_none(),
+            "cypher entry must be invalidated"
+        );
+        assert!(
+            cap.get("ast:rust:def").is_some(),
+            "ast entries are content-addressed and must survive"
+        );
+        assert!(
+            cap.get("embed:123").is_some(),
+            "embed entries are content-addressed and must survive"
+        );
+
+        // Re-set after invalidation lands in the new generation and reads back.
+        cap.set("cypher:abc", b"fresh-result".to_vec());
+        assert_eq!(cap.get("cypher:abc"), Some(b"fresh-result".to_vec()));
     }
 
     #[tokio::test(flavor = "multi_thread")]

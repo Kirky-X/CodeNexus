@@ -96,9 +96,11 @@ impl<'a> CypherExecutor<'a> {
                 }
                 return Ok(result);
             }
-            // Write query: invalidate cache before executing to ensure
-            // subsequent read queries don't return stale results.
-            cache.invalidate_all();
+            // Write query: invalidate cached reads before executing to ensure
+            // subsequent read queries don't return stale results. Scoped to
+            // the `cypher` namespace — content-addressed caches (`ast:`,
+            // `embed:`) are unaffected by graph data changes.
+            cache.invalidate_namespace("cypher");
         }
 
         self.execute_internal(cypher)

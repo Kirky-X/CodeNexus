@@ -53,4 +53,16 @@ pub trait CacheStore: Send + Sync {
     /// expire via TTL, but explicit invalidation is required for
     /// correctness after writes.
     fn invalidate_all(&self);
+
+    /// Invalidates only the entries whose keys start with `"<ns>:"`.
+    ///
+    /// Default: no-op (fall back to [`invalidate_all`](Self::invalidate_all)
+    /// at call sites when strict isolation matters). Backends without
+    /// key-enumeration implement this via per-namespace generation counters,
+    /// so content-addressed namespaces (`ast:`, `embed:`) survive a `cypher`
+    /// invalidation — their entries are keyed by content hash and remain
+    /// valid across graph mutations.
+    fn invalidate_namespace(&self, ns: &str) {
+        let _ = ns;
+    }
 }
