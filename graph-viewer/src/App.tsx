@@ -8,6 +8,7 @@ import { NodeModal } from "./components/NodeModal";
 import { Button } from "./components/ui/button";
 import { generateDemoData } from "./lib/demoData";
 import { loadLbugFile, closeDatabase } from "./api/client";
+import { computeLoadBudget, detectMemoryProfile, type LoadBudget } from "./lib/memoryBudget";
 import { useI18n } from "./lib/i18n";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
 import LightRays from "./components/LightRays";
@@ -43,6 +44,8 @@ export function App() {
   const [demoData, setDemoData] = useState<GraphData | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  /* 内存预算 — 大文件加载时钳制节点上限并启用省内存档 */
+  const [loadBudget, setLoadBudget] = useState<LoadBudget | null>(null);
 
   /* 文件加载处理 */
   const handleFileLoad = useCallback(async (file: File) => {
@@ -53,7 +56,10 @@ export function App() {
     setFileLoading(true);
     setFileError(null);
     try {
-      await loadLbugFile(file);
+      const budget = computeLoadBudget(file.size, detectMemoryProfile());
+      setLoadBudget(budget);
+      if (maxNodes > budget.maxNodesCap) setMaxNodes(budget.maxNodesCap);
+      await loadLbugFile(file, budget);
       setFileName(file.name);
       setFileLoaded(true);
     } catch (e) {
@@ -61,7 +67,7 @@ export function App() {
     } finally {
       setFileLoading(false);
     }
-  }, []);
+  }, [maxNodes]);
 
   const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -224,6 +230,7 @@ export function App() {
   const handleBack = useCallback(async () => {
     await closeDatabase();
     setFileLoaded(false);
+    setLoadBudget(null);
     setFileName("");
     setSelectedNode(null);
     setHighlightedIds(null);
@@ -472,15 +479,24 @@ export function App() {
             </div>
           )}
           <div className="flex items-center gap-2">
+            {loadBudget?.warnLowMemory && (
+              <span
+                className="text-[11px] text-foreground/45 whitespace-nowrap"
+                title={t("header.memoryMode")}
+              >
+                {t("header.memoryMode")} · ≤{loadBudget.maxNodesCap}
+              </span>
+            )}
             <select
               value={maxNodes}
               onChange={(e) => setMaxNodes(Number(e.target.value))}
               className="bg-white/[0.04] border border-white/[0.08] rounded-lg px-2 py-1 text-sm text-foreground/60 outline-none cursor-pointer hover:border-primary/30 transition-colors"
             >
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-              <option value={200}>200</option>
-              <option value={500}>500</option>
+              {[50, 100, 200, 500]
+                .filter((n) => !loadBudget || n <= loadBudget.maxNodesCap)
+                .map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
             </select>
             <div className="text-sm text-white/60 font-mono tabular-nums">
               {filteredData.nodes.length.toLocaleString()} {t("hud.nodes")} / {filteredData.edges.length.toLocaleString()} {t("hud.edges")}

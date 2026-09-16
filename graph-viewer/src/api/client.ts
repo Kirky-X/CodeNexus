@@ -3,20 +3,24 @@
 import type { GraphData, SchemaInfo, TraceResult, TraceMode } from "../lib/types";
 import { LbugDatabase } from "../lib/lbugWasm";
 import { queryGraph, querySchema, queryTrace } from "../lib/graphQuery";
+import type { LoadBudget } from "../lib/memoryBudget";
 
-/* 模块级状态 — 当前打开的数据库 */
+/* 模块级状态 — 当前打开的数据库与其加载预算 */
 let currentDb: LbugDatabase | null = null;
+let currentBudget: LoadBudget | null = null;
 
 /**
  * 加载 .lbug 文件到浏览器内数据库
+ * @param budget 可选内存预算（bufferPool 封顶 DB 缓冲）
  */
-export async function loadLbugFile(file: File): Promise<void> {
+export async function loadLbugFile(file: File, budget?: LoadBudget): Promise<void> {
   /* 关闭之前的数据库 */
   if (currentDb) {
     currentDb.close();
     currentDb = null;
   }
-  currentDb = await LbugDatabase.fromFile(file);
+  currentDb = await LbugDatabase.fromFile(file, budget?.bufferPoolBytes ?? 0);
+  currentBudget = budget ?? null;
 }
 
 /**
@@ -56,7 +60,7 @@ export async function fetchGraphData(
   _lbugPath?: string,
 ): Promise<GraphData> {
   const db = getDb();
-  return queryGraph(db, db.fileName, maxNodes);
+  return queryGraph(db, db.fileName, maxNodes, currentBudget?.scanLimit);
 }
 
 /**

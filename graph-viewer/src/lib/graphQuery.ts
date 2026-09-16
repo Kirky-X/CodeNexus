@@ -113,9 +113,11 @@ export function queryGraph(
   db: LbugDatabase,
   projectName: string,
   maxNodes = 100,
+  /** 关系扫描行数上限 — 内存预算模块按设备档位传入（省内存档 50k） */
+  scanLimitOverride?: number,
 ): GraphData {
   /* 1. 扫描关系表 */
-  const scanLimit = Math.min(Math.max(maxNodes * 200, 10_000), 200_000);
+  const scanLimit = scanLimitOverride ?? Math.min(Math.max(maxNodes * 200, 10_000), 200_000);
   let relRows: Record<string, unknown>[];
   try {
     relRows = db.query(

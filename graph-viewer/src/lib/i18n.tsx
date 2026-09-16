@@ -49,6 +49,7 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "header.variableTrace": "Variable Trace",
     "header.selectFile": "Select File",
     "header.clearTrace": "Clear trace",
+    "header.memoryMode": "Memory saver",
     /* Graph HUD */
     "hud.nodes": "nodes",
     "hud.edges": "edges",
@@ -127,6 +128,7 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "header.variableTrace": "变量追踪中",
     "header.selectFile": "选择文件",
     "header.clearTrace": "清除追踪",
+    "header.memoryMode": "省内存模式",
     /* Graph HUD */
     "hud.nodes": "节点",
     "hud.edges": "边",

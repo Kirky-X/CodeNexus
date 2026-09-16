@@ -19,7 +19,8 @@ interface LbugSyncModule {
   Connection: typeof LbugConn;
 }
 
-/** Emscripten 虚拟文件系统（sync 变体仅导出 createDataFile 等预加载 API） */
+/** Emscripten FS — sync 变体仅类型化导出 createDataFile 等少量 API，
+ * 运行时对象通常还带 open/write/close/unlink（用于分块流式与释放，均需 feature-detect） */
 interface EmscriptenFS {
   createDataFile(
     parent: string,
@@ -28,7 +29,11 @@ interface EmscriptenFS {
     canRead: boolean,
     canWrite: boolean,
     canOwn?: boolean,
-  ): void;
+  ): unknown;
+  open?(path: string, flags: string): { object: unknown };
+  write?(stream: { object: unknown }, buffer: Uint8Array, offset: number, length: number, position?: number): number;
+  close?(stream: { object: unknown }): void;
+  unlink?(path: string): void;
 }
 
 /* WASM 模块 — 延迟加载 */
@@ -72,11 +77,14 @@ export class LbugDatabase {
   private db: LbugDB;
   private conn: LbugConn;
   private _fileName: string;
+  /** MEMFS 内的库文件路径 — close 时尝试 unlink 释放 WASM 堆 */
+  private vfsPath: string | null;
 
-  private constructor(db: LbugDB, conn: LbugConn, fileName: string) {
+  private constructor(db: LbugDB, conn: LbugConn, fileName: string, vfsPath: string | null) {
     this.db = db;
     this.conn = conn;
     this._fileName = fileName;
+    this.vfsPath = vfsPath;
   }
 
   /** 当前打开的文件名 */
@@ -86,37 +94,48 @@ export class LbugDatabase {
 
   /**
    * 从 File 对象加载 .lbug 数据库
+   *
+   * @param file 浏览器 File 对象
+   * @param bufferPoolSize DB 缓冲池上限（字节），0 = 引擎默认。
+   *        内存受限设备按 {@link computeLoadBudget} 的预算传入
    */
-  static async fromFile(file: File): Promise<LbugDatabase> {
+  static async fromFile(file: File, bufferPoolSize = 0): Promise<LbugDatabase> {
     const mod = await getLbugModule();
     const fs = mod.getFS();
 
-    /* 读取文件内容为 Uint8Array */
-    let data: Uint8Array;
-    try {
-      const buffer = await file.arrayBuffer();
-      data = new Uint8Array(buffer);
-    } catch (err) {
-      console.error("[lbugWasm] 文件读取失败:", err);
-      throw new Error(`无法读取文件: ${err instanceof Error ? err.message : String(err)}`);
-    }
-
-    /* 写入 WASM 虚拟文件系统（使用 createDataFile，sync FS 不导出 writeFile）
-     * createDataFile 不允许覆盖已存在文件，因此用计数器生成唯一路径 */
+    /* 写入 WASM 虚拟文件系统。
+     * 优先分块流式写入（8MB/块）：File 按需切片读取，不在 JS 堆持有
+     * 全量副本——大文件场景 JS 侧峰值从 ~2×fileSize 降到 ~8MB。
+     * FS.open/write 不可用（旧运行时）时退回 createDataFile 全量拷贝。 */
     const vfsName = `${vfsFileCounter++}_${file.name}`;
     const vfsPath = `${VFS_ROOT}${vfsName}`;
     try {
-      fs.createDataFile(VFS_ROOT, vfsName, data, true, false);
+      if (typeof fs.open === "function" && typeof fs.write === "function" && typeof fs.close === "function") {
+        const stream = fs.open(vfsPath, "w+");
+        const CHUNK = 8 * 1024 * 1024;
+        let pos = 0;
+        while (pos < file.size) {
+          const slice = file.slice(pos, pos + CHUNK);
+          const buf = new Uint8Array(await slice.arrayBuffer());
+          fs.write(stream, buf, 0, buf.length, pos);
+          pos += buf.length;
+        }
+        fs.close(stream);
+      } else {
+        const data = new Uint8Array(await file.arrayBuffer());
+        fs.createDataFile(VFS_ROOT, vfsName, data, true, false);
+      }
     } catch (err) {
       console.error("[lbugWasm] 写入 VFS 失败:", err);
       throw new Error(`写入虚拟文件系统失败: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    /* 以只读模式打开数据库 */
+    /* 以只读模式打开数据库（bufferPoolSize 封顶 DB 缓冲，保护低内存设备） */
     try {
-      const db = new mod.Database(vfsPath, 0, 0, true, true);
+      const db = new mod.Database(vfsPath, bufferPoolSize, 0, true, true);
       const conn = new mod.Connection(db);
-      return new LbugDatabase(db, conn, file.name);
+      console.debug(`[lbugWasm] 已加载 ${file.name}（${(file.size / 1048576).toFixed(1)}MB，bufferPool=${bufferPoolSize || "默认"}）`);
+      return new LbugDatabase(db, conn, file.name, vfsPath);
     } catch (err) {
       console.error("[lbugWasm] 打开数据库失败:", err);
       throw new Error(`打开数据库失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -158,6 +177,14 @@ export class LbugDatabase {
   close(): void {
     try { this.conn.close(); } catch { /* 连接可能已关闭 */ }
     try { this.db.close(); } catch { /* 数据库可能已关闭 */ }
-    /* sync FS 不导出 unlink，VFS 文件留在内存中直到页面卸载 */
+    /* 释放 MEMFS 副本：99MB 库在 WASM 堆占约 100MB，切换文件若不
+     * unlink 会累积。旧运行时无 unlink 时退回原行为（页面卸载释放） */
+    if (this.vfsPath && lbugModule) {
+      try {
+        const fs = lbugModule.getFS();
+        if (typeof fs.unlink === "function") fs.unlink(this.vfsPath);
+      } catch { /* 已释放或不支持 */ }
+      this.vfsPath = null;
+    }
   }
 }
