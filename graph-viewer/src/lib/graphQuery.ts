@@ -88,29 +88,176 @@ function escapeCypherStr(s: string): string {
     .replace(/\t/g, "\\t");
 }
 
+/** 从 qualifiedName 提取短名兜底（部分节点无 name 属性）：
+ * "proj_xxx.src.stp.session.rs.expire#MockDao" → "expire"
+ * "proj_xxx.src.stp.token.rs." → "token"（容忍尾部空段/扩展名） */
+function shortNameFromQn(qn: string): string {
+  const body = qn.split("#")[0] ?? qn;
+  const segs = body.split(".").filter(Boolean);
+  let last = segs[segs.length - 1] ?? "";
+  if (segs.length >= 2 && last.length <= 3) last = segs[segs.length - 2];
+  return last || qn;
+}
+
 /* ── 图数据查询 ───────────────────────────────────── */
 
 /**
  * 查询图数据（节点 + 边）
- * 对齐后端 graph_query.rs::query_graph
+ *
+ * 边优先加载：先扫描关系表，按端点热度（度数）选出最强的边和节点，
+ * 再批量解析节点详情。早期实现按 label 配额盲取节点、为缺失端点造
+ * stub——真实库（10 万+ 节点）里盲取的节点与边几乎不相交，100 条边
+ * 全部连向 stub 幽灵节点，视觉上呈现为向一点汇聚的扇形。
  */
 export function queryGraph(
   db: LbugDatabase,
   projectName: string,
   maxNodes = 100,
 ): GraphData {
-  const limit = maxNodes;
+  /* 1. 扫描关系表 */
+  const scanLimit = Math.min(Math.max(maxNodes * 200, 10_000), 200_000);
+  let relRows: Record<string, unknown>[];
+  try {
+    relRows = db.query(
+      `MATCH (r:CodeRelation) RETURN r.source AS src_name, r.target AS tgt_name, r.type AS edge_type LIMIT ${scanLimit}`,
+    );
+  } catch {
+    relRows = [];
+  }
+
+  if (relRows.length === 0) {
+    /* 无关系表（旧格式库）→ 退回按 label 配额加载纯节点 */
+    return queryGraphByLabelQuota(db, projectName, maxNodes);
+  }
+
+  const relations = relRows
+    .map((row) => ({
+      src: getStr(row, "src_name") ?? "",
+      tgt: getStr(row, "tgt_name") ?? "",
+      type: getStr(row, "edge_type") ?? "UNKNOWN",
+    }))
+    .filter((r) => r.src && r.tgt);
+
+  /* 2. 端点热度（度数） */
+  const degree = new Map<string, number>();
+  for (const rel of relations) {
+    degree.set(rel.src, (degree.get(rel.src) ?? 0) + 1);
+    degree.set(rel.tgt, (degree.get(rel.tgt) ?? 0) + 1);
+  }
+
+  /* 3. 贪心选边：按端点热度降序，但每个端点设配额上限，
+   *    避免预算被超级热点（如被所有测试调用的 dao）的平行边吃光 */
+  const scored = relations
+    .map((rel, i) => ({ rel, i, score: (degree.get(rel.src) ?? 0) + (degree.get(rel.tgt) ?? 0) }))
+    .sort((a, b) => b.score - a.score || a.i - b.i);
+
+  const PER_NODE_CAP = 4;
+  const pickedCount = new Map<string, number>();
+  const picked: typeof relations = [];
+  for (const { rel } of scored) {
+    if (picked.length >= maxNodes) break;
+    const cSrc = pickedCount.get(rel.src) ?? 0;
+    const cTgt = pickedCount.get(rel.tgt) ?? 0;
+    if (cSrc >= PER_NODE_CAP || cTgt >= PER_NODE_CAP) continue;
+    pickedCount.set(rel.src, cSrc + 1);
+    pickedCount.set(rel.tgt, cTgt + 1);
+    picked.push(rel);
+  }
+
+  /* 4. 入选边的端点按热度取前 maxNodes 个作为节点预算 */
+  const endpointQns = new Set<string>();
+  for (const rel of picked) {
+    endpointQns.add(rel.src);
+    endpointQns.add(rel.tgt);
+  }
+  const nodeQns = [...endpointQns]
+    .sort((a, b) => (degree.get(b) ?? 0) - (degree.get(a) ?? 0))
+    .slice(0, maxNodes);
+  const qnSet = new Set(nodeQns);
+  const keptRelations = picked.filter((r) => qnSet.has(r.src) && qnSet.has(r.tgt));
+
+  /* 5. 批量解析节点详情（IN 分批，避免超长 Cypher） */
+  const BATCH = 40;
   const nodes: GraphNode[] = [];
-  const nameToId = new Map<string, string>();
+  const idByQn = new Map<string, string>();
   let nodeCounter = 0;
+  for (let i = 0; i < nodeQns.length; i += BATCH) {
+    const batch = nodeQns.slice(i, i + BATCH);
+    const list = batch.map((qn) => `'${escapeCypherStr(qn)}'`).join(",");
+    let rows: Record<string, unknown>[];
+    try {
+      rows = db.query(
+        `MATCH (n) WHERE n.qualifiedName IN [${list}] ` +
+          `RETURN n.name AS name, n.qualifiedName AS qualified_name, n.filePath AS file_path, ` +
+          `n.project AS project, n.startLine AS start_line, n.endLine AS end_line, labels(n) AS labels`,
+      );
+    } catch {
+      continue;
+    }
+    for (const row of rows) {
+      const qn = getStr(row, "qualified_name") ?? "";
+      if (!qn || idByQn.has(qn)) continue;
+      const synthId = `n${nodeCounter++}`;
+      idByQn.set(qn, synthId);
+      const name = getStr(row, "name") ?? "";
+      nodes.push({
+        id: synthId,
+        label: parseLabel(row, "Node") as GraphNode["label"],
+        name: name || shortNameFromQn(qn),
+        file_path: getStr(row, "file_path"),
+        project: getStr(row, "project") ?? projectName,
+        qualified_name: qn,
+        start_line: getNum(row, "start_line"),
+        end_line: getNum(row, "end_line"),
+        x: 0, y: 0, z: 0,
+      });
+    }
+  }
 
-  /* 每个类型分配的配额 */
-  const perTypeLimit = Math.min(Math.max(Math.floor(limit / 6), 50), 500);
+  /* 6. 组装边（两端都已解析的才保留） */
+  const edges: GraphEdge[] = [];
+  for (const rel of keptRelations) {
+    const source = idByQn.get(rel.src);
+    const target = idByQn.get(rel.tgt);
+    if (!source || !target) continue;
+    edges.push({
+      id: `e${edges.length}`,
+      source,
+      target,
+      edge_type: rel.type as GraphEdge["edge_type"],
+      confidence: 1.0,
+      start_line: undefined,
+      project: "",
+    });
+  }
 
-  /* 按优先级查询各类型节点 */
+  /* 7. 球面坐标 */
+  assignSpherePositions(nodes);
+
+  return {
+    nodes,
+    edges,
+    total_nodes: nodes.length,
+    total_edges: edges.length,
+  };
+}
+
+/**
+ * 兜底加载：无关系表时按 label 配额盲取节点（纯节点展示，无边）
+ * 对齐后端 graph_query.rs::query_graph 的原始行为
+ */
+function queryGraphByLabelQuota(
+  db: LbugDatabase,
+  projectName: string,
+  maxNodes = 100,
+): GraphData {
+  const nodes: GraphNode[] = [];
+  let nodeCounter = 0;
+  const perTypeLimit = Math.min(Math.max(Math.floor(maxNodes / 6), 50), 500);
+
   for (const label of QUERYABLE_LABELS) {
-    if (nodes.length >= limit) break;
-    const typeLimit = Math.min(perTypeLimit, limit - nodes.length);
+    if (nodes.length >= maxNodes) break;
+    const typeLimit = Math.min(perTypeLimit, maxNodes - nodes.length);
 
     const cypher =
       `MATCH (n:${label}) ` +
@@ -128,25 +275,11 @@ export function queryGraph(
     if (rows.length === 0) continue;
 
     for (const row of rows) {
-      if (nodes.length >= limit) break;
-
-      const synthId = `n${nodeCounter}`;
-      nodeCounter++;
-      const name = getStr(row, "name") ?? "";
-      const parsedLabel = parseLabel(row, label);
-
-      if (name) {
-        nameToId.set(name, synthId);
-      }
-      const qn = getStr(row, "qualified_name") ?? "";
-      if (qn) {
-        nameToId.set(qn, synthId);
-      }
-
+      if (nodes.length >= maxNodes) break;
       nodes.push({
-        id: synthId,
-        label: parsedLabel as GraphNode["label"],
-        name,
+        id: `n${nodeCounter++}`,
+        label: parseLabel(row, label) as GraphNode["label"],
+        name: getStr(row, "name") ?? "",
         file_path: getStr(row, "file_path"),
         project: getStr(row, "project") ?? projectName,
         qualified_name: getStr(row, "qualified_name"),
@@ -157,99 +290,14 @@ export function queryGraph(
     }
   }
 
-  /* 查询边 */
-  const edges = queryAllEdges(db, limit, nodes, nameToId);
-
-  /* 分配球面坐标 */
   assignSpherePositions(nodes);
 
   return {
     nodes,
-    edges,
+    edges: [],
     total_nodes: nodes.length,
-    total_edges: edges.length,
+    total_edges: 0,
   };
-}
-
-/**
- * 查询所有边 — 至少一端在已加载节点中，缺失端点补充为 stub 节点
- * 对齐后端 graph_query.rs::query_all_edges
- */
-function queryAllEdges(
-  db: LbugDatabase,
-  limit: number,
-  nodes: GraphNode[],
-  nameToId: Map<string, string>,
-): GraphEdge[] {
-  /* 扫描更多边以提高命中率 */
-  const scanLimit = Math.min(Math.max(limit * 200, 10_000), 200_000);
-  const cypher =
-    `MATCH (r:CodeRelation) RETURN r.source AS src_name, r.target AS tgt_name, r.type AS edge_type LIMIT ${scanLimit}`;
-
-  let rows: Record<string, unknown>[];
-  try {
-    rows = db.query(cypher);
-  } catch {
-    return [];
-  }
-
-  const edges: GraphEdge[] = [];
-  let edgeCounter = 0;
-  let nodeCounter = nodes.length;
-
-  for (const row of rows) {
-    if (edges.length >= limit) break;
-
-    const srcName = getStr(row, "src_name") ?? "";
-    const tgtName = getStr(row, "tgt_name") ?? "";
-    const edgeType = getStr(row, "edge_type") ?? "UNKNOWN";
-
-    const srcId = nameToId.get(srcName);
-    const tgtId = nameToId.get(tgtName);
-
-    /* 至少一端必须匹配已加载节点 */
-    if (!srcId && !tgtId) continue;
-
-    /* 为缺失端点创建 stub 节点 */
-    const source = srcId ?? createStubNode(srcName, nodeCounter++, nodes, nameToId);
-    const target = tgtId ?? createStubNode(tgtName, nodeCounter++, nodes, nameToId);
-
-    edges.push({
-      id: `e${edgeCounter}`,
-      source,
-      target,
-      edge_type: edgeType as GraphEdge["edge_type"],
-      confidence: 1.0,
-      start_line: undefined,
-      project: "",
-    });
-    edgeCounter++;
-  }
-
-  return edges;
-}
-
-/** 创建 stub 节点（边端点缺失时补充） */
-function createStubNode(
-  name: string,
-  counter: number,
-  nodes: GraphNode[],
-  nameToId: Map<string, string>,
-): string {
-  const synthId = `n${counter}`;
-  nameToId.set(name, synthId);
-  nodes.push({
-    id: synthId,
-    label: "Function",
-    name,
-    file_path: undefined,
-    project: "",
-    qualified_name: name,
-    start_line: undefined,
-    end_line: undefined,
-    x: 0, y: 0, z: 0,
-  });
-  return synthId;
 }
 
 /* ── Schema 统计 ──────────────────────────────────── */
