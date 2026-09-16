@@ -15,10 +15,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install Rust 1.95 with clippy
+      # Cargo.toml [patch.crates-io] points the base libraries at ../base/*;
+      # clone them so the patch paths resolve. NOTE: this checks out
+      # origin/main, which may lag the local dev trees — push base repos
+      # before relying on CI to validate cross-repo changes.
+      - name: Checkout base libraries (patch.crates-io targets)
+        run: |
+          mkdir -p ../base
+          for repo in trait-kit sdforge oxcache inklog; do
+            git clone --depth 1 "https://github.com/Kirky-X/${repo}.git" "../base/${repo}"
+          done
+      # Toolchain version must match the declared MSRV (Cargo.toml
+      # `rust-version` / clippy.toml `msrv`) — this job is what verifies it.
+      - name: Install Rust 1.97.1 with clippy
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: "1.95"
+          toolchain: "1.97.1"
           components: clippy
       - name: Install nightly toolchain with rustfmt
         uses: dtolnay/rust-toolchain@efcb852328a9f50117170cc43094fb6f09eaf1ae # nightly
@@ -38,9 +50,9 @@ jobs:
       - name: Check formatting
         run: cargo +nightly fmt --all -- --check
       - name: Clippy (full)
-        run: cargo +1.95 clippy -- -D warnings
+        run: cargo +1.97.1 clippy -- -D warnings
       - name: Clippy (minimal)
-        run: cargo +1.95 clippy --lib --no-default-features --features minimal -- -D warnings
+        run: cargo +1.97.1 clippy --lib --no-default-features --features minimal -- -D warnings
 
   test:
     name: test (${{ matrix.features }})
@@ -63,10 +75,17 @@ jobs:
             cache-key: "full-embed"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install Rust 1.95
+      # See the lint job: [patch.crates-io] needs the base repos at ../base.
+      - name: Checkout base libraries (patch.crates-io targets)
+        run: |
+          mkdir -p ../base
+          for repo in trait-kit sdforge oxcache inklog; do
+            git clone --depth 1 "https://github.com/Kirky-X/${repo}.git" "../base/${repo}"
+          done
+      - name: Install Rust 1.97.1 (declared MSRV)
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: "1.95"
+          toolchain: "1.97.1"
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -82,6 +101,10 @@ jobs:
         run: |
           if [ "${{ matrix.features }}" = "full" ]; then
             cargo test --lib --verbose
+            # Integration tests (tests/*.rs: CLI, daemon lifecycle, MCP
+            # protocol, non-ASCII paths) must gate merges too — they cover
+            # paths the lib-only suite never touches.
+            cargo test --tests --features full --verbose
           else
             cargo test --lib --no-default-features --features "${{ matrix.features }}" --verbose
           fi
@@ -91,10 +114,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install Rust 1.95
+      # See the lint job: [patch.crates-io] needs the base repos at ../base
+      # (cargo metadata / cargo-deny resolve the patched manifest too).
+      - name: Checkout base libraries (patch.crates-io targets)
+        run: |
+          mkdir -p ../base
+          for repo in trait-kit sdforge oxcache inklog; do
+            git clone --depth 1 "https://github.com/Kirky-X/${repo}.git" "../base/${repo}"
+          done
+      - name: Install Rust 1.97.1 (declared MSRV)
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: "1.95"
+          toolchain: "1.97.1"
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -115,6 +146,34 @@ jobs:
           name: coverage
           path: lcov.info
 
+  fuzz-smoke:
+    name: fuzz smoke (build + short run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # cargo-fuzz requires nightly (sanitizer) + rust-src (build-std).
+      - name: Install nightly with rust-src
+        uses: dtolnay/rust-toolchain@efcb852328a9f50117170cc43094fb6f09eaf1ae # nightly
+        with:
+          toolchain: nightly
+          components: rust-src
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config protobuf-compiler
+      - uses: taiki-e/install-action@9458fed45835344deb5e69e06e831be047c96abf # cargo-llvm-cov
+        with:
+          tool: cargo-fuzz
+      - name: Build all fuzz targets
+        working-directory: fuzz
+        run: cargo fuzz build
+      - name: Short run per target (smoke, not a corpus campaign)
+        working-directory: fuzz
+        run: |
+          for t in escape_cypher_string escape_identifier cypher_subset_parse cnxp_header; do
+            cargo fuzz run "$t" -- -runs=2000 -max_total_time=60
+          done
+
   security:
     name: cargo-audit + cargo-deny
     runs-on: ubuntu-latest
@@ -124,15 +183,26 @@ jobs:
       checks: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # See the lint job: [patch.crates-io] needs the base repos at ../base
+      # (cargo-audit/cargo-deny resolve the patched manifest's lockfile).
+      - name: Checkout base libraries (patch.crates-io targets)
+        run: |
+          mkdir -p ../base
+          for repo in trait-kit sdforge oxcache inklog; do
+            git clone --depth 1 "https://github.com/Kirky-X/${repo}.git" "../base/${repo}"
+          done
+      # deny.toml is the single source of truth for advisory ignores
+      # (audit.toml is a synced mirror; audit-check cannot read config files,
+      # so the ignore list is derived here and can never drift again).
+      # Constraint: deny.toml comments must only mention RUSTSEC IDs that are
+      # actually ignored.
+      - name: Derive advisory ignores from deny.toml
+        id: audit_ignore
+        run: echo "ids=$(grep -oE 'RUSTSEC-[0-9]{4}-[0-9]+' deny.toml | sort -u | paste -sd, -)" >> "$GITHUB_OUTPUT"
       - name: cargo-audit (RustSec 漏洞库)
         uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # 临时忽略以下 advisory，与 deny.toml 保持一致，待上游修复后移除：
-          # - RUSTSEC-2026-0235 (rkyv 0.7.46)：rust_decimal 可选 feature 未启用，不进入构建图
-          # - RUSTSEC-2026-0202 (cxx)：lbug 精确锁定 =1.0.138，无法升级
-          # - RUSTSEC-2026-0221 (event-listener)：smol-rs 间接依赖，待上游修复
-          # - RUSTSEC-2024-0436 (paste)：tokenizers/parquet 间接依赖，无升级路径
-          ignore: RUSTSEC-2026-0235,RUSTSEC-2026-0202,RUSTSEC-2026-0221,RUSTSEC-2024-0436
+          ignore: ${{ steps.audit_ignore.outputs.ids }}
       - name: cargo-deny (license / ban / advisory)
         uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2

@@ -1,16 +1,11 @@
-# cargo-audit 配置 — `cargo audit` 按此校验 RUSTSEC 漏洞。
-# 临时接受以下 advisory，待上游修复后移除：
-# - cxx RUSTSEC-2026-0202 (unsound)：lbug v0.17.1 在 crates.io 精确锁定 cxx = "=1.0.138"，无法升级，
-#   待 lbug 上游放开约束后移除并真正升级 cxx。
-# - rkyv RUSTSEC-2026-0235 (memory-exposure)：rkyv 0.7.46 仅作为 rust_decimal 的可选 rkyv feature 被
-#   Cargo.lock 锁定解析，本项目未启用该 feature，rkyv 不进入构建图，无实际暴露面。
-#   待 rust_decimal 升级到支持 rkyv 0.8.x 后移除。
-# - paste RUSTSEC-2024-0436 (unmaintained)：tokenizers/parquet 的间接依赖，无安全升级路径。
-# - event-listener RUSTSEC-2026-0221 (unsound)：smol-rs 间接依赖，待上游修复后升级。
+# cargo-audit 配置 — `cargo audit`（本地运行）按此校验 RUSTSEC 漏洞。
+#
+# 注意：忽略清单的单一事实源是 deny.toml（CI audit-check 从它 grep 生成），
+# 本文件是其同步镜像；修改忽略项时两处必须一起改，并在 deny.toml 注释里
+# 更新复核日期。
 [advisories]
 ignore = [
-    "RUSTSEC-2026-0202",
-    "RUSTSEC-2026-0235",
-    "RUSTSEC-2024-0436",
-    "RUSTSEC-2026-0221",
+    "RUSTSEC-2026-0202", # cxx unsound：lbug 0.20.4 传递锁定 cxx 1.0.202，待 lbug 放宽约束
+    "RUSTSEC-2024-0436", # paste unmaintained：tokenizers 间接依赖，无升级路径
+    "RUSTSEC-2026-0221", # event-listener unsound：smol-rs 间接依赖 5.4.2，待上游修复
 ]

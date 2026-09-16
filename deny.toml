@@ -4,12 +4,21 @@
 [advisories]
 db-urls = ["https://github.com/RustSec/advisory-db"]
 yanked = "deny"
-# 临时接受：
-# - cxx RUSTSEC-2026-0202 (unsound)：lbug v0.17.1 精确锁定 cxx = "=1.0.138"，待 lbug 放宽约束后升级。
-# - paste RUSTSEC-2024-0436 (unmaintained)：tokenizers/parquet 的间接依赖，无安全升级路径。
+# 本文件是 advisory 忽略清单的单一事实源：CI 的 audit-check ignore 由本文件
+# grep 生成（ci.yml security job），audit.toml 为同步镜像。
+# 约束：下方注释只允许出现被 ignore 的 RUSTSEC 编号（会被 grep 命中）。
+# 每条 ignore 必须带"复核日期"，到期重新评估是否仍需忽略。
+# 临时接受（最近复核 2026-09-16，基于 Cargo.lock 实锁版本）：
+# - cxx RUSTSEC-2026-0202 (unsound)：lbug 0.20.4 传递锁定 cxx 1.0.202，
+#   待 lbug 放宽约束升级到修复版后移除。复核：随 lbug 升级。
+# - paste RUSTSEC-2024-0436 (unmaintained)：tokenizers 间接依赖（paste 1.0.15），
+#   无安全升级路径。复核：2026-12。
+# - event-listener RUSTSEC-2026-0221 (unsound)：smol-rs 间接依赖（5.4.2），
+#   待上游发布修复版后升级移除。复核：2026-12。
 ignore = [
     "RUSTSEC-2026-0202",
     "RUSTSEC-2024-0436",
+    "RUSTSEC-2026-0221",
 ]
 
 [licenses]

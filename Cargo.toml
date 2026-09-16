@@ -201,10 +201,21 @@ members = ["examples", "graph-viewer/server"]
 # join only for workspace-wide ops (cargo clean --workspace, metadata).
 default-members = ["."]
 
-# Local development: uncomment to use path deps for base libraries.
-# MUST be commented out before publishing to crates.io.
-# [patch.crates-io]
-# trait-kit = { path = "/home/kirky/projects/base/trait-kit" }
-# sdforge = { path = "/home/kirky/projects/base/sdforge" }
-# oxcache = { path = "/home/kirky/projects/base/oxcache" }
-# inklog = { path = "/home/kirky/projects/base/inklog" }
+# Local development: patch the base libraries to the LOCAL working trees
+# (../base/*, relative to this manifest) instead of the crates.io releases.
+# The local trees are the single source of truth and are frequently AHEAD of
+# the published versions (e.g. sdforge v0.5.0-rc.4-8-g4d8e3ff, trait-kit
+# v0.5.0-rc.5-7-gd849d42 as of 2026-09-16) — building against them picks up
+# unpublished fixes immediately. Macro sub-crates (sdforge-macros,
+# trait-kit-macros, oxcache_macros) resolve locally automatically via the
+# parents' own `path = "./..."` deps, so only the four parents are patched.
+#
+# ⚠️ CI: .github/workflows/ci.yml clones the same repos to ../base before
+#    running cargo — keep the repo list there in sync with this table.
+# ⚠️ Publishing: comment this whole section out before `cargo publish`
+#    (crates.io builds must resolve from the registry).
+[patch.crates-io]
+trait-kit = { path = "../base/trait-kit" }
+sdforge = { path = "../base/sdforge" }
+oxcache = { path = "../base/oxcache" }
+inklog = { path = "../base/inklog" }

@@ -2058,8 +2058,6 @@ dependencies = [
 [[package]]
 name = "inklog"
 version = "0.3.0-rc.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de4b9a8ac2f3220e56f79315cd8a3bb318dbade1a8ff60cc72f02b724818b7f5"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2836,8 +2834,6 @@ dependencies = [
 [[package]]
 name = "oxcache"
 version = "0.5.0-rc.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d6c9870fdf44705199a23baf0ecfa891ba9b4b58fe56d556fb2afacf7e507f4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2857,8 +2853,6 @@ dependencies = [
 [[package]]
 name = "oxcache_macros"
 version = "0.5.0-rc.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e39e745ea7f2dc5fc4f8d72a2682532bbcaa0c1184b413e67ae311ab1f9648a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3727,8 +3721,6 @@ checksum = "d68f2ec51b097e4c1a75b681a8bec621909b5e91f15bb7b840c4f2f7b01148b2"
 [[package]]
 name = "sdforge"
 version = "0.5.0-rc.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68a378126f32116e626245d59d9226dfd82d6b984baca4b2cda90a1b86c367c8"
 dependencies = [
  "anyhow",
  "clap",
@@ -3748,8 +3740,6 @@ dependencies = [
 [[package]]
 name = "sdforge-macros"
 version = "0.5.0-rc.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5f7a1ad330bdfaabd93f1eb4129df97d183ffaca1cfdd2cf389eca34058bf36"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4549,8 +4539,6 @@ dependencies = [
 [[package]]
 name = "trait-kit"
 version = "0.5.0-rc.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2645fc42f8787abe89d0031b798c0a881087ebc2ebb40a67ad71fa65def62534"
 
 [[package]]
 name = "tree-sitter"
