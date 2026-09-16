@@ -21,8 +21,13 @@ pub use error::{is_table_missing_error, Result, StorageError};
 pub use loader::CsvLoader;
 pub use module::{StorageConfig, StorageModule};
 pub use quality::{QualityChecker, QualityReport, QualityViolation};
-pub use repository::{FunctionRecord, ProjectRecord, Repository};
+pub use repository::{
+    FunctionRecord, ProjectRecord, Repository, SymbolRow, SYMBOL_ENRICHMENT_LABELS,
+};
 pub use schema::{
     all_init_ddl, embedding_table_ddl, escape_cypher_string, escape_identifier, index_ddl,
     node_table_columns, node_table_ddl, relation_table_columns, relation_table_ddl,
 };
+
+#[cfg(test)]
+mod tx_probe;

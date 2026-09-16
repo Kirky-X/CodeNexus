@@ -81,8 +81,14 @@ impl Repository {
     /// schema, and returns a [`Repository`] over it.
     pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let conn = StorageConnection::open(path)?;
+        // init_schema stamps the current SCHEMA_VERSION when the DB has no
+        // version row yet (fresh DB, or legacy DB — grandfathered); the check
+        // then rejects files stamped by an incompatible version instead of
+        // failing later with cryptic binder errors.
         conn.init_schema()?;
-        Ok(Self::new(conn))
+        let repo = Self::new(conn);
+        repo.check_schema_version()?;
+        Ok(repo)
     }
 
     /// Opens a LadybugDB database at `path` in **read-only** mode and returns
@@ -94,7 +100,16 @@ impl Repository {
     /// DB concurrently (DuckDB shared-read). Fails if `path` does not exist.
     pub fn open_read_only(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let conn = StorageConnection::open_read_only(path)?;
-        Ok(Self::new(conn))
+        let repo = Self::new(conn);
+        repo.check_schema_version()?;
+        Ok(repo)
+    }
+
+    /// Validates the stamped schema version against the binary's
+    /// [`SCHEMA_VERSION`](super::schema::SCHEMA_VERSION). No-op for legacy
+    /// databases without a version stamp.
+    pub fn check_schema_version(&self) -> Result<()> {
+        self.conn.check_schema_version()
     }
 
     /// Creates an in-memory repository (useful for tests).
@@ -123,6 +138,15 @@ impl Repository {
     /// The node must have `label == NodeLabel::Project`; its `rootPath`,
     /// `fileCount`, and `indexedAt` are read from `node.properties`.
     pub fn save_project(&self, node: &Node) -> Result<()> {
+        Self::save_project_on(&self.conn, node)
+    }
+
+    /// [`Self::save_project`] against an explicit Cypher executor (a
+    /// [`WriteTx`](super::connection::WriteTx) transaction connection).
+    pub fn save_project_on<E: crate::storage::connection::CypherExecutor>(
+        conn: &E,
+        node: &Node,
+    ) -> Result<()> {
         if node.label != NodeLabel::Project {
             return Err(StorageError::InvalidData(format!(
                 "save_project requires NodeLabel::Project, got {}",
@@ -144,7 +168,7 @@ impl Repository {
             indexed_at,
             escape_cypher_string(&last_commit),
         );
-        self.conn.execute(&cypher)
+        conn.execute_cypher(&cypher)
     }
 
     /// Bulk-saves nodes of a single label via CSV `COPY FROM` (ADR-014).
@@ -209,6 +233,16 @@ impl Repository {
     where
         I: IntoIterator<Item = &'a Node>,
     {
+        Self::save_nodes_stream_on(&self.conn, nodes, label)
+    }
+
+    /// [`Self::save_nodes_stream`] against an explicit Cypher executor (a
+    /// [`WriteTx`](super::connection::WriteTx) transaction connection).
+    pub fn save_nodes_stream_on<'b, I, E>(conn: &E, nodes: I, label: NodeLabel) -> Result<()>
+    where
+        I: IntoIterator<Item = &'b Node>,
+        E: crate::storage::connection::CypherExecutor,
+    {
         let mut iter = nodes.into_iter().peekable();
         // L6-3 perf fix: build `file_name` inside the `peek` match so the
         // mutable borrow of `iter` ends before `iter` is moved into
@@ -245,7 +279,7 @@ impl Repository {
                 stats.skipped_duplicates, stats.written
             );
         }
-        load_from_csv(&self.conn, table, &path)
+        load_from_csv(conn, table, &path)
         // dir drops here, auto-cleaning the CSV file.
     }
 
@@ -296,6 +330,16 @@ impl Repository {
     where
         I: IntoIterator<Item = &'a Edge>,
     {
+        Self::save_edges_stream_on(&self.conn, edges)
+    }
+
+    /// [`Self::save_edges_stream`] against an explicit Cypher executor (a
+    /// [`WriteTx`](super::connection::WriteTx) transaction connection).
+    pub fn save_edges_stream_on<'b, I, E>(conn: &E, edges: I) -> Result<()>
+    where
+        I: IntoIterator<Item = &'b Edge>,
+        E: crate::storage::connection::CypherExecutor,
+    {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("coderelation.csv");
         let file = std::fs::File::create(&path)?;
@@ -313,7 +357,7 @@ impl Repository {
                 stats.skipped_duplicates, stats.written
             );
         }
-        load_from_csv(&self.conn, "CodeRelation", &path)
+        load_from_csv(conn, "CodeRelation", &path)
     }
 
     /// Returns the project with the given id, or `None` if not found.
@@ -331,7 +375,7 @@ impl Repository {
     /// Returns `Err` if the Project table is missing (e.g. fresh/uninitialized
     /// DB or schema corruption). The strict semantics are required by
     /// [`QualityChecker::check_project_isolation`](crate::storage::quality::QualityChecker)
-    /// to detect Project-table-drop violations (DQ-005). The CLI service
+    /// to detect Project-table-drop violations. The CLI service
     /// layer (`run_list`, `run_status`) converts "table missing" errors into
     /// empty results so users see a clean `[]` on fresh DBs.
     pub fn list_projects(&self) -> Result<Vec<ProjectRecord>> {
@@ -508,6 +552,16 @@ impl Repository {
     /// batch path works on schemas that have not yet created every label
     /// table.
     pub fn delete_file_nodes_batch(&self, paths: &[String], project: &str) -> Result<()> {
+        Self::delete_file_nodes_batch_on(&self.conn, paths, project)
+    }
+
+    /// [`Self::delete_file_nodes_batch`] against an explicit Cypher executor
+    /// (a [`WriteTx`](super::connection::WriteTx) transaction connection).
+    pub fn delete_file_nodes_batch_on<E: crate::storage::connection::CypherExecutor>(
+        conn: &E,
+        paths: &[String],
+        project: &str,
+    ) -> Result<()> {
         if paths.is_empty() {
             return Ok(());
         }
@@ -519,6 +573,18 @@ impl Repository {
             .join(", ");
 
         let mut orphan_ids: Vec<String> = Vec::new();
+        // Pre-check the catalog instead of tolerating binder errors: this
+        // variant runs inside explicit transactions where ANY statement error
+        // aborts the whole transaction ("No active transaction for COMMIT").
+        // init_schema skips DDL the engine rejects (e.g. `Database` collides
+        // with a reserved keyword), so a label whose column spec claims a
+        // `filePath` column may still have no table — querying it would kill
+        // the transaction even though the delete is semantically a no-op.
+        let existing_tables: std::collections::HashSet<String> = conn
+            .query_cypher("CALL show_tables() RETURN name;")?
+            .iter()
+            .filter_map(|row| row.first().and_then(|v| v.as_str()).map(String::from))
+            .collect();
         for label in NodeLabel::all() {
             if label == NodeLabel::Project {
                 continue;
@@ -526,26 +592,26 @@ impl Repository {
             if !node_table_columns(label).contains(&"filePath") {
                 continue;
             }
+            if !existing_tables.contains(label.table_name()) {
+                continue;
+            }
             let table = escape_identifier(label.table_name());
             let select = format!(
                 "MATCH (n:{table}) WHERE n.filePath IN [{path_list}] AND n.project = '{proj_escaped}' RETURN n.id AS id;"
             );
-            if let Ok(rows) = self.conn.query(&select) {
-                for row in rows {
-                    if let Some(id) = row.first().and_then(|v| v.as_str()).map(String::from) {
-                        orphan_ids.push(id);
-                    }
+            // Fail-loud: inside a transaction ANY statement error aborts it,
+            // so tolerating errors here would only move the failure to COMMIT
+            // ("No active transaction") and mask the real cause.
+            let rows = conn.query_cypher(&select)?;
+            for row in rows {
+                if let Some(id) = row.first().and_then(|v| v.as_str()).map(String::from) {
+                    orphan_ids.push(id);
                 }
             }
             let delete = format!(
                 "MATCH (n:{table}) WHERE n.filePath IN [{path_list}] AND n.project = '{proj_escaped}' DELETE n;"
             );
-            if let Err(err) = self.conn.execute(&delete) {
-                let msg = err.to_string();
-                if !msg.contains("does not exist") && !msg.contains("no such") {
-                    return Err(err);
-                }
-            }
+            conn.execute_cypher(&delete)?;
         }
         if !orphan_ids.is_empty() {
             let id_list = orphan_ids
@@ -556,14 +622,25 @@ impl Repository {
             let cypher = format!(
                 "MATCH (r:CodeRelation) WHERE r.source IN [{id_list}] OR r.target IN [{id_list}] DELETE r;"
             );
-            if let Err(err) = self.conn.execute(&cypher) {
-                let msg = err.to_string();
-                if !msg.contains("does not exist") && !msg.contains("no such") {
-                    return Err(err);
-                }
-            }
+            conn.execute_cypher(&cypher)?;
         }
         Ok(())
+    }
+
+    /// Runs `f` on a dedicated connection inside an explicit write
+    /// transaction. See [`StorageConnection::in_write_transaction`] — this is
+    /// the repository-level passthrough used by the indexing pipeline.
+    ///
+    /// Cross-statement atomicity requires one connection: `Repository`'s
+    /// ordinary write methods each execute through a fresh connection
+    /// (statement-per-connection), so within `f` use the
+    /// `_on`-variant primitives (`save_nodes_stream_on` etc.) against the
+    /// supplied [`WriteTx`].
+    pub fn in_write_transaction<T, ErrT: std::fmt::Display + From<StorageError>>(
+        &self,
+        f: impl FnOnce(&super::connection::WriteTx<'_>) -> std::result::Result<T, ErrT>,
+    ) -> std::result::Result<T, ErrT> {
+        self.conn.in_write_transaction(f)
     }
 
     /// Returns all functions in the given project.
@@ -576,6 +653,159 @@ impl Repository {
         );
         let rows = self.conn.query(&cypher)?;
         Ok(rows.into_iter().map(row_to_function).collect())
+    }
+
+    /// Loads symbol definition rows for the given project, one query per
+    /// extractor-emitted node label (see [`SYMBOL_ENRICHMENT_LABELS`]).
+    ///
+    /// Used by incremental indexing: unchanged files' definitions stay in the
+    /// database (only changed files are re-parsed and rewritten), and the
+    /// resolve phase needs them so cross-file CALLS / DataFlows / Type edges
+    /// from changed files still resolve. Each query projects exactly the
+    /// columns that label's table actually has (per `node_table_columns`):
+    /// labels without `qualifiedName` fall back to `name`, labels without
+    /// `isExported`/`signature` yield `false`/`None`.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the first storage error; a missing table (label feature
+    /// added after the DB was created) is tolerated as an empty result.
+    pub fn get_symbol_rows(&self, project: &str) -> Result<Vec<SymbolRow>> {
+        let mut out = Vec::new();
+        for label in SYMBOL_ENRICHMENT_LABELS {
+            let cols = node_table_columns(*label);
+            let has = |c: &str| cols.contains(&c);
+            // Projection order is fixed: id, name, qn, filePath, isExported,
+            // signature — read positionally by `row_to_symbol`.
+            let qn_expr = if has("qualifiedName") {
+                "n.qualifiedName"
+            } else {
+                "n.name"
+            };
+            let exported_expr = if has("isExported") {
+                "n.isExported"
+            } else {
+                "false"
+            };
+            let sig_expr = if has("signature") {
+                "n.signature"
+            } else {
+                "NULL"
+            };
+            let table = escape_identifier(label.table_name());
+            let cypher = format!(
+                "MATCH (n:{table}) WHERE n.project = '{}' RETURN n.id, n.name, {qn_expr}, n.filePath, {exported_expr}, {sig_expr};",
+                escape_cypher_string(project),
+            );
+            let rows = match self.conn.query(&cypher) {
+                Ok(rows) => rows,
+                // A table created by a newer schema (or dropped by `clean`)
+                // must not abort enrichment — skip the label.
+                Err(err) => {
+                    let msg = err.to_string();
+                    if msg.contains("does not exist") || msg.contains("no such") {
+                        continue;
+                    }
+                    return Err(err);
+                }
+            };
+            out.extend(rows.into_iter().map(|row| row_to_symbol(*label, row)));
+        }
+        Ok(out)
+    }
+
+    /// Loads `(file_path, file_node_id)` pairs for every `File` node in the
+    /// project. Used by incremental indexing so IMPORTS edges from changed
+    /// files can target unchanged files' File nodes (whose ids persist in
+    /// the database across incremental runs).
+    pub fn get_file_id_rows(&self, project: &str) -> Result<Vec<(String, String)>> {
+        let cypher = format!(
+            "MATCH (n:File) WHERE n.project = '{}' RETURN n.filePath, n.id;",
+            escape_cypher_string(project),
+        );
+        let rows = self.conn.query(&cypher)?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let get_str = |idx: usize| -> Option<String> {
+                    row.get(idx).and_then(|v| v.as_str()).map(String::from)
+                };
+                Some((get_str(0)?, get_str(1)?))
+            })
+            .collect())
+    }
+}
+
+/// Node labels that participate in symbol-table enrichment: exactly the set
+/// the language extractors emit into parse results (`build_symbol_table`'s
+/// input). Everything else (Project/Folder/File, resolver-created
+/// Parameters, analysis-time Community/Embedding nodes) is excluded so the
+/// enriched table matches a full-index symbol table.
+pub const SYMBOL_ENRICHMENT_LABELS: &[NodeLabel] = &[
+    NodeLabel::Class,
+    NodeLabel::Const,
+    NodeLabel::Enum,
+    NodeLabel::Function,
+    NodeLabel::GlobalVar,
+    NodeLabel::Impl,
+    NodeLabel::Interface,
+    NodeLabel::Macro,
+    NodeLabel::Method,
+    NodeLabel::Module,
+    NodeLabel::Namespace,
+    NodeLabel::Property,
+    NodeLabel::Route,
+    NodeLabel::Static,
+    NodeLabel::Struct,
+    NodeLabel::Template,
+    NodeLabel::Trait,
+    NodeLabel::TypeAlias,
+    NodeLabel::Typedef,
+    NodeLabel::Variable,
+];
+
+/// A symbol definition row loaded from the database (see
+/// [`Repository::get_symbol_rows`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymbolRow {
+    /// Owning node label (which table the row came from).
+    pub label: NodeLabel,
+    /// Node id (== qualified name for definition nodes).
+    pub id: String,
+    /// Simple name.
+    pub name: String,
+    /// Qualified name (falls back to `name` for tables without the column).
+    pub qualified_name: String,
+    /// Source file path (relative, normalized by the scope phase).
+    pub file_path: String,
+    /// Exported flag (`false` for tables without the column).
+    pub is_exported: bool,
+    /// Signature (`None` for tables without the column).
+    pub signature: Option<String>,
+}
+
+/// Converts a positional query row (see the projection order in
+/// `get_symbol_rows`) into a [`SymbolRow`].
+fn row_to_symbol(label: NodeLabel, row: Vec<serde_json::Value>) -> SymbolRow {
+    let get_str = |idx: usize| -> String {
+        row.get(idx)
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_default()
+    };
+    let signature = row
+        .get(5)
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .filter(|s| !s.is_empty());
+    SymbolRow {
+        label,
+        id: get_str(0),
+        name: get_str(1),
+        qualified_name: get_str(2),
+        file_path: get_str(3),
+        is_exported: row.get(4).and_then(|v| v.as_bool()).unwrap_or(false),
+        signature,
     }
 }
 
@@ -729,6 +959,16 @@ fn row_to_function(row: Vec<serde_json::Value>) -> FunctionRecord {
         start_line: get_i64(4),
         end_line: get_i64(5),
         signature: get_str(6),
+    }
+}
+
+impl crate::storage::connection::CypherExecutor for Repository {
+    fn execute_cypher(&self, cypher: &str) -> Result<()> {
+        self.conn.execute(cypher)
+    }
+
+    fn query_cypher(&self, cypher: &str) -> Result<Vec<Vec<serde_json::Value>>> {
+        self.conn.query(cypher)
     }
 }
 

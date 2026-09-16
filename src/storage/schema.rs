@@ -238,10 +238,32 @@ pub fn index_ddl() -> Vec<String> {
 /// included in [`node_table_ddl`] through the `Embedding` variant. Pushing it
 /// again would emit a duplicate `CREATE NODE TABLE Embedding` statement and
 /// break schema init.
+/// Current schema version stamp written into `SchemaMeta` at init time.
+///
+/// Bump whenever a schema change makes existing database files incompatible
+/// with the code (added/removed/renamed tables or columns, changed id
+/// semantics). On open, a version mismatch produces
+/// [`StorageError::Schema`] with a `clean --rebuild` recovery hint instead
+/// of cryptic binder errors downstream.
+pub const SCHEMA_VERSION: &str = "1";
+
+/// Reserved project-independent row id that carries the schema version.
+pub const SCHEMA_META_ROW_ID: &str = "__schema__";
+
+/// DDL for the one-row `SchemaMeta` table (schema version stamp).
+///
+/// Kept outside [`node_table_ddl`] — `SchemaMeta` is not a [`NodeLabel`];
+/// it is engine bookkeeping.
+#[must_use]
+pub fn schema_meta_table_ddl() -> String {
+    "CREATE NODE TABLE SchemaMeta (id STRING, version STRING, PRIMARY KEY(id));".to_string()
+}
+
 #[must_use]
 pub fn all_init_ddl() -> Vec<String> {
     let mut ddl: Vec<String> = node_table_ddl().into_iter().map(|(_, stmt)| stmt).collect();
     ddl.push(relation_table_ddl());
+    ddl.push(schema_meta_table_ddl());
     ddl.extend(index_ddl());
     ddl
 }
@@ -1101,10 +1123,10 @@ mod tests {
     fn all_init_ddl_includes_node_tables_relation_embedding_and_indexes() {
         let ddl = all_init_ddl();
         // 44 node tables (incl. Embedding via ddl_for_label) + 1 relation
-        // + 39 indexes (20 secondary + 18 FTS + 1 VECTOR) = 84
+        // + 1 SchemaMeta + 39 indexes (20 secondary + 18 FTS + 1 VECTOR) = 85
         // (added idx_rel_source + idx_rel_target for targeted WHERE
         // e.target/e.source lookups)
-        assert_eq!(ddl.len(), 84, "expected 84 DDL statements total");
+        assert_eq!(ddl.len(), 85, "expected 85 DDL statements total");
         assert!(ddl.iter().any(|s| s.contains("CREATE NODE TABLE Project")));
         assert!(ddl.iter().any(|s| s.contains("CodeRelation")));
         assert!(ddl.iter().any(|s| s.contains("Embedding")));

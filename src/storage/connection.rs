@@ -16,7 +16,7 @@ use lbug::{Connection, Database, SystemConfig, Value};
 use tracing::warn;
 
 use super::error::{Result, StorageError};
-use super::schema::all_init_ddl;
+use super::schema::{all_init_ddl, SCHEMA_VERSION};
 
 // Pin the upstream `Send + Sync` bound on `lbug::Database`. `StorageCapability`
 // lends out shared `&StorageConnection` (→ `&Database`) across threads via an
@@ -266,7 +266,86 @@ impl StorageConnection {
     /// type) do abort initialization by returning [`StorageError::Schema`].
     pub fn init_schema(&self) -> Result<SchemaInitReport> {
         let ddl = all_init_ddl();
-        self.run_init_ddl(&ddl)
+        let report = self.run_init_ddl(&ddl)?;
+        self.stamp_schema_version()?;
+        Ok(report)
+    }
+
+    /// Stamps the current [`SCHEMA_VERSION`] into `SchemaMeta` if the table
+    /// has no version row yet (fresh DB or a legacy DB created before
+    /// versioning existed — legacy files are grandfathered at their current
+    /// layout). Idempotent; called from [`Self::init_schema`].
+    ///
+    /// # Errors
+    /// Propagates storage errors from the version-row upsert. A missing
+    /// `SchemaMeta` table is tolerated (DDL for it was skipped by an older
+    /// binary).
+    fn stamp_schema_version(&self) -> Result<()> {
+        let check =
+            self.query("MATCH (m:SchemaMeta {id: '__schema__'}) RETURN m.version AS version;");
+        match check {
+            Ok(rows) if rows.is_empty() => {
+                // Fresh DB or legacy DB without a stamp: record current version.
+                self.execute(&format!(
+                    "CREATE (:SchemaMeta {{id: '__schema__', version: '{SCHEMA_VERSION}'}});"
+                ))
+                .map_err(|e| {
+                    StorageError::Schema(format!("failed to stamp schema version: {e}"))
+                })?;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                let msg = e.to_string();
+                if !(msg.contains("does not exist")
+                    || msg.contains("no such")
+                    || msg.contains("not supported"))
+                {
+                    return Err(e);
+                }
+                // SchemaMeta table absent (older binary created the DB):
+                // nothing to stamp or check — grandfathered.
+            }
+        }
+        Ok(())
+    }
+
+    /// Reads the stamped schema version, or `None` when the row (or table)
+    /// is absent (legacy DB).
+    fn read_schema_version(&self) -> Result<Option<String>> {
+        match self.query("MATCH (m:SchemaMeta {id: '__schema__'}) RETURN m.version AS version;") {
+            Ok(rows) => Ok(rows
+                .first()
+                .and_then(|r| r.first())
+                .and_then(|v| v.as_str())
+                .map(String::from)),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("does not exist")
+                    || msg.contains("no such")
+                    || msg.contains("not supported")
+                {
+                    Ok(None)
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    /// Validates the stamped schema version against [`SCHEMA_VERSION`].
+    ///
+    /// A mismatch means the file was written by a different (older or newer)
+    /// CodeNexus and queries would fail downstream with cryptic binder
+    /// errors; surface a `clean --rebuild` recovery hint instead.
+    pub(crate) fn check_schema_version(&self) -> Result<()> {
+        match self.read_schema_version()? {
+            None => Ok(()), // legacy DB without a stamp — tolerated
+            Some(v) if v == SCHEMA_VERSION => Ok(()),
+            Some(v) => Err(StorageError::Schema(format!(
+                "database schema version mismatch — file stamped v{v}, this binary expects v{SCHEMA_VERSION}; \
+                 run `codenexus clean --rebuild true` to reset the database, then re-index"
+            ))),
+        }
     }
 
     /// Executes a list of DDL statements, classifying each failure as either
@@ -307,6 +386,45 @@ impl StorageConnection {
             }
         }
         Ok(report)
+    }
+
+    /// Runs `f` with a **dedicated** connection inside an explicit write
+    /// transaction (`BEGIN TRANSACTION` … `COMMIT`/`ROLLBACK`).
+    ///
+    /// [`StorageConnection::execute`] opens a fresh `Connection` per call
+    /// (convenient for one-shot DDL/DML/read queries), but a transaction is
+    /// bound to a single connection — statements issued through fresh
+    /// connections cannot join it. `in_write_transaction` therefore hands `f`
+    /// a [`WriteTx`] that owns one dedicated connection; every statement `f`
+    /// issues through it (including `COPY FROM`) is staged atomically and
+    /// committed only when `f` returns `Ok`.
+    ///
+    /// On an `Err` from `f`, the transaction is rolled back (best-effort) and
+    /// the original error is propagated.
+    pub fn in_write_transaction<T, ErrT: std::fmt::Display + From<StorageError>>(
+        &self,
+        f: impl FnOnce(&WriteTx<'_>) -> std::result::Result<T, ErrT>,
+    ) -> std::result::Result<T, ErrT> {
+        let conn = Connection::new(&self.db).map_err(StorageError::from)?;
+        {
+            let mut result = conn
+                .query("BEGIN TRANSACTION")
+                .map_err(StorageError::from)?;
+            while result.next().is_some() {}
+        }
+        let tx = WriteTx { conn };
+        match f(&tx) {
+            Ok(value) => {
+                tx.finish("COMMIT")?;
+                Ok(value)
+            }
+            Err(err) => {
+                if let Err(rb_err) = tx.finish("ROLLBACK") {
+                    tracing::warn!(error = %rb_err, "ROLLBACK after failed transaction also failed");
+                }
+                Err(err)
+            }
+        }
     }
 
     /// Executes a single Cypher statement that does not return rows (DDL/DML).
@@ -559,6 +677,69 @@ pub fn value_to_json(value: Value) -> serde_json::Value {
     }
 }
 
+/// A dedicated-connection write transaction opened by
+/// [`StorageConnection::in_write_transaction`].
+///
+/// Exposes [`execute`](Self::execute) / [`query`](Self::query) with the same
+/// signatures as [`StorageConnection`] and implements [`CypherExecutor`], so
+/// storage primitives (CSV `COPY FROM` loads, batch deletes) can run inside
+/// the transaction unchanged.
+pub struct WriteTx<'a> {
+    conn: Connection<'a>,
+}
+
+impl WriteTx<'_> {
+    /// Executes one statement and drains the (empty) result.
+    pub fn execute(&self, cypher: &str) -> Result<()> {
+        self.finish(cypher)
+    }
+
+    fn finish(&self, cypher: &str) -> Result<()> {
+        let mut result = self.conn.query(cypher)?;
+        while result.next().is_some() {}
+        Ok(())
+    }
+
+    /// Runs a Cypher query and returns all rows as JSON values.
+    pub fn query(&self, cypher: &str) -> Result<Vec<Vec<serde_json::Value>>> {
+        let mut result = self.conn.query(cypher)?;
+        let mut rows = Vec::with_capacity(result.get_num_tuples() as usize);
+        for row in &mut result {
+            let json_row = row.into_iter().map(value_to_json).collect();
+            rows.push(json_row);
+        }
+        Ok(rows)
+    }
+}
+
+impl crate::storage::connection::CypherExecutor for WriteTx<'_> {
+    fn execute_cypher(&self, cypher: &str) -> Result<()> {
+        self.execute(cypher)
+    }
+
+    fn query_cypher(&self, cypher: &str) -> Result<Vec<Vec<serde_json::Value>>> {
+        self.query(cypher)
+    }
+}
+
+impl CypherExecutor for StorageConnection {
+    fn execute_cypher(&self, cypher: &str) -> Result<()> {
+        self.execute(cypher)
+    }
+
+    fn query_cypher(&self, cypher: &str) -> Result<Vec<Vec<serde_json::Value>>> {
+        self.query(cypher)
+    }
+}
+
+/// A Cypher execution target so storage primitives can run either through the
+/// statement-per-connection [`StorageConnection`] or inside a
+/// [`WriteTx`] transaction on one dedicated connection.
+pub trait CypherExecutor {
+    fn execute_cypher(&self, cypher: &str) -> Result<()>;
+    fn query_cypher(&self, cypher: &str) -> Result<Vec<Vec<serde_json::Value>>>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -585,6 +766,57 @@ mod tests {
     fn in_memory_works() {
         let conn = StorageConnection::in_memory();
         assert!(conn.is_ok());
+    }
+
+    #[test]
+    fn init_schema_stamps_schema_version() {
+        let conn = fresh_conn();
+        conn.init_schema().expect("init_schema failed");
+        let rows = conn
+            .query("MATCH (m:SchemaMeta {id: '__schema__'}) RETURN m.version AS version;")
+            .expect("version row query");
+        let version = rows
+            .first()
+            .and_then(|r| r.first())
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        assert_eq!(
+            version.as_deref(),
+            Some(crate::storage::schema::SCHEMA_VERSION),
+            "init_schema must stamp the current schema version"
+        );
+    }
+
+    #[test]
+    fn check_schema_version_accepts_current_and_legacy() {
+        let conn = fresh_conn();
+        conn.init_schema().expect("init_schema failed");
+        // Current version passes.
+        conn.check_schema_version().expect("current version passes");
+
+        // Legacy DB without a stamp is grandfathered.
+        conn.execute("MATCH (m:SchemaMeta {id: '__schema__'}) DELETE m;")
+            .expect("delete stamp");
+        conn.check_schema_version()
+            .expect("legacy DB without stamp must be tolerated");
+    }
+
+    #[test]
+    fn check_schema_version_rejects_mismatch() {
+        let conn = fresh_conn();
+        conn.init_schema().expect("init_schema failed");
+        conn.execute("MATCH (m:SchemaMeta {id: '__schema__'}) DELETE m;")
+            .expect("delete stamp");
+        conn.execute("CREATE (:SchemaMeta {id: '__schema__', version: '999.0'});")
+            .expect("stamp future version");
+        let err = conn
+            .check_schema_version()
+            .expect_err("version mismatch must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("schema version mismatch") && msg.contains("clean --rebuild"),
+            "error must carry the recovery hint, got: {msg}"
+        );
     }
 
     #[test]

@@ -19,7 +19,6 @@ use std::path::Path;
 
 use csv::WriterBuilder;
 
-use super::connection::StorageConnection;
 use super::error::{Result, StorageError};
 use super::schema::{escape_identifier, node_table_columns, relation_table_columns};
 use crate::model::{Edge, EdgeType, Node, NodeLabel};
@@ -346,13 +345,17 @@ where
 ///
 /// `HEADER` is specified so LadybugDB skips the CSV header row. Without it,
 /// the header row (e.g. `id,project,name,...`) is inserted as a data row,
-/// producing phantom nodes whose fields are the column names (DQ-005).
+/// producing phantom nodes whose fields are the column names.
 ///
 /// `DELIM '\t'` specifies tab-delimited format. LadybugDB's COPY parser does
 /// not correctly handle RFC 4180 quoted fields containing commas (e.g. Rust
 /// generic types like `FallbackChain<T, U>`), so we use tab delimiters
 /// instead (see [`CSV_DELIMITER`]).
-pub fn load_from_csv(conn: &StorageConnection, table: &str, csv_path: &Path) -> Result<()> {
+pub fn load_from_csv<C: crate::storage::connection::CypherExecutor>(
+    conn: &C,
+    table: &str,
+    csv_path: &Path,
+) -> Result<()> {
     let path_str = csv_path
         .to_str()
         .ok_or_else(|| StorageError::InvalidData(format!("non-utf8 csv path: {csv_path:?}")))?
@@ -365,7 +368,7 @@ pub fn load_from_csv(conn: &StorageConnection, table: &str, csv_path: &Path) -> 
     let cypher = format!(
         "COPY {escaped_table} FROM '{escaped_path}' (HEADER, DELIM '\\t', PARALLEL=FALSE);"
     );
-    conn.execute(&cypher)?;
+    conn.execute_cypher(&cypher)?;
     Ok(())
 }
 
@@ -755,6 +758,7 @@ pub fn edge_to_row(edge: &Edge) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::model::Language;
+    use crate::storage::StorageConnection;
 
     fn sample_function_node() -> Node {
         Node::builder(NodeLabel::Function, "main", "proj.src.main")
