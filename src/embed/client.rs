@@ -354,99 +354,245 @@ impl LocalEmbedClient {
     }
 }
 
+/// Upper bound on texts per ONNX `session.run` call. Bounds the padded
+/// batch tensor (`batch × max_len`) memory; larger inputs are chunked.
+const MAX_ONNX_BATCH: usize = 32;
+
 impl EmbedClient for LocalEmbedClient {
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         let mut results = Vec::with_capacity(texts.len());
-        for text in texts {
+        for chunk in texts.chunks(MAX_ONNX_BATCH) {
+            let mut batch = vec![Vec::new(); chunk.len()];
+            self.embed_batch(chunk, &mut batch)?;
+            results.extend(batch);
+        }
+        Ok(results)
+    }
+}
+
+impl LocalEmbedClient {
+    /// Embeds one chunk into pre-sized `results` slots.
+    ///
+    /// Tokens are padded to the chunk's max sequence length and run as a
+    /// single `[batch, max_len]` inference — one `session.run` per chunk
+    /// instead of one per text (ONNX batch parallelism). If the runtime
+    /// rejects the batched shape (a model exported with a fixed batch axis
+    /// of 1), falls back to the per-text path so correctness never depends
+    /// on the ONNX export's dynamic axes.
+    fn embed_batch(&self, texts: &[&str], results: &mut [Vec<f32>]) -> Result<()> {
+        debug_assert_eq!(texts.len(), results.len());
+
+        // 1. Tokenize every text; collect ids/masks/types.
+        let mut encodings = Vec::with_capacity(texts.len());
+        for (i, text) in texts.iter().enumerate() {
             let encoding = self
                 .tokenizer
                 .encode(*text, true)
                 .map_err(|e| EmbedError::Unavailable(format!("tokenization failed: {e}")))?;
-
-            let input_ids = encoding.get_ids();
-            let attention_mask = encoding.get_attention_mask();
-            let token_type_ids = encoding.get_type_ids();
-            let seq_len = input_ids.len();
-
-            if seq_len == 0 {
-                return Err(EmbedError::Unavailable(
-                    "tokenization produced empty sequence".to_string(),
-                ));
+            if encoding.get_ids().is_empty() {
+                return Err(EmbedError::Unavailable(format!(
+                    "tokenization produced empty sequence (text #{i})"
+                )));
             }
+            encodings.push(encoding);
+        }
 
-            // Build input tensors (shape: [1, seq_len], dtype: i64).
-            let input_ids_arr = ndarray::Array2::from_shape_vec(
-                (1, seq_len),
-                input_ids.iter().map(|&v| v as i64).collect(),
-            )
-            .map_err(|e| EmbedError::Unavailable(format!("input_ids ndarray: {e}")))?;
+        let batch = texts.len();
+        let max_len = encodings
+            .iter()
+            .map(|e| e.get_ids().len())
+            .max()
+            .expect("non-empty chunk");
 
-            let attention_mask_arr = ndarray::Array2::from_shape_vec(
-                (1, seq_len),
-                attention_mask.iter().map(|&v| v as i64).collect(),
-            )
-            .map_err(|e| EmbedError::Unavailable(format!("attention_mask ndarray: {e}")))?;
+        // 2. Right-pad to [batch, max_len]: input ids pad with 0 ([PAD] for
+        //    BERT-style vocabularies), attention mask 0 (excluded from mean
+        //    pooling), token type ids 0.
+        let mut input_ids = Vec::with_capacity(batch * max_len);
+        let mut attention_mask = Vec::with_capacity(batch * max_len);
+        let mut token_type_ids = Vec::with_capacity(batch * max_len);
+        let mut per_text_masks: Vec<&[u32]> = Vec::with_capacity(batch);
+        for encoding in &encodings {
+            let ids = encoding.get_ids();
+            let mask = encoding.get_attention_mask();
+            let types = encoding.get_type_ids();
+            input_ids.extend(ids.iter().map(|&v| v as i64));
+            attention_mask.extend(mask.iter().map(|&v| v as i64));
+            token_type_ids.extend(types.iter().map(|&v| v as i64));
+            for _ in ids.len()..max_len {
+                input_ids.push(0);
+                attention_mask.push(0);
+                token_type_ids.push(0);
+            }
+            per_text_masks.push(mask);
+        }
 
-            // arctic-embed-xs (BERT-style) uses token_type_ids; reuse the
-            // tokenizer-provided ones rather than a zero vector to stay
-            // faithful to the model's training distribution.
-            let token_type_ids_arr = ndarray::Array2::from_shape_vec(
-                (1, seq_len),
-                token_type_ids.iter().map(|&v| v as i64).collect(),
-            )
-            .map_err(|e| EmbedError::Unavailable(format!("token_type_ids ndarray: {e}")))?;
+        // 3. Build [batch, max_len] tensors and run once.
+        let to_array2 = |data: &[i64]| -> Result<ndarray::Array2<i64>> {
+            ndarray::Array2::from_shape_vec((batch, max_len), data.to_vec())
+                .map_err(|e| EmbedError::Unavailable(format!("ndarray reshape: {e}")))
+        };
+        let input_ids_arr = to_array2(&input_ids)?;
+        let attention_mask_arr = to_array2(&attention_mask)?;
+        let token_type_ids_arr = to_array2(&token_type_ids)?;
 
-            // ort 2.0.0-rc.12 requires Value objects (not raw ndarrays) in
-            // `ort::inputs!`. Convert each array to a `Value<Tensor>` first.
-            let input_ids_value = ort::value::Value::from_array(input_ids_arr)
-                .map_err(|e| EmbedError::Unavailable(format!("input_ids value: {e}")))?;
-            let attention_mask_value = ort::value::Value::from_array(attention_mask_arr)
-                .map_err(|e| EmbedError::Unavailable(format!("attention_mask value: {e}")))?;
-            let token_type_ids_value = ort::value::Value::from_array(token_type_ids_arr)
-                .map_err(|e| EmbedError::Unavailable(format!("token_type_ids value: {e}")))?;
+        let input_ids_value = ort::value::Value::from_array(input_ids_arr)
+            .map_err(|e| EmbedError::Unavailable(format!("input_ids value: {e}")))?;
+        let attention_mask_value = ort::value::Value::from_array(attention_mask_arr)
+            .map_err(|e| EmbedError::Unavailable(format!("attention_mask value: {e}")))?;
+        let token_type_ids_value = ort::value::Value::from_array(token_type_ids_arr)
+            .map_err(|e| EmbedError::Unavailable(format!("token_type_ids value: {e}")))?;
 
-            // Run inference — Session::run requires &mut self, so lock the mutex.
+        // Pool inside the block (ort outputs borrow the session guard); the
+        // per-text fallback afterwards needs `&self` again, so the outcome is
+        // carried out as owned vectors.
+        enum BatchOutcome {
+            /// One pooled+normalized vector per input text.
+            Pooled(Vec<Vec<f32>>),
+            /// The runtime rejected the batched shape — retry per-text.
+            Rejected(String),
+        }
+
+        let outcome: Result<BatchOutcome> = {
+            // Session::run requires &mut self, so lock the mutex.
             let mut session = self
                 .session
                 .lock()
                 .map_err(|e| EmbedError::Unavailable(format!("session mutex poisoned: {e}")))?;
 
-            // `ort::inputs!` returns `[SessionInputValue; N]` directly (not a
-            // Result) when all inputs are already `&Value` references.
             let inputs = ort::inputs![
                 &input_ids_value,
                 &attention_mask_value,
                 &token_type_ids_value
             ];
 
-            let outputs = session
-                .run(inputs)
-                .map_err(|e| EmbedError::Unavailable(format!("ort inference failed: {e}")))?;
+            let run_result = session.run(inputs);
+            match run_result {
+                Ok(outputs) => {
+                    // `last_hidden_state`: [batch, max_len, hidden], row-major.
+                    let (_shape, hidden_data) = outputs["last_hidden_state"]
+                        .try_extract_tensor::<f32>()
+                        .map_err(|e| EmbedError::Unavailable(format!("ort output extract: {e}")))?;
+                    let hidden_dim = hidden_data.len() / (batch * max_len);
 
-            // `try_extract_tensor::<f32>()` returns `(&Shape, &[f32])` — the
-            // flat row-major tensor data. For arctic-embed-xs the output
-            // `last_hidden_state` has shape `[1, seq_len, hidden_dim]`.
-            let (_shape, hidden_data) = outputs["last_hidden_state"]
-                .try_extract_tensor::<f32>()
-                .map_err(|e| EmbedError::Unavailable(format!("ort output extract: {e}")))?;
-
-            // hidden_data.len() = 1 * seq_len * hidden_dim
-            let hidden_dim = hidden_data.len() / seq_len;
-
-            // Mean-pool + L2-normalize.
-            let mut pooled = Self::mean_pool(hidden_data, attention_mask, seq_len, hidden_dim);
-            Self::l2_normalize(&mut pooled);
-
-            if pooled.len() != EMBEDDING_DIM {
-                return Err(EmbedError::DimensionMismatch {
-                    expected: EMBEDDING_DIM,
-                    actual: pooled.len(),
-                });
+                    let mut pooled_batch = Vec::with_capacity(batch);
+                    for mask in &per_text_masks {
+                        let i = pooled_batch.len();
+                        let base = i * max_len * hidden_dim;
+                        let row = &hidden_data[base..base + max_len * hidden_dim];
+                        let mut pooled = Self::mean_pool(row, mask, max_len, hidden_dim);
+                        Self::l2_normalize(&mut pooled);
+                        if pooled.len() != EMBEDDING_DIM {
+                            return Err(EmbedError::DimensionMismatch {
+                                expected: EMBEDDING_DIM,
+                                actual: pooled.len(),
+                            });
+                        }
+                        pooled_batch.push(pooled);
+                    }
+                    Ok(BatchOutcome::Pooled(pooled_batch))
+                }
+                Err(err) => Ok(BatchOutcome::Rejected(err.to_string())),
             }
+        };
 
-            results.push(pooled);
+        match outcome? {
+            BatchOutcome::Pooled(pooled_batch) => {
+                results.clone_from_slice(&pooled_batch);
+                Ok(())
+            }
+            BatchOutcome::Rejected(batch_err) => {
+                // Fixed-batch ONNX export (batch axis = 1): fall back to the
+                // per-text path so the caller always gets vectors.
+                tracing::debug!(
+                    error = %batch_err,
+                    batch = batch,
+                    "batched inference rejected by the runtime; falling back to per-text"
+                );
+                for (i, text) in texts.iter().enumerate() {
+                    results[i] = self.embed_single(text)?;
+                }
+                Ok(())
+            }
         }
-        Ok(results)
+    }
+
+    /// Single-text inference path (batch fallback; original semantics).
+    fn embed_single(&self, text: &str) -> Result<Vec<f32>> {
+        let encoding = self
+            .tokenizer
+            .encode(text, true)
+            .map_err(|e| EmbedError::Unavailable(format!("tokenization failed: {e}")))?;
+
+        let input_ids = encoding.get_ids();
+        let attention_mask = encoding.get_attention_mask();
+        let token_type_ids = encoding.get_type_ids();
+        let seq_len = input_ids.len();
+
+        if seq_len == 0 {
+            return Err(EmbedError::Unavailable(
+                "tokenization produced empty sequence".to_string(),
+            ));
+        }
+
+        let input_ids_arr = ndarray::Array2::from_shape_vec(
+            (1, seq_len),
+            input_ids.iter().map(|&v| v as i64).collect(),
+        )
+        .map_err(|e| EmbedError::Unavailable(format!("input_ids ndarray: {e}")))?;
+
+        let attention_mask_arr = ndarray::Array2::from_shape_vec(
+            (1, seq_len),
+            attention_mask.iter().map(|&v| v as i64).collect(),
+        )
+        .map_err(|e| EmbedError::Unavailable(format!("attention_mask ndarray: {e}")))?;
+
+        // arctic-embed-xs (BERT-style) uses token_type_ids; reuse the
+        // tokenizer-provided ones rather than a zero vector to stay
+        // faithful to the model's training distribution.
+        let token_type_ids_arr = ndarray::Array2::from_shape_vec(
+            (1, seq_len),
+            token_type_ids.iter().map(|&v| v as i64).collect(),
+        )
+        .map_err(|e| EmbedError::Unavailable(format!("token_type_ids ndarray: {e}")))?;
+
+        let input_ids_value = ort::value::Value::from_array(input_ids_arr)
+            .map_err(|e| EmbedError::Unavailable(format!("input_ids value: {e}")))?;
+        let attention_mask_value = ort::value::Value::from_array(attention_mask_arr)
+            .map_err(|e| EmbedError::Unavailable(format!("attention_mask value: {e}")))?;
+        let token_type_ids_value = ort::value::Value::from_array(token_type_ids_arr)
+            .map_err(|e| EmbedError::Unavailable(format!("token_type_ids value: {e}")))?;
+
+        let mut session = self
+            .session
+            .lock()
+            .map_err(|e| EmbedError::Unavailable(format!("session mutex poisoned: {e}")))?;
+
+        let inputs = ort::inputs![
+            &input_ids_value,
+            &attention_mask_value,
+            &token_type_ids_value
+        ];
+
+        let outputs = session
+            .run(inputs)
+            .map_err(|e| EmbedError::Unavailable(format!("ort inference failed: {e}")))?;
+
+        let (_shape, hidden_data) = outputs["last_hidden_state"]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| EmbedError::Unavailable(format!("ort output extract: {e}")))?;
+
+        let hidden_dim = hidden_data.len() / seq_len;
+
+        let mut pooled = Self::mean_pool(hidden_data, attention_mask, seq_len, hidden_dim);
+        Self::l2_normalize(&mut pooled);
+
+        if pooled.len() != EMBEDDING_DIM {
+            return Err(EmbedError::DimensionMismatch {
+                expected: EMBEDDING_DIM,
+                actual: pooled.len(),
+            });
+        }
+        Ok(pooled)
     }
 }
 
@@ -589,15 +735,19 @@ fn deserialize_vec(bytes: &[u8]) -> Vec<f32> {
 /// [`LocalEmbedClient`], and [`MockEmbedClient`] are not modified.
 #[cfg(feature = "cache")]
 pub struct CachedEmbedClient {
-    inner: Box<dyn EmbedClient>,
+    inner: Arc<dyn EmbedClient>,
     cache: Arc<dyn CacheStore>,
 }
 
 #[cfg(feature = "cache")]
 impl CachedEmbedClient {
     /// Creates a new cached embedding client wrapping `inner` with `cache`.
+    ///
+    /// `inner` is an [`Arc`] so callers that keep a lazily-initialised client
+    /// (e.g. the ONNX [`LocalEmbedClient`] behind a mutex) can share the same
+    /// instance between the cached wrapper and the fallback path.
     #[must_use]
-    pub fn new(inner: Box<dyn EmbedClient>, cache: Arc<dyn CacheStore>) -> Self {
+    pub fn new(inner: Arc<dyn EmbedClient>, cache: Arc<dyn CacheStore>) -> Self {
         Self { inner, cache }
     }
 }
@@ -1012,7 +1162,7 @@ mod tests {
         fn cached_embed_miss_then_hit_skips_inner_call() {
             let inner = CountingEmbedClient::new();
             let calls = Arc::clone(&inner.calls);
-            let cached = CachedEmbedClient::new(Box::new(inner), Arc::new(MockCache::new()));
+            let cached = CachedEmbedClient::new(Arc::new(inner), Arc::new(MockCache::new()));
 
             let r1 = cached.embed(&["hello"]).expect("first embed");
             let r2 = cached.embed(&["hello"]).expect("second embed (cache hit)");
@@ -1031,7 +1181,7 @@ mod tests {
             let calls = Arc::clone(&inner.calls);
             let recorded = Arc::clone(&inner.recorded);
             let cache = Arc::new(MockCache::new());
-            let cached = CachedEmbedClient::new(Box::new(inner), cache.clone());
+            let cached = CachedEmbedClient::new(Arc::new(inner), cache.clone());
 
             // Prime the cache: embed "cached_text" once.
             let primed = cached
@@ -1074,7 +1224,7 @@ mod tests {
         fn cached_embed_same_text_same_key() {
             let inner = CountingEmbedClient::new();
             let cache = Arc::new(MockCache::new());
-            let cached = CachedEmbedClient::new(Box::new(inner), cache.clone());
+            let cached = CachedEmbedClient::new(Arc::new(inner), cache.clone());
 
             cached.embed(&["hello"]).expect("first");
             cached.embed(&["hello"]).expect("second");
@@ -1096,7 +1246,7 @@ mod tests {
         fn cached_embed_different_texts_different_keys() {
             let inner = CountingEmbedClient::new();
             let cache = Arc::new(MockCache::new());
-            let cached = CachedEmbedClient::new(Box::new(inner), cache.clone());
+            let cached = CachedEmbedClient::new(Arc::new(inner), cache.clone());
 
             cached.embed(&["hello", "world"]).expect("embed");
 
@@ -1119,7 +1269,7 @@ mod tests {
             let inner = CountingEmbedClient::new();
             let calls = Arc::clone(&inner.calls);
             let cache = Arc::new(MockCache::new());
-            let cached = CachedEmbedClient::new(Box::new(inner), cache.clone());
+            let cached = CachedEmbedClient::new(Arc::new(inner), cache.clone());
 
             let results = cached.embed(&[]).expect("empty embed");
             assert!(results.is_empty(), "empty input should return empty");
@@ -1136,7 +1286,7 @@ mod tests {
             let inner = CountingEmbedClient::new();
             let calls = Arc::clone(&inner.calls);
             let cache = Arc::new(MockCache::new());
-            let cached = CachedEmbedClient::new(Box::new(inner), cache.clone());
+            let cached = CachedEmbedClient::new(Arc::new(inner), cache.clone());
 
             let r1 = cached.embed(&["hello"]).expect("first embed");
             let v1 = r1.into_iter().next().expect("one vector");

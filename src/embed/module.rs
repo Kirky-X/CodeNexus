@@ -120,7 +120,14 @@ impl AsyncAutoBuilder for EmbedModule {
             let config = kit
                 .config::<EmbeddingConfig>()
                 .map_err(|e| EmbedError::Unavailable(e.to_string()))?;
-            Self::build_cap(&config)
+            // Optional cache wiring (namespace-isolated content-addressed
+            // vectors — see CachedEmbedClient). Absent when the `cache`
+            // feature is off or the CacheModule is not registered.
+            #[cfg(feature = "cache")]
+            let cache = kit.require::<crate::cache::CacheModule>().ok();
+            #[cfg(not(feature = "cache"))]
+            let cache = ();
+            Self::build_cap(&config, cache)
         })
     }
 }
@@ -130,10 +137,16 @@ impl EmbedModule {
     ///
     /// Shared between [`AsyncAutoBuilder::build`] and tests so that
     /// capability-level tests can run without an async runtime.
-    pub(crate) fn build_cap(config: &EmbeddingConfig) -> Result<Arc<dyn EmbedClient>> {
+    pub(crate) fn build_cap(
+        config: &EmbeddingConfig,
+        #[cfg(feature = "cache")] cache: Option<Arc<dyn crate::cache::capability::CacheStore>>,
+        #[cfg(not(feature = "cache"))] cache: (),
+    ) -> Result<Arc<dyn EmbedClient>> {
         Ok(Arc::new(EmbedCapability {
             config: Arc::new(RwLock::new(config.clone())),
             local_client: Mutex::new(None),
+            #[cfg(feature = "cache")]
+            cache,
         }))
     }
 }
@@ -165,7 +178,14 @@ struct EmbedCapability {
     ///
     /// `None` = not yet loaded (or local mode not in use).
     /// `Some(client)` = loaded and cached for reuse.
-    local_client: Mutex<Option<LocalEmbedClient>>,
+    local_client: Mutex<Option<Arc<LocalEmbedClient>>>,
+    /// Content-addressed vector cache (`embed:<blake3>` keys). Wired from the
+    /// CacheModule when available — repeated identical texts (e.g. the same
+    /// query across daemon incremental runs, which used to be re-embedded
+    /// after every index because the shared store's `invalidate_all` cleared
+    /// them) now hit the cache.
+    #[cfg(feature = "cache")]
+    cache: Option<Arc<dyn crate::cache::capability::CacheStore>>,
 }
 
 impl EmbedClient for EmbedCapability {
@@ -177,28 +197,18 @@ impl EmbedClient for EmbedCapability {
             .map_err(|e| EmbedError::Unavailable(format!("config rwlock poisoned: {e}")))?
             .clone();
 
-        if config.is_local() {
-            // Local ONNX inference — lazy-load the model on first use.
-            let mut guard = self.local_client.lock().map_err(|e| {
-                EmbedError::Unavailable(format!("local_client mutex poisoned: {e}"))
-            })?;
-            if guard.is_none() {
-                let client = LocalEmbedClient::new(&config)?;
-                *guard = Some(client);
-            }
-            // unwrap is safe: we just ensured it's Some.
-            guard
-                .as_ref()
-                .expect("local_client initialized")
-                .embed(texts)
-        } else {
-            // Remote HTTP mode — create a fresh OpenAIEmbedClient per call.
-            if !config.has_api_key() {
-                return Err(EmbedError::MissingApiKey);
-            }
-            let client = OpenAIEmbedClient::new(config)?;
-            client.embed(texts)
+        // Cache wiring (feature `cache` + CacheModule registered): wrap the
+        // mode-specific client in CachedEmbedClient so repeated identical
+        // texts hit the content-addressed vector cache instead of paying
+        // ONNX inference or an HTTP round-trip.
+        #[cfg(feature = "cache")]
+        if let Some(cache) = &self.cache {
+            let inner = self.acquire_client(&config)?;
+            let cached = crate::embed::client::CachedEmbedClient::new(inner, Arc::clone(cache));
+            return cached.embed(texts);
         }
+
+        self.acquire_client(&config)?.embed(texts)
     }
 
     fn update_config(&self, new_config: EmbeddingConfig) {
@@ -209,6 +219,29 @@ impl EmbedClient for EmbedCapability {
         if let Ok(mut guard) = self.local_client.lock() {
             *guard = None;
         }
+    }
+}
+
+impl EmbedCapability {
+    /// Builds (or reuses) the mode-specific client as a shared trait object.
+    fn acquire_client(&self, config: &EmbeddingConfig) -> Result<Arc<dyn EmbedClient>> {
+        if config.is_local() {
+            // Local ONNX inference — lazy-load the model on first use.
+            let mut guard = self.local_client.lock().map_err(|e| {
+                EmbedError::Unavailable(format!("local_client mutex poisoned: {e}"))
+            })?;
+            if guard.is_none() {
+                let client = LocalEmbedClient::new(config)?;
+                *guard = Some(Arc::new(client));
+            }
+            // unwrap is safe: we just ensured it's Some.
+            return Ok(guard.as_ref().expect("local_client initialized").clone());
+        }
+        // Remote HTTP mode — create a fresh OpenAIEmbedClient per call.
+        if !config.has_api_key() {
+            return Err(EmbedError::MissingApiKey);
+        }
+        Ok(Arc::new(OpenAIEmbedClient::new(config.clone())?))
     }
 }
 
@@ -223,8 +256,14 @@ mod tests {
 
     #[test]
     fn build_returns_send_sync_capability() {
-        let cap =
-            EmbedModule::build_cap(&EmbeddingConfig::default()).expect("EmbedModule::build_cap");
+        let cap = EmbedModule::build_cap(
+            &EmbeddingConfig::default(),
+            #[cfg(feature = "cache")]
+            None,
+            #[cfg(not(feature = "cache"))]
+            (),
+        )
+        .expect("EmbedModule::build_cap");
         // If this compiles, EmbedCapability is Send + Sync (the dyn
         // EmbedClient bound requires it). The Arc<dyn EmbedClient> is also
         // Send + Sync.
@@ -243,8 +282,14 @@ mod tests {
         std::env::remove_var(crate::embed::EMBED_ENDPOINT_ENV);
         std::env::remove_var(crate::embed::EMBED_MODEL_PATH_ENV);
 
-        let cap =
-            EmbedModule::build_cap(&EmbeddingConfig::default()).expect("EmbedModule::build_cap");
+        let cap = EmbedModule::build_cap(
+            &EmbeddingConfig::default(),
+            #[cfg(feature = "cache")]
+            None,
+            #[cfg(not(feature = "cache"))]
+            (),
+        )
+        .expect("EmbedModule::build_cap");
 
         let result = cap.embed(&["hello"]);
         assert!(result.is_err(), "should error without model file");
@@ -263,10 +308,16 @@ mod tests {
         std::env::remove_var(crate::embed::API_KEY_ENV);
         std::env::remove_var(crate::embed::OPENAI_API_KEY_ENV);
 
-        let cap = EmbedModule::build_cap(&EmbeddingConfig {
-            endpoint: Some("https://api.openai.com/v1".to_string()),
-            ..EmbeddingConfig::default()
-        })
+        let cap = EmbedModule::build_cap(
+            &EmbeddingConfig {
+                endpoint: Some("https://api.openai.com/v1".to_string()),
+                ..EmbeddingConfig::default()
+            },
+            #[cfg(feature = "cache")]
+            None,
+            #[cfg(not(feature = "cache"))]
+            (),
+        )
         .expect("EmbedModule::build_cap");
         let result = cap.embed(&["hello"]);
         assert!(
@@ -307,6 +358,8 @@ mod tests {
         let cap = EmbedCapability {
             config: Arc::new(RwLock::new(config)),
             local_client: Mutex::new(None),
+            #[cfg(feature = "cache")]
+            cache: None,
         };
 
         // Default should be local mode.
