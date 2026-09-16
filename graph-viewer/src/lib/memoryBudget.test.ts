@@ -37,6 +37,13 @@ describe("computeLoadBudget", () => {
     expect(b.warnLowMemory).toBe(true);
     expect(b.maxNodesCap).toBe(50);
     expect(b.scanLimit).toBe(50_000);
+    /* 峰值 660MB > 可用 320MB×0.95 → 硬上限预警 */
+    expect(b.fileTooLarge).toBe(true);
+  });
+
+  it("高配设备 + 中等文件：不触发硬上限预警", () => {
+    const b = computeLoadBudget(100 * MB, profiles.highEnd);
+    expect(b.fileTooLarge).toBe(false);
   });
 
   it("省内存档下 bufferPool 减半且不超上限", () => {

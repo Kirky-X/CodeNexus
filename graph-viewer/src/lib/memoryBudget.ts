@@ -25,6 +25,8 @@ export interface LoadBudget {
   maxNodesCap: number;
   /** 文件偏大，已启用省内存档 */
   warnLowMemory: boolean;
+  /** 文件峰值逼近可用内存上限——加载可能直接失败（wasm32 堆天花板） */
+  fileTooLarge: boolean;
 }
 
 /** 低内存设备的判定阈值（GB） */
@@ -68,6 +70,8 @@ export function computeLoadBudget(fileSizeBytes: number, profile: MemoryProfile)
   const usable = usableBytes(profile);
   const peak = fileSizeBytes * PEAK_FACTOR;
   const warnLowMemory = peak > usable * 0.55;
+  /* 峰值吃满可用内存——MEMFS 副本 + DB 存储无法同时容纳，大概率 OOM */
+  const fileTooLarge = peak > usable * 0.95;
 
   let maxNodesCap: number;
   if (fileSizeBytes <= 64 * MB) maxNodesCap = 500;
@@ -82,5 +86,5 @@ export function computeLoadBudget(fileSizeBytes: number, profile: MemoryProfile)
   const gb = profile.deviceMemoryGB ?? LOW_MEMORY_GB;
   if (gb <= LOW_MEMORY_GB) bufferPoolBytes = Math.floor(bufferPoolBytes / 2);
 
-  return { bufferPoolBytes, scanLimit, maxNodesCap, warnLowMemory };
+  return { bufferPoolBytes, scanLimit, maxNodesCap, warnLowMemory, fileTooLarge };
 }

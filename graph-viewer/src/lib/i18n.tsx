@@ -39,7 +39,10 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "landing.confirmLoad": "Load Anyway",
     /* Loading / Error / Empty */
     "loading.text": "Loading graph data",
+    "loading.stageCopy": "Reading database into local engine…",
+    "loading.stageAnalyze": "Analyzing graph relations…",
     "loading.largeFile": "Large file — this can take a while",
+    "loading.fileMayOOM": "This file may exceed available memory — loading could fail",
     "error.title": "Failed to load graph",
     "error.retry": "Retry",
     "error.back": "Back",
@@ -120,7 +123,10 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "landing.confirmLoad": "仍然加载",
     /* Loading / Error / Empty */
     "loading.text": "正在加载图数据",
+    "loading.stageCopy": "正在读取数据库到本地引擎…",
+    "loading.stageAnalyze": "正在分析图关系…",
     "loading.largeFile": "大文件加载中，可能需要较长时间",
+    "loading.fileMayOOM": "文件可能超出当前可用内存——加载可能失败",
     "error.title": "图数据加载失败",
     "error.retry": "重试",
     "error.back": "返回",

@@ -27,7 +27,12 @@ export function App() {
   const [fileFilter, setFileFilter] = useState("");
   const [projectFilter] = useState("");
   const [showLabels, setShowLabels] = useState(true);
-  const [maxNodes, setMaxNodes] = useState(100);
+  const [maxNodes, setMaxNodes] = useState(() => {
+    try {
+      const v = Number(localStorage.getItem("codenexus-maxNodes"));
+      return [50, 100, 200, 500].includes(v) ? v : 100;
+    } catch { return 100; }
+  });
 
   /* 选择状态 */
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
@@ -46,6 +51,8 @@ export function App() {
   const [isDragOver, setIsDragOver] = useState(false);
   /* 内存预算 — 大文件加载时钳制节点上限并启用省内存档 */
   const [loadBudget, setLoadBudget] = useState<LoadBudget | null>(null);
+  /* 加载阶段 — 大文件加载分两步给出反馈，避免黑盒假死感 */
+  const [loadStage, setLoadStage] = useState<"copy" | "analyze" | null>(null);
 
   /* 文件加载处理 */
   const handleFileLoad = useCallback(async (file: File) => {
@@ -60,12 +67,15 @@ export function App() {
       const budget = computeLoadBudget(file.size, detectMemoryProfile());
       setLoadBudget(budget);
       if (maxNodes > budget.maxNodesCap) setMaxNodes(budget.maxNodesCap);
+      setLoadStage("copy");
       await loadLbugFile(file, budget);
+      setLoadStage("analyze");
       setFileName(file.name);
-      setFileLoaded(true);
+      setFileLoaded(true); /* 触发 fetchData：关系分析 + 布局 */
     } catch (e) {
       setFileError(e instanceof Error ? e.message : "加载数据库失败");
     } finally {
+      setLoadStage(null);
       setFileLoading(false);
     }
   }, [maxNodes, fileLoading]);
@@ -87,6 +97,11 @@ export function App() {
     const file = e.dataTransfer.files[0];
     if (file) handleFileLoad(file);
   }, [handleFileLoad]);
+
+  /* 持久化节点上限偏好 */
+  useEffect(() => {
+    try { localStorage.setItem("codenexus-maxNodes", String(maxNodes)); } catch {}
+  }, [maxNodes]);
 
   /* 加载数据 */
   useEffect(() => {
@@ -369,10 +384,17 @@ export function App() {
           </div>
           {/* 文字信息 */}
           <div className="space-y-2">
-            <p className="text-base text-foreground/60 font-medium">{t("loading.text")}</p>
+            <p className="text-base text-foreground/60 font-medium">
+              {loadStage === "copy" ? t("loading.stageCopy")
+                : loadStage === "analyze" ? t("loading.stageAnalyze")
+                : t("loading.text")}
+            </p>
             <p className="text-sm text-foreground/30 font-mono">{fileName}</p>
             {loadBudget?.warnLowMemory && (
               <p className="text-xs text-foreground/35">{t("loading.largeFile")}</p>
+            )}
+            {loadBudget?.fileTooLarge && (
+              <p className="text-xs text-destructive/70">{t("loading.fileMayOOM")}</p>
             )}
           </div>
           {/* 流动点动画 */}
