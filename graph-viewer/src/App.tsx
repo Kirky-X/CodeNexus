@@ -53,6 +53,7 @@ export function App() {
       setFileError("请选择 .lbug 文件");
       return;
     }
+    if (fileLoading) return; /* 加载中防重复触发 */
     setFileLoading(true);
     setFileError(null);
     try {
@@ -67,7 +68,7 @@ export function App() {
     } finally {
       setFileLoading(false);
     }
-  }, [maxNodes]);
+  }, [maxNodes, fileLoading]);
 
   const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -370,6 +371,9 @@ export function App() {
           <div className="space-y-2">
             <p className="text-base text-foreground/60 font-medium">{t("loading.text")}</p>
             <p className="text-sm text-foreground/30 font-mono">{fileName}</p>
+            {loadBudget?.warnLowMemory && (
+              <p className="text-xs text-foreground/35">{t("loading.largeFile")}</p>
+            )}
           </div>
           {/* 流动点动画 */}
           <div className="flex items-center justify-center gap-1.5">
@@ -555,6 +559,9 @@ export function App() {
               <div className="absolute top-3 left-3 text-sm text-white/40 pointer-events-none font-mono space-y-0.5">
                 {activeData.nodes.length > filteredData.nodes.length && (
                   <p>{t("hud.filtered")} {activeData.nodes.length.toLocaleString()} {t("hud.filteredSuffix")}</p>
+                )}
+                {!demoMode && data?.edges.length === 0 && (
+                  <p className="text-amber-400/70">{t("hud.noRelations")}</p>
                 )}
                 {traceNodeIds.size > 0 && (
                   <p className="text-primary/60">{t("hud.trace")} {traceNodeIds.size} {t("hud.traceNodes")}, {traceEdgeIds.size} {t("hud.traceEdges")}</p>

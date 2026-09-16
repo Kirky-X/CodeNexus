@@ -39,6 +39,7 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "landing.confirmLoad": "Load Anyway",
     /* Loading / Error / Empty */
     "loading.text": "Loading graph data",
+    "loading.largeFile": "Large file — this can take a while",
     "error.title": "Failed to load graph",
     "error.retry": "Retry",
     "error.back": "Back",
@@ -60,6 +61,7 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "hud.traceEdges": "edges",
     "hud.clear": "Clear",
     "hud.noFiltered": "All nodes filtered",
+    "hud.noRelations": "No relation data in this database — showing nodes only",
     "hud.resetFilters": "Reset Filters",
     /* FilterPanel */
     "filter.projectName": "Project",
@@ -118,6 +120,7 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "landing.confirmLoad": "仍然加载",
     /* Loading / Error / Empty */
     "loading.text": "正在加载图数据",
+    "loading.largeFile": "大文件加载中，可能需要较长时间",
     "error.title": "图数据加载失败",
     "error.retry": "重试",
     "error.back": "返回",
@@ -139,6 +142,7 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "hud.traceEdges": "条边",
     "hud.clear": "清除",
     "hud.noFiltered": "所有节点已被过滤",
+    "hud.noRelations": "库中未检测到关系数据——仅展示节点",
     "hud.resetFilters": "重置筛选",
     /* FilterPanel */
     "filter.projectName": "项目名称",
