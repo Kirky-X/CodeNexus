@@ -1,11 +1,14 @@
-/* 3D 边线渲染 — 使用 Line2 高性能渲染，支持爆炸动画 */
+/* 3D 边线渲染 — 合并为单个 LineSegments（1 次 draw call），支持爆炸动画
+ *
+ * 性能设计：旧实现每条边一个 Line2 组件（每边独立 draw call + 每帧
+ * setPositions 数组分配），500 条边时产生 500×60fps 的 GC 压力。
+ * 现合并为单一几何：位置缓冲仅在爆炸动画期间更新，之后冻结；
+ * 高亮/追踪状态变化时重建颜色缓冲。深色背景下用顶点色乘法表达
+ * 透明度衰减（暗边 ≈ 背景色），省去逐边材质。 */
 
-import { useRef, useMemo } from "react";
+import { useRef, useMemo, useEffect } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
-import { Line2 } from "three/examples/jsm/lines/Line2.js";
-import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
-import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import type { GraphNode, GraphEdge } from "../lib/types";
 import { colorForEdgeType, TRACE_COLORS } from "../lib/colors";
 import { EXPLODE_DURATION, sharedExplodeEased, easeOutCubic } from "../lib/explosion";
@@ -18,48 +21,28 @@ interface EdgeLinesProps {
   traceNodeIds: Set<string>;
 }
 
-/* 单条边 — 支持爆炸动画 */
-function EdgeLine({
-  src, tgt, color, opacity, lineWidth,
-}: {
-  src: GraphNode; tgt: GraphNode; color: string; opacity: number;
-  lineWidth: number;
-}) {
-  const lineRef = useRef<Line2>(null);
+/** 每条边的可见性状态 → 颜色（写入 out 避免分配） */
+function edgeColor(
+  edge: GraphEdge,
+  highlightedIds: Set<string> | null,
+  traceEdgeIds: Set<string>,
+  out: THREE.Color,
+): void {
+  if (traceEdgeIds.has(edge.id)) {
+    out.set(TRACE_COLORS.callChain);
+    return;
+  }
+  out.set(colorForEdgeType(edge.edge_type));
+  const isRelevant =
+    !highlightedIds ||
+    (highlightedIds.has(edge.source) && highlightedIds.has(edge.target));
+  if (!isRelevant) out.multiplyScalar(0.04); /* 非相关边：≈背景色，视觉隐没 */
+}
 
-  /* 每帧更新边线端点（爆炸动画从中心展开） */
-  useFrame(() => {
-    const line = lineRef.current;
-    if (!line) return;
-    const e = sharedExplodeEased.current;
-    line.geometry.setPositions([
-      src.x * e, src.y * e, src.z * e,
-      tgt.x * e, tgt.y * e, tgt.z * e,
-    ]);
-  });
-
-  const material = useMemo(
-    () => new LineMaterial({
-      color: new THREE.Color(color).getHex(),
-      linewidth: lineWidth,
-      transparent: true,
-      opacity,
-    }),
-    [color, lineWidth, opacity],
-  );
-
-  const geometry = useMemo(() => {
-    const g = new LineGeometry();
-    g.setPositions([0, 0, 0, 0, 0, 0]);
-    return g;
-  }, []);
-
-  return (
-    <primitive
-      ref={lineRef}
-      object={useMemo(() => new Line2(geometry, material), [geometry, material])}
-    />
-  );
+interface DrawableEdge {
+  src: GraphNode;
+  tgt: GraphNode;
+  edge: GraphEdge;
 }
 
 export function EdgeLines({ nodes, edges, highlightedIds, traceEdgeIds }: EdgeLinesProps) {
@@ -71,66 +54,79 @@ export function EdgeLines({ nodes, edges, highlightedIds, traceEdgeIds }: EdgeLi
     return map;
   }, [nodes]);
 
-  /* 将边按是否追踪分组 */
-  const { traceEdges, normalEdges } = useMemo(() => {
-    const trace: GraphEdge[] = [];
-    const normal: GraphEdge[] = [];
+  /* 保留两端都在已加载节点中的边 */
+  const drawable = useMemo(() => {
+    const list: DrawableEdge[] = [];
     for (const edge of edges) {
       const src = nodeMap.get(edge.source);
       const tgt = nodeMap.get(edge.target);
-      if (!src || !tgt) continue;
-      if (traceEdgeIds.has(edge.id)) {
-        trace.push(edge);
-      } else {
-        normal.push(edge);
-      }
+      if (src && tgt) list.push({ src, tgt, edge });
     }
-    return { traceEdges: trace, normalEdges: normal };
-  }, [edges, nodeMap, traceEdgeIds]);
+    return list;
+  }, [edges, nodeMap]);
 
-  /* 爆炸动画缓动 — 更新共享值 */
+  const positions = useMemo(
+    () => new Float32Array(drawable.length * 2 * 3),
+    [drawable.length],
+  );
+  const colors = useMemo(
+    () => new Float32Array(drawable.length * 2 * 3),
+    [drawable.length],
+  );
+
+  const geometry = useMemo(() => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    return g;
+  }, [positions, colors]);
+
+  /* 高亮/追踪变化 → 重写颜色缓冲；数据变化 → 立即按当前缓动值写位置
+   * （位置逐帧更新在爆炸结束后冻结，数据变更时必须在此补一次写入） */
+  useEffect(() => {
+    const color = new THREE.Color();
+    for (let i = 0; i < drawable.length; i++) {
+      edgeColor(drawable[i].edge, highlightedIds, traceEdgeIds, color);
+      const o = i * 6;
+      colors[o] = color.r; colors[o + 1] = color.g; colors[o + 2] = color.b;
+      colors[o + 3] = color.r; colors[o + 4] = color.g; colors[o + 5] = color.b;
+    }
+    (geometry.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
+    writePositions(geometry, drawable, sharedExplodeEased.current);
+  }, [drawable, highlightedIds, traceEdgeIds, geometry, colors]);
+
+  /* 爆炸动画缓动 — 更新共享值（节点云消费同一时间轴） */
   useFrame((_, delta) => {
     const dt = Math.min(delta, 0.05);
     timeRef.current += dt;
-    const progress = Math.min(1, timeRef.current / EXPLODE_DURATION);
-    sharedExplodeEased.current = easeOutCubic(progress);
+    sharedExplodeEased.current = easeOutCubic(Math.min(1, timeRef.current / EXPLODE_DURATION));
+  });
+
+  /* 位置缓冲：仅爆炸动画期间逐帧更新，完成后冻结（边无漂移） */
+  useFrame(() => {
+    if (timeRef.current > EXPLODE_DURATION + 0.1) return;
+    writePositions(geometry, drawable, sharedExplodeEased.current);
   });
 
   return (
-    <group>
-      {/* 普通边 */}
-      {normalEdges.map((edge) => {
-        const src = nodeMap.get(edge.source)!;
-        const tgt = nodeMap.get(edge.target)!;
-        const isRelevant =
-          !highlightedIds ||
-          (highlightedIds.has(edge.source) && highlightedIds.has(edge.target));
-        const color = colorForEdgeType(edge.edge_type);
-        const opacity = isRelevant ? 0.7 : 0.02;
-        const lineWidth = isRelevant && highlightedIds ? 2 : 1;
-
-        return (
-          <EdgeLine
-            key={edge.id}
-            src={src} tgt={tgt}
-            color={color} opacity={opacity} lineWidth={lineWidth}
-          />
-        );
-      })}
-
-      {/* 追踪路径边 — 高亮脉冲 */}
-      {traceEdges.map((edge) => {
-        const src = nodeMap.get(edge.source)!;
-        const tgt = nodeMap.get(edge.target)!;
-        return (
-          <EdgeLine
-            key={`trace-${edge.id}`}
-            src={src} tgt={tgt}
-            color={TRACE_COLORS.callChain}
-            opacity={0.9} lineWidth={2.5}
-          />
-        );
-      })}
-    </group>
+    <lineSegments geometry={geometry} frustumCulled={false}>
+      <lineBasicMaterial vertexColors transparent opacity={0.9} depthWrite={false} />
+    </lineSegments>
   );
+}
+
+function writePositions(
+  geometry: THREE.BufferGeometry,
+  drawable: DrawableEdge[],
+  e: number,
+): void {
+  const posAttr = geometry.getAttribute("position") as THREE.BufferAttribute;
+  const arr = posAttr.array as Float32Array;
+  for (let i = 0; i < drawable.length; i++) {
+    const { src, tgt } = drawable[i];
+    const o = i * 6;
+    arr[o] = src.x * e; arr[o + 1] = src.y * e; arr[o + 2] = src.z * e;
+    arr[o + 3] = tgt.x * e; arr[o + 4] = tgt.y * e; arr[o + 5] = tgt.z * e;
+  }
+  posAttr.needsUpdate = true;
 }
