@@ -28,7 +28,7 @@ use tracing::{info, warn};
 
 use crate::discover::{FileInfo, Walker};
 use crate::index::error::IndexError;
-use crate::index::incremental::{diff_files, FileDiff};
+use crate::index::incremental::{diff_files_with_hints, FileDiff, FileHashHint};
 use crate::index::pipeline::{build_file_nodes, now_unix_seconds, with_retry, DEFAULT_MAX_RETRIES};
 use crate::ir::ExtractResult;
 use crate::model::{
@@ -146,6 +146,11 @@ fn phase_err(phase: &'static str, e: IndexError) -> PhaseError {
 pub struct ScanPhase {
     /// Shared repository handle (Arc-cloned from Pipeline).
     pub repo: Arc<Repository>,
+    /// Daemon fast-path hints (path → size/mtime/hash of the previous run).
+    /// `Some` on the daemon's long-lived `IndexFacade` so consecutive
+    /// incremental batches skip re-reading unchanged files; `None` for
+    /// one-shot CLI runs (empty map semantics).
+    pub hints: Option<Arc<std::sync::Mutex<HashMap<String, FileHashHint>>>>,
 }
 
 impl Phase for ScanPhase {
@@ -181,9 +186,25 @@ impl Phase for ScanPhase {
         })
         .unwrap_or_default();
 
-        // Step 3: diff hashes → changed/added/deleted/unchanged.
-        let diff = diff_files(&disk_files, &db_hashes, force)
-            .map_err(|e| phase_err(Self::NAME, IndexError::Io(e)))?;
+        // Step 3: diff hashes → changed/added/deleted/unchanged, reusing
+        // (size, mtime) hints from the previous run when available.
+        let hint_map = self
+            .hints
+            .as_ref()
+            .and_then(|m| m.lock().ok().map(|guard| guard.clone()));
+        let (diff, fresh_hints) = diff_files_with_hints(
+            &disk_files,
+            &db_hashes,
+            force,
+            &hint_map.unwrap_or_default(),
+        )
+        .map_err(|e| phase_err(Self::NAME, IndexError::Io(e)))?;
+        // Publish fresh hints for the next incremental batch.
+        if let Some(m) = &self.hints {
+            if let Ok(mut guard) = m.lock() {
+                *guard = fresh_hints;
+            }
+        }
 
         Ok(ScanOutput {
             project_id,
@@ -309,7 +330,7 @@ impl Phase for ParsePhase {
 ///
 /// Replaces original step 5 of the pipeline. Merges per-file extraction
 /// results into a single [`Graph`], normalizing node ids to FQNs and
-/// rewriting edge endpoints to match stored node ids (DQ-004).
+/// rewriting edge endpoints to match stored node ids.
 pub struct ScopeResolutionPhase;
 
 impl Phase for ScopeResolutionPhase {
@@ -357,16 +378,21 @@ impl Phase for ScopeResolutionPhase {
         // immutable borrow of `ctx`, allowing `ctx.insert` later.
 
         // Build mapping from absolute file path → File node id (file_<uuid>).
+        // rel→id map built once (first node wins, matching the previous inner
+        // `break` semantics); the nested per-file scan made this O(F × F_nodes).
+        let mut rel_to_file_id: HashMap<&str, &str> = HashMap::with_capacity(file_nodes.len());
+        for fn_node in &file_nodes {
+            rel_to_file_id
+                .entry(fn_node.name.as_str())
+                .or_insert(fn_node.id.as_str());
+        }
         let mut path_to_file_id: HashMap<&str, &str> = HashMap::new();
         for file in parse.to_parse.iter() {
-            if let Some(abs) = file.path.to_str() {
-                let rel = file.relative_path.as_str();
-                for fn_node in &file_nodes {
-                    if fn_node.name == rel {
-                        path_to_file_id.insert(abs, &fn_node.id);
-                        break;
-                    }
-                }
+            let Some(abs) = file.path.to_str() else {
+                continue;
+            };
+            if let Some(id) = rel_to_file_id.get(file.relative_path.as_str()) {
+                path_to_file_id.insert(abs, id);
             }
         }
 
@@ -604,7 +630,11 @@ fn build_includes_edges(
 /// Replaces original step 6 of the pipeline. Clones the graph from
 /// [`ScopeResolutionPhase`] (the context is immutable during `run`, so
 /// mutation requires ownership) and runs the resolvers on it.
-pub struct ResolvePhase;
+pub struct ResolvePhase {
+    /// Shared repository handle (Arc-cloned from Pipeline) — used to load
+    /// incremental enrichment (symbols of unchanged files) from the database.
+    pub repo: Arc<Repository>,
+}
 
 impl Phase for ResolvePhase {
     type Input = ();
@@ -705,17 +735,91 @@ impl Phase for ResolvePhase {
         // L6 fix: `resolve_all` now returns `()` — no master Vec<Edge> is
         // built. Each sub-resolver's Vec is dropped immediately after its
         // edges are cloned into `graph`.
-        let symbol_table = build_symbol_table(&parse.results, project_id);
+        let mut symbol_table = build_symbol_table(&parse.results, project_id);
+
+        // Incremental enrichment (cross-file edge-loss fix): on incremental
+        // runs only changed/added files are parsed, so unchanged files'
+        // symbols are absent from the symbol table and File/function ids are
+        // absent from the graph. LoadPhase deletes all edges touching changed
+        // files' nodes and the resolvers re-create them from the enriched
+        // table — without enrichment, every incremental run net-lost
+        // CALLS/DataFlows/Type edges from changed files into unchanged files
+        // (plus IMPORTS edges targeting them). Enrichment loads those
+        // symbols/ids from the DB, excluding the (stale) rows of
+        // changed/added/deleted files. Enriched data stays OUT of the graph —
+        // LoadPhase saves `graph.nodes_view()`, and re-persisting unchanged
+        // files would defeat incremental indexing.
+        let enrichment = {
+            let mut excluded: std::collections::HashSet<String> =
+                scan.diff.deleted.iter().cloned().collect();
+            excluded.extend(scan.diff.changed.iter().map(|f| f.relative_path.clone()));
+            excluded.extend(scan.diff.added.iter().map(|f| f.relative_path.clone()));
+
+            let mut enr = crate::resolve::ResolveEnrichment::default();
+            let file_rows = match self.repo.get_file_id_rows(project_id) {
+                Ok(rows) => rows,
+                Err(err) => {
+                    warn!(error = %err, "failed to load file ids for incremental enrichment");
+                    Vec::new()
+                }
+            };
+            let symbol_rows = match self.repo.get_symbol_rows(project_id) {
+                Ok(rows) => rows,
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        "failed to load symbol rows for incremental enrichment; \
+                         proceeding without it (cross-file edges into unchanged files \
+                         would be dropped)"
+                    );
+                    Vec::new()
+                }
+            };
+
+            // 1. File ids of unchanged files (IMPORTS resolution).
+            for (path, id) in file_rows {
+                if !excluded.contains(&path) {
+                    enr.extra_file_index.insert(path, id);
+                }
+            }
+            // 2. Function/Method ids of unchanged files, grouped under their
+            // (persisted) File id (REEXPORTS resolution).
+            for row in &symbol_rows {
+                if excluded.contains(&row.file_path) {
+                    continue;
+                }
+                if matches!(row.label, NodeLabel::Function | NodeLabel::Method) {
+                    if let Some(file_id) = enr.extra_file_index.get(&row.file_path) {
+                        enr.extra_func_index
+                            .entry(file_id.clone())
+                            .or_default()
+                            .entry(row.name.clone())
+                            .or_insert_with(|| row.id.clone());
+                    }
+                }
+            }
+            // 3. Symbol table entries of unchanged files (CALLS/DataFlows/
+            // Type resolution).
+            crate::resolve::enrich_symbol_table_from_rows(
+                &mut symbol_table,
+                &symbol_rows,
+                &excluded,
+                project_id,
+            );
+            enr
+        };
+
         resolve_all(
             &parse.results,
             &symbol_table,
             project_id,
             &mut graph,
             &includes_graph,
+            &enrichment,
         );
 
         // L3 fix: Parameter and Variable nodes created during dataflow
-        // resolution (DQ-004) are already in `graph.nodes`. Rewrite their
+        // resolution are already in `graph.nodes`. Rewrite their
         // `file_path` in place (absolute → relative) instead of cloning them
         // into a separate `all_nodes` Vec. This eliminates the second copy
         // of Parameter/Variable nodes that previously existed in `all_nodes`.
@@ -814,53 +918,60 @@ impl Phase for LoadPhase {
         let graph = &resolve.graph;
         let edges_created = graph.edge_count();
 
-        // Step 7: batch-delete old nodes for deleted + changed files.
+        // Steps 7–8: the whole load — batch-delete + project/definition/edge
+        // writes — runs on ONE dedicated connection inside an explicit
+        // transaction (`BEGIN TRANSACTION` on entry, `COMMIT` on success,
+        // `ROLLBACK` on any error), making an index run an atomic unit: the
+        // graph is either fully updated or unchanged. This replaces the old
+        // statement-per-connection behavior where a swallowed delete failure
+        // left duplicate/ghost symbols that no later run repaired, and a
+        // crash mid-load left a partially replaced graph.
         //
-        // The batch path collapses N per-file passes (each ~21 Cypher queries
-        // over the node-label set) into a single `WHERE n.filePath IN [...]`
-        // pass, keeping the query count fixed regardless of how many files
-        // changed. This fixes the `incremental_500_of_1000` SLO regression
-        // (33 files/s → target ≥100 files/s) — the per-file delete loop was
-        // the dominant cost on incremental re-index.
+        // Transaction state is per-connection — `StorageConnection::execute`
+        // opens a fresh connection per statement and cannot join one — hence
+        // the `_on` primitive variants running against the supplied `WriteTx`.
+        //
+        // Note: lbug 0.20 allows re-inserting a primary key deleted earlier
+        // in the SAME transaction (guard test
+        // `lbug_allows_delete_then_insert_same_pk_in_one_tx`), which an index
+        // run legitimately does for the Project id and changed-file FQN ids.
+        //
+        // Failure is fatal: rollback and abort. That is safe for convergence
+        // — a rolled-back load leaves the previous consistent graph, and the
+        // next diff re-derives the same work.
         let mut paths_to_delete: Vec<String> = scan.diff.deleted.clone();
         paths_to_delete.extend(scan.diff.changed.iter().map(|f| f.relative_path.clone()));
-        if !paths_to_delete.is_empty() {
-            if let Err(err) = self
-                .repo
-                .delete_file_nodes_batch(&paths_to_delete, project_id)
-            {
-                warn!(
-                    file_count = paths_to_delete.len(),
-                    error = %err,
-                    "failed to batch delete file nodes for deleted+changed files"
-                );
-            }
-        }
 
-        // Step 8: persist project node, definition nodes, and edges.
-        // L3 fix: stream nodes from `graph.nodes_view()` instead of borrowing
-        // a separate `all_nodes: Vec<Node>`.
-        // L6 fix: stream edges from `graph.edges_view()` directly into
-        // `save_edges_stream` (which now accepts `impl IntoIterator<Item = &Edge>`),
-        // eliminating the `let all_edges: Vec<Edge> = ...collect()` that
-        // previously deep-cloned every edge. For large repos (100k+ edges)
-        // this avoids ~10 MB of peak RSS. Each `with_retry` attempt re-creates
-        // the iterator (cheap — `edges_view` returns an iterator over `&Edge`).
-        //
-        // L4: renamed from `save_edges` to `save_edges_stream` — iterator-based
-        // callers MUST use the inherent `_stream` method directly.
-        save_project_node(&self.repo, project_id, project_name, root, disk_files)
-            .map_err(|e| phase_err(Self::NAME, e))?;
-        save_nodes_by_label(&self.repo, graph.nodes_view())
-            .map_err(|e| phase_err(Self::NAME, e))?;
-        if edges_created > 0 {
-            with_retry(DEFAULT_MAX_RETRIES, || {
-                self.repo
-                    .save_edges_stream(graph.edges_view())
-                    .map_err(IndexError::from)
-            })
-            .map_err(|e| phase_err(Self::NAME, e))?;
-        }
+        let result: std::result::Result<(), IndexError> = self.repo.in_write_transaction(|tx| {
+            // Step 7: batch-delete old nodes for deleted + changed files.
+            //
+            // The batch path collapses N per-file passes (each ~21 Cypher
+            // queries over the node-label set) into a single
+            // `WHERE n.filePath IN [...]` pass, keeping the query count
+            // fixed regardless of how many files changed — the
+            // `incremental_500_of_1000` SLO fix.
+            if !paths_to_delete.is_empty() {
+                Repository::delete_file_nodes_batch_on(tx, &paths_to_delete, project_id)
+                    .map_err(IndexError::from)?;
+            }
+
+            // Step 8: persist project node, definition nodes, and edges.
+            // L3 fix: stream nodes from `graph.nodes_view()` instead of
+            // borrowing a separate `all_nodes: Vec<Node>`.
+            // L6/L4: stream edges from `graph.edges_view()` directly into
+            // `save_edges_stream_on` (iterator-based callers MUST use the
+            // `_stream`/`_on` variants — the trait method's `&[Edge]`
+            // signature does not accept arbitrary iterators). For large
+            // repos (100k+ edges) streaming avoids ~10 MB of peak RSS.
+            save_project_node_on(tx, &self.repo, project_id, project_name, root, disk_files)?;
+            save_nodes_by_label_on(tx, graph.nodes_view())?;
+            if edges_created > 0 {
+                Repository::save_edges_stream_on(tx, graph.edges_view())
+                    .map_err(IndexError::from)?;
+            }
+            Ok(())
+        });
+        result.map_err(|e| phase_err(Self::NAME, e))?;
 
         // Step 9: build the IndexResult.
         let duration_ms = scan.start.elapsed().as_millis().min(u64::MAX as u128) as u64;
@@ -940,20 +1051,24 @@ fn lookup_or_create_project_id(
 /// process's CWD when the caller passed a relative path like `.`. Falls back
 /// to the original path on `canonicalize` failure so dry-run tests with
 /// non-existent paths still work.
-fn save_project_node(
+fn save_project_node_on<E: crate::storage::connection::CypherExecutor>(
+    conn: &E,
     repo: &Repository,
     project_id: &str,
     project_name: &str,
     root: &Path,
     disk_files: &[FileInfo],
 ) -> std::result::Result<(), IndexError> {
-    // If the project node already exists, delete only the Project row.
+    // If the project node already exists, delete only the Project row — on
+    // the SAME transaction connection as the re-insert (the existence check
+    // reads committed state via `repo`, which is fine: the tx only needs the
+    // DELETE and CREATE to be co-located for the PK replace to work).
     if repo.get_project(project_id)?.is_some() {
         let cypher = format!(
             "MATCH (p:Project {{id: '{}'}}) DELETE p;",
             project_id.replace('\'', "\\'"),
         );
-        let _ = repo.connection().execute(&cypher);
+        conn.execute_cypher(&cypher)?;
     }
     let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let last_commit = git_head_commit(&canonical_root);
@@ -966,7 +1081,7 @@ fn save_project_node(
             "lastCommit": last_commit,
         }))
         .build();
-    repo.save_project(&project_node)?;
+    Repository::save_project_on(conn, &project_node)?;
     Ok(())
 }
 
@@ -1008,8 +1123,8 @@ fn git_head_commit(root: &Path) -> String {
 /// Vec<&Node>>` collection is retained because each label maps to a distinct
 /// CSV file (and thus a distinct `save_nodes` call) — the grouping is
 /// structurally necessary, only the per-group dedup Vec was waste.
-fn save_nodes_by_label<'a>(
-    repo: &Repository,
+fn save_nodes_by_label_on<'a, E: crate::storage::connection::CypherExecutor>(
+    conn: &E,
     nodes: impl Iterator<Item = &'a Node>,
 ) -> std::result::Result<(), IndexError> {
     let mut by_label: HashMap<NodeLabel, Vec<&Node>> = HashMap::new();
@@ -1034,10 +1149,11 @@ fn save_nodes_by_label<'a>(
         // L4: renamed from `save_nodes` to `save_nodes_stream` — iterator-based
         // callers MUST use the inherent `_stream` method directly; the trait
         // method's `&[Node]` signature does not accept `impl Iterator`.
-        with_retry(DEFAULT_MAX_RETRIES, || {
-            repo.save_nodes_stream(group.iter().copied(), label)
-                .map_err(IndexError::from)
-        })?;
+        // No per-statement retry: the transaction holds the single-writer
+        // lock for the whole span, so foreign-writer conflicts cannot surface
+        // mid-transaction. Any failure propagates and rolls the load back.
+        Repository::save_nodes_stream_on(conn, group.iter().copied(), label)
+            .map_err(IndexError::from)?;
     }
     Ok(())
 }

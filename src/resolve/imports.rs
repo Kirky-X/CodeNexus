@@ -65,13 +65,29 @@ const EXTENSION_PROBES: &[&str] = &[
 /// [`resolve_imports`]: ImportResolver::resolve_imports
 pub struct ImportResolver<'a> {
     project: &'a str,
+    /// Incremental enrichment: database-derived lookups for unchanged files
+    /// (see [`crate::resolve::orchestrator::ResolveEnrichment`]). Empty for
+    /// full-index runs.
+    enrichment: super::orchestrator::ResolveEnrichment,
 }
 
 impl<'a> ImportResolver<'a> {
     /// Creates a new `ImportResolver` for the given project.
     #[must_use]
     pub fn new(project: &'a str) -> Self {
-        Self { project }
+        Self {
+            project,
+            enrichment: super::orchestrator::ResolveEnrichment::default(),
+        }
+    }
+
+    /// Attaches incremental enrichment (unchanged files' File ids and
+    /// function ids loaded from the database). Graph entries always win over
+    /// enriched entries — changed files carry fresh, authoritative ids.
+    #[must_use]
+    pub fn with_enrichment(mut self, enrichment: &super::orchestrator::ResolveEnrichment) -> Self {
+        self.enrichment = enrichment.clone();
+        self
     }
 
     /// Resolves all imports from [`ExtractResult`]s and adds `IMPORTS` edges to
@@ -95,11 +111,29 @@ impl<'a> ImportResolver<'a> {
     /// * `graph` - The graph to add resolved IMPORTS edges to. Must already
     ///   contain File nodes (created by the scope phase).
     pub fn resolve_imports(&self, results: &[ExtractResult], graph: &mut Graph) {
-        let file_index = build_file_index(graph);
+        let mut file_index = build_file_index(graph);
+        // Incremental enrichment: unchanged files' File nodes are not in the
+        // graph; DB-derived ids fill the gap so IMPORTS edges from changed
+        // files into unchanged files survive. Graph entries win (a changed
+        // file's stale DB id must not shadow its fresh graph id).
+        for (path, id) in &self.enrichment.extra_file_index {
+            file_index.entry(path.clone()).or_insert_with(|| id.clone());
+        }
+        // Precomputed path lookup: O(path depth) per query instead of a
+        // full-index scan per ExtractResult (O(results × F) → O(results)).
+        let path_index = FilePathIndex::build(&file_index);
         // Build (file_id, function_name) → function_id index for REEXPORTS
         // edge creation. Re-exports target specific Function nodes (not File
         // nodes), so we need to resolve `imported_names` to their Function ids.
-        let func_index = build_function_index(graph, &file_index);
+        let mut func_index = build_function_index(graph, &path_index);
+        // Incremental enrichment for REEXPORTS: function ids of unchanged
+        // files, grouped under their (DB-persisted) File node id.
+        for (file_id, names) in &self.enrichment.extra_func_index {
+            let entry = func_index.entry(file_id.clone()).or_default();
+            for (name, func_id) in names {
+                entry.entry(name.clone()).or_insert_with(|| func_id.clone());
+            }
+        }
 
         // Deduplicate by (source_file_id, target_file_id) — one IMPORTS edge
         // per file pair, regardless of how many symbols are imported.
@@ -119,11 +153,9 @@ impl<'a> ImportResolver<'a> {
             }
             // result.file_path is absolute in production (e.g.
             // /home/dev/.../src/lib.rs) but file_index keys are relative
-            // (e.g. `src/lib.rs`). find_file_in_index handles this mismatch.
-            let (source_file_id, importer_rel_path) = match find_file_in_index(
-                &file_index,
-                &result.file_path,
-            ) {
+            // (e.g. `src/lib.rs`). path_index.lookup handles this mismatch
+            // (same longest-suffix semantics as the old find_file_in_index).
+            let (source_file_id, importer_rel_path) = match path_index.lookup(&result.file_path) {
                 Some((id, rel)) => (id, rel),
                 None => {
                     // Single-line for coverage: tarpaulin attribute continuation
@@ -242,28 +274,20 @@ fn build_file_index(graph: &Graph) -> HashMap<String, String> {
 ///   `String::replace` allocations.
 fn build_function_index(
     graph: &Graph,
-    file_index: &HashMap<String, String>,
+    path_index: &FilePathIndex,
 ) -> HashMap<String, HashMap<String, String>> {
     use std::collections::hash_map::Entry;
-    // Pre-normalise file_index keys once so the
-    // per-function suffix match doesn't re-allocate for every key.
-    let normalised_index: HashMap<String, String> = file_index
-        .iter()
-        .map(|(k, v)| (k.replace('\\', "/"), v.clone()))
-        .collect();
     let mut index: HashMap<String, HashMap<String, String>> = HashMap::new();
     for label in [NodeLabel::Function, NodeLabel::Method] {
         for node in graph.nodes_by_label(label) {
             let Some(fp) = &node.file_path else {
                 continue;
             };
-            // Resolve Function.file_path → owning File node id. Try direct
-            // match first, then suffix match via the shared helper
-            // (DRY with find_file_in_index).
-            let file_id = file_index.get(fp).cloned().or_else(|| {
-                find_best_suffix_match(&normalised_index, fp).map(|(_, id)| id.clone())
-            });
-            let Some(file_id) = file_id else { continue };
+            // Resolve Function.file_path → owning File node id via the
+            // precomputed path index (direct + longest-suffix semantics).
+            let Some(file_id) = path_index.lookup_id(fp) else {
+                continue;
+            };
             // Log duplicate function names so the
             // "first wins" ambiguity is visible (dead-code may false-negative
             // on the shadowed method).
@@ -338,7 +362,7 @@ fn resolve_reexport_targets(
 /// must pick the LONGEST suffix match for determinism (HashMap iteration
 /// order is non-deterministic).
 ///
-/// # Key normalisation (audit LOW-2 + LOW-4)
+/// # Key normalisation (audit + )
 ///
 /// `file_index` keys may or may not be pre-normalised — this function
 /// defensively normalises each key with `rel.replace('\\', "/")` inside
@@ -349,6 +373,10 @@ fn resolve_reexport_targets(
 /// `find_file_in_index` (invoked per ExtractResult), so the defensive
 /// in-loop normalisation is kept as the cheaper trade-off. `path` is
 /// normalised once at entry.
+// Legacy per-call scan — superseded in production by [`FilePathIndex`]
+// (O(path depth) probes instead of an O(F) scan per query). Kept for tests
+// as the semantic reference implementation.
+#[cfg(test)]
 fn find_best_suffix_match<'a>(
     file_index: &'a HashMap<String, String>,
     path: &str,
@@ -371,6 +399,59 @@ fn find_best_suffix_match<'a>(
     best
 }
 
+/// Precomputed path → File-id lookup that resolves absolute (or differently
+/// slash-styled) file paths in O(path depth) instead of scanning the whole
+/// index per call.
+///
+/// The naive per-call scan (`find_best_suffix_match` over every index key)
+/// made import resolution O(results × F) with a `String` allocation per
+/// compared key — on a 10k-file repo that is ~10⁸ operations per resolve run.
+/// This structure normalises every key once at build time, then enumerates
+/// the query path's `/`-boundary suffixes (≤ path depth candidates), giving
+/// identical *longest-boundary-suffix-match* semantics in a handful of
+/// HashMap probes.
+struct FilePathIndex {
+    /// Normalised (`\` → `/`) relative path → File node id.
+    exact: HashMap<String, String>,
+}
+
+impl FilePathIndex {
+    fn build(file_index: &HashMap<String, String>) -> Self {
+        let exact = file_index
+            .iter()
+            .map(|(rel, id)| (rel.replace('\\', "/"), id.clone()))
+            .collect();
+        Self { exact }
+    }
+
+    /// Returns the matched entry as `(normalised_relative_path, file_id)`.
+    ///
+    /// A key can only boundary-match `path` if it starts right after one of
+    /// the path's own `/` boundaries (or equals the whole path), so scanning
+    /// those boundaries longest-first and returning the first exact hit is
+    /// equivalent to picking the longest suffix match.
+    fn lookup(&self, path: &str) -> Option<(String, String)> {
+        let norm = path.replace('\\', "/");
+        if let Some(id) = self.exact.get(&norm) {
+            return Some((norm, id.clone()));
+        }
+        for (i, b) in norm.char_indices() {
+            if b != '/' || i == 0 {
+                continue;
+            }
+            if let Some(id) = self.exact.get(&norm[i + 1..]) {
+                return Some((norm[i + 1..].to_string(), id.clone()));
+            }
+        }
+        None
+    }
+
+    /// File-id-only variant (used by [`build_function_index`]).
+    fn lookup_id(&self, path: &str) -> Option<String> {
+        self.lookup(path).map(|(_, id)| id)
+    }
+}
+
 /// Finds a File node id and its relative path in the index.
 ///
 /// `result.file_path` is absolute in production (e.g.
@@ -382,6 +463,7 @@ fn find_best_suffix_match<'a>(
 /// Returns `(file_node_id, relative_path)` on success. The relative_path is
 /// used as `importer_path` in [`resolve_import_target`] so that
 /// `normalise_relative` works correctly (it expects relative paths).
+#[cfg(test)]
 fn find_file_in_index(
     file_index: &HashMap<String, String>,
     path: &str,
@@ -2442,7 +2524,7 @@ mod tests {
         ));
 
         let file_index = build_file_index(&graph);
-        let func_index = build_function_index(&graph, &file_index);
+        let func_index = build_function_index(&graph, &FilePathIndex::build(&file_index));
 
         // Function should be indexed under the File node's id ("src/lib.rs"),
         // not under the absolute path.
@@ -2514,6 +2596,43 @@ mod tests {
         assert!(
             best2.is_none(),
             "xsrc/lib.rs must not boundary-match src/lib.rs"
+        );
+    }
+
+    /// `FilePathIndex::lookup` must reproduce `find_best_suffix_match`
+    /// semantics (longest `/`-boundary suffix match, cross-platform slashes)
+    /// while probing O(path depth) entries instead of scanning the index.
+    #[test]
+    fn file_path_index_matches_legacy_suffix_semantics() {
+        let mut index = HashMap::new();
+        index.insert("index.ts".to_string(), "id-root".to_string());
+        index.insert("src/index.ts".to_string(), "id-src".to_string());
+        index.insert("xsrc/lib.rs".to_string(), "id-xlib".to_string());
+        index.insert("src\\win.rs".to_string(), "id-win".to_string());
+        let idx = FilePathIndex::build(&index);
+
+        // Longest boundary match wins.
+        assert_eq!(
+            idx.lookup("/home/dev/proj/src/index.ts"),
+            Some(("src/index.ts".to_string(), "id-src".to_string()))
+        );
+        // Direct (whole-path) hit.
+        assert_eq!(
+            idx.lookup("src/lib.rs").map(|(_, id)| id),
+            None,
+            "src/lib.rs is not an index key in this fixture"
+        );
+        // Boundary rejection across segments.
+        assert_eq!(
+            idx.lookup("/home/dev/proj/xsrc/lib.rs").map(|(_, id)| id),
+            Some("id-xlib".to_string()),
+            "the key itself must match when it is the boundary suffix"
+        );
+        assert_eq!(idx.lookup("/home/dev/proj/othersrc/lib.rs"), None);
+        // Backslash key + backslash query converge on the normalised form.
+        assert_eq!(
+            idx.lookup(r"C:\repo\src\win.rs"),
+            Some(("src/win.rs".to_string(), "id-win".to_string()))
         );
     }
 }

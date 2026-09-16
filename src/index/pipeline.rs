@@ -22,8 +22,9 @@
 //! 5. [`ConfidencePhase`] — pass-through (real confidence scoring not yet implemented).
 //! 6. [`LoadPhase`] — persist nodes/edges to the database, build [`IndexResult`].
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use tracing::{info, warn};
@@ -31,7 +32,7 @@ use tracing::{info, warn};
 use crate::discover::{FileInfo, Walker};
 use crate::index::error::{IndexError, Result};
 use crate::index::hash::compute_file_hash;
-use crate::index::incremental::FileDiff;
+use crate::index::incremental::{FileDiff, FileHashHint};
 use crate::index::MemoryBudget;
 use crate::model::{new_file_id, Language, Node, NodeLabel};
 use crate::parse::parallel::RamFirstSources;
@@ -194,6 +195,13 @@ pub struct IndexFacade {
     db_path: PathBuf,
     #[cfg(feature = "cache")]
     cache: Option<Arc<dyn CacheStore>>,
+    /// Daemon fast-path hints: path → (size, mtime, hash) of the previous
+    /// run. Shared Arc across every incremental batch on this facade — for
+    /// the daemon (one long-lived facade) this turns each batch's diff from
+    /// a full read + BLAKE3 of every file into one `stat` per unchanged
+    /// file. One-shot CLI runs populate it once and exit (no benefit, no
+    /// cost beyond the map itself).
+    diff_hints: Arc<Mutex<HashMap<String, FileHashHint>>>,
     /// Memory budget used by [`index_ram_first`](Self::index_ram_first) to
     /// decide whether RAM-first mode is safe or whether to fall back to the
     /// streaming disk-read path (L5 adaptive degradation).
@@ -209,6 +217,7 @@ impl IndexFacade {
             db_path: db_path.to_path_buf(),
             #[cfg(feature = "cache")]
             cache: None,
+            diff_hints: Arc::new(Mutex::new(HashMap::new())),
             budget: MemoryBudget::from_system(),
         })
     }
@@ -247,11 +256,15 @@ impl IndexFacade {
         let repository = with_retry(DEFAULT_MAX_RETRIES, || {
             Repository::open(&self.db_path).map_err(IndexError::from)
         })?;
-        let pipeline = Pipeline::new(repository);
+        let pipeline = Pipeline::new(repository).with_diff_hints(Arc::clone(&self.diff_hints));
         let result = pipeline.run(path, project_name, force)?;
         #[cfg(feature = "cache")]
         if let Some(ref cache) = self.cache {
-            cache.invalidate_all();
+            // Namespace-scoped invalidation: index runs change graph data, so
+            // cached Cypher results are stale — but `ast:` (content-hash
+            // keyed) and `embed:` (content-addressed vectors) entries remain
+            // valid and must survive an index run.
+            cache.invalidate_namespace("cypher");
         }
         Ok(result)
     }
@@ -361,13 +374,17 @@ impl IndexFacade {
         let repository = with_retry(DEFAULT_MAX_RETRIES, || {
             Repository::open(&self.db_path).map_err(IndexError::from)
         })?;
-        let pipeline = Pipeline::new(repository);
+        let pipeline = Pipeline::new(repository).with_diff_hints(Arc::clone(&self.diff_hints));
         // `run_ram_first` takes ownership of `compressed`; it is dropped when
         // `run_ram_first` returns (after the single COPY FROM dump in LoadPhase).
         let result = pipeline.run_ram_first(path, project_name, force, compressed)?;
         #[cfg(feature = "cache")]
         if let Some(ref cache) = self.cache {
-            cache.invalidate_all();
+            // Namespace-scoped invalidation: index runs change graph data, so
+            // cached Cypher results are stale — but `ast:` (content-hash
+            // keyed) and `embed:` (content-addressed vectors) entries remain
+            // valid and must survive an index run.
+            cache.invalidate_namespace("cypher");
         }
         Ok(result)
     }
@@ -381,6 +398,9 @@ impl IndexFacade {
 /// same database connection (Repository is not Clone, ADR-008).
 pub struct Pipeline {
     repository: Arc<Repository>,
+    /// Daemon fast-path hints shared with [`ScanPhase`] (see
+    /// [`IndexFacade::diff_hints`]). `None` → empty-map semantics.
+    hints: Option<Arc<std::sync::Mutex<HashMap<String, FileHashHint>>>>,
 }
 
 impl Pipeline {
@@ -389,7 +409,20 @@ impl Pipeline {
     pub fn new(repository: Repository) -> Self {
         Self {
             repository: Arc::new(repository),
+            hints: None,
         }
+    }
+
+    /// Attaches daemon fast-path hints (size/mtime → hash of the previous
+    /// run). The daemon's long-lived `IndexFacade` passes the same Arc on
+    /// every incremental batch so unchanged files skip the full read.
+    #[must_use]
+    pub fn with_diff_hints(
+        mut self,
+        hints: Arc<std::sync::Mutex<HashMap<String, FileHashHint>>>,
+    ) -> Self {
+        self.hints = Some(hints);
+        self
     }
 
     /// Runs the full indexing pipeline via the typed DAG runner.
@@ -492,12 +525,16 @@ impl Pipeline {
         let mut dag = DagPipeline::new();
         dag.register(ScanPhase {
             repo: self.repository.clone(),
+            hints: self.hints.clone(),
         })
         .map_err(IndexError::from)?;
         dag.register(ParsePhase).map_err(IndexError::from)?;
         dag.register(ScopeResolutionPhase)
             .map_err(IndexError::from)?;
-        dag.register(ResolvePhase).map_err(IndexError::from)?;
+        dag.register(ResolvePhase {
+            repo: self.repository.clone(),
+        })
+        .map_err(IndexError::from)?;
         dag.register(ConfidencePhase).map_err(IndexError::from)?;
         dag.register(LoadPhase {
             repo: self.repository.clone(),
@@ -606,10 +643,21 @@ fn evaluate_ram_first_budget(files: &[FileInfo], budget: &MemoryBudget) -> (u64,
 
 /// Builds a [`Node`] (label `File`) for each changed/added file, carrying the
 /// BLAKE3 hash in `properties.hash` for future incremental runs.
+///
+/// Hashes are reused from [`FileDiff::hashes`] when the diff phase already
+/// computed them (the normal pipeline path) — this eliminates a second full
+/// disk read + BLAKE3 pass per changed file. Hand-constructed diffs (unit
+/// tests) without hash entries fall back to reading the file.
 pub(crate) fn build_file_nodes(diff: &FileDiff, project_id: &str) -> Vec<Node> {
     let mut nodes = Vec::new();
     for file in diff.changed.iter().chain(diff.added.iter()) {
-        let hash = match compute_file_hash(&file.path) {
+        let hash = match diff
+            .hashes
+            .get(file.relative_path.as_str())
+            .cloned()
+            .map(Ok)
+            .unwrap_or_else(|| compute_file_hash(&file.path))
+        {
             Ok(h) => h,
             Err(err) => {
                 warn!(
@@ -1037,6 +1085,65 @@ mod tests {
         assert_eq!(
             first.project_id, second.project_id,
             "re-index should reuse the project id"
+        );
+    }
+
+    // --- incremental re-index must preserve cross-file CALLS edges ---
+
+    /// Regression (cross-file edge-loss fix): an incremental re-index used to
+    /// silently drop CALLS edges from the changed file into unchanged files.
+    /// The resolve phase resolved calls against a symbol table built only
+    /// from the re-parsed files, while LoadPhase deleted every edge touching
+    /// the changed files' old nodes — a net edge loss on every incremental
+    /// run. The DB-symbol enrichment in ResolvePhase must keep the edge.
+    #[cfg(feature = "lang-rust")]
+    #[test]
+    fn incremental_reindex_preserves_cross_file_calls_edges() {
+        use crate::storage::capability::Storage;
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_file(root, "util.rs", "pub fn helper_fn() -> i32 { 1 }\n");
+        write_file(root, "main.rs", "fn main_fn() -> i32 { helper_fn() }\n");
+
+        let db_path = fresh_db_path();
+        let facade = IndexFacade::new(&db_path).expect("facade");
+
+        let first = facade.index(root, "demo", false).expect("first index");
+        assert!(first.files_indexed >= 2, "both files parsed on first run");
+
+        let calls_edge_count = |db: &Path| -> i64 {
+            let repo = Repository::open(db).expect("repo");
+            let rows = repo
+                .query("MATCH (r:CodeRelation) WHERE r.type = 'CALLS' RETURN count(r.id) AS cnt;")
+                .expect("query CALLS edges");
+            rows.first()
+                .and_then(|r| r.first())
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0)
+        };
+
+        let calls_after_full = calls_edge_count(&db_path);
+        assert_eq!(
+            calls_after_full, 1,
+            "exactly one CALLS edge main_fn -> helper_fn after full index"
+        );
+
+        // Touch only main.rs; util.rs stays unchanged.
+        write_file(
+            root,
+            "main.rs",
+            "// changed\nfn main_fn() -> i32 { helper_fn() }\n",
+        );
+        let second = facade
+            .index_incremental(root, "demo", false)
+            .expect("incremental index");
+        assert_eq!(second.files_indexed, 1, "only main.rs should be re-parsed");
+
+        let calls_after_incremental = calls_edge_count(&db_path);
+        assert_eq!(
+            calls_after_incremental, 1,
+            "cross-file CALLS edge must survive an incremental re-index"
         );
     }
 
@@ -1883,6 +1990,12 @@ mod tests {
             fn invalidate_all(&self) {
                 self.invalidates.fetch_add(1, Ordering::SeqCst);
             }
+            // The index path invalidates only the `cypher` namespace —
+            // content-addressed caches (`ast:`/`embed:`) survive index runs.
+            fn invalidate_namespace(&self, ns: &str) {
+                assert_eq!(ns, "cypher", "index must invalidate the cypher namespace");
+                self.invalidates.fetch_add(1, Ordering::SeqCst);
+            }
         }
 
         let tmp = TempDir::new().unwrap();
@@ -1898,7 +2011,7 @@ mod tests {
         assert!(result.is_ok(), "index should succeed: {:?}", result);
         assert!(
             cache.invalidates.load(Ordering::SeqCst) >= 1,
-            "invalidate_all should be called after index"
+            "invalidate_namespace(cypher) should be called after index"
         );
     }
 
@@ -2130,6 +2243,12 @@ mod tests {
             fn invalidate_all(&self) {
                 self.invalidates.fetch_add(1, Ordering::SeqCst);
             }
+            // The index path invalidates only the `cypher` namespace —
+            // content-addressed caches (`ast:`/`embed:`) survive index runs.
+            fn invalidate_namespace(&self, ns: &str) {
+                assert_eq!(ns, "cypher", "index must invalidate the cypher namespace");
+                self.invalidates.fetch_add(1, Ordering::SeqCst);
+            }
         }
 
         let tmp = TempDir::new().unwrap();
@@ -2149,7 +2268,7 @@ mod tests {
         );
         assert!(
             cache.invalidates.load(Ordering::SeqCst) >= 1,
-            "invalidate_all should be called after ram_first index"
+            "invalidate_namespace(cypher) should be called after ram_first index"
         );
     }
 

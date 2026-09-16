@@ -36,6 +36,14 @@ pub struct FileDiff {
     pub unchanged: Vec<FileInfo>,
     /// Paths present in the database but absent on disk.
     pub deleted: Vec<String>,
+    /// BLAKE3 hashes computed during classification, keyed by relative path.
+    ///
+    /// Downstream consumers (e.g. `build_file_nodes`) reuse these instead of
+    /// re-reading every file from disk — previously each changed file was
+    /// read 2× for hashing (diff + File-node build), plus a separate read
+    /// for line counting and one for parsing. Files that were skipped during
+    /// classification (symlink / oversized) are absent from this map.
+    pub hashes: HashMap<String, String>,
 }
 
 impl FileDiff {
@@ -118,6 +126,62 @@ pub fn diff_files(
     db_hashes: &[(String, String)],
     force: bool,
 ) -> Result<FileDiff, std::io::Error> {
+    Ok(diff_files_with_hints(disk_files, db_hashes, force, &HashMap::new())?.0)
+}
+
+/// A per-file hint enabling the daemon fast path: when `(size, mtime)` match
+/// the previous run, the previous BLAKE3 hash is reused without reading the
+/// file. One `stat` per file replaces a full read + hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileHashHint {
+    /// File size in bytes (from `FileInfo`, no extra syscall).
+    pub size: u64,
+    /// File modification time in nanoseconds since the Unix epoch.
+    pub mtime_nanos: i128,
+    /// BLAKE3 hash of the content at the observed `(size, mtime)`.
+    pub hash: String,
+}
+
+/// Returns the file's mtime in nanoseconds since the Unix epoch, or `None`
+/// when metadata is unreadable (pre-1970 timestamps clamp to 0).
+fn mtime_nanos(path: &std::path::Path) -> Option<i128> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some(
+        meta.modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as i128)
+            .unwrap_or(0),
+    )
+}
+
+/// [`diff_files`] with daemon fast-path hints.
+///
+/// For each disk file: if `hints` contains an entry whose `size` matches
+/// `FileInfo.size` and whose `mtime_nanos` matches a single `stat` of the
+/// file, the previous hash is reused (no content read). Otherwise the file is
+/// read and hashed as before. Alongside the [`FileDiff`], returns the fresh
+/// hint map for the *next* run — the caller (daemon `IndexFacade`) stores it
+/// process-wide so consecutive incremental batches only pay one `stat` per
+/// unchanged file instead of a full read + BLAKE3 pass.
+///
+/// Correctness contract: a reused hash equals the DB hash ⇒ `Unchanged`
+/// (skip); a hint mismatch (touch/rename-restore) falls back to a full hash,
+/// never to a wrong classification. The standard mtime+size trade-off
+/// applies: content changes that preserve both size and mtime are missed —
+/// the same trade-off every incremental build system makes, and `--force`
+/// bypasses hints entirely.
+/// Per-file outcome of the parallel classification pass: the class, the
+/// (reused or freshly computed) hash, and the fresh hint for the next run
+/// (`None` when the file was skipped or its mtime was unreadable).
+type HashClassification = (FileClass, String, Option<FileHashHint>);
+
+pub fn diff_files_with_hints(
+    disk_files: &[FileInfo],
+    db_hashes: &[(String, String)],
+    force: bool,
+    hints: &HashMap<String, FileHashHint>,
+) -> Result<(FileDiff, HashMap<String, FileHashHint>), std::io::Error> {
     // Index DB hashes by path for O(1) lookup.
     let mut db_map: HashMap<&str, &str> = HashMap::with_capacity(db_hashes.len());
     for (path, hash) in db_hashes {
@@ -138,27 +202,48 @@ pub fn diff_files(
     // phase — a single malicious symlink should not block indexing the
     // rest of the project. Other errors (NotFound, PermissionDenied) are
     // propagated as before.
-    let classifications: Result<Vec<Option<FileClass>>, std::io::Error> = disk_files
+    let classifications: Result<Vec<Option<HashClassification>>, std::io::Error> = disk_files
         .par_iter()
         .map(|file| {
-            let disk_hash = match compute_file_hash(&file.path) {
-                Ok(h) => h,
-                Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
-                    // Symlink or oversized file: skip with a warning.
-                    // Returning None signals the caller to skip this file.
-                    warn!(
-                        file = %file.relative_path,
-                        error = %err,
-                        "skipping file during hash classification \
-                         (symlink or exceeds MAX_FILE_SIZE)"
-                    );
-                    return Ok(None);
+            // Daemon fast path: one `stat` per file; a (size, mtime) hit
+            // reuses the previous hash instead of reading the content.
+            let mtime = mtime_nanos(&file.path);
+            let hint = hints.get(file.relative_path.as_str());
+            let cached_hash = match (hint, &mtime) {
+                (Some(h), Some(mt)) if !force && h.size == file.size && h.mtime_nanos == *mt => {
+                    Some(h.hash.clone())
                 }
-                Err(err) => return Err(err),
+                _ => None,
             };
+            let disk_hash = match cached_hash {
+                Some(h) => h,
+                None => match compute_file_hash(&file.path) {
+                    Ok(h) => h,
+                    Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
+                        // Symlink or oversized file: skip with a warning.
+                        // Returning None signals the caller to skip this file.
+                        warn!(
+                            file = %file.relative_path,
+                            error = %err,
+                            "skipping file during hash classification \
+                             (symlink or exceeds MAX_FILE_SIZE)"
+                        );
+                        return Ok(None);
+                    }
+                    Err(err) => return Err(err),
+                },
+            };
+            // Fresh hint for the next run (stat result already in hand).
+            let fresh_hint = mtime.map(|mtime_nanos| FileHashHint {
+                size: file.size,
+                mtime_nanos,
+                hash: disk_hash.clone(),
+            });
             if force {
                 // --force ignores hashes; every disk file is changed.
-                return Ok(Some(FileClass::Changed));
+                // The hash is still carried downstream (File-node build
+                // reuses it instead of re-reading the file).
+                return Ok(Some((FileClass::Changed, disk_hash, fresh_hint)));
             }
             let class = match db_map.get(file.relative_path.as_str()) {
                 None => FileClass::Added,
@@ -172,13 +257,14 @@ pub fn diff_files(
                     }
                 }
             };
-            Ok(Some(class))
+            Ok(Some((class, disk_hash, fresh_hint)))
         })
         .collect();
 
     let classifications = classifications?;
 
     let mut diff = FileDiff::new();
+    let mut fresh_hints: HashMap<String, FileHashHint> = HashMap::with_capacity(disk_files.len());
     let mut seen_on_disk: HashMap<&str, ()> = HashMap::with_capacity(disk_files.len());
 
     // Bucket files in disk traversal order (preserves pre-parallel behavior).
@@ -190,9 +276,27 @@ pub fn diff_files(
     for (file, class) in disk_files.iter().zip(classifications) {
         seen_on_disk.insert(file.relative_path.as_str(), ());
         match class {
-            Some(FileClass::Changed) => diff.changed.push(file.clone()),
-            Some(FileClass::Added) => diff.added.push(file.clone()),
-            Some(FileClass::Unchanged) => diff.unchanged.push(file.clone()),
+            Some((FileClass::Changed, hash, hint)) => {
+                diff.hashes.insert(file.relative_path.clone(), hash);
+                if let Some(hint) = hint {
+                    fresh_hints.insert(file.relative_path.clone(), hint);
+                }
+                diff.changed.push(file.clone());
+            }
+            Some((FileClass::Added, hash, hint)) => {
+                diff.hashes.insert(file.relative_path.clone(), hash);
+                if let Some(hint) = hint {
+                    fresh_hints.insert(file.relative_path.clone(), hint);
+                }
+                diff.added.push(file.clone());
+            }
+            Some((FileClass::Unchanged, hash, hint)) => {
+                diff.hashes.insert(file.relative_path.clone(), hash);
+                if let Some(hint) = hint {
+                    fresh_hints.insert(file.relative_path.clone(), hint);
+                }
+                diff.unchanged.push(file.clone());
+            }
             None => {
                 // Skipped during classification — already warned above.
                 // Fall through without bucketing.
@@ -207,7 +311,7 @@ pub fn diff_files(
         }
     }
 
-    Ok(diff)
+    Ok((diff, fresh_hints))
 }
 
 #[cfg(test)]
@@ -337,6 +441,65 @@ mod tests {
         assert!(diff.changed.is_empty());
         assert!(diff.unchanged.is_empty());
         assert!(diff.deleted.is_empty());
+    }
+
+    // --- diff_files_with_hints: daemon fast path ---
+
+    /// Hint hit (size+mtime unchanged) reuses the previous hash without
+    /// re-reading, and the fresh hint map round-trips to the next run.
+    #[test]
+    fn diff_files_with_hints_reuses_unchanged_files() {
+        let tmp = TempDir::new().unwrap();
+        let f = make_file(tmp.path(), "a.rs", "fn a() {}", Language::Rust);
+        let disk = vec![f];
+        let db: Vec<(String, String)> = vec![];
+
+        // First run: no hints → full hash; capture fresh hints.
+        let (_, fresh) = diff_files_with_hints(&disk, &db, false, &HashMap::new()).unwrap();
+        let hash1 = fresh
+            .get("a.rs")
+            .expect("first run must record a hint")
+            .clone();
+        assert_eq!(hash1.hash, compute_file_hash(&disk[0].path).unwrap());
+
+        // Second run with the fresh hints: classification identical, and the
+        // reused hash must equal the real content hash (correctness of the
+        // fast path — a wrong reuse would mark changed files unchanged).
+        let (diff2, fresh2) = diff_files_with_hints(&disk, &db, false, &fresh).unwrap();
+        assert_eq!(diff2.added.len(), 1, "still added (not in DB)");
+        assert_eq!(
+            fresh2
+                .get("a.rs")
+                .expect("second run must refresh the hint"),
+            &hash1,
+            "unchanged file → identical hint"
+        );
+    }
+
+    /// A file modified after the hint was recorded must NOT reuse the stale
+    /// hash (mtime differs → full re-hash → changed classification).
+    #[test]
+    fn diff_files_with_hints_falls_back_to_full_hash_on_change() {
+        let tmp = TempDir::new().unwrap();
+        let f = make_file(tmp.path(), "a.rs", "fn a() {}", Language::Rust);
+        let disk = vec![f];
+        let db: Vec<(String, String)> = vec![];
+
+        let (_, fresh) = diff_files_with_hints(&disk, &db, false, &HashMap::new()).unwrap();
+
+        // Modify the file after the hint snapshot.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&disk[0].path, "fn b() {}").unwrap();
+
+        let (diff, fresh2) = diff_files_with_hints(&disk, &db, false, &fresh).unwrap();
+        assert_eq!(diff.added.len(), 1, "modified file must be re-hashed");
+        let new_hash = fresh2.get("a.rs").unwrap().hash.clone();
+        assert_eq!(new_hash, compute_file_hash(&disk[0].path).unwrap());
+        assert_ne!(
+            new_hash,
+            fresh.get("a.rs").unwrap().hash,
+            "stale hint must not leak into the new hint"
+        );
     }
 
     // --- diff_files: matching hash → unchanged ---

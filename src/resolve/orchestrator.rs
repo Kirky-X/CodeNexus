@@ -119,6 +119,72 @@ pub fn build_symbol_table(results: &[ExtractResult], project: &str) -> ProjectSy
     table
 }
 
+/// Incremental-index enrichment: database-derived lookups for files that were
+/// NOT re-parsed in this run.
+///
+/// An incremental index only parses changed/added files, so unchanged files'
+/// symbols and File nodes are missing from the resolve phase's in-memory
+/// view — before enrichment existed, every incremental run silently dropped
+/// CALLS/DataFlows/Type edges from changed files into unchanged files (and
+/// IMPORTS edges targeting them). The rows live in the database (loaded via
+/// `Repository::get_symbol_rows` / `get_file_id_rows`, filtered to exclude
+/// changed/added/deleted files); resolvers emit qualified-name-id edges, so
+/// no enriched node ever needs to enter the graph (keeping `LoadPhase`'s
+/// write set limited to the re-parsed files).
+#[derive(Debug, Default, Clone)]
+pub struct ResolveEnrichment {
+    /// file_path → File node id for unchanged files (IMPORTS resolution).
+    pub extra_file_index: std::collections::HashMap<String, String>,
+    /// file_id → (function name → function id) for unchanged files
+    /// (REEXPORTS resolution).
+    pub extra_func_index:
+        std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+}
+
+/// Merges database-loaded symbol definitions into `table` for files that were
+/// not re-parsed in this run (`exclude` = changed ∪ added ∪ deleted relative
+/// paths). See [`ResolveEnrichment`].
+pub fn enrich_symbol_table_from_rows(
+    table: &mut ProjectSymbolTable,
+    rows: &[crate::storage::SymbolRow],
+    exclude: &std::collections::HashSet<String>,
+    project: &str,
+) {
+    use std::collections::HashMap;
+    let mut by_file: HashMap<&str, Vec<&crate::storage::SymbolRow>> = HashMap::new();
+    for row in rows {
+        if exclude.contains(&row.file_path) {
+            continue;
+        }
+        by_file.entry(row.file_path.as_str()).or_default().push(row);
+    }
+    for (file_path, rows) in by_file {
+        let mut file_table = FileSymbolTable::new();
+        for row in rows {
+            let qn = if row.qualified_name.is_empty() {
+                row.name.clone()
+            } else {
+                row.qualified_name.clone()
+            };
+            let mut entry = SymbolEntry::new(
+                row.name.clone(),
+                qn,
+                row.label,
+                row.file_path.clone(),
+                project,
+            )
+            .with_exported(row.is_exported);
+            if let Some(sig) = &row.signature {
+                entry = entry.with_signature_opt(Some(sig.clone()));
+            }
+            file_table.add(entry);
+        }
+        if !file_table.is_empty() {
+            table.add_file_table(file_path, file_table);
+        }
+    }
+}
+
 /// Resolves all symbols: calls + dataflows + FFI + imports, adding edges to
 /// `graph` in place.
 ///
@@ -153,6 +219,7 @@ pub fn resolve_all(
     project: &str,
     graph: &mut Graph,
     includes_graph: &IncludesGraph,
+    enrichment: &ResolveEnrichment,
 ) {
     let call_resolver =
         CallResolver::new(symbol_table, project).with_includes_graph(includes_graph.clone());
@@ -170,7 +237,7 @@ pub fn resolve_all(
     // records extracted by the parse phase (DDD §7.2). Runs after the other
     // resolvers; needs File nodes already in the graph (created by the scope
     // phase).
-    let import_resolver = ImportResolver::new(project);
+    let import_resolver = ImportResolver::new(project).with_enrichment(enrichment);
     import_resolver.resolve_imports(results, graph);
     // Type resolution fixes dangling Extends/Implements/UsesType edges
     // Runs after other resolvers so it can fix edges created
@@ -559,7 +626,14 @@ mod tests {
         }
 
         // L6 fix: `resolve_all` now returns `()` — inspect `graph` directly.
-        resolve_all(&results, &table, "proj", &mut graph, &IncludesGraph::new());
+        resolve_all(
+            &results,
+            &table,
+            "proj",
+            &mut graph,
+            &IncludesGraph::new(),
+            &ResolveEnrichment::default(),
+        );
 
         // Should have 1 CALLS edge + 1 DataFlows edge = 2 total.
         assert_eq!(graph.edge_count(), 2);
@@ -589,7 +663,14 @@ mod tests {
         let table = ProjectSymbolTable::new();
         let mut graph = Graph::new();
         // L6 fix: `resolve_all` now returns `()` — check graph is empty.
-        resolve_all(&[], &table, "proj", &mut graph, &IncludesGraph::new());
+        resolve_all(
+            &[],
+            &table,
+            "proj",
+            &mut graph,
+            &IncludesGraph::new(),
+            &ResolveEnrichment::default(),
+        );
         assert_eq!(graph.edge_count(), 0);
     }
 
@@ -625,7 +706,14 @@ mod tests {
             }
         }
 
-        resolve_all(&results, &table, "proj", &mut graph, &IncludesGraph::new());
+        resolve_all(
+            &results,
+            &table,
+            "proj",
+            &mut graph,
+            &IncludesGraph::new(),
+            &ResolveEnrichment::default(),
+        );
 
         // The self-call edge should be in the graph.
         assert_eq!(graph.edge_count(), 1);
@@ -751,7 +839,14 @@ mod tests {
 
         assert_eq!(graph.edge_count(), 2, "precondition: 2 IMPLEMENTS edges");
 
-        resolve_all(&results, &table, "proj", &mut graph, &IncludesGraph::new());
+        resolve_all(
+            &results,
+            &table,
+            "proj",
+            &mut graph,
+            &IncludesGraph::new(),
+            &ResolveEnrichment::default(),
+        );
 
         let implements_edges: Vec<_> = graph
             .edges
@@ -802,7 +897,14 @@ mod tests {
 
         assert_eq!(graph.edge_count(), 2, "precondition: 2 dangling type edges");
 
-        resolve_all(&results, &table, "proj", &mut graph, &IncludesGraph::new());
+        resolve_all(
+            &results,
+            &table,
+            "proj",
+            &mut graph,
+            &IncludesGraph::new(),
+            &ResolveEnrichment::default(),
+        );
 
         assert_eq!(
             graph.edge_count(),
@@ -837,7 +939,14 @@ mod tests {
             "proj",
         ));
 
-        resolve_all(&results, &table, "proj", &mut graph, &IncludesGraph::new());
+        resolve_all(
+            &results,
+            &table,
+            "proj",
+            &mut graph,
+            &IncludesGraph::new(),
+            &ResolveEnrichment::default(),
+        );
 
         let calls_count = graph
             .edges
@@ -914,6 +1023,7 @@ fn contains_scientific(ast: &AstNode) -> bool { true }
             project,
             &mut graph,
             &IncludesGraph::new(),
+            &ResolveEnrichment::default(),
         );
 
         let calls_edges: Vec<_> = graph

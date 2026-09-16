@@ -93,7 +93,17 @@ impl Resolver for ResolverCapability {
         graph: &mut Graph,
         includes_graph: &IncludesGraph,
     ) {
-        super::resolve_all(results, symbol_table, project, graph, includes_graph)
+        // dyn-Resolver consumers have no incremental enrichment context —
+        // the enrichment path is exercised by the pipeline (ResolvePhase),
+        // which calls the free function directly.
+        super::resolve_all(
+            results,
+            symbol_table,
+            project,
+            graph,
+            includes_graph,
+            &super::ResolveEnrichment::default(),
+        )
     }
 }
 

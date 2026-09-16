@@ -417,6 +417,11 @@ impl Pipeline {
     /// Before calling this, the caller must insert each phase's `Input` into
     /// `ctx` under the phase's `NAME` (see [Input wiring](#input-wiring)).
     ///
+    /// After each phase completes, a one-line progress note is written to
+    /// **stderr** (`[codenexus] [i/n] <phase> ok (<elapsed>)`) so long index
+    /// runs are no longer silent. stderr — not stdout — because stdout is the
+    /// command's machine-readable JSON channel.
+    ///
     /// # Errors
     ///
     /// - [`PhaseError::MissingDependency`] / [`PhaseError::Cycle`] — from
@@ -425,11 +430,13 @@ impl Pipeline {
     /// - [`PhaseError::ExecutionFailed`] — a phase's `run` returned an error.
     pub fn run(&self, ctx: &mut PipelineCtx) -> Result<(), PhaseError> {
         let order = self.topo_sort()?;
-        for &name in &order {
+        let total = order.len();
+        for (idx, &name) in order.iter().enumerate() {
             let phase = self
                 .phases
                 .get(name)
                 .expect("topo_sort only returns registered phase names");
+            let started = std::time::Instant::now();
             phase.execute(ctx).map_err(|e| match e {
                 // Pass through ExecutionFailed as-is (already carries the
                 // phase name and boxed inner error).
@@ -440,6 +447,13 @@ impl Pipeline {
                     inner: Box::new(other),
                 },
             })?;
+            eprintln!(
+                "[codenexus] [{}/{}] {} ok ({:?})",
+                idx + 1,
+                total,
+                name,
+                started.elapsed()
+            );
         }
         Ok(())
     }

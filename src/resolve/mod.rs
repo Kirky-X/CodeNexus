@@ -53,6 +53,7 @@ pub use includes_graph::{resolve_include, IncludesGraph};
 pub use module::ResolverModule;
 pub use mro::{mro_for, MroResolver, MroStrategy};
 pub use orchestrator::{build_symbol_table, resolve_all};
+pub use orchestrator::{enrich_symbol_table_from_rows, ResolveEnrichment};
 pub use scope::{Scope, ScopeChain, ScopeContext, ScopeResolver, ScopeResolverRegistry};
 pub use symbol_table::{FileSymbolTable, ProjectSymbolTable, SymbolEntry};
 pub use type_resolver::TypeResolver;
