@@ -51,6 +51,12 @@ pub struct ArtifactManifest {
     pub source_db_path: String,
     pub project: Option<String>,
     pub original_size: u64,
+    /// BLAKE3 hex digest of the uncompressed DB payload — lets `import`
+    /// verify integrity before overwriting the local database (an artifact
+    /// is third-party input). `None` for artifacts written before this field
+    /// existed (`#[serde(default)]` keeps those importable).
+    #[serde(default)]
+    pub payload_blake3: Option<String>,
 }
 
 /// JSON-serializable export-command output.
@@ -106,6 +112,7 @@ pub fn run_export(
             Some(project.to_string())
         },
         original_size,
+        payload_blake3: Some(blake3::hash(&original_bytes).to_string()),
     };
     let manifest_json = serde_json::to_vec(&manifest)?;
     let compressed = zstd_compress(&original_bytes)?;
@@ -184,6 +191,7 @@ mod tests {
             source_db_path: "/demo/db.ladybug".into(),
             project: Some("demo".into()),
             original_size: 4096,
+            payload_blake3: None,
         };
         let json = serde_json::to_string(&manifest).unwrap();
         let parsed: ArtifactManifest = serde_json::from_str(&json).unwrap();
@@ -199,6 +207,7 @@ mod tests {
             source_db_path: "/db".into(),
             project: Some("demo".into()),
             original_size: 0,
+            payload_blake3: None,
         };
         let without_project = ArtifactManifest {
             project: None,

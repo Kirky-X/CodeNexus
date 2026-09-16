@@ -39,11 +39,88 @@ pub struct ImportOutput {
     pub reindexed: bool,
 }
 
-/// Decompresses `input` (zstd-compressed bytes) via the `oxiarc-zstd` pure-Rust library.
+/// Hard cap on the decompressed DB payload accepted from an artifact.
+///
+/// `import` processes artifacts produced by *other people* (team sharing), so
+/// the zstd step must be bomb-safe: a few MB of malicious compressed input can
+/// otherwise expand to tens of GB and OOM the process before any DB write
+/// happens. 4 GiB comfortably covers legitimate indexed repositories (a 10k-
+/// file repo indexes to a few hundred MB) while bounding worst-case memory.
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+const MAX_IMPORT_DB_BYTES: usize = 4 << 30;
+
+/// Decompresses `input` (zstd-compressed bytes) via the `oxiarc-zstd` pure-Rust
+/// library, refusing payloads that expand beyond [`MAX_IMPORT_DB_BYTES`].
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 fn zstd_decompress(input: &[u8]) -> Result<Vec<u8>, CodeNexusError> {
-    oxiarc_zstd::decompress(input)
-        .map_err(|e| CodeNexusError::Internal(format!("zstd decompression failed: {e}")))
+    zstd_decompress_with_limit(input, MAX_IMPORT_DB_BYTES)
+}
+
+/// Bomb-safe zstd decompression with an explicit output cap.
+///
+/// The concrete error type (`oxiarc_core::error::OxiArcError`) lives in a
+/// transitive dependency, so the budget-overrun variant is detected via its
+/// stable Display prefix ("memory budget exceeded: …") and mapped to
+/// `InvalidInput` — an oversized artifact is an input problem, not an
+/// internal one.
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+fn zstd_decompress_with_limit(input: &[u8], limit: usize) -> Result<Vec<u8>, CodeNexusError> {
+    oxiarc_zstd::decompress_with_limit(input, limit).map_err(|e| {
+        let msg = e.to_string();
+        if msg.starts_with("memory budget exceeded") {
+            CodeNexusError::InvalidInput(format!(
+                "artifact decompressed size exceeds the {} GiB import limit (possible decompression bomb or corrupt artifact)",
+                MAX_IMPORT_DB_BYTES >> 30
+            ))
+        } else {
+            CodeNexusError::Internal(format!("zstd decompression failed: {e}"))
+        }
+    })
+}
+
+/// Parses and validates the artifact header (magic + manifest) without
+/// touching the compressed payload.
+///
+/// Returns the parsed manifest and the total header size (`8`-byte prefix +
+/// manifest). This is a pure function — no filesystem or database access —
+/// so it is also exercised directly by the `cnxp_header` fuzz target.
+///
+/// # Errors
+///
+/// [`CodeNexusError::InvalidInput`] for truncation, magic mismatch or
+/// unsupported `format_version`; serde errors for malformed manifest JSON.
+#[cfg(any(feature = "cli", feature = "mcp", test))]
+pub fn parse_artifact_header(bytes: &[u8]) -> Result<(ArtifactManifest, usize), CodeNexusError> {
+    if bytes.len() < 8 {
+        return Err(CodeNexusError::InvalidInput(format!(
+            "artifact too small ({} bytes) — expected at least 8-byte header",
+            bytes.len()
+        )));
+    }
+    if bytes[0..4] != ARTIFACT_MAGIC {
+        return Err(CodeNexusError::InvalidInput(format!(
+            "artifact magic mismatch — expected {:?}, got {:?}",
+            std::str::from_utf8(&ARTIFACT_MAGIC),
+            std::str::from_utf8(&bytes[0..4])
+        )));
+    }
+    let manifest_len = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
+    let header_total = 8 + manifest_len;
+    if bytes.len() < header_total {
+        return Err(CodeNexusError::InvalidInput(format!(
+            "artifact truncated — header says manifest is {} bytes but file only has {} bytes total",
+            manifest_len,
+            bytes.len()
+        )));
+    }
+    let manifest: ArtifactManifest = serde_json::from_slice(&bytes[8..header_total])?;
+    if manifest.format_version != ARTIFACT_FORMAT_VERSION {
+        return Err(CodeNexusError::InvalidInput(format!(
+            "artifact format version mismatch — expected {}, got {}",
+            ARTIFACT_FORMAT_VERSION, manifest.format_version
+        )));
+    }
+    Ok((manifest, header_total))
 }
 
 /// Runs import against an injected Kit (testable core).
@@ -67,43 +144,30 @@ pub fn run_import(
     }
 
     let artifact_bytes = std::fs::read(input_path)?;
-    if artifact_bytes.len() < 8 {
-        return Err(CodeNexusError::InvalidInput(format!(
-            "artifact too small ({} bytes) — expected at least 8-byte header",
-            artifact_bytes.len()
-        )));
-    }
-    if artifact_bytes[0..4] != ARTIFACT_MAGIC {
-        return Err(CodeNexusError::InvalidInput(format!(
-            "artifact magic mismatch — expected {:?}, got {:?}",
-            std::str::from_utf8(&ARTIFACT_MAGIC),
-            std::str::from_utf8(&artifact_bytes[0..4])
-        )));
-    }
-    let manifest_len = u32::from_le_bytes([
-        artifact_bytes[4],
-        artifact_bytes[5],
-        artifact_bytes[6],
-        artifact_bytes[7],
-    ]) as usize;
-    let header_total = 8 + manifest_len;
-    if artifact_bytes.len() < header_total {
-        return Err(CodeNexusError::InvalidInput(format!(
-            "artifact truncated — header says manifest is {} bytes but file only has {} bytes total",
-            manifest_len,
-            artifact_bytes.len()
-        )));
-    }
-    let manifest: ArtifactManifest = serde_json::from_slice(&artifact_bytes[8..header_total])?;
-    if manifest.format_version != ARTIFACT_FORMAT_VERSION {
-        return Err(CodeNexusError::InvalidInput(format!(
-            "artifact format version mismatch — expected {}, got {}",
-            ARTIFACT_FORMAT_VERSION, manifest.format_version
-        )));
-    }
+    let (manifest, header_total) = parse_artifact_header(&artifact_bytes)?;
 
     let compressed_payload = &artifact_bytes[header_total..];
     let db_bytes = zstd_decompress(compressed_payload)?;
+
+    // Integrity gate: verify the payload digest recorded by `export` before
+    // it overwrites the local database. Artifacts without a digest
+    // (`payload_blake3 == None`, pre-0.3.x format) skip the check.
+    if let Some(expected) = &manifest.payload_blake3 {
+        let actual = blake3::hash(&db_bytes).to_string();
+        if actual != *expected {
+            return Err(CodeNexusError::InvalidInput(
+                "artifact integrity check failed — payload digest does not match the                  manifest (corrupt or tampered artifact)"
+                    .to_string(),
+            ));
+        }
+    }
+    if manifest.original_size != 0 && manifest.original_size != db_bytes.len() as u64 {
+        return Err(CodeNexusError::InvalidInput(format!(
+            "artifact size mismatch — manifest says {} bytes, payload is {} bytes",
+            manifest.original_size,
+            db_bytes.len()
+        )));
+    }
 
     // Remove stale WAL sidecar so LadybugDB doesn't reject the imported DB
     // (the WAL carries the old database ID; importing replaces the DB bytes).
@@ -192,6 +256,7 @@ mod tests {
             source_db_path: "/db".into(),
             project: Some("demo".into()),
             original_size: 4096,
+            payload_blake3: None,
         };
         let output = ImportOutput {
             artifact: "/tmp/a.cnxp".into(),
@@ -223,6 +288,76 @@ mod tests {
         let compressed = oxiarc_zstd::compress_with_level(&original[..], 19).expect("zstd encode");
         let decompressed = zstd_decompress(&compressed).expect("zstd_decompress should succeed");
         assert_eq!(decompressed, original, "decompressed should match original");
+    }
+
+    /// Decompression-bomb guard: a tiny compressed payload that expands beyond
+    /// the configured limit must be rejected as InvalidInput (exit 2), not
+    /// allocate the full output. Uses a small limit so the test stays cheap —
+    /// production passes [`MAX_IMPORT_DB_BYTES`].
+    #[test]
+    fn zstd_decompress_rejects_payload_exceeding_limit() {
+        let bomb_source = vec![b'A'; 1 << 20]; // 1 MiB compresses to ~1 KB
+        let compressed =
+            oxiarc_zstd::compress_with_level(&bomb_source[..], 19).expect("zstd encode");
+        let err = zstd_decompress_with_limit(&compressed, 4096)
+            .expect_err("payload beyond the limit must be rejected");
+        match err {
+            CodeNexusError::InvalidInput(msg) => {
+                assert!(msg.contains("import limit"), "unexpected message: {msg}");
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    /// The production limit itself admits legitimate payloads (round-trip at
+    /// the real cap, keeping the guard from being accidentally tightened to
+    /// something unusable).
+    #[test]
+    fn zstd_decompress_allows_payload_under_production_limit() {
+        let original = b"legitimate artifact payload";
+        let compressed = oxiarc_zstd::compress_with_level(&original[..], 19).expect("zstd encode");
+        let decompressed = zstd_decompress(&compressed).expect("under the cap must succeed");
+        assert_eq!(decompressed, original);
+    }
+
+    /// Integrity gate: a payload whose digest differs from the manifest's
+    /// `payload_blake3` must be rejected (tamper/corruption detection).
+    #[test]
+    fn run_import_rejects_payload_digest_mismatch() {
+        let (src_dir, src_db) = fresh_db_path();
+        let src_kit = build_kit_for_db(&src_db);
+        let artifact = src_dir.path().join("tamper.cnxp");
+
+        crate::service::export::run_export(&src_kit, artifact.to_str().unwrap(), "demo")
+            .expect("run_export should succeed");
+
+        // Tamper: keep the valid header+manifest (recording the original
+        // payload digest) but replace the payload with a *valid* zstd frame
+        // of different content — the frame checksum passes, so only the
+        // manifest digest gate can catch this.
+        let bytes = std::fs::read(&artifact).unwrap();
+        let manifest_len = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
+        let header = &bytes[..8 + manifest_len];
+        let evil_payload = oxiarc_zstd::compress_with_level(&b"attacker-controlled bytes"[..], 19)
+            .expect("zstd encode");
+        let mut tampered_bytes = header.to_vec();
+        tampered_bytes.extend_from_slice(&evil_payload);
+        let tampered = src_dir.path().join("tampered.cnxp");
+        std::fs::write(&tampered, &tampered_bytes).unwrap();
+
+        let (_dst_dir, dst_db) = fresh_db_path();
+        let dst_kit = build_kit_for_db(&dst_db);
+        let err = run_import(&dst_kit, tampered.to_str().unwrap(), false, "", "")
+            .expect_err("tampered artifact must be rejected");
+        match err {
+            CodeNexusError::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("integrity check failed"),
+                    "unexpected message: {msg}"
+                );
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
     }
 
     #[test]
@@ -321,6 +456,7 @@ mod tests {
             source_db_path: "/dummy".into(),
             project: None,
             original_size: 0,
+            payload_blake3: None,
         };
         let manifest_json = serde_json::to_vec(&manifest).unwrap();
         let mut data = ARTIFACT_MAGIC.to_vec();
@@ -401,6 +537,7 @@ mod tests {
             source_db_path: "/dummy".into(),
             project: None,
             original_size: 0,
+            payload_blake3: None,
         };
         let manifest_json = serde_json::to_vec(&manifest).unwrap();
         let compressed =
@@ -436,6 +573,7 @@ mod tests {
             source_db_path: "/dummy".into(),
             project: None,
             original_size: 0,
+            payload_blake3: None,
         };
         let manifest_json = serde_json::to_vec(&manifest).unwrap();
         let compressed =

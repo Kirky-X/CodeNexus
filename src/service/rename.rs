@@ -110,22 +110,55 @@ fn is_valid_identifier(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Resolves a graph-provided file path against `root`, rejecting path
+/// traversal (`..` components) and any resolved location outside `root`.
+///
+/// Defense against graph poisoning: `file_path` values originate from the
+/// indexed database (which `import` can populate from a third-party
+/// artifact), so they are untrusted input for filesystem writes. A lexical
+/// `starts_with` check is not enough — `/root/sub/../../tmp/x` passes it —
+/// so both the root and the candidate are canonicalized before the prefix
+/// comparison. Returns `None` when the path escapes `root` (or `root` itself
+/// does not exist).
+fn resolve_under_root(root: &Path, file_path: &str) -> Option<PathBuf> {
+    let p = Path::new(file_path);
+    if p.components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    let root_canonical = root.canonicalize().ok()?;
+    let joined = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        root_canonical.join(p)
+    };
+    // canonicalize resolves symlinks and `.` segments for files that exist;
+    // non-existent files keep the lexical join (they cannot be read/written
+    // until created, and the prefix check still bounds the location).
+    let canonical = joined.canonicalize().unwrap_or(joined);
+    if canonical.starts_with(&root_canonical) {
+        Some(canonical)
+    } else {
+        None
+    }
+}
+
 /// Collects candidate files for text edits: the symbol's own file plus all
 /// neighbor files in the loaded subgraph, filtered to those under `root`.
+///
+/// Candidate paths come from graph nodes (untrusted — see
+/// [`resolve_under_root`]); traversal and out-of-root paths are skipped.
 fn collect_candidate_files(graph: &Graph, start_id: &NodeId, root: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = Vec::new();
     let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-    let root_canonical = root.to_path_buf();
     let collect =
         |node: &Node, files: &mut Vec<PathBuf>, seen: &mut std::collections::HashSet<PathBuf>| {
             if let Some(fp) = &node.file_path {
-                let p = PathBuf::from(fp);
-                if p.is_absolute() {
-                    if p.starts_with(&root_canonical) && seen.insert(p.clone()) {
+                if let Some(p) = resolve_under_root(root, fp) {
+                    if seen.insert(p.clone()) {
                         files.push(p);
                     }
-                } else if seen.insert(root_canonical.join(&p)) {
-                    files.push(root_canonical.join(p));
                 }
             }
         };
@@ -228,14 +261,26 @@ fn apply_graph_edit(kit: &AsyncKit<AsyncReady>, edit: &GraphEdit) -> Result<(), 
 }
 
 /// Applies text edits by writing the replaced content to each file.
-fn apply_text_edits(edits: &[TextEdit]) -> Result<(), CodeNexusError> {
+///
+/// `root` is the scan root passed on the command line; edit paths are stored
+/// root-relative (or absolute when outside root — see
+/// [`file_to_rel_string`]) and are re-resolved through
+/// [`resolve_under_root`] before any write, so a poisoned `file_path` can
+/// never escape the declared root. Previously this function resolved paths
+/// against the *current working directory*, which both miswrote when
+/// `root != CWD` and let `../`-style paths escape.
+fn apply_text_edits(root: &Path, edits: &[TextEdit]) -> Result<(), CodeNexusError> {
     let mut by_file: std::collections::HashMap<String, Vec<&TextEdit>> =
         std::collections::HashMap::new();
     for e in edits {
         by_file.entry(e.file_path.clone()).or_default().push(e);
     }
     for (file_path, file_edits) in by_file {
-        let path = PathBuf::from(&file_path);
+        let path = resolve_under_root(root, &file_path).ok_or_else(|| {
+            CodeNexusError::InvalidInput(format!(
+                "refusing to write outside root {root:?}: {file_path}"
+            ))
+        })?;
         let content = std::fs::read_to_string(&path)?;
         let new_content = apply_replacements(&content, &file_edits);
         std::fs::write(&path, new_content)?;
@@ -388,8 +433,10 @@ async fn rename(from: String, to: String, path: String, apply: bool) -> Result<(
         new_qualified_name: new_qn.clone(),
     };
 
+    let mut apply_root: Option<&str> = None;
     let text_edits = match path_opt {
         Some(root) => {
+            apply_root = Some(root);
             let candidate_files = collect_candidate_files(&graph, &start_id, Path::new(root));
             scan_text_edits(Path::new(root), &old_name, &to, &candidate_files)
                 .map_err(|e| to_api_error(e, "rename_error"))?
@@ -399,7 +446,14 @@ async fn rename(from: String, to: String, path: String, apply: bool) -> Result<(
 
     if apply {
         apply_graph_edit(&kit, &graph_edit).map_err(|e| to_api_error(e, "rename_error"))?;
-        apply_text_edits(&text_edits).map_err(|e| to_api_error(e, "rename_error"))?;
+        let root = apply_root.ok_or_else(|| {
+            to_api_error(
+                CodeNexusError::InvalidInput("apply requires path".to_string()),
+                "rename_error",
+            )
+        })?;
+        apply_text_edits(Path::new(root), &text_edits)
+            .map_err(|e| to_api_error(e, "rename_error"))?;
     }
 
     let output = RenameOutput {
@@ -480,8 +534,10 @@ mod tests {
             new_qualified_name: new_qn.clone(),
         };
 
+        let mut apply_root: Option<&str> = None;
         let text_edits = match path {
             Some(root) => {
+                apply_root = Some(root);
                 let candidate_files = collect_candidate_files(&graph, &start_id, Path::new(root));
                 scan_text_edits(Path::new(root), &old_name, to, &candidate_files)?
             }
@@ -490,7 +546,9 @@ mod tests {
 
         if apply {
             apply_graph_edit(kit, &graph_edit)?;
-            apply_text_edits(&text_edits)?;
+            let root = apply_root
+                .ok_or_else(|| CodeNexusError::InvalidInput("apply requires path".to_string()))?;
+            apply_text_edits(Path::new(root), &text_edits)?;
         }
 
         let output = RenameOutput {
@@ -612,6 +670,46 @@ mod tests {
     #[test]
     fn find_word_occurrences_empty_needle() {
         assert!(find_word_occurrences("abc", "").is_empty());
+    }
+
+    // --- resolve_under_root ---
+
+    #[test]
+    fn resolve_under_root_accepts_relative_under_root() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), "fn main() {}").unwrap();
+        let resolved = resolve_under_root(dir.path(), "src/main.rs");
+        assert_eq!(
+            resolved.as_ref(),
+            Some(&dir.path().join("src/main.rs")),
+            "existing relative path under root must resolve"
+        );
+    }
+
+    #[test]
+    fn resolve_under_root_rejects_parent_traversal() {
+        let dir = tempfile::TempDir::new().unwrap();
+        assert!(
+            resolve_under_root(dir.path(), "../escape.txt").is_none(),
+            "../ must be rejected outright (lexical escape)"
+        );
+        assert!(
+            resolve_under_root(dir.path(), "sub/../../escape.txt").is_none(),
+            "embedded ../ must be rejected even when a prefix looks safe"
+        );
+    }
+
+    #[test]
+    fn resolve_under_root_rejects_absolute_outside_root() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        let victim = outside.path().join("victim.txt");
+        std::fs::write(&victim, b"do not touch").unwrap();
+        assert!(
+            resolve_under_root(dir.path(), victim.to_str().unwrap()).is_none(),
+            "absolute path outside root must be rejected"
+        );
     }
 
     // --- file_to_rel_string ---
@@ -855,7 +953,7 @@ mod tests {
             old_text: "foo".to_string(),
             new_text: "bar".to_string(),
         }];
-        let result = apply_text_edits(&edits);
+        let result = apply_text_edits(tmp.path(), &edits);
         assert!(
             result.is_ok(),
             "apply_text_edits should succeed: {:?}",
@@ -891,7 +989,7 @@ mod tests {
                 new_text: "bar".to_string(),
             },
         ];
-        let result = apply_text_edits(&edits);
+        let result = apply_text_edits(tmp.path(), &edits);
         assert!(
             result.is_ok(),
             "apply_text_edits should succeed: {:?}",
@@ -1129,6 +1227,7 @@ mod tests {
 
     #[test]
     fn apply_text_edits_fails_on_unreadable_file() {
+        let tmp = TempDir::new().unwrap();
         let edits = vec![TextEdit {
             file_path: "/nonexistent/path/file.rs".to_string(),
             line: 1,
@@ -1136,7 +1235,7 @@ mod tests {
             old_text: "foo".to_string(),
             new_text: "bar".to_string(),
         }];
-        let result = apply_text_edits(&edits);
+        let result = apply_text_edits(tmp.path(), &edits);
         assert!(result.is_err(), "should fail on unreadable file");
     }
 
