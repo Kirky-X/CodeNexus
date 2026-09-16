@@ -41,7 +41,6 @@ function NodeLabel({ node }: { node: GraphNode }) {
     <group ref={groupRef}>
       <Html
         center
-        distanceFactor={500}
         style={{ pointerEvents: "none" }}
       >
         <div

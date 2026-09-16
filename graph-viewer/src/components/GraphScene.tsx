@@ -1,6 +1,6 @@
 /* 3D 图场景 — 组合 Canvas + 节点云 + 边线 + 标签 + 相机控制 */
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { Canvas, useThree, useFrame } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import { EffectComposer, Bloom } from "@react-three/postprocessing";
@@ -102,6 +102,33 @@ export function computeCameraTarget(
   return { position, lookAt };
 }
 
+/* 初始相机自适应 — 进入图视图时按数据包围盒推近相机，
+ * 默认视距 (z=800) 下小图会缩成中心一小团，标签全部重叠 */
+function InitialCameraFit({
+  nodes,
+  controlsRef,
+}: {
+  nodes: GraphNode[];
+  controlsRef: React.RefObject<OrbitControlsImpl | null>;
+}) {
+  const { camera } = useThree();
+  const fitted = useRef(false);
+  useEffect(() => {
+    if (fitted.current || nodes.length === 0) return;
+    fitted.current = true;
+    const all = new Set(nodes.map((n) => n.id));
+    const target = computeCameraTarget(nodes, all);
+    if (!target) return;
+    camera.position.copy(target.position);
+    const controls = controlsRef.current;
+    if (controls) {
+      controls.target.copy(target.lookAt);
+      controls.update();
+    }
+  }, [nodes, camera, controlsRef]);
+  return null;
+}
+
 export function GraphScene({
   data, highlightedIds, traceNodeIds, traceEdgeIds,
   showLabels, cameraTarget, onNodeClick,
@@ -162,6 +189,8 @@ export function GraphScene({
         minDistance={10}
         maxDistance={50000}
       />
+
+      <InitialCameraFit nodes={data.nodes} controlsRef={controlsRef} />
     </Canvas>
     </div>
   );
