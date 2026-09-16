@@ -265,6 +265,10 @@ export function NodeCloud({ nodes, edges, highlightedIds, traceNodeIds, onHover,
     }
 
     mesh.instanceMatrix.needsUpdate = true;
+    /* three.js 的 InstancedMesh.raycast 会把首次计算的 boundingSphere 永久缓存，
+     * 而实例矩阵每帧都在变（爆炸/呼吸/漂移）；不失效的话命中测试永远拦截在
+     * 过期球体上，表现为点击/悬浮完全无响应。置空强制每次 raycast 重算。 */
+    mesh.boundingSphere = null;
     colorAttr.needsUpdate = true;
     if (glow) {
       glow.instanceMatrix.needsUpdate = true;
