@@ -28,6 +28,7 @@
 //! - identifier in expression position → [`ReadInfo`]
 //! - `let_declaration` pattern / `assignment_expression` left → [`WriteInfo`]
 
+use super::helpers::node_text;
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
@@ -37,7 +38,6 @@ use super::error::{ParseError, Result};
 use super::extractor::{
     AssignInfo, CallInfo, ExternInfo, ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo,
 };
-use super::parser_factory::ParserFactory;
 
 /// Rust language tree-sitter extractor (Adapter pattern).
 pub struct RustExtractor {
@@ -65,9 +65,7 @@ impl Extractor for RustExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::Rust);
-        let mut parser = ParserFactory::create_parser(Language::Rust)?;
-        let tree = parser
-            .parse(source, None)
+        let tree = super::with_pooled_parser(Language::Rust, |parser| parser.parse(source, None))?
             .ok_or_else(|| ParseError::ParseFailed {
                 file_path: file_path.to_string(),
             })?;
@@ -506,11 +504,11 @@ fn extract_struct_fields(
         return;
     };
     let struct_qn = make_qn(ctx.file_path, &struct_name, ctx.project, ctx.current_parent);
-    // P1 (DQ-002): prepend `field_` to the disambiguator so struct fields
+    // P1 prepend `field_` to the disambiguator so struct fields
     // never collide with same-name impl methods. Without this, a struct
     // `Foo` with field `bar` AND `impl Foo { fn bar() }` produce identical
     // FQNs (`...bar#Foo`) — the Property (field) and Function (method)
-    // nodes violate DQ-002 uniqueness. The `field_` prefix cleanly
+    // nodes violate uniqueness. The `field_` prefix cleanly
     // separates the two namespaces without changing Function FQNs.
     let combined = match ctx.current_parent {
         Some(p) => format!("field_{p}_{struct_name}"),
@@ -1851,10 +1849,6 @@ fn call_arguments(node: Node, source: &str) -> Vec<String> {
     args
 }
 
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
-    node.utf8_text(source.as_bytes()).ok()
-}
-
 fn make_qn(file_path: &str, name: &str, project: &str, parent: Option<&str>) -> String {
     FqnGenerator::generate(project, file_path, name, Language::Rust, parent)
 }
@@ -2944,7 +2938,7 @@ impl Foo { fn new() -> Self { Self } }
         // prefix + struct name: e.g. `proj.test.x#field_Point` (NOT
         // `#Point` — that would collide with `impl Point { fn x() }`).
         // The `field_` prefix cleanly separates Property (field) and
-        // Function (method) namespaces, eliminating DQ-002 duplicates.
+        // Function (method) namespaces, eliminating duplicates.
         let result = extract(RUST_SOURCE);
         let property_x = result
             .nodes
@@ -2987,7 +2981,7 @@ impl Foo { fn new() -> Self { Self } }
 
     #[test]
     fn same_name_field_and_method_have_distinct_fqns() {
-        // DQ-002 regression test (diting MEDIUM-1): a struct field and an
+        // regression test a struct field and an
         // impl method with the same name must produce DISTINCT FQNs.
         // Before the `field_` prefix fix, both `struct Foo { bar }` and
         // `impl Foo { fn bar() }` produced `...bar#Foo` — violating FQN

@@ -773,15 +773,9 @@ mod tests {
     /// recursive frames.
     fn count_tree_nodes(node: &tree_sitter::Node) -> usize {
         let mut count = 1usize;
-        let n = node.child_count();
-        for i in 0..n {
-            // tree-sitter 0.26: `child_count` returns usize but `child` takes u32.
-            let Ok(i32_idx) = u32::try_from(i) else {
-                // Trees with >u32::MAX children are not realistic; bail out
-                // by stopping the walk (count is still valid up to this point).
-                break;
-            };
-            if let Some(child) = node.child(i32_idx) {
+        // tree-sitter 0.27: `child_count` and `child` share the same index type.
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
                 count += count_tree_nodes(&child);
             }
         }

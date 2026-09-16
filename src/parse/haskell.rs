@@ -29,6 +29,7 @@
 //! - Type class declarations (`class Foo a where ...`) are not specially
 //!   handled (they may appear as `class` nodes but are not extracted here).
 
+use super::helpers::node_text;
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
@@ -37,7 +38,6 @@ use crate::resolve::FqnGenerator;
 use super::dedupe_qn;
 use super::error::{ParseError, Result};
 use super::extractor::{ExtractResult, Extractor, ImportInfo};
-use super::parser_factory::ParserFactory;
 
 /// Haskell language tree-sitter extractor (Adapter pattern).
 pub struct HaskellExtractor {
@@ -65,12 +65,11 @@ impl Extractor for HaskellExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::Haskell);
-        let mut parser = ParserFactory::create_parser(Language::Haskell)?;
-        let tree = parser
-            .parse(source, None)
-            .ok_or_else(|| ParseError::ParseFailed {
-                file_path: file_path.to_string(),
-            })?;
+        let tree =
+            super::with_pooled_parser(Language::Haskell, |parser| parser.parse(source, None))?
+                .ok_or_else(|| ParseError::ParseFailed {
+                    file_path: file_path.to_string(),
+                })?;
         let root = tree.root_node();
         let ctx = VisitContext {
             file_path,
@@ -423,10 +422,6 @@ fn import_module_name(node: Node, source: &str) -> Option<String> {
         }
     }
     None
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
-    node.utf8_text(source.as_bytes()).ok()
 }
 
 /// Returns the first line of a signature string.

@@ -19,6 +19,7 @@
 //! - Signature files (.mli) use a different LANGUAGE constant and are not
 //!   handled by this extractor (only `LANGUAGE_OCAML` is wired).
 
+use super::helpers::node_text;
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
@@ -27,7 +28,6 @@ use crate::resolve::FqnGenerator;
 use super::dedupe_qn;
 use super::error::{ParseError, Result};
 use super::extractor::{ExtractResult, Extractor, ImportInfo};
-use super::parser_factory::ParserFactory;
 
 /// OCaml language tree-sitter extractor (Adapter pattern).
 pub struct OCamlExtractor {
@@ -55,9 +55,7 @@ impl Extractor for OCamlExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::OCaml);
-        let mut parser = ParserFactory::create_parser(Language::OCaml)?;
-        let tree = parser
-            .parse(source, None)
+        let tree = super::with_pooled_parser(Language::OCaml, |parser| parser.parse(source, None))?
             .ok_or_else(|| ParseError::ParseFailed {
                 file_path: file_path.to_string(),
             })?;
@@ -241,10 +239,6 @@ fn extract_include(node: Node, source: &str, result: &mut ExtractResult) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
-    node.utf8_text(source.as_bytes()).ok()
-}
 
 fn signature_first_line(text: &str) -> &str {
     text.lines().next().unwrap_or(text)

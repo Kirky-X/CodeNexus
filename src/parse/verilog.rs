@@ -25,6 +25,7 @@
 //! - Calls (`function_call`, `system_function_call`) and imports
 //!   (`include_statement`) are not extracted in this revision.
 
+use super::helpers::node_text;
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
@@ -33,7 +34,6 @@ use crate::resolve::FqnGenerator;
 use super::dedupe_qn;
 use super::error::{ParseError, Result};
 use super::extractor::{ExtractResult, Extractor};
-use super::parser_factory::ParserFactory;
 
 /// Verilog language tree-sitter extractor (Adapter pattern).
 pub struct VerilogExtractor {
@@ -61,12 +61,11 @@ impl Extractor for VerilogExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::Verilog);
-        let mut parser = ParserFactory::create_parser(Language::Verilog)?;
-        let tree = parser
-            .parse(source, None)
-            .ok_or_else(|| ParseError::ParseFailed {
-                file_path: file_path.to_string(),
-            })?;
+        let tree =
+            super::with_pooled_parser(Language::Verilog, |parser| parser.parse(source, None))?
+                .ok_or_else(|| ParseError::ParseFailed {
+                    file_path: file_path.to_string(),
+                })?;
         let root = tree.root_node();
         let ctx = VisitContext { file_path, project };
         for i in 0..root.named_child_count() as u32 {
@@ -256,10 +255,6 @@ fn find_first_descendant_of_kind<'a>(node: Node<'a>, kinds: &[&str]) -> Option<N
         }
     }
     None
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
-    node.utf8_text(source.as_bytes()).ok()
 }
 
 /// Returns the first line of a signature string (the declaration line).

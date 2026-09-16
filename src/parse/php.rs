@@ -28,6 +28,7 @@
 //! - Member call expressions (`$obj->method()`) are not captured as CallInfo;
 //!   only free function calls (`function_call_expression`) are extracted.
 
+use super::helpers::node_text;
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
@@ -36,7 +37,6 @@ use crate::resolve::FqnGenerator;
 use super::dedupe_qn;
 use super::error::{ParseError, Result};
 use super::extractor::{CallInfo, ExtractResult, Extractor, ImportInfo};
-use super::parser_factory::ParserFactory;
 
 /// PHP language tree-sitter extractor (Adapter pattern).
 pub struct PhpExtractor {
@@ -64,12 +64,10 @@ impl Extractor for PhpExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::Php);
-        let mut parser = ParserFactory::create_parser(Language::Php)?;
-        let tree = parser
-            .parse(source, None)
+        let tree = super::with_pooled_parser(Language::Php, |parser| parser.parse(source, None))?
             .ok_or_else(|| ParseError::ParseFailed {
-                file_path: file_path.to_string(),
-            })?;
+            file_path: file_path.to_string(),
+        })?;
         let root = tree.root_node();
         let ctx = VisitContext {
             file_path,
@@ -406,10 +404,6 @@ fn call_arguments(node: Node, source: &str) -> Vec<String> {
         }
     }
     args
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
-    node.utf8_text(source.as_bytes()).ok()
 }
 
 /// Returns the first line of a signature string (the `function ...` line).

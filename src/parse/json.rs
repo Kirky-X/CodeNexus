@@ -28,6 +28,7 @@
 //! - Duplicate keys at the top level produce disambiguated FQNs via
 //!   `#L{line}` suffix.
 
+use super::helpers::node_text;
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
@@ -36,7 +37,6 @@ use crate::resolve::FqnGenerator;
 use super::dedupe_qn;
 use super::error::{ParseError, Result};
 use super::extractor::{ExtractResult, Extractor};
-use super::parser_factory::ParserFactory;
 
 /// JSON language tree-sitter extractor (Adapter pattern).
 pub struct JsonExtractor {
@@ -64,9 +64,7 @@ impl Extractor for JsonExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::Json);
-        let mut parser = ParserFactory::create_parser(Language::Json)?;
-        let tree = parser
-            .parse(source, None)
+        let tree = super::with_pooled_parser(Language::Json, |parser| parser.parse(source, None))?
             .ok_or_else(|| ParseError::ParseFailed {
                 file_path: file_path.to_string(),
             })?;
@@ -156,10 +154,6 @@ fn pair_key(node: Node, source: &str) -> Option<String> {
     // Strip surrounding quotes: `"name"` -> `name`.
     let trimmed = raw.trim_matches('"');
     Some(trimmed.to_string())
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
-    node.utf8_text(source.as_bytes()).ok()
 }
 
 fn make_qn(file_path: &str, name: &str, project: &str) -> String {

@@ -118,7 +118,7 @@ pub use parallel::{
     parallel_parse, parallel_parse_ram_first, parse_single, ParallelParseResult, RamFirstSources,
 };
 pub use parser_factory::ParserFactory;
-pub use parser_pool::{with_thread_pool, ParserGuard, ParserPool};
+pub use parser_pool::{with_pooled_parser, with_thread_pool, ParserGuard, ParserPool};
 #[cfg(feature = "lang-php")]
 pub use php::PhpExtractor;
 #[cfg(feature = "lang-python")]

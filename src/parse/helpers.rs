@@ -3,7 +3,18 @@
 
 //! Shared helpers used by all language extractors.
 
+use tree_sitter::Node;
+
 use crate::ir::ExtractResult;
+
+/// Returns the UTF-8 text slice of `node` within `source`, or `None` when the
+/// node's bytes are not valid UTF-8.
+///
+/// Shared by all language extractors — previously each of the 20 extractor
+/// files carried a byte-identical private copy of this function.
+pub(crate) fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
+    node.utf8_text(source.as_bytes()).ok()
+}
 
 /// Returns a de-duplicated qualified name, appending `#L{line}` if `qn` has
 /// already been registered in `result.seen_qns`.

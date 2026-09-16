@@ -26,6 +26,7 @@
 //!   types are disambiguated via `dedupe_qn` only when names collide.
 //! - Properties, events, constructors, and delegates are not extracted.
 
+use super::helpers::node_text;
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
@@ -34,7 +35,6 @@ use crate::resolve::FqnGenerator;
 use super::dedupe_qn;
 use super::error::{ParseError, Result};
 use super::extractor::{CallInfo, ExtractResult, Extractor, ImportInfo};
-use super::parser_factory::ParserFactory;
 
 /// C# language tree-sitter extractor (Adapter pattern).
 pub struct CSharpExtractor {
@@ -62,12 +62,11 @@ impl Extractor for CSharpExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::CSharp);
-        let mut parser = ParserFactory::create_parser(Language::CSharp)?;
-        let tree = parser
-            .parse(source, None)
-            .ok_or_else(|| ParseError::ParseFailed {
-                file_path: file_path.to_string(),
-            })?;
+        let tree =
+            super::with_pooled_parser(Language::CSharp, |parser| parser.parse(source, None))?
+                .ok_or_else(|| ParseError::ParseFailed {
+                    file_path: file_path.to_string(),
+                })?;
         let root = tree.root_node();
         let ctx = VisitContext {
             file_path,
@@ -326,10 +325,6 @@ fn call_arguments(node: Node, source: &str) -> Vec<String> {
         }
     }
     args
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
-    node.utf8_text(source.as_bytes()).ok()
 }
 
 /// Returns the first line of a signature string (the declaration line).

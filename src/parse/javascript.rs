@@ -25,6 +25,7 @@
 //! - Arrow functions and anonymous function expressions are not extracted as
 //!   standalone nodes (only named declarations are captured).
 
+use super::helpers::node_text;
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
@@ -33,7 +34,6 @@ use crate::resolve::FqnGenerator;
 use super::dedupe_qn;
 use super::error::{ParseError, Result};
 use super::extractor::{CallInfo, ExtractResult, Extractor, ImportInfo};
-use super::parser_factory::ParserFactory;
 
 /// JavaScript language tree-sitter extractor (Adapter pattern).
 pub struct JavaScriptExtractor {
@@ -61,10 +61,9 @@ impl Extractor for JavaScriptExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::JavaScript);
-        let mut parser = ParserFactory::create_parser(Language::JavaScript)?;
-        let tree = parser
-            .parse(source, None)
-            .ok_or_else(|| ParseError::ParseFailed {
+        let tree =
+            super::with_pooled_parser(Language::JavaScript, |parser| parser.parse(source, None))?
+                .ok_or_else(|| ParseError::ParseFailed {
                 file_path: file_path.to_string(),
             })?;
         let root = tree.root_node();
@@ -371,10 +370,6 @@ fn call_arguments(node: Node, source: &str) -> Vec<String> {
         }
     }
     args
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
-    node.utf8_text(source.as_bytes()).ok()
 }
 
 /// Returns the first line of a signature string (the `function ...` line).

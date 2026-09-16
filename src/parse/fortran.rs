@@ -22,6 +22,7 @@
 //! - `do_loop` loop variable → [`WriteInfo`]
 //! - expression-position `identifier` → [`ReadInfo`]
 
+use super::helpers::node_text;
 use std::collections::HashSet;
 
 use tree_sitter::Node;
@@ -34,7 +35,6 @@ use super::error::{ParseError, Result};
 use super::extractor::{
     CallInfo, ExternInfo, ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo,
 };
-use super::parser_factory::ParserFactory;
 
 /// Fortran language tree-sitter extractor (Adapter pattern).
 pub struct FortranExtractor {
@@ -62,7 +62,6 @@ impl Extractor for FortranExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::Fortran);
-        let mut parser = ParserFactory::create_parser(Language::Fortran)?;
         // B11 fix: tree-sitter-fortran only supports free-form Fortran
         // comments (`!`). Fixed-form files (`.f` extension) use `*`, `C`, or
         // `c` in column 1 as comment characters, which tree-sitter-fortran
@@ -73,11 +72,12 @@ impl Extractor for FortranExtractor {
         // column-1 comment character with `!`, preserving byte offsets so
         // tree-sitter positions stay valid.
         let effective_source = preprocess_fixed_form_comments(source, file_path);
-        let tree = parser
-            .parse(effective_source.as_str(), None)
-            .ok_or_else(|| ParseError::ParseFailed {
-                file_path: file_path.to_string(),
-            })?;
+        let tree = super::with_pooled_parser(Language::Fortran, |parser| {
+            parser.parse(effective_source.as_str(), None)
+        })?
+        .ok_or_else(|| ParseError::ParseFailed {
+            file_path: file_path.to_string(),
+        })?;
         let root = tree.root_node();
         // B10 fix: collect declared array names to distinguish function calls
         // from array access. tree-sitter-fortran parses both `ABS(Y)` and
@@ -705,10 +705,6 @@ fn statement_name(node: Node, statement_kind: &str, source: &str) -> Option<Stri
         }
     }
     None
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
-    node.utf8_text(source.as_bytes()).ok()
 }
 
 /// Returns the text of `node` if it is a plain `identifier`, else `None`.

@@ -21,6 +21,7 @@
 //! - `preproc_include` → [`ImportInfo`]
 //! - `call_expression` → [`CallInfo`]
 
+use super::helpers::node_text;
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
@@ -29,7 +30,6 @@ use crate::resolve::{FqnGenerator, ScopeContext, ScopeResolverRegistry};
 use super::dedupe_qn;
 use super::error::{ParseError, Result};
 use super::extractor::{ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo};
-use super::parser_factory::ParserFactory;
 
 /// C language tree-sitter extractor (Adapter pattern).
 pub struct CExtractor {
@@ -57,9 +57,7 @@ impl Extractor for CExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::C);
-        let mut parser = ParserFactory::create_parser(Language::C)?;
-        let tree = parser
-            .parse(source, None)
+        let tree = super::with_pooled_parser(Language::C, |parser| parser.parse(source, None))?
             .ok_or_else(|| ParseError::ParseFailed {
                 file_path: file_path.to_string(),
             })?;
@@ -779,10 +777,6 @@ fn call_arguments(node: Node, source: &str) -> Vec<String> {
         }
     }
     args
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
-    node.utf8_text(source.as_bytes()).ok()
 }
 
 /// Returns the text of `node` if it is a plain `identifier`, else `None`.

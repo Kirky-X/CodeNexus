@@ -183,6 +183,29 @@ pub fn with_thread_pool<R>(f: impl FnOnce(&ParserPool) -> R) -> R {
     THREAD_POOL.with(f)
 }
 
+/// Runs `f` with a pooled [`Parser`] for `lang` from the thread-local pool.
+///
+/// Production extraction path (ADR-010): language extractors call this once
+/// per `extract` instead of `ParserFactory::create_parser`, eliminating the
+/// per-file `Parser::new() + set_language()` cost. The parser only lives
+/// inside the closure (it borrows the thread-local pool), which is exactly
+/// the `parse(source) → tree` window extraction needs.
+///
+/// # Errors
+///
+/// Returns the [`ParserFactory`](super::parser_factory::ParserFactory) error
+/// when pool initialization for `lang` fails (same error surface as
+/// `create_parser`).
+pub fn with_pooled_parser<R>(
+    lang: Language,
+    f: impl FnOnce(&mut Parser) -> R,
+) -> super::error::Result<R> {
+    THREAD_POOL.with(|pool| {
+        let mut guard = pool.get_parser(lang)?;
+        Ok(f(&mut guard))
+    })
+}
+
 #[cfg(all(
     test,
     feature = "lang-c",

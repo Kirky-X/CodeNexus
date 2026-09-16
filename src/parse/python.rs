@@ -34,8 +34,9 @@
 //!   path/scope. For cross-file base classes (`from foo import Bar; class
 //!   Child(Bar)`), the target FQN won't match the actual `Bar` node in `foo.py`,
 //!   leaving the edge dangling. Cross-file resolution requires a future
-//!   resolver enhancement (LOW-003).
+//!   resolver enhancement.
 
+use super::helpers::node_text;
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
@@ -46,7 +47,6 @@ use super::error::{ParseError, Result};
 use super::extractor::{
     AssignInfo, CallInfo, ExtractResult, Extractor, ImportInfo, ReadInfo, WriteInfo,
 };
-use super::parser_factory::ParserFactory;
 
 /// Python language tree-sitter extractor (Adapter pattern).
 pub struct PythonExtractor {
@@ -74,12 +74,11 @@ impl Extractor for PythonExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::Python);
-        let mut parser = ParserFactory::create_parser(Language::Python)?;
-        let tree = parser
-            .parse(source, None)
-            .ok_or_else(|| ParseError::ParseFailed {
-                file_path: file_path.to_string(),
-            })?;
+        let tree =
+            super::with_pooled_parser(Language::Python, |parser| parser.parse(source, None))?
+                .ok_or_else(|| ParseError::ParseFailed {
+                    file_path: file_path.to_string(),
+                })?;
         let root = tree.root_node();
         let registry = ScopeResolverRegistry::new();
         let ctx = VisitContext {
@@ -302,13 +301,13 @@ fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &m
     // Determine if this is a method (inside a class) or a function.
     // P2-5/P2: nested `def` (def inside another def) was previously skipped
     // entirely to align with gitnexus (170 vs 280 functions). But this
-    // caused DQ-004 orphan edges when outer functions call inner ones
+    // caused orphan edges when outer functions call inner ones
     // (e.g. `flush_section` calling `_strip_blank_ends` — the CALLS edge
     // targets a non-existent node). Now we extract nested functions but
     // mark them as non-global so they don't pollute the global symbol
     // table, while still providing a node for CALLS edges to target.
     //
-    // diting MEDIUM-3/LOW-1: call `function_scope` once and reuse the
+    // call `function_scope` once and reuse the
     // result for both is_method and is_global, avoiding a duplicate
     // O(depth) ancestor traversal when the node is not inside a class.
     let scope = function_scope(node);
@@ -669,10 +668,6 @@ fn call_arguments(node: Node, source: &str) -> Vec<String> {
         }
     }
     args
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
-    node.utf8_text(source.as_bytes()).ok()
 }
 
 /// Returns the text of `node` if it is a plain `identifier`, else `None`.
@@ -1119,7 +1114,7 @@ class Foo(metaclass=Meta):
     fn nested_function_definitions() {
         // P2 fix: nested `def inner` (def inside another def) IS now promoted
         // to a Function node (previously skipped by P2-5). This was changed
-        // because skipping nested functions caused DQ-004 orphan edges when
+        // because skipping nested functions caused orphan edges when
         // outer functions called inner ones (the CALLS edge targeted a
         // non-existent node). Now both outer and inner are extracted, but
         // inner is marked `is_global = false` so it doesn't pollute the
@@ -1164,7 +1159,7 @@ class Foo(metaclass=Meta):
             inner_call.is_some(),
             "call to inner() should still be recorded"
         );
-        // DQ-004 regression (diting MEDIUM-2): the CALLS edge from outer to
+        // regression the CALLS edge from outer to
         // inner must target a real node, not be orphan. CallInfo only stores
         // callee_name (FQN resolution happens later in the resolve phase), so
         // we verify (1) the callee_name matches the inner Function node's name

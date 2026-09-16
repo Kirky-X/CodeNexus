@@ -29,6 +29,7 @@
 //! - Compound selectors (`div.foo`) are used verbatim as the name text.
 //! - Nested rule sets (CSS nesting) are extracted with flat FQNs.
 
+use super::helpers::node_text;
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
@@ -37,7 +38,6 @@ use crate::resolve::FqnGenerator;
 use super::dedupe_qn;
 use super::error::{ParseError, Result};
 use super::extractor::{ExtractResult, Extractor};
-use super::parser_factory::ParserFactory;
 
 /// CSS language tree-sitter extractor (Adapter pattern).
 pub struct CssExtractor {
@@ -65,12 +65,10 @@ impl Extractor for CssExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::Css);
-        let mut parser = ParserFactory::create_parser(Language::Css)?;
-        let tree = parser
-            .parse(source, None)
+        let tree = super::with_pooled_parser(Language::Css, |parser| parser.parse(source, None))?
             .ok_or_else(|| ParseError::ParseFailed {
-                file_path: file_path.to_string(),
-            })?;
+            file_path: file_path.to_string(),
+        })?;
         let root = tree.root_node();
         let ctx = VisitContext { file_path, project };
         for i in 0..root.named_child_count() as u32 {
@@ -182,10 +180,6 @@ fn rule_set_selector(node: Node, source: &str) -> Option<String> {
         }
     }
     None
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
-    node.utf8_text(source.as_bytes()).ok()
 }
 
 fn make_qn(file_path: &str, name: &str, project: &str) -> String {

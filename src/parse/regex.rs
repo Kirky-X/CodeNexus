@@ -29,7 +29,6 @@ use crate::resolve::FqnGenerator;
 use super::dedupe_qn;
 use super::error::{ParseError, Result};
 use super::extractor::{ExtractResult, Extractor};
-use super::parser_factory::ParserFactory;
 
 /// The fixed name used for the single regex pattern node.
 const PATTERN_NAME: &str = "regex_pattern";
@@ -60,9 +59,7 @@ impl Extractor for RegexExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::Regex);
-        let mut parser = ParserFactory::create_parser(Language::Regex)?;
-        let tree = parser
-            .parse(source, None)
+        let tree = super::with_pooled_parser(Language::Regex, |parser| parser.parse(source, None))?
             .ok_or_else(|| ParseError::ParseFailed {
                 file_path: file_path.to_string(),
             })?;

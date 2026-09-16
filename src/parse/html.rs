@@ -25,6 +25,7 @@
 //! - Class attributes are not used for disambiguation (only `id`).
 //! - Nested elements produce flat FQNs (no parent-child path in the FQN).
 
+use super::helpers::node_text;
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
@@ -33,7 +34,6 @@ use crate::resolve::FqnGenerator;
 use super::dedupe_qn;
 use super::error::{ParseError, Result};
 use super::extractor::{ExtractResult, Extractor};
-use super::parser_factory::ParserFactory;
 
 /// HTML language tree-sitter extractor (Adapter pattern).
 pub struct HtmlExtractor {
@@ -61,9 +61,7 @@ impl Extractor for HtmlExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::Html);
-        let mut parser = ParserFactory::create_parser(Language::Html)?;
-        let tree = parser
-            .parse(source, None)
+        let tree = super::with_pooled_parser(Language::Html, |parser| parser.parse(source, None))?
             .ok_or_else(|| ParseError::ParseFailed {
                 file_path: file_path.to_string(),
             })?;
@@ -242,10 +240,6 @@ fn id_from_attribute(attr_node: Node, source: &str) -> Option<String> {
     } else {
         None
     }
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
-    node.utf8_text(source.as_bytes()).ok()
 }
 
 fn make_qn(file_path: &str, name: &str, project: &str) -> String {

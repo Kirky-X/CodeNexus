@@ -20,6 +20,7 @@
 //! - Pattern matching `match` expressions are not deeply analyzed.
 //! - Given/using implicit parameters are not recorded.
 
+use super::helpers::node_text;
 use tree_sitter::Node;
 
 use crate::model::{Edge, EdgeType, Language, Node as ModelNode, NodeLabel};
@@ -28,7 +29,6 @@ use crate::resolve::FqnGenerator;
 use super::dedupe_qn;
 use super::error::{ParseError, Result};
 use super::extractor::{CallInfo, ExtractResult, Extractor, ImportInfo};
-use super::parser_factory::ParserFactory;
 
 /// Scala language tree-sitter extractor (Adapter pattern).
 pub struct ScalaExtractor {
@@ -56,9 +56,7 @@ impl Extractor for ScalaExtractor {
 
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult> {
         let mut result = ExtractResult::new(file_path, Language::Scala);
-        let mut parser = ParserFactory::create_parser(Language::Scala)?;
-        let tree = parser
-            .parse(source, None)
+        let tree = super::with_pooled_parser(Language::Scala, |parser| parser.parse(source, None))?
             .ok_or_else(|| ParseError::ParseFailed {
                 file_path: file_path.to_string(),
             })?;
@@ -318,10 +316,6 @@ fn collect_identifiers(node: Node, source: &str, parts: &mut Vec<String>) {
             collect_identifiers(child, source, parts);
         }
     }
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
-    node.utf8_text(source.as_bytes()).ok()
 }
 
 fn signature_first_line(text: &str) -> &str {
