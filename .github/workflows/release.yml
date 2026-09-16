@@ -39,6 +39,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libssl-dev pkg-config protobuf-compiler
 
+      # [patch.crates-io] points the four base libraries at ../base/* for
+      # local development (CI lint/test jobs clone them there). A release
+      # must resolve from the REGISTRY instead — that is exactly what users
+      # will build against — and the runner has no ../base anyway. Strip the
+      # whole patch section (it is the final section of the manifest) before
+      # building/publishing; Cargo re-resolves the deps from crates.io and
+      # updates Cargo.lock accordingly.
+      - name: Disable local base patches (publish resolves from crates.io)
+        run: |
+          python3 - << 'PY'
+          from pathlib import Path
+          manifest = Path("Cargo.toml")
+          text = manifest.read_text()
+          idx = text.index("[patch.crates-io]")
+          manifest.write_text(text[:idx].rstrip() + "\n")
+          PY
+          grep -c "patch.crates-io" Cargo.toml || echo "patch section removed"
+
       - name: Verify build
         run: cargo build --release --lib
 

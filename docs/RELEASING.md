@@ -15,6 +15,7 @@
 | 4 | 示例数：`grep -c '\[\[bin\]\]' examples/Cargo.toml` | 14 个 | `README.md` / `README_EN.md`「示例」节（表格 + run-all 循环） | 新增示例 bin 必须同 PR 更新两份 README 的表格与 for 循环 |
 | 5 | 命令参数：`src/service/<cmd>.rs` 的 `#[forge]` CLI wrapper 签名 | — | `skill/references/commands.md` 对应条目 | 新增/改签名命令必须同步 commands.md 的 Options 列表与 sentinel 默认值（`src/main.rs` `SENTINEL_DEFAULTS`） |
 | 6 | advisory 忽略清单 | `deny.toml`（单一事实源） | `audit.toml`（同步镜像）；CI audit-check ignore 由 deny.toml grep 生成 | 只改 deny.toml 并更新复核日期，再手动同步 audit.toml；注释中只允许出现被 ignore 的 RUSTSEC 编号 |
+| 7 | 基库本地 patch | `Cargo.toml` 末尾 `[patch.crates-io]`（trait-kit/sdforge/oxcache/inklog → ../base/*） | CI lint/test/coverage/security 四 job 均会 clone 同批仓库到 ../base；release.yml 发布前自动剥离 patch 段从 crates.io 解析 | 本地手动 `cargo publish` 前必须手动注释整个 patch 段（crates.io 构建从 registry 解析——本地树领先时验证过的代码 ≠ 用户拉到的代码）；新增/移除基库 patch 时同步 ci.yml 的 clone 清单 |
 
 ## 机械校验（发布前跑一遍）
 
