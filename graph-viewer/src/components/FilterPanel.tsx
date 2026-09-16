@@ -55,7 +55,7 @@ export function FilterPanel({
   }, [data]);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col flex-1 min-h-0">
       {/* 文件路径筛选 */}
       <div className="px-3 pt-3 pb-2 border-b border-border/30 shrink-0">
         <div>
@@ -102,7 +102,7 @@ export function FilterPanel({
                         >
                           <span className="w-[5px] h-[5px] rounded-full" style={{ backgroundColor: on ? c : "#444" }} />
                           <span style={{ color: on ? c : "#555" }}>{label}</span>
-                          <span className="text-foreground/15 tabular-nums">{count}</span>
+                          <span className="text-foreground/40 tabular-nums">{count}</span>
                         </button>
                       );
                     })}
