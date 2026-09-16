@@ -176,13 +176,53 @@ export function queryGraph(
   const qnSet = new Set(nodeQns);
   const keptRelations = picked.filter((r) => qnSet.has(r.src) && qnSet.has(r.tgt));
 
-  /* 5. 批量解析节点详情（IN 分批，避免超长 Cypher） */
+  /* 5. 批量解析节点详情（IN 分批，避免超长 Cypher）。
+   *    端点分两类：File 节点以 file_* id 为键（无 qualifiedName 属性），
+   *    其余按 qualifiedName 解析 */
   const BATCH = 40;
   const nodes: GraphNode[] = [];
-  const idByQn = new Map<string, string>();
+  const idByEndpoint = new Map<string, string>();
   let nodeCounter = 0;
-  for (let i = 0; i < nodeQns.length; i += BATCH) {
-    const batch = nodeQns.slice(i, i + BATCH);
+
+  const fileEndpoints = nodeQns.filter((qn) => qn.startsWith("file_"));
+  const qnEndpoints = nodeQns.filter((qn) => !qn.startsWith("file_"));
+
+  /* 5a. File 端点 — 按 id 精确解析 */
+  for (let i = 0; i < fileEndpoints.length; i += BATCH) {
+    const batch = fileEndpoints.slice(i, i + BATCH);
+    const list = batch.map((id) => `'${escapeCypherStr(id)}'`).join(",");
+    let rows: Record<string, unknown>[];
+    try {
+      rows = db.query(
+        `MATCH (n:File) WHERE n.id IN [${list}] ` +
+          `RETURN n.id AS id, n.name AS name, n.filePath AS file_path, labels(n) AS labels`,
+      );
+    } catch {
+      continue;
+    }
+    for (const row of rows) {
+      const endpoint = getStr(row, "id") ?? "";
+      if (!endpoint || idByEndpoint.has(endpoint)) continue;
+      const filePath = getStr(row, "file_path");
+      const synthId = `n${nodeCounter++}`;
+      idByEndpoint.set(endpoint, synthId);
+      nodes.push({
+        id: synthId,
+        label: parseLabel(row, "File") as GraphNode["label"],
+        name: filePath ? (filePath.split("/").pop() ?? filePath) : (getStr(row, "name") ?? endpoint),
+        file_path: filePath,
+        project: projectName,
+        qualified_name: undefined,
+        start_line: undefined,
+        end_line: undefined,
+        x: 0, y: 0, z: 0,
+      });
+    }
+  }
+
+  /* 5b. 其余端点 — 按 qualifiedName 解析 */
+  for (let i = 0; i < qnEndpoints.length; i += BATCH) {
+    const batch = qnEndpoints.slice(i, i + BATCH);
     const list = batch.map((qn) => `'${escapeCypherStr(qn)}'`).join(",");
     let rows: Record<string, unknown>[];
     try {
@@ -196,9 +236,9 @@ export function queryGraph(
     }
     for (const row of rows) {
       const qn = getStr(row, "qualified_name") ?? "";
-      if (!qn || idByQn.has(qn)) continue;
+      if (!qn || idByEndpoint.has(qn)) continue;
       const synthId = `n${nodeCounter++}`;
-      idByQn.set(qn, synthId);
+      idByEndpoint.set(qn, synthId);
       const name = getStr(row, "name") ?? "";
       nodes.push({
         id: synthId,
@@ -217,8 +257,8 @@ export function queryGraph(
   /* 6. 组装边（两端都已解析的才保留） */
   const edges: GraphEdge[] = [];
   for (const rel of keptRelations) {
-    const source = idByQn.get(rel.src);
-    const target = idByQn.get(rel.tgt);
+    const source = idByEndpoint.get(rel.src);
+    const target = idByEndpoint.get(rel.tgt);
     if (!source || !target) continue;
     edges.push({
       id: `e${edges.length}`,
