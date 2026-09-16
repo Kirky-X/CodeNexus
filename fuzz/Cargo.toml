@@ -1,0 +1,48 @@
+# Standalone cargo-fuzz crate — must NOT join the root workspace
+# (cargo-fuzz manages its own build/lockfile with sanitizer flags).
+[workspace]
+
+[package]
+name = "codenexus-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.codenexus]
+path = ".."
+default-features = false
+features = ["lang-rust", "cli"]
+
+[[bin]]
+name = "escape_cypher_string"
+path = "fuzz_targets/escape_cypher_string.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "escape_identifier"
+path = "fuzz_targets/escape_identifier.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cypher_subset_parse"
+path = "fuzz_targets/cypher_subset_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cnxp_header"
+path = "fuzz_targets/cnxp_header.rs"
+test = false
+doc = false
+bench = false
