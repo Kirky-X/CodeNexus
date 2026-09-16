@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn evidence_is_baked_per_node_with_blob_links() {
-        let document = doc();
+        let _document = doc();
         let report = EvidenceReport {
             verified: true,
             repository: Some("https://github.com/owner/repo".to_string()),

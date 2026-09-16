@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//! Data quality validation (DQ-002/004/005/006).
+//! Data quality validation.
 //!
 //! Provides [`QualityChecker`] to run post-indexing data quality checks
 //! and report violations via [`QualityReport`].
@@ -10,10 +10,10 @@
 //!
 //! | Rule    | Description                                                              |
 //! |---------|--------------------------------------------------------------------------|
-//! | DQ-002  | FQN uniqueness — no two nodes share the same `qualifiedName` per project.|
-//! | DQ-004  | Edge integrity — every `CodeRelation` source/target resolves to a node. |
-//! | DQ-005  | Project isolation — per-project node counts sum to the table total.     |
-//! | DQ-006  | Hash integrity — every `File` node has a non-empty `hash`.              |
+//! | | FQN uniqueness — no two nodes share the same `qualifiedName` per project.|
+//! | | Edge integrity — every `CodeRelation` source/target resolves to a node. |
+//! | | Project isolation — per-project node counts sum to the table total. |
+//! | | Hash integrity — every `File` node has a non-empty `hash`. |
 
 use super::capability::Storage;
 use super::error::Result;
@@ -23,7 +23,7 @@ use crate::model::NodeLabel;
 /// A single data quality violation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QualityViolation {
-    /// The DQ rule that was violated (e.g. "DQ-002").
+    /// The DQ rule that was violated (e.g. "").
     pub rule: &'static str,
     /// Human-readable description of the violation.
     pub message: String,
@@ -90,7 +90,7 @@ impl<'a> QualityChecker<'a> {
         Ok(report)
     }
 
-    /// DQ-002: Checks that no two nodes share the same `qualifiedName`
+    /// Checks that no two nodes share the same `qualifiedName`
     /// within the same project.
     ///
     /// Iterates every node table that has `qualifiedName` and `project`
@@ -164,7 +164,7 @@ impl<'a> QualityChecker<'a> {
         Ok(violations)
     }
 
-    /// DQ-004: Checks that every edge in `CodeRelation` has a source and
+    /// Checks that every edge in `CodeRelation` has a source and
     /// target that exist as a node id in some node table.
     ///
     /// Collects all node ids across every node table, then verifies each
@@ -223,7 +223,7 @@ impl<'a> QualityChecker<'a> {
         Ok(violations)
     }
 
-    /// DQ-005: Checks that project isolation is maintained.
+    /// Checks that project isolation is maintained.
     ///
     /// For each non-Project node table that has a `project` column, compares
     /// the total row count against the sum of per-project counts (over all
@@ -292,7 +292,7 @@ impl<'a> QualityChecker<'a> {
         Ok(violations)
     }
 
-    /// DQ-006: Checks that every `File` node has a non-empty `hash`.
+    /// Checks that every `File` node has a non-empty `hash`.
     ///
     /// A `File` node whose `hash` is null or an empty string is reported as a
     /// violation.
@@ -385,7 +385,7 @@ mod tests {
             .build()
     }
 
-    // --- DQ-002: FQN uniqueness ---
+    // --- FQN uniqueness ---
 
     #[test]
     fn test_dq002_detects_duplicate_fqn() {
@@ -454,7 +454,7 @@ mod tests {
         assert!(violations.is_empty(), "got {violations:?}");
     }
 
-    // --- DQ-004: Edge integrity ---
+    // --- Edge integrity ---
 
     #[test]
     fn test_dq004_detects_orphan_edge() {
@@ -550,7 +550,7 @@ mod tests {
         );
     }
 
-    // --- DQ-005: Project isolation ---
+    // --- Project isolation ---
 
     #[test]
     fn test_dq005_clean_when_projects_isolated() {
@@ -587,7 +587,7 @@ mod tests {
     #[test]
     fn test_dq005_detects_isolation_violation_for_unknown_project() {
         // A Function node whose `project` value is not in the Project table
-        // → total count exceeds per-project sum → DQ-005 violation.
+        // → total count exceeds per-project sum → violation.
         let storage = fresh_storage();
         storage
             .save_project(&sample_project("alpha", "alpha"))
@@ -656,7 +656,7 @@ mod tests {
         );
     }
 
-    // --- DQ-006: Hash integrity ---
+    // --- Hash integrity ---
 
     #[test]
     fn test_dq006_detects_empty_hash() {
@@ -765,7 +765,7 @@ mod tests {
     #[test]
     fn test_run_all_aggregates_violations_from_all_checks() {
         let storage = fresh_storage();
-        // DQ-002 violation: duplicate FQN.
+        // violation: duplicate FQN.
         storage
             .save_nodes(
                 &[
@@ -775,7 +775,7 @@ mod tests {
                 NodeLabel::Function,
             )
             .expect("save_nodes");
-        // DQ-006 violation: empty hash.
+        // violation: empty hash.
         storage
             .save_nodes(
                 &[sample_file("file_1", "demo", "/a.rs", "")],
@@ -804,7 +804,7 @@ mod tests {
 
     #[test]
     fn test_dq002_multiple_duplicate_groups_generate_multiple_violations() {
-        // Exercises the DQ-002 violation construction (lines 150, 153-155)
+        // Exercises the violation construction (lines 150, 153-155)
         // with multiple duplicate groups across different FQNs.
         let storage = fresh_storage();
         storage
@@ -872,7 +872,7 @@ mod tests {
 
     #[test]
     fn test_dq004_only_source_orphan_produces_single_violation() {
-        // Exercises the DQ-004 source orphan branch (line 209) independently
+        // Exercises the source orphan branch (line 209) independently
         // from the target orphan branch. Only the source is missing.
         let storage = fresh_storage();
         storage
@@ -912,7 +912,7 @@ mod tests {
 
     #[test]
     fn test_dq004_only_target_orphan_produces_single_violation() {
-        // Exercises the DQ-004 target orphan branch (line 216) independently.
+        // Exercises the target orphan branch (line 216) independently.
         // Only the target is missing.
         let storage = fresh_storage();
         storage
@@ -952,7 +952,7 @@ mod tests {
 
     #[test]
     fn test_dq005_violation_in_file_table() {
-        // Exercises the DQ-005 violation construction (lines 279, 282, 284-285)
+        // Exercises the violation construction (lines 279, 282, 284-285)
         // for a table other than Function. A File node with an unknown project
         // triggers an isolation violation in the File table.
         let storage = fresh_storage();
@@ -1002,7 +1002,7 @@ mod tests {
 
     #[test]
     fn test_dq006_multiple_empty_hash_files() {
-        // Exercises the DQ-006 violation construction (line 317) with multiple
+        // Exercises the violation construction (line 317) with multiple
         // files having empty hashes.
         let storage = fresh_storage();
         storage
@@ -1051,7 +1051,7 @@ mod tests {
             .save_project(&sample_project("alpha", "alpha"))
             .expect("save_project");
 
-        // DQ-002: duplicate FQN.
+        // duplicate FQN.
         storage
             .save_nodes(
                 &[
@@ -1062,7 +1062,7 @@ mod tests {
             )
             .expect("save_nodes dup fqn");
 
-        // DQ-004: orphan edge (both endpoints missing).
+        // orphan edge (both endpoints missing).
         storage
             .save_edges(&[crate::model::Edge::builder(
                 "ghost_src",
@@ -1073,7 +1073,7 @@ mod tests {
             .build()])
             .expect("save_edges orphan");
 
-        // DQ-005: node in unknown project.
+        // node in unknown project.
         storage
             .save_nodes(
                 &[sample_function("g1", "ghost", "main", "ghost.main")],
@@ -1081,7 +1081,7 @@ mod tests {
             )
             .expect("save_nodes ghost");
 
-        // DQ-006: file with empty hash.
+        // file with empty hash.
         storage
             .save_nodes(
                 &[sample_file("file1", "alpha", "/a.rs", "")],
@@ -1415,7 +1415,7 @@ mod tests {
     #[test]
     fn test_dq005_violation_when_nodes_exist_but_no_projects() {
         // Nodes exist in a project but no Project nodes → per-project sum
-        // stays 0, total > 0 → DQ-005 violation for every table with nodes.
+        // stays 0, total > 0 → violation for every table with nodes.
         let storage = fresh_storage();
         storage
             .save_nodes(
@@ -1483,7 +1483,7 @@ mod tests {
             .expect("drop Function");
         let checker = QualityChecker::new(&*storage);
         let report = checker.run_all().expect("run_all");
-        // DQ-002 should be skipped (Function table dropped), but DQ-006
+        // should be skipped (Function table dropped), but
         // should still detect the empty hash file.
         assert_eq!(
             report.count_for_rule("DQ-002"),
@@ -1677,7 +1677,7 @@ mod tests {
     #[test]
     fn test_dq005_violations_for_multiple_tables_when_no_projects() {
         // Nodes in both Function and File tables, no Project nodes →
-        // DQ-005 violations for both tables (exercises iteration across
+        // violations for both tables (exercises iteration across
         // multiple labels with per-project count = 0).
         let storage = fresh_storage();
         storage
@@ -1743,7 +1743,7 @@ mod tests {
 
     #[test]
     fn test_run_all_with_only_dq005_asserts_other_rules_clean() {
-        // run_all with only DQ-005 violation → other rules should be clean.
+        // run_all with only violation → other rules should be clean.
         // Explicitly verifies that run_all aggregates only the expected
         // violations (lines 78-89 if-let branches).
         let storage = fresh_storage();
@@ -1796,7 +1796,7 @@ mod tests {
     fn test_dq006_handles_null_project_in_file_node() {
         // Cover the `unwrap_or("")` branch for project in check_hash_integrity
         // (line 313). A File node with NULL project and empty hash should
-        // still be detected as a DQ-006 violation with project = Some("").
+        // still be detected as a violation with project = Some("").
         let storage = fresh_storage();
         storage
             .execute(

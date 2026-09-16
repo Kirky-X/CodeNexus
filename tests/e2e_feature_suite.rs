@@ -1055,8 +1055,7 @@ fn fulltext_search_respects_project_filter() {
         assert!(
             r.qualified_name
                 .as_ref()
-                .map_or(true, |qn| qn.starts_with("proj_x")
-                    || qn.contains(&r1.project_id)),
+                .is_none_or(|qn| qn.starts_with("proj_x") || qn.contains(&r1.project_id)),
             "proj_x 的全文搜索结果应属于 proj_x"
         );
     }

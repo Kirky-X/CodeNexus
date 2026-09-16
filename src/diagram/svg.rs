@@ -228,7 +228,7 @@ fn edge_label(doc: &DiagramDocument, edge: &RoutedEdge) -> String {
 mod tests {
     use super::*;
     use crate::diagram::ir::{DiagramComponent, DiagramConnection, DiagramMeta};
-    use crate::diagram::layout::{layout_components, Layout};
+    use crate::diagram::layout::layout_components;
     use crate::diagram::route::route_edges;
 
     fn sample_doc() -> DiagramDocument {
