@@ -64,16 +64,17 @@ function TreeItem({ dir, depth, onSelect, selectedPath }: {
     <div>
       <button
         onClick={() => { setExpanded(!expanded); onSelect(dir.fullPath, dir.nodeIds); }}
-        className={`flex items-center gap-1.5 w-full text-left px-3 py-[5px] text-[13px] transition-colors ${
+        aria-expanded={expanded}
+        className={`flex items-center gap-1.5 w-full text-left px-3 py-1.5 text-[13px] transition-colors ${
           isSelected ? "bg-primary/10 text-primary" : "text-foreground/60 hover:text-foreground/80 hover:bg-white/[0.03]"
         }`}
         style={{ paddingLeft: `${depth * 16 + 12}px` }}
       >
-        <span className="text-foreground/20 w-3 text-center text-[11px] shrink-0">
+        <span className="text-fg-subtle w-3 text-center text-[11px] shrink-0" aria-hidden="true">
           {(dir.children.size > 0 || dir.directNodes.length > 0) ? (expanded ? "▾" : "▸") : ""}
         </span>
         <span className="truncate font-medium">{dir.name}</span>
-        <span className="text-foreground/15 ml-auto text-[11px] tabular-nums shrink-0">{dir.nodeIds.size}</span>
+        <span className="text-fg-subtle ml-auto text-[11px] tabular-nums shrink-0">{dir.nodeIds.size}</span>
       </button>
       {expanded && (
         <>
@@ -82,12 +83,12 @@ function TreeItem({ dir, depth, onSelect, selectedPath }: {
             <button
               key={gn.id}
               onClick={() => onSelect(dir.fullPath + "/" + gn.name, new Set([gn.id]))}
-              className="flex items-center gap-1.5 w-full text-left px-3 py-[3px] text-[12px] text-foreground/40 hover:text-foreground/60 hover:bg-white/[0.02] transition-colors"
+              className="flex items-center gap-1.5 w-full text-left px-3 py-1.5 text-[12px] text-foreground/60 hover:text-foreground/80 hover:bg-white/[0.02] transition-colors"
               style={{ paddingLeft: `${(depth + 1) * 16 + 12}px` }}
             >
               <span className="w-[5px] h-[5px] rounded-full shrink-0" style={{ backgroundColor: colorForLabel(gn.label) }} />
               <span className="truncate font-mono">{gn.name}</span>
-              <span className="text-foreground/10 ml-auto text-[11px] shrink-0">{gn.label}</span>
+              <span className="text-fg-subtle ml-auto text-[11px] shrink-0">{gn.label}</span>
             </button>
           ))}
         </>
@@ -112,7 +113,7 @@ export function Sidebar({ nodes, onSelectPath, selectedPath }: SidebarProps) {
   return (
     <div className="flex flex-col flex-1 min-h-0 border-t border-border/30">
       <div className="px-3 pt-3 pb-2 shrink-0">
-        <span className="text-[12px] font-medium text-foreground/50 uppercase tracking-widest">{t("sidebar.title")}</span>
+        <span className="text-[12px] font-medium text-fg-subtle uppercase tracking-widest">{t("sidebar.title")}</span>
       </div>
       <div className="px-3 pb-2.5 shrink-0">
         <Input
@@ -126,17 +127,17 @@ export function Sidebar({ nodes, onSelectPath, selectedPath }: SidebarProps) {
         <div className="py-1">
           {filtered ? (
             filtered.length === 0 ? (
-              <p className="text-foreground/20 text-[13px] px-4 py-6 text-center">{t("sidebar.noResults")}</p>
+              <p className="text-fg-subtle text-[13px] px-4 py-6 text-center">{t("sidebar.noResults")}</p>
             ) : (
               filtered.map((n) => (
                 <button
                   key={n.id}
                   onClick={() => onSelectPath(n.file_path ?? "", new Set([n.id]))}
-                  className="flex items-center gap-2 w-full text-left px-4 py-1.5 text-[12px] hover:bg-white/[0.03] transition-colors"
+                  className="flex items-center gap-2 w-full text-left px-4 py-2 text-[12px] hover:bg-white/[0.03] transition-colors"
                 >
                   <span className="w-[5px] h-[5px] rounded-full shrink-0" style={{ backgroundColor: colorForLabel(n.label) }} />
-                  <span className="text-foreground/60 truncate">{n.name}</span>
-                  <span className="text-foreground/15 ml-auto text-[11px] font-mono truncate max-w-[100px]">{n.file_path}</span>
+                  <span className="text-foreground/70 truncate">{n.name}</span>
+                  <span className="text-fg-subtle ml-auto text-[11px] font-mono truncate max-w-[100px]">{n.file_path}</span>
                 </button>
               ))
             )
@@ -150,7 +151,7 @@ export function Sidebar({ nodes, onSelectPath, selectedPath }: SidebarProps) {
         <div className="px-3 py-2 border-t border-border/30">
           <button
             onClick={() => onSelectPath("", new Set())}
-            className="w-full px-3 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.07] text-[12px] text-foreground/40 font-medium transition-all"
+            className="w-full px-3 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.07] text-[12px] text-fg-subtle font-medium transition-all"
           >
             {t("sidebar.clearSelection")}
           </button>

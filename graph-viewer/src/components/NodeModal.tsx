@@ -50,7 +50,7 @@ export function NodeModal({ node, allNodes, allEdges, traceMode, onClose, onNavi
   const canVariableTrace = ["Variable", "GlobalVar", "Parameter", "Const", "Static", "Property"].includes(node.label);
 
   return (
-    <div className="w-[340px] border-l border-border/30 flex flex-col h-full bg-background/95 backdrop-blur-md shrink-0 animate-slide-in-right">
+    <div className="w-[340px] max-lg:w-[min(340px,88vw)] max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-40 max-lg:shadow-2xl border-l border-border/30 flex flex-col h-full bg-background/95 backdrop-blur-md shrink-0 animate-slide-in-right">
       {/* Header */}
       <div className="px-5 pt-4 pb-3 border-b border-border/30 shrink-0">
         <div className="flex items-start justify-between gap-3">
@@ -72,7 +72,7 @@ export function NodeModal({ node, allNodes, allEdges, traceMode, onClose, onNavi
           <button
             onClick={onClose}
             aria-label={t("modal.close")}
-            className="text-foreground/30 hover:text-foreground/70 transition-colors p-1.5 rounded-lg hover:bg-white/[0.05]"
+            className="text-fg-subtle hover:text-foreground/80 transition-colors p-1.5 rounded-lg hover:bg-white/[0.05]"
           >
             <X size={14} strokeWidth={2} strokeLinecap="round" />
           </button>
@@ -82,7 +82,7 @@ export function NodeModal({ node, allNodes, allEdges, traceMode, onClose, onNavi
         <div className="mt-3 space-y-1.5">
           {node.file_path && (
             <div className="flex items-start gap-2">
-              <span className="text-[11px] text-foreground/30 uppercase tracking-wider w-14 shrink-0 pt-0.5">{t("modal.path")}</span>
+              <span className="text-[11px] text-fg-subtle uppercase tracking-wider w-14 shrink-0 pt-0.5">{t("modal.path")}</span>
               <span className="text-[13px] text-foreground/70 font-mono break-all leading-relaxed">
                 {node.file_path}
                 {node.start_line ? ` :${node.start_line}${node.end_line && node.end_line !== node.start_line ? `-${node.end_line}` : ""}` : ""}
@@ -91,13 +91,13 @@ export function NodeModal({ node, allNodes, allEdges, traceMode, onClose, onNavi
           )}
           {node.qualified_name && (
             <div className="flex items-start gap-2">
-              <span className="text-[11px] text-foreground/30 uppercase tracking-wider w-14 shrink-0 pt-0.5">{t("modal.qn")}</span>
+              <span className="text-[11px] text-fg-subtle uppercase tracking-wider w-14 shrink-0 pt-0.5">{t("modal.qn")}</span>
               <span className="text-[13px] text-foreground/60 font-mono break-all leading-relaxed">{node.qualified_name}</span>
             </div>
           )}
           {node.project && (
             <div className="flex items-start gap-2">
-              <span className="text-[11px] text-foreground/30 uppercase tracking-wider w-14 shrink-0 pt-0.5">{t("modal.project")}</span>
+              <span className="text-[11px] text-fg-subtle uppercase tracking-wider w-14 shrink-0 pt-0.5">{t("modal.project")}</span>
               <span className="text-[13px] text-foreground/60">{node.project}</span>
             </div>
           )}
@@ -143,7 +143,7 @@ export function NodeModal({ node, allNodes, allEdges, traceMode, onClose, onNavi
             { label: t("modal.total"), value: connections.length, color: "text-foreground" },
           ].map((s) => (
             <div key={s.label}>
-              <p className="text-[10px] text-foreground/45 uppercase tracking-widest mb-0.5">{s.label}</p>
+              <p className="text-[10px] text-fg-subtle uppercase tracking-widest mb-0.5">{s.label}</p>
               <p className={`text-lg font-semibold tabular-nums ${s.color}`}>{s.value}</p>
             </div>
           ))}
@@ -159,7 +159,7 @@ export function NodeModal({ node, allNodes, allEdges, traceMode, onClose, onNavi
           <ConnectionGroup title={t("modal.referencedBy")} icon="<-" connections={inbound} onNavigate={onNavigate} />
         )}
         {connections.length === 0 && (
-          <p className="text-[13px] text-foreground/40 text-center py-12">{t("modal.noConnections")}</p>
+          <p className="text-[13px] text-fg-subtle text-center py-12">{t("modal.noConnections")}</p>
         )}
       </div>
     </div>
@@ -185,15 +185,15 @@ function ConnectionGroup({
 
   return (
     <div className="mb-4">
-      <p className="text-[13px] font-medium text-foreground/50 mb-2.5 flex items-center gap-1.5">
-        <span className="text-foreground/30">{icon}</span>
+      <p className="text-[13px] font-medium text-foreground/60 mb-2.5 flex items-center gap-1.5">
+        <span className="text-fg-subtle">{icon}</span>
         {title}
-        <span className="text-foreground/30 text-[11px]">({connections.length})</span>
+        <span className="text-fg-subtle text-[11px]">({connections.length})</span>
       </p>
       <div className="space-y-2">
         {grouped.map(([type, conns]) => (
           <div key={type}>
-            <p className="text-[11px] text-foreground/45 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+            <p className="text-[11px] text-fg-subtle uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: colorForEdgeType(type) }} />
               {type.replace(/_/g, " ").toLowerCase()}
             </p>
@@ -211,7 +211,7 @@ function ConnectionGroup({
                   <span className="text-[13px] text-foreground/60 group-hover:text-foreground/90 truncate transition-colors">
                     {c.node.name}
                   </span>
-                  <span className="text-[11px] text-foreground/35 ml-auto shrink-0">{c.node.label}</span>
+                  <span className="text-[11px] text-fg-subtle ml-auto shrink-0">{c.node.label}</span>
                 </button>
               ))}
             </div>

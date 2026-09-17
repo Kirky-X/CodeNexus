@@ -7,6 +7,7 @@ import { useState } from "react";
 import * as THREE from "three";
 import type { GraphNode } from "../lib/types";
 import { colorForLabel } from "../lib/colors";
+import { EXPLODE_DURATION } from "../lib/explosion";
 
 interface NodeLabelsProps {
   nodes: GraphNode[];
@@ -19,8 +20,6 @@ const HIGH_PRIORITY_LABELS = new Set([
   "Function", "Method", "Class", "Struct", "Enum", "Trait",
   "Interface", "Impl", "Constructor", "Module", "Service",
 ]);
-
-const EXPLODE_DURATION = 1.2;
 
 /* 单个标签 — 支持爆炸动画 */
 function NodeLabel({ node }: { node: GraphNode }) {

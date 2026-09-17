@@ -107,6 +107,11 @@ const LightRays = ({
     const initializeWebGL = async () => {
       if (!containerRef.current) return;
 
+      /* prefers-reduced-motion：跳过持续光线动画，保留静态环境渐变 */
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        return;
+      }
+
       await new Promise(resolve => setTimeout(resolve, 10));
 
       if (!containerRef.current) return;

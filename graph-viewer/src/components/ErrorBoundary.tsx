@@ -44,7 +44,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
             <div className="space-y-2">
               <p className="text-sm text-foreground/80 font-medium">出错了</p>
               <p className="text-xs text-foreground/60 leading-relaxed">{detail}</p>
-              <p className="text-[10px] text-foreground/30 font-mono break-all">
+              <p className="text-[10px] text-fg-subtle font-mono break-all">
                 {this.state.error.name}: {this.state.error.message.slice(0, 200)}
               </p>
             </div>

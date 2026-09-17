@@ -25,10 +25,10 @@ export function NodeTooltip({ node }: NodeTooltipProps) {
           {node.label}
         </span>
         {node.file_path && (
-          <p className="text-[9px] text-foreground/40 font-mono truncate mt-1">{node.file_path}</p>
+          <p className="text-[9px] text-fg-subtle font-mono truncate mt-1">{node.file_path}</p>
         )}
         {node.project && (
-          <p className="text-[9px] text-foreground/30 mt-0.5">{t("tooltip.project")} {node.project}</p>
+          <p className="text-[9px] text-fg-subtle mt-0.5">{t("tooltip.project")} {node.project}</p>
         )}
       </div>
     </Html>

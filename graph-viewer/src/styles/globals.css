@@ -21,6 +21,10 @@
   --color-border: #2e2e33;
   --color-input: #2e2e33;
   --color-ring: #818cf8;
+  /* 文本层级 — 二级/三级文本的对比度下限（对 #18181b 分别 ≈8.2:1 / ≈5.6:1）。
+   * 任何承载信息的文本不得低于 fg-subtle；更低透明度只允许用于装饰 */
+  --color-fg-muted: #b0b0b8;
+  --color-fg-subtle: #909098;
   --radius: 0.75rem;
   --font-sans: "Outfit Variable", "Outfit", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;

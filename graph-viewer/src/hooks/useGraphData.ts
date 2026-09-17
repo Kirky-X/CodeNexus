@@ -10,15 +10,6 @@ export interface UseGraphDataResult {
   fetchData: (maxNodes?: number) => Promise<void>;
 }
 
-/** 剥离前端不需要的字段，减少内存占用 */
-function trimNodes(nodes: GraphData["nodes"]): GraphData["nodes"] {
-  for (const n of nodes) {
-    delete (n as unknown as Record<string, unknown>).qualified_name;
-    delete (n as unknown as Record<string, unknown>).project;
-  }
-  return nodes;
-}
-
 export function useGraphData(): UseGraphDataResult {
   const [data, setData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -28,8 +19,10 @@ export function useGraphData(): UseGraphDataResult {
     setLoading(true);
     setError(null);
     try {
+      /* 保留 qualified_name/project 等字段——节点详情面板需要展示它们；
+       * 单次加载 ≤500 节点，字段级剥离省不出可观内存 */
       const raw = await fetchGraphData("", maxNodes);
-      const nodes = computeForceLayout(trimNodes(raw.nodes), raw.edges);
+      const nodes = computeForceLayout(raw.nodes, raw.edges);
       setData({ nodes, edges: raw.edges, total_nodes: raw.total_nodes, total_edges: raw.total_edges });
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载图数据失败");

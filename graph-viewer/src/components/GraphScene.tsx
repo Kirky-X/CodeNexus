@@ -140,6 +140,10 @@ export function GraphScene({
   /* WebGL2 可用性 — 旧 GPU/Safari 15 等环境直接给友好错误而非白屏 */
   const [webglUnsupported, setWebglUnsupported] = useState(false);
 
+  /* 注意：所有 Hook 必须位于 webglUnsupported 早退 return 之前，
+   * 否则降级渲染会因 Hook 数量减少而崩溃（Hooks 规则） */
+  const handleHover = useCallback((node: GraphNode | null) => setHovered(node), []);
+
   useEffect(() => {
     const probe = document.createElement("canvas");
     if (!probe.getContext("webgl2")) setWebglUnsupported(true);
@@ -150,15 +154,13 @@ export function GraphScene({
       <div className="flex items-center justify-center h-full w-full">
         <div className="text-center space-y-3 max-w-sm px-6">
           <p className="text-sm text-foreground/70">无法初始化 WebGL2 图形上下文</p>
-          <p className="text-xs text-foreground/40 leading-relaxed">
+          <p className="text-xs text-fg-subtle leading-relaxed">
             当前浏览器或显卡不支持 WebGL2。请更换 Chrome/Edge 等现代浏览器，或更新显卡驱动后重试。
           </p>
         </div>
       </div>
     );
   }
-
-  const handleHover = useCallback((node: GraphNode | null) => setHovered(node), []);
 
   return (
     <div style={{ width: '100%', height: '100%', visibility: ready ? 'visible' : 'hidden' }}>

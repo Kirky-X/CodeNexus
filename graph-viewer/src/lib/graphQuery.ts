@@ -276,12 +276,32 @@ export function queryGraph(
   /* 7. 球面坐标 */
   assignSpherePositions(nodes);
 
+  /* 8. 全库真实总数 — 采样只是展示子集，UI 需要如实告知比例 */
+  const totals = queryTotals(db, nodes.length, edges.length);
+
   return {
     nodes,
     edges,
-    total_nodes: nodes.length,
-    total_edges: edges.length,
+    total_nodes: totals.total_nodes,
+    total_edges: totals.total_edges,
   };
+}
+
+/** 全库节点/边总数（count 查询失败时以采样数兜底，UI 退化为不显示比例） */
+function queryTotals(
+  db: LbugDatabase,
+  fallbackNodes: number,
+  fallbackEdges: number,
+): { total_nodes: number; total_edges: number } {
+  let totalNodes = fallbackNodes;
+  let totalEdges = fallbackEdges;
+  try {
+    totalNodes = Number(db.query("MATCH (n) RETURN count(n) AS cnt")[0]?.cnt ?? fallbackNodes);
+  } catch { /* 旧格式库等场景：保留采样数 */ }
+  try {
+    totalEdges = Number(db.query("MATCH (r:CodeRelation) RETURN count(*) AS cnt")[0]?.cnt ?? fallbackEdges);
+  } catch { /* 无边表 */ }
+  return { total_nodes: totalNodes, total_edges: totalEdges };
 }
 
 /**
@@ -334,11 +354,13 @@ function queryGraphByLabelQuota(
 
   assignSpherePositions(nodes);
 
+  const totals = queryTotals(db, nodes.length, 0);
+
   return {
     nodes,
     edges: [],
-    total_nodes: nodes.length,
-    total_edges: 0,
+    total_nodes: totals.total_nodes,
+    total_edges: totals.total_edges,
   };
 }
 

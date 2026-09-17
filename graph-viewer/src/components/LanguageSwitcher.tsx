@@ -16,10 +16,11 @@ export function LanguageSwitcher() {
         <button
           key={opt.value}
           onClick={() => setLocale(opt.value)}
-          className={`px-2 py-1 rounded-md text-[11px] font-medium transition-all duration-200 ${
+          aria-pressed={locale === opt.value}
+          className={`px-2.5 py-1.5 rounded-md text-[11px] font-medium transition-all duration-200 ${
             locale === opt.value
               ? "bg-primary/10 text-primary"
-              : "text-foreground/30 hover:text-foreground/50"
+              : "text-fg-subtle hover:text-foreground/80"
           }`}
         >
           {opt.label}

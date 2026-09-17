@@ -11,6 +11,8 @@ export interface GraphNode {
   qualified_name?: string;
   start_line?: number;
   end_line?: number;
+  /* arch_diff 快照的变更标注（仅 snapshot 模式，普通加载为 undefined） */
+  change?: "none" | "added" | "removed" | "changed";
   /* 力导向布局坐标（后端计算） */
   x: number;
   y: number;
@@ -55,6 +57,8 @@ export interface GraphEdge {
   confidence: number;
   start_line?: number;
   project: string;
+  /* arch_diff 快照的变更标注（仅 snapshot 模式） */
+  change?: "none" | "added" | "removed" | "changed";
 }
 
 /* CodeNexus 的 31 种边类型 */

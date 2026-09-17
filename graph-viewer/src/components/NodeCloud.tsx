@@ -46,6 +46,11 @@ export function NodeCloud({ nodes, edges, highlightedIds, traceNodeIds, onHover,
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const glowRef = useRef<THREE.InstancedMesh>(null);
   const materialRef = useRef<THREE.MeshStandardMaterial>(null);
+  /* 减少动态偏好 — 关闭装饰性呼吸/漂移，保留爆炸展开与交互反馈 */
+  const prefersReducedMotion = useMemo(
+    () => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    [],
+  );
   /* 弹性动画状态 */
   const hoveredRef = useRef<number | null>(null);
   const lastPointerMoveRef = useRef(0); /* 记录最后一次 pointerMove 时间 */
@@ -194,9 +199,9 @@ export function NodeCloud({ nodes, edges, highlightedIds, traceNodeIds, onHover,
         colorMul = 1.0;
       }
 
-      /* 呼吸动画 — ±5% 轻微脉动 */
+      /* 呼吸动画 — ±5% 轻微脉动（reduced-motion 下静止） */
       const breathPhase = i * 0.37;
-      const breath = 1.0 + Math.sin(t * 1.5 + breathPhase) * 0.05;
+      const breath = prefersReducedMotion ? 1.0 : 1.0 + Math.sin(t * 1.5 + breathPhase) * 0.05;
 
       /* 目标弹簧缩放 */
       let targetScale = baseScale * breath;
@@ -227,8 +232,8 @@ export function NodeCloud({ nodes, edges, highlightedIds, traceNodeIds, onHover,
       const explodedY = finalY * explodeEased;
       const explodedZ = finalZ * explodeEased;
 
-    /* 位置漂移 — 轻柔浮动效果（动画完成后才生效） */
-    const driftPhase = Math.min(1, explodeElapsed / (EXPLODE_DURATION + 0.5));
+    /* 位置漂移 — 轻柔浮动效果（动画完成后才生效；reduced-motion 下静止） */
+    const driftPhase = prefersReducedMotion ? 0 : Math.min(1, explodeElapsed / (EXPLODE_DURATION + 0.5));
       const driftX = Math.sin(t * 0.3 + i * 0.71) * 2.5 * driftPhase;
       const driftY = Math.cos(t * 0.4 + i * 0.53) * 2.5 * driftPhase;
       const driftZ = Math.sin(t * 0.35 + i * 0.97) * 2.5 * driftPhase;

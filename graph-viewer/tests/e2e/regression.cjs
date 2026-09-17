@@ -36,33 +36,29 @@ async function shot(page, name) {
   await page.getByRole('button', { name: /Demo Mode|演示模式/ }).click();
   await page.waitForTimeout(2800);
 
-  /* V1: BUG-1 — fresh mount, NO unlock; hover raster finds tooltip, click opens panel */
+  /* V1: BUG-1 — fresh mount, NO unlock; hover raster finds tooltip, click opens panel
+   * 漂移动画让节点持续移动：扫描命中后必须在同一点立即点击，
+   * 否则数百毫秒的间隔足以让 ~10px 的球体漂出点击位置 */
   let hoverHit = null;
+  let panelHit = null;
   outer1:
   for (const y of [482, 430, 530, 380, 580]) {
     for (let x = 600; x <= 1100; x += 15) {
       await page.mouse.move(x, y);
       await page.waitForTimeout(50);
-      if (await page.locator('div.bg-background\\/95').count() > 0) { hoverHit = [x, y]; break outer1; }
+      if (await page.locator('div.bg-background\\/95').count() > 0) {
+        hoverHit = [x, y];
+        await page.mouse.click(x, y); /* 原位立即点击 */
+        await page.waitForTimeout(800);
+        if (/OUTBOUND|INBOUND/.test(await page.locator('body').innerText())) {
+          panelHit = hoverHit;
+          break outer1;
+        }
+      }
     }
   }
   log('V1a hover tooltip on fresh mount', !!hoverHit, `tooltip at ${hoverHit}`);
   await shot(page, 'v1_hover_tooltip');
-  let panelHit = null;
-  if (hoverHit) {
-    await page.mouse.click(hoverHit[0], hoverHit[1]);
-    await page.waitForTimeout(800);
-    if (/OUTBOUND|INBOUND/.test(await page.locator('body').innerText())) panelHit = hoverHit;
-  } else {
-    // fallback grid click
-    for (let y = 350; y <= 640 && !panelHit; y += 12) {
-      for (let x = 600; x <= 1100 && !panelHit; x += 12) {
-        await page.mouse.click(x, y);
-        await page.waitForTimeout(40);
-        if (/OUTBOUND|INBOUND/.test(await page.locator('body').innerText())) panelHit = [x, y];
-      }
-    }
-  }
   log('V1b node click opens panel on fresh mount', !!panelHit, `panel opened at ${panelHit}`);
   await shot(page, 'v1_panel_open');
 
@@ -134,19 +130,21 @@ async function shot(page, name) {
   const mainDup = /\d+ nodes \/ \d+ edges/.test(mainText);
   log('V6 HUD dedup', headerHasCounts && !mainDup, `header counts=${headerHasCounts}, HUD duplicate=${mainDup}`);
 
-  /* V7: regressions — Class toggle, file filter, back */
+  /* V7: regressions — Class toggle, file filter, back
+   * header 计数格式为 "shown / total nodes / edges"（采样透明化），
+   * demo 全量展示时省略 " / total" */
   await page.getByText('Class', { exact: true }).first().click();
   await page.waitForTimeout(700);
   const h1 = await page.locator('header').innerText();
-  const dropped = /20 nodes \/ 16 edges/.test(h1);
+  const dropped = /20 \/ 25 nodes \/ 16 edges/.test(h1) || /20 nodes \/ 16 edges/.test(h1);
   await page.getByText('Class', { exact: true }).first().click();
   await page.waitForTimeout(500);
-  log('V7a Class toggle regression', dropped, `header after off: ${h1.match(/\d+ nodes \/ \d+ edges/)?.[0]}`);
+  log('V7a Class toggle regression', dropped, `header after off: ${h1.match(/\d+ \/ \d+ nodes \/ \d+ edges|\d+ nodes \/ \d+ edges/)?.[0]}`);
 
   await page.getByPlaceholder(/Filter by file path/i).fill('parse');
   await page.waitForTimeout(600);
   const h2 = await page.locator('header').innerText();
-  log('V7b file filter regression', /3 nodes \/ 2 edges/.test(h2), h2.match(/\d+ nodes \/ \d+ edges/)?.[0]);
+  log('V7b file filter regression', /3 \/ 25 nodes \/ 2 edges/.test(h2) || /3 nodes \/ 2 edges/.test(h2), h2.match(/\d+ \/ \d+ nodes \/ \d+ edges|\d+ nodes \/ \d+ edges/)?.[0]);
   await page.getByPlaceholder(/Filter by file path/i).fill('');
   await page.waitForTimeout(400);
 

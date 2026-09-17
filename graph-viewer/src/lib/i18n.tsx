@@ -23,6 +23,17 @@ function detectLocale(): Locale {
   return lang.startsWith("zh") ? "zh" : "en";
 }
 
+/* 初始语言：持久化偏好优先，否则检测浏览器语言。
+ * 不能先渲染检测结果再异步读偏好——那样挂载时的持久化 effect
+ * 会先覆写 localStorage，用户选择永远丢失。 */
+function initialLocale(): Locale {
+  try {
+    const saved = localStorage.getItem("codenexus-locale");
+    if (saved === "zh" || saved === "en") return saved;
+  } catch { /* 隐私模式等场景：退回检测 */ }
+  return detectLocale();
+}
+
 /* 翻译字典 */
 const dictionaries: Record<Locale, Record<string, string>> = {
   en: {
@@ -35,8 +46,6 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "landing.acceptsLbug": "Accepts .lbug database files",
     "landing.demo": "Demo Mode",
     "landing.loadingFile": "Loading database...",
-    "landing.fileTooLarge": "File is larger than 500MB, loading may be slow",
-    "landing.confirmLoad": "Load Anyway",
     /* Loading / Error / Empty */
     "loading.text": "Loading graph data",
     "loading.stageCopy": "Reading database into local engine…",
@@ -55,6 +64,8 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "header.selectFile": "Select File",
     "header.clearTrace": "Clear trace",
     "header.memoryMode": "Memory saver",
+    "header.nodeLimit": "Node limit",
+    "header.home": "Back to start",
     /* Graph HUD */
     "hud.nodes": "nodes",
     "hud.edges": "edges",
@@ -68,8 +79,7 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "hud.noRelations": "No relation data in this database — showing nodes only",
     "hud.resetFilters": "Reset Filters",
     /* FilterPanel */
-    "filter.projectName": "Project",
-    "filter.projectPlaceholder": "Filter by project...",
+    "filter.title": "Filters",
     "filter.filePath": "File Path",
     "filter.filePlaceholder": "Filter by file path...",
     "filter.nodeTypes": "Node Types",
@@ -120,8 +130,6 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "landing.acceptsLbug": "支持 .lbug 数据库文件",
     "landing.demo": "演示模式",
     "landing.loadingFile": "正在加载数据库...",
-    "landing.fileTooLarge": "文件超过 500MB，加载可能较慢",
-    "landing.confirmLoad": "仍然加载",
     /* Loading / Error / Empty */
     "loading.text": "正在加载图数据",
     "loading.stageCopy": "正在读取数据库到本地引擎…",
@@ -140,6 +148,8 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "header.selectFile": "选择文件",
     "header.clearTrace": "清除追踪",
     "header.memoryMode": "省内存模式",
+    "header.nodeLimit": "节点上限",
+    "header.home": "返回首页",
     /* Graph HUD */
     "hud.nodes": "节点",
     "hud.edges": "边",
@@ -153,8 +163,7 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "hud.noRelations": "库中未检测到关系数据——仅展示节点",
     "hud.resetFilters": "重置筛选",
     /* FilterPanel */
-    "filter.projectName": "项目名称",
-    "filter.projectPlaceholder": "按项目名筛选...",
+    "filter.title": "筛选",
     "filter.filePath": "文件路径",
     "filter.filePlaceholder": "按文件路径筛选...",
     "filter.nodeTypes": "节点类型",
@@ -197,7 +206,7 @@ const dictionaries: Record<Locale, Record<string, string>> = {
 };
 
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocale] = useState<Locale>(detectLocale);
+  const [locale, setLocale] = useState<Locale>(initialLocale);
 
   const t = useCallback(
     (key: string): string => dictionaries[locale][key] ?? key,
@@ -208,14 +217,6 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     try { localStorage.setItem("codenexus-locale", locale); } catch {}
   }, [locale]);
-
-  /* 初始化时读取持久化偏好 */
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("codenexus-locale");
-      if (saved === "zh" || saved === "en") setLocale(saved);
-    } catch {}
-  }, []);
 
   return (
     <I18nContext.Provider value={{ locale, setLocale, t }}>

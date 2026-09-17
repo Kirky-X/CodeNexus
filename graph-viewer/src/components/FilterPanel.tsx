@@ -59,8 +59,9 @@ export function FilterPanel({
       {/* 文件路径筛选 */}
       <div className="px-3 pt-3 pb-2 border-b border-border/30 shrink-0">
         <div>
-          <p className="text-xs font-medium text-foreground/40 mb-1.5 uppercase tracking-wider">{t("filter.filePath")}</p>
+          <label htmlFor="cn-file-filter" className="text-xs font-medium text-fg-subtle mb-1.5 uppercase tracking-wider block">{t("filter.filePath")}</label>
           <Input
+            id="cn-file-filter"
             placeholder={t("filter.filePlaceholder")}
             value={fileFilter}
             onChange={(e) => onFileFilterChange(e.target.value)}
@@ -74,11 +75,11 @@ export function FilterPanel({
           {/* 节点类型（按分组） */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <p className="text-xs font-medium text-foreground/40 uppercase tracking-wider">{t("filter.nodeTypes")}</p>
+              <p className="text-xs font-medium text-fg-subtle uppercase tracking-wider">{t("filter.nodeTypes")}</p>
               <div className="flex items-center gap-1.5">
-                <button onClick={onEnableAll} className="text-xs text-primary/70 hover:text-primary transition-colors">{t("filter.selectAll")}</button>
-                <span className="text-foreground/10">|</span>
-                <button onClick={onDisableAll} className="text-xs text-primary/70 hover:text-primary transition-colors">{t("filter.selectNone")}</button>
+                <button onClick={onEnableAll} className="text-xs text-primary hover:text-primary/80 transition-colors">{t("filter.selectAll")}</button>
+                <span className="text-foreground/10" aria-hidden="true">|</span>
+                <button onClick={onDisableAll} className="text-xs text-primary hover:text-primary/80 transition-colors">{t("filter.selectNone")}</button>
               </div>
             </div>
             {Object.entries(NODE_LABEL_GROUPS).map(([group, labels]) => {
@@ -86,7 +87,7 @@ export function FilterPanel({
               if (groupLabels.length === 0) return null;
               return (
                 <div key={group} className="mb-1.5">
-                  <p className="text-xs text-foreground/25 mb-1 font-medium">{groupNames[group] ?? group}</p>
+                  <p className="text-xs text-fg-subtle mb-1 font-medium">{groupNames[group] ?? group}</p>
                   <div className="flex flex-wrap gap-1">
                     {groupLabels.map((label) => {
                       const count = labelCounts.find(([lc]) => lc === label)?.[1] ?? 0;
@@ -96,13 +97,18 @@ export function FilterPanel({
                         <button
                           key={label}
                           onClick={() => onToggleLabel(label)}
-                          className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium transition-all border ${
-                            on ? "border-white/[0.08] bg-white/[0.04]" : "border-transparent opacity-25"
+                          aria-pressed={on}
+                          className={`inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium transition-all border ${
+                            on ? "border-white/[0.08] bg-white/[0.04]" : "border-white/[0.04] bg-transparent"
                           }`}
                         >
-                          <span className="w-[5px] h-[5px] rounded-full" style={{ backgroundColor: on ? c : "#444" }} />
-                          <span style={{ color: on ? c : "#555" }}>{label}</span>
-                          <span className="text-foreground/40 tabular-nums">{count}</span>
+                          <span
+                            className={`w-[5px] h-[5px] rounded-full shrink-0 ${on ? "" : "opacity-40"}`}
+                            style={{ backgroundColor: c }}
+                            aria-hidden="true"
+                          />
+                          <span style={on ? { color: c } : undefined} className={on ? undefined : "text-fg-subtle"}>{label}</span>
+                          <span className="text-fg-subtle tabular-nums">{count}</span>
                         </button>
                       );
                     })}
@@ -114,7 +120,7 @@ export function FilterPanel({
 
           {/* 关系类型 */}
           <div>
-            <p className="text-xs font-medium text-foreground/40 mb-1.5 uppercase tracking-wider">{t("filter.edgeTypes")}</p>
+            <p className="text-xs font-medium text-fg-subtle mb-1.5 uppercase tracking-wider">{t("filter.edgeTypes")}</p>
             <div className="flex flex-wrap gap-1">
               {edgeTypeCounts.map(([type, count]) => {
                 const on = enabledEdgeTypes.has(type);
@@ -123,13 +129,18 @@ export function FilterPanel({
                   <button
                     key={type}
                     onClick={() => onToggleEdgeType(type)}
-                    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium transition-all border ${
-                      on ? "border-white/[0.06] bg-white/[0.03] text-foreground/60" : "border-transparent opacity-20 text-foreground/30"
+                    aria-pressed={on}
+                    className={`inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium transition-all border ${
+                      on ? "border-white/[0.06] bg-white/[0.03] text-foreground/70" : "border-white/[0.04] bg-transparent text-fg-subtle"
                     }`}
                   >
-                    <span className="w-[5px] h-[5px] rounded-full" style={{ backgroundColor: on ? c : "#444" }} />
+                    <span
+                      className={`w-[5px] h-[5px] rounded-full shrink-0 ${on ? "" : "opacity-40"}`}
+                      style={{ backgroundColor: c }}
+                      aria-hidden="true"
+                    />
                     {type.replace(/_/g, " ").toLowerCase()}
-                    <span className="text-foreground/15 tabular-nums">{count}</span>
+                    <span className="text-fg-subtle tabular-nums">{count}</span>
                   </button>
                 );
               })}
@@ -142,13 +153,15 @@ export function FilterPanel({
       <div className="px-3 py-2 border-t border-border/20 shrink-0">
         <button
           onClick={onToggleShowLabels}
+          role="checkbox"
+          aria-checked={showLabels}
           className={`inline-flex items-center gap-1.5 text-sm font-medium transition-all ${
-            showLabels ? "text-primary" : "text-foreground/30"
+            showLabels ? "text-primary" : "text-fg-subtle"
           }`}
         >
           <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-all ${
-            showLabels ? "border-primary bg-primary/20" : "border-foreground/15"
-          }`}>
+            showLabels ? "border-primary bg-primary/20" : "border-foreground/25"
+          }`} aria-hidden="true">
             {showLabels && <span className="text-primary text-[9px]">✓</span>}
           </span>
           {t("filter.showLabels")}
