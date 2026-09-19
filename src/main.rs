@@ -775,12 +775,14 @@ const SENTINEL_DEFAULTS: &[(&str, &str, &str)] = &[
     ("impact", "max_depth", "0"),
     ("impact", "include_tests", "false"),
     // — context: depth defaults to 1 (USER_GUIDE example), empty project =
-    // no project validation, enhanced=false = legacy 360 view, budget 0 =
-    // unlimited (no packing receipt attached).
+    // no project validation, enhanced=false = legacy 360 view.
+    // NOTE: no `budget` entry — the `context` CLI command does not define a
+    // `budget` parameter (token budgeting lives in service::budget, applied
+    // internally); a sentinel entry here would panic clap's `mut_arg`
+    // ("Argument `budget` is undefined") on every CLI startup.
     ("context", "depth", "1"),
     ("context", "project", ""),
     ("context", "enhanced", "false"),
-    ("context", "budget", "0"),
     // — ci: base_mode defaults to head (CI diffs committed work against
     // HEAD); fail_on defaults to high (only the biggest blast radii block);
     // empty project = no project validation.
@@ -798,9 +800,10 @@ const SENTINEL_DEFAULTS: &[(&str, &str, &str)] = &[
     ("lint", "rules", ".codenexus/rules.json"),
     ("lint", "fail_on", "error"),
     ("lint", "project", ""),
-    // — daemon: impact notifications default off (opt-in via --notify-impact
-    // or .codenexus/config.json general.notify_impact).
-    ("daemon", "notify_impact", "false"),
+    // NOTE: no `daemon notify_impact` entry — the `daemon` CLI command only
+    // defines `path`/`name`; impact notifications have no CLI flag today
+    // (a sentinel entry here would panic clap's `mut_arg`
+    // ("Argument `notify_impact` is undefined") on every CLI startup).
     // — taint: rules mode by default (empty source/sink); language filter
     // empty = all rule languages.
     ("taint", "source", ""),
@@ -1255,6 +1258,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(db_discover)]
     fn default_db_path_falls_back_when_no_args() {
         let cmd = index_sub_with(None, None);
         let m = cmd.get_matches_from(["codenexus", "index"]);
@@ -1263,6 +1267,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(db_discover)]
     fn default_db_path_does_not_panic_when_subcommand_has_no_name_arg() {
         // Real commands like `search`/`impact`/`context` do not define a `name`
         // or `path` arg. default_db_path must use [`FALLBACK_PROJECT_NAME`]

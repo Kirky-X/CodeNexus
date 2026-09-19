@@ -459,7 +459,11 @@ impl Daemon {
             .map_err(|e| DaemonError::Signal(e.to_string()))?;
         flag::register(SIGINT, Arc::clone(&self.stop))
             .map_err(|e| DaemonError::Signal(e.to_string()))?;
-        info!(signals = "SIGTERM,SIGINT", "信号处理器已注册");
+        info!(
+            signals = "SIGTERM,SIGINT",
+            "{}",
+            crate::i18n::tr("daemon-signals-registered")
+        );
         Ok(())
     }
 
@@ -478,30 +482,35 @@ impl Daemon {
             path = %self.watch_path.display(),
             project = %self.project_name,
             debounce_ms = self.debounce_ms,
-            "守护模式已启动"
+            "{}",
+            crate::i18n::tr("daemon-started")
         );
 
         let tick = Duration::from_millis(TICK_INTERVAL_MS);
         loop {
             if self.stop.load(Ordering::SeqCst) {
-                info!("收到停止信号，守护模式退出");
+                info!("{}", crate::i18n::tr("daemon-stop-signal-received"));
                 break;
             }
             match rx.recv_timeout(tick) {
                 Ok(Ok(events)) => {
                     if self.verbose.load(Ordering::Relaxed) {
-                        debug!(count = events.len(), "处理防抖事件批次");
+                        debug!(
+                            count = events.len(),
+                            "{}",
+                            crate::i18n::tr("daemon-debounce-batch")
+                        );
                     }
                     self.process_debounced_events(&events);
                 }
                 Ok(Err(errors)) => {
                     for err in &errors {
-                        warn!(error = %err, "文件监视器错误");
+                        warn!(error = %err, "{}", crate::i18n::tr("daemon-watch-error"));
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => continue,
                 Err(RecvTimeoutError::Disconnected) => {
-                    warn!("事件通道已断开，守护模式退出");
+                    warn!("{}", crate::i18n::tr("daemon-channel-disconnected"));
                     break;
                 }
             }
@@ -517,19 +526,20 @@ impl Daemon {
         let coordinator = ShutdownCoordinator::new();
         coordinator.set_global_timeout(Duration::from_secs(10));
         coordinator.register_hook(ShutdownPhase::StopRequests, || {
-            info!("停机阶段 1/3：停止接收新文件事件");
+            info!("{}", crate::i18n::tr("daemon-shutdown-phase-1"));
         });
         coordinator.register_hook(ShutdownPhase::DrainQueue, || {
-            info!("停机阶段 2/3：排空防抖事件队列");
+            info!("{}", crate::i18n::tr("daemon-shutdown-phase-2"));
         });
         coordinator.register_hook(ShutdownPhase::CloseConnections, || {
-            info!("停机阶段 3/3：关闭图数据库连接");
+            info!("{}", crate::i18n::tr("daemon-shutdown-phase-3"));
         });
         let result = coordinator.shutdown();
         info!(
             ok = result.is_ok(),
             timed_out = ?result.timed_out_phases(),
-            "分阶段停机完成"
+            "{}",
+            crate::i18n::tr("daemon-shutdown-complete")
         );
     }
 
@@ -555,7 +565,7 @@ impl Daemon {
                 Ok(Ok(events)) => self.process_debounced_events(&events),
                 Ok(Err(errors)) => {
                     for err in &errors {
-                        warn!(error = %err, "文件监视器错误");
+                        warn!(error = %err, "{}", crate::i18n::tr("daemon-watch-error"));
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => continue,

@@ -17,3 +17,21 @@ index-incremental-failed = Incremental indexing failed, continuing to watch
 project-param-required = The project parameter is required
 project-not-found = Project '{ $name }' not found
 node-not-found = Node '{ $name }' not found
+
+# daemon: event loop lifecycle (src/daemon/daemon.rs)
+daemon-signals-registered = Signal handlers registered
+daemon-started = Daemon mode started
+daemon-stop-signal-received = Stop signal received, daemon exiting
+daemon-debounce-batch = Processing debounced event batch
+daemon-watch-error = File watcher error
+daemon-channel-disconnected = Event channel disconnected, daemon exiting
+daemon-shutdown-phase-1 = Shutdown phase 1/3: stop accepting new file events
+daemon-shutdown-phase-2 = Shutdown phase 2/3: drain debounced event queue
+daemon-shutdown-phase-3 = Shutdown phase 3/3: close graph database connections
+daemon-shutdown-complete = Phased shutdown complete
+
+# graph-viewer server: auth / startup logs (graph-viewer/server/src/main.rs)
+graph-host-forbidden = This service only allows local loopback access
+graph-token-missing = Missing or incorrect x-graph-token header
+graph-server-started = Graph server started: http://127.0.0.1:9800 (requests require the x-graph-token header, see stdout)
+graph-project-discovered = Discovered project: { $name } -> { $path }

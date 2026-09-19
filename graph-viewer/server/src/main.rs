@@ -205,7 +205,7 @@ async fn require_auth(
         return (
             StatusCode::FORBIDDEN,
             Json(ApiError {
-                error: "本服务仅允许本机回环访问".to_string(),
+                error: i18n::tr("graph-host-forbidden"),
             }),
         )
             .into_response();
@@ -219,7 +219,7 @@ async fn require_auth(
         return (
             StatusCode::UNAUTHORIZED,
             Json(ApiError {
-                error: "缺少或错误的 x-graph-token 头".to_string(),
+                error: i18n::tr("graph-token-missing"),
             }),
         )
             .into_response();
@@ -262,9 +262,7 @@ async fn main() {
         .expect("Failed to bind to 127.0.0.1:9800");
 
     println!("graph-server auth token: {auth_token}");
-    tracing::info!(
-        "图数据服务已启动: http://127.0.0.1:9800（请求需带 x-graph-token 头，见 stdout）"
-    );
+    tracing::info!("{}", i18n::tr("graph-server-started"));
 
     axum::serve(listener, app).await.expect("Server error");
 }
@@ -298,9 +296,17 @@ async fn scan_projects(state: &CodeNexusState) {
                             db_path: canonical,
                         });
                         tracing::info!(
-                            "发现项目: {} -> {}",
-                            name,
-                            projects.last().unwrap().db_path.display()
+                            "{}",
+                            i18n::t(
+                                "graph-project-discovered",
+                                &[
+                                    ("name", name.clone()),
+                                    (
+                                        "path",
+                                        projects.last().unwrap().db_path.display().to_string()
+                                    ),
+                                ]
+                            )
                         );
                     }
                 }

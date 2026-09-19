@@ -3720,6 +3720,7 @@ version = "0.5.0-rc.4"
 dependencies = [
  "anyhow",
  "clap",
+ "fluent-bundle",
  "http",
  "inklog",
  "inventory",
@@ -3731,6 +3732,7 @@ dependencies = [
  "thiserror",
  "tonic-build",
  "tonic-prost-build",
+ "unic-langid",
 ]
 
 [[package]]
