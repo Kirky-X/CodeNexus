@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! 项目生命周期：索引多个项目 → 列出 → 按名解析 → 删除。

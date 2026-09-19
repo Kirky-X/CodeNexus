@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 //! codenexus-verify — Cross-validation harness for CodeNexus parsing.
 //!
 //! Indexes a target repo with CodeNexus, fetches the gitnexus reference index

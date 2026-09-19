@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Edge entity and builder (DDD §5.8).

@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! 架构总览 + 自包含交互式架构图 HTML + 双项目架构 diff。

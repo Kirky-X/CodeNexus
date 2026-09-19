@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 共享爆炸动画进度 — 节点与边线共用同一时间轴，保证同步展开 */
 
 export const EXPLODE_DURATION = 1.2;

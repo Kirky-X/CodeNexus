@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Incremental indexing via BLAKE3 hash diffing (ADR-009).

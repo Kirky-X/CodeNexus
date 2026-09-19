@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! `detect_changes` service: find symbols affected by uncommitted git changes.
@@ -7,7 +7,6 @@
 //! ranges, then queries the graph for symbols whose `[startLine, endLine]`
 //! overlap any changed range. Each affected symbol is annotated with an
 //! `incoming_edge_count` and a `risk_level` (low / medium / high).
-
 use std::fmt;
 use std::path::Path;
 use std::process::Command;
@@ -337,7 +336,7 @@ pub struct AffectedSymbolOutput {
 }
 
 /// Core logic — maps the git diff at `path` to affected symbols (shared by
-/// the CLI and MCP wrappers).
+/// the CLI and MCP wrappers, and reused by the `ci` gate command).
 ///
 /// # Errors
 ///
@@ -346,7 +345,7 @@ pub struct AffectedSymbolOutput {
 /// - [`CodeNexusError::Io`] — `git diff` failed or git is unavailable.
 /// - [`CodeNexusError::Kit`] — the storage capability is unavailable.
 #[cfg(any(feature = "cli", feature = "mcp"))]
-fn run_detect_changes(
+pub(crate) fn run_detect_changes(
     kit: &AsyncKit<AsyncReady>,
     path: &str,
     mode: &str,

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 节点标签 → 颜色映射（按语义分组着色） */
 
 const LABEL_COLORS: Record<string, string> = {

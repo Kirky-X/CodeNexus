@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Shared benchmark fixtures.
@@ -24,9 +24,6 @@
 //!
 //! [`IndexFacade`]: codenexus::index::IndexFacade
 //! [`StorageConnection`]: codenexus::storage::StorageConnection
-
-#![allow(dead_code)]
-
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,7 +38,7 @@ use tempfile::TempDir;
 const LANGUAGES: &[&str] = &["rs", "c", "f90", "py", "ts"];
 
 /// Generates a temp repository containing `file_count` source files spread
-/// evenly across the 5 supported languages(
+/// evenly across the 5 supported languages (see
 /// `generate_large_repo`).
 ///
 /// Each file carries a minimal parseable symbol definition (`fn`/`int`/

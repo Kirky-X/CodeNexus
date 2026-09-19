@@ -1,9 +1,10 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Daemon event types and observer trait (Observer pattern).
-
 use std::path::PathBuf;
+
+use crate::index::IndexResult;
 
 /// 文件变更事件（观察者模式中的主题数据）。
 ///
@@ -28,6 +29,14 @@ pub trait EventObserver: Send {
     /// 实现者应在此方法中执行索引等耗时操作。错误应内部记录（日志），
     /// 不应 panic（符合状态机"索引失败 → 记录日志 → 回到监视中"）。
     fn on_events(&mut self, events: &[DaemonEvent]);
+
+    /// 增量索引成功完成后的回调（默认空实现）。
+    ///
+    /// 仅关注文件事件的观察者（如 [`IndexObserver`] 自身）无需实现；
+    /// 关注索引产物的观察者（如影响告警）覆写此方法。由
+    /// [`IndexObserver`](crate::daemon::IndexObserver) 在
+    /// `index_incremental` 返回 `Ok` 后按注册顺序回调。
+    fn on_index_complete(&mut self, _result: &IndexResult, _changed_files: &[PathBuf]) {}
 }
 
 #[cfg(test)]

@@ -1,9 +1,8 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Node label enum representing the 44 node types in the CodeNexus graph
 //! (DDD §7.1 base 20 + Interface + H1 extension 23).
-
 use std::fmt;
 use std::str::FromStr;
 
@@ -87,12 +86,14 @@ pub enum NodeLabel {
     Community,
     Tool,
     Embedding,
+    // --- feature-expansion-wave (45): external dependencies ---
+    ExternalPackage,
 }
 
 impl NodeLabel {
     /// Returns all variants in declaration order.
     #[must_use]
-    pub const fn all() -> [NodeLabel; 44] {
+    pub const fn all() -> [NodeLabel; 45] {
         [
             // Structural
             NodeLabel::Project,
@@ -150,6 +151,8 @@ impl NodeLabel {
             NodeLabel::Community,
             NodeLabel::Tool,
             NodeLabel::Embedding,
+            // feature-expansion-wave: external dependencies
+            NodeLabel::ExternalPackage,
         ]
     }
 
@@ -202,6 +205,7 @@ impl NodeLabel {
             NodeLabel::Community => "Community",
             NodeLabel::Tool => "Tool",
             NodeLabel::Embedding => "Embedding",
+            NodeLabel::ExternalPackage => "ExternalPackage",
         }
     }
 }
@@ -261,6 +265,7 @@ impl FromStr for NodeLabel {
             "community" => Ok(NodeLabel::Community),
             "tool" => Ok(NodeLabel::Tool),
             "embedding" => Ok(NodeLabel::Embedding),
+            "externalpackage" => Ok(NodeLabel::ExternalPackage),
             other => Err(format!("unknown NodeLabel: {other}")),
         }
     }
@@ -271,8 +276,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn has_forty_four_variants() {
-        assert_eq!(NodeLabel::all().len(), 44);
+    fn has_forty_five_variants() {
+        assert_eq!(NodeLabel::all().len(), 45);
     }
 
     #[test]

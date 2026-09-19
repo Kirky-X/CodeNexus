@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 3D 球面布局引擎 — 前端计算，用于无后端坐标时的降级方案 */
 
 import type { GraphNode, GraphEdge } from "./types";

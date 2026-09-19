@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 3D 边线渲染 — 合并为单个 LineSegments（1 次 draw call），支持爆炸动画
  *
  * 性能设计：旧实现每条边一个 Line2 组件（每边独立 draw call + 每帧

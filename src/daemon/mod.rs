@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! File-watching daemon (Observer pattern).
@@ -34,12 +34,12 @@
 //! [`IndexObserver`] so the unified Kit can hand a pre-configured daemon
 //! handle to `daemon_cmd::run` instead of having the CLI construct
 //! subsystems ad-hoc.
-
 pub mod capability;
 #[allow(clippy::module_inception)]
 pub mod daemon;
 pub mod error;
 pub mod event;
+pub mod impact_observer;
 pub mod index_observer;
 pub mod module;
 
@@ -47,5 +47,6 @@ pub use capability::DaemonRunner;
 pub use daemon::{Daemon, DEFAULT_DEBOUNCE_MS};
 pub use error::DaemonError;
 pub use event::{DaemonEvent, EventObserver};
+pub use impact_observer::{ImpactNotice, ImpactNotifyObserver, ImpactSymbol, SYMBOL_CAP};
 pub use index_observer::IndexObserver;
 pub use module::{DaemonConfig, DaemonModule};

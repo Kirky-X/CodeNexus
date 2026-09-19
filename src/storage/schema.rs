@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! DDL string generation for the LadybugDB schema (DDD §12.1).
@@ -24,7 +24,6 @@
 //! the lbug source). Table names that collide with a reserved keyword —
 //! notably `Macro` — must be wrapped in backticks when used as identifiers.
 //! [`escape_identifier`] handles this transparently for callers.
-
 use crate::model::NodeLabel;
 
 /// LadybugDB reserved keywords that conflict with CodeNexus table names.
@@ -110,7 +109,7 @@ pub fn escape_cypher_string(s: &str) -> String {
         .replace('\0', "\\0")
 }
 
-/// Returns `(table_name, ddl)` pairs for all 44 node tables, in declaration
+/// Returns `(table_name, ddl)` pairs for all 45 node tables, in declaration
 /// order matching [`NodeLabel::all`].
 ///
 /// The DDL strings are the exact statements from DDD §12.1.
@@ -576,6 +575,7 @@ pub fn node_table_columns(label: NodeLabel) -> &'static [&'static str] {
         ],
         // Embedding columns match the vector-store schema (DDD §5.9), not the
         // code-symbol layout. See [`embedding_table_ddl`].
+        NodeLabel::ExternalPackage => &["id", "name", "ecosystem", "language", "project"],
         NodeLabel::Embedding => &[
             "id",
             "nodeId",
@@ -790,6 +790,10 @@ fn ddl_for_label(label: NodeLabel) -> String {
         // symbol. Its DDL is the canonical source in [`embedding_table_ddl`];
         // delegating here keeps `node_table_ddl()` exhaustive without emitting
         // a duplicate CREATE TABLE in [`all_init_ddl`].
+        NodeLabel::ExternalPackage => "CREATE NODE TABLE ExternalPackage (id STRING, name STRING, \
+             ecosystem STRING, language STRING, project STRING, \
+             PRIMARY KEY (id));"
+            .to_string(),
         NodeLabel::Embedding => embedding_table_ddl(),
     }
 }
@@ -834,7 +838,7 @@ mod tests {
     #[test]
     fn node_table_ddl_returns_forty_four_entries() {
         let ddl = node_table_ddl();
-        assert_eq!(ddl.len(), 44, "expected 44 node table DDL entries");
+        assert_eq!(ddl.len(), 45, "expected 45 node table DDL entries");
     }
 
     #[test]
@@ -1126,7 +1130,7 @@ mod tests {
         // + 1 SchemaMeta + 39 indexes (20 secondary + 18 FTS + 1 VECTOR) = 85
         // (added idx_rel_source + idx_rel_target for targeted WHERE
         // e.target/e.source lookups)
-        assert_eq!(ddl.len(), 85, "expected 85 DDL statements total");
+        assert_eq!(ddl.len(), 86, "expected 86 DDL statements total");
         assert!(ddl.iter().any(|s| s.contains("CREATE NODE TABLE Project")));
         assert!(ddl.iter().any(|s| s.contains("CodeRelation")));
         assert!(ddl.iter().any(|s| s.contains("Embedding")));

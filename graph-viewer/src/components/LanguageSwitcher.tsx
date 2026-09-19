@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 语言切换器 */
 
 import { useI18n, type Locale } from "../lib/i18n";

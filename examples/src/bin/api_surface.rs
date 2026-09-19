@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! API/Web 服务面分析：路由表 / schema 校验 / API 影响 / 跨服务调用 / MCP 工具表。

@@ -43,5 +43,7 @@
   },
   "allowScripts": {
     "esbuild@0.25.12": true
-  }
+  },
+  "license": "MIT",
+  "author": "Kirky-X <Kirky-X@outlook.com>"
 }

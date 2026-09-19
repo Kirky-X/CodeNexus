@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! `arch_diff` service: architecture-level semantic diff between two indexed
@@ -7,7 +7,6 @@
 //! Both sides go through the same IR pipeline as `diagram`; the diff and its
 //! machine receipt follow archify's compare contract. The HTML and the
 //! receipt JSON are committed as an atomic pair.
-
 use serde::Serialize;
 
 #[cfg(feature = "diagram")]
@@ -38,6 +37,12 @@ pub struct ArchDiffOutput {
     pub head_project: String,
     pub output_path: String,
     pub receipt_path: String,
+    /// Path of the graph-viewer snapshot JSON written via `--viewer_data`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub viewer_data: Option<String>,
+    /// Path of the standalone viewer HTML written via `--viewer_url`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub viewer_artifact: Option<String>,
     pub receipt: DeltaReceipt,
 }
 
@@ -48,6 +53,7 @@ pub struct ArchDiffOutput {
 /// Returns [`CodeNexusError`] for unknown projects, invalid `--quality`
 /// values, empty `--output`, or quality-gate blocks.
 #[cfg(feature = "diagram")]
+#[allow(clippy::too_many_arguments)]
 pub fn run_arch_diff(
     kit: &AsyncKit<AsyncReady>,
     base_project: &str,
@@ -55,6 +61,8 @@ pub fn run_arch_diff(
     output_path: &str,
     quality: &str,
     title: &str,
+    viewer_data: &str,
+    viewer_url: &str,
 ) -> Result<ArchDiffOutput, CodeNexusError> {
     let profile = QualityProfile::parse(quality)
         .map_err(|bad| CodeNexusError::InvalidInput(format!("unknown quality profile: {bad}")))?;
@@ -74,6 +82,19 @@ pub fn run_arch_diff(
     } else {
         title.to_string()
     };
+    // Delta-carrying viewer snapshot + optional standalone viewer HTML.
+    let snapshot = crate::diagram::viewer::to_viewer_snapshot(
+        &head_doc,
+        Some(&crate::diagram::compare(&base_doc, &head_doc)),
+    );
+    let (viewer_data_written, viewer_artifact) = write_viewer_artifacts(
+        std::path::Path::new(output_path),
+        viewer_data,
+        viewer_url,
+        &head_doc,
+        &snapshot,
+    )?;
+
     let rendered = render_delta(&base_doc, &head_doc, &diff_title).map_err(|err| match err {
         DiagramError::QualityGate(diagnostics) => CodeNexusError::InvalidInput(format!(
             "arch_diff blocked by quality gate: {}",
@@ -104,8 +125,50 @@ pub fn run_arch_diff(
         head_project: head_project.to_string(),
         output_path: output_path.to_string(),
         receipt_path,
+        viewer_data: viewer_data_written,
+        viewer_artifact,
         receipt,
     })
+}
+
+/// Writes the viewer snapshot JSON (`viewer_data` path) and/or the
+/// standalone viewer HTML (`viewer_url`, rendered next to the delta HTML as
+/// `<output>.viewer.html`).
+#[cfg(feature = "diagram")]
+fn write_viewer_artifacts(
+    output_path: &std::path::Path,
+    viewer_data: &str,
+    viewer_url: &str,
+    head_doc: &crate::diagram::DiagramDocument,
+    snapshot: &crate::diagram::ViewerSnapshot,
+) -> Result<(Option<String>, Option<String>), CodeNexusError> {
+    let mut data_written = None;
+    let mut artifact = None;
+    if !viewer_data.trim().is_empty() {
+        let json = serde_json::to_string_pretty(snapshot).map_err(CodeNexusError::from)?;
+        crate::diagram::write_atomically(std::path::Path::new(viewer_data.trim()), json.as_bytes())
+            .map_err(CodeNexusError::Io)?;
+        data_written = Some(viewer_data.trim().to_string());
+    }
+    if !viewer_url.trim().is_empty() {
+        let stage = crate::diagram::viewer::viewer_stage_iframe(viewer_url.trim(), snapshot);
+        let html = crate::diagram::render::render_viewer_html(head_doc, None, &stage).map_err(
+            |placeholder| {
+                CodeNexusError::Internal(format!(
+                    "diagram template missing placeholder {placeholder}"
+                ))
+            },
+        )?;
+        let artifact_path = {
+            let mut name = output_path.as_os_str().to_os_string();
+            name.push(".viewer.html");
+            std::path::PathBuf::from(name)
+        };
+        crate::diagram::write_atomically(&artifact_path, html.as_bytes())
+            .map_err(CodeNexusError::Io)?;
+        artifact = Some(artifact_path.to_string_lossy().to_string());
+    }
+    Ok((data_written, artifact))
 }
 
 /// Builds the canonical architecture IR for one project.
@@ -173,6 +236,8 @@ async fn arch_diff(
     output: String,
     quality: String,
     title: String,
+    viewer_data: String,
+    viewer_url: String,
 ) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
     let out = run_arch_diff(
@@ -182,6 +247,8 @@ async fn arch_diff(
         &output,
         &quality,
         &title,
+        &viewer_data,
+        &viewer_url,
     )
     .map_err(|e| to_api_error(e, "arch_diff_error"))?;
     let json = serde_json::to_string(&out.receipt)
@@ -204,6 +271,8 @@ async fn arch_diff_mcp(
     output: String,
     quality: String,
     title: String,
+    viewer_data: String,
+    viewer_url: String,
 ) -> Result<DeltaReceipt, ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
     run_arch_diff(
@@ -213,6 +282,8 @@ async fn arch_diff_mcp(
         &output,
         &quality,
         &title,
+        &viewer_data,
+        &viewer_url,
     )
     .map_err(|e| to_api_error(e, "arch_diff_error"))
     .map(|out| out.receipt)
@@ -272,6 +343,8 @@ mod tests {
             target.to_str().unwrap(),
             "standard",
             "",
+            "",
+            "",
         )
         .expect("arch_diff should succeed");
         assert!(target.exists(), "delta HTML written");
@@ -301,6 +374,50 @@ mod tests {
     }
 
     #[test]
+    fn run_arch_diff_viewer_data_snapshot_carries_delta_changes() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        {
+            let storage = kit.require::<StorageModule>().expect("storage");
+            seed_base(&*storage);
+            seed_head(&*storage);
+        }
+        let out_dir = TempDir::new().unwrap();
+        let target = out_dir.path().join("delta.html");
+        let snapshot_path = out_dir.path().join("delta.snapshot.json");
+
+        let out = run_arch_diff(
+            &kit,
+            "base",
+            "head",
+            target.to_str().unwrap(),
+            "standard",
+            "",
+            snapshot_path.to_str().unwrap(),
+            "",
+        )
+        .expect("arch_diff should succeed");
+        assert_eq!(
+            out.viewer_data.as_deref(),
+            Some(snapshot_path.to_str().unwrap()),
+            "viewer_data path echoed"
+        );
+        let raw = std::fs::read_to_string(&snapshot_path).expect("snapshot written");
+        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("valid snapshot JSON");
+        assert_eq!(parsed["version"], 1);
+        let changes: Vec<&str> = parsed["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|n| n["change"].as_str())
+            .collect();
+        assert!(
+            changes.contains(&"added"),
+            "head adds a component: {parsed}"
+        );
+    }
+
+    #[test]
     fn run_arch_diff_identical_projects_yield_empty_report() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
@@ -316,6 +433,8 @@ mod tests {
             "base",
             target.to_str().unwrap(),
             "standard",
+            "",
+            "",
             "",
         )
         .expect("self diff should succeed");
@@ -338,6 +457,8 @@ mod tests {
             "base",
             target.to_str().unwrap(),
             "standard",
+            "",
+            "",
             "",
         );
         assert!(matches!(err, Err(CodeNexusError::ProjectNotFound(_))));

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 国际化 — 轻量级 i18n 上下文，支持中/英文自动检测 */
 
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
@@ -57,6 +60,14 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "error.retry": "Retry",
     "error.back": "Back",
     "empty.text": "No graph data available",
+    /* GraphScene WebGL2 fallback */
+    "scene.webgl2Title": "Failed to initialize WebGL2 context",
+    "scene.webgl2Detail": "Your browser or GPU does not support WebGL2. Try a modern browser such as Chrome/Edge, or update your graphics driver and retry.",
+    /* ErrorBoundary */
+    "error.boundaryTitle": "Something went wrong",
+    "error.boundaryReload": "Reload",
+    "error.boundaryOOM": "Out of memory: this file is too large for this device. Close other tabs and retry, or use a smaller database file.",
+    "error.boundaryWebGL": "Graphics initialization failed: your browser or GPU does not support WebGL2. Try a different browser or update your graphics driver.",
     /* Header */
     "header.file": "File",
     "header.callTrace": "Call Trace",
@@ -141,6 +152,14 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "error.retry": "重试",
     "error.back": "返回",
     "empty.text": "暂无图数据",
+    /* GraphScene WebGL2 fallback */
+    "scene.webgl2Title": "无法初始化 WebGL2 图形上下文",
+    "scene.webgl2Detail": "当前浏览器或显卡不支持 WebGL2。请更换 Chrome/Edge 等现代浏览器，或更新显卡驱动后重试。",
+    /* ErrorBoundary */
+    "error.boundaryTitle": "出错了",
+    "error.boundaryReload": "重新加载",
+    "error.boundaryOOM": "内存不足：该文件对当前设备而言过大，请关闭其他标签页后重试，或使用更小的数据库文件。",
+    "error.boundaryWebGL": "图形初始化失败：浏览器或显卡不支持 WebGL2，请更换浏览器或更新显卡驱动。",
     /* Header */
     "header.file": "文件",
     "header.callTrace": "调用追踪中",

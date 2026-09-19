@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 节点详情侧边栏 — 点击节点后右侧滑出的信息面板 */
 
 import { useMemo } from "react";

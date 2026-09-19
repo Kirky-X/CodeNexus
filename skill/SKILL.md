@@ -9,7 +9,7 @@ description: "Code knowledge graph indexer and query tool. Use when indexing cod
 
 ## Description
 
-CodeNexus is a code knowledge graph indexing tool. It parses source code (21 languages via tree-sitter — C, Rust, Fortran, Python, TypeScript, Go, Java, C++, JavaScript, Ruby, Haskell, OCaml, Scala, PHP, C#, Bash, HTML, CSS, JSON, Regex, Verilog) and builds a queryable graph in LadybugDB, supporting call-chain tracing, data-flow analysis, cross-language FFI tracking, semantic search, change-impact analysis, refactoring proposals, LSP integration, and MCP server integration.
+CodeNexus is a code knowledge graph indexing tool. It parses source code (24 languages via tree-sitter — C, Rust, Fortran, Python, TypeScript, Go, Java, C++, JavaScript, Ruby, Haskell, OCaml, Scala, PHP, C#, Bash, HTML, CSS, JSON, Regex, Verilog, Kotlin, Swift, Solidity) and builds a queryable graph in LadybugDB, supporting call-chain tracing, data-flow analysis, cross-language FFI tracking, semantic search, change-impact analysis, refactoring proposals, LSP integration, and MCP server integration.
 
 Use this Skill when you need to index a codebase, query its structure, trace function calls or data flow, analyze the impact of changes, search for symbols, watch files for incremental updates, manage projects, export/import graph artifacts, inspect a symbol's 360° context, detect symbols affected by git changes, propose renames, query an LSP server, or set up MCP integration with AI agents.
 
@@ -42,7 +42,7 @@ cargo build --release
 
 The binary is at `target/release/codenexus` (or `~/.cargo/bin/codenexus` if installed via `cargo install`). Semantic search (vector embeddings) is already included in the default `full` preset — no extra flag needed.
 
-Feature presets: `minimal` (Rust only), `core` (C+Rust+Python), `full` (all 21 languages + daemon + analysis + complexity + api-review + community + cross-service + lsp + mcp). The `mcp` feature enables the sdforge-based MCP server (`codenexus mcp`). At least one `lang-*` feature is required — the crate fails to compile otherwise.
+Feature presets: `minimal` (Rust only), `core` (C+Rust+Python), `full` (all 24 languages + daemon + analysis + complexity + api-review + community + cross-service + lsp + mcp). The `mcp` feature enables the sdforge-based MCP server (`codenexus mcp`). At least one `lang-*` feature is required — the crate fails to compile otherwise.
 
 ## Command Quick Reference
 
@@ -80,6 +80,15 @@ CodeNexus has **29 subcommands** (plus the `codenexus mcp` serve mode) grouped i
 | `setup` | MCP | Auto-detect installed AI agents (Claude Code, Cursor, Codex) and write MCP config for `codenexus mcp`. |
 | `hook` | MCP | Emit PreToolUse/PostToolUse hook JSON. Always exits 0; never blocks. Long-running (reads stdin). |
 | `mcp` | MCP | Serve MCP tools (`query`/`trace`/`impact`/`search`/`context`) over stdio. Long-running. Requires `mcp` feature. |
+| `skill` | MCP | Sync bundled skill docs into installed agents' global skill dirs. Version-stamped; mirrors `setup` overwrite policy. |
+| `ask` | Agent | Natural-language router to the read-only command cores; executes in-process. |
+| `ci` | CI | Architecture gate: fail (exit 2) when the diff touches symbols at/above a risk level. Emits PR-ready markdown. |
+| `lint` | CI | Evaluate a custom Cypher rule pack (`.codenexus/rules.json`); `--fail_on` exit-code gate. |
+| `taint` | Security | Taint audit: builtin source/sink rules (C/Python/JS/PHP/Solidity) or manual `--source`/`--sink`. |
+| `supply` | Security | Supply-chain view: ExternalPackage nodes + DEPENDS_ON edges from unresolved imports. |
+| `evolve` | Analysis | Architecture evolution timeline over the last N commits (worktree snapshots → `evolve.json`/`evolve.html`). |
+| `hub` | Team | Artifact registry client (protocol v1): `push`/`pull`/`list` `.cnxp` artifacts. Requires `hub` feature. |
+| `context --budget` | Query | Token-budget packing for context output (chars/4 estimate; appends a `budget` receipt). |
 
 ## Critical Known Issues (0.3.5)
 

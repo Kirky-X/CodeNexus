@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Deterministic architecture-diagram pipeline (absorbed from archify).
@@ -15,7 +15,6 @@
 //!   measured evidence and curated fixes — never a bare message.
 //! - **Truth boundary**: edges come from the static index (CALLS, HTTP
 //!   facts); the diagram never claims runtime behavior.
-
 pub mod deliver;
 pub mod delta;
 pub mod evidence;
@@ -26,6 +25,7 @@ pub mod render;
 pub mod route;
 pub mod svg;
 pub mod text;
+pub mod viewer;
 
 pub use deliver::write_atomically;
 pub use delta::{
@@ -43,3 +43,4 @@ pub use render::{render, render_with, DiagramError, RenderedDiagram};
 pub use route::{route_edges, RoutedEdge};
 pub use svg::render_svg;
 pub use text::{fit_label, text_units};
+pub use viewer::{to_viewer_snapshot, ChangeState, ViewerEdge, ViewerNode, ViewerSnapshot};

@@ -25,7 +25,7 @@
 <td align="center" width="25%">⚡<br><b>增量管线</b><br><span style="color:#64748B">哈希比对 · 只解析变更</span></td>
 <td align="center" width="25%">🕸️<br><b>属性图模型</b><br><span style="color:#64748B">44类节点 · 30类边 · Cypher</span></td>
 <td align="center" width="25%">🧭<br><b>多跳追踪</b><br><span style="color:#64748B">调用链 · 数据流 · 污点路径</span></td>
-<td align="center" width="25%">🔌<br><b>双入口</b><br><span style="color:#64748B">30 命令 · 8 工具 · 同语义</span></td>
+<td align="center" width="25%">🔌<br><b>双入口</b><br><span style="color:#64748B">38 命令 · 8 工具 · 同语义</span></td>
 </tr>
 </table>
 
@@ -59,7 +59,7 @@
 
 <table style="width:100%; border-collapse: collapse">
 <tr>
-<td width="50%" style="vertical-align:top; padding: 12px">🌐 <b>多语言解析</b><br><span style="color:#64748B">默认 <code>full</code> 预设支持 21 种语言（C、Rust、Fortran、Python、TypeScript、Go、Java、C++、JavaScript、Ruby、Haskell、OCaml、Scala、PHP、C#、Bash、HTML、CSS、JSON、Regex、Verilog），可用 <code>lang-*</code> feature 按需裁剪</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🌐 <b>多语言解析</b><br><span style="color:#64748B">默认 <code>full</code> 预设支持 24 种语言（C、Rust、Fortran、Python、TypeScript、Go、Java、C++、JavaScript、Ruby、Haskell、OCaml、Scala、PHP、C#、Bash、HTML、CSS、JSON、Regex、Verilog、Kotlin、Swift、Solidity），可用 <code>lang-*</code> feature 按需裁剪</span></td>
 <td width="50%" style="vertical-align:top; padding: 12px">🕸️ <b>图数据库</b><br><span style="color:#64748B">LadybugDB 图存储，44 种节点类型 + 30 种边类型，Cypher 子集查询</span></td>
 </tr>
 <tr>
@@ -83,8 +83,16 @@
 <td width="50%" style="vertical-align:top; padding: 12px">📦 <b>团队制品</b><br><span style="color:#64748B"><code>export</code> / <code>import</code> 压缩 <code>.graph.zst</code> 制品，共享索引</span></td>
 </tr>
 <tr>
-<td width="50%" style="vertical-align:top; padding: 12px">🤖 <b>多智能体 MCP</b><br><span style="color:#64748B"><code>setup</code> 自动检测 Claude Code / Cursor / Codex；<code>hook</code> 输出 PreToolUse/PostToolUse JSON；<code>mcp</code> stdio 服务暴露 10 个工具（参数语义写入工具描述）</span></td>
-<td width="50%" style="vertical-align:top; padding: 12px">👁️ <b>文件监视</b><br><span style="color:#64748B">守护进程模式，自动增量索引（<code>daemon</code> feature，SIGTERM/SIGINT 优雅退出）</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🤖 <b>多智能体 MCP</b><br><span style="color:#64748B"><code>setup</code> 自动检测 Claude Code / Cursor / Codex；<code>skill</code> 一键同步技能文档到各 Agent 全局技能目录；<code>hook</code> 输出 PreToolUse/PostToolUse JSON；<code>mcp</code> stdio 服务暴露 10 个工具（参数语义写入工具描述）；<code>ask</code> 自然语言入口路由既有命令</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">👁️ <b>文件监视</b><br><span style="color:#64748B">守护进程模式，自动增量索引（<code>daemon</code> feature，SIGTERM/SIGINT 优雅退出；<code>--notify-impact</code> 变更影响告警）</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">🚦 <b>CI 与架构门禁</b><br><span style="color:#64748B"><code>ci</code> 风险门禁（<code>--fail_on</code> 退出码 + PR Markdown，附官方 GitHub Action）；<code>lint</code> 自定义 Cypher 规则包（<code>.codenexus/rules.json</code>）</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🛡️ <b>安全与供应链</b><br><span style="color:#64748B"><code>taint</code> 内置五语言 source/sink 规则库自动审计；<code>supply</code> 外部依赖入图（ExternalPackage/DEPENDS_ON）供应链视图</span></td>
+</tr>
+<tr>
+<td width="50%" style="vertical-align:top; padding: 12px">📈 <b>架构演化</b><br><span style="color:#64748B"><code>evolve</code> 回放最近 N 个提交：worktree 快照逐个索引，产出指标时间线 JSON + 内联 SVG sparkline HTML</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">📦 <b>制品生态</b><br><span style="color:#64748B"><code>hub</code> push/pull/list（协议 v1，token 或 <code>CODENEXUS_HUB_TOKEN</code>）；<code>skill</code> 一键同步技能文档到 Agent 全局目录；<code>ask</code> 自然语言入口</span></td>
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🧮 <b>分析工具包</b><br><span style="color:#64748B">死代码检测（worklist 可达性 + 置信度）、架构概览、复杂度分析（8 项指标）、社区检测（Leiden）、跨服务调用链</span></td>
@@ -96,7 +104,7 @@
 </tr>
 </table>
 
-除上述核心能力外，CodeNexus 还提供 `context` 上下文组装、`detect_changes` 变更检测、`rename` 重命名影响预检、基于 oxcache 的查询结果缓存与 inklog 结构化日志等能力；全部 29 个子命令（外加 `mcp` 服务模式）的分组清单见 [🛠️ CLI 命令](#️-cli-命令) 一节，逐命令参数语义与可运行示例见 [📖 用户指南 · 命令详解](docs/USER_GUIDE.md#️-命令详解)。
+除上述核心能力外，CodeNexus 还提供 `context` 上下文组装（`--budget` token 预算器）、`detect_changes` 变更检测、`rename` 重命名影响预检、`ask` 自然语言入口、`ci`/`lint` 架构门禁、`taint` 污点审计、`supply` 供应链视图、`evolve` 演化回放、`hub` 制品客户端、`skill` 技能同步、基于 oxcache 的查询结果缓存与 inklog 结构化日志等能力；全部 37 个子命令（外加 `mcp` 服务模式）的分组清单见 [🛠️ CLI 命令](#️-cli-命令) 一节，逐命令参数语义与可运行示例见 [📖 用户指南 · 命令详解](docs/USER_GUIDE.md#️-命令详解)。
 
 ---
 
@@ -105,7 +113,7 @@
 ### 📦 安装
 
 ```bash
-# 从 crates.io 安装（默认 full 预设，含全部 21 语言 + 所有功能）
+# 从 crates.io 安装（默认 full 预设，含全部 24 语言 + 所有功能）
 cargo install codenexus
 
 # 从源码构建
@@ -225,7 +233,7 @@ codenexus search --text "authentication logic" --fulltext true
 
 ## 🛠️ CLI 命令
 
-CodeNexus 提供 **29 个子命令**（外加 `codenexus mcp` 服务模式），按功能分为六组：
+CodeNexus 提供 **37 个子命令**（外加 `codenexus mcp` 服务模式），按功能分组：
 
 - **索引与项目管理**：`index` / `daemon` / `status` / `list` / `clean` / `export` / `import`
 - **查询与搜索**：`query` / `search` / `context`
@@ -406,7 +414,8 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 <tr><td align="center">✅</td><td>Harness 现代化</td><td>v0.3.3 — CI 升级 Rust 1.91 + 6 特性矩阵 + dependabot + codeql + crates.io 发布</td></tr>
 <tr><td align="center">✅</td><td>大仓库内存防线</td><td>v0.3.11 — 大型仓库索引 OOM 修复（L1–L7 七层防线）：<code>MemoryBudget</code> 三级内存压力 + <code>Graph::nodes_view/edges_view</code> 迭代器 + 流式 CSV + mpsc channel 并行解析 + L5 自适应降级 + L6 管线流式化（<code>ctx.remove</code> 取代 <code>Graph::clone</code>）+ L7 LadybugDB buffer_pool 封顶（4 GB）+ LSP 按需启动 + RAM-first 8× 放大因子预算。70 GB 主机峰值内存从 60 GB 降至 ~4 GB</td></tr>
 <tr><td align="center">🚧</td><td>基础库升级</td><td>自研基础库升级至 RC（trait-kit / sdforge / oxcache 0.5.0-rc.2、inklog 0.3.0-rc.2）；MSRV 1.95 → 1.97.1</td></tr>
-<tr><td align="center">📋</td><td>Web UI 与图可视化</td><td>基于查询门面的 Web UI / 图可视化（<code>diagram</code>/<code>arch_diff</code> 已交付架构图 HTML 与语义 Delta；3D graph-viewer 集成与更多图型仍在规划中）</td></tr>
+<tr><td align="center">✅</td><td>功能拓展波次（feature-expansion-wave）</td><td>2026-09 — RICE 排序的 12 项能力：<code>context --budget</code> token 预算器、<code>ci</code> 架构门禁（含官方 GitHub Action）、<code>lint</code> 自定义架构规则包、<code>skill</code> 技能同步、<code>ask</code> 自然语言入口、graph-viewer 快照合流（<code>diagram</code>/<code>arch_diff</code> <code>--viewer_url</code>）、daemon <code>--notify-impact</code> 影响告警、Kotlin/Swift/Solidity 语言支持、<code>taint</code> 安全审计（内置 source/sink 规则库）、<code>supply</code> 供应链视图（ExternalPackage/DEPENDS_ON）、<code>evolve</code> 架构演化回放、<code>hub</code> 制品客户端（协议 v1）</td></tr>
+<tr><td align="center">📋</td><td>Web UI 与图可视化</td><td>基于查询门面的 Web UI / 图可视化（<code>diagram</code>/<code>arch_diff</code> 已交付架构图 HTML 与语义 Delta 及 graph-viewer 快照合流；3D graph-viewer 深度集成仍在规划中）</td></tr>
 </table>
 
 ---

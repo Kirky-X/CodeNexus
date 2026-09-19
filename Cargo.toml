@@ -4,7 +4,7 @@ version = "0.3.12"
 edition = "2021"
 rust-version = "1.97.1"
 description = "A queryable code knowledge graph tool built on LadybugDB and tree-sitter"
-authors = ["Kirky.X"]
+authors = ["Kirky-X <Kirky-X@outlook.com>"]
 license = "MIT"
 repository = "https://github.com/Kirky-X/codenexus"
 readme = "README.md"
@@ -21,16 +21,23 @@ path = "src/lib.rs"
 [[bin]]
 name = "codenexus"
 path = "src/main.rs"
+# 主 bin 使用 cli 门控的 sdforge/clap——声明 required-features 使
+# minimal 等无 cli 组合跳过 bin 编译（此前为 26 个 unresolved 错误）。
+required-features = ["cli"]
 
 [[bin]]
 name = "codenexus-verify"
 path = "tools/verification/src/main.rs"
+# verify 工具经 lib 的 `pub use sdforge`（cli 门控）取 clap——未开 cli 时该 bin
+# 无法编译；此前缺 required-features 导致 `--no-default-features` 构建必失败
+#（CI 一直用 --lib 编译而未暴露）。
+required-features = ["cli"]
 
 [features]
 default = ["full"]
 minimal = ["lang-rust"]
 core = ["lang-c", "lang-rust", "lang-python"]
-full = ["core", "lang-fortran", "lang-typescript", "lang-go", "lang-java", "lang-cpp", "lang-javascript", "lang-ruby", "lang-haskell", "lang-ocaml", "lang-scala", "lang-php", "lang-csharp", "lang-bash", "lang-html", "lang-css", "lang-json", "lang-regex", "lang-verilog", "daemon", "analysis", "complexity", "api-review", "community", "cross-service", "diagram", "lsp", "cli", "mcp", "cache", "embed", "i18n"]
+full = ["core", "lang-fortran", "lang-typescript", "lang-go", "lang-java", "lang-cpp", "lang-javascript", "lang-ruby", "lang-haskell", "lang-ocaml", "lang-scala", "lang-php", "lang-csharp", "lang-bash", "lang-html", "lang-css", "lang-json", "lang-regex", "lang-verilog", "daemon", "analysis", "complexity", "api-review", "community", "cross-service", "diagram", "lsp", "cli", "mcp", "cache", "embeddings", "i18n", "hub"]
 lang-c = ["dep:tree-sitter-c"]
 lang-rust = ["dep:tree-sitter-rust"]
 lang-fortran = ["dep:tree-sitter-fortran"]
@@ -52,7 +59,8 @@ lang-css = ["dep:tree-sitter-css"]
 lang-json = ["dep:tree-sitter-json"]
 lang-regex = ["dep:tree-sitter-regex"]
 lang-verilog = ["dep:tree-sitter-verilog"]
-embed = ["dep:reqwest", "dep:ort", "dep:tokenizers", "dep:ndarray"]
+# 向量嵌入（ML embeddings，ort/tokenizers）；原名单 `embed` 易与 no-std 语境的 embedded 混淆
+embeddings = ["dep:reqwest", "dep:ort", "dep:tokenizers", "dep:ndarray"]
 daemon = ["dep:notify", "dep:notify-debouncer-full", "dep:signal-hook"]
 analysis = []
 api-review = ["analysis"]
@@ -65,9 +73,10 @@ mcp = ["dep:sdforge", "sdforge/mcp", "sdforge/inklog", "dep:oxiarc-zstd"]
 cli = ["dep:sdforge", "sdforge/cli", "sdforge/inklog", "dep:oxiarc-zstd"]
 cache = ["dep:oxcache"]
 i18n = ["dep:icu_normalizer", "dep:icu_casemap"]
+hub = ["dep:reqwest"]
 
 [dependencies]
-trait-kit = { version = "0.5.0-rc.5", default-features = false, features = ["async", "lifecycle", "health", "shutdown"] }
+trait-kit = { version = "0.5.0-rc.5", path = "../base/trait-kit", default-features = false, features = ["async", "lifecycle", "health", "shutdown"] }
 lbug = "0.20"
 tree-sitter = "0.27"
 tree-sitter-c = { version = "0.24", optional = true }
@@ -118,14 +127,20 @@ lsp-types = { version = "0.97", optional = true }
 lsp-server = { version = "0.10", optional = true }
 crossbeam-channel = { version = "0.5", optional = true }
 url = { version = "2.5", optional = true }
-sdforge = { version = "0.5.0-rc.4", default-features = false, optional = true }
+sdforge = { version = "0.5.0-rc.4", path = "../base/sdforge", default-features = false, optional = true }
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
-oxcache = { version = "0.5.0-rc.4", default-features = false, features = ["minimal", "macros"], optional = true }
+oxcache = { version = "0.5.0-rc.4", path = "../base/oxcache", default-features = false, features = ["minimal", "macros"], optional = true }
 oxiarc-zstd = { version = "0.4", default-features = false, optional = true }
-inklog = { version = "0.3.0-rc.4", default-features = false }
+inklog = { version = "0.3.0-rc.4", path = "../base/inklog", default-features = false }
 regex = "1.13"
 icu_normalizer = { version = "2.3", default-features = false, features = ["compiled_data"], optional = true }
 icu_casemap = { version = "2.3", default-features = false, features = ["compiled_data"], optional = true }
+# Message-level i18n (Fluent bundles + locale detection) — always on, per the
+# unify-rust-i18n change. Unrelated to the `i18n` feature above, which gates
+# the icu_normalizer/icu_casemap text-processing crates.
+fluent-bundle = "0.16"
+unic-langid = "0.9"
+sys-locale = "0.3"
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
@@ -193,7 +208,12 @@ debug = true
 inherits = "release"
 
 [lints.rust]
-unexpected_cfgs = "allow"
+# 2026-09-19 审计：lang-kotlin/solidity/swift 死 cfg 已清理，从 "allow" 收紧为
+# warn 级白名单（sdforge 宏会在 consumer 侧发射协议 cfg，白名单声明其合法性），
+# 未来再出现悬空 cfg 将直接暴露。
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("http", "openapi", "websocket", "streaming", "grpc", "docs", "cache", "health", "metrics", "security"))',
+] }
 
 [workspace]
 members = ["examples", "graph-viewer/server"]

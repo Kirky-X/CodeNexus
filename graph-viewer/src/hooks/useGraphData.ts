@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 import { useCallback, useState } from "react";
 import type { GraphData } from "../lib/types";
 import { fetchGraphData } from "../api/client";

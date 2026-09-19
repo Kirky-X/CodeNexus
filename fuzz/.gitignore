@@ -1,4 +1,4 @@
 target
-corpus
+# corpus 作为 fuzz 回归语料已纳入版本控制,故不再沿用 cargo-fuzz 默认的忽略规则
 artifacts
 coverage

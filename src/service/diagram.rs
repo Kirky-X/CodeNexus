@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! `diagram` service: render a self-contained interactive architecture HTML
@@ -8,7 +8,6 @@
 //! deterministic layout/routing/SVG → geometric quality gates → optional
 //! git evidence verification → template fill → atomic delivery with a
 //! repair receipt on stdout.
-
 use serde::Serialize;
 
 #[cfg(feature = "diagram")]
@@ -36,6 +35,8 @@ use sdforge::prelude::ApiError;
 pub struct DiagramOutput {
     pub project: String,
     pub output_path: String,
+    /// Path of the graph-viewer snapshot JSON written via `--viewer-data`.
+    pub viewer_data: Option<String>,
     pub receipt: Receipt,
 }
 
@@ -56,6 +57,8 @@ pub fn run_diagram(
     repo_url: &str,
     title: &str,
     locale: &str,
+    viewer_data: &str,
+    viewer_url: &str,
 ) -> Result<DiagramOutput, CodeNexusError> {
     let profile = QualityProfile::parse(quality)
         .map_err(|bad| CodeNexusError::InvalidInput(format!("unknown quality profile: {bad}")))?;
@@ -131,27 +134,102 @@ pub fn run_diagram(
         }
     };
 
-    let rendered = render(&doc, profile, evidence_report.as_ref()).map_err(map_diagram_error)?;
+    let rendered_stage = if viewer_url.trim().is_empty() {
+        ViewerStage::Svg(
+            render(&doc, profile, evidence_report.as_ref()).map_err(map_diagram_error)?,
+        )
+    } else {
+        // Viewer mode: swap the SVG stage for a 3D-viewer iframe. The
+        // SVG-specific quality gates do not apply (nothing to gate); a
+        // warning diagnostic records the skip.
+        let snapshot = crate::diagram::viewer::to_viewer_snapshot(&doc, None);
+        let stage = crate::diagram::viewer::viewer_stage_iframe(viewer_url.trim(), &snapshot);
+        let html =
+            crate::diagram::render::render_viewer_html(&doc, evidence_report.as_ref(), &stage)
+                .map_err(|placeholder| {
+                    CodeNexusError::Internal(format!(
+                        "diagram template missing placeholder {placeholder}"
+                    ))
+                })?;
+        let spec_json = serde_json::to_string(&doc).map_err(CodeNexusError::from)?;
+        ViewerStage::Viewer {
+            html,
+            specification: crate::diagnostics::HashInfo {
+                algorithm: "blake3".to_string(),
+                hash: blake3::hash(spec_json.as_bytes()).to_string(),
+                bytes: spec_json.len() as u64,
+            },
+        }
+    };
+
+    // Optional graph-viewer snapshot export (independent of the stage choice).
+    let viewer_data_written = if viewer_data.trim().is_empty() {
+        None
+    } else {
+        let snapshot = crate::diagram::viewer::to_viewer_snapshot(&doc, None);
+        let json = serde_json::to_string_pretty(&snapshot).map_err(CodeNexusError::from)?;
+        crate::diagram::write_atomically(std::path::Path::new(viewer_data.trim()), json.as_bytes())
+            .map_err(CodeNexusError::Io)?;
+        Some(viewer_data.trim().to_string())
+    };
+
+    let (html, specification, validation, mut diagnostics) = match rendered_stage {
+        ViewerStage::Svg(rendered) => (
+            rendered.html,
+            rendered.specification,
+            rendered.validation,
+            rendered.diagnostics,
+        ),
+        ViewerStage::Viewer {
+            html,
+            specification,
+        } => {
+            let validation = crate::diagnostics::ValidationSummary {
+                checks_passed: 0,
+                check_count: 0,
+                errors: 0,
+                warnings: 1,
+                quality_profile: if profile == QualityProfile::Showcase {
+                    "showcase".to_string()
+                } else {
+                    "standard".to_string()
+                },
+            };
+            let warning = Diagnostic {
+                code: "diagram/viewer-mode".to_string(),
+                severity: Severity::Warning,
+                subject: viewer_url.trim().to_string(),
+                message:
+                    "viewer mode: SVG stage replaced by 3D viewer iframe; quality gates skipped"
+                        .to_string(),
+                evidence: serde_json::json!({ "viewer_url": viewer_url.trim() }),
+                supported_fixes: vec![
+                    "Re-run without --viewer_url to restore the deterministic SVG pipeline"
+                        .to_string(),
+                ],
+            };
+            (html, specification, validation, vec![warning])
+        }
+    };
+    diagnostics.extend(evidence_diagnostics);
+
     if profile == QualityProfile::Showcase
-        && evidence_diagnostics
-            .iter()
-            .any(|d| d.severity == Severity::Error)
+        && diagnostics.iter().any(|d| d.severity == Severity::Error)
     {
         return Err(CodeNexusError::InvalidInput(format!(
             "diagram blocked by evidence gate: {}",
-            evidence_diagnostics
+            diagnostics
                 .iter()
+                .filter(|d| d.severity == Severity::Error)
                 .map(|d| d.code.as_str())
                 .collect::<Vec<_>>()
                 .join(",")
         )));
     }
 
-    let artifact = crate::diagram::write_atomically(
-        std::path::Path::new(output_path),
-        rendered.html.as_bytes(),
-    )
-    .map_err(CodeNexusError::Io)?;
+    let artifact =
+        crate::diagram::write_atomically(std::path::Path::new(output_path), html.as_bytes())
+            .map_err(CodeNexusError::Io)?;
 
     let evidence_summary = evidence_report.map(|report| EvidenceSummary {
         verified: report.verified,
@@ -159,21 +237,32 @@ pub fn run_diagram(
         revision: report.revision,
         reference_count: report.references.len() as u32,
     });
-    let mut diagnostics = rendered.diagnostics;
-    diagnostics.extend(evidence_diagnostics);
 
     Ok(DiagramOutput {
         project: project.to_string(),
         output_path: output_path.to_string(),
+        viewer_data: viewer_data_written,
         receipt: Receipt {
             command: "diagram".to_string(),
-            specification: rendered.specification,
+            specification,
             artifact,
-            validation: rendered.validation,
+            validation,
             evidence: evidence_summary,
             diagnostics,
         },
     })
+}
+
+/// Stage selection for the rendered artifact.
+#[cfg(feature = "diagram")]
+enum ViewerStage {
+    /// Deterministic SVG pipeline (default).
+    Svg(crate::diagram::RenderedDiagram),
+    /// 3D-viewer iframe stage (`--viewer_url`).
+    Viewer {
+        html: String,
+        specification: crate::diagnostics::HashInfo,
+    },
 }
 
 #[cfg(feature = "diagram")]
@@ -224,10 +313,21 @@ async fn diagram(
     repo_url: String,
     title: String,
     locale: String,
+    viewer_data: String,
+    viewer_url: String,
 ) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
     let out = run_diagram(
-        &kit, &project, &output, &quality, &repo_root, &repo_url, &title, &locale,
+        &kit,
+        &project,
+        &output,
+        &quality,
+        &repo_root,
+        &repo_url,
+        &title,
+        &locale,
+        &viewer_data,
+        &viewer_url,
     )
     .map_err(|e| to_api_error(e, "diagram_error"))?;
     let json = serde_json::to_string(&out.receipt)
@@ -253,10 +353,21 @@ async fn diagram_mcp(
     repo_url: String,
     title: String,
     locale: String,
+    viewer_data: String,
+    viewer_url: String,
 ) -> Result<Receipt, ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
     run_diagram(
-        &kit, &project, &output, &quality, &repo_root, &repo_url, &title, &locale,
+        &kit,
+        &project,
+        &output,
+        &quality,
+        &repo_root,
+        &repo_url,
+        &title,
+        &locale,
+        &viewer_data,
+        &viewer_url,
     )
     .map_err(|e| to_api_error(e, "diagram_error"))
     .map(|out| out.receipt)
@@ -312,6 +423,8 @@ mod tests {
             "",
             "",
             "en",
+            "",
+            "",
         )
         .expect("run_diagram should succeed");
         assert!(target.exists(), "artifact written");
@@ -321,6 +434,64 @@ mod tests {
         let text = String::from_utf8(html).unwrap();
         assert!(text.contains("data-node-id=\"src-api\""), "{text}");
         assert!(text.contains("static index facts"), "truth boundary footer");
+    }
+
+    #[test]
+    fn run_diagram_viewer_url_swaps_stage_and_writes_snapshot() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<StorageModule>().expect("storage");
+        seed_two_modules(&*storage);
+        let out_dir = TempDir::new().unwrap();
+        let target = out_dir.path().join("arch3d.html");
+        let snapshot_path = out_dir.path().join("arch.snapshot.json");
+
+        let out = run_diagram(
+            &kit,
+            "demo",
+            target.to_str().unwrap(),
+            "standard",
+            "",
+            "",
+            "",
+            "en",
+            snapshot_path.to_str().unwrap(),
+            "http://localhost:5173",
+        )
+        .expect("run_diagram viewer mode should succeed");
+
+        // Snapshot written and echoed in the output.
+        assert_eq!(
+            out.viewer_data.as_deref(),
+            Some(snapshot_path.to_str().unwrap())
+        );
+        let raw = std::fs::read_to_string(&snapshot_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("valid snapshot JSON");
+        assert_eq!(parsed["version"], 1);
+        assert!(!parsed["nodes"].as_array().unwrap().is_empty());
+
+        // HTML: iframe stage with data-uri snapshot, no SVG node markup.
+        let html = std::fs::read_to_string(&target).unwrap();
+        assert!(html.contains("cnx-viewer-frame"), "iframe present");
+        assert!(
+            html.contains("data:application/json;charset=utf-8,"),
+            "snapshot data-uri present"
+        );
+        assert!(
+            !html.contains("<svg"),
+            "SVG stage must be replaced in viewer mode"
+        );
+        assert!(html.contains("CodeNexus"), "title chrome retained");
+
+        // Receipt: warning diagnostic records the gate skip.
+        assert_eq!(out.receipt.validation.check_count, 0);
+        assert!(
+            out.receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "diagram/viewer-mode"),
+            "viewer-mode warning present"
+        );
     }
 
     #[test]
@@ -341,6 +512,8 @@ mod tests {
             "",
             "",
             "en",
+            "",
+            "",
         )
         .expect("first run");
         run_diagram(
@@ -352,6 +525,8 @@ mod tests {
             "",
             "",
             "en",
+            "",
+            "",
         )
         .expect("second run");
         assert_eq!(
@@ -378,6 +553,8 @@ mod tests {
             "",
             "",
             "en",
+            "",
+            "",
         )
         .expect("run_diagram");
         let html = String::from_utf8(std::fs::read(&target).unwrap()).unwrap();
@@ -405,9 +582,11 @@ mod tests {
             "",
             "",
             "en",
+            "",
+            "",
         );
         assert!(matches!(bad_quality, Err(CodeNexusError::InvalidInput(_))));
-        let empty_output = run_diagram(&kit, "demo", "", "standard", "", "", "", "en");
+        let empty_output = run_diagram(&kit, "demo", "", "standard", "", "", "", "en", "", "");
         assert!(matches!(empty_output, Err(CodeNexusError::InvalidInput(_))));
     }
 
@@ -436,6 +615,8 @@ mod tests {
             String::new(),
             String::new(),
             "en".to_string(),
+            String::new(),
+            String::new(),
         ));
         assert!(result.is_ok(), "wrapper should succeed: {:?}", result.err());
 

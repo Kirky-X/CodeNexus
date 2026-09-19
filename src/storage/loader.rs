@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! CSV batch loading (ADR-014).
@@ -13,7 +13,6 @@
 //! The [`node_to_row`] helper extracts values from a [`Node`], pulling
 //! table-specific fields (e.g. `hash`, `content`, `parameterCount`) from the
 //! node's `properties` JSON when they don't have a dedicated struct field.
-
 use std::io::Write;
 use std::path::Path;
 
@@ -414,6 +413,13 @@ fn opt_lang(lang: &Option<crate::model::Language>) -> String {
 #[must_use]
 pub fn node_to_row(node: &Node, label: NodeLabel) -> Vec<String> {
     match label {
+        NodeLabel::ExternalPackage => vec![
+            node.id.clone(),
+            node.name.clone(),
+            prop_str(node, "ecosystem"),
+            opt_lang(&node.language),
+            node.project.clone(),
+        ],
         NodeLabel::Project => vec![
             node.id.clone(),
             node.name.clone(),

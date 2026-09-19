@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Symbol resolution and data-flow analysis.
@@ -21,7 +21,6 @@
 //!   languages (ADD §7.4).
 //! - [`orchestrator`]: top-level orchestration functions
 //!   ([`build_symbol_table`], [`resolve_all`]).
-
 pub mod calls;
 pub mod capability;
 pub mod module;
@@ -33,6 +32,7 @@ pub mod module;
 pub mod cross_lang;
 pub mod dataflow;
 pub mod error;
+pub mod external_deps;
 pub mod fqn;
 pub mod imports;
 pub mod includes_graph;

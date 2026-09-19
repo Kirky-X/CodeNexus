@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Unified service layer for CLI and MCP command handlers.
@@ -11,11 +11,15 @@
 //! Kit injection uses the global [`runtime::kit()`] accessor (Mutex-protected)
 //! because sdforge's `#[forge]` macro generates standalone functions
 //! that cannot accept injected state.
-
 pub mod api_impact;
 #[cfg(feature = "diagram")]
 pub mod arch_diff;
 pub mod architecture;
+#[cfg(any(feature = "cli", feature = "mcp"))]
+pub mod ask;
+pub mod budget;
+#[cfg(feature = "cli")]
+pub mod ci_gate;
 pub mod clean;
 pub mod community;
 pub mod complexity;
@@ -27,11 +31,17 @@ pub mod detect_changes;
 #[cfg(feature = "diagram")]
 pub mod diagram;
 pub mod error;
+#[cfg(feature = "analysis")]
+pub mod evolve;
 pub mod export;
 pub mod hook;
+#[cfg(all(feature = "cli", feature = "hub"))]
+pub mod hub;
 pub mod impact;
 pub mod import;
 pub mod index;
+#[cfg(all(feature = "cli", feature = "analysis"))]
+pub mod lint;
 pub mod list;
 pub mod lsp;
 pub mod project;
@@ -42,7 +52,11 @@ pub mod runtime;
 pub mod search;
 pub mod setup;
 pub mod shape_check;
+pub mod skill_sync;
 pub mod status;
+pub mod supply;
+#[cfg(feature = "analysis")]
+pub mod taint;
 pub mod tool_map;
 pub mod trace;
 

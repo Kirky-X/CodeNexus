@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! trait-kit bootstrap.
@@ -32,7 +32,6 @@
 //! exactly 7 capabilities (no `DaemonModule` / `EmbedModule`).
 //!
 //! [`AsyncKit::require`]: crate::kit::AsyncKit::require
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -47,7 +46,7 @@ use crate::kit::{
 use crate::kit::CacheModule;
 #[cfg(feature = "daemon")]
 use crate::kit::DaemonModule;
-#[cfg(feature = "embed")]
+#[cfg(feature = "embeddings")]
 use crate::kit::EmbedModule;
 
 // Configs are still imported from their owning modules.
@@ -59,7 +58,7 @@ use crate::trace::TraceConfig;
 #[cfg(feature = "daemon")]
 use crate::daemon::{DaemonConfig, DEFAULT_DEBOUNCE_MS};
 
-#[cfg(feature = "embed")]
+#[cfg(feature = "embeddings")]
 use crate::embed::EmbeddingConfig;
 
 #[cfg(feature = "cache")]
@@ -103,12 +102,22 @@ pub struct KitBootstrapConfig {
 
     /// Embedding-service config (endpoint, model, API key). Only consulted
     /// when the `embed` feature is enabled.
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "embeddings")]
     pub embedding_config: EmbeddingConfig,
 
     /// Enables per-batch debug diagnostics in the daemon event loop
     /// (CLI `--verbose`). Flows into `DaemonConfig::verbose_events`.
     pub verbose: bool,
+
+    /// Enables the daemon's post-index impact notifications
+    /// (CLI `--notify-impact`). Flows into `DaemonConfig::impact_notify`.
+    #[cfg(feature = "daemon")]
+    pub impact_notify: bool,
+
+    /// Optional impact-notice webhook URL (hub feature).
+    /// Flows into `DaemonConfig::notify_webhook`.
+    #[cfg(all(feature = "daemon", feature = "hub"))]
+    pub notify_webhook: Option<String>,
 }
 
 impl KitBootstrapConfig {
@@ -124,10 +133,32 @@ impl KitBootstrapConfig {
             db_path,
             debounce_ms: DEFAULT_DEBOUNCE_MS,
             read_only: false,
-            #[cfg(feature = "embed")]
+            #[cfg(feature = "embeddings")]
             embedding_config: EmbeddingConfig::from_env(),
             verbose: false,
+            #[cfg(feature = "daemon")]
+            impact_notify: false,
+            #[cfg(all(feature = "daemon", feature = "hub"))]
+            notify_webhook: None,
         }
+    }
+
+    /// Sets the impact-notice webhook URL (only used when both `daemon` and
+    /// `hub` features are on).
+    #[cfg(all(feature = "daemon", feature = "hub"))]
+    #[must_use]
+    pub fn with_notify_webhook(mut self, notify_webhook: Option<String>) -> Self {
+        self.notify_webhook = notify_webhook;
+        self
+    }
+
+    /// Enables the daemon's post-index impact notifications
+    /// (only used when `daemon` feature is on).
+    #[cfg(feature = "daemon")]
+    #[must_use]
+    pub fn with_impact_notify(mut self, impact_notify: bool) -> Self {
+        self.impact_notify = impact_notify;
+        self
     }
 
     /// Sets the debounce window (only used when `daemon` feature is on).
@@ -147,7 +178,7 @@ impl KitBootstrapConfig {
     }
 
     /// Sets the embedding config (only used when `embed` feature is on).
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "embeddings")]
     #[must_use]
     pub fn with_embedding_config(mut self, config: EmbeddingConfig) -> Self {
         self.embedding_config = config;
@@ -258,12 +289,15 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
             db_path: config.db_path.clone(),
             debounce_ms: config.debounce_ms,
             verbose_events: config.verbose,
+            impact_notify: config.impact_notify,
+            #[cfg(feature = "hub")]
+            notify_webhook: config.notify_webhook.clone(),
         });
         kit.register::<DaemonModule>()?;
     }
 
     // 9. Embed (feature-gated) — owns EmbeddingConfig.
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "embeddings")]
     {
         kit.set_config(config.embedding_config.clone());
         kit.register::<EmbedModule>()?;
@@ -339,7 +373,7 @@ pub trait KitExt {
     fn require_daemon(&self) -> Result<Arc<dyn crate::daemon::capability::DaemonRunner>, KitError>;
 
     /// Resolves the Embed capability (`Arc<dyn EmbedClient>`).
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "embeddings")]
     fn require_embed(&self) -> Result<Arc<dyn crate::embed::client::EmbedClient>, KitError>;
 
     /// Resolves the Cache capability (`Arc<dyn CacheStore>`).
@@ -386,7 +420,7 @@ impl KitExt for AsyncKit<AsyncReady> {
         self.require::<DaemonModule>()
     }
 
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "embeddings")]
     fn require_embed(&self) -> Result<Arc<dyn crate::embed::client::EmbedClient>, KitError> {
         self.require::<EmbedModule>()
     }
@@ -516,7 +550,7 @@ mod tests {
         assert!(kit.contains::<TraceModule>());
     }
 
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "embeddings")]
     #[tokio::test]
     async fn build_kit_registers_embed_when_feature_on() {
         // Ensure deterministic env state — no API key, no endpoint (local mode).
@@ -541,7 +575,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "embeddings")]
     #[tokio::test]
     async fn build_kit_embed_remote_without_key_returns_missing_api_key() {
         // Remote mode (endpoint=Some) without API key → MissingApiKey.
@@ -563,7 +597,7 @@ mod tests {
         std::env::remove_var(crate::embed::EMBED_ENDPOINT_ENV);
     }
 
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "embeddings")]
     #[test]
     fn bootstrap_config_with_embedding_config_overrides_from_env() {
         let custom = EmbeddingConfig {
@@ -579,7 +613,7 @@ mod tests {
         assert_eq!(config.embedding_config.api_key, custom.api_key);
     }
 
-    #[cfg(not(feature = "embed"))]
+    #[cfg(not(feature = "embeddings"))]
     #[tokio::test]
     async fn build_kit_omits_embed_when_feature_off() {
         // Mirror of the daemon-off test. EmbedModule is not in scope, so we

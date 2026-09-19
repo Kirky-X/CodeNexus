@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Render orchestration: IR → layout → routing → SVG → gates → template.
@@ -6,7 +6,6 @@
 //! The pipeline is fail-closed: under the `showcase` profile any gate error
 //! aborts rendering and no HTML is produced, so a failing candidate never
 //! replaces the last good artifact.
-
 use std::collections::BTreeMap;
 
 use thiserror::Error;
@@ -147,6 +146,30 @@ fn fill_template(
     svg: &str,
     evidence: Option<&EvidenceReport>,
 ) -> Result<String, String> {
+    fill_stage_template(doc, svg, evidence)
+}
+
+/// Viewer variant: fills the template with caller-supplied stage markup
+/// (e.g. a 3D-viewer iframe) instead of the deterministic SVG. Quality
+/// gates do not apply — there is no SVG artifact to gate (see
+/// `feature-expansion-wave` spec R-diagram-002).
+///
+/// # Errors
+///
+/// Returns the missing placeholder name (programmer error).
+pub fn render_viewer_html(
+    doc: &DiagramDocument,
+    evidence: Option<&EvidenceReport>,
+    stage_markup: &str,
+) -> Result<String, String> {
+    fill_stage_template(doc, stage_markup, evidence)
+}
+
+fn fill_stage_template(
+    doc: &DiagramDocument,
+    stage_content: &str,
+    evidence: Option<&EvidenceReport>,
+) -> Result<String, String> {
     let locale = if doc.meta.locale == "zh-CN" {
         "zh-CN"
     } else {
@@ -207,7 +230,7 @@ fn fill_template(
             "__CNX_TITLE__",
             &format!("{} — CodeNexus", escape_html(&doc.meta.title)),
         )
-        .replace("__CNX_SVG__", svg)
+        .replace("__CNX_SVG__", stage_content)
         .replace("__CNX_DATA__", &script_json(&data))
         .replace("__CNX_EVIDENCE__", &script_json(&evidence_payload))
         .replace("__CNX_LOCALE__", locale);

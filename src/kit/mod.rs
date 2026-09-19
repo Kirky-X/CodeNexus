@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Kit — unified capability & configuration registry.
@@ -50,7 +50,7 @@ pub use trait_kit::TraitKitError as KitError;
 pub use crate::cache::CacheModule;
 #[cfg(feature = "daemon")]
 pub use crate::daemon::DaemonModule;
-#[cfg(feature = "embed")]
+#[cfg(feature = "embeddings")]
 pub use crate::embed::EmbedModule;
 pub use crate::index::IndexerModule;
 pub use crate::parse::{ExtractorRegistryModule, ParserFactoryModule};

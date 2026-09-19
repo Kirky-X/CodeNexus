@@ -1,0 +1,98 @@
+# CodeNexus Architecture Gate — reusable Composite Action.
+#
+# Usage (in a downstream repo's workflow, after checkout):
+#
+#   - uses: Kirky-X/codenexus/.github/actions/codenexus-gate@main
+#     with:
+#       base: origin/main
+#       fail_on: high
+#       project: ""
+#
+# Steps: install codenexus from crates.io → index the checkout → run the
+# `ci` gate against the base ref → append the Markdown report to
+# $GITHUB_STEP_SUMMARY. The gate exits 2 on failure, which fails the step.
+
+name: "CodeNexus Architecture Gate"
+description: >-
+  Index the repository with codenexus and fail the job when the current
+  diff touches symbols whose blast radius meets the configured risk level.
+  Produces a PR-ready Markdown report in the step summary.
+
+inputs:
+  base:
+    description: "Git ref to diff against (passed to the gate as the diff base)."
+    required: false
+    default: "HEAD"
+  fail_on:
+    description: "Minimum risk level that fails the gate: none|low|medium|high."
+    required: false
+    default: "high"
+  project:
+    description: "Project name to validate against the index (empty = skip validation)."
+    required: false
+    default: ""
+  codenexus_version:
+    description: "codenexus version to install from crates.io."
+    required: false
+    default: "0.3.12"
+  path:
+    description: "Repository root to index and diff."
+    required: false
+    default: "."
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install codenexus
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo install "codenexus@${{ inputs.codenexus_version }}" --locked
+
+    - name: Index repository
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${{ inputs.path }}"
+        PROJECT_NAME="$(basename "$GITHUB_REPOSITORY")"
+        codenexus index --path . --name "$PROJECT_NAME"
+
+    - name: Run architecture gate
+      id: gate
+      shell: bash
+      run: |
+        set -uo pipefail
+        cd "${{ inputs.path }}"
+        BASE="${{ inputs.base }}"
+        MODE="head"
+        if [ "$BASE" != "HEAD" ]; then
+          # Present the committed diff vs BASE as STAGED changes so the
+          # gate's `staged` mode (`git diff --staged`) consumes exactly the
+          # base-relative diff: move the index to BASE, keep the worktree.
+          git reset --soft "$BASE"
+          MODE="staged"
+        fi
+        set +e
+        codenexus ci --path . --base_mode "$MODE" \
+          --fail_on "${{ inputs.fail_on }}" \
+          --project "${{ inputs.project }}" | tee codenexus-gate.json
+        GATE_EXIT=$?
+        set -e
+        echo "exit_code=$GATE_EXIT" >> "$GITHUB_OUTPUT"
+        exit $GATE_EXIT
+
+    - name: Append report to step summary
+      if: always()
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -f codenexus-gate.json ]; then
+          python3 - "$PWD/codenexus-gate.json" <<'PY' >> "$GITHUB_STEP_SUMMARY"
+        import json, sys
+        with open(sys.argv[1], encoding="utf-8") as fh:
+            data = json.load(fh)
+        print(data.get("markdown", ""))
+        PY
+        else
+          echo "CodeNexus gate produced no report (run failed before output)." >> "$GITHUB_STEP_SUMMARY"
+        fi

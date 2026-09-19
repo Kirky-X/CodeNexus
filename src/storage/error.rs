@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Storage layer error types (ADD §3.5).
@@ -6,7 +6,6 @@
 //! Uses [`thiserror`] for ergonomic, type-safe error propagation. Wraps errors
 //! from the [`lbug`] crate, CSV generation, and I/O operations into a single
 //! unified [`StorageError`] enum.
-
 use std::io;
 
 use thiserror::Error;
@@ -78,7 +77,7 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 /// "table missing" errors into empty results so the CLI exits 0 with a clean
 /// `[]` on uninitialized DBs. The storage layer keeps strict semantics —
 /// [`QualityChecker::check_project_isolation`](crate::storage::quality::QualityChecker)
-/// relies on the error propagating to detect Project-table-drop violations
+/// relies on the error propagating to detect Project-table-drop violations.
 ///
 /// Matches the same substrings as the tolerance logic previously embedded in
 /// `Repository::list_projects` (reverted because it masked violations).

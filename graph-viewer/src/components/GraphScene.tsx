@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 3D 图场景 — 组合 Canvas + 节点云 + 边线 + 标签 + 相机控制 */
 
 import { useState, useRef, useCallback, useEffect } from "react";
@@ -10,6 +13,7 @@ import { NodeCloud } from "./NodeCloud";
 import { EdgeLines } from "./EdgeLines";
 import { NodeLabels } from "./NodeLabels";
 import { NodeTooltip } from "./NodeTooltip";
+import { useI18n } from "../lib/i18n";
 import type { GraphNode, GraphData } from "../lib/types";
 
 /* 爆炸动画就绪检测：在首帧 useFrame 时通知父组件显示 Canvas */
@@ -133,6 +137,7 @@ export function GraphScene({
   data, highlightedIds, traceNodeIds, traceEdgeIds,
   showLabels, cameraTarget, onNodeClick,
 }: GraphSceneProps) {
+  const { t } = useI18n();
   const [hovered, setHovered] = useState<GraphNode | null>(null);
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
   /* Canvas 初始化完成前隐藏，避免爆炸动画前节点闪现 */
@@ -153,9 +158,9 @@ export function GraphScene({
     return (
       <div className="flex items-center justify-center h-full w-full">
         <div className="text-center space-y-3 max-w-sm px-6">
-          <p className="text-sm text-foreground/70">无法初始化 WebGL2 图形上下文</p>
+          <p className="text-sm text-foreground/70">{t("scene.webgl2Title")}</p>
           <p className="text-xs text-fg-subtle leading-relaxed">
-            当前浏览器或显卡不支持 WebGL2。请更换 Chrome/Edge 等现代浏览器，或更新显卡驱动后重试。
+            {t("scene.webgl2Detail")}
           </p>
         </div>
       </div>

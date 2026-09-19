@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Integration tests for the `diagram` command.
@@ -7,7 +7,6 @@
 //! typing from real layer facts, cycle/cross-service edge variants, and the
 //! showcase evidence gate. `arch_diff` coverage lives in
 //! `service::arch_diff` unit tests (same core pipeline).
-
 use codenexus::kit::{build_kit, AsyncKit, AsyncReady, KitBootstrapConfig, StorageModule};
 use codenexus::service::diagram::run_diagram;
 use codenexus::service::error::CodeNexusError;
@@ -55,6 +54,8 @@ fn diagram_int_renders_variants_and_types_from_graph_facts() {
         "",
         "",
         "en",
+        "",
+        "",
     )
     .expect("run_diagram should succeed");
     assert!(target.exists());
@@ -106,6 +107,8 @@ fn diagram_int_showcase_blocks_on_invalid_evidence() {
         "",
         "",
         "en",
+        "",
+        "",
     )
     .expect_err("showcase must block on invalid evidence");
     assert!(

@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! trait-kit module for the Daemon subsystem.
@@ -42,7 +42,6 @@
 //! [`IndexObserver`]: super::IndexObserver
 //! [`IndexFacade`]: crate::index::IndexFacade
 //! [`DaemonRunner::start`]: super::capability::DaemonRunner::start
-
 use std::any::TypeId;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -64,7 +63,6 @@ use crate::index::IndexFacade;
 /// Stored in Kit via `AsyncKit::set_config` and read in
 /// [`AsyncAutoBuilder::build`]. The Daemon needs the database path (for
 /// [`IndexFacade`]) and the debounce window in milliseconds
-/// ().
 #[derive(Debug, Clone)]
 pub struct DaemonConfig {
     /// Filesystem path to the LadybugDB database directory.
@@ -74,6 +72,11 @@ pub struct DaemonConfig {
     pub debounce_ms: u64,
     /// Per-batch debug diagnostics in the event loop (CLI `--verbose`).
     pub verbose_events: bool,
+    /// 增量索引完成后输出变更影响告警（CLI `--notify-impact`，默认关闭）。
+    pub impact_notify: bool,
+    /// 可选 webhook：影响告警同时 POST 到该 URL（`hub` feature，默认 None）。
+    #[cfg(feature = "hub")]
+    pub notify_webhook: Option<String>,
 }
 
 impl DaemonConfig {
@@ -85,6 +88,9 @@ impl DaemonConfig {
             db_path,
             debounce_ms: DEFAULT_DEBOUNCE_MS,
             verbose_events: false,
+            impact_notify: false,
+            #[cfg(feature = "hub")]
+            notify_webhook: None,
         }
     }
 }
@@ -180,11 +186,25 @@ struct DaemonCapability {
 impl DaemonRunner for DaemonCapability {
     fn start(&self, watch_path: &Path, project_name: &str) -> Result<(), DaemonError> {
         // Read the current debounce_ms from the shared config (hot-reloadable).
-        let (debounce_ms, verbose_events) = self
+        let (debounce_ms, verbose_events, impact_notify, notify_webhook) = self
             .config
             .read()
-            .map(|c| (c.debounce_ms, c.verbose_events))
-            .unwrap_or((DEFAULT_DEBOUNCE_MS, false));
+            .map(|c| {
+                (
+                    c.debounce_ms,
+                    c.verbose_events,
+                    c.impact_notify,
+                    #[cfg(feature = "hub")]
+                    c.notify_webhook.clone(),
+                )
+            })
+            .unwrap_or((
+                DEFAULT_DEBOUNCE_MS,
+                false,
+                false,
+                #[cfg(feature = "hub")]
+                None,
+            ));
 
         // Construct the IndexFacade (lazy — opens DB on first index call).
         let facade = IndexFacade::new(&self.db_path)
@@ -196,8 +216,16 @@ impl DaemonRunner for DaemonCapability {
 
         // Register the IndexObserver (Observer pattern) — triggers
         // incremental indexing on code-file changes.
-        let observer =
+        let mut observer =
             IndexObserver::new(facade, project_name.to_string(), watch_path.to_path_buf());
+        // 影响告警（默认关闭）：增量索引成功后对变更文件输出受影响符号通知。
+        if impact_notify {
+            let notify_observer =
+                crate::daemon::impact_observer::ImpactNotifyObserver::new(self.db_path.clone());
+            #[cfg(feature = "hub")]
+            let notify_observer = notify_observer.with_webhook(notify_webhook);
+            observer.add_completion_observer(Box::new(notify_observer));
+        }
         daemon.add_observer(Box::new(observer));
 
         // Enter the blocking event loop. Returns when the daemon stops
@@ -208,6 +236,12 @@ impl DaemonRunner for DaemonCapability {
     fn update_debounce_ms(&self, new_ms: u64) {
         if let Ok(mut cfg) = self.config.write() {
             cfg.debounce_ms = new_ms;
+        }
+    }
+
+    fn update_impact_notify(&self, enabled: bool) {
+        if let Ok(mut cfg) = self.config.write() {
+            cfg.impact_notify = enabled;
         }
     }
 }

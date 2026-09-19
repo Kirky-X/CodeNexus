@@ -1,11 +1,10 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Tracing engine (PRD §4.2, ADD §3.4).
 //!
 //! BFS traversal over call graph and data flow edges, plus impact analysis
 //! and cross-language taint path tracking.
-
 pub mod bfs;
 pub mod call_graph;
 pub mod capability;
@@ -17,6 +16,7 @@ pub mod graph_loader;
 pub mod impact;
 pub mod module;
 pub mod taint;
+pub mod taint_rules;
 pub mod types;
 
 pub use call_graph::CallGraphTracer;
@@ -30,6 +30,7 @@ pub use impact::{
 };
 pub use module::{TraceConfig, TraceModule};
 pub use taint::TaintPathTracer;
+pub use taint_rules::{match_node, rules_for, TaintHit, TaintPattern, BUILTIN_RULES};
 pub use types::{
     ContextOutput, RelatedNodeOutput, SymbolNodeOutput, TraceEdge, TraceNode, TracePath,
     TraceResult,

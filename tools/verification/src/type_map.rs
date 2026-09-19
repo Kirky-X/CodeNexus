@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 //! Type mapping between CodeNexus and gitnexus node/edge vocabularies.
 //!
 //! Loads `tools/verification/type_map.json` and normalizes raw type strings

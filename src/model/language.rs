@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Language enum representing the source languages supported by CodeNexus
@@ -9,7 +9,6 @@
 //! features gate only the parser implementations (in `src/parse/`), not the
 //! `Language` type itself. This allows LSP-only builds (no tree-sitter) to
 //! still identify languages by extension and store language metadata on nodes.
-
 use std::fmt;
 use std::str::FromStr;
 
@@ -42,6 +41,8 @@ pub enum Language {
     Json,
     Regex,
     Verilog,
+    Kotlin,
+    Solidity,
     // Extended languages (extension-only, no tree-sitter parser)
     Swift,
     R,
@@ -79,6 +80,8 @@ impl Language {
             Language::Json,
             Language::Regex,
             Language::Verilog,
+            Language::Kotlin,
+            Language::Solidity,
             Language::Swift,
             Language::R,
             Language::Sql,
@@ -167,6 +170,8 @@ impl Language {
             Language::Json => &["json", "jsonc"],
             Language::Regex => &["regex"],
             Language::Verilog => &["v", "sv"],
+            Language::Kotlin => &["kt", "kts"],
+            Language::Solidity => &["sol"],
             Language::Swift => &["swift"],
             Language::R => &["r", "R"],
             Language::Sql => &["sql"],
@@ -205,6 +210,8 @@ impl Language {
             "json" | "jsonc" => Some(Language::Json),
             "regex" => Some(Language::Regex),
             "v" | "sv" => Some(Language::Verilog),
+            "kt" | "kts" => Some(Language::Kotlin),
+            "sol" => Some(Language::Solidity),
             "swift" => Some(Language::Swift),
             "r" => Some(Language::R),
             "sql" => Some(Language::Sql),
@@ -242,6 +249,8 @@ impl fmt::Display for Language {
             Language::Json => f.write_str("json"),
             Language::Regex => f.write_str("regex"),
             Language::Verilog => f.write_str("verilog"),
+            Language::Kotlin => f.write_str("kotlin"),
+            Language::Solidity => f.write_str("solidity"),
             Language::Swift => f.write_str("swift"),
             Language::R => f.write_str("r"),
             Language::Sql => f.write_str("sql"),
@@ -280,6 +289,8 @@ impl FromStr for Language {
             "json" => Ok(Language::Json),
             "regex" => Ok(Language::Regex),
             "verilog" | "v" => Ok(Language::Verilog),
+            "kotlin" | "kt" => Ok(Language::Kotlin),
+            "solidity" | "sol" => Ok(Language::Solidity),
             "swift" => Ok(Language::Swift),
             "r" => Ok(Language::R),
             "sql" => Ok(Language::Sql),
@@ -298,8 +309,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn has_all_29_variants() {
-        assert_eq!(Language::all().len(), 29);
+    fn has_all_31_variants() {
+        assert_eq!(Language::all().len(), 31);
     }
 
     #[test]

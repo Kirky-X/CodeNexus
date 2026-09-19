@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Integration test for `build_kit`.
@@ -20,7 +20,7 @@ use std::path::PathBuf;
 
 #[cfg(feature = "daemon")]
 use codenexus::kit::DaemonModule;
-#[cfg(feature = "embed")]
+#[cfg(feature = "embeddings")]
 use codenexus::kit::EmbedModule;
 use codenexus::kit::{
     build_kit, ExtractorRegistryModule, IndexerModule, KitBootstrapConfig, ParserFactoryModule,
@@ -57,7 +57,7 @@ async fn daemon_capability_resolvable_when_feature_on() {
     kit.require::<DaemonModule>().expect("require_daemon");
 }
 
-#[cfg(feature = "embed")]
+#[cfg(feature = "embeddings")]
 #[tokio::test]
 async fn embed_capability_resolvable_when_feature_on() {
     let config = KitBootstrapConfig::new(memory_db_path());

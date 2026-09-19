@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! MCP integration test — verifies the sdforge-based MCP server boots,
@@ -7,9 +7,6 @@
 //! This test spawns `codenexus mcp` as a subprocess, communicates via
 //! stdin/stdout (line-delimited JSON-RPC 2.0 per MCP stdio transport),
 //! and validates the protocol handshake + tool discovery.
-
-#![cfg(feature = "mcp")]
-
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -198,6 +195,9 @@ fn mcp_server_initializes_and_lists_tools() {
         // Diagram pipeline exposed over MCP.
         "diagram",
         "arch_diff",
+        // Analysis toolkit exposed over MCP (commit 71be801 扩面).
+        "dead_code",
+        "detect_changes",
     ];
     for name in &expected {
         assert!(

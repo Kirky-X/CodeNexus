@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 import { describe, it, expect } from "vitest";
 import {
   readSnapshotFromUrl,

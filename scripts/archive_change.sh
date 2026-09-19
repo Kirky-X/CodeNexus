@@ -1,19 +1,6 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 Kirky.X. All rights reserved.
+# Copyright (c) 2026 Kirky.X🌠
 # SPDX-License-Identifier: MIT
-# Deterministic archive executor for specmark workflow.
-#
-# Creates .readonly sentinel, acquires change-level flock, syncs delta specs
-# (if --sync), moves changes/<name> -> archive/<date>-<name>, writes meta.json
-# anchored to current git HEAD commit SHA.
-#
-# Usage:
-#   bash scripts/archive_change.sh <name> [--sync] [--date YYYY-MM-DD]
-#
-# Exit codes:
-#   0 — success
-#   1 — generic error (missing change, target exists, sync failure)
-#   2 — flock timeout (another archive in progress for this change)
 
 set -euo pipefail
 

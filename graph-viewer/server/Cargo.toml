@@ -10,4 +10,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Message-level i18n — mirrors codenexus::i18n and embeds the same shared
+# locales/{en,zh}/messages.ftl files (see src/i18n.rs).
+fluent-bundle = "0.16"
+unic-langid = "0.9"
+sys-locale = "0.3"
 lbug = "0.20"

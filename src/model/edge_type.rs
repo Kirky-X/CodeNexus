@@ -1,8 +1,7 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Edge type enum representing the 31 relation types in the CodeNexus graph (DDD §7.2).
-
 use std::fmt;
 use std::str::FromStr;
 
@@ -70,12 +69,14 @@ pub enum EdgeType {
     /// Function/Method node; the source is the importing File node.
     /// Treated as a live seed by dead-code analysis.
     Reexports,
+    // --- feature-expansion-wave (32): external dependencies ---
+    DependsOn,
 }
 
 impl EdgeType {
     /// Returns all variants in declaration order.
     #[must_use]
-    pub const fn all() -> [EdgeType; 31] {
+    pub const fn all() -> [EdgeType; 32] {
         [
             EdgeType::Contains,
             EdgeType::Defines,
@@ -108,6 +109,7 @@ impl EdgeType {
             EdgeType::Emits,
             EdgeType::ListensOn,
             EdgeType::Reexports,
+            EdgeType::DependsOn,
         ]
     }
 
@@ -147,6 +149,7 @@ impl EdgeType {
             EdgeType::Emits => "EMITS",
             EdgeType::ListensOn => "LISTENS_ON",
             EdgeType::Reexports => "REEXPORTS",
+            EdgeType::DependsOn => "DEPENDS_ON",
         }
     }
 
@@ -212,6 +215,7 @@ impl EdgeType {
             EdgeType::ListensOn => (0.75, 0.85),
             // Re-export — structural, explicit in syntax (like Imports).
             EdgeType::Reexports => (0.95, 1.0),
+            EdgeType::DependsOn => (0.9, 0.9),
         }
     }
 }
@@ -258,6 +262,7 @@ impl FromStr for EdgeType {
             "EMITS" => Ok(EdgeType::Emits),
             "LISTENS_ON" => Ok(EdgeType::ListensOn),
             "REEXPORTS" => Ok(EdgeType::Reexports),
+            "DEPENDS_ON" => Ok(EdgeType::DependsOn),
             other => Err(format!("unknown EdgeType: {other}")),
         }
     }
@@ -301,7 +306,7 @@ mod tests {
 
     #[test]
     fn has_thirty_one_variants() {
-        assert_eq!(EdgeType::all().len(), 31);
+        assert_eq!(EdgeType::all().len(), 32);
     }
 
     #[test]

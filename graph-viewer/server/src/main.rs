@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! CodeNexus 图数据可视化后端服务
@@ -32,10 +32,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 mod graph_query;
+mod i18n;
 
 /// 服务配置
 #[derive(Clone)]
-struct AppState {
+struct CodeNexusState {
     /// 已索引项目的 .lbug 文件路径映射
     projects: Arc<RwLock<Vec<ProjectEntry>>>,
     /// 默认搜索路径（CodeNexus 的 .codenexus/ 目录）——数据库白名单来源
@@ -189,7 +190,7 @@ fn host_name(host_header: &str) -> &str {
 
 /// 鉴权 + Host 校验中间件。
 async fn require_auth(
-    State(state): State<AppState>,
+    State(state): State<CodeNexusState>,
     headers: HeaderMap,
     req: Request,
     next: Next,
@@ -228,6 +229,10 @@ async fn require_auth(
 
 #[tokio::main]
 async fn main() {
+    // Message i18n: detect once up front (lazy fallback inside i18n::t
+    // guarantees localized output even without this call).
+    i18n::init();
+
     tracing_subscriber::fmt()
         .with_env_filter("graph_server=info,axum=info")
         .init();
@@ -235,7 +240,7 @@ async fn main() {
     let search_paths = vec![PathBuf::from(".codenexus"), PathBuf::from(".")];
 
     let auth_token = Arc::new(generate_auth_token());
-    let state = AppState {
+    let state = CodeNexusState {
         projects: Arc::new(RwLock::new(Vec::new())),
         search_paths,
         auth_token: Arc::clone(&auth_token),
@@ -264,7 +269,7 @@ async fn main() {
     axum::serve(listener, app).await.expect("Server error");
 }
 
-async fn scan_projects(state: &AppState) {
+async fn scan_projects(state: &CodeNexusState) {
     let mut projects = state.projects.write().await;
     projects.clear();
     let mut seen = HashSet::new();
@@ -304,7 +309,7 @@ async fn scan_projects(state: &AppState) {
     }
 }
 
-async fn list_projects(State(state): State<AppState>) -> impl IntoResponse {
+async fn list_projects(State(state): State<CodeNexusState>) -> impl IntoResponse {
     let projects = state.projects.read().await;
     let infos: Vec<ProjectInfo> = projects
         .iter()
@@ -331,16 +336,16 @@ fn resolve_db_path(
     projects: &[ProjectEntry],
     project_name: Option<&str>,
 ) -> Result<(PathBuf, String), String> {
-    let name = project_name.ok_or("需要提供 project 参数")?;
+    let name = project_name.ok_or_else(|| i18n::tr("project-param-required"))?;
     let project = projects
         .iter()
         .find(|p| p.name == name)
-        .ok_or_else(|| format!("项目 '{}' 未找到", name))?;
+        .ok_or_else(|| i18n::t("project-not-found", &[("name", name.to_string())]))?;
     Ok((project.db_path.clone(), name.to_string()))
 }
 
 async fn get_graph(
-    State(state): State<AppState>,
+    State(state): State<CodeNexusState>,
     Query(query): Query<GraphQuery>,
 ) -> impl IntoResponse {
     let projects = state.projects.read().await;
@@ -367,7 +372,7 @@ async fn get_graph(
 }
 
 async fn get_schema(
-    State(state): State<AppState>,
+    State(state): State<CodeNexusState>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let project_name = params.get("project").cloned();
@@ -390,7 +395,7 @@ async fn get_schema(
 }
 
 async fn get_trace(
-    State(state): State<AppState>,
+    State(state): State<CodeNexusState>,
     Query(query): Query<TraceQuery>,
 ) -> impl IntoResponse {
     let projects = state.projects.read().await;

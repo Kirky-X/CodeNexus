@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 import { describe, expect, it } from "vitest";
 import { computeLoadBudget, detectMemoryProfile, type MemoryProfile } from "./memoryBudget";
 

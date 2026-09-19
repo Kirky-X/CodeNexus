@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 3D 节点标签 — 基于相机距离动态显示，支持爆炸动画 */
 
 import { useMemo, useRef } from "react";

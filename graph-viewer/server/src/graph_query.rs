@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! 图数据查询模块 — 从 LadybugDB 读取节点和边数据
@@ -522,7 +522,7 @@ fn query_single_node(
             z: 0.0,
         })
     } else {
-        Err(format!("节点 '{}' 未找到", node_name).into())
+        Err(crate::i18n::t("node-not-found", &[("name", node_name.to_string())]).into())
     }
 }
 

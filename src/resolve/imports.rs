@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Import resolution (resolve/imports.rs).
@@ -26,7 +26,6 @@
 //!    `index.{ext}` for barrel imports.
 //! 4. **External modules** (no `.`/`/` prefix, e.g. `"react"`, `"std::io"`):
 //!    no local File node exists → skip with `warn`.
-
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -142,6 +141,8 @@ impl<'a> ImportResolver<'a> {
         // (source_file_id, function_id) — a single file may re-export
         // multiple functions, each producing its own REEXPORTS edge.
         let mut seen_reexport_pairs: HashSet<(String, String)> = HashSet::new();
+        // Dedup for external DEPENDS_ON edges: (source_file_id, package id).
+        let mut seen_external_pairs: HashSet<(String, String)> = HashSet::new();
 
         for result in results {
             // C++ #include edges are handled by ResolvePhase
@@ -177,6 +178,18 @@ impl<'a> ImportResolver<'a> {
                 ) {
                     Some(id) => id,
                     None => {
+                        // feature-expansion-wave: unresolved imports become
+                        // ExternalPackage nodes + DEPENDS_ON edges (supply
+                        // view) instead of being dropped.
+                        super::external_deps::record_external_dependency(
+                            graph,
+                            &source_file_id,
+                            &import.source_file,
+                            result.language,
+                            import.line,
+                            self.project,
+                            &mut seen_external_pairs,
+                        );
                         // Single-line for coverage: tarpaulin attribute continuation
                         warn!(import = %import.source_file, importer = %result.file_path, line = import.line, "IMPORTS target unresolved (external module or missing file); skipping");
                         continue;
@@ -843,6 +856,14 @@ mod tests {
     /// Builds a File node with the given relative path as id, name, and
     /// file_path (mirrors what `build_file_nodes` produces in the scope phase,
     /// but uses the path as id for simpler test assertions).
+    fn count_edges_of_type(graph: &Graph, edge_type: EdgeType) -> usize {
+        graph
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == edge_type)
+            .count()
+    }
+
     fn make_file_node(path: &str, project: &str) -> Node {
         Node::builder(NodeLabel::File, path, path)
             .id(path)
@@ -938,7 +959,11 @@ mod tests {
         let resolver = ImportResolver::new("proj");
         resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(graph.edge_count(), 0, "unresolved import → no edge");
+        assert_eq!(
+            count_edges_of_type(&graph, EdgeType::Imports),
+            0,
+            "unresolved import → no edge"
+        );
     }
 
     #[test]
@@ -959,7 +984,16 @@ mod tests {
 
         let resolver = ImportResolver::new("proj");
         resolver.resolve_imports(&results, &mut graph);
-        assert_eq!(graph.edge_count(), 0);
+        assert_eq!(
+            count_edges_of_type(&graph, EdgeType::Imports),
+            0,
+            "missing source File node → no edges at all"
+        );
+        assert_eq!(
+            count_edges_of_type(&graph, EdgeType::DependsOn),
+            0,
+            "missing source File node → no DEPENDS_ON edges"
+        );
     }
 
     #[test]
@@ -1245,7 +1279,7 @@ mod tests {
         resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            graph.edge_count(),
+            count_edges_of_type(&graph, EdgeType::Imports),
             0,
             "unresolvable relative import → no edge"
         );
@@ -1485,7 +1519,11 @@ mod tests {
         let resolver = ImportResolver::new("proj");
         resolver.resolve_imports(&results, &mut graph);
 
-        assert_eq!(graph.edge_count(), 0, "external crate (std::io) → no edge");
+        assert_eq!(
+            count_edges_of_type(&graph, EdgeType::Imports),
+            0,
+            "external crate (std::io) → no edge"
+        );
     }
 
     // --- resolve_imports: Rust module path resolution (unprefixed, e.g. `cli::run`) ---
@@ -1654,7 +1692,7 @@ mod tests {
         resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            graph.edge_count(),
+            count_edges_of_type(&graph, EdgeType::Imports),
             0,
             "external `std::io` → no edge (no false positive)"
         );
@@ -2196,7 +2234,7 @@ mod tests {
         resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(
-            graph.edge_count(),
+            count_edges_of_type(&graph, EdgeType::Imports),
             0,
             "JDK import (java.util.List) should not resolve to a local file"
         );

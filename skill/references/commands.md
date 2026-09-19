@@ -72,6 +72,8 @@ codenexus daemon --path <PATH> --name <PROJECT_NAME> [--debounce-ms <MS>] [--db 
 
 ### Querying & search
 
+- `--notify_impact <BOOL>` — `true` emits a per-file impact notice (structured JSON via the log channel) after each successful incremental index: symbols defined in the changed files and their incoming-edge counts, capped at 200 symbols per batch (default `false`)
+
 #### query — Execute a Cypher query
 
 ```bash
@@ -178,19 +180,20 @@ All of `--symbol`, `--depth`, `--edge_types`, `--max_depth`, `--include_tests` a
 Shows the resolved node, incoming edges (callers/importers/readers/writers), outgoing edges (callees/imports/uses), and processes/routes/endpoints the symbol participates in.
 
 ```bash
-codenexus context --symbol <SYMBOL> --depth <N> --project <NAME_OR_ID> --enhanced <BOOL> [--db <DB_PATH>]
+codenexus context --symbol <SYMBOL> --depth <N> --project <NAME_OR_ID> --enhanced <BOOL> --budget <TOKENS> [--db <DB_PATH>]
 ```
 
-All of `--symbol`, `--depth`, `--project`, `--enhanced` are **required**.
+All of `--symbol`, `--depth`, `--project`, `--enhanced`, `--budget` are **required** (sentinel defaults apply when omitted).
 
 **Options:**
 - `--symbol <SYMBOL>` — Symbol name (required)
 - `--depth <N>` — BFS expansion depth for the surrounding subgraph (required; e.g. `--depth 2`)
 - `--project <NAME_OR_ID>` — Project name or id (required; used by `--enhanced true`)
 - `--enhanced <BOOL>` — `true` returns the multi-dimensional `SymbolContext` (symbol definition + type context + module context + test context); `false` returns the legacy caller/callee/processes view (required)
+- `--budget <TOKENS>` — Token ceiling for the output JSON; `0` (default) = unlimited. When > 0, array sections are greedily packed (prefix-truncated) to fit and a `budget` receipt is attached: `{requested, estimated_tokens, truncated, sections_dropped[], oversized_dropped}`. Estimate heuristic: `chars / 4` (Unicode chars, no tokenizer)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
-**Output (JSON):** `{symbol, node, incoming[], outgoing[], processes[], routes[], endpoints[]}` (legacy) or the enhanced `SymbolContext`.
+**Output (JSON):** `{symbol, node, incoming[], outgoing[], processes[], routes[], endpoints[]}` (legacy) or the enhanced `SymbolContext`; with `--budget > 0` a `budget` object is appended.
 
 > ✅ **Fixed in 0.3.4 (Problem F + A):** `context --enhanced true` now resolves `--project <name|id>` via `resolve_project_id` (previously it matched the raw value against `Function.project`, which stores the id, so name lookups failed with a generic error). Ambiguous symbols now fail fast — `context --symbol new --enhanced true --project CodeNexus` returns `ambiguous symbol 'new': 99 candidates` in ~0.3s (exit 1) instead of timing out. Verified: a unique short name returns a full `SymbolContext` (exit 0).
 
@@ -374,7 +377,7 @@ Both `--project` and `--endpoint` are **required**.
 Renders a self-contained interactive architecture diagram (HTML) from the indexed graph: layered module overview with edge types, quality-gated diagnostics, and optional git evidence.
 
 ```bash
-codenexus diagram --project <NAME_OR_ID> --output <HTML_PATH> [--quality standard|showcase] [--repo_root <PATH>] [--repo_url <URL>] [--title <TITLE>] [--locale en|zh-CN] [--db <DB_PATH>]
+codenexus diagram --project <NAME_OR_ID> --output <HTML_PATH> [--quality standard|showcase] [--repo_root <PATH>] [--repo_url <URL>] [--title <TITLE>] [--locale en|zh-CN] [--viewer_data <JSON_PATH>] [--viewer_url <URL>] [--db <DB_PATH>]
 ```
 
 **Options:**
@@ -385,9 +388,11 @@ codenexus diagram --project <NAME_OR_ID> --output <HTML_PATH> [--quality standar
 - `--repo_url <URL>` — Repository URL for evidence links (required; empty = omit)
 - `--title <TITLE>` — Diagram title (required; empty = generated caption)
 - `--locale <LOCALE>` — `en` (default) or `zh-CN` (required)
+- `--viewer_data <JSON_PATH>` — Also write a graph-viewer snapshot JSON (`{version:1, nodes, edges}`); empty = off
+- `--viewer_url <URL>` — Viewer mode: replace the SVG stage with a 3D-viewer iframe loading the snapshot from `<URL>/?snapshot=data:application/json,...` (the graph-viewer app must be served at that URL); empty = off. Quality gates are skipped in this mode and a `diagram/viewer-mode` warning is attached
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
-**Output (JSON):** `project`, `output_path`, `receipt` (pipeline diagnostics receipt)
+**Output (JSON):** `project`, `output_path`, `viewer_data` (when written), `receipt` (pipeline diagnostics receipt)
 
 #### arch_diff — Render an architecture diff HTML between two projects
 
@@ -540,6 +545,105 @@ codenexus setup --force <BOOL>
 - `--force <BOOL>` — `true` overwrites existing config entries without prompting; `false` prompts (required)
 
 **Output (JSON):** `{configured, skipped}` (lists of agent names that were configured vs. skipped)
+
+#### skill — Sync skill docs into installed agents
+
+Copies the bundled CodeNexus skill documentation (`SKILL.md` + 4 references) into each detected AI agent's global skill directory (`~/.claude/skills/codenexus/`, `~/.cursor/skills/codenexus/`, `~/.codex/skills/codenexus/`). Every written file carries a `<!-- codenexus-sync: v<version> -->` stamp. Overwrite policy mirrors `setup`: identical → skipped; different → prompt y/N unless `--force true` (non-interactive stdin EOF counts as decline). Does not touch the DB.
+
+```bash
+codenexus skill --force <BOOL> --target <TARGET>
+```
+
+- `--force <BOOL>` — `true` overwrites differing docs without prompting (default `false`)
+- `--target <TARGET>` — `auto` (default, all detected agents), `claude-code`, `cursor`, or `codex`
+
+**Output (JSON):** `{written: [{agent, file, path}], skipped: [{agent, file, path}], declined: [{agent, skill_dir}]}`
+
+#### ask — Natural-language question router
+
+Routes a natural-language question to one of the read-only command cores (trace/impact/context/search/dead_code/complexity/architecture/status/detect_changes/query) via a static keyword table and executes it **in-process** (no subprocess). Symbol extraction: backtick/quote-wrapped spans first, then `snake_case`/`camelCase`/`path::qualifier` tokens. Confidence ≥ 0.6 executes; otherwise only suggestions are returned. Execution failures degrade to the equivalent CLI command (exit stays 0).
+
+```bash
+codenexus ask --question "<QUESTION>" --execute <BOOL> --project <NAME_OR_ID> [--db <DB_PATH>]
+```
+
+- `--question <QUESTION>` — Natural-language question (required)
+- `--execute <BOOL>` — `true` (default) runs the matched command in-process; `false` only returns the routed intent
+- `--project <NAME_OR_ID>` — Project scope for project-scoped commands (`dead_code`/`complexity`/`architecture`/`search`; default empty)
+
+**Output (JSON):** `{question, intent: {command, symbol, confidence, matched_keywords} | null, executed, result, suggestions}`
+
+#### taint — Cross-language taint audit
+
+Traces source→sink paths through the graph (DataFlows/Reads/Writes/FfiCalls edges). **Rules mode** (default, empty `--source`/`--sink`) matches nodes against the builtin rule library (version 1: C, Python, JavaScript, PHP, Solidity) and pairs them automatically; **manual mode** traces two named symbols. A node's language comes from its File node. Cap `--max_pairs` combinations; exceeding the cap sets `truncated: true`.
+
+```bash
+codenexus taint [--source <SYMBOL>] [--sink <SYMBOL>] [--language <LANG>] [--max_pairs <N>] [--depth <N>] [--project <NAME_OR_ID>] [--db <DB_PATH>]
+```
+
+- `--source <SYMBOL>` / `--sink <SYMBOL>` — Manual mode endpoints (both empty = rules mode; one empty = error)
+- `--language <LANG>` — Restrict rules mode to one language (`c`|`python`|`javascript`|`php`|`solidity`; empty = all)
+- `--max_pairs <N>` — Pair cap (default 200); `--depth <N>` — traversal depth (default 8)
+- `--project <NAME_OR_ID>` — Validate project exists (empty = skip)
+
+**Output (JSON):** `{mode, rules_version, sources_found, sinks_found, pairs_scanned, paths: [{source, sink, depth, nodes, edge_types}], truncated, diagnostics}`
+
+#### supply — Supply-chain view of external dependencies
+
+Lists `ExternalPackage` nodes (created from unresolved imports at index time) with their ecosystem (crates/pypi/npm/gomodules/…), language, dependent file count, and deduplicated import paths. Packages sort by dependent count descending.
+
+```bash
+codenexus supply --project <NAME_OR_ID> [--db <DB_PATH>]
+```
+
+- `--project <NAME_OR_ID>` — Validate project exists before aggregating (empty = skip)
+
+**Output (JSON):** `{project, total_packages, total_edges, packages: [{name, ecosystem, language, dependents, import_paths}]}`
+
+#### evolve — Architecture evolution timeline
+
+Snapshots the last N commits (`git worktree add --detach`, force-removed on both success and error paths), indexes each as `<project>@<sha7>` into the project DB, and extracts per-commit architecture metrics (file/symbol/module counts, language mix, edges-per-symbol). Writes `evolve.json` (timeline) and `evolve.html` (inline-SVG sparklines, no external resources).
+
+```bash
+codenexus evolve --path <REPO> --output <DIR> --max_commits <N> --project <NAME> [--db <DB_PATH>]
+```
+
+- `--path <REPO>` — Git repository to replay (required)
+- `--output <DIR>` — Output directory for `evolve.json` / `evolve.html` (default `.codenexus/evolve`)
+- `--max_commits <N>` — Number of commits to replay (default 10, cap 50)
+- `--project <NAME>` — Base project name (empty = directory name)
+
+**Output (JSON):** `{path, max_commits, points: [{commit, timestamp, subject, project_name, file_count, symbol_count, module_count, languages, avg_fanout, index_ms}], json_path, html_path}`
+
+#### hub — Artifact registry client (protocol v1)
+
+Client for a CodeNexus artifact registry. `push` exports the project to a `.cnxp` artifact and uploads it; `pull` downloads the latest artifact for a name and imports it (full BLAKE3/size validation); `list` queries registry artifacts. Bearer token: `--token` wins over `CODENEXUS_HUB_TOKEN`. Protocol: `docs/HUB_PROTOCOL.md` (server out of scope). Data leaves the machine only on explicit push.
+
+```bash
+codenexus hub --action push|pull|list --url <BASE> [--name <ARTIFACT>] [--project <NAME>] [--token <TOKEN>] [--db <DB_PATH>]
+```
+
+- `--action <ACTION>` — `push` | `pull` | `list` (required)
+- `--url <BASE>` — Registry base URL, `http(s)://host` (required)
+- `--name <ARTIFACT>` — Artifact name (`pull`; URL-encoded in the path)
+- `--project <NAME>` — Project name (`push` export source; `list` filter)
+- `--token <TOKEN>` — Bearer token (default: `CODENEXUS_HUB_TOKEN` env)
+
+**Output (JSON):** `{action, url, artifact, project, outcome, details}`
+
+#### lint — Evaluate a custom architecture rule pack
+
+Runs user-authored Cypher assertions (`.codenexus/rules.json`) against the indexed graph. Each rule has an expectation: `forbid_matches` (zero rows) or `require_min` (at least N rows). The Cypher subset matches the `query` command — query edges node-style via `CodeRelation` (`MATCH (e:CodeRelation) WHERE e.type = 'IMPORTS'`); relationship patterns `(a)-[r:T]->(b)` are not supported. See `.codenexus/rules.example.json`. A rule whose Cypher errors becomes an `error`-severity violation (fail-closed); other rules still run.
+
+```bash
+codenexus lint --rules <PATH> --fail_on error|warning|never --project <NAME_OR_ID> [--db <DB_PATH>]
+```
+
+- `--rules <PATH>` — Rules file path (default `.codenexus/rules.json`)
+- `--fail_on <LEVEL>` — `error` (default), `warning` (any violated rule fails), `never`
+- `--project <NAME_OR_ID>` — Validate project exists before linting (empty = skip)
+
+**Output (JSON):** `{project, rules_file, rules_evaluated, violations: [{name, severity, message, violated, match_count, sample_rows, error?}], verdict, diagnostics}`. Exit 2 when `verdict` is `fail`.
 
 #### hook — Emit PreToolUse/PostToolUse hook JSON (H13)
 

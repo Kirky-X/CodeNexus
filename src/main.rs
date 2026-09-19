@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! CodeNexus binary entry point.
@@ -8,7 +8,6 @@
 //!
 //! MCP mode (gated by `mcp` feature): sdforge MCP server serves
 //! `#[forge]` tools over stdio via rmcp.
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -91,6 +90,11 @@ fn init_inklog() {
 }
 
 fn main() {
+    // Message i18n (daemon logs, CLI/user-visible strings): detect the
+    // locale once up front. Lazy fallback inside i18n::t/tr guarantees
+    // localized output even if this were skipped.
+    codenexus::i18n::init();
+
     init_logging();
 
     #[cfg(feature = "mcp")]
@@ -243,6 +247,7 @@ fn run_cli() {
 
     // Read-only commands open the DB read-only so multiple processes can read
     // concurrently (DuckDB/LadybugDB shared-read); writing commands keep RW.
+    // with_notify_webhook 仅在 daemon+hub 下存在（见 kit/bootstrap.rs）
     let config = KitBootstrapConfig::new(PathBuf::from(&db))
         .with_debounce_ms(debounce_ms)
         .with_read_only(opens_read_only(sub_name))
@@ -251,6 +256,8 @@ fn run_cli() {
                 == Some(sdforge::clap::parser::ValueSource::CommandLine)
                 || project_config.verbose.unwrap_or(false),
         );
+    #[cfg(all(feature = "daemon", feature = "hub"))]
+    let config = config.with_notify_webhook(project_config.notify_webhook.clone());
     match runtime.block_on(build_kit(&config)) {
         Ok(kit) => {
             if let Err(e) = init_kit(kit) {
@@ -460,6 +467,11 @@ fn opens_read_only(sub_name: &str) -> bool {
             | "tool_map"
             | "shape_check"
             | "api_impact"
+            | "ci"
+            | "ask"
+            | "lint"
+            | "taint"
+            | "supply"
     )
 }
 
@@ -701,19 +713,27 @@ const SENTINEL_DEFAULTS: &[(&str, &str, &str)] = &[
     ("api_impact", "endpoint", ""),
     // — diagram: quality/repo_root/repo_url/title/locale default at the
     // service layer; empty repo_root skips evidence verification.
+    // viewer_data/viewer_url default empty (viewer mode off).
     ("diagram", "quality", "standard"),
     ("diagram", "repo_root", ""),
     ("diagram", "repo_url", ""),
     ("diagram", "title", ""),
     ("diagram", "locale", "en"),
+    ("diagram", "viewer_data", ""),
+    ("diagram", "viewer_url", ""),
     // — arch_diff: quality defaults to standard, title defaults to the
-    // generated "<base> → <head>" caption.
+    // generated "<base> → <head>" caption; viewer params default off.
     ("arch_diff", "quality", "standard"),
     ("arch_diff", "title", ""),
+    ("arch_diff", "viewer_data", ""),
+    ("arch_diff", "viewer_url", ""),
     // — dead_code: check_dynamic_dispatch defaults to true so trait
     // impl methods (e.g. `fmt#Display`) are excluded by default. Users can
     // opt out via `--check_dynamic_dispatch false` for adversarial testing.
     ("dead_code", "check_dynamic_dispatch", "true"),
+    // — dead_code: reflection/derive-macro entry points default off
+    // (sentinel missed when the param was introduced — exit-2 regression).
+    ("dead_code", "check_reflection", "false"),
     // — index: fresh defaults to false so users can omit --fresh; only
     // --fresh true triggers DB file deletion (P-DB space reclamation).
     ("index", "fresh", "false"),
@@ -755,10 +775,47 @@ const SENTINEL_DEFAULTS: &[(&str, &str, &str)] = &[
     ("impact", "max_depth", "0"),
     ("impact", "include_tests", "false"),
     // — context: depth defaults to 1 (USER_GUIDE example), empty project =
-    // no project validation, enhanced=false = legacy 360 view.
+    // no project validation, enhanced=false = legacy 360 view, budget 0 =
+    // unlimited (no packing receipt attached).
     ("context", "depth", "1"),
     ("context", "project", ""),
     ("context", "enhanced", "false"),
+    ("context", "budget", "0"),
+    // — ci: base_mode defaults to head (CI diffs committed work against
+    // HEAD); fail_on defaults to high (only the biggest blast radii block);
+    // empty project = no project validation.
+    ("ci", "base_mode", "head"),
+    ("ci", "fail_on", "high"),
+    ("ci", "project", ""),
+    // — skill: target defaults to auto (all detected agents).
+    ("skill", "target", "auto"),
+    // — ask: execute defaults to true (run the matched command in-process);
+    // empty project = project-scoped commands use the default project.
+    ("ask", "execute", "true"),
+    ("ask", "project", ""),
+    // — lint: rules file defaults to .codenexus/rules.json; fail_on defaults
+    // to error (only error-severity violations block).
+    ("lint", "rules", ".codenexus/rules.json"),
+    ("lint", "fail_on", "error"),
+    ("lint", "project", ""),
+    // — daemon: impact notifications default off (opt-in via --notify-impact
+    // or .codenexus/config.json general.notify_impact).
+    ("daemon", "notify_impact", "false"),
+    // — taint: rules mode by default (empty source/sink); language filter
+    // empty = all rule languages.
+    ("taint", "source", ""),
+    ("taint", "sink", ""),
+    ("taint", "language", ""),
+    ("taint", "max_pairs", "200"),
+    ("taint", "depth", "8"),
+    ("taint", "project", ""),
+    // — supply: empty project = no project validation.
+    ("supply", "project", ""),
+    // — evolve: output dir default; max_commits default 10 (cap 50 enforced
+    // in the service); empty project = directory base name.
+    ("evolve", "output", ".codenexus/evolve"),
+    ("evolve", "max_commits", "10"),
+    ("evolve", "project", ""),
 ];
 
 /// Applies sentinel `default_value`s to CLI parameters listed in
@@ -901,6 +958,7 @@ fn parse_mcp_db_arg() -> Option<String> {
 struct ProjectConfig {
     db: Option<String>,
     debounce_ms: Option<u64>,
+    notify_webhook: Option<String>,
     verbose: Option<bool>,
     command_defaults: HashMap<String, HashMap<String, String>>,
 }
@@ -921,11 +979,15 @@ impl ProjectConfig {
             Some(serde_json::Value::Object(g)) => {
                 cfg.db = Self::string_field(g, "db", &mut warnings);
                 cfg.debounce_ms = Self::u64_field(g, "debounce_ms", &mut warnings);
+                cfg.notify_webhook = Self::string_field(g, "notify_webhook", &mut warnings);
                 cfg.verbose = Self::bool_field(g, "verbose", &mut warnings);
                 for key in g.keys() {
-                    if !matches!(key.as_str(), "db" | "debounce_ms" | "verbose") {
+                    if !matches!(
+                        key.as_str(),
+                        "db" | "debounce_ms" | "notify_webhook" | "verbose"
+                    ) {
                         warnings.push(format!(
-                            "general.{key}: unknown key (expected db / debounce_ms / verbose)"
+                            "general.{key}: unknown key (expected db / debounce_ms / notify_webhook / verbose)"
                         ));
                     }
                 }

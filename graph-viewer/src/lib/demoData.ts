@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 演示用模拟数据 — 无后端时展示 UI 效果 */
 
 import type { GraphData, GraphNode, GraphEdge } from "./types";

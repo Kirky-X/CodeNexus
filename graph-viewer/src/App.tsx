@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 import { useEffect, useState, useCallback, useMemo, useRef, lazy, Suspense } from "react";
 import { useGraphData } from "./hooks/useGraphData";
 import { useTrace } from "./hooks/useTrace";

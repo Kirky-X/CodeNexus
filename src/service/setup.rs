@@ -1,9 +1,8 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! `setup` service: auto-detect installed AI coding agents and write MCP
 //! server config.
-
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
@@ -54,12 +53,18 @@ impl Agent {
         }
     }
 
-    fn marker_dir(self, home: &Path) -> PathBuf {
+    pub(crate) fn marker_dir(self, home: &Path) -> PathBuf {
         match self {
             Agent::ClaudeCode => home.join(".claude"),
             Agent::Cursor => home.join(".cursor"),
             Agent::Codex => home.join(".codex"),
         }
+    }
+
+    /// Target directory for `codenexus skill` generated docs:
+    /// `<agent_home>/skills/codenexus/`.
+    pub(crate) fn skill_dir(self, home: &Path) -> PathBuf {
+        self.marker_dir(home).join("skills").join("codenexus")
     }
 
     fn config_path(self, home: &Path) -> PathBuf {

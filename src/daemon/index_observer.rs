@@ -1,8 +1,7 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Index observer: triggers incremental indexing on file changes.
-
 use std::path::PathBuf;
 
 use tracing::{info, warn};
@@ -10,10 +9,10 @@ use tracing::{info, warn};
 use crate::daemon::event::{DaemonEvent, EventObserver};
 use crate::index::{IndexError, IndexFacade, IndexResult};
 
-/// 索引观察者：收到事件后触发增量索引（）。
+/// 索引观察者：收到事件后触发增量索引。
 ///
 /// 每次被通知时，调用 [`IndexFacade::index_incremental`] 对项目根目录
-/// 执行增量索引。索引期间设置 `is_indexing` 标志（）。
+/// 执行增量索引。索引期间设置 `is_indexing` 标志。
 pub struct IndexObserver {
     /// 索引门面。
     facade: IndexFacade,
@@ -21,7 +20,7 @@ pub struct IndexObserver {
     project_name: String,
     /// 监视的项目根目录。
     watch_path: PathBuf,
-    /// 是否正在索引中（）。
+    /// 是否正在索引中。
     is_indexing: bool,
     /// 索引触发次数。
     index_count: usize,
@@ -29,6 +28,8 @@ pub struct IndexObserver {
     last_result: Option<IndexResult>,
     /// 最近一次索引错误（索引失败时记录）。
     last_error: Option<IndexError>,
+    /// 索引完成回调观察者（影响告警等），成功路径后按注册顺序回调。
+    completion_observers: Vec<Box<dyn EventObserver + Send>>,
 }
 
 impl IndexObserver {
@@ -42,10 +43,19 @@ impl IndexObserver {
             index_count: 0,
             last_result: None,
             last_error: None,
+            completion_observers: Vec::new(),
         }
     }
 
-    /// 返回是否正在索引中（）。
+    /// 注册一个"索引完成"观察者（Observer 模式的完成回调侧）。
+    ///
+    /// 增量索引成功返回后，[`IndexObserver`] 会以
+    /// `(&IndexResult, &[PathBuf])` 回调所有已注册的完成观察者。
+    pub fn add_completion_observer(&mut self, observer: Box<dyn EventObserver + Send>) {
+        self.completion_observers.push(observer);
+    }
+
+    /// 返回是否正在索引中。
     #[must_use]
     pub fn is_indexing(&self) -> bool {
         self.is_indexing
@@ -71,7 +81,7 @@ impl IndexObserver {
 }
 
 impl EventObserver for IndexObserver {
-    fn on_events(&mut self, _events: &[DaemonEvent]) {
+    fn on_events(&mut self, events: &[DaemonEvent]) {
         //：索引期间暂停事件处理。
         self.is_indexing = true;
         self.index_count += 1;
@@ -79,19 +89,36 @@ impl EventObserver for IndexObserver {
         info!(
             project = %self.project_name,
             path = %self.watch_path.display(),
-            "触发增量索引"
+            "{}",
+            crate::i18n::tr("index-incremental-triggered")
         );
+
+        let changed_files: Vec<PathBuf> = events
+            .iter()
+            .map(|event| match event {
+                DaemonEvent::Create(p) | DaemonEvent::Modify(p) | DaemonEvent::Remove(p) => {
+                    p.clone()
+                }
+            })
+            .collect();
 
         match self
             .facade
             .index_incremental(&self.watch_path, &self.project_name, false)
         {
             Ok(result) => {
+                for observer in &mut self.completion_observers {
+                    observer.on_index_complete(&result, &changed_files);
+                }
                 self.last_result = Some(result);
                 self.last_error = None;
             }
             Err(err) => {
-                warn!(error = %err, "增量索引失败，继续监视");
+                warn!(
+                    error = %err,
+                    "{}",
+                    crate::i18n::tr("index-incremental-failed")
+                );
                 self.last_error = Some(err);
             }
         }

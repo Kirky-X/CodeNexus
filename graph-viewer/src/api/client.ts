@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* WASM 图数据客户端 — 通过 Web Worker 驱动同步引擎
  *
  * WASM 初始化、文件写入 MEMFS、数据库打开与查询全部在 worker 线程

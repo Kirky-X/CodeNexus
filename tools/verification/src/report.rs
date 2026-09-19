@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 //! Markdown report generator (tasks 6.1-6.4).
 //!
 //! Produces per-sample Markdown reports and an aggregate batch report. The

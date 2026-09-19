@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 内存预算 — 依据文件大小与设备可用内存，自适应控制加载参数
  *
  * 大库的内存大头（按占比排序）：

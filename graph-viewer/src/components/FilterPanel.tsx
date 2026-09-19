@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 筛选面板 — 按节点类型、边类型、文件路径筛选 */
 
 import { useMemo } from "react";

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 //! Query comparison module (tasks 5.1-5.4).
 //!
 //! Loads `.cql` query files from `tools/verification/queries/`, executes each

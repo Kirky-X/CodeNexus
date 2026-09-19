@@ -53,6 +53,9 @@ jobs:
         run: cargo +1.97.1 clippy -- -D warnings
       - name: Clippy (minimal)
         run: cargo +1.97.1 clippy --lib --no-default-features --features minimal -- -D warnings
+      # 2026-09-19 审计补腿：examples 是 workspace 成员但此前从未进 CI
+      - name: Check examples crate
+        run: cargo +1.97.1 check -p codenexus-examples --all-targets
 
   test:
     name: test (${{ matrix.features }})
@@ -71,8 +74,8 @@ jobs:
             cache-key: "core-daemon-analysis-complexity"
           - features: "core,lsp,cache"
             cache-key: "core-lsp-cache"
-          - features: "full,embed"
-            cache-key: "full-embed"
+          - features: "full,embeddings"
+            cache-key: "full-embeddings"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # See the lint job: [patch.crates-io] needs the base repos at ../base.

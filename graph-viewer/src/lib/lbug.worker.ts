@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* LadybugDB Worker — 在 Web Worker 线程运行同步 WASM 引擎
  *
  * 主线程只做 RPC，文件切片/MEMFS 写入/DB 打开/关系扫描全部离线程，

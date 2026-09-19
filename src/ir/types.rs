@@ -1,8 +1,7 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Intermediate extraction records collected per file.
-
 use crate::model::Language;
 
 /// Information about an import/include statement extracted from source.
@@ -58,7 +57,6 @@ pub struct CallInfo {
 /// Information about a variable assignment extracted from source.
 ///
 /// Captured for later resolution of DataFlows/Reads/Writes edges
-/// ().
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AssignInfo {
     /// The name of the variable being assigned.

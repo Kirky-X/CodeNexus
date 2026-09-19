@@ -1,8 +1,7 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Index command: execute the full index pipeline.
-
 use std::path::Path;
 
 use serde::Serialize;
@@ -1846,8 +1845,8 @@ mod tests {
     }
 
     // Covers the DQ violation reporting branch in index_core (lines 248-258).
-    // Pre-populates the DB with a File node that has an empty hash (
-    // violation), then calls index_core. The DQ check should detect the
+    // Pre-populates the DB with a File node that has an empty hash
+    // (violation), then calls index_core. The DQ check should detect the
     // violation and trigger the `if !dq_report.is_clean()` branch.
     #[cfg(feature = "lang-rust")]
     #[test]

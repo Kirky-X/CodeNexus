@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 图快照模式 — 加载 `?snapshot=` 静态图数据，短路 LadybugDB worker 路径。
  *
  * 快照由 `codenexus diagram --viewer_url` / `arch_diff --viewer_url` 生成的

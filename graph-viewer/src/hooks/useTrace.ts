@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 追踪 Hook — 在当前加载的图子图上做 BFS 遍历
  *
  * 追踪语义 = 高亮"用户正在看的这张图"里的调用/数据流路径，

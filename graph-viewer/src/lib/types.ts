@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 代码知识图谱数据模型 — 对齐 CodeNexus 的 44 种 NodeLabel + 31 种 EdgeType */
 
 /* ── 节点 ─────────────────────────────────────────── */

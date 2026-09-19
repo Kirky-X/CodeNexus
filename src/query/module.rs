@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! trait-kit module for the Query subsystem.
@@ -7,7 +7,6 @@
 //! wiring the existing [`QueryFacade`] (Facade pattern) into the unified
 //! Kit registry as `Arc<dyn QueryEngine>` under
 //! [`QueryModule`](crate::kit::QueryModule).
-
 use std::any::TypeId;
 use std::future::Future;
 use std::path::PathBuf;
@@ -182,7 +181,7 @@ impl QueryEngine for QueryCapability {
     }
 
     /// Hybrid BM25 + semantic search.
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "embeddings")]
     fn semantic_search(
         &self,
         text: &str,

@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! DaemonRunner capability trait.
@@ -20,7 +20,6 @@
 //! [`Daemon`]: super::Daemon
 //! [`IndexObserver`]: super::IndexObserver
 //! [`Daemon::run`]: super::Daemon::run
-
 use std::path::Path;
 
 use super::DaemonError;
@@ -59,6 +58,12 @@ pub trait DaemonRunner: Send + Sync {
     /// the config behind an `Arc<RwLock<…>>` override this to propagate the
     /// new value so the next [`start`](DaemonRunner::start) call picks it up.
     fn update_debounce_ms(&self, _new_ms: u64) {}
+
+    /// Hot-reloadable impact-notify toggle (default no-op). Mirrors
+    /// [`update_debounce_ms`](Self::update_debounce_ms): capabilities holding
+    /// the config override this so the next [`start`](DaemonRunner::start)
+    /// call picks it up.
+    fn update_impact_notify(&self, _enabled: bool) {}
 }
 
 /// Compile-time assertion that `DaemonRunner` is object-safe and `Send + Sync`.

@@ -1,8 +1,7 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Trace and context output types.
-
 use crate::model::{Edge, Node};
 use serde::{Deserialize, Serialize};
 
@@ -54,7 +53,7 @@ impl From<&Edge> for TraceEdge {
     ///
     /// Shared by all trace engines (bfs, call_graph, data_flow, taint) and
     /// service-layer trace callers so the edge-type string formatting lives
-    /// in exactly one place (C2 ).
+    /// in exactly one place.
     fn from(e: &Edge) -> Self {
         Self {
             edge_type: e.edge_type.as_db_type().to_string(),

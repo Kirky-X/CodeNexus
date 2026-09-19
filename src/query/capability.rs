@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! QueryEngine capability trait.
@@ -8,7 +8,6 @@
 //! concrete impl wraps [`QueryFacade`].
 //!
 //! [`QueryFacade`]: super::QueryFacade
-
 use crate::model::NodeLabel;
 
 use super::error::QueryError;
@@ -66,7 +65,7 @@ pub trait QueryEngine: Send + Sync {
     /// trait, so callers must fall back to [`fulltext_search`](Self::fulltext_search).
     ///
     /// [`HybridStrategy`]: crate::embed::HybridStrategy
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "embeddings")]
     fn semantic_search(
         &self,
         text: &str,

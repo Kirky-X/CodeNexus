@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 文件树侧边栏 — 按文件路径组织节点 */
 
 import { useMemo, useState } from "react";

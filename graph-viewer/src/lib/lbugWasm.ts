@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* LadybugDB WASM 管理层 — sync 变体运行于 Web Worker 内（由 lbug.worker.ts 加载）
  *
  * 直接访问 Emscripten 虚拟文件系统，所有数据库操作同步执行。

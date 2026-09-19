@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! CodeNexus: A queryable code knowledge graph tool.
@@ -68,6 +68,10 @@ pub mod daemon;
 pub mod diagnostics;
 #[doc(hidden)]
 pub mod discover;
+/// Message-level i18n (Fluent + locale detection chain) for daemon logs and
+/// server error responses. Not to be confused with [`model::i18n`], which is
+/// Unicode text processing (case folding / NFC) for tokenization.
+pub mod i18n;
 pub mod index;
 #[doc(hidden)]
 pub mod ir;
@@ -100,7 +104,7 @@ pub mod analysis;
 #[doc(hidden)]
 pub mod diagram;
 
-#[cfg(feature = "embed")]
+#[cfg(feature = "embeddings")]
 pub mod embed;
 
 #[cfg(feature = "lsp")]

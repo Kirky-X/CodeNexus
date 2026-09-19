@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 图数据查询 — 从 WASM LadybugDB 读取节点和边数据
  *
  * 移植自 server/src/graph_query.rs，使用相同的 Cypher 查询语句

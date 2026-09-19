@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 3D 节点云 — 使用 instanced mesh 高性能渲染 */
 
 import { useRef, useMemo, useCallback } from "react";

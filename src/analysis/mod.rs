@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Code analysis subsystem.
@@ -15,7 +15,6 @@
 //! `Arc<dyn Storage>`; using `&dyn Storage` keeps the analyzer consistent
 //! with the Kit capability pattern (惯例优先于新颖) and works in
 //! both production (via `kit.require::<StorageModule>()`) and tests.
-
 pub mod architecture;
 pub mod dead_code;
 
@@ -27,6 +26,9 @@ pub mod community;
 
 #[cfg(feature = "analysis")]
 pub mod cross_service;
+
+#[cfg(feature = "analysis")]
+pub mod rules;
 
 #[cfg(feature = "complexity")]
 pub mod complexity;

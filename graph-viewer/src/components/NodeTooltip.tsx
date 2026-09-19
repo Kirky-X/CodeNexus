@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 /* 节点悬浮提示 */
 
 import { Html } from "@react-three/drei";

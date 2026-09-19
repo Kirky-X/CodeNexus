@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Kirky.X🌠
+// SPDX-License-Identifier: MIT
+
 //! gitnexus reference client (tasks 4.1-4.4).
 //!
 //! Invokes `gitnexus cypher --repo <name> <query>` as a subprocess, parses the

@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! Unified top-level error type for CodeNexus.
@@ -14,7 +14,6 @@
 //! | 1    | internal/system error  | Internal, Io, Json, Daemon, Lsp, Discover, Cache, Embed |
 //! | 2    | client error           | InvalidInput, ProjectNotFound, Query, Trace, Storage, Resolve, Phase |
 //! | 4    | not found / corrupt    | NotFound, Index(corrupt), Kit(corrupt)|
-
 use thiserror::Error;
 use tracing::error;
 
@@ -23,7 +22,7 @@ use crate::cache::CacheError;
 #[cfg(feature = "daemon")]
 use crate::daemon::DaemonError;
 use crate::discover::DiscoverError;
-#[cfg(feature = "embed")]
+#[cfg(feature = "embeddings")]
 use crate::embed::EmbedError;
 use crate::index::pipeline_dag::PhaseError;
 use crate::index::IndexError;
@@ -79,7 +78,7 @@ pub enum CodeNexusError {
     #[error("{0}")]
     Cache(#[from] CacheError),
 
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "embeddings")]
     #[error("{0}")]
     Embed(#[from] EmbedError),
 
@@ -138,7 +137,7 @@ impl CodeNexusError {
             CodeNexusError::Daemon(_) => 1,
             #[cfg(feature = "cache")]
             CodeNexusError::Cache(_) => 1,
-            #[cfg(feature = "embed")]
+            #[cfg(feature = "embeddings")]
             CodeNexusError::Embed(_) => 1,
             #[cfg(feature = "lsp")]
             CodeNexusError::Lsp(_) => 1,
@@ -891,14 +890,14 @@ mod tests {
 
     // --- exit_code for Embed (1) ---
 
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "embeddings")]
     #[test]
     fn exit_code_embed_missing_api_key_is_1() {
         let err: CodeNexusError = EmbedError::MissingApiKey.into();
         assert_eq!(err.exit_code(), 1);
     }
 
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "embeddings")]
     #[test]
     fn exit_code_embed_unavailable_is_1() {
         let err: CodeNexusError = EmbedError::Unavailable("connection refused".to_string()).into();

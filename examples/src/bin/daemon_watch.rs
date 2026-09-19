@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Kirky.X. All rights reserved.
+// Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
 //! 文件监视守护：`notify` 防抖 → 增量索引（Observer 模式）→ 优雅停止。
