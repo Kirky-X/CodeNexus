@@ -25,7 +25,7 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 <td align="center" width="25%">⚡<br><b>Incremental pipeline</b><br><span style="color:#64748B">hash diffing · reparse only changes</span></td>
 <td align="center" width="25%">🕸️<br><b>Property graph</b><br><span style="color:#64748B">44 node types · 30 edge types · Cypher</span></td>
 <td align="center" width="25%">🧭<br><b>Multi-hop tracing</b><br><span style="color:#64748B">call chains · data flow · taint paths</span></td>
-<td align="center" width="25%">🔌<br><b>Dual entry</b><br><span style="color:#64748B">29 CLI commands + serve mode · 10 MCP tools</span></td>
+<td align="center" width="25%">🔌<br><b>Dual entry</b><br><span style="color:#64748B">37 CLI commands + serve mode · 10 MCP tools</span></td>
 </tr>
 </table>
 
@@ -185,7 +185,7 @@ cargo build --release --no-default-features --features lang-c
 cargo build --release
 
 # Build with vector embeddings
-cargo build --release --features embed
+cargo build --release --features embeddings
 ```
 
 ### 💡 Minimal example

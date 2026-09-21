@@ -58,7 +58,7 @@ cargo build --no-default-features --features minimal
 cargo build --no-default-features --features core
 
 # Everything including vector embeddings (slower to compile)
-cargo build --features embed
+cargo build --features embeddings
 ```
 
 ## 📝 Commit Convention — Conventional Commits
@@ -143,7 +143,7 @@ If your change touches a feature-gated path, also run:
 ```bash
 cargo test --no-default-features --features minimal
 cargo test --no-default-features --features core
-cargo test --features embed
+cargo test --features embeddings
 ```
 
 ### Writing Tests

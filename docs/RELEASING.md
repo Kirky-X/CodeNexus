@@ -20,7 +20,7 @@
 ## 机械校验（发布前跑一遍）
 
 ```bash
-# 1. 命令数（应为 29）
+# 1. 命令数（应为 37）
 grep -rn "cli = true" src/service/*.rs | grep -v "//" | wc -l
 # 2. MCP 工具数（应为 10）
 grep -rn 'tool_name = "' src/service/*.rs | grep -v hook | wc -l

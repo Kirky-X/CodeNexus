@@ -25,7 +25,7 @@
 <td align="center" width="25%">⚡<br><b>增量管线</b><br><span style="color:#64748B">哈希比对 · 只解析变更</span></td>
 <td align="center" width="25%">🕸️<br><b>属性图模型</b><br><span style="color:#64748B">44类节点 · 30类边 · Cypher</span></td>
 <td align="center" width="25%">🧭<br><b>多跳追踪</b><br><span style="color:#64748B">调用链 · 数据流 · 污点路径</span></td>
-<td align="center" width="25%">🔌<br><b>双入口</b><br><span style="color:#64748B">38 命令 · 8 工具 · 同语义</span></td>
+<td align="center" width="25%">🔌<br><b>双入口</b><br><span style="color:#64748B">37 命令 + mcp · 10 工具 · 同语义</span></td>
 </tr>
 </table>
 
@@ -193,7 +193,7 @@ cargo build --release --no-default-features --features lang-c
 cargo build --release
 
 # 含向量嵌入的构建
-cargo build --release --features embed
+cargo build --release --features embeddings
 ```
 
 ### 💡 最小示例

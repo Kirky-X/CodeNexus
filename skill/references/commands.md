@@ -21,7 +21,7 @@ All of `--path`, `--name`, `--force`, `--lsp`, `--embed`, `--ram_first` are **re
 - `--name <NAME>` — Project name (required)
 - `--force <BOOL>` — Re-parse every file, ignoring cached hashes (required; e.g. `--force false`)
 - `--lsp <BOOL>` — Reserved for future use (currently unimplemented; required; e.g. `--lsp false`)
-- `--embed <BOOL>` — Deprecated: embedding is now controlled by the `embed` cargo feature. A `--embed true` only emits a warning to stderr. Required; pass `--embed false`.
+- `--embed <BOOL>` — Deprecated: embedding is now controlled by the `embeddings` cargo feature. A `--embed true` only emits a warning to stderr. Required; pass `--embed false`.
 - `--ram_first <BOOL>` — RAM-first indexing (H15): LZ4-compress sources into memory, parse from memory, single `COPY FROM` dump. Recommended for repos < 1 GB source. Default is streaming. (required; e.g. `--ram_first false`)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
