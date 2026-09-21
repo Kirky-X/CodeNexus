@@ -142,14 +142,17 @@ jobs:
       - uses: taiki-e/install-action@9458fed45835344deb5e69e06e831be047c96abf # cargo-llvm-cov
         with:
           tool: cargo-fuzz
+      # 显式指定 host gnu target：cargo-fuzz 0.14 起 Linux 默认改用 musl
+      # (rust-fuzz/cargo-fuzz#398)，musl 静态 libc 与 sanitizer 不兼容
+      # （"sanitizer is incompatible with statically linked libc" + E0463）。
       - name: Build all fuzz targets
         working-directory: fuzz
-        run: cargo fuzz build
+        run: cargo fuzz build --target x86_64-unknown-linux-gnu
       - name: Short run per target (smoke, not a corpus campaign)
         working-directory: fuzz
         run: |
           for t in escape_cypher_string escape_identifier cypher_subset_parse cnxp_header; do
-            cargo fuzz run "$t" -- -runs=2000 -max_total_time=60
+            cargo fuzz run "$t" --target x86_64-unknown-linux-gnu -- -runs=2000 -max_total_time=60
           done
 
   security:
