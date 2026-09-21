@@ -171,7 +171,7 @@ L6+L7 memory-overflow fix：L6 管线流式化 + LSP kill 超时 + iterator API 
 
 ### Fixed
 
-- **fix(analysis): bulwark testing 5 bugs + triage review fixes** — Phase 2 bulwark project testing (534 files / 19242 nodes / 94127 edges) revealed 5 real bugs, all fixed plus triage review (security/architecture/performance) findings addressed:
+- **fix(analysis): bulwark testing 5 bugs + triage review fixes** — bulwark project testing (534 files / 19242 nodes / 94127 edges) revealed 5 real bugs, all fixed plus triage review (security/architecture/performance) findings addressed:
   - **P0: `query`/`list` without `--db` failed** even when `.codenexus/<project>.lbug` existed. Added `discover_single_indexed_db()` to scan `.codenexus/` and auto-select the single available index.
   - **P1: `dead_code` reported 99.2% false positives** (1376/1387) on Rust `tests.rs` — `#[test]`/`#[tokio::test]`/`#[rstest]` macro CALLS edges are invisible to tree-sitter. Added `TEST_ATTRIBUTE_MARKERS` const + `has_test_attribute_marker()` helper to treat `#[test]`-attributed functions as entry points.
   - **P2: `route_map`/`shape_check`/`cross_service`/`tool_map` returned 0 on axum projects** — axum uses programmatic `Router::new().route("/x", get(h))` instead of attribute macros. Added `extract_axum_routes()` in `rust_extractor.rs` emitting `NodeLabel::Route` + `EdgeType::HandlesRoute`. `api_review.rs` service layer now supports both legacy (Handler+HANDLES) and axum (Function+HANDLES_ROUTE) patterns via module constants `HANDLER_LIKE_EDGE_TYPES`/`ROUTE_LIKE_LABELS`/`HANDLER_LIKE_LABELS`/`CALLER_LIKE_LABELS`/`ENDPOINT_MATCH_FIELDS`.
@@ -347,7 +347,7 @@ Initial public release. CodeNexus indexes source code into a queryable knowledge
 
 ### Changed
 
-- **Migrated all components to the `trait-kit` unified registry** (T6 / unified-architecture Phase 2). The in-tree `src/kit/shim.rs` fallback was removed once every module used `build_kit`. `trait-kit` is now a hard dependency.
+- **Migrated all components to the `trait-kit` unified registry**. The in-tree `src/kit/shim.rs` fallback was removed once every module used `build_kit`. `trait-kit` is now a hard dependency.
 - **Broke the `parse` ↔ `resolve` circular dependency** by introducing a `src/ir/` module for shared intermediate representations (R-3).
 - **Reduced `visit_node` parameter count** by introducing a `VisitContext` carried across the 5 extractors (R-1).
 - **Calls edge confidence range** adjusted to 0.80–0.95 to better reflect extraction certainty.
