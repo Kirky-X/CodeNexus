@@ -46,7 +46,7 @@ Feature presets: `minimal` (Rust only), `core` (C+Rust+Python), `full` (all 24 l
 
 ## Command Quick Reference
 
-CodeNexus has **29 subcommands** (plus the `codenexus mcp` serve mode) grouped into functional areas. **All required flags and detailed output schemas are documented in [`references/commands.md`](references/commands.md).** Run `codenexus <command> --help` for the auto-generated flag list.
+CodeNexus has **37 subcommands** (plus the `codenexus mcp` serve mode) grouped into functional areas. **All required flags and detailed output schemas are documented in [`references/commands.md`](references/commands.md).** Run `codenexus <command> --help` for the auto-generated flag list.
 
 | Command | Area | One-line description |
 |---------|------|----------------------|
@@ -105,7 +105,7 @@ Detailed documentation is split into supporting files that load on demand. The m
 
 | Reference | Contents |
 |-----------|----------|
-| [`references/commands.md`](references/commands.md) | Full flag list, options, output schemas, and notes for all 29 subcommands (+ `mcp` serve mode). |
+| [`references/commands.md`](references/commands.md) | Full flag list, options, output schemas, and notes for all 37 subcommands (+ `mcp` serve mode). |
 | [`references/storage-model.md`](references/storage-model.md) | `CodeRelation` NODE TABLE design, 44 node types, 24 edge types, confidence tiers. |
 | [`references/workflows.md`](references/workflows.md) | Nine end-to-end workflows: indexing, daemon, multi-project, FFI, refactoring, team artifacts, MCP, complexity audit, API surface. |
 | [`references/appendix.md`](references/appendix.md) | Supported languages (21), exit codes, full known-issues table, example programs. |

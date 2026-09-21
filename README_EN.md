@@ -156,7 +156,7 @@ Requires Rust 1.97.1 or later (MSRV, matching `rust-version` in `Cargo.toml` and
 | `lang-regex`      | —       | Regex parser (tree-sitter-regex) |
 | `lang-verilog`    | —       | Verilog parser (tree-sitter-verilog) |
 | `daemon`          | Enabled | File-watching daemon (notify + notify-debouncer-full) |
-| `embeddings`    | Enabled | Vector embedding semantic search (reqwest HTTP + local ONNX inference) |
+| `embeddings`      | Enabled | Vector embedding semantic search (reqwest HTTP + local ONNX inference) |
 | `lsp`             | Enabled | LSP-enriched parsing (7 LSP clients: rust-analyzer, pyright, clangd, gopls, ts-lang-server, fortls, jdtls) |
 | `analysis`        | Enabled | Dead-code detection + architecture overview (pure Cypher aggregation) |
 | `complexity`      | Enabled | AST complexity analysis (8 metrics, depends on `analysis`) |

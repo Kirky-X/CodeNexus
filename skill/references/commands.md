@@ -1,10 +1,10 @@
 # Commands Reference
 
-> Detailed flags, options, and output schemas for all 28 CodeNexus subcommands. Part of the CodeNexus skill — see [SKILL.md](../SKILL.md) for the overview and command quick-reference table.
+> Detailed flags, options, and output schemas for all 37 CodeNexus subcommands. Part of the CodeNexus skill — see [SKILL.md](../SKILL.md) for the overview and command quick-reference table.
 
 ## Commands
 
-CodeNexus has **29 subcommands** (plus the `codenexus mcp` serve mode, documented under MCP & agent integration) grouped into functional areas.
+CodeNexus has **37 subcommands** (plus the `codenexus mcp` serve mode, documented under MCP & agent integration) grouped into functional areas.
 
 ### Indexing & project management
 
