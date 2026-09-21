@@ -59,7 +59,7 @@
 
 <table style="width:100%; border-collapse: collapse">
 <tr>
-<td width="50%" style="vertical-align:top; padding: 12px">🌐 <b>多语言解析</b><br><span style="color:#64748B">默认 <code>full</code> 预设支持 24 种语言（C、Rust、Fortran、Python、TypeScript、Go、Java、C++、JavaScript、Ruby、Haskell、OCaml、Scala、PHP、C#、Bash、HTML、CSS、JSON、Regex、Verilog、Kotlin、Swift、Solidity），可用 <code>lang-*</code> feature 按需裁剪</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🌐 <b>多语言解析</b><br><span style="color:#64748B">默认 <code>full</code> 预设支持 21 种语言（C、Rust、Fortran、Python、TypeScript、Go、Java、C++、JavaScript、Ruby、Haskell、OCaml、Scala、PHP、C#、Bash、HTML、CSS、JSON、Regex、Verilog），可用 <code>lang-*</code> feature 按需裁剪</span></td>
 <td width="50%" style="vertical-align:top; padding: 12px">🕸️ <b>图数据库</b><br><span style="color:#64748B">LadybugDB 图存储，44 种节点类型 + 30 种边类型，Cypher 子集查询</span></td>
 </tr>
 <tr>
@@ -96,7 +96,7 @@
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🧮 <b>分析工具包</b><br><span style="color:#64748B">死代码检测（worklist 可达性 + 置信度）、架构概览、复杂度分析（8 项指标）、社区检测（Leiden）、跨服务调用链</span></td>
-<td width="50%" style="vertical-align:top; padding: 12px">🧠 <b>向量嵌入</b><br><span style="color:#64748B">默认启用的语义搜索（<code>embed</code> feature，本地 ONNX 推理 + BM25 全文）</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🧠 <b>向量嵌入</b><br><span style="color:#64748B">默认启用的语义搜索（<code>embeddings</code> feature，本地 ONNX 推理 + BM25 全文）</span></td>
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🌍 <b>国际化</b><br><span style="color:#64748B">Unicode case folding + NFC 规范化（ICU4X，<code>i18n</code> feature，含于 <code>full</code> 预设）</span></td>
@@ -113,7 +113,7 @@
 ### 📦 安装
 
 ```bash
-# 从 crates.io 安装（默认 full 预设，含全部 24 语言 + 所有功能）
+# 从 crates.io 安装（默认 full 预设，含全部 21 语言 + 所有功能）
 cargo install codenexus
 
 # 从源码构建
@@ -141,7 +141,7 @@ cargo build --release
 | ----------------- | ---- | ---- |
 | `minimal`         | —    | 最小预设：仅 `lang-rust` |
 | `core`            | —    | 核心预设：`lang-c` + `lang-rust` + `lang-python` |
-| `full`            | 启用 | 完整预设：`core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embed/i18n |
+| `full`            | 启用 | 完整预设：`core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embeddings/i18n |
 | `lang-c`          | —    | C 语言解析器（tree-sitter-c） |
 | `lang-rust`       | 启用 | Rust 语言解析器（tree-sitter-rust） |
 | `lang-fortran`    | —    | Fortran 语言解析器（tree-sitter-fortran） |
@@ -164,7 +164,7 @@ cargo build --release
 | `lang-regex`      | —    | 正则语言解析器（tree-sitter-regex） |
 | `lang-verilog`    | —    | Verilog 语言解析器（tree-sitter-verilog） |
 | `daemon`          | 启用 | 文件监视守护进程（notify + notify-debouncer-full） |
-| `embed`           | 启用 | 向量嵌入语义搜索（reqwest HTTP + 本地 ONNX 推理） |
+| `embeddings`    | 启用 | 向量嵌入语义搜索（reqwest HTTP + 本地 ONNX 推理） |
 | `lsp`             | 启用 | LSP 增强解析（7 个 LSP 客户端） |
 | `analysis`        | 启用 | 死代码检测 + 架构概览（纯 Cypher 聚合） |
 | `complexity`      | 启用 | AST 复杂度分析（8 项指标，依赖 `analysis`） |
@@ -351,7 +351,7 @@ cargo +nightly fmt --all -- --check
 cargo +1.95 clippy -- -D warnings
 cargo +1.95 clippy --lib --no-default-features --features minimal -- -D warnings
 
-# 测试（CI 矩阵按 minimal / core / full / core,daemon,analysis,complexity / core,lsp,cache / full,embed 六档运行）
+# 测试（CI 矩阵按 minimal / core / full / core,daemon,analysis,complexity / core,lsp,cache / full,embeddings 六档运行）
 cargo test --lib --verbose
 cargo test --lib --no-default-features --features "core" --verbose
 
@@ -409,7 +409,7 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 <tr><td align="center">✅</td><td>复杂度分析</td><td>v0.2.1 — AST 复杂度分析：圈/认知复杂度、嵌套深度、函数长度，绿/黄/红/致命四级告警</td></tr>
 <tr><td align="center">✅</td><td>MCP 服务器</td><td>v0.3.0 — sdforge-based MCP 服务器：<code>#[forge]</code> 宏 + sdforge <code>mcp</code> stdio 传输，替代手写 JSON-RPC；6 个工具（query/trace/impact/search/context/architecture）</td></tr>
 <tr><td align="center">✅</td><td>跨语言污点追踪</td><td>v0.3.2 — 跨语言数据流端到端追踪：<code>TaintPathTracer</code> BFS 遍历 DataFlows/Reads/Writes/FfiCalls 边</td></tr>
-<tr><td align="center">✅</td><td>语义搜索</td><td>v0.3.2 — 向量嵌入默认开启语义搜索（<code>embed</code> feature 已包含在 <code>full</code> 预设中）</td></tr>
+<tr><td align="center">✅</td><td>语义搜索</td><td>v0.3.2 — 向量嵌入默认开启语义搜索（<code>embeddings</code> feature 已包含在 <code>full</code> 预设中）</td></tr>
 <tr><td align="center">✅</td><td>国际化</td><td>v0.3.3 — 国际化模块（<code>i18n</code> feature）：ICU4X Unicode case folding + NFC 规范化 + CJK 边界检测</td></tr>
 <tr><td align="center">✅</td><td>Harness 现代化</td><td>v0.3.3 — CI 升级 Rust 1.91 + 6 特性矩阵 + dependabot + codeql + crates.io 发布</td></tr>
 <tr><td align="center">✅</td><td>大仓库内存防线</td><td>v0.3.11 — 大型仓库索引 OOM 修复（L1–L7 七层防线）：<code>MemoryBudget</code> 三级内存压力 + <code>Graph::nodes_view/edges_view</code> 迭代器 + 流式 CSV + mpsc channel 并行解析 + L5 自适应降级 + L6 管线流式化（<code>ctx.remove</code> 取代 <code>Graph::clone</code>）+ L7 LadybugDB buffer_pool 封顶（4 GB）+ LSP 按需启动 + RAM-first 8× 放大因子预算。70 GB 主机峰值内存从 60 GB 降至 ~4 GB</td></tr>

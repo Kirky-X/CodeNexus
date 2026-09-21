@@ -174,7 +174,7 @@ crate 根另外导出：
 
 ## 🖥️ CLI / MCP 对外接口
 
-CLI 与 MCP 共用 `src/service/` 中 `#[forge]` 宏定义的同一套命令（core 函数 + CLI wrapper + MCP wrapper）。29 个 CLI 子命令（外加 `mcp` 服务模式）、10 个 MCP 工具（query / trace / impact / search / context / architecture / diagram / arch_diff / dead_code / detect_changes）与全部参数的语义见 [📖 用户指南](USER_GUIDE.md)。
+CLI 与 MCP 共用 `src/service/` 中 `#[forge]` 宏定义的同一套命令（core 函数 + CLI wrapper + MCP wrapper）。37 个 CLI 子命令（外加 `mcp` 服务模式）、10 个 MCP 工具（query / trace / impact / search / context / architecture / diagram / arch_diff / dead_code / detect_changes）与全部参数的语义见 [📖 用户指南](USER_GUIDE.md)。
 
 关键契约：
 

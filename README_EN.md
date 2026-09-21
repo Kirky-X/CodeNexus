@@ -88,7 +88,7 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🧮 <b>Analysis toolkit</b><br><span style="color:#64748B">Dead-code detection (worklist reachability + confidence), architecture overview, complexity analysis (8 metrics), community detection (Leiden), cross-service call chains</span></td>
-<td width="50%" style="vertical-align:top; padding: 12px">🧠 <b>Vector embeddings</b><br><span style="color:#64748B">Semantic search enabled by default (<code>embed</code> feature, local ONNX inference + BM25 full-text)</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🧠 <b>Vector embeddings</b><br><span style="color:#64748B">Semantic search enabled by default (<code>embeddings</code> feature, local ONNX inference + BM25 full-text)</span></td>
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🌍 <b>Internationalization</b><br><span style="color:#64748B">Unicode case folding + NFC normalization (ICU4X, <code>i18n</code> feature, included in the <code>full</code> preset)</span></td>
@@ -96,7 +96,7 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 </tr>
 </table>
 
-Beyond the core capabilities above, CodeNexus also ships `context` assembly, `detect_changes` change detection, `rename` rename-impact pre-checks, oxcache-backed query-result caching, and structured logging via inklog; the grouped list of all 29 subcommands (plus the `mcp` serve mode) lives in the [🛠️ CLI Commands](#️-cli-commands) section, and per-command flag semantics with runnable examples are in the [📖 User Guide · Command reference](docs/USER_GUIDE.md#️-命令详解).
+Beyond the core capabilities above, CodeNexus also ships `context` assembly, `detect_changes` change detection, `rename` rename-impact pre-checks, oxcache-backed query-result caching, and structured logging via inklog; the grouped list of all 37 subcommands (plus the `mcp` serve mode) lives in the [🛠️ CLI Commands](#️-cli-commands) section, and per-command flag semantics with runnable examples are in the [📖 User Guide · Command reference](docs/USER_GUIDE.md#️-命令详解).
 
 ---
 
@@ -133,7 +133,7 @@ Requires Rust 1.97.1 or later (MSRV, matching `rust-version` in `Cargo.toml` and
 | ----------------- | ------- | ----------- |
 | `minimal`         | —       | Minimal preset: `lang-rust` only |
 | `core`            | —       | Core preset: `lang-c` + `lang-rust` + `lang-python` |
-| `full`            | Enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embed/i18n |
+| `full`            | Enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embeddings/i18n |
 | `lang-c`          | —       | C parser (tree-sitter-c) |
 | `lang-rust`       | Enabled | Rust parser (tree-sitter-rust) |
 | `lang-fortran`    | —       | Fortran parser (tree-sitter-fortran) |
@@ -156,7 +156,7 @@ Requires Rust 1.97.1 or later (MSRV, matching `rust-version` in `Cargo.toml` and
 | `lang-regex`      | —       | Regex parser (tree-sitter-regex) |
 | `lang-verilog`    | —       | Verilog parser (tree-sitter-verilog) |
 | `daemon`          | Enabled | File-watching daemon (notify + notify-debouncer-full) |
-| `embed`           | Enabled | Vector embedding semantic search (reqwest HTTP + local ONNX inference) |
+| `embeddings`    | Enabled | Vector embedding semantic search (reqwest HTTP + local ONNX inference) |
 | `lsp`             | Enabled | LSP-enriched parsing (7 LSP clients: rust-analyzer, pyright, clangd, gopls, ts-lang-server, fortls, jdtls) |
 | `analysis`        | Enabled | Dead-code detection + architecture overview (pure Cypher aggregation) |
 | `complexity`      | Enabled | AST complexity analysis (8 metrics, depends on `analysis`) |
@@ -225,7 +225,7 @@ codenexus search --text "authentication logic" --fulltext true
 
 ## 🛠️ CLI Commands
 
-CodeNexus ships **29 subcommands** (plus the `codenexus mcp` serve mode), grouped by function:
+CodeNexus ships **37 subcommands** (plus the `codenexus mcp` serve mode), grouped by function:
 
 - **Indexing & project management**: `index` / `daemon` / `status` / `list` / `clean` / `export` / `import`
 - **Query & search**: `query` / `search` / `context`
@@ -343,7 +343,7 @@ cargo +nightly fmt --all -- --check
 cargo +1.95 clippy -- -D warnings
 cargo +1.95 clippy --lib --no-default-features --features minimal -- -D warnings
 
-# Tests (CI matrix runs minimal / core / full / core,daemon,analysis,complexity / core,lsp,cache / full,embed)
+# Tests (CI matrix runs minimal / core / full / core,daemon,analysis,complexity / core,lsp,cache / full,embeddings)
 cargo test --lib --verbose
 cargo test --lib --no-default-features --features "core" --verbose
 
@@ -401,7 +401,7 @@ Do not report security vulnerabilities through public issues. Email **security@k
 <tr><td align="center">✅</td><td>Complexity analysis</td><td>v0.2.1 — AST complexity analysis: cyclomatic/cognitive complexity, nesting depth, function length, green/yellow/red/critical alerts</td></tr>
 <tr><td align="center">✅</td><td>MCP server</td><td>v0.3.0 — sdforge-based MCP server: <code>#[forge]</code> macro + sdforge <code>mcp</code> stdio transport replacing hand-written JSON-RPC; 6 tools (query/trace/impact/search/context/architecture)</td></tr>
 <tr><td align="center">✅</td><td>Cross-language taint tracing</td><td>v0.3.2 — Cross-language data-flow end-to-end tracing: <code>TaintPathTracer</code> BFS over DataFlows/Reads/Writes/FfiCalls edges</td></tr>
-<tr><td align="center">✅</td><td>Semantic search</td><td>v0.3.2 — Vector embeddings on by default for semantic search (<code>embed</code> feature included in the <code>full</code> preset)</td></tr>
+<tr><td align="center">✅</td><td>Semantic search</td><td>v0.3.2 — Vector embeddings on by default for semantic search (<code>embeddings</code> feature included in the <code>full</code> preset)</td></tr>
 <tr><td align="center">✅</td><td>Internationalization</td><td>v0.3.3 — Internationalization module (<code>i18n</code> feature): ICU4X Unicode case folding + NFC normalization + CJK boundary detection</td></tr>
 <tr><td align="center">✅</td><td>Harness modernization</td><td>v0.3.3 — CI upgrade to Rust 1.91 + 6-feature matrix + dependabot + codeql + crates.io publishing</td></tr>
 <tr><td align="center">✅</td><td>Large-repo memory defenses</td><td>v0.3.11 — Large-repo indexing OOM fix (L1–L7 seven-layer defense): <code>MemoryBudget</code> three-level memory pressure + <code>Graph::nodes_view/edges_view</code> iterators + streaming CSV + mpsc channel parallel parsing + L5 adaptive degradation + L6 pipeline streaming (<code>ctx.remove</code> replaces <code>Graph::clone</code>) + L7 LadybugDB buffer_pool cap (4 GB) + on-demand LSP startup + RAM-first 8× amplification budget. Peak memory on a 70 GB host dropped from 60 GB to ~4 GB</td></tr>

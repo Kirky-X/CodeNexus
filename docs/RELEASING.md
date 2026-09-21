@@ -9,7 +9,7 @@
 
 | # | 事实源（数这里） | 当前基准 | 必须对齐的文档 | 对齐方法 |
 |---|------------------|----------|----------------|----------|
-| 1 | CLI 子命令数：`grep -rn "cli = true" src/service/*.rs`（排除 `mod.rs` 注释行） | 29 个注册子命令（`codenexus mcp` 是 main.rs 字符串拦截，非注册子命令） | `README.md` / `README_EN.md`「CLI 命令」节、`docs/USER_GUIDE.md`、`skill/SKILL.md`、`skill/references/commands.md` | 注册数写作 "29 subcommands"；含 `mcp` 服务模式的清单写作 "29 + mcp"，勿笼统写 30 |
+| 1 | CLI 子命令数：`grep -rn "cli = true" src/service/*.rs`（排除 `mod.rs` 注释行） | 37 个注册子命令（`codenexus mcp` 是 main.rs 字符串拦截，非注册子命令） | `README.md` / `README_EN.md`「CLI 命令」节、`docs/USER_GUIDE.md`、`skill/SKILL.md`、`skill/references/commands.md` | 注册数写作 "37 subcommands"；含 `mcp` 服务模式的清单写作 "37 + mcp"，勿笼统写 38 |
 | 2 | MCP 工具数：`grep -rn 'tool_name = "' src/service/*.rs \| grep -v hook` | 10 个（query/trace/impact/search/context/architecture/diagram/arch_diff/dead_code/detect_changes） | `README.md` / `README_EN.md`「MCP 集成」节、`docs/USER_GUIDE.md`、`docs/FAQ.md`、`skill/references/commands.md` | 新增 MCP 工具时同步 `sdforge::mcp` 工具面描述 |
 | 3 | 语言数：`grep -c '^lang-' Cargo.toml` | 21 种（每语言一个 `lang-*` feature） | `skill/SKILL.md`、`skill/references/appendix.md` 语言表、README feature 表 | appendix 语言表的扩展名以 `src/model/language.rs` 为准，节点类型以 `src/parse/<lang>.rs` 的 `NodeLabel::` 为准 |
 | 4 | 示例数：`grep -c '\[\[bin\]\]' examples/Cargo.toml` | 14 个 | `README.md` / `README_EN.md`「示例」节（表格 + run-all 循环） | 新增示例 bin 必须同 PR 更新两份 README 的表格与 for 循环 |
