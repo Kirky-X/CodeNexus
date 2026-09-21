@@ -51,7 +51,19 @@ jobs:
 
       # 注意:step 级 if 里取不到 secrets/env 上下文中的 secret,原写法恒为 false
       # 导致发布被静默跳过。secret 经 job env 注入,步骤无条件执行,publish 失败即红。
+      # 幂等:已发布版本直接跳过,避免"已存在"报错误伤重跑
+      - name: Check already published
+        id: published
+        run: |
+          VERSION=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name=="codenexus") | .version')
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" -H 'User-Agent: kirky-x-release-verify' \
+            "https://crates.io/api/v1/crates/codenexus/${VERSION}")
+          echo "codenexus ${VERSION}: HTTP ${CODE}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "exists=$([[ "$CODE" == "200" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
+
       - name: Publish to crates.io
+        if: steps.published.outputs.exists == 'false'
         # No --no-verify: publish-time verification catches dev-dependency /
         # doctest / feature-matrix breakage, which a multi-feature crate like
         # this one is most exposed to — and a bad publish cannot be undone.
@@ -61,14 +73,16 @@ jobs:
 
       # crates.io 版本硬校验:防止任何形式的静默漏发
       - name: Verify on crates.io
+        if: always()
         run: |
+          VERSION=${{ steps.published.outputs.version }}
           for i in 1 2 3 4 5; do
             sleep 20
             CODE=$(curl -s -o /dev/null -w "%{http_code}" -H 'User-Agent: kirky-x-release-verify' \
-              "https://crates.io/api/v1/crates/codenexus/0.3.13-rc.1")
+              "https://crates.io/api/v1/crates/codenexus/${VERSION}")
             echo "try$i: HTTP ${CODE}"
             if [ "$CODE" = "200" ]; then exit 0; fi
             if [ "$CODE" != "403" ]; then break; fi
           done
-          echo "::error::codenexus 0.3.13-rc.1 未出现在 crates.io(HTTP ${CODE})"
+          echo "::error::codenexus ${VERSION} 未出现在 crates.io(HTTP ${CODE})"
           exit 1
