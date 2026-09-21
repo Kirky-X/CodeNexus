@@ -1475,7 +1475,7 @@ mod tests {
         );
     }
 
-    // --- discover_single_indexed_db (M3: multi-`.lbug` fallback coverage) ---
+    // --- discover_single_indexed_db (multi-`.lbug` fallback coverage) ---
 
     /// Restores the process cwd on drop. Used by the
     /// `discover_single_indexed_db_*` tests below so the original cwd is

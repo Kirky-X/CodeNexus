@@ -98,7 +98,7 @@ impl<'a> ImportResolver<'a> {
     /// Duplicate `(source, target)` pairs are collapsed to a single edge
     /// (matching `CallResolver`'s dedup behaviour).
     ///
-    /// L6 fix: returns `()` instead of `Vec<Edge>`; edges are added directly
+    /// fix: returns `()` instead of `Vec<Edge>`; edges are added directly
     /// to `graph`. The previous `Vec<Edge>` return was an anti-pattern —
     /// production callers (`orchestrator.rs::resolve_all`) discarded it via
     /// `let _ = ...`, wasting memory on 1M+ edge repos due to per-edge

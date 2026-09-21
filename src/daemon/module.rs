@@ -186,25 +186,15 @@ struct DaemonCapability {
 impl DaemonRunner for DaemonCapability {
     fn start(&self, watch_path: &Path, project_name: &str) -> Result<(), DaemonError> {
         // Read the current debounce_ms from the shared config (hot-reloadable).
-        let (debounce_ms, verbose_events, impact_notify, notify_webhook) = self
-            .config
-            .read()
-            .map(|c| {
-                (
-                    c.debounce_ms,
-                    c.verbose_events,
-                    c.impact_notify,
-                    #[cfg(feature = "hub")]
-                    c.notify_webhook.clone(),
-                )
-            })
-            .unwrap_or((
-                DEFAULT_DEBOUNCE_MS,
-                false,
-                false,
-                #[cfg(feature = "hub")]
-                None,
-            ));
+        // notify_webhook 仅在 hub 组合下存在——元组元素上挂 #[cfg] 会让无 hub
+        // 组合的元组元数与解构不匹配（E0308），故拆成独立读取。
+        let config_guard = self.config.read().ok();
+        let (debounce_ms, verbose_events, impact_notify) = config_guard
+            .as_ref()
+            .map(|c| (c.debounce_ms, c.verbose_events, c.impact_notify))
+            .unwrap_or((DEFAULT_DEBOUNCE_MS, false, false));
+        #[cfg(feature = "hub")]
+        let notify_webhook = config_guard.as_ref().and_then(|c| c.notify_webhook.clone());
 
         // Construct the IndexFacade (lazy — opens DB on first index call).
         let facade = IndexFacade::new(&self.db_path)

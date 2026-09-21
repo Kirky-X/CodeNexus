@@ -9,9 +9,10 @@ use serde::Serialize;
 use crate::analysis::architecture::ArchitectureAnalyzer;
 use crate::kit::{AsyncKit, AsyncReady};
 use crate::service::error::CodeNexusError;
+// run_evolve（无 cli 门控的可测试核心）无条件使用 index_core，此 import
+// 不得挂 cli 门——否则 core,daemon,… 等无 cli 组合的 lib test 编译失败。
 #[cfg(feature = "cli")]
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
-#[cfg(feature = "cli")]
 use crate::service::index::index_core;
 #[cfg(feature = "cli")]
 use crate::service::runtime::kit;

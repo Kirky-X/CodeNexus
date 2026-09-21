@@ -15,16 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Cargo.toml [patch.crates-io] points the base libraries at ../base/*;
-      # clone them so the patch paths resolve. NOTE: this checks out
-      # origin/main, which may lag the local dev trees — push base repos
-      # before relying on CI to validate cross-repo changes.
-      - name: Checkout base libraries (patch.crates-io targets)
-        run: |
-          mkdir -p ../base
-          for repo in trait-kit sdforge oxcache inklog; do
-            git clone --depth 1 "https://github.com/Kirky-X/${repo}.git" "../base/${repo}"
-          done
       # Toolchain version must match the declared MSRV (Cargo.toml
       # `rust-version` / clippy.toml `msrv`) — this job is what verifies it.
       - name: Install Rust 1.97.1 with clippy
@@ -78,13 +68,6 @@ jobs:
             cache-key: "full-embeddings"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # See the lint job: [patch.crates-io] needs the base repos at ../base.
-      - name: Checkout base libraries (patch.crates-io targets)
-        run: |
-          mkdir -p ../base
-          for repo in trait-kit sdforge oxcache inklog; do
-            git clone --depth 1 "https://github.com/Kirky-X/${repo}.git" "../base/${repo}"
-          done
       - name: Install Rust 1.97.1 (declared MSRV)
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
@@ -117,14 +100,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # See the lint job: [patch.crates-io] needs the base repos at ../base
-      # (cargo metadata / cargo-deny resolve the patched manifest too).
-      - name: Checkout base libraries (patch.crates-io targets)
-        run: |
-          mkdir -p ../base
-          for repo in trait-kit sdforge oxcache inklog; do
-            git clone --depth 1 "https://github.com/Kirky-X/${repo}.git" "../base/${repo}"
-          done
       - name: Install Rust 1.97.1 (declared MSRV)
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
@@ -186,14 +161,6 @@ jobs:
       checks: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # See the lint job: [patch.crates-io] needs the base repos at ../base
-      # (cargo-audit/cargo-deny resolve the patched manifest's lockfile).
-      - name: Checkout base libraries (patch.crates-io targets)
-        run: |
-          mkdir -p ../base
-          for repo in trait-kit sdforge oxcache inklog; do
-            git clone --depth 1 "https://github.com/Kirky-X/${repo}.git" "../base/${repo}"
-          done
       # deny.toml is the single source of truth for advisory ignores
       # (audit.toml is a synced mirror; audit-check cannot read config files,
       # so the ignore list is derived here and can never drift again).

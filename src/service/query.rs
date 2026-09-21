@@ -15,7 +15,9 @@ use crate::service::error::kit_not_initialized;
 use crate::service::error::to_api_error;
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 use crate::service::error::CodeNexusError;
-#[cfg(any(feature = "cli", feature = "mcp"))]
+// run_query_cached 在 test 组合（无 cli/mcp）下也会编译，kit() 须随行——
+// 否则 core,lsp,cache 等含 cache 的无 cli 组合 lib test 编译失败（E0425）。
+#[cfg(any(feature = "cli", feature = "mcp", all(test, feature = "cache")))]
 use crate::service::runtime::kit;
 #[cfg(all(any(feature = "cli", feature = "mcp", test), feature = "cache"))]
 use oxcache::cached;

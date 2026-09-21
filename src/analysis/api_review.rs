@@ -290,14 +290,14 @@ impl<'a> ApiReviewer<'a> {
         //     routes emit HANDLES_ROUTE edges with Function sources; legacy
         //     endpoints use HANDLES edges with Handler sources. Uses a
         //     targeted `WHERE e.target = ...` query instead of loading all
-        //     edges and filtering in Rust (M2: was O(N) over all edges).
+        //     edges and filtering in Rust (was O(N) over all edges).
         let handler_id = match self.find_handler_for_target(project, &endpoint_id)? {
             Some(id) => id,
             None => return Ok(Vec::new()),
         };
 
         // (c) Find all CALLS edges pointing to the handler via a targeted
-        //     query (M2: was loading all CALLS edges then filtering).
+        //     query (was loading all CALLS edges then filtering).
         let caller_ids = self.find_callers_of_target(project, &handler_id)?;
 
         // (d) Look up caller info (name, filePath, startLine) from

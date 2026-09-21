@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## 📋 目录
 
 - [Unreleased](#unreleased)
+- [0.3.13-rc.1 — 2026-09-21](#0313-rc1---2026-09-21)
 - [0.3.12 — 2026-07-30](#0312---2026-07-30)
 - [0.3.11 — 2026-07-26](#0311---2026-07-26)
 - [0.3.10 — 2026-07-25](#0310---2026-07-25)
@@ -29,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.13-rc.1] - 2026-09-21
+
+冻结改动收编 + 跨仓解耦：并行会话冻结的 14 文件成品改动（注释任务标记清理 + graph-viewer server 日志迁移 inklog）收编入库；同批移除 `[patch.crates-io]` 与全部跨仓 path 依赖，基库一律改走 crates.io 发布版（trait-kit `0.5.0-rc.6`、sdforge/oxcache `0.5.0-rc.5`、inklog `0.3.0-rc.5`），仓库从此自包含克隆可构建。CI test 矩阵 6 条腿此前因 cfg 门错挂无法编译的三处一并前向修复。
+
+### Fixed（冻结改动收编：cfg 门修复）
 ### Fixed（架构审查修复批次二：遗留项收尾）
 
 - **fix(security): fuzz harness 恢复 + 两个新目标** — 从丢失的提交 fef636b 找回 `fuzz/Cargo.toml` 与 `escape_cypher_string`/`escape_identifier` 目标（含转义不变量断言）；新增 `cypher_subset_parse`（MCP 只读语法门 pest 解析器永不负 panic + 拒绝信息非空）与 `cnxp_header`（`.cnxp` 工件头解析永不 panic + Ok 蕴含格式版本正确）两个目标；CI 新增 `fuzz-smoke` job（nightly + rust-src + cargo-fuzz，构建全部目标并各跑 2000 次冒烟）。注：`fuzz/Cargo.lock` 未恢复（需联网由 cargo-fuzz 重新生成）。
@@ -84,6 +90,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **chore(deps): 全量依赖升级至最新版并统一 minor 级写法** — 跨版本：`lbug` 0.18→0.20.4（自研，graph-viewer server 联动）、`tree-sitter` 0.26→0.27（`Node::kind` 改借用节点生命周期：`analysis/complexity.rs` Halstead 收集去 `&'static` 化；`LanguageError` 新增 `NotParseable` 变体：`parse/error.rs` 测试补分支）、`criterion` 0.5→0.8（7 个 bench `criterion::black_box`→`std::hint::black_box`）、`oxiarc-zstd` 0.3→0.4、`pest`/`pest_derive` 2.7→2.9、`serial_test` 3→4.0、`tree-sitter-ocaml` 0.25→0.26、`rust_decimal` 1.37→1.43、`uuid` 1.23→1.26、自研四库 rc.2→最新（trait-kit `0.5.0-rc.5`、sdforge/oxcache `0.5.0-rc.4`、inklog `0.3.0-rc.4`）；写法统一 minor 级（`"1"`→`"1.53"`、`"2"`→`"2.3"` 等，禁 major/patch 级）。例外说明：`ort` 维持 rc（2.0.0-rc.13，crates.io max_stable_version=null、1.16.3 已 yanked，rc 即最新）；自研 rc 写法必须三段式（cargo 不接受 `0.5-rc.4`）。验证：复跑 `cargo outdated` 直接依赖 0 行待更新。
 
 - **chore(deps): 自研基础库升级至 RC 版本** — trait-kit `0.3.0` → `0.5.0-rc.2`、sdforge `0.4.7` → `0.5.0-rc.2`、oxcache `0.3.9` → `0.5.0-rc.2`、inklog `0.1.12` → `0.3.0-rc.2`（四库依赖链锁定，联动升级，规则 25 升级前基线 4740 测试全绿）。MSRV `1.95` → `1.97.1`（`clippy.toml` `msrv` 同步）。唯一 API 适配：`KitError::BuildFailed.context` / `MissingCapability.key` 字段 `&'static str` → `String`（`src/service/error.rs` 测试代码 6 处 `.to_string()`），运行时行为不变；`load_config_or_default` / inklog builder / oxcache sync API / `#[forge]` 宏均向后兼容，零改动。新特性开启：`mcp`/`cli` feature 追加 `sdforge/inklog`（sdforge 内部日志接入 inklog 0.3.0-rc.2，同一版本已在依赖树，无树外新 crate）；评估后暂不开启：trait-kit `lifecycle/health/shutdown`（需 9+ Kit 模块实现对应 trait，列为后续独立变更）、oxcache 分布式后端（redis/dragonfly/aerospike）与 compression/macros/batch/lock/bloom（无对应场景或收益边际）、inklog `compression`（zstd-sys 与 lbug bundled zstd 符号冲突风险，现有 LZ4 `file_compress` 已满足）。传递依赖变化：+confers `0.6.0-rc.2`（trait-kit 必选）、+ICU4X i18n 栈（sys-locale/unic-langid/zerovec）、+stacker/psm，-opentelemetry 全家桶 / -secrecy / -tracing-opentelemetry；rmcp `2.2`→`3.2`、tokio `1.52`→`1.53`。验证：`cargo test` 4740 passed / 0 failed / 24 ignored（与基线一致）、`cargo clippy --all-targets` 0 error、release 二进制 111,783,896 → 112,313,304 bytes（+0.47%）、`cargo tree --duplicates` 零版本分叉。另：`deny.toml` 补 6 条 `[[licenses.clarify]]`（MIT，带版本限定）——RC manifest 漏写 `license` 字段导致 `cargo deny` licenses 失败，base 工作区 LICENSE 实证均为 MIT，正式版补字段后可移除。完整决策表见 specmark change `upgrade-base-libs-rc`（design.md D3）。
+
+- **fix(daemon): 无 hub 组合编译失败（E0308）** — `DaemonRunner::start` 在返回元组的元素上挂 `#[cfg(feature = "hub")]`，无 hub 组合下元组元数 (3) 与解构 (4) 不匹配，`core,daemon,…` 组合 lib test 无法编译（i18n 整改批次引入，CI 未及验证）。改为 hub 无关三元组 + `notify_webhook` 独立 cfg 读取，hub 路径语义不变。
+- **fix(service): 三处 cfg 门错挂导致无 cli 组合 lib test 编译失败（E0425）** — ① `evolve.rs` 的 `index_core` import、② `taint.rs` 的 `resolve_project_id` import 均被 `#[cfg(feature = "cli")]` 门控，但其调用方 `run_evolve`/`run_taint`（无门控的可测试核心）无条件使用；③ `query.rs` 的 `runtime::kit` import 未覆盖 `run_query_cached` 的 `test + cache` 组合。三处均放开为随调用方编译。至此 CI test 矩阵 6 条腿全部可编译可测试。
+
+### Changed（冻结改动收编与跨仓解耦）
+
+- **chore(comments): 清理注释中的任务体系内部标记** — 全仓注释移除 `M2:`/`L3:`/`L6`/`M3` 等任务代号前缀（resolve 五模块、index/phases、analysis/api_review、main tests、trace_bench、storage/quality），注释语义不变、代码零改动。
+- **refactor(graph-viewer): graph-server 生产日志迁移 inklog** — `tracing-subscriber` 移除，改用 `inklog::LoggerManager`（`{timestamp} [{level}] {target} - {message}` 控制台格式）；原 per-target filter 不再支持（单用途 dev server 影响可忽略）。已实测：启动日志为 inklog 格式、敏感地址经 inklog 脱敏、401 鉴权正常。
+- **chore(deps): 移除 `[patch.crates-io]` 与跨仓 path 依赖，基库走 crates.io** — 根 `Cargo.toml` 与 `graph-viewer/server/Cargo.toml` 删除 `path = "../base/*"` 字段，version req 升至已发布最新：trait-kit `0.5.0-rc.5 → 0.5.0-rc.6`、sdforge `0.5.0-rc.4 → 0.5.0-rc.5`、oxcache `0.5.0-rc.4 → 0.5.0-rc.5`、inklog `0.3.0-rc.4 → 0.3.0-rc.5`（无依赖项指向未发布版本）。配套：`ci.yml` 四个 job（lint/test/coverage/security）删除 base 仓库浅克隆步骤（不再需要）；`release.yml` 删除「发布前剥离 patch 段」步骤（段已不存在，`str.index` 会直接抛错）；`RELEASING.md` 对账项 7 改写为「基库一律 crates.io version req、禁止重新引入跨仓 path/patch」。验证：`cargo deny check`（advisories/bans/licenses/sources）全绿、graph-server 冒烟通过。
 
 ## [0.3.12] - 2026-07-30
 

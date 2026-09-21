@@ -9,7 +9,8 @@ tokio = { version = "1.53", features = ["macros", "net", "rt", "rt-multi-thread"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# 生产日志经自研 inklog（crates.io 发布版）；tracing-subscriber 已移除
+inklog = { version = "0.3.0-rc.5", default-features = false }
 # Message-level i18n — mirrors codenexus::i18n and embeds the same shared
 # locales/{en,zh}/messages.ftl files (see src/i18n.rs).
 fluent-bundle = "0.16"

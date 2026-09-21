@@ -199,7 +199,7 @@ fn build_high_fanin_graph(fanout: usize) -> Graph {
     g
 }
 
-/// M2: impact on a ~5000-node high-fanin graph (bulwark regression guard).
+/// impact on a ~5000-node high-fanin graph (bulwark regression guard).
 ///
 /// Verifies that `analyze_impact` completes in bounded time on the kind of
 /// graph that triggered the cap raise (1000 → 5000). The benchmark

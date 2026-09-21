@@ -625,7 +625,7 @@ mod tests {
             }
         }
 
-        // L6 fix: `resolve_all` now returns `()` — inspect `graph` directly.
+        // fix: `resolve_all` now returns `()` — inspect `graph` directly.
         resolve_all(
             &results,
             &table,
@@ -662,7 +662,7 @@ mod tests {
     fn resolve_all_empty_results_returns_empty() {
         let table = ProjectSymbolTable::new();
         let mut graph = Graph::new();
-        // L6 fix: `resolve_all` now returns `()` — check graph is empty.
+        // fix: `resolve_all` now returns `()` — check graph is empty.
         resolve_all(
             &[],
             &table,
@@ -1016,7 +1016,7 @@ fn contains_scientific(ast: &AstNode) -> bool { true }
         }
 
         // Resolve calls
-        // L6 fix: `resolve_all` now returns `()` — inspect `graph` directly.
+        // fix: `resolve_all` now returns `()` — inspect `graph` directly.
         resolve_all(
             &[result],
             &table,

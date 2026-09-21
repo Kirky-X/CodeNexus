@@ -22,7 +22,7 @@ use crate::model::NodeLabel;
 /// A single data quality violation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QualityViolation {
-    /// The DQ rule that was violated (e.g. "DQ-002").
+    /// The DQ rule that was violated (e.g. "").
     pub rule: &'static str,
     /// Human-readable description of the violation.
     pub message: String,
@@ -1482,8 +1482,8 @@ mod tests {
             .expect("drop Function");
         let checker = QualityChecker::new(&*storage);
         let report = checker.run_all().expect("run_all");
-        // DQ-002 should be skipped (Function table dropped), but
-        // DQ-006 should still detect the empty hash file.
+        // should be skipped (Function table dropped), but
+        // should still detect the empty hash file.
         assert_eq!(
             report.count_for_rule("DQ-002"),
             0,

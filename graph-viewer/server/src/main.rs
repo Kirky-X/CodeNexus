@@ -233,9 +233,17 @@ async fn main() {
     // guarantees localized output even without this call).
     i18n::init();
 
-    tracing_subscriber::fmt()
-        .with_env_filter("graph_server=info,axum=info")
-        .init();
+    // 生产日志由 inklog 接管（全局 info 级；原 tracing-subscriber 的
+    // per-target filter 不再支持，对单用途 dev server 影响可忽略）
+    let logger = inklog::LoggerManager::builder()
+        .level("info")
+        .format("{timestamp} [{level}] {target} - {message}")
+        .console(true)
+        .console_colored(true)
+        .build()
+        .await
+        .expect("init inklog");
+    std::mem::forget(logger);
 
     let search_paths = vec![PathBuf::from(".codenexus"), PathBuf::from(".")];
 

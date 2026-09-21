@@ -511,7 +511,7 @@ checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
 name = "codenexus"
-version = "0.3.12"
+version = "0.3.13-rc.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -597,13 +597,13 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "fluent-bundle",
+ "inklog",
  "lbug",
  "serde",
  "serde_json",
  "sys-locale",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "unic-langid",
 ]
 
@@ -2062,7 +2062,9 @@ dependencies = [
 
 [[package]]
 name = "inklog"
-version = "0.3.0-rc.4"
+version = "0.3.0-rc.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25233fa7e1dfc3ee5c212d98438d1329af15a3157319cfa81a6cc6b49d68cbf1"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2827,7 +2829,9 @@ checksum = "13c45bb4a6ae1280ec0803b1ef9d3455eb50f01efbbe1447ab020f1d54fba9d8"
 
 [[package]]
 name = "oxcache"
-version = "0.5.0-rc.4"
+version = "0.5.0-rc.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1306b2d6f269d6e7f406878426f3f0d13aebd8e30297ac6ebc06e85cf1531941"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2848,7 +2852,9 @@ dependencies = [
 
 [[package]]
 name = "oxcache_macros"
-version = "0.5.0-rc.4"
+version = "0.5.0-rc.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7329772b7638c563558d5d5719913e8ad111e73b12a84a6f7abf57e54e705fc3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3716,7 +3722,9 @@ checksum = "d68f2ec51b097e4c1a75b681a8bec621909b5e91f15bb7b840c4f2f7b01148b2"
 
 [[package]]
 name = "sdforge"
-version = "0.5.0-rc.4"
+version = "0.5.0-rc.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "678394737868a422cac83a685f8fdc09246f6013fda68aa0863c7ee29169ca6a"
 dependencies = [
  "anyhow",
  "clap",
@@ -3737,7 +3745,9 @@ dependencies = [
 
 [[package]]
 name = "sdforge-macros"
-version = "0.5.0-rc.4"
+version = "0.5.0-rc.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "681b005a3788c688e86f422991cc16b06d2cc4aafb0b1851873d1ff062afc709"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4517,7 +4527,9 @@ dependencies = [
 
 [[package]]
 name = "trait-kit"
-version = "0.5.0-rc.5"
+version = "0.5.0-rc.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "726ca13fe2e870e40548c8eff4d02614548e31615282395da2df696a4981bfb9"
 dependencies = [
  "fluent-bundle",
  "unic-langid",

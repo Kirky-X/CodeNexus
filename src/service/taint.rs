@@ -8,7 +8,8 @@ use crate::model::Language;
 use crate::service::error::CodeNexusError;
 #[cfg(feature = "cli")]
 use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
-#[cfg(feature = "cli")]
+// run_taint（无 cli 门控的可测试核心）无条件使用 resolve_project_id，此
+// import 不得挂 cli 门——否则无 cli 组合的 lib test 编译失败（E0425）。
 use crate::service::project::resolve_project_id;
 #[cfg(feature = "cli")]
 use crate::service::runtime::kit;

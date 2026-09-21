@@ -186,7 +186,7 @@ mod tests {
         let (results, table, mut graph) = fixture_call_foo_to_bar();
         let cap = ResolverModule::build_cap().expect("build_cap");
         let includes_graph = IncludesGraph::new();
-        // L6 fix: `resolve_all` now returns `()` — inspect `graph` directly.
+        // fix: `resolve_all` now returns `()` — inspect `graph` directly.
         cap.resolve_all(&results, &table, "proj", &mut graph, &includes_graph);
 
         let calls_count = graph

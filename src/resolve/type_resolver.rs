@@ -139,7 +139,7 @@ impl<'a> TypeResolver<'a> {
     ///
     /// Edges whose target already exists in the graph are left unchanged.
     ///
-    /// L6 fix: returns `()` instead of `Vec<Edge>`; edges are mutated directly
+    /// fix: returns `()` instead of `Vec<Edge>`; edges are mutated directly
     /// in `graph`. The previous `Vec<Edge>` return was an anti-pattern —
     /// production callers (`orchestrator.rs::resolve_all`) discarded it via
     /// `let _ = ...`, wasting memory on large repos due to per-edge `clone()`

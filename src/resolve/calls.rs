@@ -108,7 +108,7 @@ impl<'a> CallResolver<'a> {
     /// a known caller qualified name, a CALLS edge is created and added
     /// directly to `graph`.
     ///
-    /// L6 fix: returns `()` instead of `Vec<Edge>`; edges are added directly
+    /// fix: returns `()` instead of `Vec<Edge>`; edges are added directly
     /// to `graph`. The previous `Vec<Edge>` return was an anti-pattern —
     /// production callers (`orchestrator.rs::resolve_all`) discarded it via
     /// `let _ = ...`, wasting ~100MB on 1M+ edge repos due to per-edge

@@ -499,7 +499,7 @@ impl Phase for ScopeResolutionPhase {
 /// # Returns
 ///
 /// An [`IncludesGraph`] populated for `lookup_exported_in_scope`. INCLUDES
-/// edges are added directly to `graph` (moved, not cloned — L6 fix).
+/// edges are added directly to `graph` (moved, not cloned — fix).
 fn build_includes_edges(
     results: &[ExtractResult],
     graph: &mut Graph,
@@ -697,7 +697,7 @@ impl Phase for ResolvePhase {
         // `resolve_all`; dangling type edges are pruned in place by
         // `resolve_all`'s internal `prune_dangling_type_edges(graph)` call.
         //
-        // L6 fix: `graph` is MOVED out of `scope` (no clone). The previous
+        // fix: `graph` is MOVED out of `scope` (no clone). The previous
         // `scope.graph.clone()` was the largest single allocation in the
         // pipeline for large repos.
         let mut graph = scope.graph;
@@ -712,9 +712,9 @@ impl Phase for ResolvePhase {
         // MUST run before resolve_all so the IncludesGraph is available to
         // CallResolver for scope-aware lookup_exported_in_scope.
         //
-        // L3 fix: `build_includes_edges` adds edges to `graph` directly; the
+        // fix: `build_includes_edges` adds edges to `graph` directly; the
         // returned Vec is ignored (previously extended into `all_edges`).
-        // L6 fix: `build_includes_edges` now returns only `IncludesGraph`
+        // fix: `build_includes_edges` now returns only `IncludesGraph`
         // (the Vec was always discarded — pure waste).
         let includes_graph =
             build_includes_edges(&parse.results, &mut graph, &scope.path_to_rel, project_id);
@@ -730,9 +730,9 @@ impl Phase for ResolvePhase {
         // call resolution Files with #include edges use
         // lookup_exported_in_scope; others use lookup_exported (backward compat).
         //
-        // L3 fix: `resolve_all` adds resolved edges to `graph` directly and
+        // fix: `resolve_all` adds resolved edges to `graph` directly and
         // prunes dangling type edges via `prune_dangling_type_edges(graph)`.
-        // L6 fix: `resolve_all` now returns `()` — no master Vec<Edge> is
+        // fix: `resolve_all` now returns `()` — no master Vec<Edge> is
         // built. Each sub-resolver's Vec is dropped immediately after its
         // edges are cloned into `graph`.
         let mut symbol_table = build_symbol_table(&parse.results, project_id);
@@ -818,7 +818,7 @@ impl Phase for ResolvePhase {
             &enrichment,
         );
 
-        // L3 fix: Parameter and Variable nodes created during dataflow
+        // fix: Parameter and Variable nodes created during dataflow
         // resolution are already in `graph.nodes`. Rewrite their
         // `file_path` in place (absolute → relative) instead of cloning them
         // into a separate `all_nodes` Vec. This eliminates the second copy
@@ -956,7 +956,7 @@ impl Phase for LoadPhase {
             }
 
             // Step 8: persist project node, definition nodes, and edges.
-            // L3 fix: stream nodes from `graph.nodes_view()` instead of
+            // fix: stream nodes from `graph.nodes_view()` instead of
             // borrowing a separate `all_nodes: Vec<Node>`.
             // L6/L4: stream edges from `graph.edges_view()` directly into
             // `save_edges_stream_on` (iterator-based callers MUST use the
@@ -1263,7 +1263,7 @@ mod tests {
         let results = vec![main_result];
 
         let path_to_rel = HashMap::new();
-        // L6 fix: `build_includes_edges` now returns only `IncludesGraph`
+        // fix: `build_includes_edges` now returns only `IncludesGraph`
         // (edges are moved into `graph`).
         let includes_graph = build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
 
@@ -1304,7 +1304,7 @@ mod tests {
         let results = vec![ts_result];
 
         let path_to_rel = HashMap::new();
-        // L6 fix: `build_includes_edges` now returns only `IncludesGraph`.
+        // fix: `build_includes_edges` now returns only `IncludesGraph`.
         let includes_graph = build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
 
         let includes_edges: Vec<&Edge> = graph
@@ -1338,7 +1338,7 @@ mod tests {
         let results = vec![main_result];
 
         let path_to_rel = HashMap::new();
-        // L6 fix: `build_includes_edges` now returns only `IncludesGraph`.
+        // fix: `build_includes_edges` now returns only `IncludesGraph`.
         let includes_graph = build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
 
         let includes_edges: Vec<&Edge> = graph
@@ -1379,7 +1379,7 @@ mod tests {
         let results = vec![main_result, foo_result];
 
         let path_to_rel = HashMap::new();
-        // L6 fix: `build_includes_edges` now returns only `IncludesGraph`.
+        // fix: `build_includes_edges` now returns only `IncludesGraph`.
         let includes_graph = build_includes_edges(&results, &mut graph, &path_to_rel, "proj");
 
         let includes_edges: Vec<&Edge> = graph
