@@ -30,6 +30,9 @@ allow = [
     "Zlib", "CC0-1.0", "MPL-2.0",
     # webpki-roots / webpki-root-certs (TLS 根证书库) 使用此数据许可
     "CDLA-Permissive-2.0",
+    # xxhash-rust（经 oxcache 0.5.0-rc.6 可选 redis 后端进入 Cargo.lock 的
+    # 传递依赖；OSI/FSF 认可的宽松许可，redis 特性本仓未启用）
+    "BSL-1.0",
 ]
 confidence-threshold = 0.8
 
