@@ -8,16 +8,19 @@
 //! library) but embeds the *same* shared `locales/{en,zh}/messages.ftl`
 //! files, which remain the single source of truth for message text.
 //!
+//! The embedded FTL entries are registered into the sdforge i18n registry
+//! by [`init()`] (called from `main`); [`t`]/[`tr`] forward to
+//! `sdforge::i18n::t` (host registry → built-in en catalog → key itself,
+//! never panics). Before `init()` the registry holds none of this crate's
+//! keys, so `t`/`tr` serve bare keys.
+//!
 //! Detection chain (forced order): `CODENEXUS_LANG` → `LC_ALL` →
 //! `LC_MESSAGES` → `LANG` → `sys-locale` → `"en"`; domain is exactly
-//! `{en, zh}`. [`t`] never panics; missing keys resolve to the key itself.
+//! `{en, zh}`. `init()` injects the detected locale via
+//! `sdforge::i18n::set_locale`, so sdforge's `SDFORGE_LANG` auto-detection
+//! never overrides it.
 
-use std::str::FromStr;
 use std::sync::OnceLock;
-
-use fluent_bundle::concurrent::FluentBundle;
-use fluent_bundle::{FluentArgs, FluentResource, FluentValue};
-use unic_langid::LanguageIdentifier;
 
 /// Compile-time embedded copies of the shared `locales/` directory
 /// (registered manually — the sync-guard test fails if a file is missed).
@@ -38,22 +41,51 @@ const EMBEDDED_LOCALES: &[(&str, &[(&str, &str)])] = &[
     ),
 ];
 
-const EN_FTL: &str = EMBEDDED_LOCALES[0].1[0].1;
-const ZH_FTL: &str = EMBEDDED_LOCALES[1].1[0].1;
+static GLOBAL_LOCALE: OnceLock<&'static str> = OnceLock::new();
 
-static EN_BUNDLE: OnceLock<FluentBundle<FluentResource>> = OnceLock::new();
-static ZH_BUNDLE: OnceLock<FluentBundle<FluentResource>> = OnceLock::new();
+/// Terminal fallback: English.
+fn en() -> &'static str {
+    "en"
+}
 
-static GLOBAL_LOCALE: OnceLock<LanguageIdentifier> = OnceLock::new();
+/// Parse `key = value` pairs from an FTL document, in file order.
+///
+/// The catalog convention is single-line patterns, so the value is simply
+/// the trimmed remainder of the line (placeholders keep their `{ $name }`
+/// text — sdforge's `format_template` syntax matches this catalog's).
+fn ftl_entries(ftl: &str) -> impl Iterator<Item = (&str, &str)> {
+    ftl.lines().filter_map(|line| {
+        let (head, tail) = line.split_once('=')?;
+        let key = head.trim();
+        let is_key = !key.is_empty()
+            && !key.starts_with('#')
+            && key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        is_key.then_some((key, tail.trim()))
+    })
+}
 
-/// Warm the detection chain eagerly (called from `main`); [`t`] would
-/// lazily initialize anyway.
+/// Warm the detection chain eagerly (called from `main`), register the
+/// embedded FTL catalogs into the sdforge i18n registry, and pin the active
+/// locale to the detected one.
+///
+/// Idempotent — re-registering the same `(locale, key)` pairs overwrites
+/// them with identical values.
 pub fn init() {
     let _ = GLOBAL_LOCALE.get_or_init(detect_locale);
+    for (locale, files) in EMBEDDED_LOCALES {
+        for (_, ftl) in *files {
+            for (key, value) in ftl_entries(ftl) {
+                sdforge::i18n::register_translation(locale, key, value);
+            }
+        }
+    }
+    sdforge::i18n::set_locale(current_locale());
 }
 
 /// Detect the locale using the forced chain (see module docs).
-fn detect_locale() -> LanguageIdentifier {
+fn detect_locale() -> &'static str {
     let env = |key: &str| std::env::var(key).ok().filter(|v| !v.trim().is_empty());
     resolve_inputs(
         env("CODENEXUS_LANG").as_deref(),
@@ -67,15 +99,21 @@ fn detect_locale() -> LanguageIdentifier {
 /// Normalize a raw locale string to one of the two supported languages.
 /// `zh-*`/`en-*` variants collapse to bare `zh`/`en`; `C`/`POSIX` and
 /// unsupported languages yield `None` so the detection chain keeps walking.
-fn normalize(raw: &str) -> Option<LanguageIdentifier> {
+///
+/// Shape check (ASCII-alphanumeric subtags separated by `-`) mirrors what
+/// `unic-langid`'s parser rejected, keeping the chain's domain exactly
+/// `{en, zh}` now that the direct `unic-langid` dependency is gone.
+fn normalize(raw: &str) -> Option<&'static str> {
     let s = raw.split('@').next()?.split('.').next()?.replace('_', "-");
-    if matches!(s.as_str(), "" | "C" | "POSIX") {
+    if s.is_empty() || matches!(s.as_str(), "C" | "POSIX") {
         return None;
     }
-    let id = LanguageIdentifier::from_str(&s).ok()?;
-    match id.language.as_str() {
-        "zh" => Some(LanguageIdentifier::from_str("zh").expect("'zh' is a valid language id")),
-        "en" => Some(LanguageIdentifier::from_str("en").expect("'en' is a valid language id")),
+    if !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return None;
+    }
+    match s.split('-').next()?.to_ascii_lowercase().as_str() {
+        "zh" => Some("zh"),
+        "en" => Some(en()),
         _ => None,
     }
 }
@@ -87,79 +125,36 @@ fn resolve_inputs(
     lc_messages: Option<&str>,
     lang: Option<&str>,
     sys: Option<&str>,
-) -> LanguageIdentifier {
+) -> &'static str {
     let chain = [codenexus_lang, lc_all, lc_messages, lang];
     for raw in chain.into_iter().flatten() {
-        if let Some(id) = normalize(raw) {
-            return id;
+        if let Some(locale) = normalize(raw) {
+            return locale;
         }
     }
-    if let Some(id) = sys.and_then(normalize) {
-        return id;
+    if let Some(locale) = sys.and_then(normalize) {
+        return locale;
     }
-    LanguageIdentifier::from_str("en").expect("'en' is a valid language identifier")
+    en()
 }
 
 /// Get the current locale (the once-detected default).
-pub fn current_locale() -> LanguageIdentifier {
-    GLOBAL_LOCALE.get_or_init(detect_locale).clone()
+pub fn current_locale() -> &'static str {
+    GLOBAL_LOCALE.get_or_init(detect_locale)
 }
 
 /// Translate `key` for the current locale, formatting `{ $var }` with
 /// `args`. Fallback: current language → `en` → the key itself. Never panics.
+///
+/// Forwarded to `sdforge::i18n::t`; translations are available after
+/// [`init()`] has registered the embedded catalogs.
 pub fn t(key: &str, args: &[(&str, String)]) -> String {
-    let locale = current_locale();
-    format_from_bundle(locale.language.as_str(), key, args)
-        .or_else(|| format_from_bundle("en", key, args))
-        .unwrap_or_else(|| key.to_string())
+    sdforge::i18n::t(key, args)
 }
 
 /// Convenience: [`t`] with no dynamic arguments.
 pub fn tr(key: &str) -> String {
     t(key, &[])
-}
-
-fn format_from_bundle(lang: &str, key: &str, args: &[(&str, String)]) -> Option<String> {
-    let bundle = match lang {
-        "zh" => ZH_BUNDLE.get_or_init(build_zh_bundle),
-        _ => EN_BUNDLE.get_or_init(build_en_bundle),
-    };
-    let msg = bundle.get_message(key)?;
-    let pattern = msg.value()?;
-    let mut fluent_args = FluentArgs::new();
-    for (name, value) in args {
-        fluent_args.set(*name, FluentValue::from(value.clone()));
-    }
-    let mut errors = vec![];
-    Some(
-        bundle
-            .format_pattern(pattern, Some(&fluent_args), &mut errors)
-            .to_string(),
-    )
-}
-
-fn build_bundle(langid: LanguageIdentifier, ftl: &str) -> FluentBundle<FluentResource> {
-    let resource = FluentResource::try_new(ftl.to_string()).unwrap_or_else(|e| e.0);
-    let mut bundle = FluentBundle::new_concurrent(vec![langid]);
-    bundle.set_use_isolating(false);
-    bundle
-        .add_resource(resource)
-        .expect("FTL resources should add without conflict");
-    bundle
-}
-
-fn build_en_bundle() -> FluentBundle<FluentResource> {
-    build_bundle(
-        "en".parse().expect("'en' is a valid language identifier"),
-        EN_FTL,
-    )
-}
-
-fn build_zh_bundle() -> FluentBundle<FluentResource> {
-    build_bundle(
-        "zh".parse().expect("'zh' is a valid language identifier"),
-        ZH_FTL,
-    )
 }
 
 #[cfg(test)]
@@ -168,25 +163,25 @@ mod tests {
     use std::collections::BTreeSet;
 
     fn ftl_keys(ftl: &str) -> BTreeSet<String> {
-        ftl.lines()
-            .filter_map(|line| line.split_once('='))
-            .filter_map(|(head, _)| {
-                let key = head.trim();
-                let is_key = !key.is_empty()
-                    && !key.starts_with('#')
-                    && key
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-                is_key.then(|| key.to_string())
-            })
-            .collect()
+        ftl_entries(ftl).map(|(key, _)| key.to_string()).collect()
+    }
+
+    /// Look up the embedded FTL text of a locale registered in
+    /// EMBEDDED_LOCALES.
+    fn embedded_ftl(locale: &str) -> &'static str {
+        EMBEDDED_LOCALES
+            .iter()
+            .find(|(l, _)| *l == locale)
+            .unwrap_or_else(|| panic!("EMBEDDED_LOCALES missing locale '{locale}'"))
+            .1[0]
+            .1
     }
 
     /// Guard: the shared catalog's EN/ZH key sets must stay identical.
     #[test]
     fn test_key_parity() {
-        let en = ftl_keys(EN_FTL);
-        let zh = ftl_keys(ZH_FTL);
+        let en = ftl_keys(embedded_ftl("en"));
+        let zh = ftl_keys(embedded_ftl("zh"));
         assert!(!en.is_empty(), "EN catalog must not be empty");
         assert_eq!(en, zh, "EN/ZH key sets must be identical");
     }
@@ -234,18 +229,30 @@ mod tests {
 
     #[test]
     fn test_lookups_and_fallbacks() {
+        let _guard = I18N_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        init();
         assert_eq!(
-            format_from_bundle("en", "project-not-found", &[("name", "demo".to_string())]),
-            Some("Project 'demo' not found".to_string())
+            sdforge::i18n::translate_for(
+                "en",
+                "project-not-found",
+                &[("name", "demo".to_string())]
+            ),
+            "Project 'demo' not found".to_string()
         );
         assert_eq!(
-            format_from_bundle("zh", "project-not-found", &[("name", "demo".to_string())]),
-            Some("项目 'demo' 未找到".to_string())
+            sdforge::i18n::translate_for(
+                "zh",
+                "project-not-found",
+                &[("name", "demo".to_string())]
+            ),
+            "项目 'demo' 未找到".to_string()
         );
-        // Unknown language → en bundle; missing key → None → key itself.
+        // Unknown language → en catalog; missing key → key itself.
         assert_eq!(
-            format_from_bundle("ar", "node-not-found", &[("name", "x".to_string())]),
-            Some("Node 'x' not found".to_string())
+            sdforge::i18n::translate_for("ar", "node-not-found", &[("name", "x".to_string())]),
+            "Node 'x' not found".to_string()
         );
         assert_eq!(t("nonexistent-key", &[]), "nonexistent-key");
         assert_eq!(tr("another-missing-key"), "another-missing-key");
@@ -253,50 +260,20 @@ mod tests {
 
     #[test]
     fn test_detection_chain_pure_logic() {
-        let lang = |r: LanguageIdentifier| r.to_string();
         // Project override beats POSIX chain; zh-TW collapses to zh.
         assert_eq!(
-            lang(resolve_inputs(
-                Some("zh_TW"),
-                Some("en_US"),
-                None,
-                None,
-                None
-            )),
+            resolve_inputs(Some("zh_TW"), Some("en_US"), None, None, None),
             "zh"
         );
         // C/POSIX and unsupported languages fall through; terminal is en.
         assert_eq!(
-            lang(resolve_inputs(
-                Some("C"),
-                Some("fr_FR"),
-                None,
-                Some("zh_CN"),
-                None
-            )),
+            resolve_inputs(Some("C"), Some("fr_FR"), None, Some("zh_CN"), None),
             "zh"
         );
-        assert_eq!(lang(resolve_inputs(None, None, None, None, None)), "en");
+        assert_eq!(resolve_inputs(None, None, None, None, None), "en");
     }
 
     // --- sdforge bridge behavior (selfdev-lib-adoption-r1) ---
-
-    /// Parse `key = value` pairs from an FTL document (single-line pattern
-    /// convention — same key-shape rules as [`ftl_keys`]).
-    fn ftl_entries(ftl: &str) -> std::collections::BTreeMap<String, String> {
-        ftl.lines()
-            .filter_map(|line| line.split_once('='))
-            .filter_map(|(head, tail)| {
-                let key = head.trim();
-                let is_key = !key.is_empty()
-                    && !key.starts_with('#')
-                    && key
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-                is_key.then(|| (key.to_string(), tail.trim().to_string()))
-            })
-            .collect()
-    }
 
     /// Serializes tests that call `init()` / mutate the process-global
     /// sdforge registry (no serial_test dev-dependency in this crate).
@@ -314,7 +291,7 @@ mod tests {
             for (_, ftl) in *files {
                 for (key, value) in ftl_entries(ftl) {
                     assert_eq!(
-                        sdforge::i18n::translate_for(locale, &key, &[]),
+                        sdforge::i18n::translate_for(locale, key, &[]),
                         value,
                         "sdforge registry must serve shared ({locale}, {key}) verbatim"
                     );
@@ -331,8 +308,15 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         init();
-        // Pin zh explicitly for a deterministic assertion (no env mutation);
-        // CODENEXUS_LANG wiring is covered by test_detection_chain_pure_logic.
+        // init() must inject the detected locale into sdforge's registry.
+        assert_eq!(
+            sdforge::i18n::get_locale(),
+            current_locale(),
+            "init() must set sdforge's locale from the detection chain"
+        );
+        // Pin zh explicitly for a deterministic translation assertion (no env
+        // mutation); CODENEXUS_LANG wiring is covered by
+        // test_detection_chain_pure_logic.
         sdforge::i18n::set_locale("zh");
         assert_eq!(
             t("project-not-found", &[("name", "demo".to_string())]),
