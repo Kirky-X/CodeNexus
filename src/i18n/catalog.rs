@@ -130,6 +130,23 @@ mod tests {
             .collect()
     }
 
+    /// Parse `key = value` pairs from an FTL document (single-line pattern
+    /// convention — same key-shape rules as [`ftl_keys`]).
+    fn ftl_entries(ftl: &str) -> std::collections::BTreeMap<String, String> {
+        ftl.lines()
+            .filter_map(|line| line.split_once('='))
+            .filter_map(|(head, tail)| {
+                let key = head.trim();
+                let is_key = !key.is_empty()
+                    && !key.starts_with('#')
+                    && key
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+                is_key.then(|| (key.to_string(), tail.trim().to_string()))
+            })
+            .collect()
+    }
+
     /// Guard: EN and ZH catalogs must expose exactly the same key set, so a
     /// missing translation can never silently fall through to another
     /// language's text or a bare key.
@@ -232,5 +249,84 @@ mod tests {
         assert_eq!(tr("another-missing-key"), "another-missing-key");
         assert_eq!(format_from_bundle("en", "nonexistent-key", &[]), None);
         assert_eq!(format_from_bundle("zh", "nonexistent-key", &[]), None);
+    }
+
+    // --- sdforge bridge behavior (selfdev-lib-adoption-r1) ---
+
+    /// `init()` must register every embedded FTL entry into the sdforge
+    /// registry, so each `(locale, key)` resolves verbatim (host registrations
+    /// win over built-in catalogs and carry `{ $name }` placeholders).
+    #[test]
+    #[serial_test::serial(i18n_catalog)]
+    fn init_registers_all_embedded_entries_in_sdforge() {
+        init();
+        for (locale, files) in EMBEDDED_LOCALES {
+            for (_, ftl) in *files {
+                for (key, value) in ftl_entries(ftl) {
+                    assert_eq!(
+                        sdforge::i18n::translate_for(locale, &key, &[]),
+                        value,
+                        "sdforge registry must serve embedded ({locale}, {key}) verbatim"
+                    );
+                }
+            }
+        }
+    }
+
+    /// `init()` must inject the detected locale into sdforge via
+    /// `set_locale` (keeping the CODENEXUS_LANG contract), and `t` must
+    /// translate through the registry for the active locale.
+    #[test]
+    #[serial_test::serial(i18n_catalog)]
+    fn init_wires_detected_locale_and_translates_via_sdforge() {
+        // The override stands in for CODENEXUS_LANG=zh — the same path
+        // detect_locale feeds, without mutating process env.
+        crate::i18n::set_locale("zh").expect("zh supported");
+        init();
+        assert_eq!(
+            sdforge::i18n::get_locale(),
+            "zh",
+            "init() must call sdforge set_locale with the detected locale"
+        );
+        assert_eq!(
+            t("project-not-found", &[("name", "demo".to_string())]),
+            "项目 'demo' 未找到",
+            "zh must translate through the sdforge registry"
+        );
+        assert_eq!(tr("impact-notice"), "变更影响告警");
+        // Restore a neutral locale for other tests sharing the process-level
+        // registry.
+        crate::i18n::set_locale("en").expect("en supported");
+    }
+
+    /// Explicit unsupported locale falls back to the en catalog (the old
+    /// `format_from_bundle("ar", …)` case).
+    #[test]
+    #[serial_test::serial(i18n_catalog)]
+    fn explicit_unsupported_locale_falls_back_to_en() {
+        init();
+        assert_eq!(
+            sdforge::i18n::translate_for(
+                "ar",
+                "project-not-found",
+                &[("name", "demo".to_string())]
+            ),
+            "Project 'demo' not found"
+        );
+        assert_eq!(
+            sdforge::i18n::translate_for("en", "impact-notice", &[]),
+            "Change impact alert"
+        );
+    }
+
+    /// Missing keys resolve to the key itself before and after `init()`.
+    #[test]
+    #[serial_test::serial(i18n_catalog)]
+    fn missing_key_returns_bare_key_before_and_after_init() {
+        assert_eq!(t("nonexistent-key", &[]), "nonexistent-key");
+        assert_eq!(tr("another-missing-key"), "another-missing-key");
+        init();
+        assert_eq!(t("nonexistent-key", &[]), "nonexistent-key");
+        assert_eq!(tr("another-missing-key"), "another-missing-key");
     }
 }
