@@ -3818,6 +3818,7 @@ dependencies = [
  "clap",
  "fluent-bundle",
  "http",
+ "icu",
  "inklog",
  "inventory",
  "log",
@@ -3825,10 +3826,12 @@ dependencies = [
  "sdforge-macros",
  "serde",
  "serde_json",
+ "sys-locale",
  "thiserror",
  "tonic-build",
  "tonic-prost-build",
  "unic-langid",
+ "writeable",
 ]
 
 [[package]]
