@@ -622,15 +622,14 @@ name = "codenexus-graph-server"
 version = "0.1.0"
 dependencies = [
  "axum",
- "fluent-bundle",
  "inklog",
  "lbug",
+ "sdforge",
  "serde",
  "serde_json",
  "sys-locale",
  "tokio",
  "tracing",
- "unic-langid",
 ]
 
 [[package]]
