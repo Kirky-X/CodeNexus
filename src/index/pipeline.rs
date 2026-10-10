@@ -1630,6 +1630,109 @@ mod tests {
         );
     }
 
+    /// Backoff sequence must match `limiteron::retry::delay_for_attempt`
+    /// exactly (100/200/400ms for retries 1..=3), then surface
+    /// `IndexError::DatabaseLocked`. Observed durations are measured between
+    /// successive `f` invocations; each must be at least the expected delay
+    /// (sleep never returns early) and within scheduling slack of it.
+    #[test]
+    fn with_retry_backoff_matches_limiteron_delay_for_attempt() {
+        let calls = AtomicU32::new(0);
+        let mut timestamps = Vec::new();
+        let result: Result<u32> = with_retry(3, || {
+            timestamps.push(Instant::now());
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err(lock_error())
+        });
+        assert!(
+            matches!(result, Err(IndexError::DatabaseLocked)),
+            "lock errors exhausting retries must surface DatabaseLocked, got: {result:?}"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            4,
+            "max_retries=3 means 1 initial + 3 retries"
+        );
+        assert_eq!(timestamps.len(), 4);
+        for retry in 1..=3u32 {
+            let expected = limiteron::retry::delay_for_attempt(
+                retry,
+                std::time::Duration::from_millis(100),
+                2.0,
+                std::time::Duration::from_millis(400),
+                0.0,
+            );
+            let observed = timestamps[retry as usize] - timestamps[retry as usize - 1];
+            assert!(
+                observed >= expected,
+                "retry {retry}: backoff {observed:?} must be at least delay_for_attempt's {expected:?}"
+            );
+            let slack = std::time::Duration::from_millis(150);
+            assert!(
+                observed <= expected + slack,
+                "retry {retry}: backoff {observed:?} must track delay_for_attempt's {expected:?} \
+                 (linux sleep can overshoot, but not by more than {slack:?} slack)"
+            );
+        }
+    }
+
+    /// The 400ms cap: retry 4 must NOT double to 800ms (the hand-rolled
+    /// `delay_ms *= 2` behavior) — `delay_for_attempt` caps at `max_delay`.
+    #[test]
+    fn with_retry_backoff_caps_at_400ms() {
+        let calls = AtomicU32::new(0);
+        let mut timestamps = Vec::new();
+        let result: Result<u32> = with_retry(4, || {
+            timestamps.push(Instant::now());
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err(lock_error())
+        });
+        assert!(matches!(result, Err(IndexError::DatabaseLocked)));
+        assert_eq!(timestamps.len(), 5, "max_retries=4 means 5 total attempts");
+        // Retries 1..=4 all equal the capped 400ms delay, never 800ms.
+        for retry in 1..=4u32 {
+            let expected = limiteron::retry::delay_for_attempt(
+                retry,
+                std::time::Duration::from_millis(100),
+                2.0,
+                std::time::Duration::from_millis(400),
+                0.0,
+            );
+            let observed = timestamps[retry as usize] - timestamps[retry as usize - 1];
+            assert!(
+                observed >= expected,
+                "retry {retry}: backoff {observed:?} must be at least delay_for_attempt's {expected:?}"
+            );
+            let slack = std::time::Duration::from_millis(150);
+            assert!(
+                observed <= expected + slack,
+                "retry {retry}: backoff {observed:?} must equal the capped {expected:?} \
+                 (uncapped hand-rolled doubling would sleep 800ms here)"
+            );
+        }
+    }
+
+    /// `max_retries = 0` performs exactly one attempt and never sleeps.
+    #[test]
+    fn with_retry_zero_max_retries_does_not_wait() {
+        let calls = AtomicU32::new(0);
+        let start = Instant::now();
+        let result: Result<u32> = with_retry(0, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err(lock_error())
+        });
+        let elapsed = start.elapsed();
+        assert!(
+            matches!(result, Err(IndexError::DatabaseLocked)),
+            "should return DatabaseLocked with 0 retries: {result:?}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(
+            elapsed < std::time::Duration::from_millis(50),
+            "max_retries=0 must not sleep (first backoff is 100ms), took {elapsed:?}"
+        );
+    }
+
     // --- enhance_with_lsp graceful degradation + writes ---
 
     /// What `MockLspProvider::hover` returns on each call.
