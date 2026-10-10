@@ -278,4 +278,93 @@ mod tests {
         );
         assert_eq!(lang(resolve_inputs(None, None, None, None, None)), "en");
     }
+
+    // --- sdforge bridge behavior (selfdev-lib-adoption-r1) ---
+
+    /// Parse `key = value` pairs from an FTL document (single-line pattern
+    /// convention — same key-shape rules as [`ftl_keys`]).
+    fn ftl_entries(ftl: &str) -> std::collections::BTreeMap<String, String> {
+        ftl.lines()
+            .filter_map(|line| line.split_once('='))
+            .filter_map(|(head, tail)| {
+                let key = head.trim();
+                let is_key = !key.is_empty()
+                    && !key.starts_with('#')
+                    && key
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+                is_key.then(|| (key.to_string(), tail.trim().to_string()))
+            })
+            .collect()
+    }
+
+    /// Serializes tests that call `init()` / mutate the process-global
+    /// sdforge registry (no serial_test dev-dependency in this crate).
+    static I18N_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// `init()` must register every shared FTL entry into the sdforge
+    /// registry, so each `(locale, key)` resolves verbatim.
+    #[test]
+    fn init_registers_all_shared_entries_in_sdforge() {
+        let _guard = I18N_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        init();
+        for (locale, files) in EMBEDDED_LOCALES {
+            for (_, ftl) in *files {
+                for (key, value) in ftl_entries(ftl) {
+                    assert_eq!(
+                        sdforge::i18n::translate_for(locale, &key, &[]),
+                        value,
+                        "sdforge registry must serve shared ({locale}, {key}) verbatim"
+                    );
+                }
+            }
+        }
+    }
+
+    /// `init()` wires the detection chain into sdforge via `set_locale`, and
+    /// `t`/`tr` translate through the registry.
+    #[test]
+    fn init_wires_detected_locale_and_translates_via_sdforge() {
+        let _guard = I18N_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        init();
+        // Pin zh explicitly for a deterministic assertion (no env mutation);
+        // CODENEXUS_LANG wiring is covered by test_detection_chain_pure_logic.
+        sdforge::i18n::set_locale("zh");
+        assert_eq!(
+            t("project-not-found", &[("name", "demo".to_string())]),
+            "项目 'demo' 未找到",
+            "zh must translate through the sdforge registry"
+        );
+        assert_eq!(tr("impact-notice"), "变更影响告警");
+        // Restore a neutral locale for other tests sharing the registry.
+        sdforge::i18n::set_locale("en");
+    }
+
+    /// Explicit unsupported locale falls back to the en catalog.
+    #[test]
+    fn explicit_unsupported_locale_falls_back_to_en() {
+        let _guard = I18N_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        init();
+        assert_eq!(
+            sdforge::i18n::translate_for(
+                "ar",
+                "project-not-found",
+                &[("name", "demo".to_string())]
+            ),
+            "Project 'demo' not found"
+        );
+    }
+
+    /// Missing keys resolve to the key itself, before and after `init()`.
+    #[test]
+    fn missing_keys_return_bare_key() {
+        assert_eq!(t("nonexistent-key", &[]), "nonexistent-key");
+        assert_eq!(tr("another-missing-key"), "another-missing-key");
+    }
 }
