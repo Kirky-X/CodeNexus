@@ -98,7 +98,9 @@ fn is_lock_conflict(msg: &str) -> bool {
 /// Executes a database operation with retry on lock.
 ///
 /// Retries up to `max_retries` times with exponential backoff
-/// (100ms, 200ms, 400ms, ...). A failure classified by [`is_lock_conflict`]
+/// (100ms, 200ms, 400ms — each delay computed by
+/// [`limiteron::retry::delay_for_attempt`] with initial 100ms, factor 2.0,
+/// cap 400ms, no jitter). A failure classified by [`is_lock_conflict`]
 /// is treated as a transient lock and retried; any other error is propagated
 /// immediately. When all attempts are exhausted on a lock error,
 /// [`IndexError::DatabaseLocked`] is returned.
@@ -120,18 +122,25 @@ pub(crate) fn with_retry<T, F>(max_retries: u32, mut f: F) -> Result<T>
 where
     F: FnMut() -> Result<T>,
 {
-    let mut delay_ms = 100u64;
     for attempt in 0..=max_retries {
         match f() {
             Ok(v) => return Ok(v),
             Err(IndexError::Storage(StorageError::Query(ref msg))) if is_lock_conflict(msg) => {
                 if attempt < max_retries {
+                    let delay = limiteron::retry::delay_for_attempt(
+                        attempt + 1,
+                        std::time::Duration::from_millis(100),
+                        2.0,
+                        std::time::Duration::from_millis(400),
+                        0.0,
+                    );
                     warn!(
                         attempt = attempt + 1,
-                        max_retries, delay_ms, "database locked, retrying"
+                        max_retries,
+                        delay_ms = delay.as_millis(),
+                        "database locked, retrying"
                     );
-                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                    delay_ms *= 2;
+                    std::thread::sleep(delay);
                     continue;
                 }
                 return Err(IndexError::DatabaseLocked);
