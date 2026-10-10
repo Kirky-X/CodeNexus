@@ -544,7 +544,6 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "csv",
- "fluent-bundle",
  "icu_casemap",
  "icu_normalizer",
  "ignore",

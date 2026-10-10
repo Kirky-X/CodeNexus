@@ -222,7 +222,10 @@ mod tests {
         }
     }
 
+    // 与 i18n/catalog.rs 的 sdforge 桥接测试共享进程级 locale 全局态
+    // （OVERRIDE_LOCALE / sdforge registry），同组串行避免竞态。
     #[test]
+    #[serial_test::serial(i18n_catalog)]
     fn set_locale_accepts_only_supported_languages() {
         set_locale("zh-CN").expect("zh-CN is supported");
         assert_eq!(current_locale().to_string(), "zh");

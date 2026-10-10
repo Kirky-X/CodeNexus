@@ -138,10 +138,11 @@ inklog = { workspace = true }
 regex = "1.13"
 icu_normalizer = { version = "2.3", default-features = false, features = ["compiled_data"], optional = true }
 icu_casemap = { version = "2.3", default-features = false, features = ["compiled_data"], optional = true }
-# Message-level i18n (Fluent bundles + locale detection) — always on, per the
-# unify-rust-i18n change. Unrelated to the `i18n` feature above, which gates
+# Message-level i18n (locale detection) — always on, per the unify-rust-i18n
+# change. Messages now resolve via sdforge i18n (see src/i18n/catalog.rs), so
+# the fluent-bundle direct dependency is gone; unic-langid remains for the
+# locale detection chain. Unrelated to the `i18n` feature above, which gates
 # the icu_normalizer/icu_casemap text-processing crates.
-fluent-bundle = { workspace = true }
 unic-langid = { workspace = true }
 sys-locale = { workspace = true }
 
