@@ -2,15 +2,17 @@
 // SPDX-License-Identifier: MIT
 
 //! Fluent message catalog: `locales/{en,zh}/messages.ftl` embedded at
-//! compile time into concurrent (Send+Sync) Fluent bundles, cached in
-//! `OnceLock`s (dbnexus pattern — non-concurrent `FluentBundle` holds a
-//! `RefCell` and cannot live in a `static`).
-
-use std::sync::OnceLock;
-
-use fluent_bundle::concurrent::FluentBundle;
-use fluent_bundle::{FluentArgs, FluentResource, FluentValue};
-use unic_langid::LanguageIdentifier;
+//! compile time and registered into the sdforge i18n registry by [`init()`].
+//!
+//! The FTL assets remain the single source of truth (same `key = value`
+//! single-line patterns, same `{ $name }` placeholders — which is exactly
+//! sdforge's host-template syntax). Bundle construction is no longer
+//! hand-rolled: [`t`]/[`tr`] forward to `sdforge::i18n::t`, which resolves
+//! host registrations → built-in catalog → the key itself (never panics).
+//!
+//! Applications must call [`init()`] once at startup (the CLI `main` does;
+//! see [`crate::i18n::init`]). Before `init()` the sdforge registry holds
+//! none of this crate's keys, so `t`/`tr` serve bare keys.
 
 use super::locale::current_locale;
 
@@ -38,75 +40,62 @@ const EMBEDDED_LOCALES: &[(&str, &[(&str, &str)])] = &[
     ),
 ];
 
-/// Cached concurrent Fluent bundles (thread-safe, built once on first use).
-static EN_BUNDLE: OnceLock<FluentBundle<FluentResource>> = OnceLock::new();
-static ZH_BUNDLE: OnceLock<FluentBundle<FluentResource>> = OnceLock::new();
+/// Parse `key = value` pairs from an FTL document, in file order.
+///
+/// The catalog convention is single-line patterns, so the value is simply
+/// the trimmed remainder of the line (placeholders keep their `{ $name }`
+/// text — sdforge's `format_template` syntax matches this catalog's).
+fn ftl_entries(ftl: &str) -> impl Iterator<Item = (&str, &str)> {
+    ftl.lines().filter_map(|line| {
+        let (head, tail) = line.split_once('=')?;
+        let key = head.trim();
+        let is_key = !key.is_empty()
+            && !key.starts_with('#')
+            && key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        is_key.then_some((key, tail.trim()))
+    })
+}
+
+/// Register the embedded FTL catalogs into the sdforge i18n registry and
+/// pin the active locale to the detected one.
+///
+/// Must be called once from the application entry point before serving
+/// any messages: before `init()` the registry holds none of this crate's
+/// keys, so [`t`] falls back to bare keys (no panic, no translation).
+/// Idempotent — re-registering the same `(locale, key)` pairs overwrites
+/// them with identical values.
+///
+/// Keeps the `CODENEXUS_LANG` contract: the active locale is injected via
+/// `sdforge::i18n::set_locale` from this crate's own detection chain (see
+/// [`super::locale`]), so sdforge's `SDFORGE_LANG` auto-detection never
+/// overrides it.
+pub fn init() {
+    super::locale::init();
+    for (locale, files) in EMBEDDED_LOCALES {
+        for (_, ftl) in *files {
+            for (key, value) in ftl_entries(ftl) {
+                sdforge::i18n::register_translation(locale, key, value);
+            }
+        }
+    }
+    sdforge::i18n::set_locale(&current_locale().to_string());
+}
 
 /// Translate `key` for the current locale, formatting `{ $var }`
 /// placeholders with `args`.
 ///
-/// Fallback chain: current language → `en` → the key itself. Never panics.
+/// Forwarded to `sdforge::i18n::t`. Fallback chain: current language →
+/// `en` → the key itself. Never panics.
 pub fn t(key: &str, args: &[(&str, String)]) -> String {
-    let locale = current_locale();
-    format_from_bundle(locale.language.as_str(), key, args)
-        .or_else(|| format_from_bundle("en", key, args))
-        .unwrap_or_else(|| key.to_string())
+    sdforge::i18n::t(key, args)
 }
 
 /// Convenience: [`t`] with no dynamic arguments.
 pub fn tr(key: &str) -> String {
     t(key, &[])
 }
-
-/// Format a message from the catalog for the given language.
-///
-/// Unknown languages resolve to the `en` bundle; missing keys return `None`
-/// (the caller falls back to the key itself).
-fn format_from_bundle(lang: &str, key: &str, args: &[(&str, String)]) -> Option<String> {
-    let bundle = match lang {
-        "zh" => ZH_BUNDLE.get_or_init(build_zh_bundle),
-        _ => EN_BUNDLE.get_or_init(build_en_bundle),
-    };
-    let msg = bundle.get_message(key)?;
-    let pattern = msg.value()?;
-    let mut fluent_args = FluentArgs::new();
-    for (name, value) in args {
-        fluent_args.set(*name, FluentValue::from(value.clone()));
-    }
-    let mut errors = vec![];
-    Some(
-        bundle
-            .format_pattern(pattern, Some(&fluent_args), &mut errors)
-            .to_string(),
-    )
-}
-
-fn build_bundle(langid: LanguageIdentifier, ftl: &str) -> FluentBundle<FluentResource> {
-    let resource = FluentResource::try_new(ftl.to_string()).unwrap_or_else(|e| e.0);
-    let mut bundle = FluentBundle::new_concurrent(vec![langid]);
-    bundle.set_use_isolating(false);
-    bundle
-        .add_resource(resource)
-        .expect("FTL resources should add without conflict");
-    bundle
-}
-
-fn build_en_bundle() -> FluentBundle<FluentResource> {
-    build_bundle(
-        "en".parse().expect("'en' is a valid language identifier"),
-        EN_FTL,
-    )
-}
-
-fn build_zh_bundle() -> FluentBundle<FluentResource> {
-    build_bundle(
-        "zh".parse().expect("'zh' is a valid language identifier"),
-        ZH_FTL,
-    )
-}
-
-const EN_FTL: &str = EMBEDDED_LOCALES[0].1[0].1;
-const ZH_FTL: &str = EMBEDDED_LOCALES[1].1[0].1;
 
 #[cfg(test)]
 mod tests {
@@ -116,35 +105,18 @@ mod tests {
     /// Extract message keys from an FTL document (single-line patterns only,
     /// which is all this catalog uses).
     fn ftl_keys(ftl: &str) -> BTreeSet<String> {
-        ftl.lines()
-            .filter_map(|line| line.split_once('='))
-            .filter_map(|(head, _)| {
-                let key = head.trim();
-                let is_key = !key.is_empty()
-                    && !key.starts_with('#')
-                    && key
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-                is_key.then(|| key.to_string())
-            })
-            .collect()
+        ftl_entries(ftl).map(|(key, _)| key.to_string()).collect()
     }
 
-    /// Parse `key = value` pairs from an FTL document (single-line pattern
-    /// convention — same key-shape rules as [`ftl_keys`]).
-    fn ftl_entries(ftl: &str) -> std::collections::BTreeMap<String, String> {
-        ftl.lines()
-            .filter_map(|line| line.split_once('='))
-            .filter_map(|(head, tail)| {
-                let key = head.trim();
-                let is_key = !key.is_empty()
-                    && !key.starts_with('#')
-                    && key
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-                is_key.then(|| (key.to_string(), tail.trim().to_string()))
-            })
-            .collect()
+    /// Look up the embedded FTL text of a locale registered in
+    /// EMBEDDED_LOCALES.
+    fn embedded_ftl(locale: &str) -> &'static str {
+        EMBEDDED_LOCALES
+            .iter()
+            .find(|(l, _)| *l == locale)
+            .unwrap_or_else(|| panic!("EMBEDDED_LOCALES missing locale '{locale}'"))
+            .1[0]
+            .1
     }
 
     /// Guard: EN and ZH catalogs must expose exactly the same key set, so a
@@ -152,8 +124,8 @@ mod tests {
     /// language's text or a bare key.
     #[test]
     fn test_key_parity() {
-        let en = ftl_keys(EN_FTL);
-        let zh = ftl_keys(ZH_FTL);
+        let en = ftl_keys(embedded_ftl("en"));
+        let zh = ftl_keys(embedded_ftl("zh"));
         assert!(!en.is_empty(), "EN catalog must not be empty");
         assert_eq!(en, zh, "EN/ZH key sets must be identical");
     }
@@ -198,57 +170,60 @@ mod tests {
         }
     }
 
-    // Bundle lookups target a fixed language (no global locale state) — safe
-    // under parallel test execution (dbnexus catalog.rs pattern).
+    // Registry lookups via `init()` + sdforge mutate the process-global
+    // registry, so they run serialized (dbnexus catalog.rs pattern).
 
     #[test]
+    #[serial_test::serial(i18n_catalog)]
     fn test_en_bundle_lookups() {
+        init();
         assert_eq!(
-            format_from_bundle("en", "impact-notice", &[]),
-            Some("Change impact alert".to_string())
+            sdforge::i18n::translate_for("en", "impact-notice", &[]),
+            "Change impact alert".to_string()
         );
         assert_eq!(
-            format_from_bundle("en", "project-not-found", &[("name", "demo".to_string())]),
-            Some("Project 'demo' not found".to_string())
+            sdforge::i18n::translate_for(
+                "en",
+                "project-not-found",
+                &[("name", "demo".to_string())]
+            ),
+            "Project 'demo' not found".to_string()
         );
         assert_eq!(
-            format_from_bundle("en", "node-not-found", &[("name", "main".to_string())]),
-            Some("Node 'main' not found".to_string())
+            sdforge::i18n::translate_for("en", "node-not-found", &[("name", "main".to_string())]),
+            "Node 'main' not found".to_string()
         );
     }
 
     #[test]
+    #[serial_test::serial(i18n_catalog)]
     fn test_zh_bundle_lookups() {
+        init();
         assert_eq!(
-            format_from_bundle("zh", "impact-notice", &[]),
-            Some("变更影响告警".to_string())
+            sdforge::i18n::translate_for("zh", "impact-notice", &[]),
+            "变更影响告警".to_string()
         );
         assert_eq!(
-            format_from_bundle("zh", "project-not-found", &[("name", "demo".to_string())]),
-            Some("项目 'demo' 未找到".to_string())
+            sdforge::i18n::translate_for(
+                "zh",
+                "project-not-found",
+                &[("name", "demo".to_string())]
+            ),
+            "项目 'demo' 未找到".to_string()
         );
         assert_eq!(
-            format_from_bundle("zh", "index-incremental-triggered", &[]),
-            Some("触发增量索引".to_string())
-        );
-    }
-
-    #[test]
-    fn test_unknown_lang_falls_back_to_en_bundle() {
-        assert_eq!(
-            format_from_bundle("ar", "impact-notice", &[]),
-            Some("Change impact alert".to_string())
+            sdforge::i18n::translate_for("zh", "index-incremental-triggered", &[]),
+            "触发增量索引".to_string()
         );
     }
 
     /// Guard: missing keys resolve to the key itself without panicking,
     /// including before any explicit init() and for both languages.
     #[test]
+    #[serial_test::serial(i18n_catalog)]
     fn test_missing_key_returns_key_without_panic() {
         assert_eq!(t("nonexistent-key", &[]), "nonexistent-key");
         assert_eq!(tr("another-missing-key"), "another-missing-key");
-        assert_eq!(format_from_bundle("en", "nonexistent-key", &[]), None);
-        assert_eq!(format_from_bundle("zh", "nonexistent-key", &[]), None);
     }
 
     // --- sdforge bridge behavior (selfdev-lib-adoption-r1) ---
@@ -264,7 +239,7 @@ mod tests {
             for (_, ftl) in *files {
                 for (key, value) in ftl_entries(ftl) {
                     assert_eq!(
-                        sdforge::i18n::translate_for(locale, &key, &[]),
+                        sdforge::i18n::translate_for(locale, key, &[]),
                         value,
                         "sdforge registry must serve embedded ({locale}, {key}) verbatim"
                     );

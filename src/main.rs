@@ -90,9 +90,10 @@ fn init_inklog() {
 }
 
 fn main() {
-    // Message i18n (daemon logs, CLI/user-visible strings): detect the
-    // locale once up front. Lazy fallback inside i18n::t/tr guarantees
-    // localized output even if this were skipped.
+    // Message i18n (daemon logs, CLI/user-visible strings): register the
+    // embedded FTL catalogs into the sdforge i18n registry and pin the
+    // detected locale up front. Without init() the registry holds none of
+    // this crate's keys, so t/tr would serve bare keys — hence mandatory.
     codenexus::i18n::init();
 
     init_logging();
