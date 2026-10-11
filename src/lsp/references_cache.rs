@@ -169,6 +169,16 @@ impl ReferencesCache {
         }
     }
 
+    /// Creates a cache with the real system clock, given TTL and capacity.
+    ///
+    /// Convenience for callers that want a plain bounded TTL cache without
+    /// clock injection; tests use short TTLs with the real clock where
+    /// `thread::sleep` overshoot makes expiry deterministic.
+    #[must_use]
+    pub fn with_ttl_capacity(ttl: Duration, capacity: usize) -> Self {
+        Self::with_clock(Arc::new(SystemClock), ttl, capacity)
+    }
+
     /// Looks up `key` in the cache. Returns `Some` only if the entry exists
     /// AND has not expired (age <= TTL). Expired entries are evicted on read
     /// (lazy expiration).
@@ -418,22 +428,23 @@ mod tests {
 
     #[test]
     fn invalidate_uri_after_eviction_keeps_other_uris() {
-        // oxcache evicts the LRU key internally; the facade's `by_uri`
-        // reverse index is authoritative for which keys belonged to the uri,
-        // so the returned count covers index keys — including one already
-        // evicted inside oxcache (its delete is a harmless no-op there).
+        // 手写实现（保留版）的索引与存活条目一致：LRU 逐出 k1 时其索引
+        // 条目一并移除（oxcache 路径的「索引宽口径」随该路径回退作废，
+        // 收敛记录见 specmark changes/selfdev-lib-adoption-r1 design.md
+        // D3 补充-最终裁定）。invalidate_uri 的计数口径=该 uri 的存活键。
         let c = ReferencesCache::with_ttl_capacity(Duration::from_secs(600), 2);
         let k1 = CacheKey::new("file:///tmp/x.rs".into(), 1, 1);
         let k2 = CacheKey::new("file:///tmp/x.rs".into(), 2, 2);
         c.insert(k1.clone(), vec![loc(1)]);
         c.insert(k2.clone(), vec![loc(2)]);
-        // Insert a third key for a different uri → evicts k1 (LRU).
+        // Insert a third key for a different uri → evicts k1 (LRU), and its
+        // index entry is reclaimed with it.
         let k3 = CacheKey::new("file:///tmp/y.rs".into(), 3, 3);
         c.insert(k3.clone(), vec![loc(3)]);
         assert!(c.get(&k1).is_none(), "k1 should have been LRU-evicted");
 
         let evicted = c.invalidate_uri("file:///tmp/x.rs");
-        assert_eq!(evicted, 2, "index-level count: k1 (already evicted) + k2");
+        assert_eq!(evicted, 1, "only live key k2 remains in the x.rs index");
         assert!(c.get(&k2).is_none(), "k2 cleared by invalidate_uri");
         assert!(c.get(&k3).is_some(), "y.rs entry must survive");
         assert_eq!(
@@ -445,8 +456,10 @@ mod tests {
 
     #[test]
     fn invalidate_uri_after_expiry_clears_index() {
-        // Expiry happens inside oxcache; the reverse index still lists the
-        // expired keys until invalidate_uri removes them.
+        // Expiry is lazy (on read) in the retained implementation: the get
+        // below reclaims k1 from entries AND index; k2's index entry is
+        // removed by invalidate_uri itself. The index never outlives the
+        // live entries it describes.
         let c = ReferencesCache::with_ttl_capacity(Duration::from_millis(50), 100);
         let k1 = CacheKey::new("file:///tmp/x.rs".into(), 1, 1);
         let k2 = CacheKey::new("file:///tmp/x.rs".into(), 2, 2);
@@ -456,7 +469,10 @@ mod tests {
         assert!(c.get(&k1).is_none(), "k1 should be expired");
 
         let evicted = c.invalidate_uri("file:///tmp/x.rs");
-        assert_eq!(evicted, 2, "index-level count covers expired keys");
+        assert_eq!(
+            evicted, 1,
+            "k1 already reclaimed by the lazy-expiring get; k2 removed here"
+        );
         assert_eq!(c.len(), 0);
     }
 
