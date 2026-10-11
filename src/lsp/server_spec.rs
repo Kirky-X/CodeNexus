@@ -64,8 +64,7 @@ impl<S: LspServerSpec> ServerClient<S> {
     }
 
     /// Creates a client with a custom [`ReferencesCache`] — used by tests
-    /// to inject a [`MockClock`](super::references_cache::MockClock)-backed
-    /// cache for deterministic TTL verification.
+    /// to inject a short-TTL cache for deterministic expiry verification.
     #[must_use]
     pub fn with_references_cache(server_path: PathBuf, references_cache: ReferencesCache) -> Self {
         Self {

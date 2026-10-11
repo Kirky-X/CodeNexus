@@ -37,8 +37,7 @@ impl RustAnalyzerClient {
     }
 
     /// Creates a client with a custom [`ReferencesCache`] — used by tests
-    /// to inject a [`MockClock`](super::references_cache::MockClock)-backed
-    /// cache for deterministic TTL verification.
+    /// to inject a short-TTL cache for deterministic expiry verification.
     #[must_use]
     pub fn with_references_cache(server_path: PathBuf, references_cache: ReferencesCache) -> Self {
         Self {
@@ -597,8 +596,8 @@ mod tests {
     }
 
     /// Like [`client_with_mock`] but injects a custom [`ReferencesCache`]
-    /// (typically backed by [`MockClock`](crate::lsp::references_cache::MockClock))
-    /// so the 5-minute TTL can be fast-forwarded in tests.
+    /// (built with a short TTL) so the expiry path can be exercised without
+    /// waiting out the 5-minute default.
     fn client_with_mock_and_cache(
         cache: crate::lsp::references_cache::ReferencesCache,
     ) -> (
@@ -791,23 +790,21 @@ mod tests {
         let _ = c.shutdown();
     }
 
-    /// `references` results must be cached for 5 minutes keyed by
+    /// `references` results must be cached for the configured TTL keyed by
     /// `(uri, line, column)`. Second call within the TTL window must not
     /// hit the LSP server; after the TTL elapses the cache must invalidate
     /// and the next call must dispatch a fresh request.
     ///
-    /// Uses `MockClock` injection (no real `thread::sleep`) so the test
-    /// runs in milliseconds rather than 5 wall-clock minutes.
+    /// Uses a short real-clock TTL (50ms, replacing the old MockClock
+    /// fast-forward) so the expiry path runs in milliseconds rather than
+    /// 5 wall-clock minutes.
     #[test]
-    fn test_references_result_cached_for_5_minutes() {
-        use crate::lsp::references_cache::{MockClock, ReferencesCache};
-        use std::sync::Arc;
+    fn test_references_result_cached_until_ttl_expiry() {
+        use crate::lsp::references_cache::ReferencesCache;
         use std::time::Duration;
 
-        let mock_clock = Arc::new(MockClock::new());
-        let cache = ReferencesCache::with_clock(
-            mock_clock.clone(),
-            Duration::from_secs(300),
+        let cache = ReferencesCache::with_ttl_capacity(
+            Duration::from_millis(50),
             ReferencesCache::DEFAULT_CAPACITY,
         );
         let (c, rt, _wr) = client_with_mock_and_cache(cache);
@@ -868,8 +865,9 @@ mod tests {
             "no new LSP request dispatched on cached call (id still 2)"
         );
 
-        // Advance the mock clock past the 5-minute TTL.
-        mock_clock.advance(Duration::from_secs(301));
+        // Expire the 50ms TTL: sleep overshoots, so the next call after the
+        // sleep strictly misses the cache (deterministic without a mock clock).
+        std::thread::sleep(Duration::from_millis(80));
 
         // Third call: cache expired, server must be hit again. Pre-stage the
         // response with the next request id (the client will dispatch id=2,

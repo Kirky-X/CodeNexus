@@ -50,7 +50,7 @@ pub use fortls::FortlsClient;
 pub use gopls::GoplsClient;
 pub use jdtls::JdtlsClient;
 pub use pyright::PyrightClient;
-pub use references_cache::{CacheKey, Clock, MockClock, ReferencesCache, SystemClock};
+pub use references_cache::{CacheKey, ReferencesCache};
 pub use server_spec::{LspServerSpec, ServerClient};
 pub use types::map_lsp_symbol_kind;
 pub use typescript_ls::TypeScriptLanguageClient;

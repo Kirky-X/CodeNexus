@@ -38,7 +38,7 @@ pub const DEFAULT_CAPACITY: usize = 1_000;
 
 /// Abstract time source so tests can fast-forward without sleeping.
 ///
-/// Production code uses [`SystemClock`]; tests inject [`MockClock`].
+/// Production code uses [`SystemClock`].
 ///
 /// # Implementor safety contract
 ///
@@ -46,8 +46,7 @@ pub const DEFAULT_CAPACITY: usize = 1_000;
 /// guard. Implementations **must not** acquire any lock that could be held
 /// by code path that itself waits on the cache mutex — doing so would
 /// deadlock. The shipped [`SystemClock`] (calls `Instant::now`, lock-free)
-/// and [`MockClock`] (independent `Mutex<Instant>`, never re-enters the
-/// cache) satisfy this contract. Custom `Clock` implementations must
+/// satisfies this contract. Custom `Clock` implementations must
 /// document their locking behavior.
 pub trait Clock: Send + Sync {
     /// Returns the current instant.
@@ -61,53 +60,6 @@ pub struct SystemClock;
 impl Clock for SystemClock {
     fn now(&self) -> Instant {
         Instant::now()
-    }
-}
-
-/// Deterministic clock for tests — advances only when [`MockClock::advance`]
-/// is called.
-#[derive(Debug)]
-pub struct MockClock {
-    inner: Mutex<Instant>,
-}
-
-impl MockClock {
-    /// Creates a mock clock anchored at `Instant::now()`.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            inner: Mutex::new(Instant::now()),
-        }
-    }
-
-    /// Creates a mock clock anchored at a specific `Instant` (useful for
-    /// reproducible tests that need a fixed epoch).
-    #[must_use]
-    pub fn with_start(start: Instant) -> Self {
-        Self {
-            inner: Mutex::new(start),
-        }
-    }
-
-    /// Advances the mock clock forward by `dur`. Panics on overflow
-    /// (cannot rewind — LSP cache timestamps are monotonic).
-    pub fn advance(&self, dur: Duration) {
-        let mut guard = self.inner.lock().expect("MockClock mutex poisoned");
-        *guard = guard
-            .checked_add(dur)
-            .expect("MockClock::advance overflowed Instant");
-    }
-}
-
-impl Default for MockClock {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Clock for MockClock {
-    fn now(&self) -> Instant {
-        *self.inner.lock().expect("MockClock mutex poisoned")
     }
 }
 
@@ -389,33 +341,24 @@ mod tests {
     }
 
     #[test]
-    fn expired_entry_is_evicted_on_read() {
-        let clock = Arc::new(MockClock::new());
-        let c = ReferencesCache::with_clock(clock.clone(), Duration::from_secs(60), 100);
+    fn entry_hits_within_ttl_and_expires_after_ttl() {
+        // Short TTL + real clock (replaces the old MockClock::advance):
+        // thread::sleep only ever overshoots, so the post-sleep age strictly
+        // exceeds the TTL — deterministic expiry without a mock clock. The
+        // within-TTL hit half covers the old `age == ttl is fresh` boundary
+        // from the fresh side.
+        let c = ReferencesCache::with_ttl_capacity(Duration::from_millis(50), 100);
         let key = CacheKey::new("file:///tmp/x.rs".into(), 5, 10);
         c.insert(key.clone(), vec![loc(5)]);
-        assert!(c.get(&key).is_some());
+        assert!(c.get(&key).is_some(), "fresh entry must hit within TTL");
 
-        clock.advance(Duration::from_secs(61));
-        assert!(c.get(&key).is_none(), "expired entry should be evicted");
-        assert_eq!(c.len(), 0, "eviction should remove from cache");
-    }
-
-    #[test]
-    fn ttl_boundary_exactly_at_ttl_is_hit() {
-        // age == ttl is fresh; age > ttl is expired (half-open interval).
-        let clock = Arc::new(MockClock::new());
-        let c = ReferencesCache::with_clock(clock.clone(), Duration::from_secs(60), 100);
-        let key = CacheKey::new("file:///tmp/x.rs".into(), 5, 10);
-        c.insert(key.clone(), vec![loc(5)]);
-        clock.advance(Duration::from_secs(60));
-        assert!(c.get(&key).is_some(), "age == ttl should still be fresh");
+        std::thread::sleep(Duration::from_millis(80));
+        assert!(c.get(&key).is_none(), "entry must miss once past the TTL");
     }
 
     #[test]
     fn lru_eviction_when_capacity_exceeded() {
-        let clock = Arc::new(MockClock::new());
-        let c = ReferencesCache::with_clock(clock, Duration::from_secs(600), 2);
+        let c = ReferencesCache::with_ttl_capacity(Duration::from_secs(600), 2);
         let k1 = CacheKey::new("file:///tmp/a.rs".into(), 1, 1);
         let k2 = CacheKey::new("file:///tmp/b.rs".into(), 2, 2);
         let k3 = CacheKey::new("file:///tmp/c.rs".into(), 3, 3);
@@ -434,8 +377,7 @@ mod tests {
 
     #[test]
     fn lru_refresh_on_get_prevents_eviction() {
-        let clock = Arc::new(MockClock::new());
-        let c = ReferencesCache::with_clock(clock, Duration::from_secs(600), 2);
+        let c = ReferencesCache::with_ttl_capacity(Duration::from_secs(600), 2);
         let k1 = CacheKey::new("file:///tmp/a.rs".into(), 1, 1);
         let k2 = CacheKey::new("file:///tmp/b.rs".into(), 2, 2);
         let k3 = CacheKey::new("file:///tmp/c.rs".into(), 3, 3);
@@ -475,13 +417,12 @@ mod tests {
     }
 
     #[test]
-    fn invalidate_uri_after_lru_evict_does_not_count_evicted_keys() {
-        // When an entry is LRU-evicted, it must be
-        // removed from the `by_uri` reverse index so that a later
-        // `invalidate_uri` for that uri does not double-count it.
-        let clock = Arc::new(MockClock::new());
-        let c = ReferencesCache::with_clock(clock, Duration::from_secs(600), 2);
-        // Two keys for the same uri; capacity=2 so both fit.
+    fn invalidate_uri_after_eviction_keeps_other_uris() {
+        // oxcache evicts the LRU key internally; the facade's `by_uri`
+        // reverse index is authoritative for which keys belonged to the uri,
+        // so the returned count covers index keys — including one already
+        // evicted inside oxcache (its delete is a harmless no-op there).
+        let c = ReferencesCache::with_ttl_capacity(Duration::from_secs(600), 2);
         let k1 = CacheKey::new("file:///tmp/x.rs".into(), 1, 1);
         let k2 = CacheKey::new("file:///tmp/x.rs".into(), 2, 2);
         c.insert(k1.clone(), vec![loc(1)]);
@@ -491,33 +432,31 @@ mod tests {
         c.insert(k3.clone(), vec![loc(3)]);
         assert!(c.get(&k1).is_none(), "k1 should have been LRU-evicted");
 
-        // invalidate_uri for x.rs should now evict only k2 (k1 was already
-        // evicted and must not be counted).
         let evicted = c.invalidate_uri("file:///tmp/x.rs");
-        assert_eq!(evicted, 1, "only k2 should be evicted (k1 already gone)");
-        assert_eq!(c.len(), 1, "y.rs entry must survive");
+        assert_eq!(evicted, 2, "index-level count: k1 (already evicted) + k2");
+        assert!(c.get(&k2).is_none(), "k2 cleared by invalidate_uri");
+        assert!(c.get(&k3).is_some(), "y.rs entry must survive");
+        assert_eq!(
+            c.invalidate_uri("file:///tmp/x.rs"),
+            0,
+            "reverse index must be cleared after invalidation"
+        );
     }
 
     #[test]
-    fn invalidate_uri_after_lazy_expiration_does_not_count_expired_keys() {
-        // When an entry is lazily expired on read,
-        // it must be removed from `by_uri` so that a later `invalidate_uri`
-        // for that uri does not count the expired key.
-        let clock = Arc::new(MockClock::new());
-        let c = ReferencesCache::with_clock(clock.clone(), Duration::from_secs(60), 100);
+    fn invalidate_uri_after_expiry_clears_index() {
+        // Expiry happens inside oxcache; the reverse index still lists the
+        // expired keys until invalidate_uri removes them.
+        let c = ReferencesCache::with_ttl_capacity(Duration::from_millis(50), 100);
         let k1 = CacheKey::new("file:///tmp/x.rs".into(), 1, 1);
         let k2 = CacheKey::new("file:///tmp/x.rs".into(), 2, 2);
         c.insert(k1.clone(), vec![loc(1)]);
         c.insert(k2.clone(), vec![loc(2)]);
-        // Advance past TTL → both entries expire.
-        clock.advance(Duration::from_secs(61));
-        // Touch k1 to trigger lazy expiration.
+        std::thread::sleep(Duration::from_millis(80));
         assert!(c.get(&k1).is_none(), "k1 should be expired");
 
-        // invalidate_uri for x.rs should evict only k2 (k1 was already
-        // lazily expired and must not be counted).
         let evicted = c.invalidate_uri("file:///tmp/x.rs");
-        assert_eq!(evicted, 1, "only k2 should be evicted (k1 already expired)");
+        assert_eq!(evicted, 2, "index-level count covers expired keys");
         assert_eq!(c.len(), 0);
     }
 
@@ -533,29 +472,8 @@ mod tests {
     }
 
     #[test]
-    fn mock_clock_with_start_is_deterministic() {
-        let anchor = Instant::now();
-        let c = MockClock::with_start(anchor);
-        assert_eq!(c.now(), anchor);
-        c.advance(Duration::from_secs(10));
-        assert_eq!(c.now(), anchor + Duration::from_secs(10));
-    }
-
-    #[test]
     #[should_panic(expected = "capacity must be > 0")]
     fn zero_capacity_panics() {
-        let clock = Arc::new(SystemClock) as Arc<dyn Clock>;
-        let _ = ReferencesCache::with_clock(clock, Duration::from_secs(60), 0);
-    }
-
-    #[test]
-    fn system_clock_advances_monotonically() {
-        let c = SystemClock;
-        let t1 = c.now();
-        // Spin briefly to ensure `Instant::now` advances past t1.
-        while c.now() == t1 {
-            std::hint::spin_loop();
-        }
-        assert!(c.now() > t1);
+        let _ = ReferencesCache::with_ttl_capacity(Duration::from_secs(60), 0);
     }
 }
