@@ -289,7 +289,14 @@ impl LocalEmbedClient {
             )));
         }
 
-        let session = ort::session::Session::builder()
+        // ort 2.0.0-rc.14 起 Session::builder 需要显式 Environment；
+        // Session 通过 SharedSessionInner 内部持有它，函数内局部创建即可。
+        let environment = ort::init()
+            .with_name("codenexus-embed")
+            .build()
+            .map_err(|e| EmbedError::Unavailable(format!("ort environment init failed: {e}")))?;
+
+        let session = ort::session::Session::builder(&environment)
             .map_err(|e| EmbedError::Unavailable(format!("ort session builder failed: {e}")))?
             .with_intra_threads(1)
             .map_err(|e| EmbedError::Unavailable(format!("ort thread config failed: {e}")))?
