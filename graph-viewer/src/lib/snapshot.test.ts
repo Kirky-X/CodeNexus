@@ -57,8 +57,9 @@ describe("readSnapshotFromUrl", () => {
   });
 
   it("未知版本与缺失字段拒绝", () => {
+    /* 文案已入语言包（i18nCatalog），生效语言由环境检测，断言两种语言的共同语义 */
     const v2 = encodeURIComponent(JSON.stringify({ version: 2, nodes: [], edges: [] }));
-    expect(() => readSnapshotFromUrl(`?snapshot=${v2}`)).toThrow(/版本/);
+    expect(() => readSnapshotFromUrl(`?snapshot=${v2}`)).toThrow(/版本|version/);
     const noNodes = encodeURIComponent(JSON.stringify({ version: 1, edges: [] }));
     expect(() => readSnapshotFromUrl(`?snapshot=${noNodes}`)).toThrow(/nodes/);
   });
@@ -70,7 +71,7 @@ describe("readSnapshotFromUrl", () => {
       edges: [{ source: "a", target: "ghost" }],
     };
     const encoded = encodeURIComponent(JSON.stringify(dangling));
-    expect(() => readSnapshotFromUrl(`?snapshot=${encoded}`)).toThrow(/不存在/);
+    expect(() => readSnapshotFromUrl(`?snapshot=${encoded}`)).toThrow(/不存在|does not exist/);
   });
 });
 

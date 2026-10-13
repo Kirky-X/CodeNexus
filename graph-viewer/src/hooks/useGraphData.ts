@@ -5,6 +5,7 @@ import { useCallback, useState } from "react";
 import type { GraphData } from "../lib/types";
 import { fetchGraphData } from "../api/client";
 import { computeForceLayout } from "../lib/layout";
+import { resolveLocale, translate } from "../lib/i18nCatalog";
 
 export interface UseGraphDataResult {
   data: GraphData | null;
@@ -28,7 +29,9 @@ export function useGraphData(): UseGraphDataResult {
       const nodes = computeForceLayout(raw.nodes, raw.edges);
       setData({ nodes, edges: raw.edges, total_nodes: raw.total_nodes, total_edges: raw.total_edges });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "加载图数据失败");
+      /* 兜底文案走冷路径直读 catalog——若依赖 useI18n 的 t，切语言会重建
+       * fetchData 并触发 App 的数据加载 effect 重跑，代价是整图重新加载 */
+      setError(e instanceof Error ? e.message : translate(resolveLocale(), "error.title"));
     } finally {
       setLoading(false);
     }

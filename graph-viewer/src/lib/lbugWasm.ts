@@ -14,6 +14,7 @@ import type {
   Connection as LbugConn,
   QueryResult as LbugResult,
 } from "@ladybugdb/wasm-core/sync";
+import { resolveLocale, translate } from "./i18nCatalog";
 
 /** sync 模块默认导出的 API 形状 */
 interface LbugSyncModule {
@@ -60,8 +61,10 @@ async function getLbugModule(): Promise<LbugSyncModule> {
     await initPromise;
   } catch (err) {
     initPromise = null;
-    console.error("[lbugWasm] WASM 模块初始化失败:", err);
-    throw new Error(`WASM 引擎初始化失败: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(translate(resolveLocale(), "log.lbugWasmInitFailed"), err);
+    throw new Error(translate(resolveLocale(), "error.wasmInit", {
+      detail: err instanceof Error ? err.message : String(err),
+    }));
   }
   return lbugModule;
 }
@@ -136,8 +139,10 @@ export class LbugDatabase {
         fs.createDataFile(VFS_ROOT, vfsName, data, true, false);
       }
     } catch (err) {
-      console.error("[lbugWasm] 写入 VFS 失败:", err);
-      throw new Error(`写入虚拟文件系统失败: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(translate(resolveLocale(), "log.lbugWasmVfsWriteFailed"), err);
+      throw new Error(translate(resolveLocale(), "error.vfsWrite", {
+        detail: err instanceof Error ? err.message : String(err),
+      }));
     }
 
     /* 以只读模式打开数据库（bufferPoolSize 封顶 DB 缓冲，保护低内存设备） */
@@ -145,11 +150,17 @@ export class LbugDatabase {
     try {
       const db = new mod.Database(vfsPath, bufferPoolSize, 0, true, true);
       const conn = new mod.Connection(db);
-      console.debug(`[lbugWasm] 已加载 ${file.name}（${(file.size / 1048576).toFixed(1)}MB，bufferPool=${bufferPoolSize || "默认"}）`);
+      console.debug(translate(resolveLocale(), "log.lbugWasmDbLoaded", {
+        name: file.name,
+        size: (file.size / 1048576).toFixed(1),
+        pool: bufferPoolSize || translate(resolveLocale(), "common.default"),
+      }));
       return new LbugDatabase(db, conn, file.name, vfsPath);
     } catch (err) {
-      console.error("[lbugWasm] 打开数据库失败:", err);
-      throw new Error(`打开数据库失败: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(translate(resolveLocale(), "log.lbugWasmDbOpenFailed"), err);
+      throw new Error(translate(resolveLocale(), "error.dbOpen", {
+        detail: err instanceof Error ? err.message : String(err),
+      }));
     }
   }
 
@@ -162,7 +173,7 @@ export class LbugDatabase {
       result = this.conn.query(cypher);
       if (!result.isSuccess()) {
         const err = result.getErrorMessage();
-        throw new Error(`Cypher 查询失败: ${err}`);
+        throw new Error(translate(resolveLocale(), "error.cypherQuery", { detail: err }));
       }
       return result.getAllObjects();
     } finally {

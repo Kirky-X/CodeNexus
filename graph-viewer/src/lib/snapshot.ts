@@ -10,6 +10,7 @@
  */
 
 import type { GraphData, GraphNode, GraphEdge } from "./types";
+import { resolveLocale, translate } from "./i18nCatalog";
 
 export interface ViewerSnapshotNode {
   id: string;
@@ -54,47 +55,48 @@ export function readSnapshotFromUrl(search: string): ViewerSnapshot | null {
   if (raw.startsWith("data:")) {
     const comma = raw.indexOf(",");
     if (comma === -1) {
-      throw new SnapshotError("snapshot data URI 缺少逗号分隔符");
+      throw new SnapshotError(translate(resolveLocale(), "error.snapshotNoComma"));
     }
     jsonText = raw.slice(comma + 1);
   } else {
     jsonText = raw;
   }
   if (jsonText.length > MAX_SNAPSHOT_BYTES) {
-    throw new SnapshotError(
-      `snapshot 超过大小上限（${jsonText.length} > ${MAX_SNAPSHOT_BYTES} 字节）`,
-    );
+    throw new SnapshotError(translate(resolveLocale(), "error.snapshotTooLarge", {
+      size: jsonText.length,
+      max: MAX_SNAPSHOT_BYTES,
+    }));
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(jsonText);
   } catch {
-    throw new SnapshotError("snapshot 不是合法 JSON");
+    throw new SnapshotError(translate(resolveLocale(), "error.snapshotInvalidJson"));
   }
   return validateSnapshot(parsed);
 }
 
 function validateSnapshot(parsed: unknown): ViewerSnapshot {
   if (typeof parsed !== "object" || parsed === null) {
-    throw new SnapshotError("snapshot 必须是 JSON 对象");
+    throw new SnapshotError(translate(resolveLocale(), "error.snapshotNotObject"));
   }
   const obj = parsed as Record<string, unknown>;
   if (obj.version !== 1) {
-    throw new SnapshotError(`不支持的 snapshot 版本: ${String(obj.version)}`);
+    throw new SnapshotError(translate(resolveLocale(), "error.snapshotVersion", { version: String(obj.version) }));
   }
   if (!Array.isArray(obj.nodes)) {
-    throw new SnapshotError("snapshot.nodes 必须是数组");
+    throw new SnapshotError(translate(resolveLocale(), "error.snapshotNodesType"));
   }
   if (!Array.isArray(obj.edges)) {
-    throw new SnapshotError("snapshot.edges 必须是数组");
+    throw new SnapshotError(translate(resolveLocale(), "error.snapshotEdgesType"));
   }
   const nodes = obj.nodes.map((n, i) => {
     const node = n as Record<string, unknown>;
     if (typeof node.id !== "string" || node.id === "") {
-      throw new SnapshotError(`snapshot.nodes[${i}].id 缺失`);
+      throw new SnapshotError(translate(resolveLocale(), "error.snapshotNodeId", { index: i }));
     }
     if (typeof node.label !== "string") {
-      throw new SnapshotError(`snapshot.nodes[${i}].label 缺失`);
+      throw new SnapshotError(translate(resolveLocale(), "error.snapshotNodeLabel", { index: i }));
     }
     const change = typeof node.change === "string" && CHANGE_STATES.has(node.change)
       ? (node.change as SnapshotChange)
@@ -111,10 +113,10 @@ function validateSnapshot(parsed: unknown): ViewerSnapshot {
   const edges = obj.edges.map((e, i) => {
     const edge = e as Record<string, unknown>;
     if (typeof edge.source !== "string" || typeof edge.target !== "string") {
-      throw new SnapshotError(`snapshot.edges[${i}] 缺少 source/target`);
+      throw new SnapshotError(translate(resolveLocale(), "error.snapshotEdgeEndpoints", { index: i }));
     }
     if (!ids.has(edge.source) || !ids.has(edge.target)) {
-      throw new SnapshotError(`snapshot.edges[${i}] 引用不存在的节点`);
+      throw new SnapshotError(translate(resolveLocale(), "error.snapshotEdgeDangling", { index: i }));
     }
     const change = typeof edge.change === "string" && CHANGE_STATES.has(edge.change)
       ? (edge.change as SnapshotChange)

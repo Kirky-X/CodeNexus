@@ -14,6 +14,7 @@ import { readSnapshotFromUrl, snapshotToGraphData, SnapshotError } from "./lib/s
 import { loadLbugFile, closeDatabase } from "./api/client";
 import { computeLoadBudget, detectMemoryProfile, type LoadBudget } from "./lib/memoryBudget";
 import { useI18n } from "./lib/i18n";
+import { resolveLocale, translate } from "./lib/i18nCatalog";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
 /* 懒加载 — LightRays 拖入 ogl 着色器库，拆出主包让首屏更早可交互 */
 const LightRays = lazy(() => import("./components/LightRays"));
@@ -74,7 +75,7 @@ export function App() {
   /* 文件加载处理 */
   const handleFileLoad = useCallback(async (file: File) => {
     if (!file.name.endsWith(".lbug")) {
-      setFileError("请选择 .lbug 文件");
+      setFileError(t("error.invalidFileType"));
       return;
     }
     if (fileLoading) return; /* 加载中防重复触发 */
@@ -96,12 +97,12 @@ export function App() {
       setLoadSeq((n) => n + 1);
       setMode("file");
     } catch (e) {
-      setFileError(e instanceof Error ? e.message : "加载数据库失败");
+      setFileError(e instanceof Error ? e.message : t("error.loadDatabase"));
     } finally {
       setLoadStage(null);
       setFileLoading(false);
     }
-  }, [maxNodes, fileLoading]);
+  }, [maxNodes, fileLoading, t]);
 
   const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -145,7 +146,9 @@ export function App() {
         setMode("snapshot");
       }
     } catch (e) {
-      setSnapshotError(e instanceof SnapshotError ? e.message : "snapshot 解析失败");
+      /* 兜底文案走冷路径直读 catalog，effect 保持挂载一次语义：依赖 t
+       * 会让切语言重新解析 URL 并重建筛选器 */
+      setSnapshotError(e instanceof SnapshotError ? e.message : translate(resolveLocale(), "error.snapshot"));
     }
   }, []);
 

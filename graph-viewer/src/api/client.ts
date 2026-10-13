@@ -9,6 +9,7 @@
 
 import type { GraphData } from "../lib/types";
 import type { LoadBudget } from "../lib/memoryBudget";
+import { resolveLocale, translate } from "../lib/i18nCatalog";
 import LbugWorker from "../lib/lbug.worker?worker";
 
 /* 模块级状态 */
@@ -42,16 +43,16 @@ function ensureWorker(): Worker {
     const entry = msg.requestId != null ? pending.get(msg.requestId) : undefined;
     if (!entry) return;
     pending.delete(msg.requestId!);
-    if (msg.type === "error") entry.reject(new Error(msg.message ?? "Worker 错误"));
+    if (msg.type === "error") entry.reject(new Error(msg.message ?? translate(resolveLocale(), "error.worker")));
     else entry.resolve(msg);
   };
   worker.onerror = (event) => {
     console.error("[worker onerror]", event.message, event.filename, event.lineno, event.colno);
-    const err = new Error(`Worker 错误: ${event.message || "unknown"}`);
+    const err = new Error(`${translate(resolveLocale(), "error.worker")}: ${event.message || "unknown"}`);
     for (const [, entry] of pending) entry.reject(err);
     pending.clear();
   };
-  worker.onmessageerror = () => console.error("[worker onmessageerror] 反序列化失败");
+  worker.onmessageerror = () => console.error(translate(resolveLocale(), "log.workerDeserializeFailed"));
   return worker;
 }
 

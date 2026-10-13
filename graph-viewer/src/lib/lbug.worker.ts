@@ -18,6 +18,7 @@
 
 import { LbugDatabase } from "./lbugWasm";
 import { queryGraph } from "./graphQuery";
+import { resolveLocale, translate } from "./i18nCatalog";
 import type { GraphData } from "./types";
 
 let db: LbugDatabase | null = null;
@@ -38,7 +39,7 @@ self.onmessage = async (event: MessageEvent) => {
   try {
     switch (msg.type) {
       case "load": {
-        if (!msg.file) throw new Error("缺少文件");
+        if (!msg.file) throw new Error(translate(resolveLocale(), "error.missingFile"));
         post({ type: "stage", requestId: msg.requestId, stage: "copy" });
         db?.close();
         db = await LbugDatabase.fromFile(msg.file, msg.bufferPoolSize ?? 0, (stage) =>
@@ -48,7 +49,7 @@ self.onmessage = async (event: MessageEvent) => {
         break;
       }
       case "queryGraph": {
-        if (!db) throw new Error("未加载数据库");
+        if (!db) throw new Error(translate(resolveLocale(), "error.dbNotLoaded"));
         const data: GraphData = queryGraph(db, msg.projectName ?? db.fileName, msg.maxNodes ?? 100, msg.scanLimit);
         post({ type: "result", requestId: msg.requestId, data });
         break;
@@ -60,7 +61,7 @@ self.onmessage = async (event: MessageEvent) => {
         break;
       }
       default:
-        throw new Error(`未知消息类型: ${msg.type}`);
+        throw new Error(translate(resolveLocale(), "error.unknownMessageType", { type: msg.type }));
     }
   } catch (err) {
     post({
