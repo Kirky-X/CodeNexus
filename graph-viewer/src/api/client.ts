@@ -64,7 +64,8 @@ function call<T>(message: Record<string, unknown>): Promise<T> {
       resolve: (v) => resolve(v as T),
       reject,
     });
-    w.postMessage({ ...message, requestId });
+    /* locale 随消息下发 — worker 线程无 localStorage，读不到主线程持久化偏好 */
+    w.postMessage({ ...message, locale: resolveLocale(), requestId });
   });
 }
 

@@ -8,17 +8,20 @@
  * 浏览器保证按需读取）。
  *
  * 协议（requestId 关联请求/响应）：
- *   { type:"load", file, bufferPoolSize, requestId }
+ *   { type:"load", file, bufferPoolSize, locale, requestId }
  *       → 阶段消息 { type:"stage", stage:"copy"|"open" }
  *       → { type:"loaded", requestId, fileName } | { type:"error", requestId, message }
- *   { type:"queryGraph", maxNodes, scanLimit, projectName, requestId }
+ *   { type:"queryGraph", maxNodes, scanLimit, projectName, locale, requestId }
  *       → { type:"result", requestId, data } | { type:"error", ... }
- *   { type:"close", requestId } → { type:"closed", requestId }
+ *   { type:"close", locale, requestId } → { type:"closed", requestId }
+ *
+ * locale：主线程下发的生效语言（zh/en）。WorkerGlobalScope 不暴露
+ * localStorage，worker 读不到持久化偏好，只能由消息携带。
  */
 
-import { LbugDatabase } from "./lbugWasm";
+import { LbugDatabase, setActiveLocale, wt } from "./lbugWasm";
 import { queryGraph } from "./graphQuery";
-import { resolveLocale, translate } from "./i18nCatalog";
+import { parseLocale } from "./i18nCatalog";
 import type { GraphData } from "./types";
 
 let db: LbugDatabase | null = null;
@@ -34,12 +37,15 @@ self.onmessage = async (event: MessageEvent) => {
     maxNodes?: number;
     scanLimit?: number;
     projectName?: string;
+    locale?: string;
   };
+
+  setActiveLocale(parseLocale(msg.locale));
 
   try {
     switch (msg.type) {
       case "load": {
-        if (!msg.file) throw new Error(translate(resolveLocale(), "error.missingFile"));
+        if (!msg.file) throw new Error(wt("error.missingFile"));
         post({ type: "stage", requestId: msg.requestId, stage: "copy" });
         db?.close();
         db = await LbugDatabase.fromFile(msg.file, msg.bufferPoolSize ?? 0, (stage) =>
@@ -49,7 +55,7 @@ self.onmessage = async (event: MessageEvent) => {
         break;
       }
       case "queryGraph": {
-        if (!db) throw new Error(translate(resolveLocale(), "error.dbNotLoaded"));
+        if (!db) throw new Error(wt("error.dbNotLoaded"));
         const data: GraphData = queryGraph(db, msg.projectName ?? db.fileName, msg.maxNodes ?? 100, msg.scanLimit);
         post({ type: "result", requestId: msg.requestId, data });
         break;
@@ -61,7 +67,7 @@ self.onmessage = async (event: MessageEvent) => {
         break;
       }
       default:
-        throw new Error(translate(resolveLocale(), "error.unknownMessageType", { type: msg.type }));
+        throw new Error(wt("error.unknownMessageType", { type: msg.type }));
     }
   } catch (err) {
     post({

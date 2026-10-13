@@ -5,7 +5,11 @@
  *
  * worker（lbugWasm/lbug.worker）与非组件模块（api/client、lib/snapshot）
  * 都从这里取值；React 组件走 i18n.tsx 的 useI18n().t()，同一份字典，
- * 避免出现第二套文案，也避免把 React 拖进 worker 包。 */
+ * 避免出现第二套文案，也避免把 React 拖进 worker 包。
+ *
+ * 字典全量随 worker 包发布（双语言约 13.7 KB 原文 / 4.7 KB gzip，占 200 KB
+ * gzip 预算约 2.4%）为已量化接受的取舍：按前缀拆冷热两份会让每个新键多
+ * 一次归属决策，收益与维护成本不成比例。 */
 
 export type Locale = "zh" | "en";
 
@@ -28,10 +32,16 @@ function initialLocale(): Locale {
 }
 
 /* 当前生效 locale — 与 Provider 初始化同一优先级（持久化偏好 > 浏览器检测）。
- * worker 内读不到 localStorage，只能落到浏览器语言检测；用户显式切换的偏好
- * 在 worker 抛出的错误文案里可能与之不一致。 */
+ * WorkerGlobalScope 不暴露 localStorage，worker 内只能落到浏览器语言检测；
+ * worker 宿主可经 lbugWasm.setActiveLocale 注入消息下发的生效语言。 */
 export function resolveLocale(): Locale {
   return initialLocale();
+}
+
+/* 校验外部传入的 locale（如 worker 消息字段）— 仅接受 zh/en，
+ * 其余值（含 undefined）回落 resolveLocale() 的持久化偏好/浏览器检测 */
+export function parseLocale(value: unknown): Locale {
+  return value === "zh" || value === "en" ? value : resolveLocale();
 }
 
 /* 消息模板占位符 — 提升为模块常量，避免每次带 vars 的 translate 重复编译正则 */

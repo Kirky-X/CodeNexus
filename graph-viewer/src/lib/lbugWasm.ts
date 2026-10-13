@@ -14,7 +14,7 @@ import type {
   Connection as LbugConn,
   QueryResult as LbugResult,
 } from "@ladybugdb/wasm-core/sync";
-import { resolveLocale, translate } from "./i18nCatalog";
+import { resolveLocale, translate, type Locale } from "./i18nCatalog";
 
 /** sync 模块默认导出的 API 形状 */
 interface LbugSyncModule {
@@ -46,6 +46,19 @@ interface EmscriptenFS {
 const lbugModule = lbugSyncDefault as unknown as LbugSyncModule;
 let initPromise: Promise<void> | null = null;
 
+/* worker 内生效语言 — WorkerGlobalScope 不暴露 localStorage，主线程的持久化
+ * 偏好只能随消息下发；每条消息处理前由 lbug.worker.ts 的 onmessage 设置，
+ * 作用于本 worker 实例的模块图（各 worker 实例独立，非全局 React 态） */
+let activeLocale: Locale | null = null;
+export function setActiveLocale(locale: Locale): void {
+  activeLocale = locale;
+}
+
+/* worker 侧文案取值 — 生效语言优先，未注入时回落浏览器检测 */
+export function wt(key: string, vars?: Record<string, string | number>): string {
+  return translate(activeLocale ?? resolveLocale(), key, vars);
+}
+
 /* 虚拟文件系统路径 — 直接写入根目录，避免需要 mkdir */
 const VFS_ROOT = "/";
 
@@ -61,8 +74,8 @@ async function getLbugModule(): Promise<LbugSyncModule> {
     await initPromise;
   } catch (err) {
     initPromise = null;
-    console.error(translate(resolveLocale(), "log.lbugWasmInitFailed"), err);
-    throw new Error(translate(resolveLocale(), "error.wasmInit", {
+    console.error(wt("log.lbugWasmInitFailed"), err);
+    throw new Error(wt("error.wasmInit", {
       detail: err instanceof Error ? err.message : String(err),
     }));
   }
@@ -139,8 +152,8 @@ export class LbugDatabase {
         fs.createDataFile(VFS_ROOT, vfsName, data, true, false);
       }
     } catch (err) {
-      console.error(translate(resolveLocale(), "log.lbugWasmVfsWriteFailed"), err);
-      throw new Error(translate(resolveLocale(), "error.vfsWrite", {
+      console.error(wt("log.lbugWasmVfsWriteFailed"), err);
+      throw new Error(wt("error.vfsWrite", {
         detail: err instanceof Error ? err.message : String(err),
       }));
     }
@@ -150,15 +163,15 @@ export class LbugDatabase {
     try {
       const db = new mod.Database(vfsPath, bufferPoolSize, 0, true, true);
       const conn = new mod.Connection(db);
-      console.debug(translate(resolveLocale(), "log.lbugWasmDbLoaded", {
+      console.debug(wt("log.lbugWasmDbLoaded", {
         name: file.name,
         size: (file.size / 1048576).toFixed(1),
-        pool: bufferPoolSize || translate(resolveLocale(), "common.default"),
+        pool: bufferPoolSize || wt("common.default"),
       }));
       return new LbugDatabase(db, conn, file.name, vfsPath);
     } catch (err) {
-      console.error(translate(resolveLocale(), "log.lbugWasmDbOpenFailed"), err);
-      throw new Error(translate(resolveLocale(), "error.dbOpen", {
+      console.error(wt("log.lbugWasmDbOpenFailed"), err);
+      throw new Error(wt("error.dbOpen", {
         detail: err instanceof Error ? err.message : String(err),
       }));
     }
@@ -173,7 +186,7 @@ export class LbugDatabase {
       result = this.conn.query(cypher);
       if (!result.isSuccess()) {
         const err = result.getErrorMessage();
-        throw new Error(translate(resolveLocale(), "error.cypherQuery", { detail: err }));
+        throw new Error(wt("error.cypherQuery", { detail: err }));
       }
       return result.getAllObjects();
     } finally {
