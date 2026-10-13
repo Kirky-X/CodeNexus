@@ -20,6 +20,43 @@ let currentFileName = "";
 let currentBudget: LoadBudget | null = null;
 let stageListener: ((stage: "copy" | "open") => void) | null = null;
 
+/* RPC 不活动看门狗 — worker 被静默销毁时 onerror 不保证触发，pending 条目
+ * 会永久悬挂（加载转圈不止）。以"收到任意消息即存活信号"兜底：超时则全部
+ * 在途 RPC 失败并丢弃实例，下次调用重建新 worker。
+ * 60s 远大于单条 stage/result 间隔；长文件加载期间 stage 消息持续续约。 */
+const RPC_INACTIVITY_TIMEOUT_MS = 60_000;
+let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+
+function armInactivityTimer(): void {
+  if (inactivityTimer) clearTimeout(inactivityTimer);
+  inactivityTimer = setTimeout(onWorkerSilence, RPC_INACTIVITY_TIMEOUT_MS);
+}
+
+function disarmInactivityTimer(): void {
+  if (inactivityTimer) {
+    clearTimeout(inactivityTimer);
+    inactivityTimer = null;
+  }
+}
+
+function failAllPending(err: Error): void {
+  for (const [, entry] of pending) entry.reject(err);
+  pending.clear();
+  disarmInactivityTimer();
+}
+
+function recycleWorker(): void {
+  disarmInactivityTimer();
+  worker?.terminate();
+  worker = null;
+}
+
+function onWorkerSilence(): void {
+  inactivityTimer = null;
+  failAllPending(new Error(translate(resolveLocale(), "error.workerTimeout")));
+  recycleWorker();
+}
+
 type WorkerResponse = {
   type: "loaded" | "result" | "closed" | "stage" | "error";
   requestId?: number;
@@ -35,6 +72,8 @@ function ensureWorker(): Worker {
    * 规避 module worker 的依赖 URL/加载失败问题 */
   worker = new LbugWorker();
   worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+    /* 任意消息（stage/result/error）都是存活信号，重新起跑看门狗 */
+    armInactivityTimer();
     const msg = event.data;
     if (msg.type === "stage") {
       stageListener?.(msg.stage ?? "copy");
@@ -43,16 +82,17 @@ function ensureWorker(): Worker {
     const entry = msg.requestId != null ? pending.get(msg.requestId) : undefined;
     if (!entry) return;
     pending.delete(msg.requestId!);
+    if (pending.size === 0) disarmInactivityTimer();
     if (msg.type === "error") entry.reject(new Error(msg.message ?? translate(resolveLocale(), "error.worker")));
     else entry.resolve(msg);
   };
   worker.onerror = (event) => {
     console.error("[worker onerror]", event.message, event.filename, event.lineno, event.colno);
-    const err = new Error(`${translate(resolveLocale(), "error.worker")}: ${event.message || "unknown"}`);
-    for (const [, entry] of pending) entry.reject(err);
-    pending.clear();
+    failAllPending(new Error(`${translate(resolveLocale(), "error.worker")}: ${event.message || "unknown"}`));
+    recycleWorker();
   };
   worker.onmessageerror = () => console.error(translate(resolveLocale(), "log.workerDeserializeFailed"));
+  armInactivityTimer();
   return worker;
 }
 
@@ -66,6 +106,7 @@ function call<T>(message: Record<string, unknown>): Promise<T> {
     });
     /* locale 随消息下发 — worker 线程无 localStorage，读不到主线程持久化偏好 */
     w.postMessage({ ...message, locale: resolveLocale(), requestId });
+    armInactivityTimer();
   });
 }
 
