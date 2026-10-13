@@ -105,8 +105,8 @@ Detailed documentation is split into supporting files that load on demand. The m
 
 | Reference | Contents |
 |-----------|----------|
-| [`references/commands.md`](references/commands.md) | Full flag list, options, output schemas, and notes for all 37 subcommands (+ `mcp` serve mode). |
-| [`references/storage-model.md`](references/storage-model.md) | `CodeRelation` NODE TABLE design, 44 node types, 24 edge types, confidence tiers. |
+| [`references/commands.md`](references/commands.md) | Full flag list, options, output schemas, and notes for the documented subcommands (36 of 37; for `ci` and anything not covered, defer to `codenexus <cmd> --help`). |
+| [`references/storage-model.md`](references/storage-model.md) | `CodeRelation` NODE TABLE design, 45 node types, 32 edge types, confidence tiers. |
 | [`references/workflows.md`](references/workflows.md) | Nine end-to-end workflows: indexing, daemon, multi-project, FFI, refactoring, team artifacts, MCP, complexity audit, API surface. |
 | [`references/appendix.md`](references/appendix.md) | Supported languages (21), exit codes, full known-issues table, example programs. |
 
@@ -127,4 +127,4 @@ MATCH (r:CodeRelation) WHERE r.type='CALLS' AND r.source='my_namespace::my_func'
 RETURN r.target, r.filePath
 ```
 
-`CodeRelation` columns: `id`, `source`, `target`, `type`, `confidence`, `confidenceTier`, `reason`, `startLine`, `project`. `source`/`target` hold the symbol `qualifiedName` (equal to `Function.id`). High-level commands (`trace`, `impact`, `dead_code`, `architecture`, `community`, etc.) abstract over this layout — they read `CodeRelation` internally so you don't have to write the join yourself. Full schema (44 node types, 24 edge types) is in [`references/storage-model.md`](references/storage-model.md).
+`CodeRelation` columns: `id`, `source`, `target`, `type`, `confidence`, `confidenceTier`, `reason`, `startLine`, `project`. `source`/`target` hold the symbol `qualifiedName` (equal to `Function.id`). High-level commands (`trace`, `impact`, `dead_code`, `architecture`, `community`, etc.) abstract over this layout — they read `CodeRelation` internally so you don't have to write the join yourself. Full schema (45 node types, 32 edge types) is in [`references/storage-model.md`](references/storage-model.md).

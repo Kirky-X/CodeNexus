@@ -1,10 +1,10 @@
 # Storage Model Reference
 
-> CodeNexus graph schema: CodeRelation node table, 44 node types, and 24 edge types. Part of the CodeNexus skill — see [SKILL.md](../SKILL.md) for the overview.
+> CodeNexus graph schema: CodeRelation node table, 45 node types, and 32 edge types. Part of the CodeNexus skill — see [SKILL.md](../SKILL.md) for the overview.
 
 ## CodeRelation Node Table
 
-> Important for `query` users: CodeNexus stores edges as **nodes** in a `CodeRelation` NODE TABLE, not as LadybugDB REL relationships. This is by design (see `src/storage/schema.rs:80-97`): LadybugDB's `REL TABLE` requires concrete node-table names for FROM/TO and cannot express a general edge across 44 node types.
+> Important for `query` users: CodeNexus stores edges as **nodes** in a `CodeRelation` NODE TABLE, not as LadybugDB REL relationships. This is by design (see `src/storage/schema.rs:80-97`): LadybugDB's `REL TABLE` requires concrete node-table names for FROM/TO and cannot express a general edge across 45 node types.
 
 **Implication for Cypher:**
 - `MATCH ()-[r]->()` and `MATCH ()-[r:CALLS]->()` **return 0** — there are no REL relationships.
