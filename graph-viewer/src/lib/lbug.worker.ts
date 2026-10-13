@@ -89,6 +89,6 @@ self.onmessage = (event: MessageEvent) => {
   /* 队列尾追加；catch 仅兜底 postMessage 通道本身失效（响应已无法回传），
    * 保证后续消息不因单条处理异常而断链 */
   messageQueue = messageQueue.then(() => handleMessage(msg)).catch((err) => {
-    console.error("[worker] 消息处理失败", err);
+    console.error(wt("log.workerMessageHandlingFailed"), err);
   });
 };
