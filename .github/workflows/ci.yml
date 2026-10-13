@@ -179,3 +179,9 @@ jobs:
           ignore: ${{ steps.audit_ignore.outputs.ids }}
       - name: cargo-deny (license / ban / advisory)
         uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2
+      # 工作流注入面：inputs/github 事件上下文直插 run 块是经典 CI 注入向量。
+      # 与本地 tiangang(semgrep) 同规则集；版本随工具链评审 bump。
+      - name: semgrep (GitHub Actions 工作流注入扫描)
+        run: |
+          pip install -q "semgrep==1.168.0"
+          semgrep --config p/github-actions --metrics=off --error .github/

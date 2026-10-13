@@ -43,27 +43,38 @@ inputs:
 runs:
   using: "composite"
   steps:
+    # 所有 inputs 一律经 env: 中转再进 shell —— 直接插值 run 块会被
+    # semgrep 判 shell 注入（下游工作流可能把不可信数据传进 inputs）
     - name: Install codenexus
       shell: bash
+      env:
+        CODENEXUS_VERSION: ${{ inputs.codenexus_version }}
       run: |
         set -euo pipefail
-        cargo install "codenexus@${{ inputs.codenexus_version }}" --locked
+        cargo install "codenexus@$CODENEXUS_VERSION" --locked
 
     - name: Index repository
       shell: bash
+      env:
+        INDEX_PATH: ${{ inputs.path }}
       run: |
         set -euo pipefail
-        cd "${{ inputs.path }}"
+        cd "$INDEX_PATH"
         PROJECT_NAME="$(basename "$GITHUB_REPOSITORY")"
         codenexus index --path . --name "$PROJECT_NAME"
 
     - name: Run architecture gate
       id: gate
       shell: bash
+      env:
+        GATE_PATH: ${{ inputs.path }}
+        GATE_BASE: ${{ inputs.base }}
+        GATE_FAIL_ON: ${{ inputs.fail_on }}
+        GATE_PROJECT: ${{ inputs.project }}
       run: |
         set -uo pipefail
-        cd "${{ inputs.path }}"
-        BASE="${{ inputs.base }}"
+        cd "$GATE_PATH"
+        BASE="$GATE_BASE"
         MODE="head"
         if [ "$BASE" != "HEAD" ]; then
           # Present the committed diff vs BASE as STAGED changes so the
@@ -74,8 +85,8 @@ runs:
         fi
         set +e
         codenexus ci --path . --base_mode "$MODE" \
-          --fail_on "${{ inputs.fail_on }}" \
-          --project "${{ inputs.project }}" | tee codenexus-gate.json
+          --fail_on "$GATE_FAIL_ON" \
+          --project "$GATE_PROJECT" | tee codenexus-gate.json
         GATE_EXIT=$?
         set -e
         echo "exit_code=$GATE_EXIT" >> "$GITHUB_OUTPUT"
