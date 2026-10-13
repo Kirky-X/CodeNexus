@@ -2,7 +2,7 @@
 
 <img src="docs/assets/CodeNexus.png" alt="CodeNexus Logo" width="200">
 
-[![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) [![Crates.io](https://img.shields.io/crates/v/codenexus.svg)](https://crates.io/crates/codenexus) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Rust Version](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](https://www.rust-lang.org)
+[![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) [![Crates.io](https://img.shields.io/crates/v/codenexus.svg)](https://crates.io/crates/codenexus) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Rust Version](https://img.shields.io/badge/rust-1.97.1%2B-orange.svg)](https://www.rust-lang.org)
 
 **中文** | [English](README_EN.md)
 
@@ -23,7 +23,7 @@
 <table style="width:100%; border-collapse: collapse">
 <tr>
 <td align="center" width="25%">⚡<br><b>增量管线</b><br><span style="color:#64748B">哈希比对 · 只解析变更</span></td>
-<td align="center" width="25%">🕸️<br><b>属性图模型</b><br><span style="color:#64748B">44类节点 · 30类边 · Cypher</span></td>
+<td align="center" width="25%">🕸️<br><b>属性图模型</b><br><span style="color:#64748B">45类节点 · 32类边 · Cypher</span></td>
 <td align="center" width="25%">🧭<br><b>多跳追踪</b><br><span style="color:#64748B">调用链 · 数据流 · 污点路径</span></td>
 <td align="center" width="25%">🔌<br><b>双入口</b><br><span style="color:#64748B">37 命令 + mcp · 10 工具 · 同语义</span></td>
 </tr>
@@ -60,7 +60,7 @@
 <table style="width:100%; border-collapse: collapse">
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🌐 <b>多语言解析</b><br><span style="color:#64748B">默认 <code>full</code> 预设支持 21 种语言（C、Rust、Fortran、Python、TypeScript、Go、Java、C++、JavaScript、Ruby、Haskell、OCaml、Scala、PHP、C#、Bash、HTML、CSS、JSON、Regex、Verilog），可用 <code>lang-*</code> feature 按需裁剪</span></td>
-<td width="50%" style="vertical-align:top; padding: 12px">🕸️ <b>图数据库</b><br><span style="color:#64748B">LadybugDB 图存储，44 种节点类型 + 30 种边类型，Cypher 子集查询</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🕸️ <b>图数据库</b><br><span style="color:#64748B">LadybugDB 图存储，45 种节点类型 + 32 种边类型，Cypher 子集查询</span></td>
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🔄 <b>增量索引</b><br><span style="color:#64748B">SHA-256 文件哈希比对，仅重新解析变更文件；Rayon 并行 + 线程局部 parser 池</span></td>
@@ -84,7 +84,7 @@
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🤖 <b>多智能体 MCP</b><br><span style="color:#64748B"><code>setup</code> 自动检测 Claude Code / Cursor / Codex；<code>skill</code> 一键同步技能文档到各 Agent 全局技能目录；<code>hook</code> 输出 PreToolUse/PostToolUse JSON；<code>mcp</code> stdio 服务暴露 10 个工具（参数语义写入工具描述）；<code>ask</code> 自然语言入口路由既有命令</span></td>
-<td width="50%" style="vertical-align:top; padding: 12px">👁️ <b>文件监视</b><br><span style="color:#64748B">守护进程模式，自动增量索引（<code>daemon</code> feature，SIGTERM/SIGINT 优雅退出；<code>--notify-impact</code> 变更影响告警）</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">👁️ <b>文件监视</b><br><span style="color:#64748B">守护进程模式，自动增量索引（<code>daemon</code> feature，SIGTERM/SIGINT 优雅退出）</span></td>
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🚦 <b>CI 与架构门禁</b><br><span style="color:#64748B"><code>ci</code> 风险门禁（<code>--fail_on</code> 退出码 + PR Markdown，附官方 GitHub Action）；<code>lint</code> 自定义 Cypher 规则包（<code>.codenexus/rules.json</code>）</span></td>
@@ -131,7 +131,7 @@ cargo build --release
 > LBUG_BUILD_FROM_SOURCE=1 cargo install codenexus
 > ```
 
-要求 Rust 1.97.1 及以上（MSRV，`Cargo.toml` `rust-version` 与 `clippy.toml` `msrv` 一致；CI 工具链当前锁定 1.95，见 `.github/workflows/ci.yml`）。
+要求 Rust 1.97.1 及以上（MSRV，`Cargo.toml` `rust-version` 与 `clippy.toml` `msrv` 一致；CI 工具链当前锁定 1.97.1，见 `.github/workflows/ci.yml`）。
 
 #### 🔧 构建预设与 Feature 开关
 
@@ -222,7 +222,7 @@ codenexus search --text "authentication logic" --fulltext true
 
 ### 🧭 核心概念
 
-- **知识图谱模型**：源码被解析为 44 种节点与 30 种边构成的属性图，存入 LadybugDB，可用 Cypher 子集查询。
+- **知识图谱模型**：源码被解析为 45 种节点与 32 种边构成的属性图，存入 LadybugDB，可用 Cypher 子集查询。
 - **严格 flag 风格 CLI**：无位置参数，参数为 snake_case 长选项（如 `--symbol`、`--trace_type`），布尔选项显式传值（`true`/`false`）。可选参数自带内置默认值（如 `trace --depth 5`、`search --limit 50`，完整清单见各命令 `--help`），并可用 `.codenexus/config.json` 按项目固化。
 - **全局 `--db` 选项**：数据库路径默认 `.codenexus/<项目名称>.lbug`，需置于子命令之前；仅有一个索引时可自动发现。
 - **退出码契约**：0 成功、1 内部错误、2 无效输入 / 项目不存在 / 查询错误、4 NotFound / 数据库损坏（见 `src/service/error.rs`）。
@@ -240,7 +240,9 @@ CodeNexus 提供 **37 个子命令**（外加 `codenexus mcp` 服务模式），
 - **追踪与影响分析**：`trace` / `impact` / `detect_changes` / `rename`
 - **分析工具包**：`dead_code` / `architecture` / `complexity` / `community` / `cross_service`
 - **API 审查与架构图**：`route_map` / `shape_check` / `api_impact` / `tool_map` / `diagram` / `arch_diff`
-- **多智能体与 LSP**：`setup` / `hook` / `mcp` / `lsp_goto_def` / `lsp_hover`
+- **安全与门禁**：`taint` / `supply` / `ci` / `lint`
+- **制品与智能体生态**：`hub` / `skill` / `ask` / `evolve`
+- **多智能体与 LSP**：`setup` / `hook` / `lsp_goto_def` / `lsp_hover`
 
 每个命令的全部参数语义与可运行示例见 [📖 用户指南 · 命令详解](docs/USER_GUIDE.md#️-命令详解)；复杂度指标与阈值表见 [📖 用户指南 · 复杂度分析](docs/USER_GUIDE.md#-复杂度分析)，死代码检测配置见 [📖 用户指南 · 死代码检测](docs/USER_GUIDE.md#-死代码检测)。
 
@@ -283,7 +285,6 @@ codenexus hook
 | [🎯 产品需求文档（PRD）](docs/PRD.md) | 产品需求与 SLO 指标 |
 | [🧾 技术需求文档（TRD）](docs/TRD.md) | 技术需求分解 |
 | [🗄️ 数据库设计文档（DDD）](docs/DDD.md) | 图存储 Schema 设计 |
-| [🗜️ 数据库压缩实测](docs/database-compression.md) | gzip / zstd / lz4 压缩率与耗时实测 |
 | [🔬 研究笔记](docs/research/) | TaintRadar、级联漏洞链等论文笔记 |
 | [🛡️ 安全审计](docs/security/) | Strix 审计 triage 与 ReDoS 误报复核实证 |
 | [🤖 CLI 技能](skill/SKILL.md) | 面向 AI 智能体的 CLI 用法知识包（针对 v0.3.12 校验） |
@@ -331,7 +332,7 @@ done
 
 CodeNexus 采用「库 + 二进制」双目标 crate：`src/lib.rs` 暴露公共 API（模型 / 解析 / 存储 / 索引 / 查询 / 追踪 / service 模块），`src/main.rs` 是 sdforge 驱动的 CLI 二进制；v0.3.2 起 CLI 与 MCP 接口经 sdforge `#[forge]` 宏统一封装在 `src/service/`，每个命令定义 core 函数 + CLI wrapper + MCP wrapper。索引方向为「文件发现 → 增量哈希 → 并行解析 → 符号解析 → 批量入库」。
 
-三层源码结构、索引管线流程图、图模型（44 种节点 / 30 种边与置信度分层）、核心语言提取表与 `architecture` / `diagram` / `arch_diff` 命令输出语义，详见 [🏗️ 架构文档](docs/ARCHITECTURE.md)。
+三层源码结构、索引管线流程图、图模型（45 种节点 / 32 种边与置信度分层）、核心语言提取表与 `architecture` / `diagram` / `arch_diff` 命令输出语义，详见 [🏗️ 架构文档](docs/ARCHITECTURE.md)。
 
 ---
 
@@ -348,8 +349,8 @@ CodeNexus 采用「库 + 二进制」双目标 crate：`src/lib.rs` 暴露公共
 cargo +nightly fmt --all -- --check
 
 # Clippy 门禁（CI 按 full 与 minimal 双档执行，警告即错误）
-cargo +1.95 clippy -- -D warnings
-cargo +1.95 clippy --lib --no-default-features --features minimal -- -D warnings
+cargo +1.97.1 clippy -- -D warnings
+cargo +1.97.1 clippy --lib --no-default-features --features minimal -- -D warnings
 
 # 测试（CI 矩阵按 minimal / core / full / core,daemon,analysis,complexity / core,lsp,cache / full,embeddings 六档运行）
 cargo test --lib --verbose
@@ -401,7 +402,7 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 
 <table style="width:100%; border-collapse: collapse">
 <tr><th style="text-align:center">状态</th><th style="text-align:left">方向</th><th style="text-align:left">条目</th></tr>
-<tr><td align="center">✅</td><td>核心索引与图模型</td><td>v0.1.0 — 多语言索引（C/Rust/Fortran/Python/TypeScript）、图模式（44 种节点类型 + 30 种边类型）、<code>query</code>/<code>trace</code>/<code>impact</code>/<code>context</code>/<code>search</code>、增量索引、RAM 优先模式、MCP 服务、团队 <code>export</code>/<code>import</code>、守护进程模式、置信度分层、歧义消解</td></tr>
+<tr><td align="center">✅</td><td>核心索引与图模型</td><td>v0.1.0 — 多语言索引（C/Rust/Fortran/Python/TypeScript）、图模式（45 种节点类型 + 32 种边类型）、<code>query</code>/<code>trace</code>/<code>impact</code>/<code>context</code>/<code>search</code>、增量索引、RAM 优先模式、MCP 服务、团队 <code>export</code>/<code>import</code>、守护进程模式、置信度分层、歧义消解</td></tr>
 <tr><td align="center">✅</td><td>稳定性与性能加固</td><td>v0.1.x — 增量重索引覆盖、大仓库内存调优、更多语言专属边提取</td></tr>
 <tr><td align="center">✅</td><td>LSP 增强</td><td>v0.2.0 — <code>lsp</code> feature：LSP 增强提取，超越 tree-sitter 的类型精确解析（rust-analyzer 集成）</td></tr>
 <tr><td align="center">✅</td><td>语言覆盖扩展</td><td>v0.2.0 — 扩展语言覆盖（Go、Java、C++，以及 JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog），由新的 <code>lang-*</code> feature 控制</td></tr>
@@ -413,8 +414,8 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 <tr><td align="center">✅</td><td>国际化</td><td>v0.3.3 — 国际化模块（<code>i18n</code> feature）：ICU4X Unicode case folding + NFC 规范化 + CJK 边界检测</td></tr>
 <tr><td align="center">✅</td><td>Harness 现代化</td><td>v0.3.3 — CI 升级 Rust 1.91 + 6 特性矩阵 + dependabot + codeql + crates.io 发布</td></tr>
 <tr><td align="center">✅</td><td>大仓库内存防线</td><td>v0.3.11 — 大型仓库索引 OOM 修复（L1–L7 七层防线）：<code>MemoryBudget</code> 三级内存压力 + <code>Graph::nodes_view/edges_view</code> 迭代器 + 流式 CSV + mpsc channel 并行解析 + L5 自适应降级 + L6 管线流式化（<code>ctx.remove</code> 取代 <code>Graph::clone</code>）+ L7 LadybugDB buffer_pool 封顶（4 GB）+ LSP 按需启动 + RAM-first 8× 放大因子预算。70 GB 主机峰值内存从 60 GB 降至 ~4 GB</td></tr>
-<tr><td align="center">🚧</td><td>基础库升级</td><td>自研基础库升级至 RC（trait-kit / sdforge / oxcache 0.5.0-rc.2、inklog 0.3.0-rc.2）；MSRV 1.95 → 1.97.1</td></tr>
-<tr><td align="center">✅</td><td>功能拓展波次（feature-expansion-wave）</td><td>2026-09 — RICE 排序的 12 项能力：<code>context --budget</code> token 预算器、<code>ci</code> 架构门禁（含官方 GitHub Action）、<code>lint</code> 自定义架构规则包、<code>skill</code> 技能同步、<code>ask</code> 自然语言入口、graph-viewer 快照合流（<code>diagram</code>/<code>arch_diff</code> <code>--viewer_url</code>）、daemon <code>--notify-impact</code> 影响告警、Kotlin/Swift/Solidity 语言支持、<code>taint</code> 安全审计（内置 source/sink 规则库）、<code>supply</code> 供应链视图（ExternalPackage/DEPENDS_ON）、<code>evolve</code> 架构演化回放、<code>hub</code> 制品客户端（协议 v1）</td></tr>
+<tr><td align="center">✅</td><td>基础库升级</td><td>自研基础库升级至 crates.io RC（trait-kit 0.5.0-rc.6、sdforge / oxcache 0.5.0-rc.5、inklog 0.3.0-rc.5）；MSRV 1.97.1</td></tr>
+<tr><td align="center">✅</td><td>功能拓展波次（feature-expansion-wave）</td><td>2026-09 — RICE 排序的 12 项能力：<code>context --budget</code> token 预算器、<code>ci</code> 架构门禁（含官方 GitHub Action）、<code>lint</code> 自定义架构规则包、<code>skill</code> 技能同步、<code>ask</code> 自然语言入口、graph-viewer 快照合流（<code>diagram</code>/<code>arch_diff</code> <code>--viewer_url</code>）、daemon 影响告警（DaemonConfig 字段，CLI 接线待补）、Kotlin/Swift/Solidity 语言识别（扩展名映射与污点规则，tree-sitter 解析暂不支持）、<code>taint</code> 安全审计（内置 source/sink 规则库）、<code>supply</code> 供应链视图（ExternalPackage/DEPENDS_ON）、<code>evolve</code> 架构演化回放、<code>hub</code> 制品客户端（协议 v1）</td></tr>
 <tr><td align="center">📋</td><td>Web UI 与图可视化</td><td>基于查询门面的 Web UI / 图可视化（<code>diagram</code>/<code>arch_diff</code> 已交付架构图 HTML 与语义 Delta 及 graph-viewer 快照合流；3D graph-viewer 深度集成仍在规划中）</td></tr>
 </table>
 
@@ -426,7 +427,7 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 
 ### 🛠️ 开发环境
 
-工具链为 Rust stable 1.95+（CI 锁定 1.95；`Cargo.toml` MSRV 1.97.1）+ nightly（`cargo fmt` 使用 nightly-only 选项），系统依赖包括 C/C++ 编译器（tree-sitter grammar 构建）、`libssl-dev`、`pkg-config` 与 `protobuf-compiler`；提交前运行 `cargo +nightly fmt --all -- --check` 与 `cargo clippy -- -D warnings`；[pre-commit](https://pre-commit.com/) Git 钩子在 pre-commit 执行文件检查、私钥/密钥扫描、fmt 与 clippy，pre-push 执行 `cargo test --lib`、覆盖率门禁（≥95%）、`cargo audit` 与 `cargo deny check`；提交信息遵循 Conventional Commits（`feat`、`fix`、`perf`、`refactor`、`docs`、`test`、`chore`、`revert`）。完整环境搭建步骤见 [🤝 贡献指南 · 开发环境](docs/CONTRIBUTING.md#-development-environment)。
+工具链为 Rust stable 1.97.1+（CI 锁定 1.97.1；`Cargo.toml` MSRV 1.97.1）+ nightly（`cargo fmt` 使用 nightly-only 选项），系统依赖包括 C/C++ 编译器（tree-sitter grammar 构建）、`libssl-dev`、`pkg-config` 与 `protobuf-compiler`；提交前运行 `cargo +nightly fmt --all -- --check` 与 `cargo clippy -- -D warnings`；[pre-commit](https://pre-commit.com/) Git 钩子在 pre-commit 执行文件检查、私钥/密钥扫描、fmt 与 clippy，pre-push 执行 `cargo test --lib`、覆盖率门禁（≥95%）、`cargo audit` 与 `cargo deny check`；提交信息遵循 Conventional Commits（`feat`、`fix`、`perf`、`refactor`、`docs`、`test`、`chore`、`revert`）。完整环境搭建步骤见 [🤝 贡献指南 · 开发环境](docs/CONTRIBUTING.md#-development-environment)。
 
 ### 💖 贡献方式
 
@@ -469,7 +470,7 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 
 | 版本 | 日期 | 要点 |
 |------|------|------|
-| Unreleased | — | 自研基础库升级至 RC（trait-kit / sdforge / oxcache 0.5.0-rc.2、inklog 0.3.0-rc.2）；MSRV 1.95 → 1.97.1 |
+| 0.3.13-rc.1 | 2026-09-21 | 跨仓解耦：基库改走 crates.io 发布版（trait-kit rc.6 / sdforge、oxcache rc.5 / inklog rc.5）；embed→embeddings 更名；增量索引跨文件边丢失修复 |
 | 0.3.12 | 2026-07-30 | 动态 `max_db_size` + `--fresh` 标志解决 DB 膨胀；read-only 连接 4 TiB cap 修复 >16 GiB 数据库查询崩溃；LSP hover 批量 UNWIND 更新等 P 系列修复 |
 | 0.3.11 | 2026-07-26 | L6+L7 内存优化：管线流式化 + 迭代器 API + buffer_pool 封顶，70 GB 主机峰值内存 60 GB → ~4 GB |
 | 0.3.10 | 2026-07-25 | 大仓库索引 OOM 的 L1–L5 五层防线：内存预算、图视图迭代器、流式 CSV、mpsc 并发上限、自适应降级 |

@@ -286,8 +286,8 @@ cargo test --test non_ascii_path_test
 
 # 格式与 lint 门禁
 cargo +nightly fmt --all -- --check
-cargo +1.95 clippy -- -D warnings
-cargo +1.95 clippy --lib --no-default-features --features minimal -- -D warnings
+cargo +1.97.1 clippy -- -D warnings
+cargo +1.97.1 clippy --lib --no-default-features --features minimal -- -D warnings
 
 # 覆盖率门禁（≥95% 行覆盖）
 cargo llvm-cov --lib --fail-under-lines 95 --lcov --output-path lcov.info

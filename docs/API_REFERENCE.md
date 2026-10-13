@@ -114,7 +114,7 @@
 
 | 模块 | 职责 | 关键类型 |
 |------|------|----------|
-| `model` | 图数据模型 | `Node` / `Edge` / `Graph`、`NodeLabel`（44 种）、`EdgeType`（30 种）、语言与 i18n 支持 |
+| `model` | 图数据模型 | `Node` / `Edge` / `Graph`、`NodeLabel`（45 种）、`EdgeType`（32 种）、语言与 i18n 支持 |
 | `discover` | 文件发现 | 遵守 `.gitignore` 的目录遍历（`ignore` crate） |
 | `parse` | tree-sitter 解析 | 各语言 extractor，把 AST 转为 `Node`/`Edge` 记录 |
 | `ir` | 中间表示 | `ExtractResult` 等管线中间产物 |
@@ -128,7 +128,7 @@
 | `kit` | 能力注册表 | `build_kit` / `KitBootstrapConfig`（见下节） |
 | `analysis`（`analysis`） | 分析工具包 | 死代码检测、架构概览、复杂度、社区检测、跨服务检测 |
 | `diagram`（`diagram`） | 架构图管线 | 确定性布局、正交路由、HTML 写出、质检、语义 Delta |
-| `embed`（`embed`） | 向量嵌入 | 语义搜索嵌入（本地 ONNX 推理） |
+| `embed`（`embeddings`） | 向量嵌入 | 语义搜索嵌入（本地 ONNX 推理） |
 | `lsp`（`lsp`） | LSP 增强 | 7 个 LSP 客户端、按需启动、hover 批量更新 |
 | `cache`（`cache`） | 查询缓存 | `CacheStore` 能力（oxcache） |
 | `daemon`（`daemon`） | 文件监视守护进程 | 事件循环、去抖（`DEFAULT_DEBOUNCE_MS = 2000`）、优雅退出 |
@@ -167,7 +167,7 @@ crate 根另外导出：
 | `KitBootstrapConfig::new(db_path: PathBuf)` | 以数据库路径构造引导配置 |
 | `with_debounce_ms(u64)` | daemon 去抖毫秒数（默认 2000） |
 | `with_read_only(bool)` | 只读模式（追踪/查询命令） |
-| `with_embedding_config(EmbeddingConfig)` | 嵌入配置（`embed` feature） |
+| `with_embedding_config(EmbeddingConfig)` | 嵌入配置（`embeddings` feature） |
 | `build_kit(config)` | 构建 Kit 实例；`KitError` 报告能力缺失 / 构建失败 |
 
 ---
@@ -208,7 +208,7 @@ CLI 与 MCP 共用 `src/service/` 中 `#[forge]` 宏定义的同一套命令（c
 | `parse`（对应语言） | `lang-c` … `lang-verilog` | 21 个语言 feature，至少启用其一 |
 | `analysis` | `analysis` | 死代码 / 架构概览 / 复杂度 / 社区 / 跨服务 |
 | `diagram` | `diagram`（含 `analysis`） | 架构图与语义 Delta |
-| `embed` | `embed` | 向量嵌入语义搜索 |
+| `embed` | `embeddings` | 向量嵌入语义搜索 |
 | `lsp` | `lsp` | LSP 增强解析 |
 | `cache` | `cache` | 查询缓存 |
 | `daemon` | `daemon` | 文件监视守护进程 |

@@ -22,7 +22,7 @@
 | 能力 | 说明 |
 |:-----|:-----|
 | **多语言解析** | tree-sitter，默认 `full` 预设 21 种语言 |
-| **图存储** | LadybugDB，44 种节点类型 + 30 种边类型 |
+| **图存储** | LadybugDB，45 种节点类型 + 32 种边类型 |
 | **查询分析** | Cypher 子集查询、调用链/数据流追踪、影响分析、语义搜索 |
 | **智能体集成** | MCP 服务器（10 个工具）+ setup 自动接入 Claude Code / Cursor / Codex |
 
@@ -49,7 +49,7 @@
 
 ### ❓ 支持哪些 Rust 版本？
 
-MSRV 为 **1.97.1**（`Cargo.toml` `rust-version`，`clippy.toml` `msrv` 同步）。CI 工具链当前锁定 1.95（见 `.github/workflows/ci.yml`）。格式化需要 nightly 工具链（`rustfmt.toml` 使用 nightly-only 选项）。
+MSRV 为 **1.97.1**（`Cargo.toml` `rust-version`，`clippy.toml` `msrv` 同步）。CI 工具链当前锁定 1.97.1（见 `.github/workflows/ci.yml`）。格式化需要 nightly 工具链（`rustfmt.toml` 使用 nightly-only 选项）。
 
 ### ❓ 只想要部分语言怎么办？
 
