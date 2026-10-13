@@ -9,8 +9,12 @@ repos:
     hooks:
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
+        # fuzz 语料是二进制回归输入，按文本规则改写会污染用例字节
+        exclude: '^fuzz/corpus/'
       - id: end-of-file-fixer
+        exclude: '^fuzz/corpus/'
       - id: check-yaml
+        exclude: '^fuzz/corpus/'
       - id: check-toml
       - id: check-added-large-files
         args: ['--maxkb=2000']
@@ -19,6 +23,7 @@ repos:
         args: ['--assume-in-merge']
       - id: mixed-line-ending
         args: ['--fix=lf']
+        exclude: '^fuzz/corpus/'
 
   # 2. Detect secrets
   - repo: https://github.com/Yelp/detect-secrets
