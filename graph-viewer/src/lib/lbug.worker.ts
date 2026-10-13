@@ -17,6 +17,11 @@
  *
  * locale：主线程下发的生效语言（zh/en）。WorkerGlobalScope 不暴露
  * localStorage，worker 读不到持久化偏好，只能由消息携带。
+ *
+ * 消息串行：onmessage 是 async，load 的 WASM 初始化/MEMFS 写入期间
+ * 插入的后续消息会先改写 activeLocale 与 db——先到消息失败时 wt() 已
+ * 读到新语言（文案错配），queryGraph 也可能查到正在被替换的旧 db。
+ * 以 Promise 链保证同一 worker 内消息逐条处理。
  */
 
 import { LbugDatabase, setActiveLocale, wt } from "./lbugWasm";
@@ -25,21 +30,22 @@ import { parseLocale } from "./i18nCatalog";
 import type { GraphData } from "./types";
 
 let db: LbugDatabase | null = null;
+let messageQueue: Promise<void> = Promise.resolve();
 
 const post = (msg: unknown) => self.postMessage(msg);
 
-self.onmessage = async (event: MessageEvent) => {
-  const msg = event.data as {
-    type: string;
-    requestId: number;
-    file?: File;
-    bufferPoolSize?: number;
-    maxNodes?: number;
-    scanLimit?: number;
-    projectName?: string;
-    locale?: string;
-  };
+type WorkerRequest = {
+  type: string;
+  requestId: number;
+  file?: File;
+  bufferPoolSize?: number;
+  maxNodes?: number;
+  scanLimit?: number;
+  projectName?: string;
+  locale?: string;
+};
 
+async function handleMessage(msg: WorkerRequest): Promise<void> {
   setActiveLocale(parseLocale(msg.locale));
 
   try {
@@ -76,4 +82,13 @@ self.onmessage = async (event: MessageEvent) => {
       message: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+self.onmessage = (event: MessageEvent) => {
+  const msg = event.data as WorkerRequest;
+  /* 队列尾追加；catch 仅兜底 postMessage 通道本身失效（响应已无法回传），
+   * 保证后续消息不因单条处理异常而断链 */
+  messageQueue = messageQueue.then(() => handleMessage(msg)).catch((err) => {
+    console.error("[worker] 消息处理失败", err);
+  });
 };
