@@ -113,3 +113,7 @@ strix_runs/
 .qoder/
 .mimosa/
 .agents/
+
+# ZCode workflow drafts and run journals (machine-generated)
+.zcode/workflow-drafts/
+.zcode/workflow-runs/
