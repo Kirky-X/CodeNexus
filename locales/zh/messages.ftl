@@ -30,8 +30,14 @@ daemon-shutdown-phase-2 = 停机阶段 2/3：排空防抖事件队列
 daemon-shutdown-phase-3 = 停机阶段 3/3：关闭图数据库连接
 daemon-shutdown-complete = 分阶段停机完成
 
-# graph-viewer server：鉴权/启动日志（graph-viewer/server/src/main.rs）
+# viewer：鉴权/启动日志（src/viewer/server.rs）
 graph-host-forbidden = 本服务仅允许本机回环访问
 graph-token-missing = 缺少或错误的 x-graph-token 头
-graph-server-started = 图数据服务已启动: http://127.0.0.1:9800（请求需带 x-graph-token 头，见 stdout）
+graph-server-started = 图数据服务已启动: http://127.0.0.1:{ $port }（请求需带 x-graph-token 头，见 stdout）
 graph-project-discovered = 发现项目: { $name } -> { $path }
+
+# viewer：内嵌 graph-viewer（src/viewer/assets.rs）
+graph-viewer-dist-missing = graph-viewer 前端资源未构建：请在 graph-viewer/ 执行 npm run build 后重新编译本二进制。
+
+# logging：inklog 级别预设（src/logging.rs）
+logging-invalid_target_level = 忽略非法的 CODENEXUS_LOG_TARGETS 条目 '{ $entry }'（应为 target=level，如 hyper=warn）

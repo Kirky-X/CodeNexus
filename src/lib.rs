@@ -76,6 +76,10 @@ pub mod index;
 #[doc(hidden)]
 pub mod ir;
 pub mod kit;
+/// Global logging setup: inklog initialization, per-target level presets
+/// (`CODENEXUS_LOG_TARGETS`) and runtime level hot-tuning.
+#[doc(hidden)]
+pub mod logging;
 pub mod model;
 #[doc(hidden)]
 pub mod parse;
@@ -111,6 +115,13 @@ pub mod embed;
 #[doc(hidden)]
 pub mod lsp;
 
+/// Embedded graph-viewer Web UI service (`webui` feature): loopback-only,
+/// token-guarded `/api` routes plus compile-time-embedded frontend assets,
+/// started by `codenexus webui`.
+#[cfg(feature = "webui")]
+#[doc(hidden)]
+pub mod viewer;
+
 /// Test log capture utilities backed by inklog's `LoggerSubscriber`.
 /// Available only in test builds; used by unit tests across the crate.
 #[cfg(test)]
@@ -121,6 +132,11 @@ mod test_log_capture;
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
+
+/// Side-effect directory CodeNexus uses inside a project (databases,
+/// configuration, logs). Single source for the CLI binary and the logging
+/// module.
+pub const DEFAULT_DB_DIR: &str = ".codenexus";
 
 #[cfg(test)]
 mod tests {

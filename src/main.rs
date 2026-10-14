@@ -15,9 +15,7 @@ use codenexus::kit::{build_kit, KitBootstrapConfig, KitError};
 use codenexus::service::error::CodeNexusError;
 use codenexus::service::init_kit;
 use codenexus::storage::StorageError;
-
-/// Default directory (relative to CWD) that holds per-project database files.
-const DEFAULT_DB_DIR: &str = ".codenexus";
+use codenexus::DEFAULT_DB_DIR;
 
 /// Fallback project name used when no command-specific `name`/`path` arg is
 /// available to derive one (e.g. non-indexing subcommands).
@@ -31,64 +29,6 @@ use codenexus::daemon::DEFAULT_DEBOUNCE_MS;
 #[cfg(not(feature = "daemon"))]
 use codenexus::kit::bootstrap::DEFAULT_DEBOUNCE_MS;
 
-/// Initialize the global `tracing` subscriber using inklog as the sole backend.
-///
-/// Configures console (colored, stderr-routed) + file output with daily
-/// rotation, 100 MB max file size, gzip compression, 30-day retention, and
-/// inklog's built-in PII masking (`pii_masking_enabled` defaults to `true`
-/// on the file sink). The log level is read from `RUST_LOG` (default: `info`).
-///
-/// All console records — `info` included — are routed to stderr so stdout
-/// stays a pure JSON channel under `> out.json` redirection. The file sink
-/// lives under `.codenexus/logs/` (not a bare `logs/` in the CWD) so any
-/// command creates only the one side-effect directory users gitignore.
-///
-/// Note: file-sink *sampling* (`inklog::SamplingSink`) is intentionally not
-/// wired yet — it requires the builder's `add_sink` path, whose
-/// `build_with_deps` constructor does not install the global tracing/log
-/// frontend (only the pure-config `with_config_and_sinks` path does), which
-/// would silence all records. Revisit after the upstream inklog fix.
-pub fn init_logging() {
-    init_inklog();
-}
-
-fn init_inklog() {
-    let level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
-
-    let rt = tokio::runtime::Runtime::new().expect("create tokio runtime for inklog");
-    let logger = rt
-        .block_on(async {
-            inklog::LoggerManager::builder()
-                .level(&level)
-                .format("{timestamp} [{level}] {target} - {message}")
-                .console(true)
-                .console_colored(true)
-                // Route every log level to stderr so stdout carries only the
-                // command's JSON output. inklog's default stderr_levels is
-                // ["error", "warn"] (info goes to stdout), which corrupted
-                // `codenexus index > result.json` whenever the index pipeline
-                // emitted info! events (index_started/completed/performance).
-                // Unknown level names in the list never match and are harmless.
-                .console_stderr_levels(&["error", "warn", "info", "debug", "trace", "fatal"])
-                // Keep the file sink inside .codenexus/ so a one-off command
-                // in any project creates only the side-effect directory users
-                // already gitignore. inklog's file sink create_dir_all's the
-                // parent, so no mkdir here (see init_logging doc comment).
-                .file(format!("{DEFAULT_DB_DIR}/logs/codenexus.log"))
-                .file_max_size("100MB")
-                .file_compress(true)
-                .file_rotation_time("daily")
-                .file_keep_files(30)
-                .channel_capacity(10000)
-                .build()
-                .await
-        })
-        .expect("init inklog");
-
-    std::mem::forget(logger);
-    std::mem::forget(rt);
-}
-
 fn main() {
     // Message i18n (daemon logs, CLI/user-visible strings): register the
     // embedded FTL catalogs into the sdforge i18n registry and pin the
@@ -96,7 +36,11 @@ fn main() {
     // this crate's keys, so t/tr would serve bare keys — hence mandatory.
     codenexus::i18n::init();
 
-    init_logging();
+    // Global inklog backend: console (colored, stderr-routed) + file output
+    // with daily rotation, gzip compression, 30-day retention, inklog's
+    // built-in PII masking, `RUST_LOG` directive support and per-target level
+    // presets (see `codenexus::logging`).
+    codenexus::logging::init_logging();
 
     #[cfg(feature = "mcp")]
     if std::env::args().nth(1) == Some("mcp".into()) {
@@ -153,11 +97,38 @@ fn run_cli() {
 
     let matches = cmd.get_matches();
 
+    // Machine-readable output contract (`sdforge::cli::output`): the global
+    // `--format text|json` switch is mounted by `CliBuilder::build()` and
+    // propagates to every subcommand (before or after the subcommand name).
+    // CodeNexus renders its own boundary output — handlers print their own
+    // compact JSON — so the mode is read here; `text` (default) keeps every
+    // historical stdout/stderr line unchanged.
+    let format = sdforge::cli::OutputFormat::from_matches(&matches);
+
     let sub_name = match matches.subcommand_name() {
         Some(name) => name,
         None => {
             // No subcommand provided — print a short quick-start to stdout
             // and exit 0 so callers can detect "no-op" via exit code.
+            // Under `--format json` the human banner is unparseable machine
+            // output, so the same condition becomes the contract's
+            // UnifiedError JSON line on stdout. `InvalidInput` (not
+            // `Internal`) because the library sanitizes internal messages — a
+            // usage error must keep its text — and the exit code follows the
+            // payload class (2), never a bare 1.
+            if format == sdforge::cli::OutputFormat::Json {
+                exit_with_api_error(
+                    format,
+                    sdforge::prelude::ApiError::InvalidInput {
+                        message: "no subcommand supplied (run `codenexus --help` to list commands)"
+                            .to_string(),
+                        field: None,
+                        value: None,
+                    },
+                    "",
+                    None,
+                );
+            }
             println!(
                 "CodeNexus {} — code knowledge graph CLI",
                 codenexus::version()
@@ -171,6 +142,7 @@ fn run_cli() {
             println!(
                 "Run `codenexus --help` to list all commands, or `codenexus <command> --help` for its flags."
             );
+            codenexus::logging::flush();
             std::process::exit(0);
         }
     };
@@ -218,10 +190,15 @@ fn run_cli() {
     //
     // Ensure the default DB directory exists so `Database::new` can create the
     // file (it does not create parent directories itself).
-    if let Some(parent) = PathBuf::from(&db).parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!("[warn] Failed to create DB directory {parent:?}: {e}");
+    // `webui` 自带数据扫描、不使用 Kit：跳过 DB 目录准备与 Kit 构建，避免在
+    // 无索引目录里创建空库，也避免与持锁写入进程争用（见 src/viewer/cli.rs）。
+    let needs_kit = !(cfg!(feature = "webui") && sub_name == "webui");
+    if needs_kit {
+        if let Some(parent) = PathBuf::from(&db).parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    eprintln!("[warn] Failed to create DB directory {parent:?}: {e}");
+                }
             }
         }
     }
@@ -230,55 +207,67 @@ fn run_cli() {
     // DuckDB DELETE doesn't reclaim pages and LadybugDB doesn't support
     // VACUUM, so repeated `--force` indexes accumulate dead space. --fresh
     // drops the old file so Kit opens a fresh one. See [`handle_fresh_flag`].
-    handle_fresh_flag(sub_name, sub_matches, &db);
+    handle_fresh_flag(sub_name, sub_matches, &db, format);
 
     // clean --rebuild: delete the whole DB file (schema-version mismatch or
     // corruption self-healing) before Kit init — deleting requires no open
     // handles, which is exactly the state a corrupt DB needs. See
     // [`handle_clean_rebuild`].
-    handle_clean_rebuild(sub_name, sub_matches, &db);
+    handle_clean_rebuild(sub_name, sub_matches, &db, format);
 
     // Gate read-only commands against a missing DB file. Without this,
     // `list --db <missing>` would build an empty DB (create-on-open) and
     // return `[]` with exit 0 — a silent success. Creating commands bypass.
     if let Err(msg) = validate_db_exists(&db, sub_name) {
-        eprintln!("[error] {msg}");
-        std::process::exit(4);
+        exit_with_api_error(
+            format,
+            sdforge::prelude::ApiError::not_found("database", Some(db.clone())),
+            &format!("[error] {msg}"),
+            None,
+        );
     }
 
-    // Read-only commands open the DB read-only so multiple processes can read
-    // concurrently (DuckDB/LadybugDB shared-read); writing commands keep RW.
-    // with_notify_webhook 仅在 daemon+hub 下存在（见 kit/bootstrap.rs）
-    let config = KitBootstrapConfig::new(PathBuf::from(&db))
-        .with_debounce_ms(debounce_ms)
-        .with_read_only(opens_read_only(sub_name))
-        .with_verbose(
-            matches.value_source("verbose")
-                == Some(sdforge::clap::parser::ValueSource::CommandLine)
-                || project_config.verbose.unwrap_or(false),
-        );
-    #[cfg(all(feature = "daemon", feature = "hub"))]
-    let config = config.with_notify_webhook(project_config.notify_webhook.clone());
-    match runtime.block_on(build_kit(&config)) {
-        Ok(kit) => {
-            if let Err(e) = init_kit(kit) {
-                eprintln!("[warn] Kit already initialized: {e}");
+    // `webui` 跳过 Kit（见 needs_kit 定义处）。
+    if needs_kit {
+        // Read-only commands open the DB read-only so multiple processes can read
+        // concurrently (DuckDB/LadybugDB shared-read); writing commands keep RW.
+        // with_notify_webhook 仅在 daemon+hub 下存在（见 kit/bootstrap.rs）
+        let config = KitBootstrapConfig::new(PathBuf::from(&db))
+            .with_debounce_ms(debounce_ms)
+            .with_read_only(opens_read_only(sub_name))
+            .with_verbose(
+                matches.value_source("verbose")
+                    == Some(sdforge::clap::parser::ValueSource::CommandLine)
+                    || project_config.verbose.unwrap_or(false),
+            );
+        #[cfg(all(feature = "daemon", feature = "hub"))]
+        let config = config.with_notify_webhook(project_config.notify_webhook.clone());
+        match runtime.block_on(build_kit(&config)) {
+            Ok(kit) => {
+                if let Err(e) = init_kit(kit) {
+                    eprintln!("[warn] Kit already initialized: {e}");
+                }
             }
-        }
-        Err(e) => {
-            // A DB lock conflict must surface as exit 2 with a clear
-            // message, not hide behind the generic kit_not_initialized exit 1.
-            if let Some(hint) = extract_db_locked_hint(&e) {
-                eprintln!("[error] database is locked: {hint}");
-                eprintln!(
-                    "  another codenexus process may be writing (index/import hold an exclusive DB lock)"
-                );
-                eprintln!(
-                    "  close other codenexus processes and retry, or wait for them to finish"
-                );
-                std::process::exit(2);
+            Err(e) => {
+                // A DB lock conflict must surface as exit 2 with a clear
+                // message, not hide behind the generic kit_not_initialized exit 1.
+                if let Some(hint) = extract_db_locked_hint(&e) {
+                    let text = format!(
+                        "[error] database is locked: {hint}\n  another codenexus process may be writing (index/import hold an exclusive DB lock)\n  close other codenexus processes and retry, or wait for them to finish"
+                    );
+                    exit_with_api_error(
+                        format,
+                        sdforge::prelude::ApiError::InvalidInput {
+                            message: format!("database is locked: {hint}"),
+                            field: None,
+                            value: None,
+                        },
+                        &text,
+                        None,
+                    );
+                }
+                eprintln!("[warn] Failed to build Kit (commands requiring Kit will fail): {e}");
             }
-            eprintln!("[warn] Failed to build Kit (commands requiring Kit will fail): {e}");
         }
     }
 
@@ -289,14 +278,33 @@ fn run_cli() {
     {
         Some(h) => h,
         None => {
-            eprintln!("[error] No handler registered for command: {sub_name}");
-            std::process::exit(1);
+            // Same condition (and same `ApiError` shape) as sdforge's own
+            // dispatch lookup; rendering and the exit code (NotFound → 4)
+            // follow the global `--format` contract.
+            let api_error = sdforge::prelude::ApiError::NotFound {
+                resource: "cli_command".to_string(),
+                resource_id: Some(sub_name.to_string()),
+            };
+            let text_line = format!("[error] No handler registered for command: {sub_name}");
+            exit_with_api_error(format, api_error, &text_line, None);
         }
     };
 
     if let Err(api_error) = runtime.block_on((handler.handler)(args, None)) {
+        // `--format json` renders the handler's `ApiError` as the shared
+        // UnifiedError JSON payload on stdout (same shape as HTTP/gRPC);
+        // `text` keeps the historical `Error: <CodeNexusError>` stderr line.
+        // Exit codes stay CodeNexus's own (`service::error`) in both modes.
+        // Drain the async log sink first so error-level `fn_exit` records
+        // reach the log file even for one-shot commands.
+        codenexus::logging::flush();
+        if format == sdforge::cli::OutputFormat::Json {
+            format.emit_error(&api_error);
+        }
         let cli_error = CodeNexusError::from(api_error);
-        eprintln!("Error: {cli_error}");
+        if format == sdforge::cli::OutputFormat::Text {
+            eprintln!("Error: {cli_error}");
+        }
         std::process::exit(cli_error.exit_code());
     }
 
@@ -306,6 +314,28 @@ fn run_cli() {
     if let Some(kit) = codenexus::service::runtime::kit() {
         runtime.block_on(kit.shutdown_async());
     }
+    codenexus::logging::flush();
+}
+
+/// Renders a `run_cli` boundary error under the global `--format` contract and
+/// exits: text keeps the historical stderr line(s), json emits the shared
+/// UnifiedError payload on stdout. The exit code follows the payload class
+/// (`CodeNexusError::exit_code`) unless the site owns a documented code of its
+/// own (`--fresh`/`--rebuild` failures keep 5/6).
+fn exit_with_api_error(
+    format: sdforge::cli::OutputFormat,
+    api_error: sdforge::prelude::ApiError,
+    text_line: &str,
+    code_override: Option<i32>,
+) -> ! {
+    codenexus::logging::flush();
+    match format {
+        sdforge::cli::OutputFormat::Json => format.emit_error(&api_error),
+        sdforge::cli::OutputFormat::Text => eprintln!("{text_line}"),
+    }
+    std::process::exit(
+        code_override.unwrap_or_else(|| CodeNexusError::from(api_error).exit_code()),
+    );
 }
 
 /// Returns the value of the global arg `name` when it was explicitly
@@ -551,8 +581,15 @@ fn delete_db_for_fresh(db: &str) -> std::io::Result<bool> {
 ///
 /// Exits with code 6 if `--db` points at a non-`.lbug` file (safety), or code
 /// 5 if deletion fails (failure must surface, not be swallowed).
-/// Code 4 is reserved for NotFound (validate_db_exists).
-fn handle_fresh_flag(sub_name: &str, sub_matches: &sdforge::clap::ArgMatches, db: &str) {
+/// Code 4 is reserved for NotFound (validate_db_exists). Under `--format json`
+/// the failure also emits the contract payload; the 5/6 codes stay (documented
+/// contract for `--fresh`).
+fn handle_fresh_flag(
+    sub_name: &str,
+    sub_matches: &sdforge::clap::ArgMatches,
+    db: &str,
+    format: sdforge::cli::OutputFormat,
+) {
     if sub_name != "index" {
         return;
     }
@@ -572,12 +609,18 @@ fn handle_fresh_flag(sub_name: &str, sub_matches: &sdforge::clap::ArgMatches, db
             eprintln!("[info] --fresh: no existing DB file at {db}, nothing to delete");
         }
         Err(e) => {
-            eprintln!("[error] --fresh: {e}");
-            std::process::exit(if e.kind() == std::io::ErrorKind::InvalidInput {
-                6
+            let text = format!("[error] --fresh: {e}");
+            let invalid = e.kind() == std::io::ErrorKind::InvalidInput;
+            let api_error = if invalid {
+                sdforge::prelude::ApiError::InvalidInput {
+                    message: e.to_string(),
+                    field: None,
+                    value: None,
+                }
             } else {
-                5
-            });
+                sdforge::prelude::ApiError::internal_error(e.to_string(), "fresh_delete_failed")
+            };
+            exit_with_api_error(format, api_error, &text, Some(if invalid { 6 } else { 5 }));
         }
     }
 }
@@ -592,7 +635,12 @@ fn handle_fresh_flag(sub_name: &str, sub_matches: &sdforge::clap::ArgMatches, db
 /// Exits 0 after deletion (the caller re-runs `codenexus index` to rebuild).
 /// A missing DB file is a no-op success. The `.lbug`-extension refusal from
 /// [`delete_db_for_fresh`] applies.
-fn handle_clean_rebuild(sub_name: &str, sub_matches: &sdforge::clap::ArgMatches, db: &str) {
+fn handle_clean_rebuild(
+    sub_name: &str,
+    sub_matches: &sdforge::clap::ArgMatches,
+    db: &str,
+    format: sdforge::cli::OutputFormat,
+) {
     if sub_name != "clean" {
         return;
     }
@@ -616,12 +664,18 @@ fn handle_clean_rebuild(sub_name: &str, sub_matches: &sdforge::clap::ArgMatches,
             std::process::exit(0);
         }
         Err(e) => {
-            eprintln!("[error] --rebuild: {e}");
-            std::process::exit(if e.kind() == std::io::ErrorKind::InvalidInput {
-                6
+            let text = format!("[error] --rebuild: {e}");
+            let invalid = e.kind() == std::io::ErrorKind::InvalidInput;
+            let api_error = if invalid {
+                sdforge::prelude::ApiError::InvalidInput {
+                    message: e.to_string(),
+                    field: None,
+                    value: None,
+                }
             } else {
-                5
-            });
+                sdforge::prelude::ApiError::internal_error(e.to_string(), "clean_rebuild_failed")
+            };
+            exit_with_api_error(format, api_error, &text, Some(if invalid { 6 } else { 5 }));
         }
     }
 }
@@ -1154,13 +1208,6 @@ mod tests {
             "expected message to contain the marker, got: {:?}",
             record.message
         );
-    }
-
-    // --- init_logging ---
-
-    #[test]
-    fn init_logging_does_not_panic() {
-        init_logging();
     }
 
     // --- explicit_cli_arg ---
@@ -1826,5 +1873,82 @@ mod tests {
         let (cfg, warnings) = ProjectConfig::load();
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(cfg.db.as_deref(), Some(".codenexus/x.lbug"));
+    }
+
+    // --- --format machine-readable output contract (sdforge `cli::output`) ---
+
+    /// `CliBuilder::build()` mounts the global `--format text|json` switch;
+    /// CodeNexus's own `--verbose` arg and the post-build sentinel defaults
+    /// must not shadow or drop it.
+    #[test]
+    fn build_cli_command_keeps_global_format_switch() {
+        let cmd = build_cli_command();
+        let arg = cmd
+            .get_arguments()
+            .find(|a| a.get_id() == "format")
+            .expect("--format must stay mounted by CliBuilder::build()");
+        assert!(
+            arg.is_global_set(),
+            "--format must propagate to every subcommand"
+        );
+        let possible = arg.get_possible_values();
+        let values: Vec<&str> = possible.iter().map(|v| v.get_name()).collect();
+        assert_eq!(values, vec!["text", "json"]);
+        assert_eq!(
+            arg.get_default_values().first().and_then(|v| v.to_str()),
+            Some("text"),
+            "--format must default to text (backward compatible)"
+        );
+    }
+
+    /// The mode is read from the top-level matches; clap propagates a global
+    /// arg's command-line value from the subcommand up, so both positions
+    /// (`--format json status` and `status --format json`) select json, and
+    /// omitting the flag selects text.
+    #[test]
+    fn format_flag_parses_before_and_after_the_subcommand() {
+        use sdforge::cli::OutputFormat;
+
+        let default_matches = build_cli_command().get_matches_from(["codenexus", "status"]);
+        assert_eq!(
+            OutputFormat::from_matches(&default_matches),
+            OutputFormat::Text
+        );
+
+        let before =
+            build_cli_command().get_matches_from(["codenexus", "--format", "json", "status"]);
+        assert_eq!(OutputFormat::from_matches(&before), OutputFormat::Json);
+
+        let after =
+            build_cli_command().get_matches_from(["codenexus", "status", "--format", "json"]);
+        assert_eq!(OutputFormat::from_matches(&after), OutputFormat::Json);
+    }
+
+    /// json mode renders errors as the shared `UnifiedError` payload
+    /// (`code`/`message`, no `error: ` prefix) — the exact line the CLI
+    /// boundary prints to stdout for `--format json` failures.
+    #[test]
+    fn json_format_renders_errors_as_unified_error_payload() {
+        use sdforge::cli::OutputFormat;
+
+        let err = sdforge::prelude::ApiError::NotFound {
+            resource: "cli_command".to_string(),
+            resource_id: Some("nope".to_string()),
+        };
+        let rendered = OutputFormat::Json.render_error(&err);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&rendered).expect("json format must emit valid JSON");
+        assert_eq!(parsed["code"], serde_json::json!("NOT_FOUND"));
+        assert!(
+            parsed["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("cli_command"),
+            "message must carry the failing resource, got: {parsed}"
+        );
+        assert!(
+            !rendered.starts_with("error: "),
+            "json mode must not carry the text-mode prefix"
+        );
     }
 }

@@ -24,14 +24,78 @@ use sdforge::forge;
 #[cfg(feature = "cli")]
 use sdforge::prelude::ApiError;
 
+/// Flat status name of a healthy module (`HealthStatus::as_status_name`);
+/// the aggregate payload exposes names only, so filtering compares names.
+#[cfg(any(feature = "cli", test))]
+const HEALTHY_STATUS: &str = "healthy";
+
 /// JSON-serializable status output.
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct StatusOutput {
     pub projects: Vec<ProjectOutput>,
-    /// trait-kit module health (`health_report()`), `name=status` entries.
-    /// Empty when every module reports healthy (normal case).
+    /// trait-kit module health (`health_aggregate()`), non-healthy modules as
+    /// `name=status` entries. Empty when every module reports healthy (normal
+    /// case) or when no health checker is registered.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub kit_health: Vec<String>,
+    /// Structured trait-kit health (`health_aggregate()`): worst-of overall
+    /// status plus per-module entries carrying the checker detail. Absent
+    /// when no health checker is registered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kit_health_aggregate: Option<KitHealthAggregateOutput>,
+}
+
+/// Local view of trait-kit's health aggregate
+/// (`AsyncKit::health_aggregate()`).
+///
+/// The upstream type is serializable, but it has neither `PartialEq` nor
+/// `Default` (both required by `StatusOutput`'s derives), and its field shape
+/// is upstream-owned — this view pins the JSON contract (`status` / `healthy`
+/// / `modules`) independently of trait-kit schema drift.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct KitHealthAggregateOutput {
+    /// Worst-of overall status name (`healthy` / `degraded` / `unhealthy`).
+    pub status: String,
+    /// Convenience flag: `status == "healthy"`.
+    pub healthy: bool,
+    /// Per-module entries.
+    pub modules: Vec<KitHealthModuleOutput>,
+}
+
+impl KitHealthAggregateOutput {
+    /// Maps trait-kit's aggregate into the status payload. Returns `None`
+    /// when the checker registry is empty (no health information), keeping
+    /// normal output free of health noise.
+    fn from_aggregate(aggregate: trait_kit::core::health::HealthAggregate) -> Option<Self> {
+        if aggregate.modules.is_empty() {
+            return None;
+        }
+        Some(Self {
+            status: aggregate.status.to_owned(),
+            healthy: aggregate.healthy,
+            modules: aggregate
+                .modules
+                .into_iter()
+                .map(|entry| KitHealthModuleOutput {
+                    module: entry.module.to_owned(),
+                    status: entry.status.to_owned(),
+                    detail: entry.detail,
+                })
+                .collect(),
+        })
+    }
+}
+
+/// One per-module entry of [`KitHealthAggregateOutput`].
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct KitHealthModuleOutput {
+    /// Module name.
+    pub module: String,
+    /// Flat status name (`healthy` / `degraded` / `unhealthy`).
+    pub status: String,
+    /// Checker detail for degraded / unhealthy states, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// JSON-serializable view of a project with staleness info.
@@ -134,6 +198,7 @@ pub fn run_status(kit: &AsyncKit<AsyncReady>) -> Result<StatusOutput, CodeNexusE
         Err(err) if is_table_missing_error(&err) => return Ok(StatusOutput::default()),
         Err(err) => return Err(err.into()),
     };
+    let aggregate = kit.health_aggregate();
     let output = StatusOutput {
         projects: projects
             .into_iter()
@@ -144,18 +209,20 @@ pub fn run_status(kit: &AsyncKit<AsyncReady>) -> Result<StatusOutput, CodeNexusE
                 ProjectOutput::from_record(p, current_head, stale)
             })
             .collect(),
-        kit_health: kit
-            .health_report()
+        kit_health: aggregate
+            .modules
             .iter()
-            .filter(|(_, status)| !status.is_healthy())
-            .map(|(module, status)| format!("{module}={}", status.as_status_name()))
+            .filter(|entry| entry.status != HEALTHY_STATUS)
+            .map(|entry| format!("{}={}", entry.module, entry.status))
             .collect(),
+        kit_health_aggregate: KitHealthAggregateOutput::from_aggregate(aggregate),
     };
     Ok(output)
 }
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
+#[forge::log(err_detail)]
 #[forge(
     name = "status",
     version = "0.3.5",
@@ -174,8 +241,10 @@ async fn status() -> Result<(), ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::{build_kit, KitBootstrapConfig};
+    use crate::kit::{build_kit, AsyncAutoBuilder, KitBootstrapConfig, ModuleMeta};
+    use std::future::Future;
     use std::path::PathBuf;
+    use std::pin::Pin;
     use tempfile::TempDir;
 
     fn fresh_db_path() -> (TempDir, PathBuf) {
@@ -190,6 +259,50 @@ mod tests {
             .unwrap()
             .block_on(build_kit(&config))
             .expect("build_kit")
+    }
+
+    /// Test-only module whose capability is never registered, so trait-kit's
+    /// checker lookup reports `unhealthy` with a deterministic detail.
+    struct MissingCapabilityProbe;
+
+    impl ModuleMeta for MissingCapabilityProbe {
+        const NAME: &'static str = "missing_probe";
+    }
+
+    impl AsyncAutoBuilder for MissingCapabilityProbe {
+        type Capability = ();
+        type Error = std::io::Error;
+
+        fn build<'a>(
+            _kit: &'a AsyncKit,
+        ) -> Pin<Box<dyn Future<Output = Result<(), std::io::Error>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl trait_kit::core::health::AsyncHealthCheck for MissingCapabilityProbe {
+        fn check(_cap: &()) -> trait_kit::core::health::HealthStatus {
+            trait_kit::core::health::HealthStatus::Healthy
+        }
+    }
+
+    /// Builds a minimal kit (StorageModule plus a deterministic failing probe)
+    /// with health checkers registered before `build()` — checkers only take
+    /// effect when registered on the unbuilt kit, the same pattern the
+    /// production bootstrap uses for Storage/Cache.
+    fn build_kit_with_checkers(db: &std::path::Path) -> AsyncKit<AsyncReady> {
+        let mut kit = AsyncKit::new();
+        kit.set_config(StorageConfig {
+            db_path: db.to_path_buf(),
+            read_only: false,
+        });
+        kit.register::<StorageModule>().expect("register storage");
+        kit.register_health_check::<StorageModule>();
+        kit.register_health_check::<MissingCapabilityProbe>();
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(kit.build())
+            .expect("build")
     }
 
     #[test]
@@ -238,6 +351,65 @@ mod tests {
             "non-git dir should have empty head"
         );
         assert!(!p.stale, "should not be stale when current_head is empty");
+    }
+
+    #[test]
+    fn run_status_reports_health_from_production_kit() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let output = run_status(&kit).expect("run should succeed");
+        // 生产 bootstrap 注册 storage（cache 开启时含 cache）checker：聚合必须
+        // 存在、storage 健康；平面视图只列非健康模块（此处为空）。
+        assert!(output.kit_health.is_empty());
+        let aggregate = output
+            .kit_health_aggregate
+            .clone()
+            .expect("production kit registers health checkers");
+        assert_eq!(aggregate.status, "healthy");
+        assert!(aggregate.healthy);
+        assert!(
+            aggregate
+                .modules
+                .iter()
+                .any(|m| m.module == "storage" && m.status == "healthy"),
+            "storage entry expected, got: {:?}",
+            aggregate.modules
+        );
+        let json = serde_json::to_string(&output).unwrap();
+        assert!(
+            json.contains("kit_health_aggregate"),
+            "aggregate field must be serialized: {json}"
+        );
+    }
+
+    #[test]
+    fn run_status_reports_worst_of_health_with_detail() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_with_checkers(&db);
+        let output = run_status(&kit).expect("run should succeed");
+
+        // Flat view keeps only the non-healthy module.
+        assert_eq!(output.kit_health, vec!["missing_probe=unhealthy"]);
+        let aggregate = output.kit_health_aggregate.expect("aggregate present");
+        assert_eq!(
+            aggregate.status, "unhealthy",
+            "worst-of must surface the failing module"
+        );
+        assert!(!aggregate.healthy);
+        let probe = aggregate
+            .modules
+            .iter()
+            .find(|entry| entry.module == "missing_probe")
+            .expect("missing_probe entry");
+        assert_eq!(probe.status, "unhealthy");
+        assert_eq!(probe.detail.as_deref(), Some("capability not found"));
+        let storage = aggregate
+            .modules
+            .iter()
+            .find(|entry| entry.module == "storage")
+            .expect("storage entry");
+        assert_eq!(storage.status, "healthy");
+        assert!(storage.detail.is_none());
     }
 
     #[test]
@@ -296,6 +468,44 @@ mod tests {
     }
 
     #[test]
+    fn kit_health_aggregate_output_maps_entries_and_empty() {
+        let aggregate = trait_kit::core::health::HealthAggregate {
+            status: "unhealthy",
+            healthy: false,
+            modules: vec![
+                trait_kit::core::health::HealthModuleEntry {
+                    module: "storage",
+                    status: "unhealthy",
+                    detail: Some("db gone".into()),
+                },
+                trait_kit::core::health::HealthModuleEntry {
+                    module: "cache",
+                    status: "healthy",
+                    detail: None,
+                },
+            ],
+        };
+        let output = KitHealthAggregateOutput::from_aggregate(aggregate).expect("non-empty");
+        assert_eq!(output.status, "unhealthy");
+        assert!(!output.healthy);
+        assert_eq!(output.modules.len(), 2);
+        assert_eq!(output.modules[0].module, "storage");
+        assert_eq!(output.modules[0].status, "unhealthy");
+        assert_eq!(output.modules[0].detail.as_deref(), Some("db gone"));
+        assert_eq!(output.modules[1].detail, None);
+
+        let empty = trait_kit::core::health::HealthAggregate {
+            status: "healthy",
+            healthy: true,
+            modules: Vec::new(),
+        };
+        assert!(
+            KitHealthAggregateOutput::from_aggregate(empty).is_none(),
+            "empty checker registry must not emit a health payload"
+        );
+    }
+
+    #[test]
     fn status_output_serializes_to_json() {
         let output = StatusOutput {
             projects: vec![ProjectOutput {
@@ -310,12 +520,23 @@ mod tests {
                 stale: true,
             }],
             kit_health: vec!["storage=unhealthy".into()],
+            kit_health_aggregate: Some(KitHealthAggregateOutput {
+                status: "unhealthy".into(),
+                healthy: false,
+                modules: vec![KitHealthModuleOutput {
+                    module: "storage".into(),
+                    status: "unhealthy".into(),
+                    detail: Some("db gone".into()),
+                }],
+            }),
         };
         let json = serde_json::to_string(&output).unwrap();
         assert!(json.contains("\"projects\""));
         assert!(json.contains("\"stale\":true"));
         assert!(json.contains("\"kit_health\""));
         assert!(json.contains("storage=unhealthy"));
+        assert!(json.contains("\"kit_health_aggregate\""));
+        assert!(json.contains("\"detail\":\"db gone\""));
 
         // Healthy kit (empty kit_health) omits the field entirely.
         let healthy = StatusOutput {

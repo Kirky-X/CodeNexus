@@ -30,8 +30,14 @@ daemon-shutdown-phase-2 = Shutdown phase 2/3: drain debounced event queue
 daemon-shutdown-phase-3 = Shutdown phase 3/3: close graph database connections
 daemon-shutdown-complete = Phased shutdown complete
 
-# graph-viewer server: auth / startup logs (graph-viewer/server/src/main.rs)
+# viewer: auth / startup logs (src/viewer/server.rs)
 graph-host-forbidden = This service only allows local loopback access
 graph-token-missing = Missing or incorrect x-graph-token header
-graph-server-started = Graph server started: http://127.0.0.1:9800 (requests require the x-graph-token header, see stdout)
+graph-server-started = Graph server started: http://127.0.0.1:{ $port } (requests require the x-graph-token header, see stdout)
 graph-project-discovered = Discovered project: { $name } -> { $path }
+
+# viewer: embedded graph-viewer (src/viewer/assets.rs)
+graph-viewer-dist-missing = graph-viewer frontend assets are not built: run "npm run build" in graph-viewer/ and rebuild this binary.
+
+# logging: inklog level presets (src/logging.rs)
+logging-invalid_target_level = Ignoring invalid CODENEXUS_LOG_TARGETS entry '{ $entry }' (expected target=level, e.g. hyper=warn)

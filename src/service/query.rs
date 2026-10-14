@@ -84,6 +84,7 @@ fn cache_db_key() -> String {
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
+#[forge::log(args, err_detail)]
 #[forge(
     name = "query",
     version = "0.3.5",
