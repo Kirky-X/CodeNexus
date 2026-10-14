@@ -26,6 +26,12 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [[bin]]
+name = "cn"
+path = "src/main.rs"
+# `cn` 是 `codenexus` 的等形态别名命令（同一源、同一 CLI 面）。
+required-features = ["cli"]
+
+[[bin]]
 name = "codenexus-verify"
 path = "tools/verification/src/main.rs"
 # verify 工具经 lib 的 `pub use sdforge`（cli 门控）取 clap——未开 cli 时该 bin
@@ -74,9 +80,12 @@ cli = ["sdforge/cli", "sdforge/inklog", "dep:oxiarc-zstd"]
 cache = ["dep:oxcache"]
 i18n = ["dep:icu_normalizer", "dep:icu_casemap"]
 hub = ["dep:reqwest"]
+# 内嵌 graph-viewer Web UI（`codenexus webui`）；opt-in，默认构建不含
+# graph-viewer 内嵌服务（见 feature `webui`）
+webui = ["dep:axum", "dep:mime_guess", "dep:rust-embed", "tokio/net", "tokio/sync"]
 
 [dependencies]
-trait-kit = { version = "0.5.0-rc.6", default-features = false, features = ["async", "lifecycle", "health", "shutdown"] }
+trait-kit = { version = "0.5.0-rc.9", default-features = false, features = ["async", "lifecycle", "health", "report", "shutdown"] }
 lbug = { workspace = true }
 tree-sitter = "0.27"
 tree-sitter-c = { version = "0.24", optional = true }
@@ -129,10 +138,10 @@ crossbeam-channel = { version = "0.5", optional = true }
 url = { version = "2.5", optional = true }
 # i18n 消息目录（src/i18n/catalog.rs）常编并在 t/tr 转发 sdforge::i18n，
 # 故 sdforge 从 optional 收敛为常驻依赖（cli/mcp 仅再叠加各自 feature）。
-sdforge = { version = "0.5.0-rc.5", default-features = false, features = ["i18n"] }
+sdforge = { version = "0.5.0-rc.8", default-features = false, features = ["i18n"] }
 limiteron = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
-oxcache = { version = "0.5.0-rc.5", default-features = false, features = ["minimal", "macros"], optional = true }
+oxcache = { version = "0.5.0-rc.8", default-features = false, features = ["minimal", "macros"], optional = true }
 oxiarc-zstd = { version = "0.4", default-features = false, optional = true }
 inklog = { workspace = true }
 regex = "1.13"
@@ -146,6 +155,11 @@ icu_casemap = { version = "2.3", default-features = false, features = ["compiled
 unic-langid = { workspace = true }
 sys-locale = { workspace = true }
 
+# graph-viewer 内嵌服务（见 feature `viewer`）
+axum = { workspace = true, optional = true }
+mime_guess = { version = "2.0", default-features = false, optional = true }
+rust-embed = { version = "8.13", default-features = false, features = ["include-exclude", "debug-embed"], optional = true }
+
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 time = { version = "0.3", features = ["macros"] }
@@ -155,6 +169,10 @@ serial_test = "4.0"
 oxiarc-zstd = { version = "0.4", default-features = false }
 tracing-subscriber = "0.3"
 crossbeam-channel = "0.5"
+tower = { version = "0.5", default-features = false, features = ["util"] }
+# `#[forge::log]` 壳函数经 `log` 门面发射记录；集成测试安装捕获 logger
+# 断言函数级日志（tests/log_attr_integration.rs）。
+log = "0.4"
 
 [build-dependencies]
 pkg-config = "0.3"
@@ -220,24 +238,24 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 ] }
 
 [workspace]
-members = ["examples", "graph-viewer/server"]
+members = ["examples"]
 # Daily commands (build/test/check) stay scoped to the main crate; examples
 # join only for workspace-wide ops (cargo clean --workspace, metadata).
 default-members = ["."]
 
-# 依赖集中管理：主 crate 与 workspace 成员（graph-viewer/server、examples）
+# 依赖集中管理：主 crate 与 workspace 成员（examples）
 # 的重复依赖在此声明一次，成员以 `dep = { workspace = true }` 引用，
 # 差异 features 在成员侧声明（与 garrison/sinnan 同一惯例）。
 [workspace.dependencies]
-axum = "0.8"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 tokio = "1.53"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.27"
 tracing = "0.1"
-inklog = { version = "0.3.0-rc.5", default-features = false }
+inklog = { version = "0.3.0-rc.9", default-features = false }
 fluent-bundle = "0.16"
 unic-langid = "0.9"
-limiteron = { version = "0.3.0-rc.6", default-features = false, features = ["retry"] }
+limiteron = { version = "0.3.0-rc.7", default-features = false, features = ["retry"] }
 sys-locale = "0.3"
 lbug = "0.20"
