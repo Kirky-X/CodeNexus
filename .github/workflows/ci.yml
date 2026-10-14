@@ -46,6 +46,12 @@ jobs:
       # 2026-09-19 审计补腿：examples 是 workspace 成员但此前从未进 CI
       - name: Check examples crate
         run: cargo +1.97.1 check -p codenexus-examples --all-targets
+      # webui（opt-in，不入 full）：CI 无 graph-viewer/dist 产物，
+      # 该腿同时验证 rust-embed allow_missing 回退路径可编译。
+      - name: Check webui feature (no dist fallback)
+        run: cargo +1.97.1 check --features webui
+      - name: Clippy (webui)
+        run: cargo +1.97.1 clippy --features webui -- -D warnings
 
   test:
     name: test (${{ matrix.features }})
@@ -66,6 +72,10 @@ jobs:
             cache-key: "core-lsp-cache"
           - features: "full,embeddings"
             cache-key: "full-embeddings"
+          # webui（opt-in）：viewer 单测/鉴权矩阵/e2e 在 CI 有真实执行面
+          # （无 dist 时静态断言走回退页分支，仍覆盖鉴权与 Host 校验）。
+          - features: "full,webui"
+            cache-key: "full-webui"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust 1.97.1 (declared MSRV)
