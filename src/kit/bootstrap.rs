@@ -317,6 +317,12 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
         kit.register_lifecycle::<CacheModule>();
     }
 
+    // Health checkers for `status`'s `health_aggregate()` sampling — without a
+    // registered checker the aggregate stays empty regardless of module state.
+    kit.register_health_check::<StorageModule>();
+    #[cfg(feature = "cache")]
+    kit.register_health_check::<CacheModule>();
+
     let built = kit.build().await?;
 
     // Process-global DB identity so `#[cached]` query keys are namespaced
