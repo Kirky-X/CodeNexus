@@ -176,6 +176,7 @@ cargo build --release
 | `cli`             | 启用 | CLI 二进制（sdforge `cli` 传输，二进制必需） |
 | `cache`           | 启用 | 查询结果缓存（oxcache） |
 | `i18n`            | 启用 | Unicode case folding + NFC 规范化（ICU4X） |
+| `webui`           | —    | 内嵌 graph-viewer Web UI：`codenexus webui` 启动（前端 `graph-viewer/dist` 资源编译期嵌入；opt-in，不入 `full`） |
 
 > **日志系统**：inklog 是唯一日志后端（console + file rotation + daily 滚动 + LZ4 压缩），不再提供 tracing-subscriber 可选后端。
 
@@ -243,6 +244,8 @@ CodeNexus 提供 **37 个子命令**（外加 `codenexus mcp` 服务模式），
 - **安全与门禁**：`taint` / `supply` / `ci` / `lint`
 - **制品与智能体生态**：`hub` / `skill` / `ask` / `evolve`
 - **多智能体与 LSP**：`setup` / `hook` / `lsp_goto_def` / `lsp_hover`
+
+启用 `webui` feature 后追加 **`webui`** 子命令（一条命令启动内嵌 graph-viewer Web UI，见 [📖 用户指南 · 内嵌 Web UI](docs/USER_GUIDE.md#-内嵌-web-ui-graph-viewer)）。所有命令同时提供等形态别名 **`cn`**（与 `codenexus` 同一 CLI 面，如 `cn webui`、`cn index ...`）。
 
 每个命令的全部参数语义与可运行示例见 [📖 用户指南 · 命令详解](docs/USER_GUIDE.md#️-命令详解)；复杂度指标与阈值表见 [📖 用户指南 · 复杂度分析](docs/USER_GUIDE.md#-复杂度分析)，死代码检测配置见 [📖 用户指南 · 死代码检测](docs/USER_GUIDE.md#-死代码检测)。
 

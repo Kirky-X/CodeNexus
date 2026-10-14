@@ -30,6 +30,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **refactor(graph-viewer): 独立 server crate 移除** — `graph-viewer/server/`（`codenexus-graph-server`）删除、workspace 成员由 2 个减为 1 个（`examples`）；代码与行为并入 `codenexus webui`（见 Added）。前端目录 `graph-viewer/` 保留为资源来源。
+
+- **chore(deps): 自研五库升级至 crates.io 最新版** — trait-kit `0.5.0-rc.6 → 0.5.0-rc.9`（启用 `report` feature）、sdforge `0.5.0-rc.5 → 0.5.0-rc.8`（根与 graph-viewer/server 同步）、inklog `0.3.0-rc.5 → 0.3.0-rc.9`、limiteron `0.3.0-rc.6 → 0.3.0-rc.7`、oxcache `0.5.0-rc.5（lock 实解析 0.5.0-rc.6） → 0.5.0-rc.8`；五库各 2 处 API 适配。
+
+### Added
+
+- **feat(webui): graph-viewer 并入主二进制（feature `webui` + `codenexus webui`）** — 原独立 crate `codenexus-graph-server` 删除，HTTP 后端并入 `src/viewer/`（路由/鉴权/Host 校验/静态资源），数据访问改走 `QueryFacade::new_read_only` + `cypher()`（复用已是 JSON 的 `QueryResult`，删自写 `value_to_json`），i18n 删镜像改用 `crate::i18n`；前端 `graph-viewer/dist` 资源编译期嵌入（rust-embed，排除 `*.lbug` fixture；dist 缺失时编译照常通过并呈回退指引页）。`webui` 子命令默认端口 9800，安全模型与旧 server 逐条一致（仅回环绑定、`x-graph-token`、Host 回环校验、目录白名单）；`webui` 不构建 Kit，不创建空库、不与其他进程争锁。顺带修复 `/api/trace`：旧关系类型模式查询（`(a)-[r:TYPE*1..N]->(b)`）在本仓单表 `CodeRelation` schema 上必然 Binder error（且边表存限定名、按 `n.name` 解析必落空），改为逐跳展开 + name/qualifiedName 双解析，响应形状不变。新增 `cn` 别名二进制（与 `codenexus` 同一 `src/main.rs`，同一 CLI 面）。
+
+- **feat(status): 吸收 trait-kit `AsyncKit<Ready>::health_aggregate()`（health × report；未采用字符串形态的 `health_json()`）** — 启用 trait-kit `report` feature 后，`status` 改为对健康度做单次 `health_aggregate()` 采样：新增结构化 `kit_health_aggregate`（worst-of 状态 + per-module detail），旧 `kit_health`（name=status）由同一聚合派生、语义不变；并在 `build_kit` 注册 Storage（`cache` 开启时含 Cache）health checker——此前生产路径未注册任何 checker，聚合恒为空。
+
+- **feat(logging): 吸收 inklog per-target 级别 / `RUST_LOG` 指令集 / 运行时热调** — 新增 `src/logging.rs`（`#[doc(hidden)] pub mod logging`），CLI 日志初始化从 builder 链迁到 `InklogConfig`（每个 builder 旋钮 1:1 对应配置字段，`target_levels` 无 builder setter 是迁移动因）。`RUST_LOG` 不再整体下传 `LoggerBuilder::level()`——指令集形式（`codenexus=debug,sqlx=warn`）与空串都触发 builder 校验失败并在 `.expect("init inklog")` panic，即 USER_GUIDE/.env.example 早已文档化的按模块过滤此前不可用；现仅从 `RUST_LOG` 提取裸级别作全局默认（默认 `info`），指令集由 inklog 自身追加进 `EnvFilter`（优先级 `RUST_LOG` > 预设 > 全局）。新增 `CODENEXUS_LOG_TARGETS`（`target=level` 逗号分隔，非法条目 stderr 提示后跳过）落到 `target_levels` 形成按模块预设，在 `RUST_LOG=info` 的进程管理环境下依然生效；`LoggerManager` 从 `mem::forget` 改为静态持有，新增 `codenexus::logging::set_level(target, level)` 运行时热调（reload 换装，无重启）。8 个新测试覆盖级别解析、配置映射、指令集落到 EnvFilter（`current_level_filter_string()` 精确断言）与热调 upsert/非法级别不变量。
+
+- **feat(logging): 吸收 sdforge `#[forge::log]` 声明式函数级结构化日志（`inklog` feature）** — `query` / `status` 两个 CLI 命令入口叠加该属性（`#[forge::log(args, err_detail)]` / `#[forge::log(err_detail)]`；属性置于外层，`#[forge(cli = true)]` 的注册与 clap 参数面照常指向带日志的壳函数）：每次调用经 `log` 门面进入既有 inklog 管道，产出 `fn_enter`（debug，`args` 经 DataMasker 掩码）与 `fn_exit`（成功走配置级别、`Result` 的 Err 恒 error，含 `ok`/`duration_ms`/`err_detail`），既有级别旋钮（`RUST_LOG` / `CODENEXUS_LOG_TARGETS` / `set_level`）照常生效。`sdforge/inklog` 已由 `cli`/`mcp` feature 显式启用（`Cargo.toml` 未新增 feature），`log` 仅作为测试捕获用的 dev-dependency 加入。新增集成测试 `tests/log_attr_integration.rs`：经 sdforge inventory 走与 `run_cli` 相同的派发路径，断言两命令成败两路的记录级别、`ok`/`duration_ms`/载荷字段、凭证掩码（明文不得入日志）与返回值语义不变。未覆盖范围：其余 CLI 命令与 MCP 工具入口。
+
+- **feat(cli): 吸收 sdforge 全局 `--format text|json` 机器可读输出契约** — sdforge `0.5.0-rc.8` 的 `CliBuilder::build()` 已内建挂载全局 `--format text|json`（`cli` feature 已启用 `sdforge/cli`，`Cargo.toml` 零改动），缺的是 CodeNexus 自渲染的 CLI 边界输出未遵守该契约；`run_cli()` 现读取 `OutputFormat` 并接通三处错误渲染：① 无子命令（human 快速开始横幅不可机读，`--format json` 改发 `InvalidInput` UnifiedError JSON + exit 1）；② 无注册 handler（原 `[error]` stderr 行改发 `NotFound` JSON）；③ handler 返回 `Err`（改发 UnifiedError JSON 并保留 CodeNexus 自身退出码）——`--format json` 时错误以 UnifiedError JSON 写 stdout（与 HTTP/gRPC 同形状），`text`（默认）模式各行与退出码逐字不变。`--format` 为 clap global arg，子命令前后位置均可解析。新增 bin 单测覆盖开关挂载与全局传播（默认 `text`）、子命令前后两种位置解析、UnifiedError JSON 载荷（`code`/`message`、无 `error: ` 前缀）。
+
 ## [0.3.13-rc.1] - 2026-09-21
 
 冻结改动收编 + 跨仓解耦：并行会话冻结的 14 文件成品改动（注释任务标记清理 + graph-viewer server 日志迁移 inklog）收编入库；同批移除 `[patch.crates-io]` 与全部跨仓 path 依赖，基库一律改走 crates.io 发布版（trait-kit `0.5.0-rc.6`、sdforge/oxcache `0.5.0-rc.5`、inklog `0.3.0-rc.5`），仓库从此自包含克隆可构建。CI test 矩阵 6 条腿此前因 cfg 门错挂无法编译的三处一并前向修复。

@@ -17,6 +17,7 @@
 - [死代码检测](#-死代码检测)
 - [API 审查工具包](#-api-审查工具包)
 - [架构图与语义 Delta](#-架构图与语义-delta)
+- [内嵌 Web UI（graph-viewer）](#-内嵌-web-ui-graph-viewer)
 - [多智能体集成](#-多智能体集成)
 - [环境变量](#-环境变量)
 - [配置文件](#️-配置文件)
@@ -104,10 +105,10 @@ codenexus context --symbol main --project myproject --enhanced true
 - **布尔参数显式传值**：`--force true`、`--fresh true`（仅 `index`）、`--apply true`、`--cross_service false`（仅 `trace`）、`--embed false`、`--ram_first false`、`--enhanced false`、`--include_tests false`（`impact`）。
 - **`--project` 接受名称或 id**：所有带 `--project <VALUE>` 的命令经 `resolve_project_id`（`src/service/project.rs`）解析：匹配已存项目 `name` 则用其规范 `id`，否则按原始 project id 处理。仅在有文档明确说明处才可传 `--project ""` 关闭过滤。
 - **可选参数自带默认值**：高频命令的"可选"参数已内置默认值，无需传占位 flag——`trace`：`--depth 5`、`--path_filter ""`、`--detect_cycles false`、`--cross_service false`；`search`：`--limit 50`、`--mode ""`、`--fulltext false`、`--project ""`；`impact`：`--depth 3`、`--edge_types ""`、`--max_depth 0`、`--include_tests false`；`context`：`--depth 1`、`--project ""`、`--enhanced false`；`index` 的 `--force`/`--lsp`/`--embed`/`--ram_first` 默认 `false`；`detect_changes --mode` 默认 `unstaged`；其余（complexity 阈值等）见各命令 `--help`。默认值可用 `.codenexus/config.json` 按项目覆盖（见 [配置文件](#️-配置文件)）。
-- **全局选项**：`--db <DB_PATH>` 与 `--debounce-ms <MS>`（默认 `2000`，仅 daemon 相关）适用于每个命令。
+- **全局选项**：`--db <DB_PATH>`、`--debounce-ms <MS>`（默认 `2000`，仅 daemon 相关）与 `--format text|json`（默认 `text`）适用于每个命令。`--format json` 时所有 CLI 边界错误（无子命令 / 未知命令 / 缺库 / 数据库被锁 / `--fresh`·`--rebuild` 失败）以 UnifiedError JSON 写 stdout，退出码与 payload 分类一致（见下方退出码契约）；`text` 保持历史 stderr 行为逐字不变。
 - **默认数据库路径**（省略 `--db` 时）：`.codenexus/<project>.lbug`，`<project>` 取 `index`/`daemon` 的 `--name`（优先）或 `--path` 目录名，兜底 `codenexus`。v0.3.7 起，无 `--name`/`--path` 可用且 `.codenexus/` 中恰好只有一个 `.lbug` 文件时自动选中该文件；存在多个时回退到 `codenexus` 并要求显式 `--db`。配置文件 `general.db` 可为非标准路径兜底。
-- **stderr 噪音**：所有日志（含 info 级与索引逐阶段进度行 `[codenexus] [i/n] <phase> ok`）都输出到 stderr，stdout 永远只有命令本身的 JSON，重定向无需过滤；日志文件在 `.codenexus/logs/codenexus.log`。stderr 中 `inklog ... Failed to set log crate logger` 等警告属良性输出。
-- **退出码契约**（`src/service/error.rs`）：`0` 成功；`1` 内部错误 / I/O / JSON / Kit 错误；`2` 无效输入 / 项目不存在 / 查询、追踪、存储、解析错误；`4` NotFound / 数据库损坏；`--fresh` 删除失败另有 5/6 退出码。
+- **stderr 噪音**：所有日志（含 info 级与索引逐阶段进度行 `[codenexus] [i/n] <phase> ok`）都输出到 stderr，stdout 永远只有命令本身的 JSON，重定向无需过滤；日志文件在 `.codenexus/logs/codenexus.log`。stderr 中 `inklog ... Failed to set log crate logger` 等警告属良性输出。`query` 与 `status` 另经 sdforge `#[forge::log]` 输出函数级结构化记录（随 inklog 管道进 stderr 与日志文件）：成功为 `fn_exit fn=<命令> ok=true duration_ms=…`（info 级），失败为 `fn_exit … ok=false error=…`（error 级）；进入记录 `fn_enter`（含 DataMasker 脱敏后的 `args`）为 debug 级，需 `RUST_LOG=debug` 才可见。一次性命令退出前会排空日志队列（`logging::flush`），失败命令的 error 级 `fn_exit` 也会落入日志文件；长驻模式（`mcp`/`webui`）不做排空。
+- **退出码契约**（`src/service/error.rs`）：`0` 成功；`1` 内部错误 / I/O / JSON / Kit 错误；`2` 无效输入 / 项目不存在 / 查询、追踪、存储、解析错误；`4` NotFound / 数据库损坏；`--fresh` 删除失败另有 5/6 退出码。`--format json` 下边界出口的退出码与 payload 分类一致（`BAD_REQUEST` → 2、`NOT_FOUND` → 4）；`--fresh`/`--rebuild` 失败在两种模式下都保留 5/6（文档化契约）。
 
 ---
 
@@ -296,6 +297,36 @@ codenexus arch_diff --base_project v1 --head_project v2 --output ./delta.html
 
 ---
 
+## 🖥️ 内嵌 Web UI（graph-viewer）
+
+`webui` feature 把 graph-viewer 的后端与前端资源编译进 `codenexus` 二进制，一条命令启动，无需手动起前端：
+
+```bash
+# 1)（可选但推荐）先构建前端，使其被编译期嵌入
+cd graph-viewer && npm ci && npm run build && cd ..
+
+# 2) 构建启用 webui 的二进制（或 cargo install --path . --features webui）
+cargo build --release --features webui
+
+# 3) 启动（等价形态：cn webui）
+codenexus webui            # 默认端口 9800
+codenexus webui --port 9000
+```
+
+启动后 stdout 会打印一行 `graph-server auth token: <hex>`；浏览器打开 `http://127.0.0.1:9800/` 即为 graph-viewer（拖入或选择 `.lbug` 文件，或以 `?snapshot=` 载入快照）。`diagram` / `arch_diff` 的快照合流可直接指向它：
+
+```bash
+codenexus diagram --project myproject --output ./arch.html --viewer_url http://127.0.0.1:9800
+```
+
+约定与安全：
+
+- 仅绑定 `127.0.0.1`；`/api/*` 需要 `x-graph-token` 头（token 见 stdout），并校验 Host 只允许回环名；数据只从启动目录的 `.codenexus/` 与当前目录白名单解析。
+- 未构建 `graph-viewer/dist` 时二进制照常编译，页面呈回退指引页（提示 `npm run build`）。
+- `webui` 不需要 Kit/数据库：不会创建空库，也不与正在写入的 `index`/`daemon` 进程争锁。
+
+---
+
 ## 🤖 多智能体集成
 
 ```bash
@@ -362,6 +393,7 @@ CodeNexus 是 CLI 工具，自身不读取 `.env` 文件；模板见 [`.env.exam
 | 变量 | 默认 | 说明 |
 |------|------|------|
 | `RUST_LOG` | `info` | 日志级别，支持单级别与按模块过滤（如 `codenexus=debug,sqlx=warn`） |
+| `CODENEXUS_LOG_TARGETS` | 未设置 | 按模块的级别预设，`target=level` 逗号分隔（如 `codenexus::storage::connection=error,lbug=warn`）；优先级低于 `RUST_LOG`、高于全局级别，非法条目在 stderr 提示后跳过 |
 | `CODENEXUS_DB_PATH` | （注释态） | 可选的默认数据库路径，省略 `--db` 时生效 |
 | `LBUG_BUILD_FROM_SOURCE` | 未设置 | 设为 `1` 时从源码编译 LadybugDB（老 `libstdc++` 系统需要） |
 
