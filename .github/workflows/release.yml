@@ -52,6 +52,19 @@ jobs:
       # 注意:step 级 if 里取不到 secrets/env 上下文中的 secret,原写法恒为 false
       # 导致发布被静默跳过。secret 经 job env 注入,步骤无条件执行,publish 失败即红。
       # 幂等:已发布版本直接跳过,避免"已存在"报错误伤重跑
+
+      - name: Verify release uniqueness (idempotency guard)
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          COUNT=$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate --jq "[.[] | select(.tag_name == \"${TAG}\")] | length")
+          echo "release objects for ${TAG}: ${COUNT}"
+          if [ "${COUNT}" != "1" ]; then
+            echo "::error::expected exactly 1 release for ${TAG}, found ${COUNT}; release state is not idempotent"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Check already published
         id: published
         run: |
