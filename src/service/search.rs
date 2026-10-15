@@ -105,6 +105,7 @@ pub fn run_search(
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
+#[forge::log(args, err_detail)]
 #[forge(
     name = "search",
     version = "0.3.5",

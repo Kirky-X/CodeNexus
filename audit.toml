@@ -5,8 +5,9 @@
 # 更新复核日期。
 [advisories]
 ignore = [
-    "RUSTSEC-2026-0202", # cxx unsound：lbug 0.20.4 传递锁定 cxx 1.0.202，待 lbug 放宽约束
-    "RUSTSEC-2024-0436", # paste unmaintained：tokenizers 间接依赖，无升级路径
+    "RUSTSEC-2026-0202", # cxx unsound：lbug 0.21.2 传递锁定 cxx 1.0.205，待 lbug 放宽约束
+    "RUSTSEC-2024-0436", # paste unmaintained：tokenizers 间接依赖（vecboost/candle 树），无升级路径
     "RUSTSEC-2026-0221", # event-listener unsound：smol-rs 间接依赖 5.4.2，待上游修复
     "RUSTSEC-2024-0449", # unsafe-libyaml unmaintained：limiteron 间接依赖（serde_yaml_ng），无升级路径
+    "RUSTSEC-2025-0119", # number_prefix unmaintained：indicatif（vecboost/candle 树）间接依赖，无升级路径
 ]

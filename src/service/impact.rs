@@ -203,6 +203,7 @@ pub fn run_impact(
 
 /// CLI wrapper — prints result to stdout as JSON.
 #[cfg(feature = "cli")]
+#[forge::log(args, err_detail)]
 #[forge(
     name = "impact",
     version = "0.3.5",

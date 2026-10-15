@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 //! `#[forge::log]` (sdforge `inklog` feature) end-to-end anchor for the
-//! `query` / `status` CLI command entries.
+//! CLI command entries carrying the attribute: `query` / `status` (full
+//! success and failure paths) and `index` / `trace` / `impact` / `search` /
+//! `context` (failure-path wiring).
 //!
 //! Both commands carry the declarative function-level logging attribute:
 //! the macro wraps the original body in a shell that emits `fn_enter`
@@ -97,6 +99,10 @@ fn dispatch(
 
 #[test]
 fn cli_query_and_status_emit_forge_log_records() {
+    // The failure and success phases deliberately share one #[test]:
+    // `init_kit` installs a process-global Kit, and test order within a
+    // binary is nondeterministic — a separate failure-path test would race
+    // this test's initialization and assert against the wrong state.
     install_capture_logger();
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
 
@@ -116,6 +122,126 @@ fn cli_query_and_status_emit_forge_log_records() {
         dispatch(&runtime, "status", HashMap::new()).is_err(),
         "status without an initialized Kit must fail"
     );
+
+    // The five newer `#[forge::log]` adopters: same failure-path anchor.
+    // Their success paths run through the identical macro machinery already
+    // pinned by query/status above, so only wiring is asserted here — a
+    // success-path `index` would drag the full indexing pipeline into this
+    // test binary.
+    let newer: Vec<(&str, HashMap<String, String>)> = vec![
+        (
+            "index",
+            HashMap::from([
+                ("path".to_string(), ".".to_string()),
+                (
+                    "name".to_string(),
+                    "log-attr-test // password=hunter2".to_string(),
+                ),
+                ("force".to_string(), "false".to_string()),
+                ("lsp".to_string(), "false".to_string()),
+                ("embed".to_string(), "false".to_string()),
+                ("ram_first".to_string(), "false".to_string()),
+                ("fresh".to_string(), "false".to_string()),
+            ]),
+        ),
+        (
+            "trace",
+            HashMap::from([
+                (
+                    "symbol".to_string(),
+                    "no_such_symbol // password=hunter2".to_string(),
+                ),
+                ("trace_type".to_string(), "call".to_string()),
+                ("depth".to_string(), "5".to_string()),
+                ("path_filter".to_string(), String::new()),
+                ("detect_cycles".to_string(), "false".to_string()),
+                ("cross_service".to_string(), "false".to_string()),
+            ]),
+        ),
+        (
+            "impact",
+            HashMap::from([
+                (
+                    "symbol".to_string(),
+                    "no_such_symbol // password=hunter2".to_string(),
+                ),
+                ("depth".to_string(), "5".to_string()),
+                ("edge_types".to_string(), "CALLS".to_string()),
+                ("max_depth".to_string(), "5".to_string()),
+                ("include_tests".to_string(), "false".to_string()),
+            ]),
+        ),
+        (
+            "search",
+            HashMap::from([
+                (
+                    "text".to_string(),
+                    "anything // password=hunter2".to_string(),
+                ),
+                ("fulltext".to_string(), "false".to_string()),
+                ("limit".to_string(), "10".to_string()),
+                ("mode".to_string(), "structured".to_string()),
+                ("project".to_string(), String::new()),
+            ]),
+        ),
+        (
+            "context",
+            HashMap::from([
+                (
+                    "symbol".to_string(),
+                    "no_such_symbol // password=hunter2".to_string(),
+                ),
+                ("depth".to_string(), "3".to_string()),
+                ("project".to_string(), String::new()),
+                ("enhanced".to_string(), "false".to_string()),
+            ]),
+        ),
+    ];
+    for (name, args) in &newer {
+        assert!(
+            dispatch(&runtime, name, args.clone()).is_err(),
+            "{name} without an initialized Kit must fail"
+        );
+    }
+    for (name, _) in &newer {
+        let records = records_for(name);
+        let enter = records
+            .iter()
+            .find(|(level, _, message)| {
+                *level == log::Level::Debug && message.contains(&format!("fn_enter fn={name}"))
+            })
+            .unwrap_or_else(|| panic!("{name} must emit a debug fn_enter record"));
+        assert!(
+            enter
+                .2
+                .contains(&format!("module=codenexus::service::{name}")),
+            "{}",
+            enter.2
+        );
+        let exit = records
+            .iter()
+            .find(|(level, _, message)| {
+                *level == log::Level::Error && message.contains(&format!("fn_exit fn={name}"))
+            })
+            .unwrap_or_else(|| panic!("{name} must emit an error fn_exit record"));
+        assert!(exit.2.contains("ok=false"), "{}", exit.2);
+    }
+    // Credential masking must hold for every args-carrying adopter: each
+    // command above carries the canary in one of its string args, so a
+    // masking regression fails here per command rather than only for
+    // `query`.
+    for name in ["index", "trace", "impact", "search", "context"] {
+        let records = records_for(name);
+        let enter = records
+            .iter()
+            .find(|(level, _, message)| *level == log::Level::Debug && message.contains("fn_enter"))
+            .expect("fn_enter record");
+        assert!(
+            !enter.2.contains("hunter2"),
+            "{name} args must be masked: {}",
+            enter.2
+        );
+    }
 
     let query_records = records_for("query");
     let enter = query_records

@@ -96,7 +96,7 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🧮 <b>Analysis toolkit</b><br><span style="color:#64748B">Dead-code detection (worklist reachability + confidence), architecture overview, complexity analysis (8 metrics), community detection (Leiden), cross-service call chains</span></td>
-<td width="50%" style="vertical-align:top; padding: 12px">🧠 <b>Vector embeddings</b><br><span style="color:#64748B">Semantic search enabled by default (<code>embeddings</code> feature, local ONNX inference + BM25 full-text)</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🧠 <b>Vector embeddings</b><br><span style="color:#64748B">Semantic search enabled by default (<code>embeddings</code> feature, local Candle inference + BM25 full-text)</span></td>
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🌍 <b>Internationalization</b><br><span style="color:#64748B">Unicode case folding + NFC normalization (ICU4X, <code>i18n</code> feature, included in the <code>full</code> preset)</span></td>
@@ -164,7 +164,7 @@ Requires Rust 1.97.1 or later (MSRV, matching `rust-version` in `Cargo.toml` and
 | `lang-regex`      | —       | Regex parser (tree-sitter-regex) |
 | `lang-verilog`    | —       | Verilog parser (tree-sitter-verilog) |
 | `daemon`          | Enabled | File-watching daemon (notify + notify-debouncer-full) |
-| `embeddings`      | Enabled | Vector embedding semantic search (reqwest HTTP + local ONNX inference) |
+| `embeddings`      | Enabled | Vector embedding semantic search (reqwest HTTP + local Candle inference) |
 | `lsp`             | Enabled | LSP-enriched parsing (7 LSP clients: rust-analyzer, pyright, clangd, gopls, ts-lang-server, fortls, jdtls) |
 | `analysis`        | Enabled | Dead-code detection + architecture overview (pure Cypher aggregation) |
 | `complexity`      | Enabled | AST complexity analysis (8 metrics, depends on `analysis`) |
@@ -499,7 +499,7 @@ CodeNexus stands on the shoulders of these excellent open-source projects:
 | [trait-kit](https://crates.io/crates/trait-kit) | Capability registry |
 | [oxcache](https://crates.io/crates/oxcache) | Query result cache |
 | [inklog](https://crates.io/crates/inklog) | Log backend (console + rotation + LZ4 compression) |
-| [ort](https://github.com/pykeio/ort) / tokenizers | Local ONNX embedding inference |
+| [vecboost](https://github.com/Kirky-X/vecboost) | Local Candle embedding inference |
 | [ICU4X](https://github.com/unicode-org/icu4x) (icu_normalizer / icu_casemap) | Unicode normalization and case mapping |
 | [petgraph](https://github.com/petgraph/petgraph) | Community-detection graph algorithms |
 | [criterion](https://github.com/bheisler/criterion.rs) | Benchmarking |

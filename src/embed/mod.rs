@@ -3,23 +3,23 @@
 
 //! Optional vector embedding subsystem (Strategy pattern).
 //!
-//! Gated behind the `embed` feature (ADR-004). Provides two embedding backends:
+//! Gated behind the `embeddings` feature (ADR-004). Provides two embedding backends:
 //!
 //! - **Remote HTTP** ([`OpenAIEmbedClient`]): calls an OpenAI-compatible
 //!   embedding API via `reqwest`. API keys are read from environment variables
 //!   and never persisted (TRD §6.1).
-//! - **Local ONNX** ([`LocalEmbedClient`]): runs `arctic-embed-xs`
-//!   inference locally via `ort` (ONNX Runtime). Works fully offline — no API
-//!   key, no network access required. The model file must be present on disk.
+//! - **Local Candle** ([`LocalEmbedClient`]): runs `arctic-embed-xs`
+//!   inference locally via `vecboost` (Candle engine). Works fully offline — no API
+//!   key, no network access required. The model directory must be present on disk.
 //!
 //! Backend selection is driven by [`EmbeddingConfig::endpoint`]:
-//! `Some(url)` → remote HTTP, `None` → local ONNX. The default is local
+//! `Some(url)` → remote HTTP, `None` → local Candle. The default is local
 //! (offline), so `--embed` works out of the box without any API key.
 //!
 //! # Architecture
 //!
 //! - [`client`]: [`EmbedClient`] trait + [`OpenAIEmbedClient`] (reqwest HTTP)
-//!   + [`LocalEmbedClient`] (ort ONNX) + [`MockEmbedClient`] (test).
+//!   + [`LocalEmbedClient`] (vecboost Candle) + [`MockEmbedClient`] (test).
 //! - [`storage`]: [`EmbeddingStorage`] stores/retrieves `FLOAT[384]` vectors in
 //!   the LadybugDB `Embedding` table (DDD §5.9).
 //! - [`search`]: [`SearchStrategy`] trait with [`Bm25Strategy`],
@@ -35,7 +35,7 @@
 //!
 //! # trait-kit integration
 //!
-//! When the `embed` feature is enabled, [`client::EmbedClient`] is the
+//! When the `embeddings` feature is enabled, [`client::EmbedClient`] is the
 //! capability trait stored in [`Kit`](crate::kit::Kit) under
 //! [`EmbedKey`](crate::kit::EmbedKey). The concrete impl
 //! ([`module::EmbedCapability`]) lazily loads the local model or creates a
@@ -51,7 +51,7 @@ pub mod storage;
 pub use client::{EmbedClient, LocalEmbedClient, MockEmbedClient, OpenAIEmbedClient};
 pub use config::{
     EmbeddingConfig, API_KEY_ENV, DEFAULT_MODEL_PATH, DEFAULT_TOKENIZER_FILENAME,
-    EMBED_ENDPOINT_ENV, EMBED_MODEL_PATH_ENV, OPENAI_API_KEY_ENV,
+    EMBED_ENDPOINT_ENV, EMBED_MODEL_PATH_ENV, EMBED_MODEL_SHA256_ENV, OPENAI_API_KEY_ENV,
 };
 pub use error::{EmbedError, Result};
 pub use module::{EmbedConfig, EmbedModule};

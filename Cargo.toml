@@ -65,8 +65,8 @@ lang-css = ["dep:tree-sitter-css"]
 lang-json = ["dep:tree-sitter-json"]
 lang-regex = ["dep:tree-sitter-regex"]
 lang-verilog = ["dep:tree-sitter-verilog"]
-# 向量嵌入（ML embeddings，ort/tokenizers）；原名单 `embed` 易与 no-std 语境的 embedded 混淆
-embeddings = ["dep:reqwest", "dep:ort", "dep:tokenizers", "dep:ndarray"]
+# 向量嵌入（ML embeddings，vecboost/candle）；原名单 `embed` 易与 no-std 语境的 embedded 混淆
+embeddings = ["dep:reqwest", "dep:vecboost"]
 daemon = ["dep:notify", "dep:notify-debouncer-full", "dep:signal-hook"]
 analysis = []
 api-review = ["analysis"]
@@ -116,9 +116,7 @@ notify-debouncer-full = { version = "0.7", optional = true }
 signal-hook = { version = "0.4", optional = true }
 blake3 = { version = "1.8", default-features = false, features = ["std"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "blocking", "rustls"], optional = true }
-ort = { version = "2.0.0-rc.14", optional = true }
-tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"], optional = true }
-ndarray = { version = "0.17", optional = true }
+vecboost = { version = "0.3.0-rc.1", default-features = false, optional = true }
 thiserror = "2.0"
 anyhow = "1.0"
 pest = "2.9"
@@ -143,6 +141,12 @@ limiteron = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
 oxcache = { version = "0.5.0-rc.8", default-features = false, features = ["minimal", "macros"], optional = true }
 oxiarc-zstd = { version = "0.4", default-features = false, optional = true }
+# zstd-sys 经 oxcache/oxiarc-zstd 传递入树；显式钉 vendored，让它自带 zstd
+# 并以 rustc-link-lib 显式链接。lbug 0.21 起 bundled zstd 符号本地化后不再
+# 外泄全局符号，此前靠 lbug 赈济 zstd-sys 引用的隐形机制已终止——而
+# pkg-config 路径的 `-l:` 参数走 cargo:rustc-link-arg，不向下游传播（实测
+# 链接行无该参数），故 pkg-config 探测无法替代 vendored。
+zstd-sys = { version = "2.1", default-features = false, features = ["std", "vendored"] }
 inklog = { workspace = true }
 regex = "1.13"
 icu_normalizer = { version = "2.3", default-features = false, features = ["compiled_data"], optional = true }
@@ -258,4 +262,11 @@ fluent-bundle = "0.16"
 unic-langid = "0.9"
 limiteron = { version = "0.3.0-rc.7", default-features = false, features = ["retry"] }
 sys-locale = "0.3"
-lbug = "0.20"
+lbug = "0.21"
+
+[patch.crates-io]
+# 临时安排：vecboost 0.3.0-rc.1 发布版因 confers 0.6.0-rc.8+ API 变更编译失败
+# （Zeroizing 适配在其 b9f3e4e，已随 6094f47 推送到上游 main），rc.2 发布前以
+# git 源锁定该修复提交——cargo 自动拉取，克隆保持自包含，无需同级检出。
+# 上游发布修复版后删除本段并回归 crates.io 版本（见 CHANGELOG Unreleased）。
+vecboost = { git = "https://github.com/Kirky-X/vecboost", rev = "6094f47c72039ce6c83a93345fdee1db89791cb1" } # pragma: allowlist secret -- git commit rev, not a credential

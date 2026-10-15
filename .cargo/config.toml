@@ -1,14 +1,17 @@
 # Build configuration for CodeNexus.
 #
-# inklog 0.1.10+ uses gzip (flate2) fallback when the `compression` feature is
-# not enabled, so zstd-sys is no longer in the dependency tree. The env vars
-# below are retained for future use: if inklog's `compression` feature is ever
-# enabled, ZSTD_SYS_USE_PKG_CONFIG=1 makes zstd-sys use pkg-config to find the
-# system libzstd instead of compiling from source (avoiding duplicate ZSTD_*
-# symbols with lbug's bundled zstd). They are harmless when zstd-sys is absent.
+# zstd reaches the link through two independent chains, each owning its own
+# symbols: lbug bundles libzstd into its static library with the symbols
+# localized (LBUG_LOCALIZE_BUNDLED_SYMBOLS, lbug build.rs, Linux/ELF), and
+# zstd-sys — pinned to `vendored` in Cargo.toml — compiles and links its own
+# copy explicitly. Before lbug 0.21 the bundled symbols leaked globally and
+# accidentally satisfied zstd-sys's references; the localization ended that
+# freeload, so nothing may rely on it again. The former
+# build-support/libzstd.pc + ZSTD_SYS_USE_PKG_CONFIG workaround is gone with
+# it (pkg-config `-l:` args ride cargo:rustc-link-arg, which never reaches
+# downstream links).
 [env]
-ZSTD_SYS_USE_PKG_CONFIG = "1"
-PKG_CONFIG_PATH = { value = "build-support", relative = true }
+LBUG_LOCALIZE_BUNDLED_SYMBOLS = "1"
 # docs.rs sets DOCS_RS=1, which makes lbug's build.rs skip C++ compilation and
 # not emit cargo:rustc-env for LBUG_PRECOMPILED_SOURCE/LBUG_PRECOMPILED_LIBRARY_DIR.
 # Provide fallback values so lbug's env!() macros resolve at compile time.

@@ -889,6 +889,7 @@ pub(crate) fn index_core(
 // never dropped — the stale boot-time connections never checkpoint over the
 // indexer's writes (same effect as `std::mem::forget(kit)` in `main.rs`).
 #[cfg(feature = "cli")]
+#[forge::log(args, err_detail)]
 #[forge(
     name = "index",
     version = "0.3.5",

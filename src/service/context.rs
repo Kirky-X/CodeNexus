@@ -90,6 +90,7 @@ pub fn run_context_enhanced(
 /// catches typos and non-existent projects early instead of silently
 /// returning results from a different project.
 #[cfg(feature = "cli")]
+#[forge::log(args, err_detail)]
 #[forge(
     name = "context",
     version = "0.3.5",

@@ -13,7 +13,7 @@
 //! [`EmbedCapability`] owns an [`EmbeddingConfig`] and chooses the backend:
 //!
 //! - **Local mode** (`endpoint = None`, default): lazily loads a
-//!   [`LocalEmbedClient`] (ort + arctic-embed-xs) on the first `embed()` call.
+//!   [`LocalEmbedClient`] (vecboost + arctic-embed-xs) on the first `embed()` call.
 //!   The loaded client is cached behind a [`Mutex`] for reuse. If the model
 //!   file is missing, `embed()` returns [`EmbedError::Unavailable`] with a
 //!   clear message.
@@ -35,7 +35,7 @@
 //! runtime via [`EmbedCapability::update_config`] without rebuilding the
 //! capability. The capability holds the config behind an `Arc<RwLock<…>>` so
 //! each `embed()` call reads the latest value. When the config changes, the
-//! cached local ONNX client is invalidated so the next `embed()` re-initialises
+//! cached local client is invalidated so the next `embed()` re-initialises
 //! with the new settings.
 //!
 //! # Dependency note
@@ -156,7 +156,7 @@ impl EmbedModule {
 // ---------------------------------------------------------------------------
 
 /// Concrete implementation of [`dyn EmbedClient`] that routes to either
-/// [`LocalEmbedClient`] (offline ONNX) or [`OpenAIEmbedClient`] (remote HTTP)
+/// [`LocalEmbedClient`] (offline Candle) or [`OpenAIEmbedClient`] (remote HTTP)
 /// based on [`EmbeddingConfig::endpoint`].
 ///
 /// # Local mode (endpoint = None, default)
@@ -174,7 +174,7 @@ impl EmbedModule {
 struct EmbedCapability {
     /// Embedding-service config (hot-reloadable via [`EmbedCapability::update_config`]).
     config: Arc<RwLock<EmbeddingConfig>>,
-    /// Lazily-loaded local ONNX client.
+    /// Lazily-loaded local Candle client.
     ///
     /// `None` = not yet loaded (or local mode not in use).
     /// `Some(client)` = loaded and cached for reuse.
@@ -200,7 +200,7 @@ impl EmbedClient for EmbedCapability {
         // Cache wiring (feature `cache` + CacheModule registered): wrap the
         // mode-specific client in CachedEmbedClient so repeated identical
         // texts hit the content-addressed vector cache instead of paying
-        // ONNX inference or an HTTP round-trip.
+        // Candle inference or an HTTP round-trip.
         #[cfg(feature = "cache")]
         if let Some(cache) = &self.cache {
             let inner = self.acquire_client(&config)?;
@@ -226,7 +226,7 @@ impl EmbedCapability {
     /// Builds (or reuses) the mode-specific client as a shared trait object.
     fn acquire_client(&self, config: &EmbeddingConfig) -> Result<Arc<dyn EmbedClient>> {
         if config.is_local() {
-            // Local ONNX inference — lazy-load the model on first use.
+            // Local Candle inference — lazy-load the model on first use.
             let mut guard = self.local_client.lock().map_err(|e| {
                 EmbedError::Unavailable(format!("local_client mutex poisoned: {e}"))
             })?;

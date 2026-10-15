@@ -39,6 +39,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libssl-dev pkg-config protobuf-compiler
 
+
       - name: Verify build
         run: cargo build --release --lib
 
@@ -74,6 +75,17 @@ jobs:
           echo "codenexus ${VERSION}: HTTP ${CODE}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "exists=$([[ "$CODE" == "200" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
+
+      # 带 [patch.crates-io] 时禁止发布:patch 不随发布物分发,下游会解析到
+      # crates.io 的 vecboost 0.3.0-rc.1(编译失败),发布物与 CI 被测版本不一致。
+      # 上游修复版发布后删除 Cargo.toml 的 patch 段,本步骤自然通过。
+      - name: Guard against active patch.crates-io before publish
+        if: steps.published.outputs.exists == 'false'
+        run: |
+          if grep -qE '^\[patch\.crates-io\]' Cargo.toml; then
+            echo "::error::Cargo.toml 含生效的 [patch.crates-io]:发布物对下游消费者不含该 patch,将解析到编译失败的 crates.io vecboost。请先在上游发布修复版并移除 patch 段。"
+            exit 1
+          fi
 
       - name: Publish to crates.io
         if: steps.published.outputs.exists == 'false'

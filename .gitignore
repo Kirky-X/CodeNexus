@@ -75,6 +75,9 @@ logs/
 openspec/
 specmark/
 
+# Embedding model assets (HF safetensors bundle, ~90 MB)
+assets/arctic-embed-xs/
+
 # Graph viewer build output
 graph-viewer/dist/
 graph-viewer/node_modules/

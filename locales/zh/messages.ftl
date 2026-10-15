@@ -41,3 +41,8 @@ graph-viewer-dist-missing = graph-viewer 前端资源未构建：请在 graph-vi
 
 # logging：inklog 级别预设（src/logging.rs）
 logging-invalid_target_level = 忽略非法的 CODENEXUS_LOG_TARGETS 条目 '{ $entry }'（应为 target=level，如 hyper=warn）
+logging-invalid_sample_entry = 忽略非法的 CODENEXUS_LOG_SAMPLE 条目 '{ $entry }'（应为 level=N 或 prefix=N[@level]，如 debug=10 或 sqlx=100@warn）
+logging-invalid_rate_limit_entry = 忽略非法的 CODENEXUS_LOG_RATE_LIMIT 条目 '{ $entry }'（应为 prefix=rate，如 lbug=50）
+
+# embed：模型完整性摘要校验（src/embed/config.rs）
+embed-invalid_model_sha256 = 忽略非法的 CODENEXUS_EMBED_MODEL_SHA256 值 '{ $value }'（应为 64 位十六进制摘要；完整性校验保持关闭）

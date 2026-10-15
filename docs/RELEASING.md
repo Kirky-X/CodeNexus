@@ -15,7 +15,7 @@
 | 4 | 示例数：`grep -c '\[\[bin\]\]' examples/Cargo.toml` | 14 个 | `README.md` / `README_EN.md`「示例」节（表格 + run-all 循环） | 新增示例 bin 必须同 PR 更新两份 README 的表格与 for 循环 |
 | 5 | 命令参数：`src/service/<cmd>.rs` 的 `#[forge]` CLI wrapper 签名 | — | `skill/references/commands.md` 对应条目 | 新增/改签名命令必须同步 commands.md 的 Options 列表与 sentinel 默认值（`src/main.rs` `SENTINEL_DEFAULTS`） |
 | 6 | advisory 忽略清单 | `deny.toml`（单一事实源） | `audit.toml`（同步镜像）；CI audit-check ignore 由 deny.toml grep 生成 | 只改 deny.toml 并更新复核日期，再手动同步 audit.toml；注释中只允许出现被 ignore 的 RUSTSEC 编号 |
-| 7 | 基库依赖口径 | `Cargo.toml`（trait-kit/sdforge/oxcache/inklog 等 base 库一律 crates.io version req，**无** path / `[patch.crates-io]`） | `Cargo.lock`（刷新后同 commit 入库） | 升级基库时同步 version req 至已发布最新并刷新 lockfile；禁止重新引入跨仓 path/patch（本地联调用 `cargo patch` 类临时手段且不入库） |
+| 7 | 基库依赖口径 | `Cargo.toml`（trait-kit/sdforge/oxcache/inklog/limiteron/lbug 等 base 库一律 crates.io version req；**唯一例外**：vecboost 暂以 `[patch.crates-io]` git 源锁定上游修复提交 `6094f47`（confers Zeroizing 适配，crates.io rc.1 不含），届时随上游 rc.2 发布移除本段回归 crates.io，见 CHANGELOG Unreleased） | `Cargo.lock`（刷新后同 commit 入库；git patch 锁同一 rev） | 升级基库时同步 version req 至已发布最新并刷新 lockfile；禁止重新引入其他跨仓 path/patch（本地联调用 `cargo patch` 类临时手段且不入库）；vecboost patch 生效期间 release.yml 会拒绝 crates.io 发布（防下游解析到坏依赖）——上游发布修复版并移除 patch 段后发布自然恢复 |
 
 ## 机械校验（发布前跑一遍）
 

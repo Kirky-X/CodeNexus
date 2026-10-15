@@ -13,8 +13,8 @@ pub const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 
 /// Environment variable name for the embedding endpoint.
 ///
-/// When set, forces remote HTTP mode. When unset, defaults to local ONNX
-/// inference via `ort`.
+/// When set, forces remote HTTP mode. When unset, defaults to local
+/// inference via `vecboost` (Candle).
 pub const EMBED_ENDPOINT_ENV: &str = "CODENEXUS_EMBED_ENDPOINT";
 
 /// Environment variable name for the local model file path.
@@ -22,7 +22,13 @@ pub const EMBED_ENDPOINT_ENV: &str = "CODENEXUS_EMBED_ENDPOINT";
 /// Overrides [`DEFAULT_MODEL_PATH`] when set.
 pub const EMBED_MODEL_PATH_ENV: &str = "CODENEXUS_EMBED_MODEL_PATH";
 
-/// Default path to the bundled `arctic-embed-xs` ONNX model file.
+/// Environment variable name for the expected SHA-256 of the model weights.
+///
+/// When set, the local engine verifies `model.safetensors` against this
+/// digest at load time and rejects a mismatch (`ModelFileCorrupted`).
+pub const EMBED_MODEL_SHA256_ENV: &str = "CODENEXUS_EMBED_MODEL_SHA256";
+
+/// Default path to the bundled `arctic-embed-xs` model directory.
 ///
 /// Relative to the current working directory. The model is NOT bundled in the
 /// repository (90 MB) — it must be downloaded separately and placed at this
@@ -31,20 +37,27 @@ pub const EMBED_MODEL_PATH_ENV: &str = "CODENEXUS_EMBED_MODEL_PATH";
 /// Design D7 open question: the exact distribution method (git-lfs vs build.rs
 /// download vs release asset) is unresolved. This default provides a stable
 /// convention; users can override via `CODENEXUS_EMBED_MODEL_PATH`.
-pub const DEFAULT_MODEL_PATH: &str = "assets/arctic-embed-xs.onnx";
+pub const DEFAULT_MODEL_PATH: &str = "assets/arctic-embed-xs";
 
-/// Default path to the HuggingFace tokenizer JSON file.
+/// Default filename for the HuggingFace tokenizer JSON file.
 ///
-/// Co-located with the model file (same directory, `tokenizer.json` filename).
-/// Derived from [`DEFAULT_MODEL_PATH`] at runtime.
+/// Located inside the model directory. Derived from [`DEFAULT_MODEL_PATH`] at
+/// runtime.
 pub const DEFAULT_TOKENIZER_FILENAME: &str = "tokenizer.json";
+
+/// Whether `value` is a well-formed SHA-256 hex digest (exactly 64 hex
+/// characters). Digests are normalized to lowercase before storage so the
+/// engine's lowercase comparison matches regardless of the operator's casing.
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit())
+}
 
 /// Configuration for the embedding subsystem.
 #[derive(Debug, Clone)]
 pub struct EmbeddingConfig {
     /// Base URL of the OpenAI-compatible embedding API.
     ///
-    /// `None` → local ONNX inference via `ort` (offline mode, default).
+    /// `None` → local inference via `vecboost` (Candle, offline mode, default).
     /// `Some(url)` → remote HTTP via [`OpenAIEmbedClient`](crate::embed::client::OpenAIEmbedClient).
     pub endpoint: Option<String>,
     /// Model name (HTTP mode) or model identifier (local mode).
@@ -53,11 +66,17 @@ pub struct EmbeddingConfig {
     ///
     /// Ignored in local mode.
     pub api_key: Option<String>,
-    /// Path to the local ONNX model file.
+    /// Path to the local model directory.
     ///
-    /// When `endpoint` is `None`, this points to the `arctic-embed-xs` ONNX
-    /// model. Defaults to [`DEFAULT_MODEL_PATH`] when `None`.
+    /// When `endpoint` is `None`, this points to the `arctic-embed-xs` model
+    /// directory. Defaults to [`DEFAULT_MODEL_PATH`] when `None`.
     pub model_path: Option<PathBuf>,
+    /// Expected SHA-256 (hex, case-insensitive) of `model.safetensors`.
+    ///
+    /// When `Some`, the local engine verifies the weights file against this
+    /// digest at load time (tampering / supply-chain check) and rejects a
+    /// mismatch. `None` skips verification.
+    pub model_sha256: Option<String>,
 }
 
 impl Default for EmbeddingConfig {
@@ -68,6 +87,7 @@ impl Default for EmbeddingConfig {
             model: "arctic-embed-xs".to_string(),
             api_key: None,
             model_path: None,
+            model_sha256: None,
         }
     }
 }
@@ -77,11 +97,15 @@ impl EmbeddingConfig {
     ///
     /// Reads:
     /// - `CODENEXUS_EMBED_ENDPOINT` (optional — if set, enables remote HTTP
-    ///   mode; if unset, defaults to local ONNX mode)
+    ///   mode; if unset, defaults to local vecboost mode)
     /// - `CODENEXUS_EMBED_API_KEY` (preferred) or `OPENAI_API_KEY` (fallback)
     ///   for HTTP mode
     /// - `CODENEXUS_EMBED_MODEL_PATH` (optional — overrides default model path
     ///   for local mode)
+    /// - `CODENEXUS_EMBED_MODEL_SHA256` (optional — enables weights integrity
+    ///   verification for local mode; must be a 64-character hex digest, an
+    ///   ill-formed value is reported to stderr and ignored, leaving
+    ///   verification disabled rather than silently misconfigured)
     ///
     /// Keys are held in memory only and never written to disk (TRD §6.1).
     #[must_use]
@@ -91,15 +115,32 @@ impl EmbeddingConfig {
             .or_else(|_| std::env::var(OPENAI_API_KEY_ENV))
             .ok();
         let model_path = std::env::var(EMBED_MODEL_PATH_ENV).ok().map(PathBuf::from);
+        let model_sha256 = std::env::var(EMBED_MODEL_SHA256_ENV)
+            .ok()
+            .and_then(|value| {
+                let normalized = value.trim().to_ascii_lowercase();
+                if is_sha256_hex(&normalized) {
+                    Some(normalized)
+                } else {
+                    let display: String =
+                        value.chars().filter(|c| !c.is_control()).take(80).collect();
+                    eprintln!(
+                        "{}",
+                        crate::i18n::t("embed-invalid_model_sha256", &[("value", display)])
+                    );
+                    None
+                }
+            });
         Self {
             endpoint,
             api_key,
             model_path,
+            model_sha256,
             ..Self::default()
         }
     }
 
-    /// Returns `true` if configured for local (offline) ONNX inference.
+    /// Returns `true` if configured for local (offline) inference.
     #[must_use]
     pub fn is_local(&self) -> bool {
         self.endpoint.is_none()
@@ -132,11 +173,11 @@ impl EmbeddingConfig {
 
     /// Returns the resolved tokenizer file path.
     ///
-    /// Derived from the model path: same directory, [`DEFAULT_TOKENIZER_FILENAME`].
+    /// Derived from the model directory: [`DEFAULT_TOKENIZER_FILENAME`] inside
+    /// the model directory.
     #[must_use]
     pub fn resolved_tokenizer_path(&self) -> PathBuf {
-        self.resolved_model_path()
-            .with_file_name(DEFAULT_TOKENIZER_FILENAME)
+        self.resolved_model_path().join(DEFAULT_TOKENIZER_FILENAME)
     }
 }
 
@@ -167,7 +208,7 @@ mod tests {
         assert_eq!(cfg.resolved_model_path(), PathBuf::from(DEFAULT_MODEL_PATH));
         assert_eq!(
             cfg.resolved_tokenizer_path(),
-            PathBuf::from("assets/tokenizer.json")
+            PathBuf::from("assets/arctic-embed-xs/tokenizer.json")
         );
     }
 
@@ -183,7 +224,7 @@ mod tests {
         );
         assert_eq!(
             cfg.resolved_tokenizer_path(),
-            PathBuf::from("/custom/tokenizer.json")
+            PathBuf::from("/custom/model.onnx/tokenizer.json")
         );
     }
 
@@ -261,6 +302,56 @@ mod tests {
             PathBuf::from("/custom/from/env/model.onnx")
         );
         std::env::remove_var(EMBED_MODEL_PATH_ENV);
+    }
+
+    #[test]
+    fn config_from_env_reads_model_sha256() {
+        let _lock = crate::embed::ENV_TEST_LOCK.lock().unwrap();
+        std::env::remove_var(EMBED_ENDPOINT_ENV);
+        // Format fixture only: any 64-char hex works, so a low-entropy
+        // pattern keeps detect-secrets from flagging a realistic digest.
+        std::env::set_var(EMBED_MODEL_SHA256_ENV, "AB".repeat(32));
+        let cfg = EmbeddingConfig::from_env();
+        assert_eq!(
+            cfg.model_sha256.as_deref(),
+            Some("ab".repeat(32).as_str()),
+            "a well-formed digest is accepted and normalized to lowercase"
+        );
+        std::env::remove_var(EMBED_MODEL_SHA256_ENV);
+    }
+
+    /// An ill-formed digest must be dropped (verification stays off) with a
+    /// stderr report — never forwarded to the engine, which would fail only
+    /// at load time with an opaque mismatch.
+    #[test]
+    fn config_from_env_drops_ill_formed_model_sha256() {
+        let _lock = crate::embed::ENV_TEST_LOCK.lock().unwrap();
+        std::env::remove_var(EMBED_ENDPOINT_ENV);
+        for bad in ["abc123", "", "  ", &"g".repeat(64), &"a".repeat(63)] {
+            std::env::set_var(EMBED_MODEL_SHA256_ENV, bad);
+            let cfg = EmbeddingConfig::from_env();
+            assert!(
+                cfg.model_sha256.is_none(),
+                "ill-formed digest {bad:?} must be dropped"
+            );
+        }
+        std::env::remove_var(EMBED_MODEL_SHA256_ENV);
+    }
+
+    #[test]
+    fn is_sha256_hex_accepts_only_64_hex_chars() {
+        assert!(is_sha256_hex(&"0a1b".repeat(16)));
+        assert!(is_sha256_hex(&"A1F2".repeat(16)));
+        assert!(!is_sha256_hex(&"a".repeat(63)));
+        assert!(!is_sha256_hex(&"a".repeat(65)));
+        assert!(!is_sha256_hex(&"g".repeat(64)));
+        assert!(!is_sha256_hex(""));
+    }
+
+    #[test]
+    fn config_default_has_no_model_sha256() {
+        let cfg = EmbeddingConfig::default();
+        assert!(cfg.model_sha256.is_none());
     }
 
     #[test]

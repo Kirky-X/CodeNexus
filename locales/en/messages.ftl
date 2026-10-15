@@ -41,3 +41,8 @@ graph-viewer-dist-missing = graph-viewer frontend assets are not built: run "npm
 
 # logging: inklog level presets (src/logging.rs)
 logging-invalid_target_level = Ignoring invalid CODENEXUS_LOG_TARGETS entry '{ $entry }' (expected target=level, e.g. hyper=warn)
+logging-invalid_sample_entry = Ignoring invalid CODENEXUS_LOG_SAMPLE entry '{ $entry }' (expected level=N or prefix=N[@level], e.g. debug=10 or sqlx=100@warn)
+logging-invalid_rate_limit_entry = Ignoring invalid CODENEXUS_LOG_RATE_LIMIT entry '{ $entry }' (expected prefix=rate, e.g. lbug=50)
+
+# embed: model integrity digest validation (src/embed/config.rs)
+embed-invalid_model_sha256 = Ignoring invalid CODENEXUS_EMBED_MODEL_SHA256 value '{ $value }' (expected a 64-character hex digest; integrity verification stays disabled)

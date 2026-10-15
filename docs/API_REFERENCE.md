@@ -128,7 +128,7 @@
 | `kit` | 能力注册表 | `build_kit` / `KitBootstrapConfig`（见下节） |
 | `analysis`（`analysis`） | 分析工具包 | 死代码检测、架构概览、复杂度、社区检测、跨服务检测 |
 | `diagram`（`diagram`） | 架构图管线 | 确定性布局、正交路由、HTML 写出、质检、语义 Delta |
-| `embed`（`embeddings`） | 向量嵌入 | 语义搜索嵌入（本地 ONNX 推理） |
+| `embed`（`embeddings`） | 向量嵌入 | 语义搜索嵌入（本地 Candle 推理） |
 | `lsp`（`lsp`） | LSP 增强 | 7 个 LSP 客户端、按需启动、hover 批量更新 |
 | `cache`（`cache`） | 查询缓存 | `CacheStore` 能力（oxcache） |
 | `daemon`（`daemon`） | 文件监视守护进程 | 事件循环、去抖（`DEFAULT_DEBOUNCE_MS = 2000`）、优雅退出 |

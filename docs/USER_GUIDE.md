@@ -394,6 +394,10 @@ CodeNexus 是 CLI 工具，自身不读取 `.env` 文件；模板见 [`.env.exam
 |------|------|------|
 | `RUST_LOG` | `info` | 日志级别，支持单级别与按模块过滤（如 `codenexus=debug,sqlx=warn`） |
 | `CODENEXUS_LOG_TARGETS` | 未设置 | 按模块的级别预设，`target=level` 逗号分隔（如 `codenexus::storage::connection=error,lbug=warn`）；优先级低于 `RUST_LOG`、高于全局级别，非法条目在 stderr 提示后跳过 |
+| `CODENEXUS_LOG_SAMPLE` | 未设置 | 日志采样：`level=N`（该级别 N 取 1，如 `debug=10`）或 `prefix=N[@level]`（target 前缀采样，`@level` 指定该级别及以上始终放行，如 `sqlx=100@warn`）；决定限流压力下保留哪些记录，非法条目在 stderr 提示后跳过 |
+| `CODENEXUS_LOG_RATE_LIMIT` | 未设置 | 按 target 前缀的日志限流配额（token/秒），`prefix=rate` 逗号分隔、最长前缀优先（如 `lbug=50,codenexus::daemon=200`）；未命中规则的 target 不受限 |
+| `CODENEXUS_EMBED_MODEL_PATH` | 未设置 | 本地嵌入模型目录（默认 `assets/arctic-embed-xs/`，90 MB 不入库需自行下载） |
+| `CODENEXUS_EMBED_MODEL_SHA256` | 未设置 | `model.safetensors` 的期望 SHA-256（64 位十六进制）；设置后加载时校验权重完整性、不匹配即拒绝加载，非法值在 stderr 提示后忽略（校验保持关闭）。计算方式：`sha256sum <模型目录>/model.safetensors` |
 | `CODENEXUS_DB_PATH` | （注释态） | 可选的默认数据库路径，省略 `--db` 时生效 |
 | `LBUG_BUILD_FROM_SOURCE` | 未设置 | 设为 `1` 时从源码编译 LadybugDB（老 `libstdc++` 系统需要） |
 

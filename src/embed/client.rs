@@ -8,7 +8,7 @@
 //!   [`reqwest::blocking`]. The API key is read from the environment and never
 //!   persisted (TRD §6.1). Used when [`EmbeddingConfig::endpoint`] is `Some`.
 //! - [`LocalEmbedClient`]: runs `arctic-embed-xs` inference locally
-//!   via `ort` (ONNX Runtime). Works fully offline. Used when
+//!   via `vecboost` (Candle engine). Works fully offline. Used when
 //!   [`EmbeddingConfig::endpoint`] is `None`.
 //! - [`MockEmbedClient`]: returns deterministic vectors for testing without
 //!   network access.
@@ -24,7 +24,7 @@
 //! {"data": [{"embedding": [0.1, ...]}, {"embedding": [0.2, ...]}]}
 //! ```
 
-use std::sync::Mutex;
+use std::future::Future;
 
 #[cfg(feature = "cache")]
 use std::sync::Arc;
@@ -32,6 +32,10 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use super::{EmbedError, EmbeddingConfig, Result, EMBEDDING_DIM, EMBED_MODEL_PATH_ENV};
+
+use vecboost::config::model::{ModelConfig, ModelTask, PoolingMode};
+use vecboost::error::VecboostError;
+use vecboost::library::{LibraryConfig, VecBoostLibrary};
 
 #[cfg(feature = "cache")]
 use crate::cache::CacheStore;
@@ -220,37 +224,40 @@ impl std::fmt::Debug for OpenAIEmbedClient {
 // LocalEmbedClient
 // ---------------------------------------------------------------------------
 
-/// Local ONNX-based embedding client.
+/// Local embedding client backed by `vecboost` (Candle engine).
 ///
-/// Runs `arctic-embed-xs` inference locally using [`ort`] (ONNX Runtime) and
-/// HuggingFace [`tokenizers`]. Requires no network access — the model and
-/// tokenizer files must be present on disk.
+/// Runs `arctic-embed-xs` inference locally using the `vecboost` crate's
+/// Candle engine. Requires no network access — the model bundle (config.json,
+/// tokenizer.json, model.safetensors) must be present on disk.
 ///
 /// # Thread safety
 ///
-/// `ort::session::Session::run` requires `&mut self`, so the session is
-/// wrapped in a [`Mutex`]. [`tokenizers::Tokenizer::encode`] takes `&self`
-/// and needs no wrapping. `LocalEmbedClient` is `Send + Sync` via the
-/// `Mutex<Session>` (Session is `Send`).
+/// `VecBoostLibrary` is `Send + Sync` (verified by compile-time assertion in
+/// tests). `LocalEmbedClient` is `Send + Sync` without additional wrapping.
 ///
 /// # Inference pipeline
 ///
-/// 1. Tokenize input text → `input_ids`, `attention_mask`, `token_type_ids`
-/// 2. Create `ndarray::Array2<i64>` tensors (shape `[1, seq_len]`)
-/// 3. Run ONNX inference via `ort::inputs!` + `Session::run`
-/// 4. Extract `last_hidden_state` tensor (shape `[1, seq_len, hidden_dim]`)
-/// 5. Mean-pool over `seq_len` using `attention_mask` as weights
-/// 6. L2-normalize the pooled vector
+/// 1. `new()` performs a complete bundle pre-check (directory, config.json,
+///    tokenizer.json, model.safetensors) before constructing the
+///    `VecBoostLibrary`.
+/// 2. `embed()` converts texts to `Vec<String>` and calls `embed_batch_sync`
+///    (vecboost's process-level runtime), then extracts the embedding vectors.
+/// 3. Mean pooling and L2 normalization are handled by the vecboost engine.
+///
+/// # Allocation note
+///
+/// Inputs are copied into `Vec<String>` per call and each vecboost result
+/// carries an unused `text_preview` string — both are imposed by the vecboost
+/// batch API (`&[String]` / `BatchEmbeddingResult`); the caller cannot avoid
+/// them. Negligible next to the ms-level inference itself.
 ///
 /// # Errors
 ///
 /// [`LocalEmbedClient::new`] returns [`EmbedError::Unavailable`] if the model
-/// or tokenizer file is missing or cannot be loaded.
+/// bundle is incomplete or cannot be loaded.
 pub struct LocalEmbedClient {
-    /// ONNX Runtime session (requires `&mut self` for `run`, hence `Mutex`).
-    session: Mutex<ort::session::Session>,
-    /// HuggingFace tokenizer (BERT WordPiece for arctic-embed-xs).
-    tokenizer: tokenizers::Tokenizer,
+    /// vecboost library instance (Candle engine).
+    library: VecBoostLibrary,
     /// Model name (for Debug output).
     model: String,
 }
@@ -258,57 +265,80 @@ pub struct LocalEmbedClient {
 impl LocalEmbedClient {
     /// Creates a new local embedding client from the given config.
     ///
-    /// Loads the ONNX model from [`EmbeddingConfig::resolved_model_path`] and
-    /// the tokenizer from [`EmbeddingConfig::resolved_tokenizer_path`].
+    /// Performs a complete bundle pre-check (directory, config.json,
+    /// tokenizer.json, model.safetensors) before constructing the
+    /// `VecBoostLibrary`.
     ///
     /// # Errors
     ///
     /// Returns [`EmbedError::Unavailable`] if:
-    /// - The model file does not exist (with guidance on how to fix).
-    /// - The tokenizer file does not exist.
-    /// - The ONNX session cannot be created (corrupt model, ort init failure).
-    /// - The tokenizer cannot be loaded (corrupt tokenizer.json).
+    /// - The model directory does not exist.
+    /// - config.json is missing.
+    /// - tokenizer.json is missing.
+    /// - Model weights (`model.safetensors`) are missing. The legacy
+    ///   `pytorch_model.bin` (pickle) format is rejected — the vecboost Candle
+    ///   engine cannot load it.
+    /// - The vecboost library cannot be initialized.
     pub fn new(config: &EmbeddingConfig) -> Result<Self> {
-        let model_path = config.resolved_model_path();
-        let tokenizer_path = config.resolved_tokenizer_path();
+        let model_dir = config.resolved_model_path();
 
-        if !model_path.exists() {
+        // 1. Check directory exists
+        if !model_dir.exists() {
             return Err(EmbedError::Unavailable(format!(
                 "local embedding model not found at {}. \
-                 Place the arctic-embed-xs ONNX model at this path \
+                 Place the arctic-embed-xs model at this path \
                  (or set the {EMBED_MODEL_PATH_ENV} env var to a custom location).",
-                model_path.display(),
+                model_dir.display(),
             )));
         }
 
+        // 2. Check config.json
+        let config_path = model_dir.join("config.json");
+        if !config_path.exists() {
+            return Err(EmbedError::Unavailable(format!(
+                "model config.json not found at {}.",
+                config_path.display(),
+            )));
+        }
+
+        // 3. Check tokenizer.json
+        let tokenizer_path = config.resolved_tokenizer_path();
         if !tokenizer_path.exists() {
             return Err(EmbedError::Unavailable(format!(
-                "tokenizer not found at {}. \
-                 Place the HuggingFace tokenizer.json co-located with the model.",
+                "tokenizer not found at {}.",
                 tokenizer_path.display(),
             )));
         }
 
-        // ort 2.0.0-rc.14 起 Session::builder 需要显式 Environment；
-        // Session 通过 SharedSessionInner 内部持有它，函数内局部创建即可。
-        let environment = ort::init()
-            .with_name("codenexus-embed")
-            .build()
-            .map_err(|e| EmbedError::Unavailable(format!("ort environment init failed: {e}")))?;
+        // 4. Check weights — safetensors only; pytorch_model.bin (pickle) is
+        //    not supported by the Candle engine.
+        let safetensors_path = model_dir.join("model.safetensors");
+        if !safetensors_path.exists() {
+            return Err(EmbedError::Unavailable(format!(
+                "model weights not found at {} (expected model.safetensors; \
+                 pytorch_model.bin is not supported by the vecboost Candle engine).",
+                model_dir.display(),
+            )));
+        }
 
-        let session = ort::session::Session::builder(&environment)
-            .map_err(|e| EmbedError::Unavailable(format!("ort session builder failed: {e}")))?
-            .with_intra_threads(1)
-            .map_err(|e| EmbedError::Unavailable(format!("ort thread config failed: {e}")))?
-            .commit_from_file(&model_path)
-            .map_err(|e| EmbedError::Unavailable(format!("ort model load failed: {e}")))?;
+        // 5. Build VecBoostLibrary
+        let mc = ModelConfig {
+            name: config.model.clone(),
+            model_path: model_dir,
+            tokenizer_path: None,
+            pooling_mode: Some(PoolingMode::Mean),
+            expected_dimension: Some(EMBEDDING_DIM),
+            max_batch_size: 32,
+            model_sha256: config.model_sha256.clone(),
+            task: ModelTask::Embedding,
+            ..Default::default()
+        };
 
-        let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
-            .map_err(|e| EmbedError::Unavailable(format!("tokenizer load failed: {e}")))?;
+        let library = block_on_vecboost(VecBoostLibrary::new(LibraryConfig::from_model_config(mc)))
+            .map_err(vecboost_error_to_embed_error)?;
 
         Ok(Self {
-            session: Mutex::new(session),
-            tokenizer,
+            library,
             model: config.model.clone(),
         })
     }
@@ -318,288 +348,38 @@ impl LocalEmbedClient {
     pub fn model(&self) -> &str {
         &self.model
     }
-
-    /// Mean-pools the last hidden state using the attention mask.
-    ///
-    /// `hidden` is flat row-major data for shape `[1, seq_len, hidden_dim]`.
-    /// Returns a vector of length `hidden_dim` where each element is the mean
-    /// of the non-masked token embeddings along the sequence dimension.
-    fn mean_pool(
-        hidden: &[f32],
-        attention_mask: &[u32],
-        seq_len: usize,
-        hidden_dim: usize,
-    ) -> Vec<f32> {
-        let mut pooled = vec![0.0f32; hidden_dim];
-        let mut count = 0u32;
-        for (i, &mask_val) in attention_mask.iter().enumerate().take(seq_len) {
-            if mask_val > 0 {
-                let base = i * hidden_dim;
-                let end = base + hidden_dim;
-                for (p, &h) in pooled.iter_mut().zip(&hidden[base..end]) {
-                    *p += h;
-                }
-                count += 1;
-            }
-        }
-        if count > 0 {
-            for v in &mut pooled {
-                *v /= count as f32;
-            }
-        }
-        pooled
-    }
-
-    /// L2-normalizes a vector in place.
-    fn l2_normalize(vec: &mut [f32]) {
-        let norm: f32 = vec.iter().map(|v| v * v).sum::<f32>().sqrt();
-        if norm > 0.0 {
-            for v in vec.iter_mut() {
-                *v /= norm;
-            }
-        }
-    }
 }
-
-/// Upper bound on texts per ONNX `session.run` call. Bounds the padded
-/// batch tensor (`batch × max_len`) memory; larger inputs are chunked.
-const MAX_ONNX_BATCH: usize = 32;
 
 impl EmbedClient for LocalEmbedClient {
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        let mut results = Vec::with_capacity(texts.len());
-        for chunk in texts.chunks(MAX_ONNX_BATCH) {
-            let mut batch = vec![Vec::new(); chunk.len()];
-            self.embed_batch(chunk, &mut batch)?;
-            results.extend(batch);
-        }
-        Ok(results)
-    }
-}
-
-impl LocalEmbedClient {
-    /// Embeds one chunk into pre-sized `results` slots.
-    ///
-    /// Tokens are padded to the chunk's max sequence length and run as a
-    /// single `[batch, max_len]` inference — one `session.run` per chunk
-    /// instead of one per text (ONNX batch parallelism). If the runtime
-    /// rejects the batched shape (a model exported with a fixed batch axis
-    /// of 1), falls back to the per-text path so correctness never depends
-    /// on the ONNX export's dynamic axes.
-    fn embed_batch(&self, texts: &[&str], results: &mut [Vec<f32>]) -> Result<()> {
-        debug_assert_eq!(texts.len(), results.len());
-
-        // 1. Tokenize every text; collect ids/masks/types.
-        let mut encodings = Vec::with_capacity(texts.len());
-        for (i, text) in texts.iter().enumerate() {
-            let encoding = self
-                .tokenizer
-                .encode(*text, true)
-                .map_err(|e| EmbedError::Unavailable(format!("tokenization failed: {e}")))?;
-            if encoding.get_ids().is_empty() {
-                return Err(EmbedError::Unavailable(format!(
-                    "tokenization produced empty sequence (text #{i})"
-                )));
+        let owned: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
+        let library = &self.library;
+        // `embed_batch_sync` rejects calls from inside a tokio runtime context
+        // (vecboost's sync guard), and every CLI/MCP entry point is an async
+        // handler — inference must therefore run on a thread outside any
+        // runtime, where vecboost lazily builds its own. The loop stays on
+        // that one thread: one spawn per call, not per chunk.
+        let responses = on_dedicated_thread(move || {
+            let mut responses = Vec::with_capacity(owned.len().div_ceil(EMBED_CHUNK_TEXTS));
+            for chunk in owned.chunks(EMBED_CHUNK_TEXTS) {
+                responses.push(library.embed_batch_sync(chunk)?);
             }
-            encodings.push(encoding);
-        }
-
-        let batch = texts.len();
-        let max_len = encodings
-            .iter()
-            .map(|e| e.get_ids().len())
-            .max()
-            .expect("non-empty chunk");
-
-        // 2. Right-pad to [batch, max_len]: input ids pad with 0 ([PAD] for
-        //    BERT-style vocabularies), attention mask 0 (excluded from mean
-        //    pooling), token type ids 0.
-        let mut input_ids = Vec::with_capacity(batch * max_len);
-        let mut attention_mask = Vec::with_capacity(batch * max_len);
-        let mut token_type_ids = Vec::with_capacity(batch * max_len);
-        let mut per_text_masks: Vec<&[u32]> = Vec::with_capacity(batch);
-        for encoding in &encodings {
-            let ids = encoding.get_ids();
-            let mask = encoding.get_attention_mask();
-            let types = encoding.get_type_ids();
-            input_ids.extend(ids.iter().map(|&v| v as i64));
-            attention_mask.extend(mask.iter().map(|&v| v as i64));
-            token_type_ids.extend(types.iter().map(|&v| v as i64));
-            for _ in ids.len()..max_len {
-                input_ids.push(0);
-                attention_mask.push(0);
-                token_type_ids.push(0);
-            }
-            per_text_masks.push(mask);
-        }
-
-        // 3. Build [batch, max_len] tensors and run once.
-        let to_array2 = |data: &[i64]| -> Result<ndarray::Array2<i64>> {
-            ndarray::Array2::from_shape_vec((batch, max_len), data.to_vec())
-                .map_err(|e| EmbedError::Unavailable(format!("ndarray reshape: {e}")))
-        };
-        let input_ids_arr = to_array2(&input_ids)?;
-        let attention_mask_arr = to_array2(&attention_mask)?;
-        let token_type_ids_arr = to_array2(&token_type_ids)?;
-
-        let input_ids_value = ort::value::Value::from_array(input_ids_arr)
-            .map_err(|e| EmbedError::Unavailable(format!("input_ids value: {e}")))?;
-        let attention_mask_value = ort::value::Value::from_array(attention_mask_arr)
-            .map_err(|e| EmbedError::Unavailable(format!("attention_mask value: {e}")))?;
-        let token_type_ids_value = ort::value::Value::from_array(token_type_ids_arr)
-            .map_err(|e| EmbedError::Unavailable(format!("token_type_ids value: {e}")))?;
-
-        // Pool inside the block (ort outputs borrow the session guard); the
-        // per-text fallback afterwards needs `&self` again, so the outcome is
-        // carried out as owned vectors.
-        enum BatchOutcome {
-            /// One pooled+normalized vector per input text.
-            Pooled(Vec<Vec<f32>>),
-            /// The runtime rejected the batched shape — retry per-text.
-            Rejected(String),
-        }
-
-        let outcome: Result<BatchOutcome> = {
-            // Session::run requires &mut self, so lock the mutex.
-            let mut session = self
-                .session
-                .lock()
-                .map_err(|e| EmbedError::Unavailable(format!("session mutex poisoned: {e}")))?;
-
-            let inputs = ort::inputs![
-                &input_ids_value,
-                &attention_mask_value,
-                &token_type_ids_value
-            ];
-
-            let run_result = session.run(inputs);
-            match run_result {
-                Ok(outputs) => {
-                    // `last_hidden_state`: [batch, max_len, hidden], row-major.
-                    let (_shape, hidden_data) = outputs["last_hidden_state"]
-                        .try_extract_tensor::<f32>()
-                        .map_err(|e| EmbedError::Unavailable(format!("ort output extract: {e}")))?;
-                    let hidden_dim = hidden_data.len() / (batch * max_len);
-
-                    let mut pooled_batch = Vec::with_capacity(batch);
-                    for mask in &per_text_masks {
-                        let i = pooled_batch.len();
-                        let base = i * max_len * hidden_dim;
-                        let row = &hidden_data[base..base + max_len * hidden_dim];
-                        let mut pooled = Self::mean_pool(row, mask, max_len, hidden_dim);
-                        Self::l2_normalize(&mut pooled);
-                        if pooled.len() != EMBEDDING_DIM {
-                            return Err(EmbedError::DimensionMismatch {
-                                expected: EMBEDDING_DIM,
-                                actual: pooled.len(),
-                            });
-                        }
-                        pooled_batch.push(pooled);
-                    }
-                    Ok(BatchOutcome::Pooled(pooled_batch))
-                }
-                Err(err) => Ok(BatchOutcome::Rejected(err.to_string())),
-            }
-        };
-
-        match outcome? {
-            BatchOutcome::Pooled(pooled_batch) => {
-                results.clone_from_slice(&pooled_batch);
-                Ok(())
-            }
-            BatchOutcome::Rejected(batch_err) => {
-                // Fixed-batch ONNX export (batch axis = 1): fall back to the
-                // per-text path so the caller always gets vectors.
-                tracing::debug!(
-                    error = %batch_err,
-                    batch = batch,
-                    "batched inference rejected by the runtime; falling back to per-text"
-                );
-                for (i, text) in texts.iter().enumerate() {
-                    results[i] = self.embed_single(text)?;
-                }
-                Ok(())
+            Ok::<_, VecboostError>(responses)
+        })
+        .map_err(vecboost_error_to_embed_error)?;
+        let embeddings: Vec<Vec<f32>> = responses
+            .into_iter()
+            .flat_map(|resp| resp.embeddings.into_iter().map(|r| r.embedding))
+            .collect();
+        for emb in &embeddings {
+            if emb.len() != EMBEDDING_DIM {
+                return Err(EmbedError::DimensionMismatch {
+                    expected: EMBEDDING_DIM,
+                    actual: emb.len(),
+                });
             }
         }
-    }
-
-    /// Single-text inference path (batch fallback; original semantics).
-    fn embed_single(&self, text: &str) -> Result<Vec<f32>> {
-        let encoding = self
-            .tokenizer
-            .encode(text, true)
-            .map_err(|e| EmbedError::Unavailable(format!("tokenization failed: {e}")))?;
-
-        let input_ids = encoding.get_ids();
-        let attention_mask = encoding.get_attention_mask();
-        let token_type_ids = encoding.get_type_ids();
-        let seq_len = input_ids.len();
-
-        if seq_len == 0 {
-            return Err(EmbedError::Unavailable(
-                "tokenization produced empty sequence".to_string(),
-            ));
-        }
-
-        let input_ids_arr = ndarray::Array2::from_shape_vec(
-            (1, seq_len),
-            input_ids.iter().map(|&v| v as i64).collect(),
-        )
-        .map_err(|e| EmbedError::Unavailable(format!("input_ids ndarray: {e}")))?;
-
-        let attention_mask_arr = ndarray::Array2::from_shape_vec(
-            (1, seq_len),
-            attention_mask.iter().map(|&v| v as i64).collect(),
-        )
-        .map_err(|e| EmbedError::Unavailable(format!("attention_mask ndarray: {e}")))?;
-
-        // arctic-embed-xs (BERT-style) uses token_type_ids; reuse the
-        // tokenizer-provided ones rather than a zero vector to stay
-        // faithful to the model's training distribution.
-        let token_type_ids_arr = ndarray::Array2::from_shape_vec(
-            (1, seq_len),
-            token_type_ids.iter().map(|&v| v as i64).collect(),
-        )
-        .map_err(|e| EmbedError::Unavailable(format!("token_type_ids ndarray: {e}")))?;
-
-        let input_ids_value = ort::value::Value::from_array(input_ids_arr)
-            .map_err(|e| EmbedError::Unavailable(format!("input_ids value: {e}")))?;
-        let attention_mask_value = ort::value::Value::from_array(attention_mask_arr)
-            .map_err(|e| EmbedError::Unavailable(format!("attention_mask value: {e}")))?;
-        let token_type_ids_value = ort::value::Value::from_array(token_type_ids_arr)
-            .map_err(|e| EmbedError::Unavailable(format!("token_type_ids value: {e}")))?;
-
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|e| EmbedError::Unavailable(format!("session mutex poisoned: {e}")))?;
-
-        let inputs = ort::inputs![
-            &input_ids_value,
-            &attention_mask_value,
-            &token_type_ids_value
-        ];
-
-        let outputs = session
-            .run(inputs)
-            .map_err(|e| EmbedError::Unavailable(format!("ort inference failed: {e}")))?;
-
-        let (_shape, hidden_data) = outputs["last_hidden_state"]
-            .try_extract_tensor::<f32>()
-            .map_err(|e| EmbedError::Unavailable(format!("ort output extract: {e}")))?;
-
-        let hidden_dim = hidden_data.len() / seq_len;
-
-        let mut pooled = Self::mean_pool(hidden_data, attention_mask, seq_len, hidden_dim);
-        Self::l2_normalize(&mut pooled);
-
-        if pooled.len() != EMBEDDING_DIM {
-            return Err(EmbedError::DimensionMismatch {
-                expected: EMBEDDING_DIM,
-                actual: pooled.len(),
-            });
-        }
-        Ok(pooled)
+        Ok(embeddings)
     }
 }
 
@@ -609,6 +389,116 @@ impl std::fmt::Debug for LocalEmbedClient {
             .field("model", &self.model)
             .finish()
     }
+}
+
+// ---------------------------------------------------------------------------
+// vecboost construction helper
+// ---------------------------------------------------------------------------
+
+/// Per-call client-side inference chunk. vecboost hard-rejects any batch above
+/// its global `MAX_BATCH_SIZE` (100) regardless of the `max_batch_size` model
+/// config, while the previous ort path chunked at 32 — chunking stays here so
+/// callers can pass any number of texts.
+const EMBED_CHUNK_TEXTS: usize = 32;
+
+/// Runs a blocking closure on a dedicated OS thread, outside any tokio
+/// runtime context.
+///
+/// vecboost's sync API refuses to run inside a runtime; this is the escape
+/// hatch for it. The thread itself needs no runtime — the sync path lazily
+/// builds vecboost's own. Returns `Err` (not panic) if the closure panicked:
+/// the join observes the unwind and turns it into a `VecboostError`. Note the
+/// release profile sets `panic = "abort"`, under which a panic takes the whole
+/// process down before `join` returns — the `Err` path is a dev/test safety
+/// net, not a production one.
+fn on_dedicated_thread<F, T>(f: F) -> std::result::Result<T, VecboostError>
+where
+    F: FnOnce() -> std::result::Result<T, VecboostError> + Send,
+    T: Send,
+{
+    match std::thread::scope(|scope| scope.spawn(f).join()) {
+        Ok(inner) => inner,
+        Err(_) => Err(VecboostError::InternalError(
+            "vecboost inference thread panicked".to_string(),
+        )),
+    }
+}
+
+/// Constructs a `VecBoostLibrary` by running its async constructor on a
+/// dedicated OS thread with a fresh tokio runtime.
+///
+/// The constructor runs once per client load (cached by the capability), so
+/// the thread cost is not on the inference hot path. Returns `Err` (not
+/// panic) if the runtime cannot be built; a thread panic unwinds into the
+/// join's `Err` arm under the default unwind profile — under the release
+/// profile's `panic = "abort"` it terminates the process, like any panic.
+fn block_on_vecboost<F, T>(fut: F) -> std::result::Result<T, VecboostError>
+where
+    F: Future<Output = std::result::Result<T, VecboostError>> + Send,
+    T: Send,
+{
+    std::thread::scope(|scope| {
+        let handle = scope.spawn(|| {
+            match tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt.block_on(fut),
+                Err(e) => Err(VecboostError::InternalError(format!(
+                    "failed to build tokio runtime: {e}"
+                ))),
+            }
+        });
+        match handle.join() {
+            Ok(inner) => inner,
+            Err(_) => Err(VecboostError::InternalError(
+                "vecboost runtime thread panicked".to_string(),
+            )),
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Error mapping
+// ---------------------------------------------------------------------------
+
+/// Maps a `VecboostError` to [`EmbedError::Unavailable`].
+///
+/// Exhaustive match over all 20 `VecboostError` variants — no catch-all arm,
+/// so upstream additions cause a compile error forcing an explicit decision.
+///
+/// Invariant: the in-process library path (no network server) does not produce
+/// the server-side operational variants — `AuthenticationError`,
+/// `RateLimitExceeded`, `Overloaded`, `RequestTimeout`, `DatabaseError` belong
+/// to the HTTP/auth/pipeline layers, not to local inference. All variants
+/// therefore collapse into the single retry/fallback classification
+/// [`EmbedError::Unavailable`] (callers degrade to BM25), with the original
+/// detail string preserved for diagnostics.
+fn vecboost_error_to_embed_error(e: VecboostError) -> EmbedError {
+    let detail = match e {
+        VecboostError::ConfigError(s) => s,
+        VecboostError::ModelLoadError(s) => s,
+        VecboostError::ModelFileCorrupted(s) => s,
+        VecboostError::ModelIntegrityError(s) => s,
+        VecboostError::TokenizationError(s) => s,
+        VecboostError::InferenceError(s) => s,
+        VecboostError::OutOfMemory(s) => s,
+        VecboostError::InvalidInput(s) => s,
+        VecboostError::NotFound(s) => s,
+        VecboostError::ModelNotLoaded(s) => s,
+        VecboostError::AuthenticationError(s) => s,
+        VecboostError::SecurityError(s) => s,
+        VecboostError::IoError(s) => s,
+        VecboostError::ValidationError(s) => s,
+        VecboostError::RateLimitExceeded(s) => s,
+        VecboostError::Overloaded(s) => s,
+        VecboostError::RequestTimeout(s) => s,
+        VecboostError::UnsupportedTask(s) => s,
+        VecboostError::DatabaseError(s) => s,
+        VecboostError::InternalError(s) => s,
+    };
+    EmbedError::Unavailable(detail)
 }
 
 /// Mock embedding client for testing (no network access).
@@ -751,7 +641,7 @@ impl CachedEmbedClient {
     /// Creates a new cached embedding client wrapping `inner` with `cache`.
     ///
     /// `inner` is an [`Arc`] so callers that keep a lazily-initialised client
-    /// (e.g. the ONNX [`LocalEmbedClient`] behind a mutex) can share the same
+    /// (e.g. the [`LocalEmbedClient`] behind a mutex) can share the same
     /// instance between the cached wrapper and the fallback path.
     #[must_use]
     pub fn new(inner: Arc<dyn EmbedClient>, cache: Arc<dyn CacheStore>) -> Self {
@@ -1004,7 +894,7 @@ mod tests {
     #[test]
     fn local_client_new_with_nonexistent_custom_path_returns_unavailable() {
         let cfg = EmbeddingConfig {
-            model_path: Some(std::path::PathBuf::from("/nonexistent/model.onnx")),
+            model_path: Some(std::path::PathBuf::from("/nonexistent/model-dir")),
             ..EmbeddingConfig::default()
         };
         let result = LocalEmbedClient::new(&cfg);
@@ -1015,61 +905,103 @@ mod tests {
             "error should mention 'not found': {msg}"
         );
         assert!(
-            msg.contains("/nonexistent/model.onnx"),
+            msg.contains("/nonexistent/model-dir"),
             "error should mention the path: {msg}"
         );
     }
 
     #[test]
+    fn local_client_new_bundle_missing_tokenizer_returns_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("model.safetensors"), b"placeholder").unwrap();
+
+        let cfg = EmbeddingConfig {
+            model_path: Some(dir.path().to_path_buf()),
+            ..EmbeddingConfig::default()
+        };
+        let result = LocalEmbedClient::new(&cfg);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("tokenizer") && msg.contains("not found"),
+            "expected tokenizer not found, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn local_client_new_rejects_missing_weights_in_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("tokenizer.json"), "{}").unwrap();
+
+        let cfg = EmbeddingConfig {
+            model_path: Some(dir.path().to_path_buf()),
+            ..EmbeddingConfig::default()
+        };
+        let result = LocalEmbedClient::new(&cfg);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("weights") && msg.contains("not found"),
+            "expected weights not found, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn local_client_new_rejects_pytorch_bin_only_bundle() {
+        // pytorch_model.bin (pickle) is not loadable by the Candle engine —
+        // the pre-check must reject the bundle instead of failing later with
+        // an obscure load error.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("tokenizer.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("pytorch_model.bin"), b"placeholder").unwrap();
+
+        let cfg = EmbeddingConfig {
+            model_path: Some(dir.path().to_path_buf()),
+            ..EmbeddingConfig::default()
+        };
+        let result = LocalEmbedClient::new(&cfg);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("model.safetensors") && msg.contains("pytorch_model.bin"),
+            "expected safetensors-only contract message, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn local_client_new_bundle_missing_config_returns_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("tokenizer.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("model.safetensors"), b"placeholder").unwrap();
+
+        let cfg = EmbeddingConfig {
+            model_path: Some(dir.path().to_path_buf()),
+            ..EmbeddingConfig::default()
+        };
+        let result = LocalEmbedClient::new(&cfg);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("config.json") && msg.contains("not found"),
+            "expected config.json not found, got: {msg}"
+        );
+    }
+
+    #[test]
     fn local_client_debug_shows_model_name() {
-        // We can't construct a LocalEmbedClient without a real model file,
+        // We can't construct a LocalEmbedClient without a real model bundle,
         // but we can verify the Debug impl format via MockEmbedClient
         // pattern. This test documents the expected Debug format.
-        // (Actual Debug test requires a model file — integration concern.)
+        // (Actual Debug test requires a model bundle — integration concern.)
     }
 
     #[test]
-    fn local_client_mean_pool_correctness() {
-        // Unit test for the mean_pool helper (no model file needed).
-        // Shape: [1, 3, 2] — 3 tokens, 2 hidden dims. Flat row-major data.
-        let hidden_data = vec![
-            // token 0 (masked in)
-            1.0, 2.0, // token 1 (masked out)
-            100.0, 200.0, // token 2 (masked in)
-            3.0, 4.0,
-        ];
-        let attention_mask = vec![1u32, 0u32, 1u32];
-
-        let pooled = LocalEmbedClient::mean_pool(&hidden_data, &attention_mask, 3, 2);
-
-        // Mean of [1.0, 3.0] = 2.0; mean of [2.0, 4.0] = 3.0
-        // (token 1 is masked out and excluded)
-        assert_eq!(pooled, vec![2.0, 3.0]);
-    }
-
-    #[test]
-    fn local_client_mean_pool_all_masked_returns_zeros() {
-        // Edge case: all tokens masked out → returns zeros (no division by zero).
-        let hidden_data = vec![1.0, 2.0, 3.0, 4.0];
-        let attention_mask = vec![0u32, 0u32];
-
-        let pooled = LocalEmbedClient::mean_pool(&hidden_data, &attention_mask, 2, 2);
-        assert_eq!(pooled, vec![0.0, 0.0]);
-    }
-
-    #[test]
-    fn local_client_l2_normalize_correctness() {
-        let mut vec = vec![3.0, 4.0]; // norm = 5.0
-        LocalEmbedClient::l2_normalize(&mut vec);
-        assert!((vec[0] - 0.6).abs() < 1e-6, "expected 0.6, got {}", vec[0]);
-        assert!((vec[1] - 0.8).abs() < 1e-6, "expected 0.8, got {}", vec[1]);
-    }
-
-    #[test]
-    fn local_client_l2_normalize_zero_vector_noop() {
-        let mut vec = vec![0.0, 0.0, 0.0];
-        LocalEmbedClient::l2_normalize(&mut vec);
-        assert_eq!(vec, vec![0.0, 0.0, 0.0]);
+    fn local_embed_client_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<LocalEmbedClient>();
     }
 
     // --- EmbedClient trait object ---

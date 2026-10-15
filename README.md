@@ -96,7 +96,7 @@
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🧮 <b>分析工具包</b><br><span style="color:#64748B">死代码检测（worklist 可达性 + 置信度）、架构概览、复杂度分析（8 项指标）、社区检测（Leiden）、跨服务调用链</span></td>
-<td width="50%" style="vertical-align:top; padding: 12px">🧠 <b>向量嵌入</b><br><span style="color:#64748B">默认启用的语义搜索（<code>embeddings</code> feature，本地 ONNX 推理 + BM25 全文）</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🧠 <b>向量嵌入</b><br><span style="color:#64748B">默认启用的语义搜索（<code>embeddings</code> feature，本地 Candle 推理 + BM25 全文）</span></td>
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🌍 <b>国际化</b><br><span style="color:#64748B">Unicode case folding + NFC 规范化（ICU4X，<code>i18n</code> feature，含于 <code>full</code> 预设）</span></td>
@@ -164,7 +164,7 @@ cargo build --release
 | `lang-regex`      | —    | 正则语言解析器（tree-sitter-regex） |
 | `lang-verilog`    | —    | Verilog 语言解析器（tree-sitter-verilog） |
 | `daemon`          | 启用 | 文件监视守护进程（notify + notify-debouncer-full） |
-| `embeddings`      | 启用 | 向量嵌入语义搜索（reqwest HTTP + 本地 ONNX 推理） |
+| `embeddings`      | 启用 | 向量嵌入语义搜索（reqwest HTTP + 本地 Candle 推理） |
 | `lsp`             | 启用 | LSP 增强解析（7 个 LSP 客户端） |
 | `analysis`        | 启用 | 死代码检测 + 架构概览（纯 Cypher 聚合） |
 | `complexity`      | 启用 | AST 复杂度分析（8 项指标，依赖 `analysis`） |
@@ -502,7 +502,7 @@ CodeNexus 站在以下优秀开源项目的肩膀上：
 | [trait-kit](https://crates.io/crates/trait-kit) | 能力注册表 |
 | [oxcache](https://crates.io/crates/oxcache) | 查询结果缓存 |
 | [inklog](https://crates.io/crates/inklog) | 日志后端（console + 轮转 + LZ4 压缩） |
-| [ort](https://github.com/pykeio/ort) / tokenizers | 本地 ONNX 向量嵌入推理 |
+| [vecboost](https://github.com/Kirky-X/vecboost) | 本地 Candle 向量嵌入推理 |
 | [ICU4X](https://github.com/unicode-org/icu4x)（icu_normalizer / icu_casemap） | Unicode 规范化与大小写折叠 |
 | [petgraph](https://github.com/petgraph/petgraph) | 社区检测图算法 |
 | [criterion](https://github.com/bheisler/criterion.rs) | 基准测试 |

@@ -23,18 +23,38 @@
 //! keeps the highest priority across rebuilds, a bare level in it
 //! (`RUST_LOG=info`) out-ranks a global hot-tune — unset `RUST_LOG` for the
 //! tune to take effect; per-target entries are unaffected.
+//!
+//! Log-volume knobs follow the same env pattern: [`SAMPLE_ENV`] configures
+//! inklog's sampling (which records survive under rate-limit pressure) and
+//! [`RATE_LIMIT_ENV`] per-target-prefix token quotas. Both go through
+//! `InklogConfig` — the config path validates up front and does not pass
+//! through the builder-side sampling gap noted in the 0.3.13-rc.1 changelog.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use inklog::{ConsoleSinkConfig, FileSinkConfig, InklogConfig, LogLevel, LoggerManager};
+use inklog::{
+    ConsoleSinkConfig, FileSinkConfig, InklogConfig, LogLevel, LoggerManager, RateLimitConfig,
+    SamplingConfig, TargetSamplingRule,
+};
 
 /// Global level used when `RUST_LOG` carries no plain level name.
 const DEFAULT_LEVEL: &str = "info";
 
 /// Per-target level presets: `target=level` pairs separated by commas.
 const TARGET_LEVELS_ENV: &str = "CODENEXUS_LOG_TARGETS";
+
+/// Sampling spec: `level=N` or `prefix=N[@level]` pairs separated by commas.
+/// A key that names a valid level feeds inklog's per-level sampling; any
+/// other key is a target prefix, with the optional `@level` suffix marking
+/// records at or above it as always kept (`sqlx=100@warn`).
+const SAMPLE_ENV: &str = "CODENEXUS_LOG_SAMPLE";
+
+/// Per-target-prefix log quotas in tokens/second: `prefix=rate` pairs
+/// separated by commas. Prefixes inklog matches longest-first; targets no
+/// rule covers stay on the unthrottled global path.
+const RATE_LIMIT_ENV: &str = "CODENEXUS_LOG_RATE_LIMIT";
 
 /// Log file inside [`crate::DEFAULT_DB_DIR`] so a one-off command in any
 /// project creates only the side-effect directory users already gitignore.
@@ -120,11 +140,122 @@ fn target_levels(spec: &str) -> HashMap<String, String> {
     levels
 }
 
-/// Builds the inklog configuration for the CLI binaries from the `RUST_LOG`
-/// and [`TARGET_LEVELS_ENV`] values (passed in so tests can pin them).
-fn config(rust_log: &str, target_spec: &str) -> InklogConfig {
+/// One parsed [`SAMPLE_ENV`] entry: a level name resolves to per-level
+/// sampling (levels are a closed set, so the check is unambiguous), anything
+/// else is a target prefix.
+enum SampleRule {
+    Level(&'static str, u64),
+    Prefix(String, TargetSamplingRule),
+}
+
+/// Parses one `key=N` / `key=N@level` sample entry; `None` marks it invalid.
+fn parse_sample_entry(entry: &str) -> Option<SampleRule> {
+    let (key, spec) = entry.split_once('=')?;
+    let (every_n, keep_level) = match spec.split_once('@') {
+        Some((n, keep)) => (n, Some(canonical_level(keep.trim())?)),
+        None => (spec, None),
+    };
+    let every_n: u64 = every_n.trim().parse().ok()?;
+    if every_n == 0 {
+        return None;
+    }
+    let key = key.trim();
+    if key.is_empty() {
+        return None;
+    }
+    if let Some(level) = canonical_level(key) {
+        return Some(SampleRule::Level(level, every_n));
+    }
+    Some(SampleRule::Prefix(
+        key.to_string(),
+        TargetSamplingRule {
+            keep_level: keep_level.map(str::to_string),
+            sample_every_n: every_n,
+        },
+    ))
+}
+
+/// Parses [`SAMPLE_ENV`] into inklog's sampling config. Invalid entries are
+/// reported to stderr and skipped, mirroring [`target_levels`].
+fn sample_config(spec: &str) -> SamplingConfig {
+    let mut config = SamplingConfig::default();
+    for entry in spec.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+        match parse_sample_entry(entry) {
+            Some(SampleRule::Level(level, every_n)) => {
+                config.per_level.insert(level.to_string(), every_n);
+            }
+            Some(SampleRule::Prefix(prefix, rule)) => {
+                config.per_target_prefix.insert(prefix, rule);
+            }
+            None => {
+                let display: String = entry.chars().filter(|c| !c.is_control()).collect();
+                eprintln!(
+                    "{}",
+                    crate::i18n::t("logging-invalid_sample_entry", &[("entry", display)])
+                );
+            }
+        }
+    }
+    config
+}
+
+/// Parses one `prefix=rate` entry; `None` marks it invalid. Kept symmetric
+/// with [`parse_sample_entry`] so all three env parsers share one shape.
+fn parse_rate_limit_entry(entry: &str) -> Option<(String, u64)> {
+    let (prefix, rate) = entry.split_once('=')?;
+    let rate: u64 = rate.trim().parse().ok()?;
+    (rate > 0 && !prefix.trim().is_empty()).then(|| (prefix.trim().to_string(), rate))
+}
+
+/// Parses [`RATE_LIMIT_ENV`] into inklog's per-target-prefix quotas, with the
+/// same invalid-entry discipline as [`sample_config`].
+fn rate_limit_config(spec: &str) -> RateLimitConfig {
+    let mut config = RateLimitConfig::default();
+    for entry in spec.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+        match parse_rate_limit_entry(entry) {
+            Some((prefix, rate)) => {
+                config.rules.insert(prefix, rate);
+            }
+            None => {
+                let display: String = entry.chars().filter(|c| !c.is_control()).collect();
+                eprintln!(
+                    "{}",
+                    crate::i18n::t("logging-invalid_rate_limit_entry", &[("entry", display)])
+                );
+            }
+        }
+    }
+    config
+}
+
+/// The four env specs [`config`] consumes, read from the process environment
+/// by [`LogEnv::from_env`] and pinned field-by-field by tests. Three of the
+/// four are same-typed comma specs — a struct keeps them from being swapped
+/// silently at a call site the way positional `&str` parameters would.
+#[derive(Debug, Clone, Default)]
+struct LogEnv {
+    rust_log: String,
+    targets: String,
+    sample: String,
+    rate_limit: String,
+}
+
+impl LogEnv {
+    fn from_env() -> Self {
+        Self {
+            rust_log: std::env::var("RUST_LOG").unwrap_or_default(),
+            targets: std::env::var(TARGET_LEVELS_ENV).unwrap_or_default(),
+            sample: std::env::var(SAMPLE_ENV).unwrap_or_default(),
+            rate_limit: std::env::var(RATE_LIMIT_ENV).unwrap_or_default(),
+        }
+    }
+}
+
+/// Builds the inklog configuration for the CLI binaries from the specs in
+/// `env`.
+fn config(env: &LogEnv) -> InklogConfig {
     let mut config = InklogConfig::default();
-    config.global.level = global_level(rust_log).to_string();
+    config.global.level = global_level(&env.rust_log).to_string();
     config.global.format = LOG_FORMAT.to_string();
     config.console_sink = Some(ConsoleSinkConfig {
         enabled: true,
@@ -145,24 +276,23 @@ fn config(rust_log: &str, target_spec: &str) -> InklogConfig {
         ..Default::default()
     });
     config.performance.channel_capacity = LOG_CHANNEL_CAPACITY;
-    config.target_levels = target_levels(target_spec);
+    config.target_levels = target_levels(&env.targets);
+    config.sampling = sample_config(&env.sample);
+    config.rate_limit = rate_limit_config(&env.rate_limit);
     config
 }
 
 /// Initializes the global inklog logger (tracing subscriber + `log` facade).
 ///
-/// Reads `RUST_LOG` and [`TARGET_LEVELS_ENV`]; the first call installs the
-/// logger, later calls are no-ops. Panics only if inklog's runtime or logger
-/// setup fails (unusable `RUST_LOG` directives surface as the same failure as
-/// before).
+/// Reads `RUST_LOG`, [`TARGET_LEVELS_ENV`], [`SAMPLE_ENV`] and
+/// [`RATE_LIMIT_ENV`]; the first call installs the logger, later calls are
+/// no-ops. Panics only if inklog's runtime or logger setup fails (unusable
+/// `RUST_LOG` directives surface as the same failure as before).
 pub fn init_logging() {
     if LOGGER.get().is_some() {
         return;
     }
-    let config = config(
-        &std::env::var("RUST_LOG").unwrap_or_default(),
-        &std::env::var(TARGET_LEVELS_ENV).unwrap_or_default(),
-    );
+    let config = config(&LogEnv::from_env());
     let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime for inklog");
     let logger = runtime
         .block_on(LoggerManager::with_config(config))
@@ -305,7 +435,10 @@ mod tests {
 
     #[test]
     fn config_carries_every_previous_builder_knob() {
-        let config = config("debug", "");
+        let config = config(&LogEnv {
+            rust_log: "debug".to_string(),
+            ..Default::default()
+        });
         assert_eq!(config.global.level, "debug");
         assert_eq!(config.global.format, LOG_FORMAT);
 
@@ -330,6 +463,71 @@ mod tests {
 
         assert_eq!(config.performance.channel_capacity, LOG_CHANNEL_CAPACITY);
         assert!(config.target_levels.is_empty());
+        assert!(config.sampling.is_empty());
+        assert!(config.rate_limit.is_empty());
+    }
+
+    /// `CODENEXUS_LOG_SAMPLE`: level keys land in `per_level`, other keys in
+    /// `per_target_prefix` (with the `@level` keep exemption); invalid
+    /// entries are skipped rather than poisoning the whole config — inklog
+    /// hard-rejects invalid sampling configs, so the parser must never
+    /// forward one.
+    #[test]
+    fn sample_config_splits_levels_from_target_prefixes() {
+        let config = sample_config("debug=10, sqlx=100@warn, warning=5");
+        assert_eq!(
+            config.per_level,
+            HashMap::from([
+                ("debug".to_string(), 10),
+                ("warn".to_string(), 5), // alias normalized
+            ])
+        );
+        let rule = config
+            .per_target_prefix
+            .get("sqlx")
+            .expect("sqlx rule present");
+        assert_eq!(rule.sample_every_n, 100);
+        assert_eq!(rule.keep_level.as_deref(), Some("warn"));
+
+        let plain = sample_config("lbug=3");
+        assert!(plain.per_level.is_empty());
+        let rule = plain.per_target_prefix.get("lbug").expect("prefix rule");
+        assert_eq!(rule.sample_every_n, 3);
+        assert_eq!(rule.keep_level, None);
+
+        for bad in [
+            "debug",      // no '='
+            "=10",        // empty key
+            "debug=0",    // rate must be >= 1
+            "sqlx=10@no", // invalid keep level
+            "sqlx=x",     // non-numeric rate
+        ] {
+            let config = sample_config(bad);
+            assert!(
+                config.per_level.is_empty() && config.per_target_prefix.is_empty(),
+                "invalid entry {bad:?} must be dropped"
+            );
+        }
+    }
+
+    /// `CODENEXUS_LOG_RATE_LIMIT`: `prefix=rate` pairs; zero or non-numeric
+    /// rates and empty prefixes are skipped (inklog hard-rejects them).
+    #[test]
+    fn rate_limit_config_parses_prefix_quotas_and_skips_invalid() {
+        let config = rate_limit_config("sqlx=50, codenexus::daemon=200");
+        assert_eq!(
+            config.rules,
+            HashMap::from([
+                ("sqlx".to_string(), 50),
+                ("codenexus::daemon".to_string(), 200),
+            ])
+        );
+        for bad in ["sqlx", "=50", "sqlx=0", "sqlx=fast"] {
+            assert!(
+                rate_limit_config(bad).rules.is_empty(),
+                "invalid entry {bad:?} must be dropped"
+            );
+        }
     }
 
     #[test]
@@ -377,7 +575,11 @@ mod tests {
             "trace,codenexus=trace",
             "not-a-level",
         ] {
-            let config = config(rust_log, "hyper=warn");
+            let config = config(&LogEnv {
+                rust_log: rust_log.to_string(),
+                targets: "hyper=warn".to_string(),
+                ..Default::default()
+            });
             assert!(
                 LogLevel::is_valid_level(&config.global.level),
                 "global level must stay a plain level name, got {:?} for RUST_LOG={rust_log:?}",
@@ -396,10 +598,11 @@ mod tests {
     #[serial_test::serial(logging_env)]
     async fn rust_log_directives_and_presets_reach_the_env_filter() {
         let _env = EnvGuard::set("RUST_LOG", "codenexus=debug,sqlx=warn");
-        let (manager, _subscriber, filter) = LoggerManager::build_detached(config(
-            &std::env::var("RUST_LOG").unwrap(),
-            "hyper=warn",
-        ))
+        let (manager, _subscriber, filter) = LoggerManager::build_detached(config(&LogEnv {
+            rust_log: std::env::var("RUST_LOG").unwrap(),
+            targets: "hyper=warn".to_string(),
+            ..Default::default()
+        }))
         .await
         .expect("build_detached should succeed");
 
@@ -427,10 +630,13 @@ mod tests {
     #[serial_test::serial(logging_env)]
     async fn hot_set_level_upserts_directives_and_rejects_invalid() {
         let _env = EnvGuard::set("RUST_LOG", "");
-        let (manager, _subscriber, _filter) =
-            LoggerManager::build_detached(config("info", "hyper=warn"))
-                .await
-                .expect("build_detached should succeed");
+        let (manager, _subscriber, _filter) = LoggerManager::build_detached(config(&LogEnv {
+            rust_log: "info".to_string(),
+            targets: "hyper=warn".to_string(),
+            ..Default::default()
+        }))
+        .await
+        .expect("build_detached should succeed");
         assert_eq!(manager.current_level_filter_string(), "info,hyper=warn");
 
         let set = |target: Option<&str>, level: &str| {
