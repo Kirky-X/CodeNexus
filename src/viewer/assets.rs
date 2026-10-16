@@ -45,12 +45,20 @@ pub(super) fn fallback_page() -> String {
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;");
+    let title = tr("graph-viewer-fallback-title")
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let heading = tr("graph-viewer-fallback-heading")
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <title>CodeNexus graph-viewer</title></head>\
+         <title>{title}</title></head>\
          <body style=\"font-family: system-ui, sans-serif; margin: 3rem auto; max-width: 40rem; line-height: 1.6;\">\
-         <h1>CodeNexus graph-viewer</h1><p>{message}</p></body></html>"
+         <h1>{heading}</h1><p>{message}</p></body></html>"
     )
 }
 
@@ -75,6 +83,27 @@ mod tests {
             assert_eq!(ViewerAssets::iter().count(), 0);
             assert!(fallback_page().contains("npm run build"));
         }
+    }
+
+    /// The fallback page's title and heading come from the catalog (not from
+    /// a hardcoded literal), so both must render through `init()`.
+    #[test]
+    #[serial_test::serial(i18n_catalog)]
+    fn fallback_page_title_and_heading_come_from_catalog() {
+        crate::i18n::init();
+        let page = fallback_page();
+        assert!(
+            page.contains(&tr("graph-viewer-fallback-title")),
+            "title must be the catalog entry: {page}"
+        );
+        assert!(
+            page.contains(&tr("graph-viewer-fallback-heading")),
+            "heading must be the catalog entry: {page}"
+        );
+        assert!(
+            page.contains(&tr("graph-viewer-dist-missing")),
+            "body guidance must stay translated: {page}"
+        );
     }
 
     #[test]

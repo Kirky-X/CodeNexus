@@ -120,8 +120,7 @@ fn run_cli() {
                 exit_with_api_error(
                     format,
                     sdforge::prelude::ApiError::InvalidInput {
-                        message: "no subcommand supplied (run `codenexus --help` to list commands)"
-                            .to_string(),
+                        message: codenexus::i18n::tr("cli-no-subcommand"),
                         field: None,
                         value: None,
                     },

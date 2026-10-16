@@ -32,6 +32,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use super::{EmbedError, EmbeddingConfig, Result, EMBEDDING_DIM, EMBED_MODEL_PATH_ENV};
+use crate::i18n::t;
 
 use vecboost::config::model::{ModelConfig, ModelTask, PoolingMode};
 use vecboost::error::VecboostError;
@@ -284,20 +285,21 @@ impl LocalEmbedClient {
 
         // 1. Check directory exists
         if !model_dir.exists() {
-            return Err(EmbedError::Unavailable(format!(
-                "local embedding model not found at {}. \
-                 Place the arctic-embed-xs model at this path \
-                 (or set the {EMBED_MODEL_PATH_ENV} env var to a custom location).",
-                model_dir.display(),
+            return Err(EmbedError::Unavailable(t(
+                "embed-model-not-found",
+                &[
+                    ("path", model_dir.display().to_string()),
+                    ("env", EMBED_MODEL_PATH_ENV.to_string()),
+                ],
             )));
         }
 
         // 2. Check config.json
         let config_path = model_dir.join("config.json");
         if !config_path.exists() {
-            return Err(EmbedError::Unavailable(format!(
-                "model config.json not found at {}.",
-                config_path.display(),
+            return Err(EmbedError::Unavailable(t(
+                "embed-model-config-missing",
+                &[("path", config_path.display().to_string())],
             )));
         }
 
@@ -314,10 +316,9 @@ impl LocalEmbedClient {
         //    not supported by the Candle engine.
         let safetensors_path = model_dir.join("model.safetensors");
         if !safetensors_path.exists() {
-            return Err(EmbedError::Unavailable(format!(
-                "model weights not found at {} (expected model.safetensors; \
-                 pytorch_model.bin is not supported by the vecboost Candle engine).",
-                model_dir.display(),
+            return Err(EmbedError::Unavailable(t(
+                "embed-model-weights-missing",
+                &[("path", model_dir.display().to_string())],
             )));
         }
 
@@ -445,16 +446,18 @@ where
                 .build()
             {
                 Ok(rt) => rt.block_on(fut),
-                Err(e) => Err(VecboostError::InternalError(format!(
-                    "failed to build tokio runtime: {e}"
+                Err(e) => Err(VecboostError::InternalError(t(
+                    "embed-runtime-build-failed",
+                    &[("reason", e.to_string())],
                 ))),
             }
         });
         match handle.join() {
             Ok(inner) => inner,
-            Err(_) => Err(VecboostError::InternalError(
-                "vecboost runtime thread panicked".to_string(),
-            )),
+            Err(_) => Err(VecboostError::InternalError(t(
+                "embed-runtime-thread-panic",
+                &[],
+            ))),
         }
     })
 }
@@ -878,21 +881,38 @@ mod tests {
 
     // --- LocalEmbedClient ---
 
+    /// Registers the embedded FTL catalogs (idempotent) so tests exercise
+    /// real translations rather than the bare-key fallback `t` serves when
+    /// `crate::i18n::init()` has not run in this process. Global registry
+    /// state, so callers must serialize via `serial(i18n_catalog)`.
+    fn init_i18n_catalog() {
+        crate::i18n::init();
+    }
+
     #[test]
+    #[serial_test::serial(i18n_catalog)]
     fn local_client_new_without_model_returns_unavailable() {
         // Default config → local mode, model path doesn't exist.
         let cfg = EmbeddingConfig::default();
+        init_i18n_catalog();
         let result = LocalEmbedClient::new(&cfg);
         assert!(result.is_err(), "should error when model file is missing");
         let err = result.unwrap_err();
+        let expected_path = cfg.resolved_model_path();
+        // The message is a localized catalog entry, so this asserts on the
+        // locale-independent payload (the missing artifact path) instead of
+        // any language's wording.
+        let expected = expected_path.display().to_string();
         assert!(
-            matches!(err, EmbedError::Unavailable(ref msg) if msg.contains("not found")),
-            "expected Unavailable with 'not found', got: {err}"
+            matches!(err, EmbedError::Unavailable(ref msg) if msg.contains(&expected)),
+            "expected Unavailable naming '{expected_path:?}', got: {err}"
         );
     }
 
     #[test]
+    #[serial_test::serial(i18n_catalog)]
     fn local_client_new_with_nonexistent_custom_path_returns_unavailable() {
+        init_i18n_catalog();
         let cfg = EmbeddingConfig {
             model_path: Some(std::path::PathBuf::from("/nonexistent/model-dir")),
             ..EmbeddingConfig::default()
@@ -901,17 +921,57 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
-            msg.contains("not found"),
-            "error should mention 'not found': {msg}"
-        );
-        assert!(
             msg.contains("/nonexistent/model-dir"),
-            "error should mention the path: {msg}"
+            "error should name the missing model path: {msg}"
+        );
+    }
+
+    /// Every hardcoded English user-facing string this module used to emit is
+    /// now a catalog entry: the message must resolve through the registry
+    /// (locale-independent payload intact) rather than falling back to a
+    /// bare key.
+    #[test]
+    #[serial_test::serial(i18n_catalog)]
+    fn embed_messages_resolve_through_catalog() {
+        init_i18n_catalog();
+        assert_eq!(
+            crate::i18n::t(
+                "embed-model-not-found",
+                &[
+                    ("path", "/m".to_string()),
+                    ("env", EMBED_MODEL_PATH_ENV.to_string()),
+                ],
+            ),
+            "local embedding model not found at /m. \
+             Place the arctic-embed-xs model at this path \
+             (or set the CODENEXUS_EMBED_MODEL_PATH env var to a custom location)."
+        );
+        assert_eq!(
+            crate::i18n::tr("embed-model-config-missing"),
+            "model config.json not found at { $path }."
+        );
+        assert_eq!(
+            crate::i18n::tr("embed-runtime-build-failed"),
+            "failed to build tokio runtime: { $reason }"
+        );
+        assert_eq!(
+            crate::i18n::tr("embed-runtime-thread-panic"),
+            "vecboost runtime thread panicked"
+        );
+        // The weights message names both the expected and the rejected file.
+        let weights = crate::i18n::t("embed-model-weights-missing", &[("path", "/m".to_string())]);
+        assert!(
+            weights.contains("/m")
+                && weights.contains("model.safetensors")
+                && weights.contains("pytorch_model.bin"),
+            "weights message must name the bundle path and both files: {weights}"
         );
     }
 
     #[test]
+    #[serial_test::serial(i18n_catalog)]
     fn local_client_new_bundle_missing_tokenizer_returns_unavailable() {
+        init_i18n_catalog();
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("config.json"), "{}").unwrap();
         std::fs::write(dir.path().join("model.safetensors"), b"placeholder").unwrap();
@@ -924,13 +984,15 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
-            msg.contains("tokenizer") && msg.contains("not found"),
-            "expected tokenizer not found, got: {msg}"
+            msg.contains("tokenizer.json"),
+            "expected the error to name the missing tokenizer path: {msg}"
         );
     }
 
     #[test]
+    #[serial_test::serial(i18n_catalog)]
     fn local_client_new_rejects_missing_weights_in_bundle() {
+        init_i18n_catalog();
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("config.json"), "{}").unwrap();
         std::fs::write(dir.path().join("tokenizer.json"), "{}").unwrap();
@@ -943,13 +1005,15 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
-            msg.contains("weights") && msg.contains("not found"),
-            "expected weights not found, got: {msg}"
+            msg.contains("model.safetensors") && msg.contains("pytorch_model.bin"),
+            "expected a safetensors-only contract message, got: {msg}"
         );
     }
 
     #[test]
+    #[serial_test::serial(i18n_catalog)]
     fn local_client_new_rejects_pytorch_bin_only_bundle() {
+        init_i18n_catalog();
         // pytorch_model.bin (pickle) is not loadable by the Candle engine —
         // the pre-check must reject the bundle instead of failing later with
         // an obscure load error.
@@ -972,7 +1036,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(i18n_catalog)]
     fn local_client_new_bundle_missing_config_returns_unavailable() {
+        init_i18n_catalog();
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("tokenizer.json"), "{}").unwrap();
         std::fs::write(dir.path().join("model.safetensors"), b"placeholder").unwrap();
@@ -985,8 +1051,8 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
-            msg.contains("config.json") && msg.contains("not found"),
-            "expected config.json not found, got: {msg}"
+            msg.contains("config.json"),
+            "expected the error to name the missing config.json path: {msg}"
         );
     }
 

@@ -104,7 +104,7 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 </tr>
 </table>
 
-Beyond the core capabilities above, CodeNexus also ships `context` assembly (with the `--budget` token budgeter), `detect_changes` change detection, `rename` rename-impact pre-checks, `ask` natural-language entry, `ci`/`lint` architecture gates, `taint` taint auditing, `supply` supply-chain view, `evolve` evolution replay, `hub` artifact client, `skill` skill sync, oxcache-backed query-result caching, and structured logging via inklog; the grouped list of the 37 subcommands (plus the `mcp` serve mode) lives in the [🛠️ CLI Commands](#️-cli-commands) section, and per-command flag semantics with runnable examples are in the [📖 User Guide · Command reference](docs/USER_GUIDE.md#️-命令详解).
+Beyond the core capabilities above, CodeNexus also ships `context` assembly (token budgeting is an internal `service::budget` library capability — no `--budget` CLI parameter is exposed), `detect_changes` change detection, `rename` rename-impact pre-checks, `ask` natural-language entry, `ci`/`lint` architecture gates, `taint` taint auditing, `supply` supply-chain view, `evolve` evolution replay, `hub` artifact client, `skill` skill sync, oxcache-backed query-result caching, and structured logging via inklog; the grouped list of the 37 subcommands (plus the `mcp` serve mode) lives in the [🛠️ CLI Commands](#️-cli-commands) section, and per-command flag semantics with runnable examples are in the [📖 User Guide · Command reference](docs/USER_GUIDE.md#️-命令详解).
 
 ---
 
@@ -141,7 +141,7 @@ Requires Rust 1.97.1 or later (MSRV, matching `rust-version` in `Cargo.toml` and
 | ----------------- | ------- | ----------- |
 | `minimal`         | —       | Minimal preset: `lang-rust` only |
 | `core`            | —       | Core preset: `lang-c` + `lang-rust` + `lang-python` |
-| `full`            | Enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embeddings/i18n |
+| `full`            | Enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embeddings/i18n/hub |
 | `lang-c`          | —       | C parser (tree-sitter-c) |
 | `lang-rust`       | Enabled | Rust parser (tree-sitter-rust) |
 | `lang-fortran`    | —       | Fortran parser (tree-sitter-fortran) |
@@ -177,7 +177,7 @@ Requires Rust 1.97.1 or later (MSRV, matching `rust-version` in `Cargo.toml` and
 | `cache`           | Enabled | Query result cache (oxcache) |
 | `i18n`            | Enabled | Unicode case folding + NFC normalization (ICU4X) |
 
-> **Logging**: inklog is the only log backend (console + file rotation + daily rolling + LZ4 compression); the optional tracing-subscriber backend has been removed.
+> **Logging**: inklog is the only log backend (console + daily-rotating file sink with 30-day retention). inklog is pulled in with `default-features = false`, so no zstd/gzip compression backend is compiled in; with `compress = true` and no backend available, compression is skipped and no compressed rotation files are produced. The optional tracing-subscriber backend has been removed.
 
 ```bash
 # Minimal build (Rust only, no daemon/analysis)
@@ -224,7 +224,7 @@ codenexus search --text "authentication logic" --fulltext true
 
 - **Knowledge graph model**: source code is parsed into a property graph of 45 node types and 32 edge types, stored in LadybugDB and queryable via a Cypher subset.
 - **Strict flag-based CLI**: no positional arguments; parameters are snake_case long options (e.g. `--symbol`, `--trace_type`) and booleans take explicit values (`true`/`false`). Optional parameters carry built-in defaults (e.g. `trace --depth 5`, `search --limit 50` — full list via each command's `--help`) and can be pinned per project via `.codenexus/config.json`.
-- **Global `--db` option**: the database path defaults to `.codenexus/<project>.lbug` and must precede the subcommand; when exactly one index exists it is auto-discovered.
+- **Global `--db` option**: the database path defaults to `.codenexus/<project>.lbug`; being a clap global argument it parses both before and after the subcommand. When exactly one index exists it is auto-discovered.
 - **Exit-code contract**: 0 success, 1 internal error, 2 invalid input / project not found / query error, 4 not found / database corrupt (see `src/service/error.rs`).
 
 > The full set of core conventions (incremental indexing, confidence tiers, etc.) is in the [📖 User Guide · Core conventions](docs/USER_GUIDE.md#-核心约定).
@@ -273,7 +273,6 @@ What each tool does is described in the [📖 User Guide · Multi-agent integrat
 | -------- | ----------- |
 | [📖 User Guide](docs/USER_GUIDE.md) | Complete tutorial from installation to advanced usage (incl. complexity analysis and dead-code detection) |
 | [📘 API Reference](docs/API_REFERENCE.md) | Library crate public API, facades, and CLI/MCP external interfaces |
-| [🏗️ Architecture](docs/ARCHITECTURE.md) | Layered structure, indexing pipeline, graph model, and diagram command semantics |
 | [⚡ Performance Guide](docs/PERFORMANCE.md) | Benchmark suite, measured baselines, SLOs, and the L1–L7 memory defenses |
 | [🔒 Security](docs/SECURITY.md) | Security policy, vulnerability reporting, and best practices |
 | [❓ FAQ](docs/FAQ.md) | Frequently asked questions |
@@ -281,13 +280,9 @@ What each tool does is described in the [📖 User Guide · Multi-agent integrat
 | [📋 Changelog](docs/CHANGELOG.md) | Release-by-release changes (Keep a Changelog format) |
 | [🤝 Contributing](docs/CONTRIBUTING.md) | How to contribute to the project |
 | [📜 Code of Conduct](docs/CODE_OF_CONDUCT.md) | Community code of conduct |
-| [📐 Architecture Design Doc (ADD)](docs/ADD.md) | Architecture decisions and design details (Chinese) |
-| [🎯 Product Requirements (PRD)](docs/PRD.md) | Product requirements and SLO metrics (Chinese) |
-| [🧾 Technical Requirements (TRD)](docs/TRD.md) | Technical requirement breakdown (Chinese) |
-| [🗄️ Database Design Doc (DDD)](docs/DDD.md) | Graph storage schema design (Chinese) |
 | [🔬 Research Notes](docs/research/) | Paper notes: TaintRadar, cascaded vulnerability chains |
 | [🛡️ Security Audits](docs/security/) | Strix audit triage with a ReDoS false-positive proof |
-| [🤖 CLI Skill](skill/SKILL.md) | Agent-facing CLI usage knowledge pack (verified against v0.3.12) |
+| [🤖 CLI Skill](skill/SKILL.md) | Agent-facing CLI usage knowledge pack (verified against v0.4.0-rc.1) |
 | [📈 Benchmark Notes](benches/README.md) | Criterion benchmark suite and SLO threshold table |
 | [📦 crates.io](https://crates.io/crates/codenexus) | Publication page |
 
@@ -332,7 +327,7 @@ Examples use `IndexFacade` to index source, `QueryFacade` to query, and `TraceFa
 
 CodeNexus is a dual-target "library + binary" crate: `src/lib.rs` exposes the public API (model / parse / storage / index / query / trace / service modules) and `src/main.rs` is the sdforge-driven CLI binary; since v0.3.2 the CLI and MCP interfaces are unified through the sdforge `#[forge]` macro inside `src/service/`, where each command defines a core function + CLI wrapper + MCP wrapper. Indexing flows through "file discovery → incremental hashing → parallel parsing → symbol resolution → bulk load".
 
-The three-layer source structure, pipeline diagram, graph model (45 node / 32 edge types with confidence tiers), per-language extraction table, and the output semantics of `architecture` / `diagram` / `arch_diff` live in the [🏗️ Architecture doc](docs/ARCHITECTURE.md).
+The three-layer source structure, pipeline diagram, graph model (45 node / 32 edge types with confidence tiers), per-language extraction table, and the output semantics of `architecture` / `diagram` / `arch_diff` live in the [📖 User Guide](docs/USER_GUIDE.md).
 
 ---
 
@@ -372,13 +367,13 @@ cargo deny check
 
 ### 📊 Test scale
 
-As of v0.3.12 (grep count of `#[test]` / `#[tokio::test]` functions): ~4600+ unit tests (147 source files contain `#[cfg(test)]` modules) + 118 integration tests (8 files) + 8 acceptance projects + 7 Criterion benchmark groups; the coverage gate is ≥95% line coverage, enforced by both the CI coverage job and the pre-push hook. The per-file breakdown and full statistics live in [🧪 Test Scenario Matrix · Statistics](docs/TEST_SCENARIOS.md#-统计汇总).
+As of v0.4.0-rc.1 (fixed-string grep count of `#[test]` / `#[tokio::test]` functions): 4757 unit tests (4714 `#[test]` + 43 `#[tokio::test]` in `src/`; 170 source files contain `#[cfg(test)]` modules) + 127 integration tests (10 top-level `.rs` files under `tests/`: 107 `#[test]` + 20 `#[tokio::test]`) + 8 acceptance projects + 7 Criterion benchmark groups; the coverage gate is ≥95% line coverage, enforced by both the CI coverage job and the pre-push hook. The per-file breakdown and full statistics live in [🧪 Test Scenario Matrix · Statistics](docs/TEST_SCENARIOS.md#-统计汇总).
 
 ---
 
 ## 📊 Performance
 
-The benchmark suite is 7 Criterion groups in `benches/` (SLO thresholds from `docs/PRD.md` §5.1): measured cold-start indexing of 1000 files is ~3929 files/s (SLO ≥ 100), single-file incremental ~4987 files/s (SLO ≥ 500), and daemon debounce response ~2.76 s (SLO ≤ 3 s); `incremental_500_of_1000` is a known gap. The L1–L7 memory defenses shipped in v0.3.10–v0.3.12 (`MemoryBudget` three-level memory pressure, streaming CSV, pipeline streaming, buffer_pool cap, etc.) reduced index peak memory on a 70 GB host from ~60 GB to ~4 GB. The full measured baseline, SLO table, and tuning recipes are in the [⚡ Performance Guide](docs/PERFORMANCE.md); the SLO threshold table in [`benches/README.md`](benches/README.md).
+The benchmark suite is 7 Criterion groups in `benches/` (indexing / incremental / query / trace / memory and daemon debounce response ≤ 3 s thresholds come from the [`benches/README.md`](benches/README.md) SLO threshold table): measured cold-start indexing of 1000 files is ~3929 files/s (SLO ≥ 100), single-file incremental ~4987 files/s (SLO ≥ 500), and daemon debounce response ~2.76 s (SLO ≤ 3 s); `incremental_500_of_1000` is a known gap. The L1–L7 memory defenses shipped in v0.3.10–v0.3.12 (`MemoryBudget` three-level memory pressure, streaming CSV, pipeline streaming, buffer_pool cap, etc.) reduced index peak memory on a 70 GB host from ~60 GB to ~4 GB. The full measured baseline, SLO table, and tuning recipes are in the [⚡ Performance Guide](docs/PERFORMANCE.md); the SLO threshold table in [`benches/README.md`](benches/README.md).
 
 ---
 
@@ -414,8 +409,8 @@ Do not report security vulnerabilities through public issues. Email **security@k
 <tr><td align="center">✅</td><td>Internationalization</td><td>v0.3.3 — Internationalization module (<code>i18n</code> feature): ICU4X Unicode case folding + NFC normalization + CJK boundary detection</td></tr>
 <tr><td align="center">✅</td><td>Harness modernization</td><td>v0.3.3 — CI upgrade to Rust 1.91 + 6-feature matrix + dependabot + codeql + crates.io publishing</td></tr>
 <tr><td align="center">✅</td><td>Large-repo memory defenses</td><td>v0.3.11 — Large-repo indexing OOM fix (L1–L7 seven-layer defense): <code>MemoryBudget</code> three-level memory pressure + <code>Graph::nodes_view/edges_view</code> iterators + streaming CSV + mpsc channel parallel parsing + L5 adaptive degradation + L6 pipeline streaming (<code>ctx.remove</code> replaces <code>Graph::clone</code>) + L7 LadybugDB buffer_pool cap (4 GB) + on-demand LSP startup + RAM-first 8× amplification budget. Peak memory on a 70 GB host dropped from 60 GB to ~4 GB</td></tr>
-<tr><td align="center">✅</td><td>In-house base library upgrades</td><td>Upgrade of in-house base libraries to crates.io RCs (trait-kit 0.5.0-rc.6, sdforge / oxcache 0.5.0-rc.5, inklog 0.3.0-rc.5); MSRV 1.97.1</td></tr>
-<tr><td align="center">✅</td><td>Feature expansion wave (feature-expansion-wave)</td><td>2026-09 — 12 capabilities ranked by RICE: <code>context --budget</code> token budgeter, <code>ci</code> architecture gates (with an official GitHub Action), <code>lint</code> custom architecture rule packs, <code>skill</code> skill sync, <code>ask</code> natural-language entry, graph-viewer snapshot integration (<code>diagram</code>/<code>arch_diff</code> <code>--viewer_url</code>), daemon impact alerts (DaemonConfig field, CLI wiring pending), Kotlin/Swift/Solidity language recognition (extension mapping and taint rules; tree-sitter parsing not yet supported), <code>taint</code> security audit (built-in source/sink rule library), <code>supply</code> supply-chain view (ExternalPackage/DEPENDS_ON), <code>evolve</code> architecture evolution replay, <code>hub</code> artifact client (protocol v1)</td></tr>
+<tr><td align="center">✅</td><td>In-house base library upgrades</td><td>Upgrade of in-house base libraries to crates.io RCs (trait-kit 0.5.0-rc.9, sdforge / oxcache 0.5.0-rc.8, inklog 0.3.0-rc.9); MSRV 1.97.1</td></tr>
+<tr><td align="center">✅</td><td>Feature expansion wave (feature-expansion-wave)</td><td>2026-09 — 12 capabilities ranked by RICE: token budgeter (internal `service::budget` library capability — no `--budget` CLI parameter exposed), <code>ci</code> architecture gates (with an official GitHub Action), <code>lint</code> custom architecture rule packs, <code>skill</code> skill sync, <code>ask</code> natural-language entry, graph-viewer snapshot integration (<code>diagram</code>/<code>arch_diff</code> <code>--viewer_url</code>), daemon impact alerts (DaemonConfig field, CLI wiring pending), Kotlin/Swift/Solidity language recognition (extension mapping and taint rules; tree-sitter parsing not yet supported), <code>taint</code> security audit (built-in source/sink rule library), <code>supply</code> supply-chain view (ExternalPackage/DEPENDS_ON), <code>evolve</code> architecture evolution replay, <code>hub</code> artifact client (protocol v1)</td></tr>
 <tr><td align="center">📋</td><td>Web UI & graph visualization</td><td>Web UI / graph visualization on top of the query facade (<code>diagram</code>/<code>arch_diff</code> already ship architecture HTML and semantic deltas; 3D graph-viewer integration and more chart types are still planned)</td></tr>
 </table>
 
@@ -470,6 +465,7 @@ The full release history lives in the [📋 Changelog](docs/CHANGELOG.md) (follo
 
 | Version | Date | Highlights |
 | ------- | ---- | ---------- |
+| 0.4.0-rc.1 | 2026-10-16 | Embedding backend switched from ort to vecboost (Candle), requiring re-indexing; in-house base libraries upgraded to the latest crates.io releases (trait-kit 0.5.0-rc.9, sdforge 0.5.0-rc.8, inklog 0.3.0-rc.9, limiteron 0.3.0-rc.7, oxcache 0.5.0-rc.8); graph-viewer server crate removed |
 | 0.3.13-rc.1 | 2026-09-21 | Cross-repo decoupling: base libraries now come from crates.io releases (trait-kit rc.6 / sdforge, oxcache rc.5 / inklog rc.5); embed→embeddings rename; fix for cross-file edge loss in incremental indexing |
 | 0.3.12 | 2026-07-30 | Dynamic `max_db_size` + `--fresh` flag fix DB bloat; read-only 4 TiB cap fixes crashes on >16 GiB databases; LSP hover batched UNWIND updates and the rest of the P-series fixes |
 | 0.3.11 | 2026-07-26 | L6+L7 memory work: pipeline streaming + iterator APIs + buffer_pool cap, cutting peak memory on a 70 GB host from 60 GB to ~4 GB |
@@ -498,7 +494,7 @@ CodeNexus stands on the shoulders of these excellent open-source projects:
 | [sdforge](https://crates.io/crates/sdforge) | CLI + MCP dual-transport framework (`#[forge]` macro) |
 | [trait-kit](https://crates.io/crates/trait-kit) | Capability registry |
 | [oxcache](https://crates.io/crates/oxcache) | Query result cache |
-| [inklog](https://crates.io/crates/inklog) | Log backend (console + rotation + LZ4 compression) |
+| [inklog](https://crates.io/crates/inklog) | Log backend (console + daily-rotating file sink; inklog is pulled in with `default-features = false`, no compression backend is compiled in, so no compressed rotation files are produced) |
 | [vecboost](https://github.com/Kirky-X/vecboost) | Local Candle embedding inference |
 | [ICU4X](https://github.com/unicode-org/icu4x) (icu_normalizer / icu_casemap) | Unicode normalization and case mapping |
 | [petgraph](https://github.com/petgraph/petgraph) | Community-detection graph algorithms |

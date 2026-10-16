@@ -34,10 +34,19 @@ daemon-shutdown-complete = 分阶段停机完成
 graph-host-forbidden = 本服务仅允许本机回环访问
 graph-token-missing = 缺少或错误的 x-graph-token 头
 graph-server-started = 图数据服务已启动: http://127.0.0.1:{ $port }（请求需带 x-graph-token 头，见 stdout）
+graph-server-auth-token = graph-server 鉴权 token: { $auth_token }
 graph-project-discovered = 发现项目: { $name } -> { $path }
+graph-asset-bad-path = 非法路径
+graph-asset-not-found = 资源不存在
+
+# viewer：图查询诊断日志（src/viewer/graph.rs）
+graph-node-query-info = 已查询 { $types } 个节点类型，获取 { $nodes } 个节点
+graph-edge-scan-info = 边扫描：{ $rows } 行，命中 { $edges } 条边，共 { $total } 个节点
 
 # viewer：内嵌 graph-viewer（src/viewer/assets.rs）
 graph-viewer-dist-missing = graph-viewer 前端资源未构建：请在 graph-viewer/ 执行 npm run build 后重新编译本二进制。
+graph-viewer-fallback-title = CodeNexus graph-viewer
+graph-viewer-fallback-heading = CodeNexus graph-viewer
 
 # logging：inklog 级别预设（src/logging.rs）
 logging-invalid_target_level = 忽略非法的 CODENEXUS_LOG_TARGETS 条目 '{ $entry }'（应为 target=level，如 hyper=warn）
@@ -46,3 +55,13 @@ logging-invalid_rate_limit_entry = 忽略非法的 CODENEXUS_LOG_RATE_LIMIT 条�
 
 # embed：模型完整性摘要校验（src/embed/config.rs）
 embed-invalid_model_sha256 = 忽略非法的 CODENEXUS_EMBED_MODEL_SHA256 值 '{ $value }'（应为 64 位十六进制摘要；完整性校验保持关闭）
+
+# embed：本地模型包预检（src/embed/client.rs）
+embed-model-not-found = 未在 { $path } 找到本地嵌入模型。请将 arctic-embed-xs 模型放在该路径（或设置 { $env } 环境变量指定自定义位置）。
+embed-model-config-missing = 未在 { $path } 找到模型 config.json。
+embed-model-weights-missing = 未在 { $path } 找到模型权重（应为 model.safetensors；vecboost Candle 引擎不支持 pytorch_model.bin）。
+embed-runtime-build-failed = 构建 tokio 运行时失败：{ $reason }
+embed-runtime-thread-panic = vecboost 运行时线程 panic
+
+# cli：用法错误（src/main.rs）
+cli-no-subcommand = 未提供子命令（运行 `codenexus --help` 查看命令列表）

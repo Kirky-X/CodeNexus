@@ -104,7 +104,7 @@
 </tr>
 </table>
 
-除上述核心能力外，CodeNexus 还提供 `context` 上下文组装（`--budget` token 预算器）、`detect_changes` 变更检测、`rename` 重命名影响预检、`ask` 自然语言入口、`ci`/`lint` 架构门禁、`taint` 污点审计、`supply` 供应链视图、`evolve` 演化回放、`hub` 制品客户端、`skill` 技能同步、基于 oxcache 的查询结果缓存与 inklog 结构化日志等能力；全部 37 个子命令（外加 `mcp` 服务模式）的分组清单见 [🛠️ CLI 命令](#️-cli-命令) 一节，逐命令参数语义与可运行示例见 [📖 用户指南 · 命令详解](docs/USER_GUIDE.md#️-命令详解)。
+除上述核心能力外，CodeNexus 还提供 `context` 上下文组装（token 预算截断由 `service::budget` 内部库能力提供，CLI 未暴露 `--budget` 参数）、`detect_changes` 变更检测、`rename` 重命名影响预检、`ask` 自然语言入口、`ci`/`lint` 架构门禁、`taint` 污点审计、`supply` 供应链视图、`evolve` 演化回放、`hub` 制品客户端、`skill` 技能同步、基于 oxcache 的查询结果缓存与 inklog 结构化日志等能力；全部 37 个子命令（外加 `mcp` 服务模式）的分组清单见 [🛠️ CLI 命令](#️-cli-命令) 一节，逐命令参数语义与可运行示例见 [📖 用户指南 · 命令详解](docs/USER_GUIDE.md#️-命令详解)。
 
 ---
 
@@ -141,7 +141,7 @@ cargo build --release
 | ----------------- | ---- | ---- |
 | `minimal`         | —    | 最小预设：仅 `lang-rust` |
 | `core`            | —    | 核心预设：`lang-c` + `lang-rust` + `lang-python` |
-| `full`            | 启用 | 完整预设：`core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embeddings/i18n |
+| `full`            | 启用 | 完整预设：`core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embeddings/i18n/hub |
 | `lang-c`          | —    | C 语言解析器（tree-sitter-c） |
 | `lang-rust`       | 启用 | Rust 语言解析器（tree-sitter-rust） |
 | `lang-fortran`    | —    | Fortran 语言解析器（tree-sitter-fortran） |
@@ -178,7 +178,7 @@ cargo build --release
 | `i18n`            | 启用 | Unicode case folding + NFC 规范化（ICU4X） |
 | `webui`           | —    | 内嵌 graph-viewer Web UI：`codenexus webui` 启动（前端 `graph-viewer/dist` 资源编译期嵌入；opt-in，不入 `full`） |
 
-> **日志系统**：inklog 是唯一日志后端（console + file rotation + daily 滚动 + LZ4 压缩），不再提供 tracing-subscriber 可选后端。
+> **日志系统**：inklog 是唯一日志后端（console + 文件 sink 日轮转 + 保留 30 天）；inklog 以 `default-features = false` 引入，未编译 zstd/gzip 压缩后端，`compress = true` 时无后端可用即跳过压缩，不产生压缩轮转文件。不再提供 tracing-subscriber 可选后端。
 
 ```bash
 # 最小构建（仅 Rust，不含 daemon/analysis）
@@ -225,7 +225,7 @@ codenexus search --text "authentication logic" --fulltext true
 
 - **知识图谱模型**：源码被解析为 45 种节点与 32 种边构成的属性图，存入 LadybugDB，可用 Cypher 子集查询。
 - **严格 flag 风格 CLI**：无位置参数，参数为 snake_case 长选项（如 `--symbol`、`--trace_type`），布尔选项显式传值（`true`/`false`）。可选参数自带内置默认值（如 `trace --depth 5`、`search --limit 50`，完整清单见各命令 `--help`），并可用 `.codenexus/config.json` 按项目固化。
-- **全局 `--db` 选项**：数据库路径默认 `.codenexus/<项目名称>.lbug`，需置于子命令之前；仅有一个索引时可自动发现。
+- **全局 `--db` 选项**：数据库路径默认 `.codenexus/<项目名称>.lbug`，为 clap 全局参数，置于子命令前后均可解析；仅有一个索引时可自动发现。
 - **退出码契约**：0 成功、1 内部错误、2 无效输入 / 项目不存在 / 查询错误、4 NotFound / 数据库损坏（见 `src/service/error.rs`）。
 
 > 增量索引、置信度分层等完整核心约定见 [📖 用户指南 · 核心约定](docs/USER_GUIDE.md#-核心约定)。
@@ -276,7 +276,6 @@ codenexus hook
 |------|------|
 | [📖 用户指南](docs/USER_GUIDE.md) | 从安装到进阶的完整使用教程（含复杂度分析与死代码检测详解） |
 | [📘 API 参考](docs/API_REFERENCE.md) | 库 crate 公开 API、Facade 接口与 CLI/MCP 对外接口 |
-| [🏗️ 架构文档](docs/ARCHITECTURE.md) | 分层结构、索引管线、图模型与架构图命令语义 |
 | [⚡ 性能指南](docs/PERFORMANCE.md) | 基准套件、实测基线、SLO 与内存优化（L1–L7 防线） |
 | [🔒 安全文档](docs/SECURITY.md) | 安全策略、漏洞报告流程与最佳实践 |
 | [❓ FAQ](docs/FAQ.md) | 常见问题解答 |
@@ -284,13 +283,9 @@ codenexus hook
 | [📋 更新日志](docs/CHANGELOG.md) | 每个版本的变更记录（Keep a Changelog 格式） |
 | [🤝 贡献指南](docs/CONTRIBUTING.md) | 如何参与项目开发 |
 | [📜 行为准则](docs/CODE_OF_CONDUCT.md) | 社区行为准则 |
-| [📐 架构设计文档（ADD）](docs/ADD.md) | 架构决策与设计细节 |
-| [🎯 产品需求文档（PRD）](docs/PRD.md) | 产品需求与 SLO 指标 |
-| [🧾 技术需求文档（TRD）](docs/TRD.md) | 技术需求分解 |
-| [🗄️ 数据库设计文档（DDD）](docs/DDD.md) | 图存储 Schema 设计 |
 | [🔬 研究笔记](docs/research/) | TaintRadar、级联漏洞链等论文笔记 |
 | [🛡️ 安全审计](docs/security/) | Strix 审计 triage 与 ReDoS 误报复核实证 |
-| [🤖 CLI 技能](skill/SKILL.md) | 面向 AI 智能体的 CLI 用法知识包（针对 v0.3.12 校验） |
+| [🤖 CLI 技能](skill/SKILL.md) | 面向 AI 智能体的 CLI 用法知识包（针对 v0.4.0-rc.1 校验） |
 | [📈 基准测试说明](benches/README.md) | Criterion 基准套件与 SLO 阈值表 |
 | [📦 crates.io](https://crates.io/crates/codenexus) | 发布页面 |
 
@@ -335,7 +330,7 @@ done
 
 CodeNexus 采用「库 + 二进制」双目标 crate：`src/lib.rs` 暴露公共 API（模型 / 解析 / 存储 / 索引 / 查询 / 追踪 / service 模块），`src/main.rs` 是 sdforge 驱动的 CLI 二进制；v0.3.2 起 CLI 与 MCP 接口经 sdforge `#[forge]` 宏统一封装在 `src/service/`，每个命令定义 core 函数 + CLI wrapper + MCP wrapper。索引方向为「文件发现 → 增量哈希 → 并行解析 → 符号解析 → 批量入库」。
 
-三层源码结构、索引管线流程图、图模型（45 种节点 / 32 种边与置信度分层）、核心语言提取表与 `architecture` / `diagram` / `arch_diff` 命令输出语义，详见 [🏗️ 架构文档](docs/ARCHITECTURE.md)。
+三层源码结构、索引管线流程图、图模型（45 种节点 / 32 种边与置信度分层）、核心语言提取表与 `architecture` / `diagram` / `arch_diff` 命令输出语义，详见 [📖 用户指南](docs/USER_GUIDE.md)。
 
 ---
 
@@ -355,7 +350,7 @@ cargo +nightly fmt --all -- --check
 cargo +1.97.1 clippy -- -D warnings
 cargo +1.97.1 clippy --lib --no-default-features --features minimal -- -D warnings
 
-# 测试（CI 矩阵按 minimal / core / full / core,daemon,analysis,complexity / core,lsp,cache / full,embeddings 六档运行）
+# 测试（CI 矩阵按 minimal / core / full / core,daemon,analysis,complexity / core,lsp,cache / full,embeddings / full,webui 七档运行）
 cargo test --lib --verbose
 cargo test --lib --no-default-features --features "core" --verbose
 
@@ -375,13 +370,13 @@ cargo deny check
 
 ### 📊 测试规模
 
-截至 v0.3.12（`#[test]` / `#[tokio::test]` 函数 grep 统计）：约 4600+ 条单元测试（147 个源文件含 `#[cfg(test)]`）+ 118 条集成测试（8 个文件）+ 8 个验收项目 + 7 组 Criterion 基准；覆盖率门禁为行覆盖 ≥ 95%（CI coverage job 与 pre-push 钩子双重执行）。逐文件分解与完整统计见 [🧪 测试场景矩阵 · 统计汇总](docs/TEST_SCENARIOS.md#-统计汇总)。
+截至 v0.4.0-rc.1（`#[test]` / `#[tokio::test]` 固定字符串 grep 统计）：4757 条单元测试（`src/` 4714 个 `#[test]` + 43 个 `#[tokio::test]`，170 个源文件含 `#[cfg(test)]`）+ 127 条集成测试（`tests/` 顶层 10 个 .rs 文件，107 个 `#[test]` + 20 个 `#[tokio::test]`）+ 8 个验收项目 + 7 组 Criterion 基准；覆盖率门禁为行覆盖 ≥ 95%（CI coverage job 与 pre-push 钩子双重执行）。逐文件分解与完整统计见 [🧪 测试场景矩阵 · 统计汇总](docs/TEST_SCENARIOS.md#-统计汇总)。
 
 ---
 
 ## 📊 性能
 
-基准套件为 `benches/` 下 7 组 Criterion 基准（SLO 阈值来自 `docs/PRD.md` §5.1）：实测 1000 文件冷启动索引约 3929 files/s（SLO ≥ 100）、单文件增量约 4987 files/s（SLO ≥ 500）、daemon 去抖响应约 2.76 s（SLO ≤ 3 s）；`incremental_500_of_1000` 为已知未达标项。v0.3.10–v0.3.12 落地的 L1–L7 内存防线（`MemoryBudget` 三级内存压力、流式 CSV、管线流式化、buffer_pool 封顶等）将 70 GB 主机上的索引峰值内存从约 60 GB 降至约 4 GB。完整实测基线、SLO 表与调优方法见 [⚡ 性能指南](docs/PERFORMANCE.md)，SLO 阈值表见 [`benches/README.md`](benches/README.md)。
+基准套件为 `benches/` 下 7 组 Criterion 基准（索引/增量/查询/追踪/内存与 daemon 去抖响应 ≤ 3 s 阈值来自 [`benches/README.md`](benches/README.md) SLO 阈值表）：实测 1000 文件冷启动索引约 3929 files/s（SLO ≥ 100）、单文件增量约 4987 files/s（SLO ≥ 500）、daemon 去抖响应约 2.76 s（SLO ≤ 3 s）；`incremental_500_of_1000` 为已知未达标项。v0.3.10–v0.3.12 落地的 L1–L7 内存防线（`MemoryBudget` 三级内存压力、流式 CSV、管线流式化、buffer_pool 封顶等）将 70 GB 主机上的索引峰值内存从约 60 GB 降至约 4 GB。完整实测基线、SLO 表与调优方法见 [⚡ 性能指南](docs/PERFORMANCE.md)，SLO 阈值表见 [`benches/README.md`](benches/README.md)。
 
 ---
 
@@ -417,8 +412,8 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 <tr><td align="center">✅</td><td>国际化</td><td>v0.3.3 — 国际化模块（<code>i18n</code> feature）：ICU4X Unicode case folding + NFC 规范化 + CJK 边界检测</td></tr>
 <tr><td align="center">✅</td><td>Harness 现代化</td><td>v0.3.3 — CI 升级 Rust 1.91 + 6 特性矩阵 + dependabot + codeql + crates.io 发布</td></tr>
 <tr><td align="center">✅</td><td>大仓库内存防线</td><td>v0.3.11 — 大型仓库索引 OOM 修复（L1–L7 七层防线）：<code>MemoryBudget</code> 三级内存压力 + <code>Graph::nodes_view/edges_view</code> 迭代器 + 流式 CSV + mpsc channel 并行解析 + L5 自适应降级 + L6 管线流式化（<code>ctx.remove</code> 取代 <code>Graph::clone</code>）+ L7 LadybugDB buffer_pool 封顶（4 GB）+ LSP 按需启动 + RAM-first 8× 放大因子预算。70 GB 主机峰值内存从 60 GB 降至 ~4 GB</td></tr>
-<tr><td align="center">✅</td><td>基础库升级</td><td>自研基础库升级至 crates.io RC（trait-kit 0.5.0-rc.6、sdforge / oxcache 0.5.0-rc.5、inklog 0.3.0-rc.5）；MSRV 1.97.1</td></tr>
-<tr><td align="center">✅</td><td>功能拓展波次（feature-expansion-wave）</td><td>2026-09 — RICE 排序的 12 项能力：<code>context --budget</code> token 预算器、<code>ci</code> 架构门禁（含官方 GitHub Action）、<code>lint</code> 自定义架构规则包、<code>skill</code> 技能同步、<code>ask</code> 自然语言入口、graph-viewer 快照合流（<code>diagram</code>/<code>arch_diff</code> <code>--viewer_url</code>）、daemon 影响告警（DaemonConfig 字段，CLI 接线待补）、Kotlin/Swift/Solidity 语言识别（扩展名映射与污点规则，tree-sitter 解析暂不支持）、<code>taint</code> 安全审计（内置 source/sink 规则库）、<code>supply</code> 供应链视图（ExternalPackage/DEPENDS_ON）、<code>evolve</code> 架构演化回放、<code>hub</code> 制品客户端（协议 v1）</td></tr>
+<tr><td align="center">✅</td><td>基础库升级</td><td>自研基础库升级至 crates.io RC（trait-kit 0.5.0-rc.9、sdforge / oxcache 0.5.0-rc.8、inklog 0.3.0-rc.9）；MSRV 1.97.1</td></tr>
+<tr><td align="center">✅</td><td>功能拓展波次（feature-expansion-wave）</td><td>2026-09 — RICE 排序的 12 项能力：token 预算器（`service::budget` 内部库能力，CLI 未暴露 `--budget` 参数）、<code>ci</code> 架构门禁（含官方 GitHub Action）、<code>lint</code> 自定义架构规则包、<code>skill</code> 技能同步、<code>ask</code> 自然语言入口、graph-viewer 快照合流（<code>diagram</code>/<code>arch_diff</code> <code>--viewer_url</code>）、daemon 影响告警（DaemonConfig 字段，CLI 接线待补）、Kotlin/Swift/Solidity 语言识别（扩展名映射与污点规则，tree-sitter 解析暂不支持）、<code>taint</code> 安全审计（内置 source/sink 规则库）、<code>supply</code> 供应链视图（ExternalPackage/DEPENDS_ON）、<code>evolve</code> 架构演化回放、<code>hub</code> 制品客户端（协议 v1）</td></tr>
 <tr><td align="center">📋</td><td>Web UI 与图可视化</td><td>基于查询门面的 Web UI / 图可视化（<code>diagram</code>/<code>arch_diff</code> 已交付架构图 HTML 与语义 Delta 及 graph-viewer 快照合流；3D graph-viewer 深度集成仍在规划中）</td></tr>
 </table>
 
@@ -473,6 +468,7 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 
 | 版本 | 日期 | 要点 |
 |------|------|------|
+| 0.4.0-rc.1 | 2026-10-16 | 嵌入后端 ort → vecboost（Candle）切换并需重新索引；自研五库升级至 crates.io 最新版（trait-kit 0.5.0-rc.9、sdforge 0.5.0-rc.8、inklog 0.3.0-rc.9、limiteron 0.3.0-rc.7、oxcache 0.5.0-rc.8）；graph-viewer server crate 移除 |
 | 0.3.13-rc.1 | 2026-09-21 | 跨仓解耦：基库改走 crates.io 发布版（trait-kit rc.6 / sdforge、oxcache rc.5 / inklog rc.5）；embed→embeddings 更名；增量索引跨文件边丢失修复 |
 | 0.3.12 | 2026-07-30 | 动态 `max_db_size` + `--fresh` 标志解决 DB 膨胀；read-only 连接 4 TiB cap 修复 >16 GiB 数据库查询崩溃；LSP hover 批量 UNWIND 更新等 P 系列修复 |
 | 0.3.11 | 2026-07-26 | L6+L7 内存优化：管线流式化 + 迭代器 API + buffer_pool 封顶，70 GB 主机峰值内存 60 GB → ~4 GB |
@@ -501,7 +497,7 @@ CodeNexus 站在以下优秀开源项目的肩膀上：
 | [sdforge](https://crates.io/crates/sdforge) | CLI + MCP 双传输框架（`#[forge]` 宏） |
 | [trait-kit](https://crates.io/crates/trait-kit) | 能力注册表 |
 | [oxcache](https://crates.io/crates/oxcache) | 查询结果缓存 |
-| [inklog](https://crates.io/crates/inklog) | 日志后端（console + 轮转 + LZ4 压缩） |
+| [inklog](https://crates.io/crates/inklog) | 日志后端（console + 日轮转文件 sink；inklog 以 `default-features = false` 引入，未编译压缩后端，不产生压缩轮转文件） |
 | [vecboost](https://github.com/Kirky-X/vecboost) | 本地 Candle 向量嵌入推理 |
 | [ICU4X](https://github.com/unicode-org/icu4x)（icu_normalizer / icu_casemap） | Unicode 规范化与大小写折叠 |
 | [petgraph](https://github.com/petgraph/petgraph) | 社区检测图算法 |

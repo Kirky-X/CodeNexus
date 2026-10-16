@@ -277,10 +277,14 @@ mod tests {
     /// This verifies the lazy-loading path: `build()` succeeds even when the
     /// model is missing, and `embed()` returns a clear error.
     #[test]
+    #[serial_test::serial(i18n_catalog)]
     fn capability_embed_local_without_model_returns_unavailable() {
         // Ensure no env vars override the default local mode.
         std::env::remove_var(crate::embed::EMBED_ENDPOINT_ENV);
         std::env::remove_var(crate::embed::EMBED_MODEL_PATH_ENV);
+        // The failure message is a localized catalog entry, so register the
+        // catalogs first — otherwise `t` serves the bare key.
+        crate::i18n::init();
 
         let cap = EmbedModule::build_cap(
             &EmbeddingConfig::default(),
@@ -294,9 +298,13 @@ mod tests {
         let result = cap.embed(&["hello"]);
         assert!(result.is_err(), "should error without model file");
         let err = result.unwrap_err();
+        let expected_path = EmbeddingConfig::default().resolved_model_path();
+        // Localized catalog entry — assert on the locale-independent payload
+        // (the missing model path), not on any language's wording.
+        let expected = expected_path.display().to_string();
         assert!(
-            matches!(err, EmbedError::Unavailable(ref msg) if msg.contains("not found")),
-            "expected Unavailable with 'not found', got: {err}"
+            matches!(err, EmbedError::Unavailable(ref msg) if msg.contains(&expected)),
+            "expected Unavailable naming '{expected_path:?}', got: {err}"
         );
     }
 

@@ -7,6 +7,7 @@ use std::path::Path;
 
 use serde_json::Value as JsonValue;
 
+use crate::i18n::t;
 use crate::query::QueryFacade;
 use crate::storage::schema::escape_cypher_string;
 
@@ -229,9 +230,14 @@ pub(super) fn query_graph(
     }
 
     eprintln!(
-        "[INFO] Queried {} node types, got {} nodes",
-        QUERYABLE_LABELS.len(),
-        nodes.len()
+        "[INFO] {}",
+        t(
+            "graph-node-query-info",
+            &[
+                ("types", QUERYABLE_LABELS.len().to_string()),
+                ("nodes", nodes.len().to_string()),
+            ]
+        )
     );
 
     /* 查询边 — 至少一端匹配已加载节点，缺失端点自动补充为 stub 节点 */
@@ -320,10 +326,15 @@ fn query_all_edges(
         edge_counter += 1;
     }
     eprintln!(
-        "[INFO] Edge scan: {} rows, {} edges matched, {} total nodes",
-        rows.len(),
-        edges.len(),
-        nodes.len()
+        "[INFO] {}",
+        t(
+            "graph-edge-scan-info",
+            &[
+                ("rows", rows.len().to_string()),
+                ("edges", edges.len().to_string()),
+                ("total", nodes.len().to_string()),
+            ]
+        )
     );
     Ok(edges)
 }

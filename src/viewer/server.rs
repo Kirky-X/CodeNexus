@@ -109,7 +109,13 @@ pub async fn serve(config: ViewerConfig) -> Result<(), ViewerError> {
         })?;
 
     /* bind 成功后打印 token：浏览器/脚本经 `x-graph-token` 头携带 */
-    println!("graph-server auth token: {auth_token}");
+    println!(
+        "{}",
+        t(
+            "graph-server-auth-token",
+            &[("auth_token", (*auth_token).clone())]
+        )
+    );
     tracing::info!(
         "{}",
         t("graph-server-started", &[("port", config.port.to_string())])
@@ -202,13 +208,13 @@ async fn serve_asset(uri: Uri) -> Response {
     let rel = if raw.is_empty() { "index.html" } else { raw };
     /* 防目录穿越：拒绝任何 `..` 段 */
     if rel.split('/').any(|seg| seg == "..") {
-        return (StatusCode::BAD_REQUEST, "bad path").into_response();
+        return (StatusCode::BAD_REQUEST, tr("graph-asset-bad-path")).into_response();
     }
     if let Some((bytes, content_type)) = super::assets::get_asset(rel) {
         return ([(axum::http::header::CONTENT_TYPE, content_type)], bytes).into_response();
     }
     if rel.starts_with("assets/") {
-        return (StatusCode::NOT_FOUND, "asset not found").into_response();
+        return (StatusCode::NOT_FOUND, tr("graph-asset-not-found")).into_response();
     }
     if let Some((bytes, content_type)) = super::assets::get_asset("index.html") {
         return ([(axum::http::header::CONTENT_TYPE, content_type)], bytes).into_response();
@@ -464,6 +470,38 @@ mod tests {
             .await
             .expect("oneshot");
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        // Localized catalog entry — assert the resolved message, not a literal.
+        assert_eq!(&body[..], tr("graph-asset-bad-path").as_bytes());
+    }
+
+    #[tokio::test]
+    async fn missing_asset_under_assets_prefix_reports_translated_error() {
+        let (_dir, state) = test_state();
+        let res = router(state)
+            .oneshot(request("/assets/nope.js", "127.0.0.1", None))
+            .await
+            .expect("oneshot");
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        assert_eq!(&body[..], tr("graph-asset-not-found").as_bytes());
+    }
+
+    /// The startup banner must render the auth token into the catalog entry
+    /// (arg-name drift would leave the `{ $auth_token }` placeholder verbatim).
+    #[test]
+    #[serial_test::serial(i18n_catalog)]
+    fn auth_token_banner_interpolates_the_token() {
+        crate::i18n::init();
+        let line = t(
+            "graph-server-auth-token",
+            &[("auth_token", "abc123".to_string())],
+        );
+        assert_eq!(line, "graph-server auth token: abc123");
     }
 
     #[tokio::test]

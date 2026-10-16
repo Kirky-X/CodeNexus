@@ -34,10 +34,19 @@ daemon-shutdown-complete = Phased shutdown complete
 graph-host-forbidden = This service only allows local loopback access
 graph-token-missing = Missing or incorrect x-graph-token header
 graph-server-started = Graph server started: http://127.0.0.1:{ $port } (requests require the x-graph-token header, see stdout)
+graph-server-auth-token = graph-server auth token: { $auth_token }
 graph-project-discovered = Discovered project: { $name } -> { $path }
+graph-asset-bad-path = Bad path
+graph-asset-not-found = Asset not found
+
+# viewer: graph query diagnostics (src/viewer/graph.rs)
+graph-node-query-info = Queried { $types } node types, got { $nodes } nodes
+graph-edge-scan-info = Edge scan: { $rows } rows, { $edges } edges matched, { $total } total nodes
 
 # viewer: embedded graph-viewer (src/viewer/assets.rs)
 graph-viewer-dist-missing = graph-viewer frontend assets are not built: run "npm run build" in graph-viewer/ and rebuild this binary.
+graph-viewer-fallback-title = CodeNexus graph-viewer
+graph-viewer-fallback-heading = CodeNexus graph-viewer
 
 # logging: inklog level presets (src/logging.rs)
 logging-invalid_target_level = Ignoring invalid CODENEXUS_LOG_TARGETS entry '{ $entry }' (expected target=level, e.g. hyper=warn)
@@ -46,3 +55,13 @@ logging-invalid_rate_limit_entry = Ignoring invalid CODENEXUS_LOG_RATE_LIMIT ent
 
 # embed: model integrity digest validation (src/embed/config.rs)
 embed-invalid_model_sha256 = Ignoring invalid CODENEXUS_EMBED_MODEL_SHA256 value '{ $value }' (expected a 64-character hex digest; integrity verification stays disabled)
+
+# embed: local model bundle pre-checks (src/embed/client.rs)
+embed-model-not-found = local embedding model not found at { $path }. Place the arctic-embed-xs model at this path (or set the { $env } env var to a custom location).
+embed-model-config-missing = model config.json not found at { $path }.
+embed-model-weights-missing = model weights not found at { $path } (expected model.safetensors; pytorch_model.bin is not supported by the vecboost Candle engine).
+embed-runtime-build-failed = failed to build tokio runtime: { $reason }
+embed-runtime-thread-panic = vecboost runtime thread panicked
+
+# cli: usage errors (src/main.rs)
+cli-no-subcommand = no subcommand supplied (run `codenexus --help` to list commands)
