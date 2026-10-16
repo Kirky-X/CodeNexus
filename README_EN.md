@@ -4,7 +4,7 @@
 
 [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) [![Crates.io](https://img.shields.io/crates/v/codenexus.svg)](https://crates.io/crates/codenexus) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Rust Version](https://img.shields.io/badge/rust-1.97.1%2B-orange.svg)](https://www.rust-lang.org)
 
-[中文](README.md) | **English**
+[CN](README.md) | **English**
 
 **A multi-language code knowledge graph tool built on LadybugDB and tree-sitter**
 
@@ -104,7 +104,7 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 </tr>
 </table>
 
-Beyond the core capabilities above, CodeNexus also ships `context` assembly (token budgeting is an internal `service::budget` library capability — no `--budget` CLI parameter is exposed), `detect_changes` change detection, `rename` rename-impact pre-checks, `ask` natural-language entry, `ci`/`lint` architecture gates, `taint` taint auditing, `supply` supply-chain view, `evolve` evolution replay, `hub` artifact client, `skill` skill sync, oxcache-backed query-result caching, and structured logging via inklog; the grouped list of the 37 subcommands (plus the `mcp` serve mode) lives in the [🛠️ CLI Commands](#️-cli-commands) section, and per-command flag semantics with runnable examples are in the [📖 User Guide · Command reference](docs/USER_GUIDE.md#️-命令详解).
+Beyond the core capabilities above, CodeNexus also ships `context` assembly (token budgeting is an internal `service::budget` library capability — no `--budget` CLI parameter is exposed), `detect_changes` change detection, `rename` rename-impact pre-checks, `ask` natural-language entry, `ci`/`lint` architecture gates, `taint` taint auditing, `supply` supply-chain view, `evolve` evolution replay, `hub` artifact client, `skill` skill sync, oxcache-backed query-result caching, and structured logging via inklog; the grouped list of the 37 subcommands (plus the `mcp` serve mode) lives in the [🛠️ CLI Commands](#️-cli-commands) section, and per-command flag semantics with runnable examples are in the [📖 User Guide · Command Reference](docs/USER_GUIDE.md).
 
 ---
 
@@ -218,7 +218,7 @@ codenexus search --text "parse" --mode exact
 codenexus search --text "authentication logic" --fulltext true
 ```
 
-> 💡 **Tip**: add `.codenexus/` to your project's `.gitignore` (the index database and logs both live there). You can also create `.codenexus/config.json` to pin per-project defaults (e.g. `ram_first`, complexity thresholds) — see the [📖 User Guide · Configuration file](docs/USER_GUIDE.md#️-配置文件).
+> 💡 **Tip**: add `.codenexus/` to your project's `.gitignore` (the index database and logs both live there). You can also create `.codenexus/config.json` to pin per-project defaults (e.g. `ram_first`, complexity thresholds) — see the [📖 User Guide · Configuration](docs/USER_GUIDE.md).
 
 ### 🧭 Core concepts
 
@@ -227,7 +227,7 @@ codenexus search --text "authentication logic" --fulltext true
 - **Global `--db` option**: the database path defaults to `.codenexus/<project>.lbug`; being a clap global argument it parses both before and after the subcommand. When exactly one index exists it is auto-discovered.
 - **Exit-code contract**: 0 success, 1 internal error, 2 invalid input / project not found / query error, 4 not found / database corrupt (see `src/service/error.rs`).
 
-> The full set of core conventions (incremental indexing, confidence tiers, etc.) is in the [📖 User Guide · Core conventions](docs/USER_GUIDE.md#-核心约定).
+> The full set of core conventions (incremental indexing, confidence tiers, etc.) is in the [📖 User Guide · Core Conventions](docs/USER_GUIDE.md).
 
 ---
 
@@ -244,7 +244,7 @@ CodeNexus ships **37 subcommands** (plus the `codenexus mcp` serve mode), groupe
 - **Artifacts & agent ecosystem**: `hub` / `skill` / `ask` / `evolve`
 - **Multi-agent & LSP**: `setup` / `hook` / `lsp_goto_def` / `lsp_hover`
 
-Full flag semantics and runnable examples for every command are in the [📖 User Guide · Command reference](docs/USER_GUIDE.md#️-命令详解); complexity metrics and thresholds in the [📖 User Guide · Complexity Analysis](docs/USER_GUIDE.md#-复杂度分析), dead-code configuration in the [📖 User Guide · Dead Code Detection](docs/USER_GUIDE.md#-死代码检测).
+Full flag semantics and runnable examples for every command are in the [📖 User Guide · Command Reference](docs/USER_GUIDE.md); complexity metrics and thresholds in the [📖 User Guide · Complexity Analysis](docs/USER_GUIDE.md), dead-code configuration in the [📖 User Guide · Dead Code Detection](docs/USER_GUIDE.md).
 
 ---
 
@@ -263,7 +263,7 @@ codenexus setup
 codenexus hook
 ```
 
-What each tool does is described in the [📖 User Guide · Multi-agent integration](docs/USER_GUIDE.md#-多智能体集成).
+What each tool does is described in the [📖 User Guide · Multi-Agent Integration](docs/USER_GUIDE.md).
 
 ---
 
@@ -347,7 +347,7 @@ cargo +nightly fmt --all -- --check
 cargo +1.97.1 clippy -- -D warnings
 cargo +1.97.1 clippy --lib --no-default-features --features minimal -- -D warnings
 
-# Tests (CI matrix runs minimal / core / full / core,daemon,analysis,complexity / core,lsp,cache / full,embeddings)
+# Tests (CI matrix runs seven tiers: minimal / core / full / core,daemon,analysis,complexity / core,lsp,cache / full,embeddings / full,webui)
 cargo test --lib --verbose
 cargo test --lib --no-default-features --features "core" --verbose
 
@@ -367,7 +367,7 @@ cargo deny check
 
 ### 📊 Test scale
 
-As of v0.4.0-rc.1 (fixed-string grep count of `#[test]` / `#[tokio::test]` functions): 4757 unit tests (4714 `#[test]` + 43 `#[tokio::test]` in `src/`; 170 source files contain `#[cfg(test)]` modules) + 127 integration tests (10 top-level `.rs` files under `tests/`: 107 `#[test]` + 20 `#[tokio::test]`) + 8 acceptance projects + 7 Criterion benchmark groups; the coverage gate is ≥95% line coverage, enforced by both the CI coverage job and the pre-push hook. The per-file breakdown and full statistics live in [🧪 Test Scenario Matrix · Statistics](docs/TEST_SCENARIOS.md#-统计汇总).
+As of v0.4.0-rc.1 (fixed-string grep count of `#[test]` / `#[tokio::test]` functions): 4757 unit tests (4714 `#[test]` + 43 `#[tokio::test]` in `src/`; 170 source files contain `#[cfg(test)]` modules) + 127 integration tests (10 top-level `.rs` files under `tests/`: 107 `#[test]` + 20 `#[tokio::test]`) + 8 acceptance projects + 7 Criterion benchmark groups; the coverage gate is ≥95% line coverage, enforced by both the CI coverage job and the pre-push hook. The per-file breakdown and full statistics live in [🧪 Test Scenario Matrix · Statistics](docs/TEST_SCENARIOS.md).
 
 ---
 

@@ -1,6 +1,6 @@
 # Commands Reference
 
-> Detailed flags, options, and output schemas for all 37 CodeNexus subcommands. Part of the CodeNexus skill — see [SKILL.md](../SKILL.md) for the overview and command quick-reference table.
+> Detailed flags, options, and output schemas for 36 of the 37 CodeNexus subcommands — all except `ci` (for `ci` and anything not covered, defer to `codenexus <cmd> --help`). Part of the CodeNexus skill — see [SKILL.md](../SKILL.md) for the overview and command quick-reference table.
 
 ## Commands
 
@@ -11,18 +11,19 @@ CodeNexus has **37 subcommands** (plus the `codenexus mcp` serve mode, documente
 #### index — Index a codebase
 
 ```bash
-codenexus index --path <PATH> --name <PROJECT_NAME> --force <BOOL> --lsp <BOOL> --embed <BOOL> --ram_first <BOOL> [OPTIONS]
+codenexus index --path <PATH> --name <PROJECT_NAME> [OPTIONS]
 ```
 
-All of `--path`, `--name`, `--force`, `--lsp`, `--embed`, `--ram_first` are **required** (booleans value-style).
+`--path` and `--name` are **required**; the boolean flags below are optional and default to `false` (no placeholder value needed).
 
 **Options:**
 - `--path <PATH>` — Codebase root to index (required)
 - `--name <NAME>` — Project name (required)
-- `--force <BOOL>` — Re-parse every file, ignoring cached hashes (required; e.g. `--force false`)
-- `--lsp <BOOL>` — Reserved for future use (currently unimplemented; required; e.g. `--lsp false`)
-- `--embed <BOOL>` — Deprecated: embedding is now controlled by the `embeddings` cargo feature. A `--embed true` only emits a warning to stderr. Required; pass `--embed false`.
-- `--ram_first <BOOL>` — RAM-first indexing (H15): LZ4-compress sources into memory, parse from memory, single `COPY FROM` dump. Recommended for repos < 1 GB source. Default is streaming. (required; e.g. `--ram_first false`)
+- `--force <BOOL>` — Re-parse every file, ignoring cached hashes (optional, default `false`; e.g. `--force true`)
+- `--lsp <BOOL>` — Run LSP semantic enhancement after indexing (requires the `lsp` feature; optional, default `false`; e.g. `--lsp true` calls `enhance_with_lsp` for `semantic_type` extraction)
+- `--embed <BOOL>` — Deprecated: embedding is now controlled by the `embeddings` cargo feature. A `--embed true` only emits a warning to stderr. Optional, default `false`.
+- `--ram_first <BOOL>` — RAM-first indexing (H15): LZ4-compress sources into memory, parse from memory, single `COPY FROM` dump. Recommended for repos < 1 GB source. Default is streaming. (optional, default `false`)
+- `--fresh <BOOL>` — Delete the old DB file before init to reclaim DuckDB dead space (optional, default `false`)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
 **Output (JSON):** `project_id`, `files_indexed`, `files_skipped`, `nodes_created`, `edges_created`, `duration_ms`
@@ -68,7 +69,7 @@ codenexus daemon --path <PATH> --name <PROJECT_NAME> [--debounce-ms <MS>] [--db 
 - `--debounce-ms <MS>` — Debounce window in milliseconds (global option, default: 2000)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
-**Behavior:** Watches the directory recursively; only `.c`/`.h`/`.rs`/`.f90`/`.f`/`.f95`/`.py`/`.ts`/`.tsx` trigger indexing; debounces consecutive changes; pauses event processing during indexing; runs until interrupted (Ctrl+C). Requires the `daemon` feature. Does not emit a final JSON blob (long-running).
+**Behavior:** Watches the directory recursively; event filtering goes through `is_code_file` → `Language::from_extension` → `Language::compiled()`, so any compiled language's extension triggers indexing (21 languages under `full`; there is no fixed 9-extension whitelist — the set follows the enabled `lang-*` features); debounces consecutive changes; pauses event processing during indexing; runs until interrupted (Ctrl+C). Requires the `daemon` feature. Does not emit a final JSON blob (long-running).
 
 ### Querying & search
 
@@ -118,14 +119,14 @@ codenexus query --cypher "MATCH (r:CodeRelation) WHERE r.type='CALLS' RETURN r.s
 codenexus search --text <TEXT> --fulltext <BOOL> --limit <N> --mode <MODE> --project <NAME_OR_ID> [--db <DB_PATH>]
 ```
 
-All of `--text`, `--fulltext`, `--limit`, `--mode`, `--project` are **required**.
+`--text` is **required**; `--fulltext`, `--limit`, `--mode`, `--project` are optional with built-in defaults (`false` / `50` / `""` / `""`) — no placeholder values needed.
 
 **Options:**
 - `--text <TEXT>` — Search text (required)
-- `--fulltext <BOOL>` — `true` for BM25 full-text over `content`/`docstring`; `false` for structured name search (required)
-- `--limit <N>` — Maximum results (required; e.g. `--limit 10`)
-- `--mode <MODE>` — `exact` (case-insensitive substring), `regex` (Rust regex over name/qualifiedName), `fuzzy` (Levenshtein), `graph` (name + degree/label filter), or `multi` (multi-signal scoring) (required)
-- `--project <NAME_OR_ID>` — Project filter (name or id); empty string `""` = no filter (required)
+- `--fulltext <BOOL>` — `true` for BM25 full-text over `content`/`docstring`; `false` for structured name search (optional, default `false`)
+- `--limit <N>` — Maximum results (optional, default `50`; e.g. `--limit 10`)
+- `--mode <MODE>` — `exact` (case-insensitive substring), `regex` (Rust regex over name/qualifiedName), `fuzzy` (Levenshtein), `graph` (name + degree/label filter), or `multi` (multi-signal scoring) (optional, default `""` = `exact`)
+- `--project <NAME_OR_ID>` — Project filter (name or id); empty string `""` = no filter (optional, default `""`)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
 **Output (JSON):** `{"count":N,"results":[{name, label, file_path, start_line, qualified_name, score, match_reason, degree}]}`
@@ -137,18 +138,18 @@ All of `--text`, `--fulltext`, `--limit`, `--mode`, `--project` are **required**
 #### trace — Trace a symbol's paths
 
 ```bash
-codenexus trace --symbol <SYMBOL> --trace_type <TYPE> --depth <N> --path_filter <GLOB> --detect_cycles <BOOL> --cross_service <BOOL> [--db <DB_PATH>]
+codenexus trace --symbol <SYMBOL> --trace_type <TYPE> [--depth <N>] [--path_filter <GLOB>] [--detect_cycles <BOOL>] [--cross_service <BOOL>] [--db <DB_PATH>]
 ```
 
-All of `--symbol`, `--trace_type`, `--depth`, `--path_filter`, `--detect_cycles`, `--cross_service` are **required**.
+`--symbol` and `--trace_type` are **required**; `--depth`, `--path_filter`, `--detect_cycles`, `--cross_service` are optional with built-in defaults (`5` / `""` / `false` / `false`).
 
 **Options:**
 - `--symbol <SYMBOL>` — Symbol name to trace (required)
 - `--trace_type <TYPE>` — `calls`, `dataflow`, or `all` (required)
-- `--depth <N>` — Maximum traversal depth (required; e.g. `--depth 3`)
-- `--path_filter <GLOB>` — Glob to restrict path nodes' `filePath` (e.g. `"/src/api/**"`); empty string `""` = no filter (required)
-- `--detect_cycles <BOOL>` — `true` appends a `cycles` array of detected call-graph cycles (DFS white/gray/black) (required)
-- `--cross_service <BOOL>` — `true` traverses `HTTP_CALLS` and reverse `HANDLES_ROUTE` edges for cross-service chains (required)
+- `--depth <N>` — Maximum traversal depth (optional, default `5`; e.g. `--depth 3`)
+- `--path_filter <GLOB>` — Glob to restrict path nodes' `filePath` (e.g. `"/src/api/**"`); empty string `""` = no filter (optional, default `""`)
+- `--detect_cycles <BOOL>` — `true` appends a `cycles` array of detected call-graph cycles (DFS white/gray/black) (optional, default `false`)
+- `--cross_service <BOOL>` — `true` traverses `HTTP_CALLS` and reverse `HANDLES_ROUTE` edges for cross-service chains (optional, default `false`)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
 **Output (JSON):** `symbol`, `paths[].nodes`, `paths[].edges`, `paths[].depth`, `cycles[]` (when `--detect_cycles true`)
@@ -163,14 +164,14 @@ Performs reverse traversal to find all symbols that depend on the target.
 codenexus impact --symbol <SYMBOL> --depth <N> --edge_types <LIST> --max_depth <N> --include_tests <BOOL> [--db <DB_PATH>]
 ```
 
-All of `--symbol`, `--depth`, `--edge_types`, `--max_depth`, `--include_tests` are **required**.
+`--symbol` is **required**; `--depth`, `--edge_types`, `--max_depth`, `--include_tests` are optional with built-in defaults (`3` / `""` / `0` / `false`).
 
 **Options:**
 - `--symbol <SYMBOL>` — Target symbol name (required)
-- `--depth <N>` — Maximum reverse-traversal depth (required; e.g. `--depth 3`)
-- `--edge_types <LIST>` — Comma-separated UPPERCASE edge types to traverse (e.g. `"CALLS,IMPLEMENTS,USES_TYPE"`). Empty string `""` uses defaults (`CALLS` + `IMPLEMENTS` + `USES_TYPE`) (required)
-- `--max_depth <N>` — Max BFS depth for enhanced analysis (clamped to 10). When non-zero, enables risk assessment (required; e.g. `--max_depth 5`)
-- `--include_tests <BOOL>` — `true` includes `TESTS` edges in the reverse BFS; default `false` (required)
+- `--depth <N>` — Maximum reverse-traversal depth (optional, default `3`; e.g. `--depth 3`)
+- `--edge_types <LIST>` — Comma-separated UPPERCASE edge types to traverse (e.g. `"CALLS,IMPLEMENTS,USES_TYPE"`). Empty string `""` uses defaults (`CALLS` + `IMPLEMENTS` + `USES_TYPE`) (optional, default `""`)
+- `--max_depth <N>` — Max BFS depth for enhanced analysis (clamped to 10). When non-zero, enables risk assessment (optional, default `0`; e.g. `--max_depth 5`)
+- `--include_tests <BOOL>` — `true` includes `TESTS` edges in the reverse BFS; default `false` (optional)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
 **Output (JSON):** `symbol`, `depth`, `node_count`, `edge_count`, `truncated` (bool; `true` when the loaded subgraph hit the `MAX_SUBGRAPH_NODES=5000` cap), `nodes[]`, `edges[]`, `risk_assessment` (when enhanced), `affected[]` (when enhanced, each `ImpactNode` has `id`, `name`, `qualified_name`, `edge_type`, `depth`, `path`)
@@ -180,22 +181,21 @@ All of `--symbol`, `--depth`, `--edge_types`, `--max_depth`, `--include_tests` a
 Shows the resolved node, incoming edges (callers/importers/readers/writers), outgoing edges (callees/imports/uses), and processes/routes/endpoints the symbol participates in.
 
 ```bash
-codenexus context --symbol <SYMBOL> --depth <N> --project <NAME_OR_ID> --enhanced <BOOL> --budget <TOKENS> [--db <DB_PATH>]
+codenexus context --symbol <SYMBOL> [--depth <N>] [--project <NAME_OR_ID>] [--enhanced <BOOL>] [--db <DB_PATH>]
 ```
 
-All of `--symbol`, `--depth`, `--project`, `--enhanced`, `--budget` are **required** (sentinel defaults apply when omitted).
+`--symbol` is **required**; `--depth`, `--project`, `--enhanced` are optional with built-in defaults (`1` / `""` / `false`). There is **no `--budget` parameter** on the `context` CLI — token budgeting exists only as the internal `service::budget` library capability (`apply_budget`), not wired into the CLI.
 
 **Options:**
 - `--symbol <SYMBOL>` — Symbol name (required)
-- `--depth <N>` — BFS expansion depth for the surrounding subgraph (required; e.g. `--depth 2`)
-- `--project <NAME_OR_ID>` — Project name or id (required; used by `--enhanced true`)
-- `--enhanced <BOOL>` — `true` returns the multi-dimensional `SymbolContext` (symbol definition + type context + module context + test context); `false` returns the legacy caller/callee/processes view (required)
-- `--budget <TOKENS>` — Token ceiling for the output JSON; `0` (default) = unlimited. When > 0, array sections are greedily packed (prefix-truncated) to fit and a `budget` receipt is attached: `{requested, estimated_tokens, truncated, sections_dropped[], oversized_dropped}`. Estimate heuristic: `chars / 4` (Unicode chars, no tokenizer)
+- `--depth <N>` — BFS expansion depth for the surrounding subgraph (optional, default `1`; e.g. `--depth 2`)
+- `--project <NAME_OR_ID>` — Project name or id (optional, default `""`; used by `--enhanced true`)
+- `--enhanced <BOOL>` — `true` returns the multi-dimensional `SymbolContext` (symbol definition + type context + module context + test context); `false` returns the legacy caller/callee/processes view (optional, default `false`)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
-**Output (JSON):** `{symbol, node, incoming[], outgoing[], processes[], routes[], endpoints[]}` (legacy) or the enhanced `SymbolContext`; with `--budget > 0` a `budget` object is appended.
+**Output (JSON):** `{symbol, node, incoming[], outgoing[], processes[], routes[], endpoints[]}` (legacy) or the enhanced `SymbolContext`.
 
-> ✅ **Fixed in 0.3.4 (Problem F + A):** `context --enhanced true` now resolves `--project <name|id>` via `resolve_project_id` (previously it matched the raw value against `Function.project`, which stores the id, so name lookups failed with a generic error). Ambiguous symbols now fail fast — `context --symbol new --enhanced true --project CodeNexus` returns `ambiguous symbol 'new': 99 candidates` in ~0.3s (exit 1) instead of timing out. Verified: a unique short name returns a full `SymbolContext` (exit 0).
+> ✅ **Fixed in 0.3.4 (Problem F + A):** `context --enhanced true` now resolves `--project <name|id>` via `resolve_project_id` (previously it matched the raw value against `Function.project`, which stores the id, so name lookups failed with a generic error). Ambiguous symbols now fail fast — `context --symbol new --enhanced true --project CodeNexus` returns `ambiguous symbol 'new': 99 candidates` in ~0.3s (exit 2, `InvalidInput`) instead of timing out. Verified: a unique short name returns a full `SymbolContext` (exit 0).
 
 ### Code analysis
 
@@ -255,39 +255,39 @@ codenexus complexity \
   [--db <DB_PATH>]
 ```
 
-All 26 parameters are **required** (no defaults). Pass `0` for numeric thresholds you want to leave at the in-memory defaults, and `""` for time/space complexity thresholds you want to leave unset.
+`--project` is the only **required** parameter; all threshold flags are optional with built-in sentinel defaults (`0` for numeric thresholds = use the in-memory default, `""` for the time/space complexity class thresholds = leave unset). You can pass `0`/`""` explicitly, but omitting the flags entirely works too.
 
 **Options:**
 - `--project <NAME_OR_ID>` — Project name or id (required)
-- `--red_only <BOOL>` — `true` keeps only Red/Critical findings (required)
-- `--sort_by_severity <BOOL>` — `true` sorts results by severity descending (required)
-- `--cyclomatic_green <N>` / `--cyclomatic_yellow <N>` / `--cyclomatic_red <N>` — cyclomatic thresholds (required; in-memory defaults 10/20/25 — pass `0` to keep them)
-- `--cognitive_green <N>` / `--cognitive_yellow <N>` / `--cognitive_red <N>` — cognitive thresholds (required; in-memory defaults 10/15/20)
-- `--nesting_green <N>` / `--nesting_yellow <N>` / `--nesting_red <N>` — nesting depth thresholds (required; in-memory defaults 3/5/6)
-- `--func_length_green <N>` / `--func_length_yellow <N>` / `--func_length_red <N>` — function length thresholds (required; in-memory defaults 30/100/200)
-- `--halstead_volume_green <N>` / `--halstead_volume_yellow <N>` / `--halstead_volume_red <N>` — Halstead volume thresholds (required; in-memory defaults 100/1000/8000)
-- `--maintainability_green <N>` / `--maintainability_yellow <N>` / `--maintainability_red <N>` — maintainability index thresholds (required; in-memory defaults 85/65/25)
-- `--time_complexity_green "<O(..)>"` / `--time_complexity_yellow "<O(..)>"` / `--time_complexity_red "<O(..)>"` — time complexity class thresholds; valid values: `O(1)`, `O(log n)`, `O(n)`, `O(n log n)`, `O(n^2)`, `O(n^3)`, `O(2^n)` (required; in-memory defaults `O(log n)`/`O(n)`/`O(n^2)` — pass `""` to leave unset)
-- `--space_complexity_yellow "<O(..)>"` / `--space_complexity_red "<O(..)>"` — space complexity class thresholds; valid values: `O(1)`, `O(n)`, `O(n^2)` (required; in-memory defaults `O(1)`/`O(n)` — pass `""` to leave unset)
+- `--red_only <BOOL>` — `true` keeps only Red/Critical findings (optional, default `false`)
+- `--sort_by_severity <BOOL>` — `true` sorts results by severity descending (optional, default `false`)
+- `--cyclomatic_green <N>` / `--cyclomatic_yellow <N>` / `--cyclomatic_red <N>` — cyclomatic thresholds (optional, default `0`; in-memory defaults 10/20/25)
+- `--cognitive_green <N>` / `--cognitive_yellow <N>` / `--cognitive_red <N>` — cognitive thresholds (optional, default `0`; in-memory defaults 10/15/20)
+- `--nesting_green <N>` / `--nesting_yellow <N>` / `--nesting_red <N>` — nesting depth thresholds (optional, default `0`; in-memory defaults 3/5/6)
+- `--func_length_green <N>` / `--func_length_yellow <N>` / `--func_length_red <N>` — function length thresholds (optional, default `0`; in-memory defaults 30/100/200)
+- `--halstead_volume_green <N>` / `--halstead_volume_yellow <N>` / `--halstead_volume_red <N>` — Halstead volume thresholds (optional, default `0`; in-memory defaults 100/1000/8000)
+- `--maintainability_green <N>` / `--maintainability_yellow <N>` / `--maintainability_red <N>` — maintainability index thresholds (optional, default `0`; in-memory defaults 85/65/25)
+- `--time_complexity_green "<O(..)>"` / `--time_complexity_yellow "<O(..)>"` / `--time_complexity_red "<O(..)>"` — time complexity class thresholds; valid values: `O(1)`, `O(log n)`, `O(n)`, `O(n log n)`, `O(n^2)`, `O(n^3)`, `O(2^n)` (optional, default `""`; in-memory defaults `O(log n)`/`O(n)`/`O(n^2)`)
+- `--space_complexity_yellow "<O(..)>"` / `--space_complexity_red "<O(..)>"` — space complexity class thresholds; valid values: `O(1)`, `O(n)`, `O(n^2)` (optional, default `""`; in-memory defaults `O(1)`/`O(n)`)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
 **Output (JSON):** `project`, `complexity[]` (each entry has function identity + per-metric severity + raw values), `summary` (totals by severity)
 
-> Note: With all threshold flags set to `0`/`""`, the analyzer uses its in-memory defaults. The flags are required by the CLI even when you want defaults — this is a UX trade-off in 0.3.5. Requires the `complexity` feature.
+> Note: With all threshold flags set to `0`/`""` (or omitted), the analyzer uses its in-memory defaults. Requires the `complexity` feature.
 
 #### community — Leiden community detection
 
 Detects communities (clusters) in the call graph using Leiden modularity optimization. Leiden improves on Louvain by adding a refinement phase that guarantees every community is internally connected (Traag et al., 2019, C3 upgrade).
 
 ```bash
-codenexus community --project <NAME_OR_ID> --resolution <RESOLUTION> [--db <DB_PATH>]
+codenexus community --project <NAME_OR_ID> [--resolution <RESOLUTION>] [--db <DB_PATH>]
 ```
 
-Both `--project` and `--resolution` are **required**.
+`--project` is **required**; `--resolution` is optional (default `""` = built-in default).
 
 **Options:**
 - `--project <NAME_OR_ID>` — Project name or id (required)
-- `--resolution <RESOLUTION>` — Leiden resolution parameter γ (required; pass empty string `""` for default, or a float like `"1.5"`; higher γ → more, smaller communities)
+- `--resolution <RESOLUTION>` — Leiden resolution parameter γ (optional, default `""` = built-in default, or a float like `"1.5"`; higher γ → more, smaller communities)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
 **Output (JSON):** `project`, `resolution`, `communities[]` (each entry has community id + member nodes)
@@ -297,14 +297,14 @@ Both `--project` and `--resolution` are **required**.
 Matches HTTP route definitions (`Route` nodes) against caller-side string literals in `Function` bodies. Supports multi-protocol detection: HTTP REST, gRPC, GraphQL, message queue (Kafka/RabbitMQ), and event bus (Socket.IO/EventEmitter).
 
 ```bash
-codenexus cross_service --project <NAME_OR_ID> --protocol <PROTO> [--db <DB_PATH>]
+codenexus cross_service --project <NAME_OR_ID> [--protocol <PROTO>] [--db <DB_PATH>]
 ```
 
-Both `--project` and `--protocol` are **required**.
+`--project` is **required**; `--protocol` is optional (default `""` = all protocols).
 
 **Options:**
 - `--project <NAME_OR_ID>` — Project name or id (required)
-- `--protocol <PROTO>` — Filter by protocol: `http_rest`, `grpc`, `graphql`, `message_queue`, `event_bus`, or empty string `""` for all protocols (required)
+- `--protocol <PROTO>` — Filter by protocol: `http_rest`, `grpc`, `graphql`, `message_queue`, `event_bus`, or empty string `""` for all protocols (optional, default `""`)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
 **Output (JSON):** `project`, `links[]` (HTTP REST matches), `matches[]` (multi-protocol matches with `protocol`, `match_type`, `confidence`)
@@ -358,14 +358,14 @@ codenexus shape_check --project <NAME_OR_ID> [--db <DB_PATH>]
 Traces which callers would be affected if a given API endpoint changes.
 
 ```bash
-codenexus api_impact --project <NAME_OR_ID> --endpoint <ENDPOINT> [--db <DB_PATH>]
+codenexus api_impact --project <NAME_OR_ID> [--endpoint <ENDPOINT>] [--db <DB_PATH>]
 ```
 
-Both `--project` and `--endpoint` are **required**.
+`--project` is **required**; `--endpoint` is optional (default `""`).
 
 **Options:**
 - `--project <NAME_OR_ID>` — Project name or id (required)
-- `--endpoint <ENDPOINT>` — Endpoint path or identifier to analyze (required)
+- `--endpoint <ENDPOINT>` — Endpoint path or identifier to analyze (optional, default `""`)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
 **Output (JSON):** `project`, `endpoint`, `impact[]` (each entry has caller symbol + edge type + path)
@@ -419,14 +419,14 @@ codenexus arch_diff --base_project <NAME_OR_ID> --head_project <NAME_OR_ID> --ou
 Runs `git diff` in `--path` and maps each touched file/line range to indexed symbols, then classifies each affected symbol's risk level by incoming edge count.
 
 ```bash
-codenexus detect_changes --path <PATH> --mode <MODE> [--db <DB_PATH>]
+codenexus detect_changes --path <PATH> [--mode <MODE>] [--db <DB_PATH>]
 ```
 
-Both `--path` and `--mode` are **required**.
+`--path` is **required**; `--mode` is optional (default `unstaged`).
 
 **Options:**
 - `--path <PATH>` — Repository path to diff (required, named flag — NOT positional)
-- `--mode <MODE>` — Git diff mode: `unstaged`, `staged`, or `head` (vs HEAD) (required)
+- `--mode <MODE>` — Git diff mode: `unstaged`, `staged`, or `head` (vs HEAD) (optional, default `unstaged`)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
 **Output (JSON):** `{path, mode, files_changed, affected[]}`
@@ -513,7 +513,7 @@ Dumps the LadybugDB database to a zstd-compressed artifact with a JSON manifest 
 - `--project <NAME_OR_ID>` — Project name or id to include in the manifest (required)
 - `--db <DB_PATH>` — Database path to export (default: `.codenexus/<project>.lbug`; see Conventions)
 
-> ✅ **Fixed in 0.3.4 (Problem D):** the export manifest now reads the version from `env!("CARGO_PKG_VERSION")` (`src/service/export.rs`), so `"codenexus_version"` matches the binary. The earlier confusion came from `--version` being polluted by the `sdforge` dependency (which reports its own `0.4.2`); `src/main.rs` now reads `Cargo.toml` as the single source of truth, so both `--version` and the manifest report `0.3.4`.
+> ✅ **Fixed in 0.3.4 (Problem D):** the export manifest now reads the version from `env!("CARGO_PKG_VERSION")` (`src/service/export.rs`), so `"codenexus_version"` matches the binary. The earlier confusion came from `--version` being polluted by the `sdforge` dependency (which reports its own `0.4.2`); `src/main.rs` now reads `Cargo.toml` as the single source of truth, so both `--version` and the manifest report the current `Cargo.toml` version (currently `0.4.0-rc.1`; `0.3.4` was the value at the time this was verified).
 
 #### import — Import a team artifact (H7)
 
@@ -617,7 +617,7 @@ codenexus evolve --path <REPO> --output <DIR> --max_commits <N> --project <NAME>
 
 #### hub — Artifact registry client (protocol v1)
 
-Client for a CodeNexus artifact registry. `push` exports the project to a `.cnxp` artifact and uploads it; `pull` downloads the latest artifact for a name and imports it (full BLAKE3/size validation); `list` queries registry artifacts. Bearer token: `--token` wins over `CODENEXUS_HUB_TOKEN`. Protocol: `docs/HUB_PROTOCOL.md` (server out of scope). Data leaves the machine only on explicit push.
+Client for a CodeNexus artifact registry. `push` exports the project to a `.cnxp` artifact and uploads it; `pull` downloads the latest artifact for a name and imports it (full BLAKE3/size validation); `list` queries registry artifacts. Bearer token: `--token` wins over `CODENEXUS_HUB_TOKEN`. Protocol: registry protocol v1 (server implementation out of scope). Data leaves the machine only on explicit push.
 
 ```bash
 codenexus hub --action push|pull|list --url <BASE> [--name <ARTIFACT>] [--project <NAME>] [--token <TOKEN>] [--db <DB_PATH>]
@@ -657,7 +657,7 @@ codenexus hook [--db <DB_PATH>]
 
 #### mcp — Serve MCP tools over stdio (H13)
 
-Starts an sdforge-based MCP server over stdio, exposing tools such as `query` (execute Cypher), `trace` (trace symbol paths), `impact` (blast radius analysis), `search` (symbol search), `context` (360° symbol view). Launched by AI agents via the config written by `codenexus setup`. This replaces the previous hand-written JSON-RPC implementation.
+Starts an sdforge-based MCP server over stdio, exposing 10 tools: `query` (execute Cypher), `trace` (trace symbol paths), `impact` (blast radius analysis), `search` (symbol search), `context` (360° symbol view), `architecture` (architecture overview), `diagram` (architecture diagram), `arch_diff` (architecture delta), `dead_code` (dead code detection), `detect_changes` (change impact). Launched by AI agents via the config written by `codenexus setup`. This replaces the previous hand-written JSON-RPC implementation.
 
 ```bash
 codenexus mcp [--db <DB_PATH>]

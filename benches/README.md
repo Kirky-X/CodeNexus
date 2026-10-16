@@ -6,7 +6,8 @@ footprint, and daemon event-loop responsiveness.
 
 ## Overview
 
-Six benchmark files exercise the full indexing/query/trace/daemon pipeline:
+Seven benchmark files exercise the full indexing/query/trace/daemon pipeline
+plus the in-memory graph data structures:
 
 | File                 | Group        | Scenarios                                                        | PRD SLO dimension       |
 |----------------------|--------------|------------------------------------------------------------------|-------------------------|
@@ -14,11 +15,12 @@ Six benchmark files exercise the full indexing/query/trace/daemon pipeline:
 | `incremental_bench.rs` | `incremental` | `cold_start_1000`, `incremental_1_of_1000`, `incremental_500_of_1000` | Incremental throughput |
 | `query_bench.rs`     | `query`      | `cypher_match_functions`, `cypher_count_functions`, `search_by_name`, `search_by_name_project` | Query latency |
 | `trace_bench.rs`     | `trace`      | `trace_calls_depth_5`, `trace_calls_depth_10`, `trace_calls_depth_50`, `trace_all_depth_10` | Trace latency |
+| `graph_bench.rs`     | `graph`      | `edges_from`, `edges_to`, `edges_to_bfs`, `neighbors`, `reverse_neighbors`, `retain_edges`, `rebuild_index`, `scaling` (in-memory `Graph` view/iterator API) | Graph data-structure throughput |
 | `memory_bench.rs`    | `memory`     | `first_index_10k_files_peak`, `daemon_sustained_10_increments`, `ram_first_vs_default_comparison` | Peak RSS / sustained RSS |
 | `daemon_bench.rs`    | `daemon`     | `debounce_response_latency`, `indexing_event_queue_throughput`   | Daemon responsiveness   |
 
 `daemon_bench.rs` is feature-gated on `daemon` (Cargo.toml
-`required-features = ["daemon"]`); the other five compile under all feature
+`required-features = ["daemon"]`); the other six compile under all feature
 presets.
 
 ## SLO threshold table
@@ -122,13 +124,11 @@ BENCH_RUN_IGNORED=1 cargo bench --bench memory_bench -- --quick
 
 ## Shared fixtures (`benches/common/mod.rs`)
 
-Three helpers are shared across `incremental_bench`, `memory_bench`, and
+Two helpers are shared across `incremental_bench`, `memory_bench`, and
 `daemon_bench`:
 
 - `generate_large_repo(file_count) -> TempDir` — builds a temp repo with N
   files spread across C/Rust/Fortran/Python/TypeScript, each containing a
   minimal parseable symbol definition.
-- `open_test_db() -> (TempDir, StorageConnection)` — opens a fresh LadybugDB
-  database in a temp dir.
 - `measure_peak_rss(f) -> u64` — samples the current process's RSS every 100 ms
   while `f` runs and returns the peak (bytes), using the `sysinfo` crate.

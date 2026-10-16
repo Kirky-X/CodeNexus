@@ -99,7 +99,7 @@ codenexus context --symbol main --project myproject --enhanced true
 
 ## 🧭 核心约定
 
-以下约定适用于所有子命令（与 [`skill/SKILL.md`](../skill/SKILL.md) 对 v0.3.12 的校验一致）：
+以下约定适用于所有子命令（与 [`skill/SKILL.md`](../skill/SKILL.md) 对 v0.4.0-rc.1 的校验一致）：
 
 - **无位置参数**。一切都是命名 flag：`codenexus query "MATCH ..."` 会失败，必须写 `codenexus query --cypher "MATCH ..."`。
 - **布尔参数显式传值**：`--force true`、`--fresh true`（仅 `index`）、`--apply true`、`--cross_service false`（仅 `trace`）、`--embed false`、`--ram_first false`、`--enhanced false`、`--include_tests false`（`impact`）。
@@ -131,15 +131,14 @@ codenexus context --symbol main --project myproject --enhanced true
 | 命令 | 关键参数 | 说明 |
 |------|----------|------|
 | `query` | `--cypher` | 对图执行 Cypher 子集查询。注意：该子集不支持 `UNION` / `UNION ALL`，也不支持多标签 `WHERE (n:A OR n:B)` 表达式 |
-| `search` | `--text` `--mode` `--limit` `--fulltext` `--project` | 5 种结构化模式 `exact` / `regex` / `fuzzy` / `graph` / `multi`；`--fulltext true` 走 BM25 全文检索（`matchReason` 为 `bm25 fts` / `bm25f weighted`） |
-| `search_by_type` 场景 | `--text` 传类型名 | `search` 按类型过滤返回对应 label 的符号 |
+| `search` | `--text` `--mode` `--limit` `--fulltext` `--project` | 5 种结构化模式 `exact` / `regex` / `fuzzy` / `graph` / `multi`；`--fulltext true` 走 BM25 全文检索（`matchReason` 为 `bm25 fts` / `bm25f weighted`）。CLI `search` 不按 node label 过滤；按类型（label）过滤仅存在于库 API `QueryFacade::search_by_type(label: NodeLabel, …)`（`src/query/facade.rs`） |
 | `context` | `--symbol` `--depth` `--project` `--enhanced` | 360° 符号视图：入度调用/导入、出度调用、所属流程；`--enhanced true` 追加多维 SymbolContext（LSP 增强信息等） |
 
 ### 🕸️ 追踪与影响分析
 
 | 命令 | 关键参数 | 说明 |
 |------|----------|------|
-| `trace` | `--symbol` `--trace_type` `--depth` `--path_filter` `--detect_cycles` `--cross_service` | `--trace_type` 取 `calls` / `data`（调用链 / 数据流）；`--path_filter` 支持 glob（如 `/src/api/**`）；`--detect_cycles true` 检测环；`--cross_service true` 关联跨服务调用 |
+| `trace` | `--symbol` `--trace_type` `--depth` `--path_filter` `--detect_cycles` `--cross_service` | `--trace_type` 取 `calls` / `dataflow` / `all`（调用链 / 数据流 / 两者）；`--path_filter` 支持 glob（如 `/src/api/**`）；`--detect_cycles true` 检测环；`--cross_service true` 关联跨服务调用 |
 | `impact` | `--symbol` `--depth` `--edge_types` `--max_depth` `--include_tests` | 影响半径分析（上游调用者子图）+ `risk_assessment` 风险评估；`--edge_types "CALLS,IMPLEMENTS,USES_TYPE"` 按边类型过滤；子图节点上限 5000（`MAX_NODES_LIMIT`） |
 | `detect_changes` | `--path` `--mode` | git diff → 受影响符号 + `risk_level`，提交前评估改动影响面 |
 | `rename` | `--from` `--to` `--path` `--apply` | 高置信度图编辑 + 文本搜索编辑；`--apply false` 为 dry-run（默认推荐先跑 dry-run 审查） |
@@ -149,9 +148,9 @@ codenexus context --symbol main --project myproject --enhanced true
 | 命令 | 关键参数 | 说明 |
 |------|----------|------|
 | `dead_code` | `--project` `--entry` `--check_exported` `--check_ffi` `--edge_types` `--check_dynamic_dispatch` | 死代码检测，详见 [死代码检测](#-死代码检测) |
-| `architecture` | `--project` | 架构概览：模块边界 + 依赖方向 + 分层 + 跨服务依赖（`ArchitectureOverview` JSON），详见 [架构文档](ARCHITECTURE.md) |
+| `architecture` | `--project` | 架构概览：模块边界 + 依赖方向 + 分层 + 跨服务依赖（`ArchitectureOverview` JSON） |
 | `complexity` | `--project` + 阈值参数 | AST 复杂度分析，详见 [复杂度分析](#-复杂度分析) |
-| `community` | `--project` `--resolution` | 社区检测（Leiden 模块度优化）；`--resolution` 省略时默认 0.5 |
+| `community` | `--project` `--resolution` | 社区检测（Leiden 模块度优化）；`--resolution` 省略时默认 1.0（`DEFAULT_RESOLUTION`） |
 | `cross_service` | `--project` `--protocol` | 跨服务调用链检测：HTTP REST / gRPC / GraphQL / 消息队列 / 事件总线；`--protocol` 省略时检测所有协议 |
 
 ---
@@ -239,19 +238,19 @@ codenexus complexity --project myproject --time_complexity_green "O(1)" --time_c
 | `check_dynamic_dispatch` | `true`                                                                                             | 检测 qualified_name 中的 `#<TypeName>` disambiguator（如 `fmt#Display`），命中则视为 trait impl 方法（vtable 动态分发，无静态 CALLS 边），跳过死代码判定。设为 `false` 时按保守模式判定为死代码 |
 | `check_exported`         | `true`                                                                                             | `isExported=true` 的 Function/Method 视为外部可见，跳过死代码判定                                                                                                                               |
 | `check_ffi`              | `true`                                                                                             | signature 含 `extern "C"` / `#[no_mangle]` 的 Function 视为 FFI 入口，跳过死代码判定                                                                                                            |
-| `edge_types`             | `CALLS` / `FfiCalls` / `Implements` / `Usage` / `Tests` / `UsesType` / `HttpCalls` / `AsyncCalls`  | 参与可达性传播的边类型白名单                                                                                                                                                                    |
+| `edge_types`             | `CALLS` / `FfiCalls` / `Implements` / `HandlesRoute` / `Usage` / `Tests` / `UsesType` / `HttpCalls` / `AsyncCalls`（9 种） | 参与可达性传播的边类型白名单                                                                                     |
 
 ### 示例
 
 ```bash
-# 默认配置检测
+# 默认配置检测（--entry/--check_exported/--check_ffi/--edge_types 为必填 flag，无默认值，缺一即 exit 2）
 codenexus dead_code --project myproject --entry "" --check_exported true --check_ffi true --edge_types ""
 
 # 自定义 edge_types（仅 CALLS + IMPLEMENTS）
-codenexus dead_code --project myproject --edge_types "CALLS,IMPLEMENTS"
+codenexus dead_code --project myproject --entry "" --check_exported true --check_ffi true --edge_types "CALLS,IMPLEMENTS"
 
 # 保守模式：禁用 trait impl 识别
-codenexus dead_code --project myproject --check_dynamic_dispatch false
+codenexus dead_code --project myproject --entry "" --check_exported true --check_ffi true --edge_types "" --check_dynamic_dispatch false
 ```
 
 > **限制**：tree-sitter 不展开 procedural macro（`#[derive(Serialize)]` 等），derive 生成的 impl 方法会被判定为死代码（已知误报）。const fn 在 const 上下文的调用也不被 tree-sitter 识别为 CALLS 边。Bash 语言的 `trap cleanup EXIT`（信号触发）与经字符串拼接 / 变量展开的间接调用对 tree-sitter 不可见，会以 Medium 置信度上报，删除前需人工确认。
@@ -275,7 +274,7 @@ codenexus dead_code --project myproject --check_dynamic_dispatch false
 
 ## 🖼️ 架构图与语义 Delta
 
-`diagram` feature 提供两个命令（输出语义详见 [架构文档](ARCHITECTURE.md)）：
+`diagram` feature 提供两个命令（各命令输出字段见 `codenexus <cmd> --help` 与下方示例）：
 
 ```bash
 # 架构图导出：自包含交互式 HTML + BLAKE3 交付回执
@@ -424,9 +423,6 @@ CodeNexus 是 CLI 工具，自身不读取 `.env` 文件；模板见 [`.env.exam
 | 文档 | 内容 |
 |------|------|
 | [📘 API 参考](API_REFERENCE.md) | 库 crate 公开 API 与 CLI/MCP 接口契约 |
-| [🏗️ 架构文档](ARCHITECTURE.md) | 三层结构、索引管线、图模型与架构图命令语义 |
 | [⚡ 性能指南](PERFORMANCE.md) | 基准数据、内存优化与调优建议 |
 | [❓ FAQ](FAQ.md) | 常见问题解答 |
 | [🔒 安全文档](SECURITY.md) | 漏洞报告流程与安全最佳实践 |
-| [📐 架构设计文档（ADD）](ADD.md) | 架构决策记录 |
-| [🗄️ 数据库设计文档（DDD）](DDD.md) | 图存储 Schema 设计 |

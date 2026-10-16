@@ -1,34 +1,34 @@
-# 🤝 Contributing to CodeNexus
+# 🤝 贡献 CodeNexus
 
-Thanks for your interest in contributing to CodeNexus. This document describes how to set up a development environment and the conventions every pull request must follow.
+感谢你对 CodeNexus 感兴趣。本文档介绍开发环境搭建方法，以及每个 Pull Request 必须遵守的约定。
 
 ## 📋 目录
 
-- [Development Environment](#️-development-environment)
-- [Commit Convention — Conventional Commits](#-commit-convention--conventional-commits)
-- [Pull Request Workflow](#-pull-request-workflow)
-- [Test and Lint Requirements](#✅-test-and-lint-requirements)
-- [Code Style](#-code-style)
-- [Adding a New Language Parser](#-adding-a-new-language-parser)
-- [Reporting Issues](#-reporting-issues)
-- [Code of Conduct](#-code-of-conduct)
-- [Questions](#-questions)
+- [开发环境](#️-开发环境)
+- [提交约定 — Conventional Commits](#-提交约定--conventional-commits)
+- [Pull Request 流程](#-pull-request-流程)
+- [测试与 Lint 要求](#✅-测试与-lint-要求)
+- [代码风格](#-代码风格)
+- [添加新语言解析器](#-添加新语言解析器)
+- [提交 Issue](#-提交-issue)
+- [行为准则](#-行为准则)
+- [问题](#-问题)
 
 ---
 
-## 🧰 Development Environment
+## 🧰 开发环境
 
-### Prerequisites
+### 前置依赖
 
-| Tool | Version | Why |
-|------|---------|-----|
-| Rust toolchain (stable) | 1.95+ | Minimum supported version, pinned in CI and `Cargo.toml` (`rust-version = "1.95"`). |
-| Rust nightly toolchain | latest | `cargo fmt` uses the nightly-only options `imports_granularity` and `group_imports` (see `rustfmt.toml`). |
-| C/C++ compiler | system default | Required to build the `tree-sitter` grammar crates. |
-| `zstd` CLI | any recent version | Used by `export`/`import` for `.graph.zst` artifacts. |
-| Git | 2.20+ | Hooks and `detect-changes` rely on modern `git` behavior. |
+| 工具 | 版本 | 说明 |
+|------|------|------|
+| Rust 工具链（stable） | 1.95+ | 最低支持版本，在 CI 和 `Cargo.toml` 中固定（`rust-version = "1.95"`）。 |
+| Rust nightly 工具链 | 最新 | `cargo fmt` 使用 nightly 专有选项 `imports_granularity` 和 `group_imports`（见 `rustfmt.toml`）。 |
+| C/C++ 编译器 | 系统默认 | 构建 `tree-sitter` 语法 crate 所需。 |
+| `zstd` CLI | 任意近期版本 | `export`/`import` 用于 `.graph.zst` 制品。 |
+| Git | 2.20+ | Hooks 和 `detect-changes` 依赖现代 `git` 行为。 |
 
-Install both Rust toolchains with [rustup](https://rustup.rs/):
+使用 [rustup](https://rustup.rs/) 安装两个 Rust 工具链：
 
 ```bash
 rustup toolchain install 1.95
@@ -37,108 +37,108 @@ rustup component add clippy --toolchain 1.95
 rustup component add rustfmt --toolchain nightly
 ```
 
-### Get the Source
+### 获取源码
 
 ```bash
 git clone https://github.com/Kirky-X/codenexus.git
 cd codenexus
-cargo build                    # smoke build
-cargo test                     # smoke test
+cargo build                    # 冒烟构建
+cargo test                     # 冒烟测试
 ```
 
-### Build Variants
+### 构建变体
 
-The default feature set is `full` (all 21 languages + daemon + analysis + complexity + api-review + community + cross-service + lsp + mcp + cli + cache + embed). For faster iteration during development you can build a leaner binary:
+默认特性集为 `full`（全部 21 种语言 + daemon + analysis + complexity + api-review + community + cross-service + lsp + mcp + cli + cache + embed）。为加快开发迭代，可以构建更精简的二进制：
 
 ```bash
-# Minimal: Rust only, no daemon (fastest compile)
+# 最小：仅 Rust，无 daemon（编译最快）
 cargo build --no-default-features --features minimal
 
-# Core: C + Rust + Python, no daemon
+# 核心：C + Rust + Python，无 daemon
 cargo build --no-default-features --features core
 
-# Everything including vector embeddings (slower to compile)
+# 全部，包括向量嵌入（编译较慢）
 cargo build --features embeddings
 ```
 
-## 📝 Commit Convention — Conventional Commits
+## 📝 提交约定 — Conventional Commits
 
-CodeNexus follows [Conventional Commits](https://conventionalcommits.org/). Every commit message must match:
+CodeNexus 遵循 [Conventional Commits](https://conventionalcommits.org/)。每条提交信息必须匹配：
 
 ```
 <type>(<scope>): <subject>
 
-[optional body]
+[可选 body]
 
-[optional footer]
+[可选 footer]
 ```
 
-### Allowed `type` values
+### 允许的 `type` 值
 
-| Type | Use for |
+| 类型 | 用途 |
 |------|---------|
-| `feat` | A new feature visible to users |
-| `fix` | A bug fix |
-| `perf` | A change that improves performance without altering behavior |
-| `refactor` | A code change that neither fixes a bug nor adds a feature |
-| `docs` | Documentation-only changes (README, CHANGELOG, design docs) |
-| `test` | Adding or correcting tests |
-| `chore` | Build, CI, deps, tooling, repo housekeeping |
-| `revert` | Reverting a previous commit |
+| `feat` | 面向用户的新功能 |
+| `fix` | Bug 修复 |
+| `perf` | 不改变行为的性能优化 |
+| `refactor` | 既不修复 bug 也不添加功能的代码变更 |
+| `docs` | 仅文档变更（README、CHANGELOG、设计文档） |
+| `test` | 添加或修正测试 |
+| `chore` | 构建、CI、依赖、工具、仓库杂务 |
+| `revert` | 回退之前的提交 |
 
 ### `scope`
 
-Optional but encouraged. Use the module name (`parse`, `resolve`, `storage`, `query`, `trace`, `cli`, `daemon`, `embed`, `mcp`, `model`, `kit`). For cross-cutting changes, omit the scope.
+可选但推荐使用。使用模块名（`parse`、`resolve`、`storage`、`query`、`trace`、`cli`、`daemon`、`embed`、`mcp`、`model`、`kit`）。跨模块变更可省略 scope。
 
-### Examples
+### 示例
 
 ```
-feat(parse): add Go language extractor
-fix(storage): prevent orphan edges when parser endpoint IDs desync
+feat(parse): 添加 Go 语言提取器
+fix(storage): 防止解析器端点 ID 失同步时的孤儿边
 perf(parse): dedupe_qn O(N²) → O(1) HashSet
-docs(readme): add Roadmap and Acknowledgments sections
-chore(ci): pin Rust 1.95 in workflow
+docs(readme): 添加 Roadmap 和 Acknowledgments 章节
+chore(ci): workflow 中固定 Rust 1.95
 ```
 
-`BREAKING CHANGE:` in the footer or `feat!:` / `fix!:` (with `!`) flag breaking changes and must include migration notes.
+footer 中的 `BREAKING CHANGE:` 或 `feat!:` / `fix!:`（带 `!`）标记破坏性变更，必须包含迁移说明。
 
-## 🔀 Pull Request Workflow
+## 🔀 Pull Request 流程
 
-1. **Fork** the repository and clone your fork.
-2. **Branch** from `main`:
+1. **Fork** 仓库并 clone 你的 fork。
+2. 从 `main` **创建分支**：
    ```bash
    git checkout -b feat/short-description
    ```
-   Use `feat/`, `fix/`, `docs/`, `refactor/`, `perf/`, `test/`, `chore/` prefixes matching the commit `type`.
-3. **Commit** with Conventional Commits messages. Keep commits focused; small commits are easier to review than one large squashed commit.
-4. **Push** to your fork:
+   使用与提交 `type` 匹配的前缀：`feat/`、`fix/`、`docs/`、`refactor/`、`perf/`、`test/`、`chore/`。
+3. 使用 Conventional Commits 信息**提交**。保持提交聚焦；小提交比一个大提交更容易审查。
+4. **推送**到你的 fork：
    ```bash
    git push -u origin feat/short-description
    ```
-5. **Open a Pull Request** against `main`. Fill in the PR template:
-   - What changed and why
-   - Related issue (e.g. `Closes #123`)
-   - How it was tested
-   - Breaking changes (if any) with migration notes
-6. **Address review feedback** by pushing new commits (do not force-push during review unless asked).
-7. **Maintainer squash-merges** on approval. The final commit message follows Conventional Commits.
+5. 对 `main` **发起 Pull Request**。填写 PR 模板：
+   - 变更内容和原因
+   - 关联的 Issue（如 `Closes #123`）
+   - 测试方式
+   - 破坏性变更（如有）及迁移说明
+6. 通过推送新提交来**处理审查反馈**（审查期间不要 force-push，除非被要求）。
+7. 维护者 **squash-merge**。最终提交信息遵循 Conventional Commits。
 
-## ✅ Test and Lint Requirements
+## ✅ 测试与 Lint 要求
 
-CI runs these gates on every PR; they must pass locally before you push:
+CI 在每个 PR 上运行以下门禁；推送前必须在本地通过：
 
 ```bash
-# 1. Format check (nightly rustfmt)
+# 1. 格式检查（nightly rustfmt）
 cargo +nightly fmt --all -- --check
 
-# 2. Lint — warnings are errors
+# 2. Lint — 警告视为错误
 cargo clippy --all-targets -- -D warnings
 
-# 3. Tests
+# 3. 测试
 cargo test --all-features
 ```
 
-If your change touches a feature-gated path, also run:
+如果变更涉及特性门控路径，还需运行：
 
 ```bash
 cargo test --no-default-features --features minimal
@@ -146,45 +146,45 @@ cargo test --no-default-features --features core
 cargo test --features embeddings
 ```
 
-### Writing Tests
+### 编写测试
 
-- Unit tests live in `#[cfg(test)] mod tests` blocks inside each module.
-- Integration tests live in `tests/` and exercise the CLI / index → query pipeline end to end.
-- Benchmarks live in `benches/` (`criterion` harness). Do not gate correctness on benchmark numbers — only on `cargo test`.
-- Tests must assert meaningful behavior (return values, graph shape, side effects), not just "did not panic".
+- 单元测试位于各模块内的 `#[cfg(test)] mod tests` 块中。
+- 集成测试位于 `tests/`，端到端地测试 CLI / 索引 → 查询管线。
+- 基准测试位于 `benches/`（`criterion` 框架）。不要以基准数据作为正确性门禁——只以 `cargo test` 为准。
+- 测试必须断言有意义的行为（返回值、图结构、副作用），而非仅断言"没有 panic"。
 
-## 🎨 Code Style
+## 🎨 代码风格
 
-- **Formatting:** `cargo +nightly fmt` is the source of truth. Configuration lives in [`rustfmt.toml`](rustfmt.toml): 4-space indent, 100-column width, Unix newlines, `imports_granularity = Preserve`.
-- **Editor config:** see [`.editorconfig`](.editorconfig) for editor-agnostic rules (Rust 4 spaces, Markdown 2 spaces, YAML 2 spaces, UTF-8, LF, trim trailing whitespace).
-- **Naming:** follow standard Rust style (`snake_case` for functions/variables/modules, `PascalCase` for types/traits/variants). Match the conventions already in the codebase — when in doubt, look at neighboring code.
-- **Error handling:** use `thiserror` for library error enums and `anyhow` for CLI/`main` boundaries. Do not silently swallow errors; surface them (see project rule "Fail Loud").
-- **No emojis** in source, comments, or commit messages. Keep documentation plain text.
+- **格式**：`cargo +nightly fmt` 是最终标准。配置位于 [`rustfmt.toml`](rustfmt.toml)：4 空格缩进、100 列宽、Unix 换行、`imports_granularity = Preserve`。
+- **编辑器配置**：见 [`.editorconfig`](.editorconfig)（Rust 4 空格、Markdown 2 空格、YAML 2 空格、UTF-8、LF、去除行尾空白）。
+- **命名**：遵循标准 Rust 风格（函数/变量/模块用 `snake_case`，类型/trait/枚举用 `PascalCase`）。与代码库现有约定保持一致——有疑问时参考相邻代码。
+- **错误处理**：库错误枚举使用 `thiserror`，CLI/`main` 边界使用 `anyhow`。不要静默吞掉错误；将它们暴露出来（参见项目规则"Fail Loud"）。
+- **禁止 emoji**：源码、注释和提交信息中不使用 emoji。文档保持纯文本。
 
-## 🌐 Adding a New Language Parser
+## 🌐 添加新语言解析器
 
-If you want to add a new language (e.g. Go), the high-level steps are:
+如果要添加新语言（如 Go），高层步骤如下：
 
-1. Add a `lang-go` feature in `Cargo.toml` pulling in `tree-sitter-go`.
-2. Wire it into the tiered presets (`minimal` / `core` / `full`) as appropriate.
-3. Implement an extractor under `src/parse/` following the existing extractor pattern (visit tree-sitter nodes → emit `Node`/`Edge` records).
-4. Register the extractor in the unified Kit registry (`trait-kit`).
-5. Add node/edge types to `src/model/` if the language needs new labels.
-6. Add tests in `tests/` indexing a small sample and asserting the extracted graph.
-7. Update `README.md` "Supported Languages" and "Feature Flags" tables.
+1. 在 `Cargo.toml` 中添加 `lang-go` 特性，引入 `tree-sitter-go`。
+2. 按需将其接入分层预设（`minimal` / `core` / `full`）。
+3. 在 `src/parse/` 下实现提取器，遵循现有提取器模式（访问 tree-sitter 节点 → 输出 `Node`/`Edge` 记录）。
+4. 在统一 Kit 注册表（`trait-kit`）中注册提取器。
+5. 如该语言需要新标签，在 `src/model/` 中添加节点/边类型。
+6. 在 `tests/` 中添加测试，索引小型样本并断言提取的图。
+7. 更新 `README.md` 的"支持语言"和"特性标志"表。
 
-Open an issue first to discuss the scope before doing large work.
+开始大规模工作前先开 Issue 讨论范围。
 
-## 🐛 Reporting Issues
+## 🐛 提交 Issue
 
-- Use the [GitHub issue tracker](https://github.com/Kirky-X/codenexus/issues).
-- For **security vulnerabilities**, do NOT open a public issue — see [SECURITY.md](SECURITY.md).
-- Include: CodeNexus version (`codenexus --version`), Rust version, OS, the exact command that failed, the full error output, and a minimal reproduction (a small repo or file if possible).
+- 使用 [GitHub Issue Tracker](https://github.com/Kirky-X/codenexus/issues)。
+- **安全漏洞**不要公开开 Issue——见 [SECURITY.md](SECURITY.md)。
+- 包含：CodeNexus 版本（`codenexus --version`）、Rust 版本、操作系统、失败的确切命令、完整错误输出，以及最小复现（如可能，提供小型仓库或文件）。
 
-## 📜 Code of Conduct
+## 📜 行为准则
 
-Participation in this project is governed by the [Code of Conduct](CODE_OF_CONDUCT.md). By contributing, you agree to uphold it.
+参与本项目受 [行为准则](CODE_OF_CONDUCT.md) 约束。贡献即表示同意遵守。
 
-## ❓ Questions
+## ❓ 问题
 
-Open a [GitHub Discussion](https://github.com/Kirky-X/codenexus/discussions) or an issue labeled `question`. Be patient — this project is maintained by a small team.
+开 [GitHub Discussion](https://github.com/Kirky-X/codenexus/discussions) 或标记为 `question` 的 Issue。请耐心等待——本项目由小团队维护。

@@ -17,7 +17,7 @@
 
 ## 🎯 概述与 SLO
 
-以下 SLO 来自 [`docs/PRD.md`](PRD.md) §5.1，是面向生产工作负载的验收参考：
+以下 SLO 为面向生产工作负载的验收参考，阈值全部来自 [`benches/README.md`](../benches/README.md) 的 SLO 阈值表（索引吞吐、增量单文件、查询延迟、追踪延迟、首次索引内存、daemon 持续内存为基准门禁项；增量批量变更 ≥ 100 files/s、daemon 响应 ≤ 3 s、事件队列零丢失为同表补充的验收项）：
 
 | 维度 | SLO | 说明 |
 |:-----|:----|:-----|
@@ -158,7 +158,7 @@ cargo bench --bench incremental_bench -- --baseline main
 BENCH_RUN_IGNORED=1 cargo bench --bench memory_bench -- --quick
 ```
 
-> 说明：criterion 0.5 的 `--ignored` 语义是「跳过全部基准」而非 libtest 的「只跑 ignored」，因此两个长时场景用 `BENCH_RUN_IGNORED=1` 环境变量在运行时开关。共享 fixture（`benches/common/mod.rs`）提供 `generate_large_repo` / `open_test_db` / `measure_peak_rss`（每 100 ms 采样 RSS）。
+> 说明：criterion 0.5 的 `--ignored` 语义是「跳过全部基准」而非 libtest 的「只跑 ignored」，因此两个长时场景用 `BENCH_RUN_IGNORED=1` 环境变量在运行时开关。共享 fixture（`benches/common/mod.rs`）提供 `generate_large_repo` / `measure_peak_rss`（每 100 ms 采样 RSS）。
 
 ---
 
@@ -168,6 +168,4 @@ BENCH_RUN_IGNORED=1 cargo bench --bench memory_bench -- --quick
 |------|------|
 | [benches/README.md](../benches/README.md) | SLO 阈值表、告警阈值、共享 fixture |
 | [📖 用户指南](USER_GUIDE.md) | `--ram_first` / `--fresh` / daemon 的使用说明 |
-| [🏗️ 架构文档](ARCHITECTURE.md) | 索引管线分层设计 |
 | [📋 更新日志](CHANGELOG.md) | L1–L7 与 P 系列优化的完整记录（v0.3.10–v0.3.12） |
-| [🎯 产品需求文档（PRD）](PRD.md) | §5.1 SLO 指标定义 |

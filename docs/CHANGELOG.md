@@ -1,15 +1,15 @@
 # 📋 CodeNexus 更新日志
 
-All notable changes to CodeNexus are documented in this file.
+CodeNexus 的所有重要变更均记录于此文件。
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，
+本项目遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
 > 发布前请对照 [RELEASING.md](RELEASING.md) 的对账清单核对文档数字（命令数 / MCP 工具数 / 语言数 / 示例数 / advisory 忽略清单）。
 
 ## 📋 目录
 
-- [Unreleased](#unreleased)
+- [0.4.0-rc.1 — 2026-10-16](#040-rc1---2026-10-16)
 - [0.3.13-rc.1 — 2026-09-21](#0313-rc1---2026-09-21)
 - [0.3.12 — 2026-07-30](#0312---2026-07-30)
 - [0.3.11 — 2026-07-26](#0311---2026-07-26)
@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.4.0-rc.1] — 2026-10-16
 
 ### Changed
 
@@ -403,7 +403,7 @@ Initial public release. CodeNexus indexes source code into a queryable knowledge
 - **Database corruption detection** — corrupt LadybugDB files are detected at startup and reported with a distinct exit code (4) instead of being loaded into a half-valid state.
 - **`.env` files ignored by default** in `.gitignore`, with an explicit `!.env.example` allow-list so the template is tracked but real secrets never are.
 
-[Unreleased]: https://github.com/Kirky-X/codenexus/compare/v0.3.11...HEAD
+[0.4.0-rc.1]: https://github.com/Kirky-X/codenexus/compare/v0.3.13-rc.1...v0.4.0-rc.1
 [0.3.11]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.11
 [0.3.10]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.10
 [0.3.9]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.9

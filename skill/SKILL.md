@@ -5,11 +5,11 @@ description: "Code knowledge graph indexer and query tool. Use when indexing cod
 
 # CodeNexus CLI Skill
 
-> **Verified against `codenexus 0.3.12`.** The CLI is **strictly flag-based**: there are **no positional arguments**, and almost every function parameter is a **mandatory flag** (plain `String`/`u32`/`bool` types in the source map to required flags — only `--db <DB_PATH>` and `--debounce-ms <MS>` are global options with defaults). Booleans are pass-by-value (e.g. `--force true` on `index`, `--apply true` on `rename`, `--cross_service false` on `trace`). ⚠️ `--cross_service` is **`trace`-only** — `impact` does NOT have this flag; `search` does NOT have `--name` (use `--text`+`--fulltext`+`--mode`).
+> **Verified against `codenexus 0.4.0-rc.1`.** The CLI is **strictly flag-based**: there are **no positional arguments**. A small set of plain-typed params are **required flags** (e.g. `--symbol`, `--trace_type` — the usage line marks them); common optional params carry **built-in sentinel defaults** and need no placeholder value (`trace --depth 5`, `search --limit 50`, `index` booleans `false`, complexity thresholds `0`/`""` — full list in Conventions and each command's `--help`). Booleans are pass-by-value (e.g. `--force true` on `index`, `--apply true` on `rename`, `--cross_service false` on `trace`). ⚠️ `--cross_service` is **`trace`-only** — `impact` does NOT have this flag; `search` does NOT have `--name` (use `--text`+`--fulltext`+`--mode`). Note `dead_code` requires `--entry`/`--check_exported`/`--check_ffi`/`--edge_types` explicitly (they have no sentinel defaults).
 
 ## Description
 
-CodeNexus is a code knowledge graph indexing tool. It parses source code (24 languages via tree-sitter — C, Rust, Fortran, Python, TypeScript, Go, Java, C++, JavaScript, Ruby, Haskell, OCaml, Scala, PHP, C#, Bash, HTML, CSS, JSON, Regex, Verilog, Kotlin, Swift, Solidity) and builds a queryable graph in LadybugDB, supporting call-chain tracing, data-flow analysis, cross-language FFI tracking, semantic search, change-impact analysis, refactoring proposals, LSP integration, and MCP server integration.
+CodeNexus is a code knowledge graph indexing tool. It parses source code (21 languages via tree-sitter — C, Rust, Fortran, Python, TypeScript, Go, Java, C++, JavaScript, Ruby, Haskell, OCaml, Scala, PHP, C#, Bash, HTML, CSS, JSON, Regex, Verilog; Kotlin/Swift/Solidity are recognized by extension mapping and taint rules only, with no tree-sitter parser) and builds a queryable graph in LadybugDB, supporting call-chain tracing, data-flow analysis, cross-language FFI tracking, semantic search, change-impact analysis, refactoring proposals, LSP integration, and MCP server integration.
 
 Use this Skill when you need to index a codebase, query its structure, trace function calls or data flow, analyze the impact of changes, search for symbols, watch files for incremental updates, manage projects, export/import graph artifacts, inspect a symbol's 360° context, detect symbols affected by git changes, propose renames, query an LSP server, or set up MCP integration with AI agents.
 
@@ -42,7 +42,7 @@ cargo build --release
 
 The binary is at `target/release/codenexus` (or `~/.cargo/bin/codenexus` if installed via `cargo install`). Semantic search (vector embeddings) is already included in the default `full` preset — no extra flag needed.
 
-Feature presets: `minimal` (Rust only), `core` (C+Rust+Python), `full` (all 24 languages + daemon + analysis + complexity + api-review + community + cross-service + lsp + mcp). The `mcp` feature enables the sdforge-based MCP server (`codenexus mcp`). At least one `lang-*` feature is required — the crate fails to compile otherwise.
+Feature presets: `minimal` (Rust only), `core` (C+Rust+Python), `full` (all 21 tree-sitter languages + daemon, analysis, complexity, api-review, community, cross-service, diagram, lsp, cli, mcp, cache, embeddings, i18n, hub). The `mcp` feature enables the sdforge-based MCP server (`codenexus mcp`). At least one `lang-*` feature is required — the crate fails to compile otherwise.
 
 ## Command Quick Reference
 
@@ -79,7 +79,7 @@ CodeNexus has **37 subcommands** (plus the `codenexus mcp` serve mode) grouped i
 | `import` | Team | Decompress a team artifact into LadybugDB. Optionally triggers an incremental reindex. |
 | `setup` | MCP | Auto-detect installed AI agents (Claude Code, Cursor, Codex) and write MCP config for `codenexus mcp`. |
 | `hook` | MCP | Emit PreToolUse/PostToolUse hook JSON. Always exits 0; never blocks. Long-running (reads stdin). |
-| `mcp` | MCP | Serve MCP tools (`query`/`trace`/`impact`/`search`/`context`) over stdio. Long-running. Requires `mcp` feature. |
+| `mcp` | MCP | Serve MCP tools (`query`/`trace`/`impact`/`search`/`context`/`architecture`/`diagram`/`arch_diff`/`dead_code`/`detect_changes`) over stdio. Long-running. Requires `mcp` feature. |
 | `skill` | MCP | Sync bundled skill docs into installed agents' global skill dirs. Version-stamped; mirrors `setup` overwrite policy. |
 | `ask` | Agent | Natural-language router to the read-only command cores; executes in-process. |
 | `ci` | CI | Architecture gate: fail (exit 2) when the diff touches symbols at/above a risk level. Emits PR-ready markdown. |
@@ -88,7 +88,6 @@ CodeNexus has **37 subcommands** (plus the `codenexus mcp` serve mode) grouped i
 | `supply` | Security | Supply-chain view: ExternalPackage nodes + DEPENDS_ON edges from unresolved imports. |
 | `evolve` | Analysis | Architecture evolution timeline over the last N commits (worktree snapshots → `evolve.json`/`evolve.html`). |
 | `hub` | Team | Artifact registry client (protocol v1): `push`/`pull`/`list` `.cnxp` artifacts. Requires `hub` feature. |
-| `context --budget` | Query | Token-budget packing for context output (chars/4 estimate; appends a `budget` receipt). |
 
 ## Critical Known Issues (0.3.5)
 
