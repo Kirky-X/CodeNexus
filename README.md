@@ -178,7 +178,7 @@ cargo build --release
 | `i18n`            | 启用 | Unicode case folding + NFC 规范化（ICU4X） |
 | `webui`           | —    | 内嵌 graph-viewer Web UI：`codenexus webui` 启动（前端 `graph-viewer/dist` 资源编译期嵌入；opt-in，不入 `full`） |
 
-> **日志系统**：inklog 是唯一日志后端（console + 文件 sink 日轮转 + 保留 30 天）；inklog 以 `default-features = false` 引入，未编译 zstd/gzip 压缩后端，`compress = true` 时无后端可用即跳过压缩，不产生压缩轮转文件。不再提供 tracing-subscriber 可选后端。
+> **日志系统**：inklog 是唯一日志后端（console + 文件 sink 日轮转 + 保留 30 天）；inklog 以 `default-features = false` 引入，默认（`full`）构建经 vecboost 的 `inklog/compression` 特性合并编译进 zstd 后端，`compress = true` 产生 zstd 压缩轮转文件；`minimal` 等不含 vecboost 的特性组合不编译任何压缩后端，压缩被跳过（告警后不产出压缩文件）。gzip（flate2）后端未启用。不再提供 tracing-subscriber 可选后端。
 
 ```bash
 # 最小构建（仅 Rust，不含 daemon/analysis）
@@ -285,7 +285,7 @@ codenexus hook
 | [📜 行为准则](docs/CODE_OF_CONDUCT.md) | 社区行为准则 |
 | [🔬 研究笔记](docs/research/) | TaintRadar、级联漏洞链等论文笔记 |
 | [🛡️ 安全审计](docs/security/) | Strix 审计 triage 与 ReDoS 误报复核实证 |
-| [🤖 CLI 技能](skill/SKILL.md) | 面向 AI 智能体的 CLI 用法知识包（针对 v0.4.0-rc.1 校验） |
+| [🤖 CLI 技能](skill/SKILL.md) | 面向 AI 智能体的 CLI 用法知识包（针对 v0.4.0-rc.2 校验） |
 | [📈 基准测试说明](benches/README.md) | Criterion 基准套件与 SLO 阈值表 |
 | [📦 crates.io](https://crates.io/crates/codenexus) | 发布页面 |
 
@@ -370,7 +370,7 @@ cargo deny check
 
 ### 📊 测试规模
 
-截至 v0.4.0-rc.1（`#[test]` / `#[tokio::test]` 固定字符串 grep 统计）：4757 条单元测试（`src/` 4714 个 `#[test]` + 43 个 `#[tokio::test]`，170 个源文件含 `#[cfg(test)]`）+ 127 条集成测试（`tests/` 顶层 10 个 .rs 文件，107 个 `#[test]` + 20 个 `#[tokio::test]`）+ 8 个验收项目 + 7 组 Criterion 基准；覆盖率门禁为行覆盖 ≥ 95%（CI coverage job 与 pre-push 钩子双重执行）。逐文件分解与完整统计见 [🧪 测试场景矩阵 · 统计汇总](docs/TEST_SCENARIOS.md#-统计汇总)。
+截至 v0.4.0-rc.2（`#[test]` / `#[tokio::test]` 固定字符串 grep 统计）：4764 条单元测试（`src/` 4721 个 `#[test]` + 43 个 `#[tokio::test]`，170 个源文件含 `#[cfg(test)]`）+ 128 条集成测试（`tests/` 顶层 10 个 .rs 文件，108 个 `#[test]` + 20 个 `#[tokio::test]`）+ 8 个验收项目 + 7 组 Criterion 基准；覆盖率门禁为行覆盖 ≥ 95%（CI coverage job 与 pre-push 钩子双重执行）。逐文件分解与完整统计见 [🧪 测试场景矩阵 · 统计汇总](docs/TEST_SCENARIOS.md#-统计汇总)。
 
 ---
 
@@ -468,7 +468,7 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 
 | 版本 | 日期 | 要点 |
 |------|------|------|
-| 0.4.0-rc.1 | 2026-10-16 | 嵌入后端 ort → vecboost（Candle）切换并需重新索引；自研五库升级至 crates.io 最新版（trait-kit 0.5.0-rc.9、sdforge 0.5.0-rc.8、inklog 0.3.0-rc.9、limiteron 0.3.0-rc.7、oxcache 0.5.0-rc.8）；graph-viewer server crate 移除 |
+| 0.4.0-rc.2 | 2026-10-16 | 嵌入后端 ort → vecboost（Candle）切换并需重新索引；自研五库升级至 crates.io 最新版（trait-kit 0.5.0-rc.9、sdforge 0.5.0-rc.8、inklog 0.3.0-rc.9、limiteron 0.3.0-rc.7、oxcache 0.5.0-rc.8）；graph-viewer server crate 移除 |
 | 0.3.13-rc.1 | 2026-09-21 | 跨仓解耦：基库改走 crates.io 发布版（trait-kit rc.6 / sdforge、oxcache rc.5 / inklog rc.5）；embed→embeddings 更名；增量索引跨文件边丢失修复 |
 | 0.3.12 | 2026-07-30 | 动态 `max_db_size` + `--fresh` 标志解决 DB 膨胀；read-only 连接 4 TiB cap 修复 >16 GiB 数据库查询崩溃；LSP hover 批量 UNWIND 更新等 P 系列修复 |
 | 0.3.11 | 2026-07-26 | L6+L7 内存优化：管线流式化 + 迭代器 API + buffer_pool 封顶，70 GB 主机峰值内存 60 GB → ~4 GB |
@@ -498,7 +498,7 @@ CodeNexus 站在以下优秀开源项目的肩膀上：
 | [trait-kit](https://crates.io/crates/trait-kit) | 能力注册表 |
 | [oxcache](https://crates.io/crates/oxcache) | 查询结果缓存 |
 | [inklog](https://crates.io/crates/inklog) | 日志后端（console + 日轮转文件 sink；inklog 以 `default-features = false` 引入，未编译压缩后端，不产生压缩轮转文件） |
-| [vecboost](https://github.com/Kirky-X/vecboost) | 本地 Candle 向量嵌入推理 |
+| [vecboost](https://crates.io/crates/vecboost) | 本地 Candle 向量嵌入推理 |
 | [ICU4X](https://github.com/unicode-org/icu4x)（icu_normalizer / icu_casemap） | Unicode 规范化与大小写折叠 |
 | [petgraph](https://github.com/petgraph/petgraph) | 社区检测图算法 |
 | [criterion](https://github.com/bheisler/criterion.rs) | 基准测试 |

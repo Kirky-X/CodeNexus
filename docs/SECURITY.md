@@ -93,4 +93,4 @@ Out of scope:
 
 - Do not `import` `.graph.zst` artifacts from untrusted sources — a malicious artifact could trigger bugs in the import path.
 - Treat `codenexus query` input as you would treat any input that reaches a database: prefer parameterized patterns over string interpolation when embedding user input in Cypher queries.
-- The `embed` feature can make outbound HTTP requests to an OpenAI-compatible endpoint. Set the endpoint explicitly and do not point it at untrusted servers.
+- The `embeddings` feature can make outbound HTTP requests to an OpenAI-compatible endpoint. Set the endpoint explicitly and do not point it at untrusted servers.

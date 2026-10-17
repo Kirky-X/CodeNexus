@@ -113,7 +113,7 @@ codenexus query --cypher "MATCH (r:CodeRelation) WHERE r.type='CALLS' RETURN r.s
 
 #### search — Search for symbols
 
-> ✅ **Fixed in 0.3.4:** `search` now returns real hits. The original `{"count":0}` was caused by (a) an empty-`project` filter that appended `AND n.project = ''` and dropped every row, and (b) a silent per-table `Err(_) => continue` that swallowed storage errors — **not** by unpopulated tables. Both are fixed in `src/query/structured.rs`; verified `search --text parse` returns `count:3` (ParseOutput/ParsePhase/ParserFactory). Semantic/embedding search still requires the `embed` feature. `query` (e.g. `MATCH (f:Function) WHERE f.name CONTAINS 'parse' RETURN ...`) remains available as a Cypher escape hatch.
+> ✅ **Fixed in 0.3.4:** `search` now returns real hits. The original `{"count":0}` was caused by (a) an empty-`project` filter that appended `AND n.project = ''` and dropped every row, and (b) a silent per-table `Err(_) => continue` that swallowed storage errors — **not** by unpopulated tables. Both are fixed in `src/query/structured.rs`; verified `search --text parse` returns `count:3` (ParseOutput/ParsePhase/ParserFactory). Semantic/embedding search still requires the `embeddings` feature. `query` (e.g. `MATCH (f:Function) WHERE f.name CONTAINS 'parse' RETURN ...`) remains available as a Cypher escape hatch.
 
 ```bash
 codenexus search --text <TEXT> --fulltext <BOOL> --limit <N> --mode <MODE> --project <NAME_OR_ID> [--db <DB_PATH>]
@@ -383,11 +383,11 @@ codenexus diagram --project <NAME_OR_ID> --output <HTML_PATH> [--quality standar
 **Options:**
 - `--project <NAME_OR_ID>` — Project name or id (required)
 - `--output <HTML_PATH>` — Path of the HTML file to write (required)
-- `--quality <PROFILE>` — `standard` (default) or `showcase` (stricter label clearance + curated fixes). Empty string = `standard` (required)
-- `--repo_root <PATH>` — Git repository root for evidence verification; empty string skips evidence (required)
-- `--repo_url <URL>` — Repository URL for evidence links (required; empty = omit)
-- `--title <TITLE>` — Diagram title (required; empty = generated caption)
-- `--locale <LOCALE>` — `en` (default) or `zh-CN` (required)
+- `--quality <PROFILE>` — `standard` (default) or `showcase` (stricter label clearance + curated fixes). Empty string = `standard` (optional)
+- `--repo_root <PATH>` — Git repository root for evidence verification; empty string skips evidence (optional)
+- `--repo_url <URL>` — Repository URL for evidence links (optional; empty = omit)
+- `--title <TITLE>` — Diagram title (optional; empty = generated caption)
+- `--locale <LOCALE>` — `en` (default) or `zh-CN` (optional)
 - `--viewer_data <JSON_PATH>` — Also write a graph-viewer snapshot JSON (`{version:1, nodes, edges}`); empty = off
 - `--viewer_url <URL>` — Viewer mode: replace the SVG stage with a 3D-viewer iframe loading the snapshot from `<URL>/?snapshot=data:application/json,...` (the graph-viewer app must be served at that URL); empty = off. Quality gates are skipped in this mode and a `diagram/viewer-mode` warning is attached
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
@@ -513,7 +513,7 @@ Dumps the LadybugDB database to a zstd-compressed artifact with a JSON manifest 
 - `--project <NAME_OR_ID>` — Project name or id to include in the manifest (required)
 - `--db <DB_PATH>` — Database path to export (default: `.codenexus/<project>.lbug`; see Conventions)
 
-> ✅ **Fixed in 0.3.4 (Problem D):** the export manifest now reads the version from `env!("CARGO_PKG_VERSION")` (`src/service/export.rs`), so `"codenexus_version"` matches the binary. The earlier confusion came from `--version` being polluted by the `sdforge` dependency (which reports its own `0.4.2`); `src/main.rs` now reads `Cargo.toml` as the single source of truth, so both `--version` and the manifest report the current `Cargo.toml` version (currently `0.4.0-rc.1`; `0.3.4` was the value at the time this was verified).
+> ✅ **Fixed in 0.3.4 (Problem D):** the export manifest now reads the version from `env!("CARGO_PKG_VERSION")` (`src/service/export.rs`), so `"codenexus_version"` matches the binary. The earlier confusion came from `--version` being polluted by the `sdforge` dependency (which reports its own `0.4.2`); `src/main.rs` now reads `Cargo.toml` as the single source of truth, so both `--version` and the manifest report the current `Cargo.toml` version (currently `0.4.0-rc.2`; `0.3.4` was the value at the time this was verified).
 
 #### import — Import a team artifact (H7)
 

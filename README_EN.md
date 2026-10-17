@@ -177,7 +177,7 @@ Requires Rust 1.97.1 or later (MSRV, matching `rust-version` in `Cargo.toml` and
 | `cache`           | Enabled | Query result cache (oxcache) |
 | `i18n`            | Enabled | Unicode case folding + NFC normalization (ICU4X) |
 
-> **Logging**: inklog is the only log backend (console + daily-rotating file sink with 30-day retention). inklog is pulled in with `default-features = false`, so no zstd/gzip compression backend is compiled in; with `compress = true` and no backend available, compression is skipped and no compressed rotation files are produced. The optional tracing-subscriber backend has been removed.
+> **Logging**: inklog is the only log backend (console + daily-rotating file sink with 30-day retention). inklog is pulled in with `default-features = false`; default (`full`) builds compile the zstd backend through vecboost's `inklog/compression` feature (cargo feature unification), so `compress = true` produces zstd-compressed rotation files. Feature sets without vecboost (e.g. `minimal`) compile no compression backend at all, and compression is skipped (warning, no compressed files). The gzip (flate2) backend is not enabled. The optional tracing-subscriber backend has been removed.
 
 ```bash
 # Minimal build (Rust only, no daemon/analysis)
@@ -282,7 +282,7 @@ What each tool does is described in the [📖 User Guide · Multi-Agent Integrat
 | [📜 Code of Conduct](docs/CODE_OF_CONDUCT.md) | Community code of conduct |
 | [🔬 Research Notes](docs/research/) | Paper notes: TaintRadar, cascaded vulnerability chains |
 | [🛡️ Security Audits](docs/security/) | Strix audit triage with a ReDoS false-positive proof |
-| [🤖 CLI Skill](skill/SKILL.md) | Agent-facing CLI usage knowledge pack (verified against v0.4.0-rc.1) |
+| [🤖 CLI Skill](skill/SKILL.md) | Agent-facing CLI usage knowledge pack (verified against v0.4.0-rc.2) |
 | [📈 Benchmark Notes](benches/README.md) | Criterion benchmark suite and SLO threshold table |
 | [📦 crates.io](https://crates.io/crates/codenexus) | Publication page |
 
@@ -367,7 +367,7 @@ cargo deny check
 
 ### 📊 Test scale
 
-As of v0.4.0-rc.1 (fixed-string grep count of `#[test]` / `#[tokio::test]` functions): 4757 unit tests (4714 `#[test]` + 43 `#[tokio::test]` in `src/`; 170 source files contain `#[cfg(test)]` modules) + 127 integration tests (10 top-level `.rs` files under `tests/`: 107 `#[test]` + 20 `#[tokio::test]`) + 8 acceptance projects + 7 Criterion benchmark groups; the coverage gate is ≥95% line coverage, enforced by both the CI coverage job and the pre-push hook. The per-file breakdown and full statistics live in [🧪 Test Scenario Matrix · Statistics](docs/TEST_SCENARIOS.md).
+As of v0.4.0-rc.2 (fixed-string grep count of `#[test]` / `#[tokio::test]` functions): 4764 unit tests (4721 `#[test]` + 43 `#[tokio::test]` in `src/`; 170 source files contain `#[cfg(test)]` modules) + 128 integration tests (10 top-level `.rs` files under `tests/`: 108 `#[test]` + 20 `#[tokio::test]`) + 8 acceptance projects + 7 Criterion benchmark groups; the coverage gate is ≥95% line coverage, enforced by both the CI coverage job and the pre-push hook. The per-file breakdown and full statistics live in [🧪 Test Scenario Matrix · Statistics](docs/TEST_SCENARIOS.md).
 
 ---
 
@@ -465,7 +465,7 @@ The full release history lives in the [📋 Changelog](docs/CHANGELOG.md) (follo
 
 | Version | Date | Highlights |
 | ------- | ---- | ---------- |
-| 0.4.0-rc.1 | 2026-10-16 | Embedding backend switched from ort to vecboost (Candle), requiring re-indexing; in-house base libraries upgraded to the latest crates.io releases (trait-kit 0.5.0-rc.9, sdforge 0.5.0-rc.8, inklog 0.3.0-rc.9, limiteron 0.3.0-rc.7, oxcache 0.5.0-rc.8); graph-viewer server crate removed |
+| 0.4.0-rc.2 | 2026-10-16 | Embedding backend switched from ort to vecboost (Candle), requiring re-indexing; in-house base libraries upgraded to the latest crates.io releases (trait-kit 0.5.0-rc.9, sdforge 0.5.0-rc.8, inklog 0.3.0-rc.9, limiteron 0.3.0-rc.7, oxcache 0.5.0-rc.8); graph-viewer server crate removed |
 | 0.3.13-rc.1 | 2026-09-21 | Cross-repo decoupling: base libraries now come from crates.io releases (trait-kit rc.6 / sdforge, oxcache rc.5 / inklog rc.5); embed→embeddings rename; fix for cross-file edge loss in incremental indexing |
 | 0.3.12 | 2026-07-30 | Dynamic `max_db_size` + `--fresh` flag fix DB bloat; read-only 4 TiB cap fixes crashes on >16 GiB databases; LSP hover batched UNWIND updates and the rest of the P-series fixes |
 | 0.3.11 | 2026-07-26 | L6+L7 memory work: pipeline streaming + iterator APIs + buffer_pool cap, cutting peak memory on a 70 GB host from 60 GB to ~4 GB |
@@ -495,7 +495,7 @@ CodeNexus stands on the shoulders of these excellent open-source projects:
 | [trait-kit](https://crates.io/crates/trait-kit) | Capability registry |
 | [oxcache](https://crates.io/crates/oxcache) | Query result cache |
 | [inklog](https://crates.io/crates/inklog) | Log backend (console + daily-rotating file sink; inklog is pulled in with `default-features = false`, no compression backend is compiled in, so no compressed rotation files are produced) |
-| [vecboost](https://github.com/Kirky-X/vecboost) | Local Candle embedding inference |
+| [vecboost](https://crates.io/crates/vecboost) | Local Candle embedding inference |
 | [ICU4X](https://github.com/unicode-org/icu4x) (icu_normalizer / icu_casemap) | Unicode normalization and case mapping |
 | [petgraph](https://github.com/petgraph/petgraph) | Community-detection graph algorithms |
 | [criterion](https://github.com/bheisler/criterion.rs) | Benchmarking |

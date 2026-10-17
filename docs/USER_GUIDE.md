@@ -99,7 +99,7 @@ codenexus context --symbol main --project myproject --enhanced true
 
 ## 🧭 核心约定
 
-以下约定适用于所有子命令（与 [`skill/SKILL.md`](../skill/SKILL.md) 对 v0.4.0-rc.1 的校验一致）：
+以下约定适用于所有子命令（与 [`skill/SKILL.md`](../skill/SKILL.md) 对 v0.4.0-rc.2 的校验一致）：
 
 - **无位置参数**。一切都是命名 flag：`codenexus query "MATCH ..."` 会失败，必须写 `codenexus query --cypher "MATCH ..."`。
 - **布尔参数显式传值**：`--force true`、`--fresh true`（仅 `index`）、`--apply true`、`--cross_service false`（仅 `trace`）、`--embed false`、`--ram_first false`、`--enhanced false`、`--include_tests false`（`impact`）。

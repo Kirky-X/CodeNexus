@@ -9,7 +9,7 @@ CodeNexus 的所有重要变更均记录于此文件。
 
 ## 📋 目录
 
-- [0.4.0-rc.1 — 2026-10-16](#040-rc1---2026-10-16)
+- [0.4.0-rc.2 — 2026-10-16](#040-rc2---2026-10-16)
 - [0.3.13-rc.1 — 2026-09-21](#0313-rc1---2026-09-21)
 - [0.3.12 — 2026-07-30](#0312---2026-07-30)
 - [0.3.11 — 2026-07-26](#0311---2026-07-26)
@@ -28,15 +28,17 @@ CodeNexus 的所有重要变更均记录于此文件。
 
 ---
 
-## [0.4.0-rc.1] — 2026-10-16
+## [0.4.0-rc.2] — 2026-10-16
 
 ### Changed
 
-- **嵌入后端切换：ort → vecboost (Candle)** — `LocalEmbedClient` 从 ort/ONNX Runtime 迁移至 vecboost Candle 引擎（`embeddings` feature = `reqwest` + `vecboost`，删除 `ort`/`tokenizers`/`ndarray`）；模型资产从单文件 `assets/arctic-embed-xs.onnx` 改为 HF safetensors 目录 `assets/arctic-embed-xs/`（`config.json`/`tokenizer.json`/`model.safetensors`；新增 `CODENEXUS_EMBED_MODEL_SHA256` 可选完整性校验——64 位十六进制摘要、大小写归一，非法值 stderr 提示后忽略，`.env.example` 与 USER_GUIDE 同步收录）；池化固定 Mean、L2 归一化由引擎承担；引擎不同导致向量值变化，**需重新索引**（旧库 Embedding 表需重建）。审查修复：`embed_batch_sync` 拒绝在 tokio 运行时上下文内调用而全部 CLI/MCP 入口均为 async handler——本地推理改经专用线程执行（一次调用一线程，非每分块），并恢复客户端 32 条分块（vecboost 对超其全局 `MAX_BATCH_SIZE`=100 的整批直接硬拒，旧 ort 路径任意 N 可行）；`CODENEXUS_EMBED_MODEL_SHA256` 增加构造期格式校验。构建备注：vecboost 0.3.0-rc.1 发布版因 confers 0.6.0-rc.8+ API 变更编译失败（Zeroizing 适配在其 b9f3e4e，已随 6094f47 推送到上游 main），rc.2 发布前 `[patch.crates-io]` 以 git 源锁定该提交（cargo 自动拉取、克隆保持自包含，CI 无需同级检出，Cargo.lock 锁定同一 rev）；release.yml 保留发布防护（patch 生效时拒绝 crates.io 发布，防下游解析到坏依赖）；上游发布修复版后移除 patch 并回归 crates.io 依赖。
+- **嵌入后端切换：ort → vecboost (Candle)** — `LocalEmbedClient` 从 ort/ONNX Runtime 迁移至 vecboost Candle 引擎（`embeddings` feature = `reqwest` + `vecboost`，删除 `ort`/`tokenizers`/`ndarray`）；模型资产从单文件 `assets/arctic-embed-xs.onnx` 改为 HF safetensors 目录 `assets/arctic-embed-xs/`（`config.json`/`tokenizer.json`/`model.safetensors`；新增 `CODENEXUS_EMBED_MODEL_SHA256` 可选完整性校验——64 位十六进制摘要、大小写归一，非法值 stderr 提示后忽略，`.env.example` 与 USER_GUIDE 同步收录）；池化固定 Mean、L2 归一化由引擎承担；引擎不同导致向量值变化，**需重新索引**（旧库 Embedding 表需重建）。审查修复：`embed_batch_sync` 拒绝在 tokio 运行时上下文内调用而全部 CLI/MCP 入口均为 async handler——本地推理改经专用线程执行（一次调用一线程，非每分块），并恢复客户端 32 条分块（vecboost 对超其全局 `MAX_BATCH_SIZE`=100 的整批直接硬拒，旧 ort 路径任意 N 可行）；`CODENEXUS_EMBED_MODEL_SHA256` 增加构造期格式校验。依赖收口：vecboost 0.3.0-rc.2 已发布（含 confers Zeroizing 适配；与锁定提交 6094f47 的 `src/` 零差异，仓库侧差异在 CI workflow——`health-check.yml` 4 行、`release.yml` 57 行（prerelease 判定与 `gh release` 幂等）——与 Cargo.toml keywords（去掉 `ml`/`ai`）），本仓移除 `[patch.crates-io]` 段与 deny.toml 的 git 源白名单，`embeddings` 回归 crates.io `0.3.0-rc.2` 版本依赖——克隆自包含恢复，CI 无需任何同级检出；release.yml 的 patch 发布守卫保留为常驻保险（patch 生效时拒绝 crates.io 发布）。
 
 - **refactor(graph-viewer): 独立 server crate 移除** — `graph-viewer/server/`（`codenexus-graph-server`）删除、workspace 成员由 2 个减为 1 个（`examples`）；代码与行为并入 `codenexus webui`（见 Added）。前端目录 `graph-viewer/` 保留为资源来源。
 
 - **chore(deps): 自研五库升级至 crates.io 最新版** — trait-kit `0.5.0-rc.6 → 0.5.0-rc.9`（启用 `report` feature）、sdforge `0.5.0-rc.5 → 0.5.0-rc.8`（根与 graph-viewer/server 同步）、inklog `0.3.0-rc.5 → 0.3.0-rc.9`、limiteron `0.3.0-rc.6 → 0.3.0-rc.7`、oxcache `0.5.0-rc.5（lock 实解析 0.5.0-rc.6） → 0.5.0-rc.8`；五库各 2 处 API 适配。行为注记：① sdforge rc.6 起 `ApiError::internal_error` 构造期脱敏且 `UnifiedError::from(ApiError::Internal)` 输出通用文案——`fresh`/`rebuild` 失败时 `--format json` 的 message 不再携带真实原因（text 模式 Display 与退出码不变）；② oxcache rc.6 起 `minimal` 内含的 metrics 默认落地（`UnifiedMetricsRecorder`，本仓不导出、开销可忽略）。
+
+- **chore(deps): 三方依赖升版 + 全量显式特性收口** — tree-sitter-haskell `0.23 → 0.24`、tree-sitter-php `0.24 → 0.25`（最新稳定版，haskell 提取器适配 0.24 的 `type_synomym → type_synonym` 节点更名，两种名字都接受）、uuid manifest `1.26 → 1.28`（lock 实版此前已 1.28.0）、pest `2.9.3 → 2.9.4`、tokio `1.53.2 → 1.53.3`、zstd-sys `2.1.1 → 2.1.2` 等 18 项 lock 级升级（17 项 patch 级 + zstd-safe `8.1.0 → 8.2.0` minor；不含本 crate 自身版本与上列两条 tree-sitter 语法包。2026-10-17 复核：`cargo update` 可全量解析）；全部直接依赖（含 workspace 层）改为 `default-features = false` + 显式特性列表（tree-sitter 全家、anyhow/thiserror/pest/pest_derive/csv/lz4_flex/regex/uuid/url/crossbeam-channel/lsp-types/lsp-server/signal-hook/notify/notify-debouncer-full、workspace 的 lbug/serde/serde_json/tracing/tempfile/tokio/unic-langid/sys-locale）；裁剪无关特性：tracing `attributes`（全仓无 `#[instrument]` 用法；full 构建中仍可能被传递依赖合并启用，裁剪在更小特性组合生效）、lz4_flex `frame`/`checked-decode`（无 `lz4_flex::frame` 用法；`checked-decode` 在 0.14 已是废弃空特性）、criterion `html_reports`（0.8 中为空特性）；rust-embed `debug-embed` 保留——关闭后 debug/测试构建按进程 CWD 运行时读盘（release 不受影响），测试会静默落到回退页，不可裁剪；移除 workspace 中无人引用的 `fluent-bundle` 声明。CI actions 升版：actions/cache `v4 → v6.1.0`、taiki-e/install-action `→ v2.87.29`、cargo-deny-action `v2 → v2.1.1`、codeql-action `v4.37.9 → codeql-bundle-v2.27.2`、dtolnay/rust-toolchain stable/nightly 两钉升到各自分支 tip `b725eda5` / `2c76c034`、semgrep `1.168.0 → 1.181.0`（checkout/audit-check/crates-io-auth-action/gh-release 已是最新未动）；coverage 的 upload-artifact 上传步骤已随 lcov 产物一并移除（不再需要，非升级）。安全审计清理：移除两条过期 advisory ignore（cxx/event-listener 锁内实版均已达各自 patched 下限，advisory 不再命中）、清理 lock 中无 crate 使用的 Unicode-DFS-2016 许可条目；遗留（待上游解除）：zip 的 extract() 三条 advisory（RUSTSEC-2026-0367/0368/0369，已随 deny.toml/.cargo/audit.toml ignore 收编）因 candle-core 0.11.0 要求 `zip ^8.6.0`、修复在 9.0.x 而不可达（zip 8.6.0 本身未被 yank，2026-10-17 复核），待上游 vecboost rc.3（candle fork 带 zip 9.0.x）或 candle 新版发布后随 vecboost bump 一并解除——本轮断环约定 vecboost 保持现钉版 `0.3.0-rc.2`。
 
 ### Added
 
@@ -55,6 +57,10 @@ CodeNexus 的所有重要变更均记录于此文件。
 - **feat(logging): `#[forge::log]` 扩至 `index`/`trace`/`impact`/`search`/`context`** — 五个高频命令入口叠加声明式函数级结构化日志，补齐 rc.8 吸收时明示的未覆盖范围；`fn_enter`（debug，args 经 DataMasker 掩码）/`fn_exit`（成功 info、`Err` 恒 error）语义与 `query`/`status` 完全一致。集成测试在 Kit 未初始化的失败路径上断言五命令的 enter/exit 接线与凭证掩码（成功路径机制由 query/status 用例锚定，避免把完整索引管线拖进测试进程）。
 
 - **fix(build): 终结 zstd 符号跨链赈济，lbug/zstd-sys 各自持符号** — zstd 经两条独立链进入链接：lbug bundled zstd 与 zstd-sys（oxcache/oxiarc-zstd 传递）。lbug 0.21 提供 `LBUG_LOCALIZE_BUNDLED_SYMBOLS`（`.cargo/config.toml` 开启；Linux/ELF 下把 bundled zstd/lz4 符号隐藏进静态库），但符号本地化一开即暴露：zstd-sys 的 `ZSTD_*` 引用历史上一直由 lbug 泄漏的全局符号**意外满足**，其 pkg-config 路径（`build-support/libzstd.pc` 的 `-l:libzstd.so.1`）经 `cargo:rustc-link-arg` 发射、只作用于 zstd-sys 自身目标，从未向下游传播（实测链接行无该参数）。修复：`Cargo.toml` 显式钉 `zstd-sys = { features = ["vendored"] }`（自带 zstd、`rustc-link-lib` 显式链接，跨平台自足），删除 `build-support/libzstd.pc` 与 `ZSTD_SYS_USE_PKG_CONFIG`/`PKG_CONFIG_PATH` 环境 workaround，`0.3.7` mold 链接事故类隐患不再依赖巧合。
+
+### Fixed
+
+- **docs: 订正四处过期注释/文档声明（配回归守卫）** — ① `src/main.rs` 日志注释称 "gzip compression"：实际后端为 zstd（inklog `compression` 特性经 vecboost 依赖特性合并进入默认构建的 inklog，`Cargo.lock` inklog 条目依赖 `zstd` 而非 `flate2`），订正为 zstd；② `src/main.rs` `run_mcp_server` 注释仅列 8 个工具、漏 `dead_code`/`detect_changes`（实际 10 个，`tests/mcp_integration.rs` 早已钉死），补齐 10 个；③ `src/analysis/architecture.rs` `load_cross_service_deps` 注释称 "caller id becomes `from_module`"：实现自 e778d0a 起为 id→模块目录映射（caller id→函数文件父目录、route id→handler 目录，同模块匹配丢弃），注释订正为实现描述；④ `build.rs` 称 "zstd-sys is no longer in the dependency tree" 且 `.cargo/config.toml` zstd 环境变量"currently inactive"：与 `Cargo.toml` vendored 钉法、`Cargo.lock`（zstd-sys 在树）及活跃的 `LBUG_LOCALIZE_BUNDLED_SYMBOLS` 矛盾，订正为在树事实。README/README_EN 日志段同步订正。回归守卫：`mcp_tool_surface_comment_lists_every_registered_tool`、`build_rs_zstd_comment_matches_the_dependency_tree`、`logging_comment_names_the_backend_inklog_is_built_with`、`load_cross_service_deps_doc_comment_describes_module_mapping`、`cross_service_deps_use_module_directories_not_node_ids`（均先红后绿）。
 
 ## [0.3.13-rc.1] - 2026-09-21
 
@@ -403,7 +409,7 @@ Initial public release. CodeNexus indexes source code into a queryable knowledge
 - **Database corruption detection** — corrupt LadybugDB files are detected at startup and reported with a distinct exit code (4) instead of being loaded into a half-valid state.
 - **`.env` files ignored by default** in `.gitignore`, with an explicit `!.env.example` allow-list so the template is tracked but real secrets never are.
 
-[0.4.0-rc.1]: https://github.com/Kirky-X/codenexus/compare/v0.3.13-rc.1...v0.4.0-rc.1
+[0.4.0-rc.2]: https://github.com/Kirky-X/codenexus/compare/v0.3.13-rc.1...v0.4.0-rc.2
 [0.3.11]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.11
 [0.3.10]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.10
 [0.3.9]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.9
