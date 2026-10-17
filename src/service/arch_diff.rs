@@ -263,7 +263,7 @@ async fn arch_diff(
     name = "arch_diff",
     version = "0.3.12",
     tool_name = "arch_diff",
-    description = "Compare two indexed projects' architectures and emit a Before/Delta/After HTML plus a machine-readable receipt (added/removed/changed with JSON Pointer fields). Params: base_project, head_project, output (all required); quality — draft|standard|high (default standard); title (default '<base> → <head>')."
+    description = "Compare two indexed projects' architectures and emit a Before/Delta/After HTML plus a machine-readable receipt (added/removed/changed with JSON Pointer fields). Params: base_project, head_project, output (all required); quality — standard|showcase (default standard); title (default '<base> → <head>')."
 )]
 async fn arch_diff_mcp(
     base_project: String,

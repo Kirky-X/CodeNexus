@@ -116,6 +116,88 @@ impl Drop for McpClient {
     }
 }
 
+/// Extracts the `quality — a|b (default c)` enum values advertised in a tool
+/// description; `None` when the description carries no quality clause.
+fn quality_enum_in(description: &str) -> Option<Vec<String>> {
+    let marker = "quality — ";
+    let start = description.find(marker)? + marker.len();
+    let rest = &description[start..];
+    let end = rest.find(" (default").unwrap_or(rest.len());
+    Some(
+        rest[..end]
+            .split('|')
+            .map(|value| value.trim().to_string())
+            .collect(),
+    )
+}
+
+/// The MCP tool descriptions must advertise exactly the profiles
+/// [`QualityProfile::parse`] accepts (`standard`/`showcase`). A stale enum
+/// (e.g. `draft|standard|high`) sends agents into values the parser rejects
+/// with `unknown quality profile`.
+#[test]
+fn mcp_quality_descriptions_match_parser_profiles() {
+    let tmp = tempfile::NamedTempFile::new().expect("create temp db file");
+    let db_path = tmp.path().to_str().expect("db path to str");
+
+    let mut client = McpClient::spawn(db_path);
+
+    let init_request = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "integration-test", "version": "0.1.0"}
+        }
+    });
+    client.send_rpc(&init_request);
+    client.send_notification("notifications/initialized");
+
+    let tools_response = client.send_rpc(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list",
+        "params": {}
+    }));
+    let tools = tools_response
+        .get("result")
+        .and_then(|r| r.get("tools"))
+        .and_then(|t| t.as_array())
+        .unwrap_or_else(|| panic!("tools/list response missing result.tools: {tools_response}"));
+
+    for tool in ["diagram", "arch_diff"] {
+        let description = tools
+            .iter()
+            .find(|t| t.get("name").and_then(|n| n.as_str()) == Some(tool))
+            .and_then(|t| t.get("description").and_then(|d| d.as_str()))
+            .unwrap_or_else(|| panic!("tools/list missing '{tool}' with a description"));
+
+        let advertised = quality_enum_in(description)
+            .unwrap_or_else(|| panic!("'{tool}' description has no quality clause: {description}"));
+        assert_eq!(
+            advertised,
+            vec!["standard".to_string(), "showcase".to_string()],
+            "'{tool}' must advertise standard|showcase, got: {description}"
+        );
+        for value in &advertised {
+            assert!(
+                codenexus::diagram::quality::QualityProfile::parse(value).is_ok(),
+                "'{tool}' advertises '{value}' but QualityProfile::parse rejects it"
+            );
+        }
+        for stale in ["draft", "high"] {
+            assert!(
+                !advertised.iter().any(|v| v == stale),
+                "'{tool}' still advertises retired profile '{stale}': {description}"
+            );
+        }
+    }
+
+    client.kill();
+}
+
 #[test]
 fn mcp_server_initializes_and_lists_tools() {
     let tmp = tempfile::NamedTempFile::new().expect("create temp db file");

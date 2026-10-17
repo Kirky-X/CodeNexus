@@ -342,7 +342,7 @@ async fn diagram(
     name = "diagram",
     version = "0.3.12",
     tool_name = "diagram",
-    description = "Render a self-contained interactive architecture HTML from the indexed graph and return the receipt. Params: project (required); output — HTML file path (required); quality — draft|standard|high (default standard); repo_root — repository root for source-evidence verification (empty = skip); repo_url — base URL for source links; title (default project name); locale — BCP-47 (default en)."
+    description = "Render a self-contained interactive architecture HTML from the indexed graph and return the receipt. Params: project (required); output — HTML file path (required); quality — standard|showcase (default standard); repo_root — repository root for source-evidence verification (empty = skip); repo_url — base URL for source links; title (default project name); locale — BCP-47 (default en)."
 )]
 #[allow(clippy::too_many_arguments)]
 async fn diagram_mcp(
