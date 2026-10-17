@@ -14,6 +14,9 @@ fn binary() -> &'static str {
 fn run(args: &[&str]) -> (i32, String, String) {
     let output = Command::new(binary())
         .args(args)
+        // 本测试的文案断言是英文字面量（"Quick start:"、"no subcommand"）；
+        // 钉住子进程语言，断言在任何主机 locale 下都成立。
+        .env("CODENEXUS_LANG", "en")
         .output()
         .unwrap_or_else(|e| panic!("failed to spawn codenexus: {e}"));
     (
@@ -93,6 +96,57 @@ fn unknown_subcommand_exits_with_error() {
         code, 0,
         "unknown command should exit non-zero, stderr: {stderr}"
     );
+}
+
+/// A corrupt DB file must exit 4 — the documented "Not found / database
+/// corrupt" contract (skill/references/appendix.md "Exit Codes"; mapping in
+/// src/service/error.rs: "NotFound, Index(corrupt), Kit(corrupt)" → 4) — with
+/// a clear message. Regression guard: the Kit build failure used to be merely
+/// warned about, so every command fell through to `kit_not_initialized`
+/// (Internal → exit 1), masking the corruption and leaving the dedicated
+/// `kit_exit_code` corruption downcast unreachable.
+#[test]
+fn corrupt_db_exits_4_with_clear_message() {
+    let tmp = tempfile::NamedTempFile::new().expect("create temp db file");
+    std::fs::write(tmp.path(), b"this is not a valid ladybugdb file").expect("write corrupt bytes");
+    let db_path = tmp.path().to_str().expect("db path to str");
+
+    let mut cases: Vec<Vec<String>> = vec![
+        vec!["--db".into(), db_path.into(), "list".into()],
+        vec!["--db".into(), db_path.into(), "status".into()],
+        vec![
+            "--db".into(),
+            db_path.into(),
+            "query".into(),
+            "--cypher".into(),
+            "RETURN 1 AS one".into(),
+        ],
+    ];
+    // `index` is the command named by the corrupt_db exit-code spec; it also
+    // builds the Kit before dispatch and must surface the same exit code.
+    let repo = tempfile::TempDir::new().expect("create repo dir");
+    cases.push(vec![
+        "--db".into(),
+        db_path.into(),
+        "index".into(),
+        "--path".into(),
+        repo.path().to_str().expect("repo path to str").into(),
+        "--name".into(),
+        "corrupt_demo".into(),
+    ]);
+
+    for args in &cases {
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (code, _stdout, stderr) = run(&arg_refs);
+        assert_eq!(
+            code, 4,
+            "{args:?} on a corrupt DB should exit 4, stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("database corrupt"),
+            "{args:?} stderr should name the corruption, got: {stderr}"
+        );
+    }
 }
 
 // --- global `--format text|json` machine-readable output contract ---

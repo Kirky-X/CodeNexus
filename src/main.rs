@@ -265,7 +265,30 @@ fn run_cli() {
                         None,
                     );
                 }
-                eprintln!("[warn] Failed to build Kit (commands requiring Kit will fail): {e}");
+                // A corrupt DB is equally un-continuable: every Kit-requiring
+                // handler would fail with kit_not_initialized (exit 1),
+                // masking the documented corrupt exit code (4). Route the
+                // failure through `CodeNexusError::Kit` so `kit_exit_code`'s
+                // source-chain downcast (`StorageError::Corrupt` /
+                // `IndexError::DatabaseCorrupt`) becomes effective.
+                let kit_error = CodeNexusError::from(e);
+                if kit_error.exit_code() == 4 {
+                    let text = format!(
+                        "[error] database corrupt: {kit_error}\n  {db} is not a valid LadybugDB database; rebuild it with `codenexus index --fresh true` or delete the file and re-run `codenexus index`"
+                    );
+                    exit_with_api_error(
+                        format,
+                        sdforge::prelude::ApiError::NotFound {
+                            resource: "database".to_string(),
+                            resource_id: Some(db.clone()),
+                        },
+                        &text,
+                        None,
+                    );
+                }
+                eprintln!(
+                    "[warn] Failed to build Kit (commands requiring Kit will fail): {kit_error}"
+                );
             }
         }
     }

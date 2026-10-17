@@ -64,6 +64,9 @@ impl Drop for WebuiChild {
 fn spawn_webui(dir: &std::path::Path, port: u16) -> (WebuiChild, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_codenexus"))
         .args(["webui", "--port", &port.to_string()])
+        // 启动横幅已本地化（t("graph-server-auth-token")）；钉住子进程语言，
+        // 下面的 strip_prefix 英文字面量在任何主机环境下都成立。
+        .env("CODENEXUS_LANG", "en")
         .current_dir(dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
