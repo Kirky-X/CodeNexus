@@ -27,6 +27,8 @@ use tempfile::TempDir;
 
 // Kit-based imports (for trace / analysis tests).
 use codenexus::kit::{build_kit, KitBootstrapConfig, StorageModule, TraceModule};
+// `Storage` capability trait import also enables `Repository::query` method
+// resolution for the direct-query assertions below.
 use codenexus::storage::capability::Storage;
 
 // ---------------------------------------------------------------------------
@@ -48,22 +50,6 @@ fn fresh_db_path() -> std::path::PathBuf {
     let path = dir.path().join("e2e_suite_db");
     std::mem::forget(dir);
     path
-}
-
-/// 构建 Kit 并返回 (kit, storage) 对。
-// NOTE: build_test_kit 保留供后续扩展使用。
-#[allow(dead_code)]
-async fn build_test_kit(
-    db_path: &Path,
-) -> (
-    codenexus::kit::AsyncKit<codenexus::kit::AsyncReady>,
-    std::sync::Arc<dyn Storage>,
-) {
-    let config = KitBootstrapConfig::new(db_path.to_path_buf());
-    let kit = build_kit(&config).await.expect("build_kit");
-    let storage: std::sync::Arc<dyn Storage> =
-        kit.require::<StorageModule>().expect("require_storage");
-    (kit, storage)
 }
 
 // ===========================================================================

@@ -375,11 +375,6 @@ mod cached_tests {
             self.sets.load(Ordering::SeqCst)
         }
 
-        #[allow(dead_code)]
-        fn invalidates(&self) -> usize {
-            self.invalidates.load(Ordering::SeqCst)
-        }
-
         /// Returns a snapshot of all cached entries (without counting a get).
         fn snapshot(&self) -> HashMap<String, Vec<u8>> {
             self.inner.lock().expect("lock").clone()

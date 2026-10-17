@@ -3,32 +3,26 @@
 
 //! Shared benchmark fixtures.
 //!
-//! Provides three helpers reused across `incremental_bench`, `memory_bench`,
+//! Provides two helpers reused across `incremental_bench`, `memory_bench`,
 //! and `daemon_bench`:
 //!
 //! - [`generate_large_repo`] — builds a temp repo with N files spread across
 //!   the 5 supported languages (C/Rust/Fortran/Python/TypeScript), each
 //!   containing a minimal parseable symbol definition.
-//! - [`open_test_db`] — opens a fresh LadybugDB database in a temp dir.
 //! - [`measure_peak_rss`] — samples the current process's resident set size
 //!   every 100 ms while `f` runs and returns the peak (bytes), using the
 //!   `sysinfo` crate for cross-platform RSS access.
 //!
-//! `open_test_db` is part of the shared fixture API required by the
-//! performance-benchmark-coverage-spec but is not directly consumed by the
-//! three benches added in this change (they use [`IndexFacade`] which opens
-//! its own repository handle); it is kept `pub` for future benches that need
-//! direct [`StorageConnection`] access. The module-level `allow(dead_code)`
-//! silences the resulting unused-warning so `cargo clippy -- -D warnings`
-//! stays green.
+//! `measure_peak_rss` is consumed by `memory_bench` only; every bench target
+//! re-compiles this module, so `incremental_bench` / `daemon_bench` builds see
+//! it as unused. The `allow(dead_code)` silences the per-target unused warning
+//! so `cargo clippy -- -D warnings` stays green.
 //!
 //! [`IndexFacade`]: codenexus::index::IndexFacade
-//! [`StorageConnection`]: codenexus::storage::StorageConnection
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use codenexus::storage::StorageConnection;
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tempfile::TempDir;
 
@@ -70,22 +64,6 @@ fn minimal_symbol(ext: &str, i: usize) -> String {
     }
 }
 
-/// Opens a fresh LadybugDB database inside a temp directory.
-///
-/// Returns the [`TempDir`] (caller owns it so the database files survive for
-/// the benchmark's lifetime) and the open [`StorageConnection`]. Schema
-/// initialization is deliberately left to the caller — benches that go
-/// through [`IndexFacade`] do not need a pre-initialized schema, and
-/// `IndexFacade` will run `init_schema` itself on the first `index` call.
-///
-/// [`IndexFacade`]: codenexus::index::IndexFacade
-pub fn open_test_db() -> (TempDir, StorageConnection) {
-    let dir = TempDir::new().expect("tempdir for test db");
-    let db_path = dir.path().join("bench.db");
-    let conn = StorageConnection::open(&db_path).expect("open test db");
-    (dir, conn)
-}
-
 /// Measures the peak resident set size (RSS, in bytes) of the current process
 /// while `f` runs.
 ///
@@ -97,6 +75,7 @@ pub fn open_test_db() -> (TempDir, StorageConnection) {
 /// RSS is sampled at the process level, so it includes allocations made by
 /// LadybugDB's C FFI as well as Rust allocations (this is why `sysinfo` was
 /// chosen over a custom `GlobalAlloc`).
+#[allow(dead_code)] // used by memory_bench; dead in the other bench targets
 pub fn measure_peak_rss<F: FnOnce()>(f: F) -> u64 {
     let peak: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
     let stop: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
