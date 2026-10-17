@@ -248,12 +248,11 @@ impl Repository {
         // mutable borrow of `iter` ends before `iter` is moved into
         // `write_nodes_csv_stream`. Avoids cloning `node.id` into a separate
         // `first_id: String` (saves 1 String allocation per label group).
+        // The name is length-bounded by [`node_batch_csv_file_name`] — raw
+        // ids can exceed the file-system name limit (Java qualified names).
         let file_name = match iter.peek() {
             None => return Ok(()),
-            Some(node) => {
-                let safe_id = node.id.replace(['/', '\\'], "_");
-                format!("{}_{}.csv", label.table_name(), safe_id)
-            }
+            Some(node) => node_batch_csv_file_name(label, &node.id),
         };
         let table = label.table_name();
         // TempDir owns the CSV file for the duration of load_from_csv and
@@ -736,6 +735,44 @@ impl Repository {
     }
 }
 
+/// Maximum byte length of the id-derived alias in a batch CSV file name.
+///
+/// The name is `{label}_{alias}.csv`; the longest label ("Community") is
+/// 9 bytes, so 160 leaves plenty of headroom below Linux's `NAME_MAX`
+/// (255 bytes) for the suffix and platform variations.
+const MAX_CSV_ALIAS_LEN: usize = 160;
+
+/// Builds the temp CSV file name for a node batch: `{label}_{alias}.csv`,
+/// where `alias` is the batch's first node id with path separators replaced
+/// by `_`.
+///
+/// Node ids are unbounded: Java symbol ids embed the project id, the full
+/// file path, and the qualified name, so an id can exceed 400 bytes. Using
+/// such an id verbatim as a file name fails with `File name too long
+/// (ENAMETOOLONG)` before `COPY FROM` ever runs (observed: indexing
+/// jackson-databind through an absolute `--path`). Ids longer than
+/// [`MAX_CSV_ALIAS_LEN`] are therefore truncated at a char boundary and
+/// suffixed with a digest of the full id — still readable, still unique,
+/// and guaranteed to fit the file system's name limit.
+fn node_batch_csv_file_name(label: NodeLabel, first_node_id: &str) -> String {
+    let safe_id = first_node_id.replace(['/', '\\'], "_");
+    if safe_id.len() <= MAX_CSV_ALIAS_LEN {
+        return format!("{}_{safe_id}.csv", label.table_name());
+    }
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    first_node_id.hash(&mut hasher);
+    let digest = hasher.finish();
+    let mut truncated = String::with_capacity(MAX_CSV_ALIAS_LEN);
+    for ch in safe_id.chars() {
+        if truncated.len() + ch.len_utf8() > MAX_CSV_ALIAS_LEN {
+            break;
+        }
+        truncated.push(ch);
+    }
+    format!("{}_{truncated}_{digest:016x}.csv", label.table_name())
+}
+
 /// Node labels that participate in symbol-table enrichment: exactly the set
 /// the language extractors emit into parse results (`build_symbol_table`'s
 /// input). Everything else (Project/Folder/File, resolver-created
@@ -1114,6 +1151,57 @@ mod tests {
         let repo = fresh_repo();
         let result = repo.save_nodes_stream(&[], NodeLabel::Function);
         assert!(result.is_ok());
+    }
+
+    /// Regression: a node id longer than the file-system name limit must not
+    /// abort the CSV batch. Java symbol ids embed project id + full path +
+    /// qualified name (400+ bytes observed on jackson-databind indexed via an
+    /// absolute `--path`); using the raw id as the temp CSV file name failed
+    /// with `File name too long (os error 36)` before `COPY FROM` ran.
+    #[test]
+    fn save_nodes_handles_id_longer_than_name_max() {
+        let repo = fresh_repo();
+        let long_id = format!(
+            "{}.src.main.java.com.example.deeply.nested.package.SomeExtremelyLongClassName.someExtremelyLongMethodName#SimpleName",
+            "x".repeat(300)
+        );
+        assert!(long_id.len() > 255, "fixture id must exceed NAME_MAX");
+        let node = sample_function(&long_id, "demo", "long_fn", "demo.long_fn");
+        repo.save_nodes_stream(&[node], NodeLabel::Function)
+            .expect("save_nodes with over-long id");
+
+        let funcs = repo.query_functions("demo").expect("query_functions");
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].id, long_id);
+    }
+
+    /// The batch CSV file name stays readable for short ids, is bounded for
+    /// over-long ids, and remains distinct for distinct inputs.
+    #[test]
+    fn node_batch_csv_file_name_bounds_long_ids() {
+        let short = node_batch_csv_file_name(NodeLabel::Function, "f_short");
+        assert_eq!(short, "Function_f_short.csv");
+
+        let long_a = format!("proj.a/{}", "b".repeat(400));
+        let long_b = format!("proj.a/{}", "c".repeat(400));
+        let name_a = node_batch_csv_file_name(NodeLabel::Function, &long_a);
+        let name_b = node_batch_csv_file_name(NodeLabel::Function, &long_b);
+        assert!(
+            name_a.len() <= 255,
+            "name must fit NAME_MAX, got {} bytes: {name_a}",
+            name_a.len()
+        );
+        assert!(name_a.ends_with(".csv"));
+        assert!(
+            !name_a.contains('/') && !name_a.contains('\\'),
+            "path separators must be replaced: {name_a}"
+        );
+        assert_ne!(name_a, name_b, "distinct ids must map to distinct names");
+        // Deterministic for the same id (truncated prefix + full-id digest).
+        assert_eq!(
+            name_a,
+            node_batch_csv_file_name(NodeLabel::Function, &long_a)
+        );
     }
 
     #[test]
