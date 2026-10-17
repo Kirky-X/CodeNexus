@@ -221,10 +221,76 @@ fn index_incremental_skips_unchanged() {
 mod daemon_hot_update {
     use super::*;
 
+    /// Owns the running daemon child process.
+    ///
+    /// `Drop` kills and reaps the child, so an assertion failure (panic) in a
+    /// test can never leak a live daemon: previously `spawn_daemon` returned a
+    /// bare `Child` and a panicking test left the daemon watching and writing
+    /// the temp DB for as long as the host kept it alive (observed: a leaked
+    /// daemon process surviving ~19 minutes after the test failed).
+    struct DaemonGuard {
+        child: Option<std::process::Child>,
+    }
+
+    impl DaemonGuard {
+        fn pid(&self) -> u32 {
+            self.child.as_ref().expect("daemon child is alive").id()
+        }
+
+        /// Returns `Some(exit_code)` once the daemon has exited (reaping it),
+        /// `None` while it is still running.
+        fn try_exit(&mut self) -> Option<i32> {
+            match self.child.as_mut()?.try_wait() {
+                Ok(Some(status)) => {
+                    let code = status.code().unwrap_or(-1);
+                    self.child = None;
+                    Some(code)
+                }
+                _ => None,
+            }
+        }
+
+        /// Sends SIGTERM to the child via `/bin/kill` (absolute path to
+        /// avoid PATH lookup, which is a security/reproducibility concern).
+        fn send_sigterm(&self) {
+            let pid = self.pid();
+            let exit = Command::new("/bin/kill")
+                .args(["-TERM", &pid.to_string()])
+                .status()
+                .expect("/bin/kill -TERM");
+            assert!(exit.success(), "kill -TERM should succeed for pid {pid}");
+        }
+
+        /// Waits up to `timeout` for the child to exit. Returns the exit code,
+        /// or panics if the child did not exit in time; on panic the guard's
+        /// `Drop` kills AND waits on the child to reap the zombie.
+        fn wait_for_exit(&mut self, timeout: Duration) -> i32 {
+            let deadline = std::time::Instant::now() + timeout;
+            loop {
+                if let Some(code) = self.try_exit() {
+                    return code;
+                }
+                if std::time::Instant::now() >= deadline {
+                    panic!("daemon did not exit within {timeout:?}");
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+
+    impl Drop for DaemonGuard {
+        fn drop(&mut self) {
+            if let Some(mut child) = self.child.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+
     /// Spawns `codenexus daemon --path <repo> --name demo --db <db>` as a
-    /// child process. Returns the `Child` handle. The caller is responsible
-    /// for sending SIGTERM via `send_sigterm` and reaping via `wait_for_exit`.
-    fn spawn_daemon(repo: &Path, db: &Path, debounce_ms: u64) -> std::process::Child {
+    /// child process. Returns a [`DaemonGuard`]; the caller sends SIGTERM via
+    /// [`DaemonGuard::send_sigterm`] and reaps via [`DaemonGuard::wait_for_exit`].
+    fn spawn_daemon(repo: &Path, db: &Path, debounce_ms: u64) -> DaemonGuard {
         let mut cmd = Command::new(binary());
         cmd.args([
             "daemon",
@@ -240,39 +306,8 @@ mod daemon_hot_update {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-        cmd.spawn().unwrap_or_else(|e| panic!("spawn daemon: {e}"))
-    }
-
-    /// Sends SIGTERM to the child process via `/bin/kill` (absolute path to
-    /// avoid PATH lookup, which is a security/reproducibility concern).
-    fn send_sigterm(child: &std::process::Child) {
-        let pid = child.id();
-        let exit = Command::new("/bin/kill")
-            .args(["-TERM", &pid.to_string()])
-            .status()
-            .expect("/bin/kill -TERM");
-        assert!(exit.success(), "kill -TERM should succeed for pid {pid}");
-    }
-
-    /// Waits up to `timeout` for `child` to exit. Returns the exit code, or
-    /// panics if the child did not exit in time. On timeout, the child is
-    /// killed AND waited on to reap the zombie (fixes LOW finding: previously
-    /// only kill was called, leaking the process entry).
-    fn wait_for_exit(child: &mut std::process::Child, timeout: Duration) -> i32 {
-        let deadline = std::time::Instant::now() + timeout;
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) => return status.code().unwrap_or(-1),
-                Ok(None) => {
-                    if std::time::Instant::now() >= deadline {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        panic!("daemon did not exit within {timeout:?}");
-                    }
-                    thread::sleep(Duration::from_millis(100));
-                }
-                Err(e) => panic!("wait failed: {e}"),
-            }
+        DaemonGuard {
+            child: Some(cmd.spawn().unwrap_or_else(|e| panic!("spawn daemon: {e}"))),
         }
     }
 
@@ -310,20 +345,42 @@ mod daemon_hot_update {
     /// was flaky under high load (daemon incremental index can exceed 4s when
     /// the host is saturated).
     ///
+    /// While waiting, the source change (`repo`, relative path, content) is
+    /// re-written every `retrigger_interval`. This closes a startup race that
+    /// no fixed sleep can: the daemon registers its recursive watch only after
+    /// building the Kit and opening the DB, and a watch never reports changes
+    /// that happened before registration. A single write that lands in that
+    /// window is lost forever — under parallel full-suite load the daemon then
+    /// idles indefinitely and the test times out even though the product works
+    /// (`extra_fn` never appeared in 30s in 1/35 runs; the same test passes in
+    /// isolation in ~9s). Re-issuing the identical write produces a fresh
+    /// IN_MODIFY that the by-then-registered watcher delivers.
+    ///
+    /// The wait also fails fast when the daemon process dies (instead of
+    /// polling a DB nobody is updating for the rest of the timeout).
+    ///
     /// Query failures (non-zero exit) are tolerated and retried within the
     /// timeout window — the daemon may be mid-transaction during the polling
     /// query, transiently rejecting concurrent readers. We only panic on
     /// timeout so that genuine slowness surfaces a clear failure message.
     ///
     /// Defaults: 150ms poll interval (fine-grained enough to detect sub-second
-    /// index completion), 30s total timeout (far exceeds the typical 4s index
+    /// index completion), 30s total timeout (far exceeds the typical index
     /// time, but bounded to avoid hanging CI).
-    fn wait_for_indexed<F>(db: &Path, predicate: F, timeout: Duration, what: &str)
-    where
+    fn wait_for_hot_update<F>(
+        daemon: &mut DaemonGuard,
+        db: &Path,
+        change: (&Path, &str, &str),
+        predicate: F,
+        timeout: Duration,
+        what: &str,
+    ) where
         F: Fn(&str) -> bool,
     {
         let poll_interval = Duration::from_millis(150);
+        let retrigger_interval = Duration::from_secs(1);
         let deadline = std::time::Instant::now() + timeout;
+        let mut next_retrigger = std::time::Instant::now() + retrigger_interval;
         let mut last_success = String::new();
         let mut last_err = String::new();
         let args: &[&str] = &[
@@ -344,12 +401,20 @@ mod daemon_hot_update {
             } else {
                 last_err = format!("exit={code}, stderr={stderr}");
             }
-            if std::time::Instant::now() >= deadline {
+            if let Some(exit) = daemon.try_exit() {
+                panic!("daemon exited (code {exit}) while waiting for: {what}");
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
                 panic!(
-                    "wait_for_indexed ({what}) not satisfied within {timeout:?}; \
+                    "wait_for_hot_update ({what}) not satisfied within {timeout:?}; \
                      last successful query: {last_success}; \
                      last query error: {last_err:?}"
                 );
+            }
+            if now >= next_retrigger {
+                write_file(change.0, change.1, change.2);
+                next_retrigger = now + retrigger_interval;
             }
             thread::sleep(poll_interval);
         }
@@ -381,26 +446,26 @@ mod daemon_hot_update {
         thread::sleep(Duration::from_millis(1000));
 
         // Step 4: Add a new .rs file with a new function.
-        write_file(
-            &repo,
-            "src/new_func.rs",
-            "fn new_func() {\n    helper();\n}\n",
-        );
+        const NEW_FILE: &str = "fn new_func() {\n    helper();\n}\n";
+        let new_file_rel = "src/new_func.rs";
+        write_file(&repo, new_file_rel, NEW_FILE);
 
         // Step 5: Poll DB until `new_func` appears (daemon debounce + index
-        // completion). Replaces a fixed 4s sleep that was flaky under high
-        // load. 30s timeout is far above the typical ~1s index time but
-        // bounded to avoid hanging CI.
-        wait_for_indexed(
+        // completion), re-issuing the write to close the watcher-startup race
+        // (see `wait_for_hot_update`). 30s timeout is far above the typical
+        // ~1s index time but bounded to avoid hanging CI.
+        wait_for_hot_update(
+            &mut daemon,
             &db,
+            (&repo, new_file_rel, NEW_FILE),
             |names| names.contains("new_func"),
             Duration::from_secs(30),
             "new_func appears after daemon hot update",
         );
 
         // Step 6: Send SIGTERM → graceful shutdown.
-        send_sigterm(&daemon);
-        let exit = wait_for_exit(&mut daemon, Duration::from_secs(3));
+        daemon.send_sigterm();
+        let exit = daemon.wait_for_exit(Duration::from_secs(3));
         assert_eq!(exit, 0, "daemon should exit 0 after SIGTERM, got {exit}");
 
         // Step 7: Verify hot update persisted — new_func + helper both present.
@@ -436,26 +501,27 @@ mod daemon_hot_update {
         thread::sleep(Duration::from_millis(1000));
 
         // Modify main.rs: add a new function.
-        write_file(
-            &repo,
-            "src/main.rs",
-            "fn main() {\n    helper();\n}\n\nfn helper() {\n    println!(\"hello\");\n}\n\nfn extra_fn() {\n    helper();\n}\n",
-        );
+        const MODIFIED: &str = "fn main() {\n    helper();\n}\n\nfn helper() {\n    println!(\"hello\");\n}\n\nfn extra_fn() {\n    helper();\n}\n";
+        let modified_rel = "src/main.rs";
+        write_file(&repo, modified_rel, MODIFIED);
 
         // Poll DB until `extra_fn` appears (daemon debounce + index
-        // completion). Replaces a fixed 4s sleep that was flaky under high
-        // load — under saturation the daemon's incremental index can exceed
-        // the hardcoded 4s window, causing `extra_fn should appear after
-        // modify` assertion failures (12 runs → 1 failure observed).
-        wait_for_indexed(
+        // completion), re-issuing the write to close the watcher-startup race
+        // (see `wait_for_hot_update`): a single write can land before the
+        // daemon's watch is registered and is then lost forever — observed as
+        // `extra_fn appears after modify` failing after 30s under parallel
+        // full-suite load (1/35 runs) while the isolated run passes.
+        wait_for_hot_update(
+            &mut daemon,
             &db,
+            (&repo, modified_rel, MODIFIED),
             |names| names.contains("extra_fn"),
             Duration::from_secs(30),
             "extra_fn appears after modify",
         );
 
-        send_sigterm(&daemon);
-        let exit = wait_for_exit(&mut daemon, Duration::from_secs(3));
+        daemon.send_sigterm();
+        let exit = daemon.wait_for_exit(Duration::from_secs(3));
         assert_eq!(exit, 0, "daemon should exit 0 after SIGTERM, got {exit}");
 
         let after = query_function_names(&db);
@@ -487,8 +553,8 @@ mod daemon_hot_update {
         // trigger re-index, so we wait the full debounce window + margin.
         thread::sleep(Duration::from_millis(1500));
 
-        send_sigterm(&daemon);
-        let exit = wait_for_exit(&mut daemon, Duration::from_secs(3));
+        daemon.send_sigterm();
+        let exit = daemon.wait_for_exit(Duration::from_secs(3));
         assert_eq!(exit, 0, "daemon should exit 0 after SIGTERM, got {exit}");
 
         let after = query_function_names(&db);
