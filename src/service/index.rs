@@ -883,6 +883,16 @@ pub(crate) fn index_core(
     Ok(IndexOutput::from(result))
 }
 
+/// Deprecation warning for the `--embed` flag. Embedding is gated by the
+/// `embeddings` cargo feature (Cargo.toml) — the flag kept its original name
+/// after the feature rename, so the message MUST name the feature exactly:
+/// a stale `--features embed` sends users to a nonexistent feature and the
+/// rebuild fails with `unknown feature`.
+#[cfg(feature = "cli")]
+const EMBED_DEPRECATION_WARNING: &str =
+    "[warn] --embed flag is deprecated; embedding is controlled by \
+     the `embeddings` cargo feature (rebuild with --features embeddings to enable)";
+
 /// CLI wrapper — prints result to stdout as JSON.
 //
 // The Kit is stored in a static `OnceLock` (see `runtime::kit`), so it is
@@ -906,10 +916,7 @@ async fn index(
     fresh: bool,
 ) -> Result<(), ApiError> {
     if embed {
-        eprintln!(
-            "[warn] --embed flag is deprecated; embedding is controlled by \
-             the `embed` cargo feature (rebuild with --features embed to enable)"
-        );
+        eprintln!("{EMBED_DEPRECATION_WARNING}");
     }
     // `fresh` parameter: registered by sdforge so the CLI exposes `--fresh`;
     // the actual DB-file deletion is handled in `main::handle_fresh_flag`
@@ -1843,6 +1850,41 @@ mod tests {
         );
 
         reset_kit_for_testing();
+    }
+
+    // Regression: the `--embed` deprecation warning must name the real cargo
+    // feature. The feature was renamed `embed` → `embeddings`, but the warning
+    // kept telling users to rebuild with `--features embed`, which cargo
+    // rejects as an unknown feature.
+    #[cfg(feature = "cli")]
+    #[test]
+    fn embed_deprecation_warning_names_a_real_cargo_feature() {
+        let flag = "--features ";
+        let start = EMBED_DEPRECATION_WARNING
+            .find(flag)
+            .expect("warning must tell users which --features to rebuild with")
+            + flag.len();
+        let feature = EMBED_DEPRECATION_WARNING[start..]
+            .split(['`', ' '])
+            .next()
+            .expect("a feature name follows --features");
+        assert_eq!(
+            "embeddings", feature,
+            "warning names stale feature `{feature}`: {EMBED_DEPRECATION_WARNING}"
+        );
+        // The named feature must exist in Cargo.toml, otherwise a user who
+        // follows the warning hits `unknown feature` and the build fails.
+        let manifest = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
+        )
+        .expect("read Cargo.toml");
+        assert!(
+            manifest
+                .lines()
+                .any(|l| l.trim_start().starts_with(&format!("{feature} ="))),
+            "warning names cargo feature `{feature}` not declared in Cargo.toml: \
+             {EMBED_DEPRECATION_WARNING}"
+        );
     }
 
     // Covers the DQ violation reporting branch in index_core (lines 248-258).
