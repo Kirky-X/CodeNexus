@@ -120,6 +120,22 @@ sum_json_values() {
   echo "$result"
 }
 
+# Returns 0 when project `$2` is present in the DB at `$1`, non-zero otherwise.
+#
+# Indexing is per-project: the DB file merely existing does not mean *this*
+# project is in it (a previous run may have indexed only other projects, or
+# `--force` may have recreated the DB per project). Skipping the index on a
+# bare file-existence check made the later cross-validation fail with
+# "project '<name>' not found in Project table" once the DB no longer held
+# every project. `list --db` prints the indexed projects as JSON.
+project_indexed() {
+  local db="$1" project="$2" listed
+  if ! listed=$(cargo run --release --bin codenexus -- list --db "$db" 2>/dev/null); then
+    return 1
+  fi
+  jq -e --arg p "$project" 'any(.[]; .name == $p)' <<<"$listed" >/dev/null
+}
+
 # --- Main ---
 
 # cd to project root so codenexus-verify's relative paths resolve.
@@ -162,14 +178,17 @@ for project in "${PROJECTS[@]}"; do
     run_or_echo git clone --depth 1 --branch "$tag" "https://github.com/${repo}.git" "$fixture_path"
   fi
 
-  # 2. Index with CodeNexus (skip if DB exists unless --force).
-  if ! $DRY_RUN && [[ -f "$ACCEPTANCE_DB" ]] && ! $FORCE; then
-    echo "[skip] index (DB exists: ${ACCEPTANCE_DB}, use --force to re-index)"
+  # 2. Index with CodeNexus (skip only when THIS project is already indexed).
+  #    --path preserves the CLI's long-flag contract; --db pins the index to
+  #    ACCEPTANCE_DB (codenexus-verify's DEFAULT_DB) so index and verify always
+  #    agree on the file instead of relying on two different defaults.
+  if ! $DRY_RUN && [[ -f "$ACCEPTANCE_DB" ]] && ! $FORCE && project_indexed "$ACCEPTANCE_DB" "$name"; then
+    echo "[skip] index (project '${name}' already in ${ACCEPTANCE_DB})"
   else
     if ! $DRY_RUN && $FORCE && [[ -f "$ACCEPTANCE_DB" ]]; then
       rm -f "$ACCEPTANCE_DB"
     fi
-    run_or_echo cargo run --release --bin codenexus -- index "$fixture_path" --name "$name"
+    run_or_echo cargo run --release --bin codenexus -- index --path "$fixture_path" --name "$name" --db "$ACCEPTANCE_DB"
   fi
 
   # 3. Index with gitnexus (reference index for cross-validation).

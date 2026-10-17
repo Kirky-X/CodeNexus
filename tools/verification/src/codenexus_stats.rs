@@ -88,9 +88,6 @@ impl CodeNexusStats {
     }
 }
 
-/// Default DB path used by `codenexus index` (matches CLI args.rs default).
-const DEFAULT_DB: &str = "./codenexus.lbug";
-
 /// `single` subcommand entry point — CodeNexus side only. Runs the full
 /// index → extract → write flow for one repo and returns the stats so the
 /// caller (main.rs orchestrator) can pass them to the report generator.
@@ -104,7 +101,7 @@ pub fn run_single(repo: &Path, name: &str, language: &str, resume: bool) -> Resu
         .with_context(|| format!("failed to create {}", results_dir.display()))?;
 
     let codenexus_json = results_dir.join(format!("{name}.codenexus.json"));
-    let db_path = Path::new(DEFAULT_DB);
+    let db_path = Path::new(crate::DEFAULT_DB);
 
     let stats = if resume && codenexus_json.exists() {
         eprintln!("[resume] loading existing {codenexus_json:?}");
@@ -130,11 +127,19 @@ pub fn run_single(repo: &Path, name: &str, language: &str, resume: bool) -> Resu
     Ok(stats)
 }
 
-/// Invoke `cargo run --bin codenexus -- index <repo> --name <name>`.
+/// Invoke `cargo run --bin codenexus -- index --path <repo> --name <name>
+/// --db <DEFAULT_DB>`.
 ///
 /// Uses `cargo run` rather than a bare `codenexus` binary because the latter
 /// is not installed in PATH in this environment. Captures stdout/stderr and
 /// returns an explicit error on non-zero exit (fail loud).
+///
+/// **Explicit `--db`**: the CLI's own default is `.codenexus/<project>.lbug`
+/// (per-project), while this tool reads `crate::DEFAULT_DB`
+/// (`.codenexus.lbug` in the project root). The flag pins the index output to
+/// the path every reader below ([`extract_stats`], query comparison) opens —
+/// without it the index lands in a file nobody reads and stats silently come
+/// back empty/absent.
 ///
 /// **Multi-project coexistence**: CodeNexus supports multiple projects in the
 /// same DB by design (see `ac_index_003_multiple_projects_coexist` in
@@ -148,9 +153,10 @@ pub fn run_single(repo: &Path, name: &str, language: &str, resume: bool) -> Resu
 /// (exit status None) mid-index. Release mode completes in seconds.
 pub fn run_index(repo_path: &Path, name: &str) -> Result<()> {
     eprintln!(
-        "[index] codenexus index {} --name {} (release)",
+        "[index] codenexus index --path {} --name {} --db {} (release)",
         repo_path.display(),
-        name
+        name,
+        crate::DEFAULT_DB
     );
     let output = Command::new("cargo")
         .args([
@@ -160,9 +166,12 @@ pub fn run_index(repo_path: &Path, name: &str) -> Result<()> {
             "codenexus",
             "--",
             "index",
+            "--path",
             repo_path.to_str().expect("repo_path is valid UTF-8"),
             "--name",
             name,
+            "--db",
+            crate::DEFAULT_DB,
         ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())

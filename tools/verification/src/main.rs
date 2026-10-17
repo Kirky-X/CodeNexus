@@ -97,7 +97,9 @@ fn main() -> Result<()> {
     }
 }
 
-/// Default DB path used by `codenexus index` (matches CLI args.rs default).
+/// CodeNexus DB path this tool indexes into and reads back from. Passed
+/// explicitly as `--db` to `codenexus index` (whose own default is
+/// `.codenexus/<project>.lbug`) so writer and readers always agree.
 const DEFAULT_DB: &str = "./codenexus.lbug";
 
 /// Default type map path.
