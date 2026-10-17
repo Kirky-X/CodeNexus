@@ -1,13 +1,18 @@
 # cargo-audit 配置 — `cargo audit`（本地运行）按此校验 RUSTSEC 漏洞。
 #
+# 位置约束：cargo-audit 0.22 只读 `./.cargo/audit.toml` 或 `~/.cargo/audit.toml`，
+# 仓库根目录的同名文件不会被加载（曾因此使本地 `cargo audit` 对已 ignore 的
+# advisory 仍报错）。本文件必须留在 `.cargo/` 下。
+#
 # 注意：忽略清单的单一事实源是 deny.toml（CI audit-check 从它 grep 生成），
 # 本文件是其同步镜像；修改忽略项时两处必须一起改，并在 deny.toml 注释里
 # 更新复核日期。
 [advisories]
 ignore = [
-    "RUSTSEC-2026-0202", # cxx unsound：lbug 0.21.2 传递锁定 cxx 1.0.205，待 lbug 放宽约束
     "RUSTSEC-2024-0436", # paste unmaintained：tokenizers 间接依赖（vecboost/candle 树），无升级路径
-    "RUSTSEC-2026-0221", # event-listener unsound：smol-rs 间接依赖 5.4.2，待上游修复
     "RUSTSEC-2024-0449", # unsafe-libyaml unmaintained：limiteron 间接依赖（serde_yaml_ng），无升级路径
     "RUSTSEC-2025-0119", # number_prefix unmaintained：indicatif（vecboost/candle 树）间接依赖，无升级路径
+    "RUSTSEC-2026-0367", # zip extract SUID 保留：candle-core 钉死 zip 8.6.0，extract 不可达
+    "RUSTSEC-2026-0368", # zip extract 符号链接逃逸：同上，随机读取不触发
+    "RUSTSEC-2026-0369", # zip extract 经符号链接提权：同上，随机读取不触发
 ]
