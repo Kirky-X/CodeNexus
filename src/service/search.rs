@@ -65,12 +65,22 @@ pub fn run_search(
     project: &str,
 ) -> Result<SearchOutput, CodeNexusError> {
     if mode.is_empty() {
-        // Empty mode → legacy path (backward compatible).
+        // Empty mode → legacy path (backward compatible). `--project` must
+        // filter here too: both QueryModule calls used to hardcode `None`,
+        // silently returning every project's rows even though the CLI help /
+        // MCP tool description promise "project — project name or id
+        // (empty = all projects)".
         let q = kit.require::<QueryModule>()?;
-        let results = if fulltext {
-            q.fulltext_search(text, None, limit as usize)
+        let project_id = if project.is_empty() {
+            None
         } else {
-            q.search(text, None, limit as usize)
+            let storage = kit.require::<StorageModule>()?;
+            Some(resolve_project_id(&*storage, project)?)
+        };
+        let results = if fulltext {
+            q.fulltext_search(text, project_id.as_deref(), limit as usize)
+        } else {
+            q.search(text, project_id.as_deref(), limit as usize)
         }?;
         let results: Vec<Value> = results.iter().map(search_result_to_json).collect();
         Ok(SearchOutput {
@@ -290,6 +300,103 @@ mod tests {
         assert!(output.count > 0, "should find do_thing in exact mode");
     }
 
+    // ===== legacy (empty-mode) path: `--project` filtering =====
+
+    /// Seeds two projects (id/name alpha, beta) each with one distinct
+    /// function directly into the DB file and closes the seed connection.
+    ///
+    /// Must run BEFORE [`build_kit_for_db`]: a LadybugDB connection opened
+    /// before a write does not observe it in-process (verified: a
+    /// QueryModule connection opened first reads an empty snapshot even
+    /// though the StorageModule connection that made the writes sees the
+    /// rows). Committing the fixture to the file first and opening the Kit
+    /// afterwards keeps every module's connection consistent.
+    fn seed_two_projects(db: &std::path::Path) {
+        use crate::storage::repository::Repository;
+        let repo = Repository::open(db).expect("open seed repository");
+        let conn = repo.connection();
+        conn.init_schema().expect("init schema");
+        for (id, name) in [("alpha", "alpha"), ("beta", "beta")] {
+            conn.execute(&format!(
+                "CREATE (:Project {{id: '{id}', name: '{name}', rootPath: '/{id}', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'}});"
+            ))
+            .expect("create project");
+        }
+        conn.execute("CREATE (:Function {id: 'f_alpha', project: 'alpha', name: 'project_alpha_fn', qualifiedName: 'alpha.project_alpha_fn', filePath: '/src/a.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create alpha function");
+        conn.execute("CREATE (:Function {id: 'f_beta', project: 'beta', name: 'project_beta_fn', qualifiedName: 'beta.project_beta_fn', filePath: '/src/b.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create beta function");
+    }
+
+    #[test]
+    fn run_search_empty_mode_filters_by_project_name() {
+        let (_dir, db) = fresh_db_path();
+        seed_two_projects(&db);
+        let kit = build_kit_for_db(&db);
+
+        // Empty project = all projects (both rows visible).
+        let all = run_search(&kit, "project_alpha_fn", false, 50, "", "")
+            .expect("unfiltered search should succeed");
+        assert_eq!(
+            all.count, 1,
+            "unfiltered name search finds alpha's function"
+        );
+
+        // Name filter must drop other projects' rows.
+        let own = run_search(&kit, "project_beta_fn", false, 50, "", "beta")
+            .expect("filtered search should succeed");
+        assert_eq!(own.count, 1, "beta's own function must be found");
+
+        let foreign = run_search(&kit, "project_alpha_fn", false, 50, "", "beta")
+            .expect("filtered search should succeed");
+        assert_eq!(
+            foreign.count, 0,
+            "alpha's function must not leak into beta's search: {:?}",
+            foreign.results
+        );
+    }
+
+    #[test]
+    fn run_search_empty_mode_filters_by_project_id() {
+        let (_dir, db) = fresh_db_path();
+        seed_two_projects(&db);
+        let kit = build_kit_for_db(&db);
+
+        let by_id = run_search(&kit, "project_alpha_fn", false, 50, "", "alpha")
+            .expect("id-filtered search should succeed");
+        assert_eq!(by_id.count, 1, "project id must resolve like a name");
+    }
+
+    #[test]
+    fn run_search_empty_mode_fulltext_filters_by_project() {
+        let (_dir, db) = fresh_db_path();
+        seed_two_projects(&db);
+        let kit = build_kit_for_db(&db);
+
+        let foreign = run_search(&kit, "project_alpha_fn", true, 50, "", "beta")
+            .expect("filtered fulltext search should succeed");
+        assert_eq!(
+            foreign.count, 0,
+            "fulltext must not leak alpha's function into beta: {:?}",
+            foreign.results
+        );
+        let own = run_search(&kit, "project_beta_fn", true, 50, "", "beta")
+            .expect("filtered fulltext search should succeed");
+        assert_eq!(own.count, 1, "fulltext must find beta's own function");
+    }
+
+    #[test]
+    fn run_search_empty_mode_unknown_project_errors() {
+        let (_dir, db) = fresh_db_path();
+        seed_two_projects(&db);
+        let kit = build_kit_for_db(&db);
+
+        let err = run_search(&kit, "project_alpha_fn", false, 50, "", "gamma")
+            .expect_err("unknown project must error");
+        assert!(
+            matches!(err, CodeNexusError::ProjectNotFound(_)),
+            "expected ProjectNotFound, got {err:?}"
+        );
+    }
+
     #[test]
     fn run_search_with_regex_mode_finds_symbol() {
         let (_dir, db) = fresh_db_path();
@@ -477,6 +584,12 @@ mod tests {
         reset_kit_for_testing();
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
+        // The wrapper passes `--project demo`; the legacy path now resolves it
+        // (name → id) and would otherwise fail with ProjectNotFound on a DB
+        // without that project — seed it first via the same connection the
+        // resolver reads from.
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        seed_project(&*storage, "demo", "demo");
         init_kit(kit).expect("init_kit");
 
         let rt = tokio::runtime::Runtime::new().expect("runtime");

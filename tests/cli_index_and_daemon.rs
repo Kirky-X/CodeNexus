@@ -637,6 +637,91 @@ mod post_index {
         );
     }
 
+    /// Legacy `search` (empty `--mode`) must honor `--project` on both the
+    /// structured and the fulltext path. Regression guard: both used to
+    /// hardcode "all projects", so `--project beta` returned `alpha`'s
+    /// functions even though the CLI/MCP contract says "project — project
+    /// name or id (empty = all projects)". Two projects are indexed into one
+    /// DB to exercise the cross-project leak.
+    #[test]
+    fn search_legacy_path_respects_project_filter() {
+        let tmp = TempDir::new().unwrap();
+        let repo_alpha = tmp.path().join("repo_alpha");
+        let repo_beta = tmp.path().join("repo_beta");
+        fs::create_dir_all(&repo_alpha).unwrap();
+        fs::create_dir_all(&repo_beta).unwrap();
+        write_file(&repo_alpha, "src/a.rs", "fn project_alpha_fn() {}\n");
+        write_file(&repo_beta, "src/b.rs", "fn project_beta_fn() {}\n");
+        let db = tmp.path().join("multi.lbug");
+
+        for (repo, name) in [(&repo_alpha, "alpha"), (&repo_beta, "beta")] {
+            let args: Vec<String> = vec![
+                "index".to_string(),
+                "--path".to_string(),
+                repo.to_string_lossy().into_owned(),
+                "--name".to_string(),
+                name.to_string(),
+                "--force=false".to_string(),
+                "--lsp=false".to_string(),
+                "--embed=false".to_string(),
+                "--ram_first=false".to_string(),
+                "--db".to_string(),
+                db.to_string_lossy().into_owned(),
+            ];
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let (code, _stdout, stderr) = run(&arg_refs);
+            assert_eq!(code, 0, "index of {name} should exit 0, stderr: {stderr}");
+        }
+
+        // Structured legacy path (no --mode): alpha's function must not leak.
+        let args: &[&str] = &[
+            "search",
+            "--text=project_alpha_fn",
+            "--fulltext=false",
+            "--limit=10",
+            "--project=beta",
+            "--db",
+            db.to_str().unwrap(),
+        ];
+        let (code, stdout, stderr) = run(args);
+        assert_eq!(code, 0, "search should exit 0, stderr: {stderr}");
+        assert!(
+            stdout.contains("\"count\":0"),
+            "alpha's function must not leak into beta's structured search: {stdout}"
+        );
+
+        // Fulltext legacy path: same contract.
+        let args: &[&str] = &[
+            "search",
+            "--text=project_alpha_fn",
+            "--fulltext=true",
+            "--limit=10",
+            "--project=beta",
+            "--db",
+            db.to_str().unwrap(),
+        ];
+        let (code, stdout, stderr) = run(args);
+        assert_eq!(code, 0, "fulltext search should exit 0, stderr: {stderr}");
+        assert!(
+            stdout.contains("\"count\":0"),
+            "alpha's function must not leak into beta's fulltext search: {stdout}"
+        );
+
+        // A project name that does not exist errors (exit 2), matching the
+        // `--mode` path's resolve_project_id contract.
+        let args: &[&str] = &[
+            "search",
+            "--text=project_alpha_fn",
+            "--fulltext=false",
+            "--limit=10",
+            "--project=gamma",
+            "--db",
+            db.to_str().unwrap(),
+        ];
+        let (code, _stdout, _stderr) = run(args);
+        assert_eq!(code, 2, "unknown project should exit 2 (ProjectNotFound)");
+    }
+
     #[test]
     fn context_returns_symbol_view() {
         let (_tmp, db) = index_fresh_repo();
