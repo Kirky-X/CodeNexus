@@ -116,7 +116,9 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         "newtype" => {
             extract_new_type(node, source, ctx, result);
         }
-        "type_synomym" => {
+        // tree-sitter-haskell 0.24 起该节点 kind 由历史误拼 `type_synomym`
+        // 更正为 `type_synonym`，两个名字都接受以兼容 0.23/0.24。
+        "type_synomym" | "type_synonym" => {
             extract_type_alias(node, source, ctx, result);
         }
         "module" => {

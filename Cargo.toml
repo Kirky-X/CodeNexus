@@ -1,6 +1,6 @@
 [package]
 name = "codenexus"
-version = "0.4.0-rc.1"
+version = "0.4.0-rc.2"
 edition = "2021"
 rust-version = "1.97.1"
 description = "A queryable code knowledge graph tool built on LadybugDB and tree-sitter"
@@ -87,53 +87,53 @@ webui = ["dep:axum", "dep:mime_guess", "dep:rust-embed", "tokio/net", "tokio/syn
 [dependencies]
 trait-kit = { version = "0.5.0-rc.9", default-features = false, features = ["async", "lifecycle", "health", "report", "shutdown"] }
 lbug = { workspace = true }
-tree-sitter = "0.27"
-tree-sitter-c = { version = "0.24", optional = true }
-tree-sitter-rust = { version = "0.24", optional = true }
-tree-sitter-fortran = { version = "0.6", optional = true }
-tree-sitter-python = { version = "0.25", optional = true }
-tree-sitter-typescript = { version = "0.23", optional = true }
-tree-sitter-go = { version = "0.25", optional = true }
-tree-sitter-java = { version = "0.23", optional = true }
-tree-sitter-cpp = { version = "0.23", optional = true }
-tree-sitter-javascript = { version = "0.25", optional = true }
-tree-sitter-ruby = { version = "0.23", optional = true }
-tree-sitter-haskell = { version = "0.23", optional = true }
-tree-sitter-ocaml = { version = "0.26", optional = true }
-tree-sitter-scala = { version = "0.26", optional = true }
-tree-sitter-php = { version = "0.24", optional = true }
-tree-sitter-c-sharp = { version = "0.23", optional = true }
-tree-sitter-bash = { version = "0.25", optional = true }
-tree-sitter-html = { version = "0.23", optional = true }
-tree-sitter-css = { version = "0.25", optional = true }
-tree-sitter-json = { version = "0.24", optional = true }
-tree-sitter-regex = { version = "0.25", optional = true }
-tree-sitter-verilog = { version = "1.0", optional = true }
-rayon = "1.12"
-ignore = "0.4"
-notify = { version = "8.2", optional = true }
-notify-debouncer-full = { version = "0.7", optional = true }
-signal-hook = { version = "0.4", optional = true }
+tree-sitter = { version = "0.27", default-features = false, features = ["std"] }
+tree-sitter-c = { version = "0.24", default-features = false, optional = true }
+tree-sitter-rust = { version = "0.24", default-features = false, optional = true }
+tree-sitter-fortran = { version = "0.6", default-features = false, optional = true }
+tree-sitter-python = { version = "0.25", default-features = false, optional = true }
+tree-sitter-typescript = { version = "0.23", default-features = false, optional = true }
+tree-sitter-go = { version = "0.25", default-features = false, optional = true }
+tree-sitter-java = { version = "0.23", default-features = false, optional = true }
+tree-sitter-cpp = { version = "0.23", default-features = false, optional = true }
+tree-sitter-javascript = { version = "0.25", default-features = false, optional = true }
+tree-sitter-ruby = { version = "0.23", default-features = false, optional = true }
+tree-sitter-haskell = { version = "0.24", default-features = false, optional = true }
+tree-sitter-ocaml = { version = "0.26", default-features = false, optional = true }
+tree-sitter-scala = { version = "0.26", default-features = false, optional = true }
+tree-sitter-php = { version = "0.25", default-features = false, optional = true }
+tree-sitter-c-sharp = { version = "0.23", default-features = false, optional = true }
+tree-sitter-bash = { version = "0.25", default-features = false, optional = true }
+tree-sitter-html = { version = "0.23", default-features = false, optional = true }
+tree-sitter-css = { version = "0.25", default-features = false, optional = true }
+tree-sitter-json = { version = "0.24", default-features = false, optional = true }
+tree-sitter-regex = { version = "0.25", default-features = false, optional = true }
+tree-sitter-verilog = { version = "1.0", default-features = false, optional = true }
+rayon = { version = "1.12", default-features = false }
+ignore = { version = "0.4", default-features = false }
+notify = { version = "8.2", default-features = false, features = ["macos_fsevent"], optional = true }
+notify-debouncer-full = { version = "0.7", default-features = false, features = ["macos_fsevent"], optional = true }
+signal-hook = { version = "0.4", default-features = false, features = ["channel", "iterator"], optional = true }
 blake3 = { version = "1.8", default-features = false, features = ["std"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "blocking", "rustls"], optional = true }
-vecboost = { version = "0.3.0-rc.1", default-features = false, optional = true }
-thiserror = "2.0"
-anyhow = "1.0"
-pest = "2.9"
-pest_derive = "2.9"
+vecboost = { version = "0.3.0-rc.2", default-features = false, optional = true }
+thiserror = { version = "2.0", default-features = false, features = ["std"] }
+anyhow = { version = "1.0", default-features = false, features = ["std"] }
+pest = { version = "2.9", default-features = false, features = ["std", "memchr"] }
+pest_derive = { version = "2.9", default-features = false, features = ["std"] }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-csv = "1.4"
+csv = { version = "1.4", default-features = false }
 tempfile = { workspace = true }
-lz4_flex = "0.14"
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
 sysinfo = { version = "0.39", default-features = false, features = ["system", "disk"] }
-uuid = { version = "1.26", features = ["v7"] }
+uuid = { version = "1.28", default-features = false, features = ["v7"] }
 petgraph = { version = "0.8", default-features = false, optional = true }
-lsp-types = { version = "0.97", optional = true }
-lsp-server = { version = "0.10", optional = true }
-crossbeam-channel = { version = "0.5", optional = true }
-url = { version = "2.5", optional = true }
+lsp-types = { version = "0.97", default-features = false, optional = true }
+lsp-server = { version = "0.10", default-features = false, optional = true }
+crossbeam-channel = { version = "0.5", default-features = false, features = ["std"], optional = true }
+url = { version = "2.5", default-features = false, features = ["std"], optional = true }
 # i18n 消息目录（src/i18n/catalog.rs）常编并在 t/tr 转发 sdforge::i18n，
 # 故 sdforge 从 optional 收敛为常驻依赖（cli/mcp 仅再叠加各自 feature）。
 sdforge = { version = "0.5.0-rc.8", default-features = false, features = ["i18n"] }
@@ -148,7 +148,7 @@ oxiarc-zstd = { version = "0.4", default-features = false, optional = true }
 # 链接行无该参数），故 pkg-config 探测无法替代 vendored。
 zstd-sys = { version = "2.1", default-features = false, features = ["std", "vendored"] }
 inklog = { workspace = true }
-regex = "1.13"
+regex = { version = "1.13", default-features = false, features = ["std", "unicode", "perf"] }
 icu_normalizer = { version = "2.3", default-features = false, features = ["compiled_data"], optional = true }
 icu_casemap = { version = "2.3", default-features = false, features = ["compiled_data"], optional = true }
 # Message-level i18n (locale detection) — always on, per the unify-rust-i18n
@@ -162,24 +162,30 @@ sys-locale = { workspace = true }
 # graph-viewer 内嵌服务（见 feature `viewer`）
 axum = { workspace = true, optional = true }
 mime_guess = { version = "2.0", default-features = false, optional = true }
+# debug-embed 必须保留：rust-embed 未启用该特性时，debug 构建改为按进程 CWD
+# 运行时读盘（release 恒为编译期嵌入）——测试以临时目录为 CWD，会静默落到回退
+# 页，真实前端不再被覆盖；仓库根目录外 debug 运行同理。见 rust-embed README
+# "In debug and when debug-embed feature is not enabled, the folder path is
+# resolved relative to where the binary is run from"。
 rust-embed = { version = "8.13", default-features = false, features = ["include-exclude", "debug-embed"], optional = true }
 
 [dev-dependencies]
-criterion = { version = "0.8", features = ["html_reports"] }
-time = { version = "0.3", features = ["macros"] }
-rust_decimal = "1.43"
+criterion = { version = "0.8", default-features = false, features = ["rayon", "plotters", "cargo_bench_support"] }
+time = { version = "0.3", default-features = false, features = ["std", "macros"] }
+rust_decimal = { version = "1.43", default-features = false }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-serial_test = "4.0"
+serial_test = { version = "4.0", default-features = false, features = ["logging", "async"] }
 oxiarc-zstd = { version = "0.4", default-features = false }
-tracing-subscriber = "0.3"
-crossbeam-channel = "0.5"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["smallvec", "fmt", "ansi", "tracing-log", "std"] }
+crossbeam-channel = { version = "0.5", default-features = false, features = ["std"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
 # `#[forge::log]` 壳函数经 `log` 门面发射记录；集成测试安装捕获 logger
-# 断言函数级日志（tests/log_attr_integration.rs）。
-log = "0.4"
+# 断言函数级日志（tests/log_attr_integration.rs）。`std` 为 set_boxed_logger
+# 所需，显式声明以关闭默认特性。
+log = { version = "0.4", default-features = false, features = ["std"] }
 
 [build-dependencies]
-pkg-config = "0.3"
+pkg-config = { version = "0.3", default-features = false }
 
 [[bench]]
 name = "index_bench"
@@ -252,21 +258,13 @@ default-members = ["."]
 # 差异 features 在成员侧声明（与 garrison/sinnan 同一惯例）。
 [workspace.dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
-tokio = "1.53"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tempfile = "3.27"
-tracing = "0.1"
+tokio = { version = "1.53", default-features = false }
+serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+tempfile = { version = "3.27", default-features = false, features = ["getrandom"] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 inklog = { version = "0.3.0-rc.9", default-features = false }
-fluent-bundle = "0.16"
-unic-langid = "0.9"
+unic-langid = { version = "0.9", default-features = false }
 limiteron = { version = "0.3.0-rc.7", default-features = false, features = ["retry"] }
-sys-locale = "0.3"
-lbug = "0.21"
-
-[patch.crates-io]
-# 临时安排：vecboost 0.3.0-rc.1 发布版因 confers 0.6.0-rc.8+ API 变更编译失败
-# （Zeroizing 适配在其 b9f3e4e，已随 6094f47 推送到上游 main），rc.2 发布前以
-# git 源锁定该修复提交——cargo 自动拉取，克隆保持自包含，无需同级检出。
-# 上游发布修复版后删除本段并回归 crates.io 版本（见 CHANGELOG Unreleased）。
-vecboost = { git = "https://github.com/Kirky-X/vecboost", rev = "6094f47c72039ce6c83a93345fdee1db89791cb1" } # pragma: allowlist secret -- git commit rev, not a credential
+sys-locale = { version = "0.3", default-features = false }
+lbug = { version = "0.21", default-features = false }

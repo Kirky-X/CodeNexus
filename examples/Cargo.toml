@@ -6,7 +6,7 @@ publish = false
 description = "Example programs demonstrating CodeNexus core features"
 
 [dependencies]
-codenexus = { path = ".." }
+codenexus = { path = "..", default-features = false, features = ["full"] }
 tempfile = { workspace = true }
 
 [[bin]]

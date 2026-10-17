@@ -12,7 +12,7 @@ edition = "2021"
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = "0.4"
+libfuzzer-sys = { version = "0.4", default-features = false, features = ["link_libfuzzer"] }
 
 [dependencies.codenexus]
 path = ".."
