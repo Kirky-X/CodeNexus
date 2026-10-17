@@ -690,4 +690,62 @@ mod tests {
         set_level(None, "error").expect("a rejected level must not break later hot-tuning");
         assert_eq!(LOGGER.get().unwrap().current_level_filter_string(), "error");
     }
+
+    /// The `main.rs` comment names the file-sink compression backend, so it
+    /// must name the backend inklog is actually built with. `Cargo.lock` is
+    /// the resolved truth: inklog's locked dependencies carry `zstd` when the
+    /// `compression` feature is enabled (also transitively pulled through
+    /// dependency feature unification) and `flate2` when `gzip` is — the
+    /// two backends are mutually exclusive in the final binary.
+    #[test]
+    fn logging_comment_names_the_backend_inklog_is_built_with() {
+        let main_rs = include_str!("main.rs");
+        let lock = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock"),
+        )
+        .expect("read Cargo.lock");
+
+        // The `dependencies = [...]` block of inklog's lock entry.
+        let entry = lock
+            .find("name = \"inklog\"")
+            .expect("Cargo.lock must carry an inklog entry");
+        let block = &lock[entry..];
+        let block = &block[..block.find(']').expect("dependency list closes")];
+        let zstd_backend = block.contains("\"zstd\"");
+        let gzip_backend = block.contains("\"flate2\"");
+        assert!(
+            zstd_backend != gzip_backend,
+            "inklog must resolve to exactly one compression backend, got zstd={zstd_backend} gzip={gzip_backend}"
+        );
+
+        // The `// Global inklog backend: ...` comment above init_logging().
+        let comment = main_rs
+            .lines()
+            .skip_while(|l| !l.contains("Global inklog backend"))
+            .take_while(|l| !l.contains("init_logging();"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !comment.is_empty(),
+            "main.rs must narrate the inklog backend above init_logging()"
+        );
+
+        if gzip_backend {
+            assert!(
+                comment.contains("gzip"),
+                "inklog is built with the gzip (flate2) backend, so the comment must say so: {comment}"
+            );
+        } else {
+            assert!(
+                !comment.contains("gzip"),
+                "inklog is built with the zstd backend (no flate2 in its lock entry), so the comment must not promise gzip: {comment}"
+            );
+        }
+        if zstd_backend {
+            assert!(
+                comment.contains("zstd"),
+                "inklog's compression feature pulls zstd; the comment must name it: {comment}"
+            );
+        }
+    }
 }

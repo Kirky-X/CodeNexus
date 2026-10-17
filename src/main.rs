@@ -37,9 +37,11 @@ fn main() {
     codenexus::i18n::init();
 
     // Global inklog backend: console (colored, stderr-routed) + file output
-    // with daily rotation, gzip compression, 30-day retention, inklog's
-    // built-in PII masking, `RUST_LOG` directive support and per-target level
-    // presets (see `codenexus::logging`).
+    // with daily rotation, zstd compression (inklog's `compression` feature,
+    // active in the unified feature graph; `compress: true` in
+    // `codenexus::logging`), 30-day retention, inklog's built-in PII masking,
+    // `RUST_LOG` directive support and per-target level presets (see
+    // `codenexus::logging`).
     codenexus::logging::init_logging();
 
     #[cfg(feature = "mcp")]
@@ -925,10 +927,11 @@ fn apply_sentinel_defaults(mut cmd: sdforge::clap::Command) -> sdforge::clap::Co
 /// MCP mode: build Kit, serve sdforge MCP server over stdio.
 ///
 /// The Kit opens the DB **read-only**: the MCP tool surface is query-only by
-/// design (query/trace/impact/search/context/architecture/diagram/arch_diff —
-/// write tools like index/import/rename are CLI-only), so a shared-read open
-/// lets the server run alongside an active `index`/`daemon` writer instead of
-/// either side failing with `DatabaseLocked` (LadybugDB is single-writer).
+/// design (query/trace/impact/search/context/architecture/diagram/arch_diff/
+/// dead_code/detect_changes — write tools like index/import/rename are
+/// CLI-only), so a shared-read open lets the server run alongside an active
+/// `index`/`daemon` writer instead of either side failing with
+/// `DatabaseLocked` (LadybugDB is single-writer).
 #[cfg(feature = "mcp")]
 fn run_mcp_server() {
     let db = parse_mcp_db_arg().unwrap_or_else(|| {
@@ -1745,6 +1748,72 @@ mod tests {
         );
     }
 
+    /// Locks the documented `dead_code` CLI contract (docs/USER_GUIDE.md
+    /// 「死代码检测」 and skill/SKILL.md conventions): `--entry` /
+    /// `--check_exported` / `--check_ffi` / `--edge_types` stay required
+    /// flags (no sentinel default — omitting one exits 2), while
+    /// `--check_dynamic_dispatch` / `--check_reflection` keep their
+    /// sentinel defaults (`true` / `false`).
+    #[test]
+    fn dead_code_required_flags_and_sentinel_toggles() {
+        let full: [&str; 12] = [
+            "codenexus",
+            "dead_code",
+            "--project",
+            "demo",
+            "--entry",
+            "",
+            "--check_exported",
+            "true",
+            "--check_ffi",
+            "true",
+            "--edge_types",
+            "",
+        ];
+        // (flag, index of the flag token in `full`); its value sits at +1.
+        for (flag, at) in [
+            ("--entry", 4),
+            ("--check_exported", 6),
+            ("--check_ffi", 8),
+            ("--edge_types", 10),
+        ] {
+            let args: Vec<&str> = full
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != at && *i != at + 1)
+                .map(|(_, s)| *s)
+                .collect();
+            let err = build_cli_command()
+                .try_get_matches_from(args)
+                .expect_err("omitting {flag} must be a usage error");
+            assert_eq!(
+                err.kind(),
+                sdforge::clap::error::ErrorKind::MissingRequiredArgument,
+                "omitting {flag} must be MissingRequiredArgument: {err}"
+            );
+            assert!(
+                err.to_string().contains(flag),
+                "error must name {flag}: {err}"
+            );
+        }
+
+        let m = build_cli_command()
+            .try_get_matches_from(full)
+            .expect("all four required flags supplied must parse");
+        let sub = m.subcommand_matches("dead_code").unwrap();
+        assert_eq!(
+            sub.get_one::<String>("check_dynamic_dispatch")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            sub.get_one::<String>("check_reflection")
+                .map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(sub.get_one::<String>("entry").map(String::as_str), Some(""));
+    }
+
     // --- extract_args: .codenexus/config.json command_defaults overlay ---
 
     fn trace_config_with_depth(value: &str) -> ProjectConfig {
@@ -1971,6 +2040,129 @@ mod tests {
         assert!(
             !rendered.starts_with("error: "),
             "json mode must not carry the text-mode prefix"
+        );
+    }
+
+    /// The `run_mcp_server` doc comment enumerates the MCP tool surface, so
+    /// it must list exactly the tools registered via `tool_name = "..."` in
+    /// the crate sources — a list that lags the inventory misleads callers
+    /// into probing for tools that do not exist (or missing ones that do).
+    #[test]
+    fn mcp_tool_surface_comment_lists_every_registered_tool() {
+        let source = include_str!("main.rs");
+
+        // Contiguous `///` block immediately above `fn run_mcp_server`
+        // (skipping the `#[cfg]` attribute line between them).
+        let fn_idx = source
+            .find("fn run_mcp_server()")
+            .expect("run_mcp_server must exist");
+        let doc_block = source[..fn_idx]
+            .lines()
+            .rev()
+            .skip_while(|l| !l.trim_start().starts_with("///"))
+            .take_while(|l| l.trim_start().starts_with("///"))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !doc_block.is_empty(),
+            "run_mcp_server must carry a doc comment"
+        );
+
+        // The tool list is the '/'-separated run inside the first
+        // parenthesized group, terminated by the em dash or ')'.
+        let listed: Vec<String> = doc_block
+            .split_once('(')
+            .expect("comment must parenthesize the tool surface")
+            .1
+            .split(['—', ')'])
+            .next()
+            .expect("list runs to the em dash")
+            .split('/')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        assert!(
+            !listed.is_empty(),
+            "no tool names parsed from comment: {doc_block}"
+        );
+
+        // Registered surface: every `tool_name = "X"` under src/.
+        let mut registered: Vec<String> = Vec::new();
+        collect_tool_names(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut registered,
+        );
+        registered.sort();
+        registered.dedup();
+
+        let mut listed_sorted = listed.clone();
+        listed_sorted.sort();
+        assert_eq!(
+            listed_sorted,
+            registered,
+            "run_mcp_server doc comment lists {} tools but {} are registered \
+             (comment: {listed:?}, registered: {registered:?})",
+            listed.len(),
+            registered.len(),
+        );
+    }
+
+    /// Recursively collects `tool_name = "X"` MCP registrations under `dir`.
+    fn collect_tool_names(dir: &std::path::Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("read source dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                collect_tool_names(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                let text = std::fs::read_to_string(&path).expect("read source file");
+                for line in text.lines() {
+                    // Only attribute-key position counts: a `///` or `//`
+                    // comment mentions `tool_name = "..."` mid-line and must
+                    // not register a phantom tool.
+                    let Some(rest) = line.trim_start().strip_prefix("tool_name = \"") else {
+                        continue;
+                    };
+                    if let Some((name, _)) = rest.split_once('"') {
+                        out.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    /// `build.rs` narrates the link graph, so its zstd claims must match the
+    /// resolved dependency tree — `Cargo.lock` is that resolved truth.
+    #[test]
+    fn build_rs_zstd_comment_matches_the_dependency_tree() {
+        let build_rs = include_str!("../build.rs");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let lock = std::fs::read_to_string(root.join("Cargo.lock")).expect("read Cargo.lock");
+        let config = std::fs::read_to_string(root.join(".cargo/config.toml"))
+            .expect("read .cargo/config.toml");
+
+        assert!(
+            lock.contains("name = \"zstd-sys\""),
+            "zstd-sys is pinned vendored in Cargo.toml; a lock without it means \
+             the pin was dropped and build.rs's link story must be re-told"
+        );
+        assert!(
+            !build_rs.contains("no longer in the dependency tree"),
+            "build.rs claims zstd-sys left the dependency tree, but Cargo.lock \
+             still carries it (direct vendored pin + inklog's compression \
+             feature chain)"
+        );
+        assert!(
+            config.contains("LBUG_LOCALIZE_BUNDLED_SYMBOLS"),
+            ".cargo/config.toml must keep the lbug zstd-symbol localization env"
+        );
+        assert!(
+            !build_rs.contains("currently inactive"),
+            "build.rs calls the .cargo/config.toml zstd env vars inactive, but \
+             they are set and active"
         );
     }
 }

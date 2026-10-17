@@ -9,7 +9,7 @@
 //! - 7 core keys (`Storage`/`Parser`/`Extractor`/`Indexer`/`Resolver`/
 //!   `Query`/`Trace`) MUST resolve under default features.
 //! - `DaemonModule` MUST resolve when the `daemon` feature is on.
-//! - `EmbedModule` MUST resolve when the `embed` feature is on.
+//! - `EmbedModule` MUST resolve when the `embeddings` feature is on.
 //!
 //! When a feature is off, the corresponding key type is `cfg`-gated out of
 //! the public API, so absence is enforced at compile time (the

@@ -8,10 +8,13 @@ fn main() {
     // etc.). Link system OpenSSL (libssl + libcrypto) unconditionally to
     // satisfy these symbols for any binary target.
     //
-    // zstd-sys is no longer in the dependency tree (inklog 0.1.10+ uses gzip
-    // fallback via flate2 when `compression` feature is not enabled). The
-    // .cargo/config.toml zstd env vars are retained for future use but are
-    // currently inactive.
+    // zstd-sys stays in the dependency tree through two independent paths:
+    // the explicit vendored pin in Cargo.toml, and inklog's `compression`
+    // feature (zstd → zstd-safe → zstd-sys, enabled in the unified feature
+    // graph via vecboost) — that feature is what compresses rotated log
+    // files. .cargo/config.toml's LBUG_LOCALIZE_BUNDLED_SYMBOLS is active: it
+    // localizes lbug's bundled zstd so neither copy's symbols satisfy the
+    // other's references.
     println!("cargo:rustc-link-lib=ssl");
     println!("cargo:rustc-link-lib=crypto");
 

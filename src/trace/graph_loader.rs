@@ -152,6 +152,10 @@ pub fn load_graph_for_symbol(
 }
 
 /// Direction filter for edge fetching.
+///
+/// `Outgoing` / `Incoming` are constructed only by `#[cfg(test)]` tests
+/// covering `fetch_edges_for_node`'s per-direction query arms; production
+/// callers pass `Either`. They are kept so the SQL arms stay test-covered.
 #[derive(Clone, Copy)]
 enum EdgeDirection {
     #[allow(dead_code)]

@@ -936,8 +936,12 @@ impl<'a> ArchitectureAnalyzer<'a> {
 
     /// Loads cross-service dependencies by running the multi-protocol
     /// [`CrossServiceDetector`] and converting each match into a
-    /// [`CrossServiceDep`]. The caller id becomes `from_module`, the
-    /// callee becomes `to_module`, and the protocol is stringified via
+    /// [`CrossServiceDep`]. Detector matches carry node ids; both sides are
+    /// mapped to modules before they become `from_module`/`to_module`: the
+    /// caller id resolves to its function's module directory (the file's
+    /// parent directory via [`module_name_from_path`]) and the callee route
+    /// id to the directory of the function handling that route — matches
+    /// inside a single module are dropped. The protocol is stringified via
     /// [`protocol_to_string`].
     ///
     /// # Errors
@@ -1857,6 +1861,99 @@ mod tests {
             result.cross_service_deps.is_empty(),
             "cross_service_deps should be empty when no routes/callers match: {:?}",
             result.cross_service_deps
+        );
+    }
+
+    /// `CrossServiceDep` documents module directories, not node ids: the
+    /// detector matches carry a caller function id and a callee route id,
+    /// and `load_cross_service_deps` maps both sides to modules before they
+    /// become `from_module`/`to_module`. Regression guard against a revert
+    /// to the pre-e778d0a pass-through (and for the doc comment that still
+    /// claimed "the caller id becomes `from_module`").
+    #[test]
+    fn cross_service_deps_use_module_directories_not_node_ids() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_route(&kit, "r1", "demo", "/api/users", "GET");
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "/src/caller.rs",
+            10,
+            r#"fetch("/api/users");"#,
+        );
+        create_function(
+            &kit,
+            "h1",
+            "demo",
+            "list_users",
+            "demo.list_users",
+            "/src/api/h.rs",
+            1,
+        );
+        create_edge(&kit, "e_hr", "h1", "r1", "HANDLES_ROUTE", "demo");
+
+        let storage = storage(&kit);
+        let analyzer = ArchitectureAnalyzer::new(&*storage);
+        let result = analyzer.overview("demo").expect("overview");
+        assert!(
+            !result.cross_service_deps.is_empty(),
+            "cross_service_deps should be populated when matches exist: {:?}",
+            result.cross_service_deps
+        );
+        let dep = &result.cross_service_deps[0];
+        assert_eq!(
+            dep.from_module, "/src",
+            "from_module is the caller function's module directory"
+        );
+        assert_ne!(
+            dep.from_module, "f1",
+            "from_module must not be the raw caller node id"
+        );
+        assert_eq!(
+            dep.to_module, "/src/api",
+            "to_module is the route handler's module directory"
+        );
+        assert_ne!(
+            dep.to_module, "r1",
+            "to_module must not be the raw callee (route) node id"
+        );
+    }
+
+    /// The `load_cross_service_deps` doc comment must describe the id→module
+    /// mapping the implementation performs. Commit e778d0a switched the
+    /// conversion to module directories but left the comment claiming the
+    /// caller id becomes `from_module` — this guard keeps the two in sync.
+    #[test]
+    fn load_cross_service_deps_doc_comment_describes_module_mapping() {
+        let source = include_str!("architecture.rs");
+        let fn_idx = source
+            .find("fn load_cross_service_deps(")
+            .expect("load_cross_service_deps must exist");
+        let doc = source[..fn_idx]
+            .lines()
+            .rev()
+            .skip_while(|l| !l.trim_start().starts_with("///"))
+            .take_while(|l| l.trim_start().starts_with("///"))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !doc.is_empty(),
+            "load_cross_service_deps must carry a doc comment"
+        );
+        assert!(
+            !doc.contains("caller id becomes"),
+            "stale doc comment: from_module is a module directory, not the caller id: {doc}"
+        );
+        assert!(
+            doc.contains("module"),
+            "doc comment must describe the id→module mapping: {doc}"
         );
     }
 
