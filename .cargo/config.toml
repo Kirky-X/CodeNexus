@@ -18,3 +18,11 @@ LBUG_LOCALIZE_BUNDLED_SYMBOLS = "1"
 # In normal builds, lbug build.rs overrides these via cargo:rustc-env (higher precedence).
 LBUG_PRECOMPILED_SOURCE = "/nonexistent"
 LBUG_PRECOMPILED_LIBRARY_DIR = "/nonexistent"
+
+# 默认静默（等价于给每条 cargo 命令加 --quiet）：cargo 会把 --quiet 转发给
+# libtest，而本仓 lib 面约 4700 个测试的逐行输出 ≈ 370KB stdout，会撑爆发布
+# 流水线 world.run 的单流 256KB 捕获上限（`cargo test --lib` 形式的门禁命令与
+# pre-push 钩子同样受影响）。静默只影响 cargo 自身的进度/逐测试行——编译错误、
+# 测试 failures 段与 `cargo llvm-cov` 的覆盖表（含 TOTAL 行）照常打印。
+[term]
+quiet = true

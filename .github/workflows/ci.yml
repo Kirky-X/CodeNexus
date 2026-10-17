@@ -18,19 +18,19 @@ jobs:
       # Toolchain version must match the declared MSRV (Cargo.toml
       # `rust-version` / clippy.toml `msrv`) — this job is what verifies it.
       - name: Install Rust 1.97.1 with clippy
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: "1.97.1"
           components: clippy
       - name: Install nightly toolchain with rustfmt
-        uses: dtolnay/rust-toolchain@efcb852328a9f50117170cc43094fb6f09eaf1ae # nightly
+        uses: dtolnay/rust-toolchain@2c76c034f9e32a5d6e2c104dc4df23a22476db04 # nightly
         with:
           components: rustfmt
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev pkg-config protobuf-compiler
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -79,14 +79,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust 1.97.1 (declared MSRV)
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: "1.97.1"
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev pkg-config protobuf-compiler
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -94,15 +94,18 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ matrix.cache-key }}-${{ hashFiles('**/Cargo.lock') }}
       - name: Tests
+        # --quiet：逐测试行打印在 4676+ 测试规模下使单步 stdout 达 ~370KB，
+        # 超门禁单流 256KB 上限；quiet 模式只输出进度点与 test result 摘要
+        # （失败时仍有完整 panic 输出，失败检测不降级）。
         run: |
           if [ "${{ matrix.features }}" = "full" ]; then
-            cargo test --lib --verbose
+            cargo test --lib --quiet
             # Integration tests (tests/*.rs: CLI, daemon lifecycle, MCP
             # protocol, non-ASCII paths) must gate merges too — they cover
             # paths the lib-only suite never touches.
-            cargo test --tests --features full --verbose
+            cargo test --tests --features full --quiet
           else
-            cargo test --lib --no-default-features --features "${{ matrix.features }}" --verbose
+            cargo test --lib --no-default-features --features "${{ matrix.features }}" --quiet
           fi
 
   coverage:
@@ -111,28 +114,30 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust 1.97.1 (declared MSRV)
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: "1.97.1"
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev pkg-config protobuf-compiler
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - uses: taiki-e/install-action@9458fed45835344deb5e69e06e831be047c96abf # cargo-llvm-cov
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
       - name: Coverage (fail under 95% lines, default features)
-        run: cargo llvm-cov --lib --fail-under-lines 95 --lcov --output-path lcov.info
-      - name: Upload coverage
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: coverage
-          path: lcov.info
+        # cargo 级 --quiet 把构建进度与内层逐测试输出一并压成进度点（原始 358KB
+        # 超 CI 日志单流 256KB 上限）；llvm-cov 文本表仍完整打印到 stdout，含
+        # TOTAL 汇总行。注：cargo 会把 --quiet 转发给 libtest，故不能写成
+        # `-- --quiet`（仓库 .cargo/config.toml 的 [term] quiet 已使其变成重复
+        # 旗标，实测报 "Option 'quiet' given more than once" 直接失败）。
+        # 注：--summary-only/--lcov 组合经实测（cargo-llvm-cov 0.9.1）会抑制
+        # stdout 汇总表，故不用；lcov.info 产物随之移除（见 Upload 步骤删除）。
+        run: cargo llvm-cov --lib --fail-under-lines 95 --quiet
 
   fuzz-smoke:
     name: fuzz smoke (build + short run)
@@ -141,7 +146,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # cargo-fuzz requires nightly (sanitizer) + rust-src (build-std).
       - name: Install nightly with rust-src
-        uses: dtolnay/rust-toolchain@efcb852328a9f50117170cc43094fb6f09eaf1ae # nightly
+        uses: dtolnay/rust-toolchain@2c76c034f9e32a5d6e2c104dc4df23a22476db04 # nightly
         with:
           toolchain: nightly
           components: rust-src
@@ -149,7 +154,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev pkg-config protobuf-compiler
-      - uses: taiki-e/install-action@9458fed45835344deb5e69e06e831be047c96abf # cargo-llvm-cov
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-fuzz
       # 显式指定 host gnu target：cargo-fuzz 0.14 起 Linux 默认改用 musl
@@ -175,8 +180,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # deny.toml is the single source of truth for advisory ignores
-      # (audit.toml is a synced mirror; audit-check cannot read config files,
-      # so the ignore list is derived here and can never drift again).
+      # (.cargo/audit.toml is the synced mirror for local `cargo audit` runs;
+      # audit-check cannot read config files, so the ignore list is derived
+      # here and can never drift again).
       # Constraint: deny.toml comments must only mention RUSTSEC IDs that are
       # actually ignored.
       - name: Derive advisory ignores from deny.toml
@@ -188,10 +194,10 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           ignore: ${{ steps.audit_ignore.outputs.ids }}
       - name: cargo-deny (license / ban / advisory)
-        uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2
+        uses: EmbarkStudios/cargo-deny-action@c3bbe7e4e3f7baeee1a3dd9aec0a3b2aded580fb # v2.1.1
       # 工作流注入面：inputs/github 事件上下文直插 run 块是经典 CI 注入向量。
       # 与本地 tiangang(semgrep) 同规则集；版本随工具链评审 bump。
       - name: semgrep (GitHub Actions 工作流注入扫描)
         run: |
-          pip install -q "semgrep==1.168.0"
+          pip install -q "semgrep==1.181.0"
           semgrep --config p/github-actions --metrics=off --error .github/

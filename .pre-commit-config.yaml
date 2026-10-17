@@ -5,7 +5,7 @@ default_install_hook_types: [pre-commit, pre-push]
 repos:
   # 1. Basic file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
@@ -57,21 +57,22 @@ repos:
         args: ['--', '-D', 'warnings']
       - id: cargo-test
         name: cargo test
-        entry: cargo test --lib
+        entry: cargo test --lib --quiet
         language: system
         types: [rust]
         pass_filenames: false
         stages: [pre-push]
       - id: cargo-coverage
         name: cargo coverage (≥95%)
-        entry: bash -c 'cargo llvm-cov --lib --fail-under-lines 95 2>/dev/null || { echo "→ 先运行 cargo install cargo-llvm-cov"; exit 1; }'
+        entry: bash -c 'cargo llvm-cov --lib --fail-under-lines 95 --quiet 2>/dev/null || { echo "→ 先运行 cargo install cargo-llvm-cov"; exit 1; }'
         language: system
         types: [rust]
         pass_filenames: false
         stages: [pre-push]
       - id: cargo-audit
         name: cargo audit (RustSec 漏洞库)
-        entry: bash -c 'cargo audit --ignore RUSTSEC-2026-0235 --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0202 --ignore RUSTSEC-2026-0221 2>/dev/null || cargo audit --ignore RUSTSEC-2026-0235 --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0202 --ignore RUSTSEC-2026-0221 --no-fetch 2>/dev/null || { echo "→ 先运行 cargo install cargo-audit"; exit 1; }'
+        # 忽略清单不再内联（曾与 deny.toml 漂移且 CLI --ignore 会整体覆盖配置）：cargo audit 读 .cargo/audit.toml（deny.toml 的同步镜像）。
+        entry: bash -c 'cargo audit 2>/dev/null || cargo audit --no-fetch || { echo "→ cargo audit 失败：存在未忽略的漏洞，或未安装 cargo-audit（cargo install cargo-audit）"; exit 1; }'
         language: system
         files: 'Cargo\.lock'
         pass_filenames: false
