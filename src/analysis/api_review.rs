@@ -209,8 +209,15 @@ impl<'a> ApiReviewer<'a> {
                 }
             })
             .collect();
-        // Sort by path for determinism.
-        result.sort_by(|a, b| a.path.cmp(&b.path));
+        // Sort by path, then method/handler so same-path routes are stable
+        // across runs (the route rows arrive in HashMap iteration order).
+        result.sort_by(|a, b| {
+            a.path
+                .cmp(&b.path)
+                .then_with(|| a.method.cmp(&b.method))
+                .then_with(|| a.handler_name.cmp(&b.handler_name))
+                .then_with(|| a.handler_id.cmp(&b.handler_id))
+        });
         Ok(result)
     }
 
@@ -1019,6 +1026,28 @@ mod tests {
         // Sorted by path.
         assert_eq!(result[0].path, "/api/products");
         assert_eq!(result[1].path, "/api/users");
+    }
+
+    #[test]
+    fn route_map_same_path_routes_sorted_by_method() {
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        // Insert POST before GET; the sort must still put GET first.
+        create_route(&kit, "r1", "demo", "/users", "POST");
+        create_route(&kit, "r2", "demo", "/users", "GET");
+        create_handler(&kit, "h1", "demo", "create_user");
+        create_handler(&kit, "h2", "demo", "list_users");
+        create_edge(&kit, "e1", "h1", "r1", "HANDLES", "demo");
+        create_edge(&kit, "e2", "h2", "r2", "HANDLES", "demo");
+
+        let storage = storage(&kit);
+        let reviewer = ApiReviewer::new(&*storage);
+        let result = reviewer.route_map("demo").expect("route_map");
+        assert_eq!(result.len(), 2, "should have 2 routes");
+        assert_eq!(result[0].method, "GET");
+        assert_eq!(result[0].handler_name, "list_users");
+        assert_eq!(result[1].method, "POST");
+        assert_eq!(result[1].handler_name, "create_user");
     }
 
     #[test]

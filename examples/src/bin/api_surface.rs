@@ -127,8 +127,10 @@ fn main() {
     }
 }
 
-// NOTE on cross-service results: `detect_all` scans Function.content for
-// string literals. The current Rust extractor does not persist function
-// bodies into `content` yet, so freshly indexed code yields 0 matches here —
-// the API surface above is exactly what integrators should call once body
-// storage lands.
+// NOTE on cross-service results: `detect_all` matches route patterns against
+// string literals in function bodies. Indexing leaves `Function.content`
+// empty, so the detector backfills each body from the indexed source file on
+// disk (resolved through the project's `rootPath`) and a freshly indexed
+// project yields matches for literals that are still present in those files.
+// If the sources were moved or deleted, the affected bodies stay empty and
+// their matches drop out.

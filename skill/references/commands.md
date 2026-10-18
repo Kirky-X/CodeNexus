@@ -633,11 +633,15 @@ codenexus hub --action push|pull|list --url <BASE> [--name <ARTIFACT>] [--projec
 
 - `--action <ACTION>` — `push` | `pull` | `list` (required)
 - `--url <BASE>` — Registry base URL, `http(s)://host` (required)
-- `--name <ARTIFACT>` — Artifact name (`pull`; URL-encoded in the path)
-- `--project <NAME>` — Project name (`push` export source; `list` filter)
+- `--name <ARTIFACT>` — Artifact name (`pull` requires it; URL-encoded in the path)
+- `--project <NAME>` — Project name (`push` requires it as the export source; `list` optional filter, empty = all projects)
 - `--token <TOKEN>` — Bearer token (default: `CODENEXUS_HUB_TOKEN` env)
 
+`--name` / `--project` / `--token` are optional on the command line; the action-specific requirements (`push` → `--project`, `pull` → `--name`) are validated before any network call (`invalid input: \`hub --action push\` requires --project`, exit 2).
+
 **Output (JSON):** `{action, url, artifact, project, outcome, details}`
+
+> End-to-end coverage: `tests/hub_integration.rs` runs the compiled binary against an in-process HTTP registry (`POST /artifacts`, `GET /artifacts/{name}/latest`, `GET /artifacts?project=`), asserting the receipt, `X-Codenexus-Project`/`Authorization` headers, the project filter, that a pulled artifact imports into a second DB, and that a tampered payload fails the integrity gate (exit 2).
 
 #### lint — Evaluate a custom architecture rule pack
 

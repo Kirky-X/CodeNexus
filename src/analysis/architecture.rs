@@ -1053,12 +1053,24 @@ fn package_prefix(qualified_name: &str) -> Option<&str> {
 
 /// Extracts the module name (parent directory) from a file path.
 ///
-/// `/src/a/foo.rs` → `/src/a`; `foo.rs` → ``.
+/// Root-level files (`foo.rs`, `./foo.rs`, `/foo.rs`) belong to the root
+/// module, named `"root"` so every boundary has a non-empty name (an empty
+/// name would produce a nameless diagram component). An empty path yields
+/// `""` — there is no file to group.
 fn module_name_from_path(file_path: &str) -> String {
-    std::path::Path::new(file_path)
-        .parent()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default()
+    if file_path.is_empty() {
+        return String::new();
+    }
+    match std::path::Path::new(file_path).parent() {
+        Some(parent)
+            if !parent.as_os_str().is_empty()
+                && parent != std::path::Path::new(".")
+                && parent != std::path::Path::new("/") =>
+        {
+            parent.to_string_lossy().into_owned()
+        }
+        _ => "root".to_string(),
+    }
 }
 
 /// Returns `true` if `target` is reachable from `start` in the adjacency list
@@ -2446,7 +2458,7 @@ mod tests {
 
     #[test]
     fn detect_module_boundaries_root_level_file() {
-        // Files at root level (no directory) → module_name_from_path returns "".
+        // Files at root level (no directory) belong to the named "root" module.
         // Covers: module_name_from_path with root-level file path.
         let db = fresh_db_path();
         let kit = build_kit_for_db(&db);
@@ -2458,8 +2470,8 @@ mod tests {
         let root_module = result
             .module_boundaries
             .iter()
-            .find(|m| m.module_name.is_empty())
-            .expect("root-level module should exist with empty name");
+            .find(|m| m.module_name == "root")
+            .expect("root-level module should exist with name 'root'");
         assert!(
             root_module.members.contains(&"main.rs".to_string()),
             "root module should contain main.rs"
@@ -2685,8 +2697,10 @@ mod tests {
     }
 
     #[test]
-    fn module_name_from_path_root_level_file_returns_empty() {
-        assert_eq!(module_name_from_path("foo.rs"), "");
+    fn module_name_from_path_root_level_file_returns_root() {
+        assert_eq!(module_name_from_path("foo.rs"), "root");
+        assert_eq!(module_name_from_path("./foo.rs"), "root");
+        assert_eq!(module_name_from_path("/foo.rs"), "root");
     }
 
     #[test]
@@ -2698,7 +2712,7 @@ mod tests {
 
     #[test]
     fn module_name_from_path_single_component() {
-        assert_eq!(module_name_from_path("a"), "");
+        assert_eq!(module_name_from_path("a"), "root");
     }
 
     #[test]

@@ -86,5 +86,7 @@ let entries = codenexus::analysis::complexity::ComplexityAnalyzer::new(&repo)
 这是因为 Kit 在启动时为每个子系统创建独立的数据库连接，可能导致文件数据库的数据可见性问题。
 直接使用 Facade 是推荐的编程方式。
 
-已知现状：当前 Rust 提取器不把函数体写入 Function.content，
-因此 `cross_service` 的字面量扫描对全新索引返回 0 条匹配（`api_surface` 示例内已注释说明）。
+已知现状：索引时不会把函数体写入 `Function.content`；`cross_service` 会按项目的
+`rootPath` 从磁盘上的索引源文件回填函数体，再扫描其中的字符串字面量。因此全新索引
+也能命中源文件里仍存在的字面量（`api_surface` 示例内已注释说明）；源文件被移动或
+删除后，相应函数体为空，匹配会随之减少。

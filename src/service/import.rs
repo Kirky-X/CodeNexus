@@ -58,11 +58,12 @@ fn zstd_decompress(input: &[u8]) -> Result<Vec<u8>, CodeNexusError> {
 
 /// Bomb-safe zstd decompression with an explicit output cap.
 ///
-/// The concrete error type (`oxiarc_core::error::OxiArcError`) lives in a
+/// Both failure classes are input problems — a corrupt/truncated artifact
+/// received over the network, or a decompression bomb — so they map to
+/// `InvalidInput` (exit 2), consistent with the digest/size gates. The
+/// concrete error type (`oxiarc_core::error::OxiArcError`) lives in a
 /// transitive dependency, so the budget-overrun variant is detected via its
-/// stable Display prefix ("memory budget exceeded: …") and mapped to
-/// `InvalidInput` — an oversized artifact is an input problem, not an
-/// internal one.
+/// stable Display prefix ("memory budget exceeded: …").
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 fn zstd_decompress_with_limit(input: &[u8], limit: usize) -> Result<Vec<u8>, CodeNexusError> {
     oxiarc_zstd::decompress_with_limit(input, limit).map_err(|e| {
@@ -73,7 +74,9 @@ fn zstd_decompress_with_limit(input: &[u8], limit: usize) -> Result<Vec<u8>, Cod
                 MAX_IMPORT_DB_BYTES >> 30
             ))
         } else {
-            CodeNexusError::Internal(format!("zstd decompression failed: {e}"))
+            CodeNexusError::InvalidInput(format!(
+                "artifact payload is not valid zstd data (corrupt or truncated artifact): {e}"
+            ))
         }
     })
 }
@@ -277,9 +280,17 @@ mod tests {
     fn zstd_decompress_returns_error_for_invalid_input() {
         let garbage = b"this is not valid zstd data at all";
         let err = zstd_decompress(garbage).expect_err("decompressing garbage should fail");
-        // zstd library returns io::Error for invalid data, converted to CodeNexusError::Io.
-        let msg = err.to_string();
-        assert!(!msg.is_empty(), "error should have a message");
+        // A corrupt/truncated payload is an input problem (exit 2), matching
+        // the digest/size gates.
+        match err {
+            CodeNexusError::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("not valid zstd data"),
+                    "unexpected message: {msg}"
+                );
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
     }
 
     #[test]

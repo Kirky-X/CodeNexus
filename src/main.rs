@@ -946,6 +946,13 @@ const SENTINEL_DEFAULTS: &[(&str, &str, &str)] = &[
     ("evolve", "output", ".codenexus/evolve"),
     ("evolve", "max_commits", "10"),
     ("evolve", "project", ""),
+    // — hub: only action/url are required (documented contract). The empty
+    // sentinels make name/project/token optional; `run_hub` then validates
+    // per action (push needs project, pull needs name), so a missing value is
+    // a clear InvalidInput instead of clap's "required arguments not provided".
+    ("hub", "name", ""),
+    ("hub", "project", ""),
+    ("hub", "token", ""),
 ];
 
 /// Applies sentinel `default_value`s to CLI parameters listed in

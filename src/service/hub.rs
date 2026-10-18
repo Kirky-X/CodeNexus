@@ -8,7 +8,7 @@ use serde::Serialize;
 use crate::kit::{AsyncKit, AsyncReady};
 use crate::service::error::CodeNexusError;
 #[cfg(feature = "cli")]
-use crate::service::error::{kit_not_initialized, to_api_error, wrap_error};
+use crate::service::error::{to_api_error, wrap_error};
 #[cfg(feature = "cli")]
 use crate::service::export::run_export;
 #[cfg(feature = "cli")]
@@ -215,6 +215,12 @@ pub struct HubOutput {
 }
 
 /// Core logic — dispatches a hub action (testable core).
+///
+/// Only `action` and `url` are required. `name`/`project`/`token` carry the
+/// empty sentinel when omitted (see `main::SENTINEL_DEFAULTS`), so the
+/// action-specific requirements are validated here:
+/// `push` needs `project` (the artifact's source and registry grouping),
+/// `pull` needs `name`; `list` accepts an empty `project` (all projects).
 pub fn run_hub(
     kit: &AsyncKit<AsyncReady>,
     action: &str,
@@ -224,7 +230,21 @@ pub fn run_hub(
     token: &str,
 ) -> Result<HubOutput, CodeNexusError> {
     match action.trim() {
-        "push" | "pull" | "list" => {}
+        "push" => {
+            if project.trim().is_empty() {
+                return Err(CodeNexusError::InvalidInput(
+                    "`hub --action push` requires --project".to_string(),
+                ));
+            }
+        }
+        "pull" => {
+            if name.trim().is_empty() {
+                return Err(CodeNexusError::InvalidInput(
+                    "`hub --action pull` requires --name".to_string(),
+                ));
+            }
+        }
+        "list" => {}
         other => {
             return Err(CodeNexusError::InvalidInput(format!(
                 "invalid --action: {other} (expected push|pull|list)"
@@ -263,9 +283,23 @@ async fn hub(
     project: String,
     token: String,
 ) -> Result<(), ApiError> {
-    let kit = kit().ok_or_else(kit_not_initialized)?;
-    let output = run_hub(&kit, &action, &url, &name, &project, &token)
-        .map_err(|e| to_api_error(e, "hub_error"))?;
+    // `HubClient` is a *blocking* reqwest client; its internal runtime panics
+    // when dropped inside the handler's async runtime context (tokio:
+    // "Cannot drop a runtime in a context where blocking is not allowed").
+    // Run the whole blocking operation on the blocking pool, which is not in
+    // an async context.
+    let output = tokio::task::spawn_blocking(move || {
+        let kit = kit().ok_or_else(CodeNexusError::kit_not_initialized)?;
+        run_hub(&kit, &action, &url, &name, &project, &token)
+    })
+    .await
+    .map_err(|e| {
+        to_api_error(
+            CodeNexusError::Internal(format!("hub worker thread join failed: {e}")),
+            "hub_error",
+        )
+    })?
+    .map_err(|e| to_api_error(e, "hub_error"))?;
     let json =
         serde_json::to_string(&output).map_err(|e| wrap_error("JSON serialization failed", e))?;
     println!("{json}");
@@ -458,6 +492,28 @@ mod tests {
             .expect_err("unknown action");
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
         assert!(err.to_string().contains("invalid --action"));
+    }
+
+    /// `--name` / `--project` / `--token` carry the empty sentinel when the
+    /// user omits them; the per-action requirements surface as InvalidInput
+    /// before any network call (documented contract: only action/url are
+    /// required).
+    #[test]
+    fn run_hub_validates_action_specific_required_params() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config = crate::kit::KitBootstrapConfig::new(dir.path().join("hub_db"));
+        let kit = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(crate::kit::build_kit(&config))
+            .unwrap();
+
+        let err = run_hub(&kit, "push", "https://hub.example.com", "", "", "")
+            .expect_err("push without --project");
+        assert!(err.to_string().contains("requires --project"), "got: {err}");
+
+        let err = run_hub(&kit, "pull", "https://hub.example.com", "", "", "")
+            .expect_err("pull without --name");
+        assert!(err.to_string().contains("requires --name"), "got: {err}");
     }
 
     /// End-to-end `push` → `pull` → `list` against a live (in-process) HTTP
