@@ -11,14 +11,14 @@ CodeNexus has **37 subcommands** (plus the `codenexus mcp` serve mode, documente
 #### index — Index a codebase
 
 ```bash
-codenexus index --path <PATH> --name <PROJECT_NAME> [OPTIONS]
+codenexus index --path <PATH> [--name <PROJECT_NAME>] [OPTIONS]
 ```
 
-`--path` and `--name` are **required**; the boolean flags below are optional and default to `false` (no placeholder value needed).
+`--path` is **required**; `--name` is optional — when omitted it defaults to the `--path` directory name (the same derivation used for the default DB file, `.codenexus/<dir-name>.lbug`). The boolean flags below are optional and default to `false` (no placeholder value needed).
 
 **Options:**
 - `--path <PATH>` — Codebase root to index (required)
-- `--name <NAME>` — Project name (required)
+- `--name <NAME>` — Project name (optional; default: `--path` directory name)
 - `--force <BOOL>` — Re-parse every file, ignoring cached hashes (optional, default `false`; e.g. `--force true`)
 - `--lsp <BOOL>` — Run LSP semantic enhancement after indexing (requires the `lsp` feature; optional, default `false`; e.g. `--lsp true` calls `enhance_with_lsp` for `semantic_type` extraction)
 - `--embed <BOOL>` — Deprecated: embedding is now controlled by the `embeddings` cargo feature. A `--embed true` only emits a warning to stderr. Optional, default `false`.
@@ -149,10 +149,12 @@ codenexus trace --symbol <SYMBOL> --trace_type <TYPE> [--depth <N>] [--path_filt
 - `--depth <N>` — Maximum traversal depth (optional, default `5`; e.g. `--depth 3`)
 - `--path_filter <GLOB>` — Glob to restrict path nodes' `filePath` (e.g. `"/src/api/**"`); empty string `""` = no filter (optional, default `""`)
 - `--detect_cycles <BOOL>` — `true` appends a `cycles` array of detected call-graph cycles (DFS white/gray/black) (optional, default `false`)
-- `--cross_service <BOOL>` — `true` traverses `HTTP_CALLS` and reverse `HANDLES_ROUTE` edges for cross-service chains (optional, default `false`)
+- `--cross_service <BOOL>` — `true` traverses `HTTP_CALLS` and reverse `HANDLES_ROUTE` edges for cross-service chains (optional, default `false`). The `HTTP_CALLS` edges come from `cross_service` (run it once to persist links); chains read `caller → route → handler`, and paths already covered by the plain call tracer are not duplicated.
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
 **Output (JSON):** `symbol`, `paths[].nodes`, `paths[].edges`, `paths[].depth`, `cycles[]` (when `--detect_cycles true`)
+
+> Note: an unknown `--symbol` is not an error — the command prints `{"symbol": "<name>", "paths": []}` and exits 0 (empty-graph contract). An ambiguous short name fails fast: `ambiguous symbol '<name>': <n> candidates`, exit 2. `--depth 0` is rejected by the engine: `invalid depth: 0 (must be >= 1)`, exit 2.
 
 #### impact — Analyze impact radius
 
@@ -175,6 +177,8 @@ codenexus impact --symbol <SYMBOL> --depth <N> --edge_types <LIST> --max_depth <
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
 **Output (JSON):** `symbol`, `depth`, `node_count`, `edge_count`, `truncated` (bool; `true` when the loaded subgraph hit the `MAX_SUBGRAPH_NODES=5000` cap), `nodes[]`, `edges[]`, `risk_assessment` (when enhanced), `affected[]` (when enhanced, each `ImpactNode` has `id`, `name`, `qualified_name`, `edge_type`, `depth`, `path`)
+
+> Note: an unknown `--symbol` fails fast with `symbol not found: <name>` and exit 2 (`InvalidInput`) — unlike `trace`, impact does not report an empty result for a symbol that cannot be resolved.
 
 #### context — Show a 360° view of a symbol (H8)
 
@@ -308,6 +312,8 @@ codenexus cross_service --project <NAME_OR_ID> [--protocol <PROTO>] [--db <DB_PA
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
 **Output (JSON):** `project`, `links[]` (HTTP REST matches), `matches[]` (multi-protocol matches with `protocol`, `match_type`, `confidence`)
+
+> Note: `cross_service` persists detected HTTP links as `HTTP_CALLS` edges (caller → route, confidence by match type, reason `route pattern match`) — it therefore opens the DB read-write. Run it once, then `trace --cross_service true` walks those edges plus reverse `HANDLES_ROUTE` edges to reach the handler on the other side of the service boundary. Function bodies are read from the indexed sources on disk (the `content` column is not populated at index time).
 
 #### route_map — List API routes and handlers
 
@@ -476,6 +482,8 @@ All of `--file`, `--line`, `--col`, `--workspace` are **required**.
 **Output (JSON):** `{found, location}` where `location` is `{file, line, col}` when found. Requires the `lsp` feature and a running language server for the file's language.
 
 > Note: When no language server is available (e.g. `gopls`/`jdtls` not installed for the file's language), the command prints an Error to stderr and **exits 2** (`failed to start LSP server`). Verified 2026-07-16: `lsp_goto_def`/`lsp_hover` on a `.go` file with no `gopls` → exit 2. (The earlier "may still exit 0" note in `temp/problem.md` was a greenhouse assumption; the actual exit code is 2.) Scripts can rely on the exit code.
+>
+> A `--file` that does not exist fails before the server starts: `file not found: <path>`, exit 2 (no readiness wait wasted). `--line`/`--col` are 1-based and converted to the 0-based LSP coordinates. The client waits (bounded) for the server to finish its initial analysis — rust-analyzer reports `experimental/serverStatus quiescent:true`, and requests that arrive before the workspace is loaded are retried — so a cold server returns real results instead of `{"found":false}`.
 
 #### lsp_hover — Query LSP Hover info
 

@@ -35,7 +35,7 @@
 
 - **场景 ID**：按功能域前缀编号（如 `IDX-01`）；「对应测试」列给出真实的 `文件 :: 测试函数` 定位。
 - **层级**：E2E = `tests/e2e_feature_suite.rs` / `tests/end_to_end.rs`；CLI = 子进程驱动的 `tests/cli_index_and_daemon.rs` / `tests/cli_integration.rs`；单元 = `src/` 内联 `#[cfg(test)]`。
-- 单元测试共 4764 条（4721 个 `#[test]` + 43 个 `#[tokio::test]`），逐条穷举不具可读性，本矩阵在单元层只给出代表性锚点；集成层（128 条）逐条穷举。
+- 单元测试共 4781 条（4738 个 `#[test]` + 43 个 `#[tokio::test]`），逐条穷举不具可读性，本矩阵在单元层只给出代表性锚点；集成层（131 条）逐条穷举。
 - 变更代码后请对照本矩阵检查受影响场景，并保持「场景 ID ↔ 测试函数」的同步。
 
 ---
@@ -44,11 +44,11 @@
 
 | 层级 | 位置 | 数量（截至 v0.4.0-rc.2） | 说明 |
 |------|------|----------------------|------|
-| 单元测试 | `src/` 内联 `#[cfg(test)]`（170 个文件） | 4764 | 各模块核心逻辑；`cargo test --lib` 运行（4721 个 `#[test]` + 43 个 `#[tokio::test]`） |
+| 单元测试 | `src/` 内联 `#[cfg(test)]`（171 个文件） | 4781 | 各模块核心逻辑；`cargo test --lib` 运行（4738 个 `#[test]` + 43 个 `#[tokio::test]`） |
 | 集成 E2E | `tests/e2e_feature_suite.rs` | 40 | 全功能端到端：索引→查询→追踪→分析工具包 |
 | 集成 E2E | `tests/end_to_end.rs` | 20 | 多语言仓库索引→查询→FFI/数据流边验证 |
-| CLI 子进程 | `tests/cli_index_and_daemon.rs` | 35 | 编译后的二进制子进程走完整 CLI 路径，覆盖 27 个子命令 |
-| CLI 契约 | `tests/cli_integration.rs` | 13 | help / version / 空库 / 未知子命令 |
+| CLI 子进程 | `tests/cli_index_and_daemon.rs` | 36 | 编译后的二进制子进程走完整 CLI 路径，覆盖 27 个子命令 |
+| CLI 契约 | `tests/cli_integration.rs` | 15 | help（全量子命令清单）/ version / 空库 / 未知子命令 |
 | 图集成 | `tests/diagram_integration.rs` | 2 | diagram 渲染与 showcase 质检门 |
 | MCP | `tests/mcp_integration.rs` | 2 | MCP 服务器初始化与工具列举 |
 | Kit 引导 | `tests/kit_bootstrap.rs` | 4 | 能力注册表可解析性 |
@@ -57,7 +57,7 @@
 | Viewer | `tests/viewer_integration.rs` | 1 | 内嵌 viewer 资源与路由自检 |
 | 验收测试 | `tests/acceptance/run_acceptance.sh` | 8 个真实项目 | 8 语言开源项目索引 + gitnexus 交叉验证 |
 | 基准回归 | `benches/`（7 组 Criterion） | — | 吞吐/延迟/内存守护，见 [基准回归场景](#-基准回归场景) |
-| 合计（集成层） | `tests/` | **128** | 10 个文件 |
+| 合计（集成层） | `tests/` | **131** | 10 个文件 |
 
 ---
 
@@ -306,8 +306,8 @@ bash tests/acceptance/run_acceptance.sh --dry-run
 
 | 类别 | 数量 |
 |------|------|
-| 单元测试函数（`src/` 内联） | 4721 `#[test]` + 43 `#[tokio::test]` = 4764（170 个含 `#[cfg(test)]` 的源文件） |
-| 集成测试函数（`tests/` 10 文件） | 128 |
+| 单元测试函数（`src/` 内联） | 4738 `#[test]` + 43 `#[tokio::test]` = 4781（171 个含 `#[cfg(test)]` 的源文件） |
+| 集成测试函数（`tests/` 10 文件） | 131 |
 | ├ `e2e_feature_suite.rs` | 40 |
 | ├ `cli_index_and_daemon.rs` | 35 |
 | ├ `end_to_end.rs` | 20 |
@@ -323,4 +323,4 @@ bash tests/acceptance/run_acceptance.sh --dry-run
 | 覆盖率门禁 | 行覆盖 ≥ 95%（CI coverage job + pre-push 钩子） |
 | 本矩阵穷举的集成层场景 | 100 条（IDX 13 + QRY 6 + SRCH 8 + TRC/IMP 4 + CTX 3 + ANA 14 + DIA 2 + MCP 3 + ART 2 + CLI 9 + KIT 4 + I18N 9 + ERR 3 + MLT 11 = 91 条编号场景，另有若干合并行） |
 
-> 待补充：`src/` 内 4764 条单元测试的逐条场景化（当前以模块锚点概括）；`fuzz/` 目录注册了 4 个 fuzz target（`escape_cypher_string`、`escape_identifier`、`cypher_subset_parse`、`cnxp_header`），0.3.13-rc.1 曾对四个目标各跑 300–500 次冒烟，纳入回归时可按目标设置运行次数上限。
+> 待补充：`src/` 内 4781 条单元测试的逐条场景化（当前以模块锚点概括）；`fuzz/` 目录注册了 4 个 fuzz target（`escape_cypher_string`、`escape_identifier`、`cypher_subset_parse`、`cnxp_header`），0.3.13-rc.1 曾对四个目标各跑 300–500 次冒烟，纳入回归时可按目标设置运行次数上限。

@@ -57,14 +57,14 @@ CodeNexus has **37 subcommands** (plus the `codenexus mcp` serve mode) grouped i
 | `daemon` | Indexing | Watch a directory recursively and incrementally re-index on file change. Long-running. |
 | `query` | Query | Execute a Cypher query. ADR-021 validator rejects destructive clauses at the CLI boundary. |
 | `search` | Query | Symbol search via `--text`+`--fulltext`+`--mode` (exact/regex/fuzzy/graph/multi) or BM25 full-text. No `--name` flag. ⚠️ See Known Issues. |
-| `trace` | Tracing | Trace a symbol's call/dataflow paths with optional cycle detection and cross-service traversal (`--cross_service <BOOL>` is trace-only). |
+| `trace` | Tracing | Trace a symbol's call/dataflow paths with optional cycle detection and cross-service traversal (`--cross_service <BOOL>` is trace-only; walks `HTTP_CALLS` from `cross_service` plus reverse `HANDLES_ROUTE`). Unknown symbols return an empty `paths` list (exit 0). |
 | `impact` | Tracing | Reverse BFS to find all symbols that depend on a target. Flags: `--symbol`/`--depth`/`--edge_types`/`--max_depth`/`--include_tests`. Narrow `--edge_types` + `--max_depth` on large graphs. **No `--cross_service`** (that's `trace`-only). |
 | `context` | Tracing | 360° view of a symbol: callers/callees/processes/routes/endpoints. `--enhanced true` resolves `--project <name\|id>` and fails fast on ambiguous symbols (verified 0.3.5). |
 | `dead_code` | Analysis | Detect unreferenced `Function`/`Method` nodes with confidence levels (High/Medium/Low). ⚠️ **Rust results are triage-only** — manually verify the entry chain (`main` → crate-root re-export `pub use` → target function) before deleting; tree-sitter may miss `calnexus::run()`-style calls where the crate name is used as a module prefix. |
 | `architecture` | Analysis | High-level overview: module boundaries, dependency directions, layers, entry points, hotspots. |
 | `complexity` | Analysis | AST-based per-function complexity (cyclomatic/cognitive/nesting/length/Halstead/MI/time/space). 26 threshold flags required. |
 | `community` | Analysis | Leiden community detection on the call graph (guarantees internally connected communities; C3 upgrade from Louvain). |
-| `cross_service` | Analysis | Detect cross-service call links (HTTP REST, gRPC, GraphQL, message queue, event bus). |
+| `cross_service` | Analysis | Detect cross-service call links (HTTP REST, gRPC, GraphQL, message queue, event bus); detected HTTP links persist as `HTTP_CALLS` edges (read-write DB open) for `trace --cross_service true` to walk to the far-side handler. |
 | `route_map` | Analysis | List HTTP API routes and their handler functions. |
 | `tool_map` | Analysis | List MCP tool definitions and their handler functions. |
 | `shape_check` | Analysis | Validate API endpoint shape consistency (pagination envelope, error shape). |

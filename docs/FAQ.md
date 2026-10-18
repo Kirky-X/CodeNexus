@@ -177,7 +177,7 @@ v0.3.8 起：`.codenexus/` 中恰好一个 `.lbug` 文件时自动选中；存�
 
 ### ❓ Cypher 查询报错或语法不支持？
 
-查询走 LadybugDB 的 Cypher **子集**：不支持 `UNION` / `UNION ALL`，不支持多标签 `WHERE (n:A OR n:B)` 表达式。需要多标签时写成两条查询在应用层合并。支持的语法以 `query --cypher` 实测与 [📘 API 参考](API_REFERENCE.md#queryfacade查询与搜索) 为准。
+查询走 LadybugDB 的 Cypher **子集**：支持 `UNION` / `UNION ALL`（两个分支各自合法）；不支持标签判定表达式 `WHERE (n:A OR n:B)`（标签写在 `MATCH (n:A)` pattern 中）与写操作（`CREATE`/`DELETE`/`SET`/`MERGE`，报 `unsupported Cypher construct`）。支持的语法以 `query --cypher` 实测与 [📘 API 参考](API_REFERENCE.md#queryfacade查询与搜索) 为准。
 
 ### ❓ 如何报告 Bug？
 

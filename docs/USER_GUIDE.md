@@ -106,7 +106,7 @@ codenexus context --symbol main --project myproject --enhanced true
 - **`--project` 接受名称或 id**：所有带 `--project <VALUE>` 的命令经 `resolve_project_id`（`src/service/project.rs`）解析：匹配已存项目 `name` 则用其规范 `id`，否则按原始 project id 处理。仅在有文档明确说明处才可传 `--project ""` 关闭过滤。
 - **可选参数自带默认值**：高频命令的"可选"参数已内置默认值，无需传占位 flag——`trace`：`--depth 5`、`--path_filter ""`、`--detect_cycles false`、`--cross_service false`；`search`：`--limit 50`、`--mode ""`、`--fulltext false`、`--project ""`；`impact`：`--depth 3`、`--edge_types ""`、`--max_depth 0`、`--include_tests false`；`context`：`--depth 1`、`--project ""`、`--enhanced false`；`index` 的 `--force`/`--lsp`/`--embed`/`--ram_first` 默认 `false`；`detect_changes --mode` 默认 `unstaged`；其余（complexity 阈值等）见各命令 `--help`。默认值可用 `.codenexus/config.json` 按项目覆盖（见 [配置文件](#️-配置文件)）。
 - **全局选项**：`--db <DB_PATH>`、`--debounce-ms <MS>`（默认 `2000`，仅 daemon 相关）与 `--format text|json`（默认 `text`）适用于每个命令。`--format json` 时所有 CLI 边界错误（无子命令 / 未知命令 / 缺库 / 数据库被锁 / `--fresh`·`--rebuild` 失败）以 UnifiedError JSON 写 stdout，退出码与 payload 分类一致（见下方退出码契约）；`text` 保持历史 stderr 行为逐字不变。
-- **默认数据库路径**（省略 `--db` 时）：`.codenexus/<project>.lbug`，`<project>` 取 `index`/`daemon` 的 `--name`（优先）或 `--path` 目录名，兜底 `codenexus`。v0.3.7 起，无 `--name`/`--path` 可用且 `.codenexus/` 中恰好只有一个 `.lbug` 文件时自动选中该文件；存在多个时回退到 `codenexus` 并要求显式 `--db`。配置文件 `general.db` 可为非标准路径兜底。
+- **默认数据库路径**（省略 `--db` 时）：`.codenexus/<project>.lbug`，`<project>` 取 `index`/`daemon` 的 `--name`（优先）或 `--path` 目录名，兜底 `codenexus`。v0.3.7 起，无 `--name`/`--path` 可用且 `.codenexus/` 中恰好只有一个 `.lbug` 文件时自动选中该文件；存在多个时回退到 `codenexus` 并要求显式 `--db`。环境变量 `CODENEXUS_DB_PATH` 可直接钉住默认库路径（优先级见「环境变量」），配置文件 `general.db` 可为非标准路径兜底。
 - **stderr 噪音**：所有日志（含 info 级与索引逐阶段进度行 `[codenexus] [i/n] <phase> ok`）都输出到 stderr，stdout 永远只有命令本身的 JSON，重定向无需过滤；日志文件在 `.codenexus/logs/codenexus.log`。stderr 中 `inklog ... Failed to set log crate logger` 等警告属良性输出。`query` 与 `status` 另经 sdforge `#[forge::log]` 输出函数级结构化记录（随 inklog 管道进 stderr 与日志文件）：成功为 `fn_exit fn=<命令> ok=true duration_ms=…`（info 级），失败为 `fn_exit … ok=false error=…`（error 级）；进入记录 `fn_enter`（含 DataMasker 脱敏后的 `args`）为 debug 级，需 `RUST_LOG=debug` 才可见。一次性命令退出前会排空日志队列（`logging::flush`），失败命令的 error 级 `fn_exit` 也会落入日志文件；长驻模式（`mcp`/`webui`）不做排空。
 - **退出码契约**（`src/service/error.rs`）：`0` 成功；`1` 内部错误 / I/O / JSON / Kit 错误；`2` 无效输入 / 项目不存在 / 查询、追踪、存储、解析错误；`4` NotFound / 数据库损坏；`--fresh` 删除失败另有 5/6 退出码。`--format json` 下边界出口的退出码与 payload 分类一致（`BAD_REQUEST` → 2、`NOT_FOUND` → 4）；`--fresh`/`--rebuild` 失败在两种模式下都保留 5/6（文档化契约）。
 
@@ -118,7 +118,7 @@ codenexus context --symbol main --project myproject --enhanced true
 
 | 命令 | 关键参数 | 说明 |
 |------|----------|------|
-| `index` | `--path` `--name` `--force` `--fresh` `--ram_first` | 索引仓库到知识图谱。增量模式经 SHA-256 哈希比对只解析变更文件；`--force true` 全量重建；`--fresh true` 索引前删除旧 DB 文件回收 DuckDB 死空间；`--ram_first true` 启用 LZ4 内存压缩批量入库 |
+| `index` | `--path` `--name` `--force` `--fresh` `--ram_first` | 索引仓库到知识图谱。`--name` 可省略（默认取 `--path` 目录名，项目名与默认库文件名一致）；增量模式经 SHA-256 哈希比对只解析变更文件；`--force true` 全量重建；`--fresh true` 索引前删除旧 DB 文件回收 DuckDB 死空间；`--ram_first true` 启用 LZ4 内存压缩批量入库 |
 | `daemon` | `--path` `--name` | 文件监视守护进程，检测到变更自动增量索引；SIGTERM/SIGINT 优雅退出；`--debounce-ms` 全局选项控制去抖（默认 2000ms） |
 | `status` | — | 查看当前索引状态 |
 | `list` | — | 列出所有已索引项目 |
@@ -130,7 +130,7 @@ codenexus context --symbol main --project myproject --enhanced true
 
 | 命令 | 关键参数 | 说明 |
 |------|----------|------|
-| `query` | `--cypher` | 对图执行 Cypher 子集查询。注意：该子集不支持 `UNION` / `UNION ALL`，也不支持多标签 `WHERE (n:A OR n:B)` 表达式 |
+| `query` | `--cypher` | 对图执行 Cypher 子集查询。子集**支持** `UNION` / `UNION ALL`（实测返回合并行，exit 0）；不支持标签判定表达式 `WHERE (n:A OR n:B)`（标签需写在 `MATCH (n:A)` pattern 中，否则报 `unsupported Cypher construct`、exit 2）与写操作（`CREATE`/`DELETE`/`SET`/`MERGE`/`REMOVE`） |
 | `search` | `--text` `--mode` `--limit` `--fulltext` `--project` | 5 种结构化模式 `exact` / `regex` / `fuzzy` / `graph` / `multi`；`--fulltext true` 走 BM25 全文检索（`matchReason` 为 `bm25 fts` / `bm25f weighted`）。CLI `search` 不按 node label 过滤；按类型（label）过滤仅存在于库 API `QueryFacade::search_by_type(label: NodeLabel, …)`（`src/query/facade.rs`） |
 | `context` | `--symbol` `--depth` `--project` `--enhanced` | 360° 符号视图：入度调用/导入、出度调用、所属流程；`--enhanced true` 追加多维 SymbolContext（LSP 增强信息等） |
 
@@ -138,7 +138,7 @@ codenexus context --symbol main --project myproject --enhanced true
 
 | 命令 | 关键参数 | 说明 |
 |------|----------|------|
-| `trace` | `--symbol` `--trace_type` `--depth` `--path_filter` `--detect_cycles` `--cross_service` | `--trace_type` 取 `calls` / `dataflow` / `all`（调用链 / 数据流 / 两者）；`--path_filter` 支持 glob（如 `/src/api/**`）；`--detect_cycles true` 检测环；`--cross_service true` 关联跨服务调用 |
+| `trace` | `--symbol` `--trace_type` `--depth` `--path_filter` `--detect_cycles` `--cross_service` | `--trace_type` 取 `calls` / `dataflow` / `all`（调用链 / 数据流 / 两者）；`--path_filter` 支持 glob（如 `/src/api/**`）；`--detect_cycles true` 检测环；`--cross_service true` 沿 `HTTP_CALLS` 与反向 `HANDLES_ROUTE` 边追踪跨服务链（先用 `cross_service` 持久化链接），普通 `calls` 追踪不会把跨服务链接当作调用边 |
 | `impact` | `--symbol` `--depth` `--edge_types` `--max_depth` `--include_tests` | 影响半径分析（上游调用者子图）+ `risk_assessment` 风险评估；`--edge_types "CALLS,IMPLEMENTS,USES_TYPE"` 按边类型过滤；子图节点上限 5000（`MAX_NODES_LIMIT`） |
 | `detect_changes` | `--path` `--mode` | git diff → 受影响符号 + `risk_level`，提交前评估改动影响面 |
 | `rename` | `--from` `--to` `--path` `--apply` | 高置信度图编辑 + 文本搜索编辑；`--apply false` 为 dry-run（默认推荐先跑 dry-run 审查） |
@@ -151,7 +151,7 @@ codenexus context --symbol main --project myproject --enhanced true
 | `architecture` | `--project` | 架构概览：模块边界 + 依赖方向 + 分层 + 跨服务依赖（`ArchitectureOverview` JSON） |
 | `complexity` | `--project` + 阈值参数 | AST 复杂度分析，详见 [复杂度分析](#-复杂度分析) |
 | `community` | `--project` `--resolution` | 社区检测（Leiden 模块度优化）；`--resolution` 省略时默认 1.0（`DEFAULT_RESOLUTION`） |
-| `cross_service` | `--project` `--protocol` | 跨服务调用链检测：HTTP REST / gRPC / GraphQL / 消息队列 / 事件总线；`--protocol` 省略时检测所有协议 |
+| `cross_service` | `--project` `--protocol` | 跨服务调用链检测：HTTP REST / gRPC / GraphQL / 消息队列 / 事件总线；`--protocol` 省略时检测所有协议。检测到的 HTTP 链接会持久化为 `HTTP_CALLS` 边（caller → route），供 `trace --cross_service true` 继续走到对端 handler；因此该命令以读写方式打开数据库。函数体内容取自磁盘上的已索引源码（索引不落库 `content`） |
 
 ---
 
@@ -397,7 +397,7 @@ CodeNexus 是 CLI 工具，自身不读取 `.env` 文件；模板见 [`.env.exam
 | `CODENEXUS_LOG_RATE_LIMIT` | 未设置 | 按 target 前缀的日志限流配额（token/秒），`prefix=rate` 逗号分隔、最长前缀优先（如 `lbug=50,codenexus::daemon=200`）；未命中规则的 target 不受限 |
 | `CODENEXUS_EMBED_MODEL_PATH` | 未设置 | 本地嵌入模型目录（默认 `assets/arctic-embed-xs/`，90 MB 不入库需自行下载） |
 | `CODENEXUS_EMBED_MODEL_SHA256` | 未设置 | `model.safetensors` 的期望 SHA-256（64 位十六进制）；设置后加载时校验权重完整性、不匹配即拒绝加载，非法值在 stderr 提示后忽略（校验保持关闭）。计算方式：`sha256sum <模型目录>/model.safetensors` |
-| `CODENEXUS_DB_PATH` | （注释态） | 可选的默认数据库路径，省略 `--db` 时生效 |
+| `CODENEXUS_DB_PATH` | 未设置 | 可选的默认数据库路径，未传 `--db` 时生效（含 `mcp` 服务模式；优先级高于配置文件 `general.db` 与 `--name`/`--path` 推导出的 `.codenexus/<project>.lbug`；空值忽略） |
 | `LBUG_BUILD_FROM_SOURCE` | 未设置 | 设为 `1` 时从源码编译 LadybugDB（老 `libstdc++` 系统需要） |
 
 ---
