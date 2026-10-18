@@ -117,7 +117,7 @@ impl<S: LspServerSpec> LspProvider for ServerClient<S> {
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
         };
-        let resp = session::send_request::<GotoDefinition>(session, params)?;
+        let resp = session::send_request_when_ready::<GotoDefinition>(session, params)?;
         Ok(session::extract_first_location(resp))
     }
 
@@ -136,7 +136,7 @@ impl<S: LspServerSpec> LspProvider for ServerClient<S> {
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
         };
-        let resp = session::send_request::<GotoTypeDefinition>(session, params)?;
+        let resp = session::send_request_when_ready::<GotoTypeDefinition>(session, params)?;
         Ok(session::extract_first_location(resp))
     }
 
@@ -154,7 +154,7 @@ impl<S: LspServerSpec> LspProvider for ServerClient<S> {
             text_document_position_params: session::make_position_params(file, line, col)?,
             work_done_progress_params: WorkDoneProgressParams::default(),
         };
-        session::send_request::<HoverRequest>(session, params)
+        session::send_request_when_ready::<HoverRequest>(session, params)
     }
 
     fn references(

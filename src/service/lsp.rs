@@ -201,6 +201,35 @@ impl HoverOutput {
     }
 }
 
+/// Converts the CLI's 1-based `--line`/`--col` into the 0-based LSP
+/// [`Position`](lsp_types::Position) coordinates the [`LspProvider`] methods
+/// expect (see the trait's line/column convention).
+///
+/// `0` (out of range for the documented 1-based contract) saturates to `0`
+/// instead of underflowing.
+#[cfg(feature = "lsp")]
+fn cli_to_lsp_position(line: u32, col: u32) -> (u32, u32) {
+    (line.saturating_sub(1), col.saturating_sub(1))
+}
+
+/// Rejects a `--file` that does not exist before starting a language server.
+///
+/// Without this gate the not-yet-loaded workspace retry in
+/// [`send_request_when_ready`](crate::lsp::session::send_request_when_ready)
+/// would treat a genuinely missing file as "server not ready" and wait the
+/// full readiness window before failing.
+#[cfg(feature = "lsp")]
+fn ensure_file_exists(file_path: &Path) -> Result<(), CodeNexusError> {
+    if file_path.is_file() {
+        Ok(())
+    } else {
+        Err(CodeNexusError::InvalidInput(format!(
+            "file not found: {}",
+            file_path.display()
+        )))
+    }
+}
+
 /// CLI wrapper for lsp-goto-def — prints result to stdout as JSON.
 #[cfg(all(feature = "cli", feature = "lsp"))]
 #[forge(
@@ -217,6 +246,8 @@ async fn lsp_goto_def(
 ) -> Result<(), ApiError> {
     let ws = Path::new(&workspace);
     let file_path = resolve_file(&file, ws);
+    ensure_file_exists(&file_path).map_err(|e| to_api_error(e, "lsp_error"))?;
+    let (line, col) = cli_to_lsp_position(line, col);
 
     let client = select_provider(&file_path);
     start_or_err(client.as_ref(), ws).map_err(|e| to_api_error(e, "lsp_error"))?;
@@ -246,6 +277,8 @@ async fn lsp_goto_def(
 async fn lsp_hover(file: String, line: u32, col: u32, workspace: String) -> Result<(), ApiError> {
     let ws = Path::new(&workspace);
     let file_path = resolve_file(&file, ws);
+    ensure_file_exists(&file_path).map_err(|e| to_api_error(e, "lsp_error"))?;
+    let (line, col) = cli_to_lsp_position(line, col);
 
     let client = select_provider(&file_path);
     start_or_err(client.as_ref(), ws).map_err(|e| to_api_error(e, "lsp_error"))?;
@@ -283,6 +316,40 @@ mod tests {
         let workspace = Path::new("/repo");
         let result = resolve_file("src/main.rs", workspace);
         assert_eq!(result, std::path::PathBuf::from("/repo/src/main.rs"));
+    }
+
+    // --- cli_to_lsp_position / ensure_file_exists ---
+
+    /// The CLI contract is 1-based; LSP positions are 0-based. Passing the raw
+    /// CLI values through would query the line/column before the requested
+    /// symbol.
+    #[test]
+    fn cli_to_lsp_position_converts_one_based_to_zero_based() {
+        assert_eq!(cli_to_lsp_position(1, 1), (0, 0));
+        assert_eq!(cli_to_lsp_position(4, 9), (3, 8));
+        // Out-of-contract 0 saturates instead of underflowing.
+        assert_eq!(cli_to_lsp_position(0, 0), (0, 0));
+    }
+
+    #[test]
+    fn ensure_file_exists_accepts_existing_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("lib.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        assert!(ensure_file_exists(&file).is_ok());
+    }
+
+    #[test]
+    fn ensure_file_exists_rejects_missing_file_and_directory() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let missing = dir.path().join("nope.rs");
+        let err = ensure_file_exists(&missing).expect_err("missing file must be rejected");
+        assert!(matches!(err, CodeNexusError::InvalidInput(_)));
+        assert!(err.to_string().contains("file not found"), "got: {err}");
+        assert!(
+            ensure_file_exists(dir.path()).is_err(),
+            "directory is not a file"
+        );
     }
 
     // --- JSON output shapes ---
