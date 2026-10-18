@@ -156,8 +156,18 @@ impl<'a> ImportResolver<'a> {
             // /home/dev/.../src/lib.rs) but file_index keys are relative
             // (e.g. `src/lib.rs`). path_index.lookup handles this mismatch
             // (same longest-suffix semantics as the old find_file_in_index).
-            let (source_file_id, importer_rel_path) = match path_index.lookup(&result.file_path) {
-                Some((id, rel)) => (id, rel),
+            // `FilePathIndex::lookup` returns `(relative_path, file_id)` —
+            // the edge source must be the File NODE ID (production File ids
+            // are generated `file_<uuid>`s, not paths), and the relative
+            // path is what `resolve_import_target`'s normalisation expects.
+            // Destructuring these the wrong way round gave every
+            // IMPORTS/REEXPORTS/DEPENDS_ON edge a source path that matches
+            // no node (DQ-004 orphan) and fed the target resolver a UUID as
+            // "relative path",
+            // degrading project-internal resolution into bogus external
+            // dependencies.
+            let (importer_rel_path, source_file_id) = match path_index.lookup(&result.file_path) {
+                Some((rel, id)) => (rel, id),
                 None => {
                     // Single-line for coverage: tarpaulin attribute continuation
                     warn!(file = %result.file_path, "IMPORTS source File node not found in graph; skipping imports for this file");
@@ -928,6 +938,87 @@ mod tests {
         resolver.resolve_imports(&results, &mut graph);
 
         assert_eq!(graph.edge_count(), 0, "no imports → no edges");
+    }
+
+    // --- resolve_imports: generated File node ids (production shape) ---
+
+    /// Builds a File node whose id differs from its path, mirroring
+    /// production (`file_<uuid>` ids). Tests using path-equal ids cannot
+    /// distinguish an edge sourced by node id from one sourced by path —
+    /// which is exactly how the swapped `FilePathIndex::lookup` destructure
+    /// stayed invisible.
+    fn make_file_node_with_id(path: &str, id: &str, project: &str) -> Node {
+        Node::builder(NodeLabel::File, path, path)
+            .id(id)
+            .project(project)
+            .file_path(path)
+            .language(Language::TypeScript)
+            .build()
+    }
+
+    #[test]
+    fn resolve_imports_edge_endpoints_use_file_node_ids() {
+        // IMPORTS edge endpoints must be the File node ids. Path-sourced
+        // edges reference no node (DQ-004 orphans) — every IMPORTS edge was
+        // one before the lookup destructure was fixed.
+        let mut a_result = make_result("/workdir/a.ts");
+        a_result.imports.push(crate::ir::ImportInfo {
+            source_file: "./b.ts".to_string(),
+            imported_names: vec!["foo".to_string()],
+            line: 3,
+            is_reexport: false,
+        });
+        let results = vec![a_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node_with_id("a.ts", "file_uuid_a", "proj"));
+        graph.add_node(make_file_node_with_id("b.ts", "file_uuid_b", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        resolver.resolve_imports(&results, &mut graph);
+
+        let edge = graph
+            .edges_view()
+            .find(|e| e.edge_type == EdgeType::Imports)
+            .expect("IMPORTS edge should exist");
+        assert_eq!(
+            edge.source, "file_uuid_a",
+            "source must be the File node id"
+        );
+        assert_eq!(
+            edge.target, "file_uuid_b",
+            "target must be the File node id"
+        );
+    }
+
+    #[test]
+    fn resolve_imports_depends_on_source_uses_file_node_id() {
+        // Unresolvable imports become DEPENDS_ON edges — their source must
+        // also be the File node id, and the target the stable package id.
+        let mut a_result = make_result("/workdir/a.ts");
+        a_result.imports.push(crate::ir::ImportInfo {
+            source_file: "some-external-crate".to_string(),
+            imported_names: vec![],
+            line: 5,
+            is_reexport: false,
+        });
+        let results = vec![a_result];
+
+        let mut graph = Graph::new();
+        graph.add_node(make_file_node_with_id("a.ts", "file_uuid_a", "proj"));
+
+        let resolver = ImportResolver::new("proj");
+        resolver.resolve_imports(&results, &mut graph);
+
+        let edge = graph
+            .edges_view()
+            .find(|e| e.edge_type == EdgeType::DependsOn)
+            .expect("DEPENDS_ON edge should exist");
+        assert_eq!(
+            edge.source, "file_uuid_a",
+            "source must be the File node id"
+        );
+        assert_eq!(edge.target, "extpkg:proj:some-external-crate");
     }
 
     #[test]
