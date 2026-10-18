@@ -12,6 +12,47 @@
 use crate::service::error::CodeNexusError;
 use crate::storage::capability::Storage;
 use crate::storage::is_table_missing_error;
+use crate::FALLBACK_PROJECT_NAME;
+use std::path::Path;
+
+/// Reduces `name` to a safe single path segment: trims whitespace, replaces
+/// path separators and control characters, collapses runs, and falls back to
+/// [`FALLBACK_PROJECT_NAME`] when empty.
+///
+/// Shared by the CLI's default-DB-path derivation (`default_db_path`) and the
+/// index service's `--name`-omitted fallback so both agree on the project name.
+#[must_use]
+pub fn sanitize_project_name(name: &str) -> String {
+    let cleaned: String = name
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_whitespace() || c == '/' || c == '\\' {
+                '_'
+            } else {
+                c
+            }
+        })
+        .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
+        .collect();
+    if cleaned.is_empty() {
+        FALLBACK_PROJECT_NAME.to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// Derives a project name from an indexed path's directory name.
+///
+/// Used when `index --name` is omitted (empty sentinel): the last path
+/// component becomes the project name, sanitized by
+/// [`sanitize_project_name`]. Paths without a usable final component fall back
+/// to [`FALLBACK_PROJECT_NAME`].
+#[must_use]
+pub fn derive_project_name(path: &Path) -> String {
+    let base = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    sanitize_project_name(base)
+}
 
 /// Resolves a project identifier (name or id) to the canonical project id.
 ///

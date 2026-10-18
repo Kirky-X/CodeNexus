@@ -31,11 +31,66 @@ fn help_lists_all_commands() {
     let (code, stdout, _) = run(&["--help"]);
     assert_eq!(code, 0, " --help should exit 0");
     assert!(stdout.contains("Usage:"), "should show Usage line");
-    assert!(stdout.contains("query"), "should list query command");
-    assert!(stdout.contains("index"), "should list index command");
-    assert!(stdout.contains("trace"), "should list trace command");
-    assert!(stdout.contains("status"), "should list status command");
-    assert!(stdout.contains("list"), "should list list command");
+    // Every user-facing subcommand (docs advertise 37 + the `mcp` serve mode)
+    // must be listed in the `Commands:` section — a missing registration means
+    // the command is unreachable from the CLI.
+    for cmd in [
+        "index",
+        "query",
+        "search",
+        "trace",
+        "impact",
+        "context",
+        "dead_code",
+        "architecture",
+        "complexity",
+        "community",
+        "cross_service",
+        "route_map",
+        "tool_map",
+        "shape_check",
+        "api_impact",
+        "diagram",
+        "arch_diff",
+        "detect_changes",
+        "rename",
+        "lsp_goto_def",
+        "lsp_hover",
+        "export",
+        "import",
+        "setup",
+        "hook",
+        "skill",
+        "ask",
+        "ci",
+        "lint",
+        "taint",
+        "supply",
+        "evolve",
+        "hub",
+        "list",
+        "status",
+        "clean",
+        "daemon",
+    ] {
+        assert!(
+            stdout.contains(cmd),
+            "`--help` should list the `{cmd}` command, got:\n{stdout}"
+        );
+    }
+}
+
+/// The `mcp` serve mode is registered with clap (so it shows up in `--help`)
+/// even though its stdio server is dispatched before clap parsing.
+#[test]
+#[cfg(feature = "mcp")]
+fn help_lists_mcp_serve_mode() {
+    let (code, stdout, _) = run(&["--help"]);
+    assert_eq!(code, 0, "--help should exit 0");
+    assert!(
+        stdout.contains("mcp"),
+        "`--help` should list the `mcp` serve mode, got:\n{stdout}"
+    );
 }
 
 #[test]

@@ -138,6 +138,12 @@ pub fn version() -> &'static str {
 /// module.
 pub const DEFAULT_DB_DIR: &str = ".codenexus";
 
+/// Project name used when neither `--name` nor a `--path` directory name is
+/// available to derive one (e.g. non-indexing subcommands, or a path without
+/// a usable final component). Single source for the CLI binary and the
+/// index/project-name service helpers.
+pub const FALLBACK_PROJECT_NAME: &str = "codenexus";
+
 #[cfg(test)]
 mod tests {
     use super::version;

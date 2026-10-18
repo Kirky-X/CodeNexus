@@ -253,7 +253,7 @@ pub fn run_hub(
 #[forge(
     name = "hub",
     version = "0.4.0",
-    description = "Client for a CodeNexus artifact registry (protocol v1, see docs/HUB_PROTOCOL.md). push uploads the project's .cnxp artifact; pull downloads and imports the latest artifact for a name; list queries registry artifacts. Token: --token or CODENEXUS_HUB_TOKEN. Params: action — push|pull|list (required); url — registry base (required); name — artifact name (pull); project — project name (push/list).",
+    description = "Client for a CodeNexus artifact registry (protocol v1, see skill/references/commands.md). push uploads the project's .cnxp artifact; pull downloads and imports the latest artifact for a name; list queries registry artifacts. Token: --token or CODENEXUS_HUB_TOKEN. Params: action — push|pull|list (required); url — registry base (required); name — artifact name (pull); project — project name (push/list).",
     cli = true
 )]
 async fn hub(
@@ -275,6 +275,140 @@ async fn hub(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    /// State shared with the mock registry thread.
+    #[derive(Default)]
+    struct RegistryState {
+        /// Last body uploaded via `POST /artifacts`.
+        stored: Mutex<Option<Vec<u8>>>,
+        /// Value of the last `X-Codenexus-Project` request header.
+        project_header: Mutex<Option<String>>,
+        /// Last `Authorization` request header.
+        auth_header: Mutex<Option<String>>,
+    }
+
+    /// Minimal in-process registry implementing the three endpoints the client
+    /// speaks (protocol v1): `POST /artifacts`,
+    /// `GET /artifacts/{name}/latest`, `GET /artifacts?project=<p>`.
+    ///
+    /// Returns the base URL, the shared state, the stop flag and the server
+    /// thread handle (stop + join at the end of the test).
+    fn spawn_mock_registry() -> (
+        String,
+        Arc<RegistryState>,
+        Arc<AtomicBool>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock registry");
+        let addr = listener.local_addr().expect("local addr");
+        let state = Arc::new(RegistryState::default());
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let thread_state = Arc::clone(&state);
+        let thread_shutdown = Arc::clone(&shutdown);
+        let handle = std::thread::spawn(move || {
+            listener
+                .set_nonblocking(true)
+                .expect("mock registry nonblocking");
+            while !thread_shutdown.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        handle_connection(&mut stream, &thread_state);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        (format!("http://{addr}"), state, shutdown, handle)
+    }
+
+    /// Reads one HTTP/1.1 request and writes one response.
+    fn handle_connection(stream: &mut std::net::TcpStream, state: &RegistryState) {
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .expect("read timeout");
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 1024];
+        // Read until the end of the header block.
+        while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+            match stream.read(&mut chunk) {
+                Ok(0) => return,
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                Err(_) => return,
+            }
+        }
+        let header_end = buf
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .expect("header terminator")
+            + 4;
+        let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
+        let request_line = headers.lines().next().unwrap_or_default().to_string();
+        let content_length: usize = headers
+            .lines()
+            .find_map(|l| {
+                let (k, v) = l.split_once(':')?;
+                k.eq_ignore_ascii_case("content-length")
+                    .then(|| v.trim().parse().ok())?
+            })
+            .unwrap_or(0);
+        let mut body = buf[header_end..].to_vec();
+        while body.len() < content_length {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => body.extend_from_slice(&chunk[..n]),
+                Err(_) => break,
+            }
+        }
+        *state.project_header.lock().unwrap() = headers.lines().find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.eq_ignore_ascii_case("x-codenexus-project")
+                .then(|| v.trim().to_string())
+        });
+        *state.auth_header.lock().unwrap() = headers.lines().find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.eq_ignore_ascii_case("authorization")
+                .then(|| v.trim().to_string())
+        });
+
+        let (status, content_type, payload): (&str, &str, Vec<u8>) = if request_line
+            .starts_with("POST /artifacts ")
+        {
+            *state.stored.lock().unwrap() = Some(body);
+            (
+                "200 OK",
+                "application/json",
+                br#"{"id":"art_1","url":"/artifacts/art_1"}"#.to_vec(),
+            )
+        } else if request_line.starts_with("GET /artifacts?") {
+            (
+                "200 OK",
+                "application/json",
+                br#"[{"id":"art_1","name":"demo"}]"#.to_vec(),
+            )
+        } else if request_line.starts_with("GET /artifacts/") && request_line.contains("/latest") {
+            match state.stored.lock().unwrap().clone() {
+                Some(bytes) => ("200 OK", "application/octet-stream", bytes),
+                None => ("404 Not Found", "application/json", b"{}".to_vec()),
+            }
+        } else {
+            ("404 Not Found", "application/json", b"{}".to_vec())
+        };
+
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            payload.len()
+        );
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.write_all(&payload);
+        let _ = stream.flush();
+    }
 
     #[test]
     fn client_rejects_bad_urls() {
@@ -324,5 +458,97 @@ mod tests {
             .expect_err("unknown action");
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
         assert!(err.to_string().contains("invalid --action"));
+    }
+
+    /// End-to-end `push` → `pull` → `list` against a live (in-process) HTTP
+    /// registry: push exports the project's `.cnxp` and uploads it, pull
+    /// downloads the same bytes and imports them (BLAKE3 + size validation),
+    /// list queries the registry. Verifies the documented receipt shape
+    /// `{action, url, artifact, project, outcome, details}` and the v1
+    /// request headers.
+    #[test]
+    fn run_hub_push_pull_list_round_trip() {
+        use crate::kit::{build_kit, KitBootstrapConfig, StorageModule};
+
+        let (base_url, registry, shutdown, server) = spawn_mock_registry();
+
+        let src_dir = tempfile::TempDir::new().unwrap();
+        let src_config = KitBootstrapConfig::new(src_dir.path().join("hub_src_db"));
+        let src_kit = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&src_config))
+            .unwrap();
+        let storage = src_kit.require::<StorageModule>().expect("storage");
+        storage
+            .execute("CREATE (:Project {id: 'proj_demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});")
+            .expect("create project");
+
+        // --- push ---
+        let pushed = run_hub(&src_kit, "push", &base_url, "demo", "demo", "secret")
+            .expect("push should succeed");
+        assert_eq!(pushed.action, "push");
+        assert_eq!(pushed.url, base_url);
+        assert_eq!(pushed.project, "demo");
+        assert_eq!(pushed.outcome, "ok");
+        assert_eq!(
+            pushed.details.get("id").and_then(|v| v.as_str()),
+            Some("art_1"),
+            "push receipt must carry the registry's id: {}",
+            pushed.details
+        );
+        assert_eq!(
+            registry.project_header.lock().unwrap().as_deref(),
+            Some("demo"),
+            "push must send X-Codenexus-Project"
+        );
+        assert_eq!(
+            registry.auth_header.lock().unwrap().as_deref(),
+            Some("Bearer secret"),
+            "push must send the bearer token"
+        );
+        let stored = registry
+            .stored
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("push must upload the .cnxp body");
+        assert!(!stored.is_empty(), "uploaded artifact must not be empty");
+
+        // --- pull into a fresh DB (round-trips the uploaded bytes) ---
+        let dst_dir = tempfile::TempDir::new().unwrap();
+        let dst_config = KitBootstrapConfig::new(dst_dir.path().join("hub_dst_db"));
+        let dst_kit = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(build_kit(&dst_config))
+            .unwrap();
+        let pulled =
+            run_hub(&dst_kit, "pull", &base_url, "demo", "", "").expect("pull should succeed");
+        assert_eq!(pulled.action, "pull");
+        assert_eq!(pulled.artifact, "demo");
+        assert_eq!(pulled.outcome, "ok");
+        assert!(
+            pulled.details.get("db_size").is_some(),
+            "pull receipt must carry the import receipt: {}",
+            pulled.details
+        );
+
+        // --- list ---
+        let listed =
+            run_hub(&src_kit, "list", &base_url, "", "demo", "").expect("list should succeed");
+        assert_eq!(listed.action, "list");
+        assert_eq!(listed.project, "demo");
+        assert_eq!(listed.outcome, "ok");
+        let artifacts = listed
+            .details
+            .as_array()
+            .expect("list details must be the registry's JSON array");
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(
+            artifacts[0].get("name").and_then(|v| v.as_str()),
+            Some("demo")
+        );
+
+        shutdown.store(true, Ordering::SeqCst);
+        server.join().expect("mock registry thread");
     }
 }

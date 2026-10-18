@@ -178,9 +178,12 @@ pub fn run_impact(
         let (graph, truncated) = trace_engine.load_graph(symbol, load_depth, MAX_SUBGRAPH_NODES)?;
 
         let effective_depth = config.max_depth;
-        // Verify symbol exists to avoid silent empty-result success.
+        // Verify symbol exists to avoid silent empty-result success. A
+        // symbol-resolution failure is a usage error (exit 2, InvalidInput),
+        // matching `context`'s not-found handling — it is not a missing
+        // resource.
         let start_id = find_start_node_id(&graph, symbol)
-            .ok_or_else(|| CodeNexusError::NotFound(format!("symbol not found: {symbol}")))?;
+            .ok_or_else(|| CodeNexusError::InvalidInput(format!("symbol not found: {symbol}")))?;
         let analyzer = ImpactAnalyzer::with_config(&graph, config);
         let result = analyzer.analyze_impact(&start_id);
 
@@ -191,9 +194,10 @@ pub fn run_impact(
     } else {
         let (graph, truncated) =
             trace_engine.load_graph(symbol, depth as usize, MAX_SUBGRAPH_NODES)?;
-        // Verify symbol exists to avoid silent empty-result success.
+        // Verify symbol exists to avoid silent empty-result success. Same
+        // usage-error classification as the enhanced branch above.
         if find_start_node_id(&graph, symbol).is_none() {
-            return Err(CodeNexusError::NotFound(format!(
+            return Err(CodeNexusError::InvalidInput(format!(
                 "symbol not found: {symbol}"
             )));
         }
@@ -267,15 +271,17 @@ mod tests {
             .expect("build_kit")
     }
 
+    /// An unknown symbol is a usage error (`InvalidInput`, exit 2) — the CLI
+    /// contract for symbol-resolution failures, matching `context`.
     #[test]
-    fn run_impact_returns_not_found_on_empty_db() {
+    fn run_impact_returns_invalid_input_on_empty_db() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let err = run_impact(&kit, "demo.foo", 3, "", 0, false)
             .expect_err("unknown symbol on empty DB should error");
         assert!(
-            matches!(err, CodeNexusError::NotFound(_)),
-            "expected NotFound, got {err:?}"
+            matches!(err, CodeNexusError::InvalidInput(_)),
+            "expected InvalidInput, got {err:?}"
         );
         let msg = err.to_string();
         assert!(
@@ -527,14 +533,14 @@ mod tests {
     }
 
     #[test]
-    fn run_impact_enhanced_returns_not_found_on_empty_db() {
+    fn run_impact_enhanced_returns_invalid_input_on_empty_db() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let err = run_impact(&kit, "demo.missing", 3, "CALLS", 5, false)
             .expect_err("enhanced impact on missing symbol should error");
         assert!(
-            matches!(err, CodeNexusError::NotFound(_)),
-            "expected NotFound, got {err:?}"
+            matches!(err, CodeNexusError::InvalidInput(_)),
+            "expected InvalidInput, got {err:?}"
         );
         let msg = err.to_string();
         assert!(
@@ -659,7 +665,7 @@ mod tests {
     }
 
     #[test]
-    fn run_impact_enhanced_returns_not_found_for_missing_start_node() {
+    fn run_impact_enhanced_returns_invalid_input_for_missing_start_node() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
@@ -671,8 +677,8 @@ mod tests {
         let err = run_impact(&kit, "nonexistent.symbol", 3, "CALLS", 5, false)
             .expect_err("enhanced impact on missing symbol should error");
         assert!(
-            matches!(err, CodeNexusError::NotFound(_)),
-            "expected NotFound, got {err:?}"
+            matches!(err, CodeNexusError::InvalidInput(_)),
+            "expected InvalidInput, got {err:?}"
         );
         let msg = err.to_string();
         assert!(

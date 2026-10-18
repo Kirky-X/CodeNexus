@@ -275,6 +275,8 @@ fn ambiguous_symbol_api_error(symbol: &str, candidates: &[String], message: Stri
 ///
 /// - `InvalidInput` / `ProjectNotFound` / `Query` → `ApiError::InvalidInput` (exit 2)
 /// - `NotFound` / `Trace(SymbolNotFound)` → `ApiError::NotFound` (exit 4)
+/// - `Trace(InvalidDepth)` → `ApiError::InvalidInput` (exit 2): a depth of 0
+///   is a usage error rejected by the trace engine, not an internal failure
 /// - `Trace(AmbiguousSymbol)` / `Resolve(AmbiguousSymbol)` → `ApiError::InvalidInput`
 ///   carrying an archify-style repair receipt (`field = "symbol"`, `value` =
 ///   structured diagnostics with candidate qualified names as supported fixes)
@@ -313,6 +315,14 @@ pub fn to_api_error(e: CodeNexusError, tag: &str) -> ApiError {
         CodeNexusError::Trace(TraceError::SymbolNotFound(s)) => ApiError::NotFound {
             resource: "symbol".to_string(),
             resource_id: Some(s),
+        },
+        // Depth validation is a usage error (the engine rejects `depth == 0`
+        // with `TraceError::InvalidDepth`), so the CLI exits 2 — not the
+        // generic internal-error exit 1.
+        CodeNexusError::Trace(err @ TraceError::InvalidDepth(_)) => ApiError::InvalidInput {
+            message: err.to_string(),
+            field: None,
+            value: None,
         },
         CodeNexusError::Trace(TraceError::AmbiguousSymbol { symbol, candidates }) => {
             let message = format!(
@@ -489,6 +499,24 @@ mod tests {
         let err = CodeNexusError::Trace(TraceError::SymbolNotFound("foo".to_string()));
         let api_err = to_api_error(err, "test");
         assert!(matches!(api_err, ApiError::NotFound { .. }));
+    }
+
+    /// `depth == 0` is rejected by the trace engine as `InvalidDepth`; the
+    /// CLI must surface it as a usage error (exit 2), not an internal error.
+    #[cfg(any(feature = "cli", feature = "mcp"))]
+    #[test]
+    fn to_api_error_trace_invalid_depth_is_invalid_input() {
+        let err = CodeNexusError::Trace(TraceError::InvalidDepth(0));
+        let api_err = to_api_error(err, "trace_error");
+        match api_err {
+            ApiError::InvalidInput { message, .. } => {
+                assert!(
+                    message.contains("invalid depth: 0"),
+                    "message should carry the engine's text, got: {message}"
+                );
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
     }
 
     #[cfg(any(feature = "cli", feature = "mcp"))]

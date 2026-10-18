@@ -41,6 +41,22 @@ pub enum StorageError {
     #[error("not found: {0}")]
     NotFound(String),
 
+    /// A symbol name matched more than one node, so no single entity could be
+    /// resolved.
+    ///
+    /// Raised by short-name lookups (e.g. `ContextCollector`'s
+    /// `collect_symbol_definition`) where ambiguity must surface explicitly
+    /// instead of silently picking one candidate. The service layer maps this
+    /// to `InvalidInput` (exit 2) with the canonical
+    /// `ambiguous symbol '<name>': <n> candidates` message.
+    #[error("ambiguous symbol '{symbol}': {count} candidates")]
+    AmbiguousSymbol {
+        /// The ambiguous symbol name supplied by the caller.
+        symbol: String,
+        /// Number of matching nodes.
+        count: usize,
+    },
+
     /// The supplied data was invalid for the target table/schema.
     #[error("invalid data: {0}")]
     InvalidData(String),

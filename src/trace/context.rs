@@ -430,17 +430,13 @@ impl<'a> ContextCollector<'a> {
                 "symbol not found: {qualified_name}"
             ))),
             [one] => Ok(parse_symbol_definition(one)),
-            many => {
-                let names: Vec<&str> = many
-                    .iter()
-                    .filter_map(|r| r.get(1).and_then(|v| v.as_str()))
-                    .collect();
-                Err(crate::storage::error::StorageError::NotFound(format!(
-                    "ambiguous symbol '{qualified_name}' in project '{project}': {} candidates — [{}]",
-                    many.len(),
-                    names.join(", ")
-                )))
-            }
+            // Typed variant (not a formatted `NotFound` string) so the service
+            // layer can map ambiguity to `InvalidInput` (exit 2) with the
+            // canonical `ambiguous symbol '<name>': <n> candidates` message.
+            many => Err(crate::storage::error::StorageError::AmbiguousSymbol {
+                symbol: qualified_name.to_string(),
+                count: many.len(),
+            }),
         }
     }
 
@@ -1552,14 +1548,25 @@ mod tests {
         s.execute("CREATE (:Function {id: 'f2', project: 'demo', name: 'foo', qualifiedName: 'demo.b.foo', filePath: '/src/b.rs', startLine: 1, endLine: 2, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
         let collector = ContextCollector::new(&*s);
         // Two nodes share short name "foo" in project "demo" → must surface
-        // ambiguity and list both candidate qualified names.
+        // the typed ambiguity so the service layer can map it to
+        // InvalidInput (exit 2) with the canonical message.
         let err = collector
             .collect_symbol_definition("demo", "foo")
             .expect_err("should error");
-        let msg = err.to_string();
-        assert!(msg.contains("ambiguous"), "expected ambiguous, got: {msg}");
-        assert!(msg.contains("demo.a.foo"), "expected demo.a.foo in: {msg}");
-        assert!(msg.contains("demo.b.foo"), "expected demo.b.foo in: {msg}");
+        match err {
+            crate::storage::error::StorageError::AmbiguousSymbol { symbol, count } => {
+                assert_eq!(symbol, "foo");
+                assert_eq!(count, 2, "both candidates counted");
+            }
+            other => panic!("expected AmbiguousSymbol, got: {other:?}"),
+        }
+        assert_eq!(
+            collector
+                .collect_symbol_definition("demo", "foo")
+                .expect_err("should error")
+                .to_string(),
+            "ambiguous symbol 'foo': 2 candidates"
+        );
     }
 
     #[test]

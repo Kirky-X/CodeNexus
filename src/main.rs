@@ -14,12 +14,9 @@ use std::path::PathBuf;
 use codenexus::kit::{build_kit, KitBootstrapConfig, KitError};
 use codenexus::service::error::CodeNexusError;
 use codenexus::service::init_kit;
+use codenexus::service::project::{derive_project_name, sanitize_project_name};
 use codenexus::storage::StorageError;
-use codenexus::DEFAULT_DB_DIR;
-
-/// Fallback project name used when no command-specific `name`/`path` arg is
-/// available to derive one (e.g. non-indexing subcommands).
-const FALLBACK_PROJECT_NAME: &str = "codenexus";
+use codenexus::{DEFAULT_DB_DIR, FALLBACK_PROJECT_NAME};
 
 // `DEFAULT_DEBOUNCE_MS` is sourced from the daemon module when the `daemon`
 // feature is enabled, or from the kit bootstrap fallback otherwise — avoiding
@@ -44,8 +41,17 @@ fn main() {
     // `codenexus::logging`).
     codenexus::logging::init_logging();
 
+    // `mcp` serve mode is intercepted here (before clap) so it keeps working
+    // when the global `--db` handling differs from a normal subcommand. Help
+    // and version requests fall through to clap so `codenexus mcp --help`
+    // renders the registered subcommand's help instead of the serve-mode
+    // usage error.
     #[cfg(feature = "mcp")]
-    if std::env::args().nth(1) == Some("mcp".into()) {
+    if std::env::args().nth(1) == Some("mcp".into())
+        && !std::env::args()
+            .skip(2)
+            .any(|a| matches!(a.as_str(), "-h" | "--help" | "-V" | "--version"))
+    {
         run_mcp_server();
         return;
     }
@@ -90,7 +96,24 @@ fn build_cli_command() -> sdforge::clap::Command {
     // Inject sentinel default_values so users can omit optional parameters
     // on the command line (sdforge 0.4.2 marks all non-Option Body params
     // required=true with no default attribute). See `apply_sentinel_defaults`.
-    apply_sentinel_defaults(cmd)
+    let cmd = apply_sentinel_defaults(cmd);
+
+    // `mcp` is the stdio MCP server, dispatched before clap parsing (see
+    // `main`), so no inventory `#[forge(cli = true)]` handler is registered
+    // for it. Registering the subcommand here has two effects:
+    // - `codenexus --help` lists every user-facing command (docs advertise
+    //   37 subcommands + the `mcp` serve mode);
+    // - an invocation that does not put `mcp` first (e.g.
+    //   `codenexus --db <path> mcp`) reaches the regular dispatch and takes
+    //   the documented "No handler registered for command" NotFound path
+    //   (exit 4) instead of clap's unrecognized-subcommand error.
+    #[cfg(feature = "mcp")]
+    let cmd =
+        cmd.subcommand(sdforge::clap::Command::new("mcp").about(
+            "Serve CodeNexus MCP tools over stdio (long-running; requires the mcp feature).",
+        ));
+
+    cmd
 }
 
 /// CLI mode: build sdforge Command, parse args, dispatch to service handler.
@@ -149,6 +172,22 @@ fn run_cli() {
     };
     let sub_matches = matches.subcommand_matches(sub_name).unwrap();
 
+    // Dispatch lookup runs before any config/DB/Kit work: a command that clap
+    // knows but `inventory` does not (e.g. `mcp` invoked with a global flag
+    // first, whose serve mode is intercepted pre-clap) must fail fast with the
+    // documented NotFound receipt (exit 4) without creating or opening a
+    // database.
+    let handler = match find_cli_handler(sub_name) {
+        Ok(h) => h,
+        Err(api_error) => {
+            // Same condition (and same `ApiError` shape) as sdforge's own
+            // dispatch lookup; rendering and the exit code (NotFound → 4)
+            // follow the global `--format` contract.
+            let text_line = format!("[error] No handler registered for command: {sub_name}");
+            exit_with_api_error(format, api_error, &text_line, None);
+        }
+    };
+
     // Load the per-project config file (.codenexus/config.json). Non-fatal:
     // shape warnings print to stderr and built-in defaults apply. Precedence
     // everywhere below: explicit CLI flag > config file > built-in default.
@@ -157,21 +196,28 @@ fn run_cli() {
         eprintln!("[warn] {DEFAULT_DB_DIR}/config.json: {warning}");
     }
 
-    let db = explicit_cli_arg(&matches, sub_matches, "db").unwrap_or_else(|| {
-        let derived = default_db_path(sub_matches);
-        // general.db only fills the "no signal" case: derivation fell through
-        // to the fallback name AND no single .lbug file was discovered. When
-        // discovery succeeded, `derived` already is the discovered path and
-        // must not be overridden by the config.
-        if derived == format!("{DEFAULT_DB_DIR}/{FALLBACK_PROJECT_NAME}.lbug")
-            && discover_single_indexed_db().is_none()
-        {
-            if let Some(configured) = project_config.db.clone() {
-                return configured;
+    // Resolves the DB path when `--db` is absent. Precedence: explicit
+    // `--db` flag > `CODENEXUS_DB_PATH` environment pin (see
+    // `.env.example`) > `.codenexus/config.json` `general.db` (only when
+    // there is no `name`/`path` signal, see below) > derived/discovered
+    // default.
+    let db = explicit_cli_arg(&matches, sub_matches, "db")
+        .or_else(env_db_path)
+        .unwrap_or_else(|| {
+            let derived = default_db_path(sub_matches);
+            // general.db only fills the "no signal" case: derivation fell through
+            // to the fallback name AND no single .lbug file was discovered. When
+            // discovery succeeded, `derived` already is the discovered path and
+            // must not be overridden by the config.
+            if derived == format!("{DEFAULT_DB_DIR}/{FALLBACK_PROJECT_NAME}.lbug")
+                && discover_single_indexed_db().is_none()
+            {
+                if let Some(configured) = project_config.db.clone() {
+                    return configured;
+                }
             }
-        }
-        derived
-    });
+            derived
+        });
     let debounce_ms = explicit_cli_arg(&matches, sub_matches, "debounce-ms")
         .or_else(|| project_config.debounce_ms.map(|v| v.to_string()))
         .unwrap_or_else(|| DEFAULT_DEBOUNCE_MS.to_string())
@@ -297,23 +343,6 @@ fn run_cli() {
 
     let args = extract_args(sub_name, sub_matches, &project_config);
 
-    let handler = match sdforge::inventory::iter::<sdforge::cli::CliHandlerRegistration>()
-        .find(|h| h.name == sub_name)
-    {
-        Some(h) => h,
-        None => {
-            // Same condition (and same `ApiError` shape) as sdforge's own
-            // dispatch lookup; rendering and the exit code (NotFound → 4)
-            // follow the global `--format` contract.
-            let api_error = sdforge::prelude::ApiError::NotFound {
-                resource: "cli_command".to_string(),
-                resource_id: Some(sub_name.to_string()),
-            };
-            let text_line = format!("[error] No handler registered for command: {sub_name}");
-            exit_with_api_error(format, api_error, &text_line, None);
-        }
-    };
-
     if let Err(api_error) = runtime.block_on((handler.handler)(args, None)) {
         // `--format json` renders the handler's `ApiError` as the shared
         // UnifiedError JSON payload on stdout (same shape as HTTP/gRPC);
@@ -362,6 +391,37 @@ fn exit_with_api_error(
     );
 }
 
+/// Reads the optional `CODENEXUS_DB_PATH` default-database pin.
+///
+/// Documented in `.env.example` and `docs/USER_GUIDE.md`: when set (non-blank)
+/// and `--db` is not passed, the command uses this path instead of the
+/// derived `.codenexus/<project>.lbug` default. Blank values are ignored so a
+/// commented-out `.env` line or `CODENEXUS_DB_PATH=` never produces an empty
+/// `--db`.
+fn env_db_path() -> Option<String> {
+    std::env::var("CODENEXUS_DB_PATH")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// Looks up the inventory-registered CLI handler for `sub_name`.
+///
+/// Most subcommands are registered by the `#[forge(cli = true)]` macro. `mcp`
+/// deliberately has no inventory handler (its serve mode is dispatched before
+/// clap parsing in `main`), so it — or any name that clap knows but
+/// `inventory` does not — resolves to `ApiError::NotFound` (exit code 4).
+fn find_cli_handler(
+    sub_name: &str,
+) -> Result<&'static sdforge::cli::CliHandlerRegistration, sdforge::prelude::ApiError> {
+    sdforge::inventory::iter::<sdforge::cli::CliHandlerRegistration>()
+        .find(|h| h.name == sub_name)
+        .ok_or_else(|| sdforge::prelude::ApiError::NotFound {
+            resource: "cli_command".to_string(),
+            resource_id: Some(sub_name.to_string()),
+        })
+}
+
 /// Returns the value of the global arg `name` when it was explicitly
 /// provided on the command line (not a clap `default_value`), checking
 /// top-level then subcommand matches. `None` means "caller falls back to
@@ -405,19 +465,25 @@ fn default_db_path(sub: &sdforge::clap::ArgMatches) -> String {
     // try_get_one (not get_one): commands like `search`/`impact`/`context` do
     // not define a `name`/`path` arg, and clap's get_one panics on an
     // undefined arg id. Fall back gracefully instead.
+    //
+    // Blank values are treated as absent: `index --name` carries the empty
+    // sentinel default (see `SENTINEL_DEFAULTS`) when the user omits it, and
+    // an empty name must fall through to the `--path` directory name instead
+    // of resolving to the fallback project name.
     let raw_project = sub
         .try_get_one::<String>("name")
         .ok()
         .flatten()
-        .cloned()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
         .or_else(|| {
-            sub.try_get_one::<String>("path").ok().flatten().map(|p| {
-                std::path::Path::new(p)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or(FALLBACK_PROJECT_NAME)
-                    .to_string()
-            })
+            sub.try_get_one::<String>("path")
+                .ok()
+                .flatten()
+                .map(|p| p.trim())
+                .filter(|p| !p.is_empty())
+                .map(|p| derive_project_name(std::path::Path::new(p)))
         });
 
     let project = match raw_project {
@@ -458,29 +524,6 @@ fn discover_single_indexed_db() -> Option<String> {
     }
 }
 
-/// Reduces `name` to a safe single path segment: trims whitespace, replaces
-/// path separators and control characters, collapses runs, and falls back to
-/// [`FALLBACK_PROJECT_NAME`] when empty.
-fn sanitize_project_name(name: &str) -> String {
-    let cleaned: String = name
-        .trim()
-        .chars()
-        .map(|c| {
-            if c.is_whitespace() || c == '/' || c == '\\' {
-                '_'
-            } else {
-                c
-            }
-        })
-        .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
-        .collect();
-    if cleaned.is_empty() {
-        FALLBACK_PROJECT_NAME.to_string()
-    } else {
-        cleaned
-    }
-}
-
 /// Commands that require an existing database file. `index`/`import` create
 /// one (LadybugDB create-on-open); `setup`/`lsp_*`/`hook`/`mcp` don't query
 /// the graph. Without this gate, `list --db <missing>` silently builds an
@@ -488,19 +531,21 @@ fn sanitize_project_name(name: &str) -> String {
 ///
 /// Includes both read-only commands (see [`opens_read_only`]) and read-write
 /// commands that operate on an existing DB (`clean`, `rename`, `daemon`,
-/// `detect_changes`, `export`).
+/// `detect_changes`, `export`, `cross_service` — the latter persists
+/// `HTTP_CALLS` link edges).
 fn requires_existing_db(sub_name: &str) -> bool {
     opens_read_only(sub_name)
         || matches!(
             sub_name,
-            "clean" | "rename" | "daemon" | "detect_changes" | "export"
+            "clean" | "rename" | "daemon" | "detect_changes" | "export" | "cross_service"
         )
 }
 
 /// Read-only commands that open the DB in shared-read mode (concurrent-safe).
 /// These commands never write to the DB, so they can share a read lock with
 /// other processes. Writing commands (`index`/`import`/`clean`/`rename`/
-/// `daemon`) keep read-write mode.
+/// `daemon`/`cross_service` — the latter persists `HTTP_CALLS` link edges)
+/// keep read-write mode.
 fn opens_read_only(sub_name: &str) -> bool {
     matches!(
         sub_name,
@@ -517,7 +562,6 @@ fn opens_read_only(sub_name: &str) -> bool {
             | "complexity"
             | "diagram"
             | "arch_diff"
-            | "cross_service"
             | "route_map"
             | "tool_map"
             | "shape_check"
@@ -816,6 +860,10 @@ const SENTINEL_DEFAULTS: &[(&str, &str, &str)] = &[
     // — index: fresh defaults to false so users can omit --fresh; only
     // --fresh true triggers DB file deletion (P-DB space reclamation).
     ("index", "fresh", "false"),
+    // — index: name defaults to the empty sentinel so `index --path <dir>`
+    // works without --name; the service layer derives the project name from
+    // the path's directory name, matching `default_db_path`.
+    ("index", "name", ""),
     // — clean: rebuild defaults to false; --rebuild true deletes the whole
     // DB file (self-healing for schema-version mismatch or corruption) and
     // is intercepted before Kit init in run_cli.
@@ -934,10 +982,11 @@ fn apply_sentinel_defaults(mut cmd: sdforge::clap::Command) -> sdforge::clap::Co
 /// `DatabaseLocked` (LadybugDB is single-writer).
 #[cfg(feature = "mcp")]
 fn run_mcp_server() {
-    let db = parse_mcp_db_arg().unwrap_or_else(|| {
-        // Same fallback chain as read-only CLI commands: pick up the single
-        // indexed project in .codenexus/ before falling back to the default
-        // name (discover_single_indexed_db returns None for 0 or 2+ files).
+    let db = parse_mcp_db_arg().or_else(env_db_path).unwrap_or_else(|| {
+        // Same fallback chain as read-only CLI commands: the
+        // CODENEXUS_DB_PATH pin, then the single indexed project in
+        // .codenexus/, then the default name (discover_single_indexed_db
+        // returns None for 0 or 2+ files).
         discover_single_indexed_db()
             .unwrap_or_else(|| format!("{DEFAULT_DB_DIR}/{FALLBACK_PROJECT_NAME}.lbug"))
     });
@@ -1330,6 +1379,43 @@ mod tests {
         assert_eq!(default_db_path(sub), ".codenexus/CodeNexus.lbug");
     }
 
+    /// `index --name` carries the empty sentinel when omitted — the blank
+    /// value must be treated as absent so the `--path` directory name still
+    /// derives the DB file (regression: blank name short-circuited the
+    /// fallback and resolved to `.codenexus/codenexus.lbug`).
+    #[test]
+    fn default_db_path_ignores_blank_name_sentinel() {
+        let cmd = index_sub_with(Some(""), Some("/home/user/myrepo"));
+        let m = cmd.get_matches_from(["codenexus", "index", "--path", "/home/user/myrepo"]);
+        let sub = m.subcommand_matches("index").unwrap();
+        assert_eq!(default_db_path(sub), ".codenexus/myrepo.lbug");
+    }
+
+    /// Whitespace-only names are blank too.
+    #[test]
+    fn default_db_path_ignores_whitespace_name() {
+        let cmd = index_sub_with(Some("   "), Some("/home/user/myrepo"));
+        let m = cmd.get_matches_from(["codenexus", "index", "--path", "/home/user/myrepo"]);
+        let sub = m.subcommand_matches("index").unwrap();
+        assert_eq!(default_db_path(sub), ".codenexus/myrepo.lbug");
+    }
+
+    /// The real `index` command accepts `--path` without `--name`: clap gets
+    /// the empty sentinel for `name` and the DB path derives from the path's
+    /// directory name.
+    #[test]
+    fn index_name_is_optional_via_sentinel_default() {
+        let cmd = build_cli_command();
+        let m = cmd.get_matches_from(["codenexus", "index", "--path", "/x/y/myrepo"]);
+        let sub = m.subcommand_matches("index").unwrap();
+        assert_eq!(
+            sub.get_one::<String>("name").map(String::as_str),
+            Some(""),
+            "omitted --name must resolve to the empty sentinel"
+        );
+        assert_eq!(default_db_path(sub), ".codenexus/myrepo.lbug");
+    }
+
     #[test]
     #[serial_test::serial(db_discover)]
     fn default_db_path_falls_back_when_no_args() {
@@ -1352,6 +1438,71 @@ mod tests {
         let m = cmd.get_matches_from(["codenexus", "search"]);
         let sub = m.subcommand_matches("search").unwrap();
         assert_eq!(default_db_path(sub), ".codenexus/codenexus.lbug");
+    }
+
+    // --- find_cli_handler / mcp registration ---
+
+    /// Any name that clap knows but `inventory` does not must resolve to the
+    /// documented NotFound receipt: resource `cli_command`, exit code 4.
+    #[test]
+    fn find_cli_handler_reports_not_found_for_unregistered_command() {
+        let err = find_cli_handler("definitely_not_a_registered_command")
+            .expect_err("unknown command must miss the inventory lookup");
+        match err {
+            sdforge::prelude::ApiError::NotFound {
+                resource,
+                resource_id,
+            } => {
+                assert_eq!(resource, "cli_command");
+                assert_eq!(
+                    resource_id.as_deref(),
+                    Some("definitely_not_a_registered_command")
+                );
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    /// `mcp` is clap-registered (so `--help` lists it, matching the docs'
+    /// "37 subcommands + mcp serve mode") but has no inventory handler — its
+    /// serve mode is intercepted before clap parsing in `main`. Invocations
+    /// that do not put `mcp` first (e.g. `codenexus --db <path> mcp`) reach
+    /// the regular dispatch and take the NotFound path (exit 4).
+    #[test]
+    #[cfg(feature = "mcp")]
+    fn mcp_is_registered_with_clap_but_has_no_inventory_handler() {
+        let cmd = build_cli_command();
+        assert!(
+            cmd.get_subcommands().any(|s| s.get_name() == "mcp"),
+            "clap must register `mcp` so `codenexus --help` lists it"
+        );
+        let err = find_cli_handler("mcp").expect_err("`mcp` must not have an inventory handler");
+        assert!(matches!(&err, sdforge::prelude::ApiError::NotFound { .. }));
+        assert_eq!(CodeNexusError::from(err).exit_code(), 4);
+    }
+
+    // --- env_db_path (CODENEXUS_DB_PATH) ---
+
+    #[test]
+    #[serial_test::serial(env_db_path)]
+    fn env_db_path_reads_non_blank_value() {
+        std::env::set_var("CODENEXUS_DB_PATH", " /tmp/pinned.lbug ");
+        assert_eq!(env_db_path().as_deref(), Some("/tmp/pinned.lbug"));
+        std::env::remove_var("CODENEXUS_DB_PATH");
+    }
+
+    #[test]
+    #[serial_test::serial(env_db_path)]
+    fn env_db_path_ignores_blank_and_missing() {
+        std::env::remove_var("CODENEXUS_DB_PATH");
+        assert_eq!(env_db_path(), None);
+        std::env::set_var("CODENEXUS_DB_PATH", "   ");
+        assert_eq!(
+            env_db_path(),
+            None,
+            "blank pin must not become an empty --db"
+        );
+        std::env::remove_var("CODENEXUS_DB_PATH");
     }
 
     // --- requires_existing_db / opens_read_only / validate_db_exists ---
@@ -1502,7 +1653,6 @@ mod tests {
             "complexity",
             "diagram",
             "arch_diff",
-            "cross_service",
             "route_map",
             "tool_map",
             "shape_check",
@@ -1510,6 +1660,16 @@ mod tests {
         ] {
             assert!(opens_read_only(cmd), "{cmd} should be read-only");
         }
+        // `cross_service` persists HTTP_CALLS link edges, so it must NOT
+        // open the DB read-only (the write fails with "read-only database").
+        assert!(
+            !opens_read_only("cross_service"),
+            "cross_service writes link edges"
+        );
+        assert!(
+            requires_existing_db("cross_service"),
+            "cross_service still needs an indexed DB"
+        );
     }
 
     #[test]

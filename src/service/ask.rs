@@ -555,18 +555,44 @@ mod tests {
         assert!(out.intent.is_some());
     }
 
+    /// Execution failures degrade to suggestions instead of surfacing an
+    /// error. `impact` is used as the example because it keeps failing on an
+    /// unknown symbol (exit 2) — `trace` now reports an empty result set for
+    /// unknown symbols instead.
     #[test]
     fn run_ask_degrades_to_suggestions_on_unknown_symbol() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let out = run_ask(&kit, "谁调用了 `missing_symbol`", true, "");
+        let out = run_ask(&kit, "改动 `missing_symbol` 的影响", true, "");
         assert!(out.executed);
         assert!(out.result.is_none(), "failed execution → no result");
         assert!(
             !out.suggestions.is_empty(),
             "suggestions must carry the equivalent CLI"
         );
-        assert!(out.suggestions[0].contains("trace --symbol missing_symbol"));
+        assert!(
+            out.suggestions[0].contains("impact --symbol missing_symbol"),
+            "suggestion should carry the routed CLI, got: {:?}",
+            out.suggestions
+        );
+    }
+
+    /// A `trace` route on an unknown symbol executes successfully with an
+    /// empty path list (empty-graph contract), so `ask` reports a result
+    /// instead of degrading.
+    #[test]
+    fn run_ask_trace_unknown_symbol_returns_empty_result() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let out = run_ask(&kit, "谁调用了 `missing_symbol`", true, "");
+        assert!(out.executed);
+        let result = out.result.expect("trace result present");
+        assert_eq!(result["symbol"], "missing_symbol");
+        assert_eq!(
+            result["paths"].as_array().map(|p| p.len()),
+            Some(0),
+            "unknown symbol → empty paths: {result}"
+        );
     }
 
     #[test]

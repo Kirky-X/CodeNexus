@@ -13,6 +13,8 @@ use crate::kit::{AsyncKit, AsyncReady, IndexerModule};
 #[cfg(any(feature = "cli", feature = "mcp", feature = "lsp", test))]
 use crate::service::error::CodeNexusError;
 #[cfg(any(feature = "cli", feature = "mcp", feature = "lsp", test))]
+use crate::service::project::derive_project_name;
+#[cfg(any(feature = "cli", feature = "mcp", feature = "lsp", test))]
 use crate::storage::{QualityChecker, Repository};
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
@@ -97,17 +99,17 @@ fn build_symbol_queries(project: &str) -> [String; 2] {
     use crate::storage::schema::escape_cypher_string;
 
     let proj = escape_cypher_string(project);
-    // P-09: pre-merge optimization kept as two separate queries because
-    // LadybugDB's Cypher subset does NOT support `UNION` / `UNION ALL`
-    // (see `src/analysis/architecture.rs` line ~38: "LadybugDB does not
-    // support `UNION`, so we issue one query per table and merge in Rust").
-    // A single `MATCH (n) WHERE n:Function OR n:Method ...` would also not
-    // work — LadybugDB does not support multi-label `WHERE (n:A OR n:B)`
-    // expressions either (same source). The two queries are issued
-    // sequentially and their result rows are merged in Rust via
-    // `rows.extend(r)` in `enhance_with_lsp`. The per-query overhead is one
-    // round-trip to the embedded LadybugDB process — negligible compared to
-    // the per-symbol LSP `hover` cost that dominates this function.
+    // P-09: pre-merge optimization kept as two separate queries because the
+    // Cypher subset validator rejects label predicates in `WHERE` — a single
+    // `MATCH (n) WHERE n:Function OR n:Method ...` fails with
+    // `unsupported Cypher construct` (see `src/query/cypher_subset.pest`;
+    // labels must sit in the `MATCH (n:Label)` pattern). `UNION` is supported
+    // by both the validator and the engine, but each branch would still repeat
+    // the project filter, so the two queries are issued sequentially and their
+    // result rows are merged in Rust via `rows.extend(r)` in
+    // `enhance_with_lsp`. The per-query overhead is one round-trip to the
+    // embedded LadybugDB process — negligible compared to the per-symbol LSP
+    // `hover` cost that dominates this function.
     [
         format!(
             "MATCH (n:Function) WHERE n.project = '{proj}' \
@@ -196,9 +198,10 @@ const LSP_HOVER_BATCH_SIZE: usize = 500;
 ///
 /// # Why not `UNION`
 ///
-/// `UNION` would also batch updates but LadybugDB does not support `UNION` /
-/// `UNION ALL` in its Cypher subset (see [`build_symbol_queries`]'s P-09
-/// comment). `UNWIND` is supported and is the idiomatic batch form.
+/// `UNWIND` is the idiomatic batch form for a single statement. A `UNION` of
+/// per-row `MATCH ... SET` statements would repeat the pattern per element;
+/// the subset validator does accept `UNION`, but `UNWIND` keeps the statement
+/// flat and the query text bounded.
 ///
 /// [`escape_cypher_string`]: crate::storage::schema::escape_cypher_string
 #[cfg(feature = "lsp")]
@@ -843,6 +846,15 @@ pub(crate) fn index_core(
     ram_first: bool,
 ) -> Result<IndexOutput, CodeNexusError> {
     let path_ref = Path::new(path);
+    // `--name` is optional: the empty sentinel (see `main::SENTINEL_DEFAULTS`)
+    // means "derive from the indexed path's directory name", mirroring
+    // `main::default_db_path` so the project name and the DB file name agree.
+    let name = if name.trim().is_empty() {
+        derive_project_name(path_ref)
+    } else {
+        name.to_string()
+    };
+    let name = name.as_str();
     let indexer = kit.require::<IndexerModule>()?;
     let result = if ram_first {
         indexer.index_ram_first(path_ref, name, force)?

@@ -65,6 +65,12 @@ pub fn run_context(
 ///
 /// Unlike [`run_context`] which uses BFS graph expansion, this method queries
 /// the storage directly for multi-dimensional context.
+///
+/// Symbol-resolution failures map to [`CodeNexusError::InvalidInput`] (exit 2):
+/// an ambiguous short name reports `ambiguous symbol '<name>': <n> candidates`
+/// and an unknown symbol reports `symbol not found: <name>`, matching the
+/// legacy [`run_context`] path and the documented CLI contract. Other storage
+/// failures stay internal.
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 pub fn run_context_enhanced(
     kit: &AsyncKit<AsyncReady>,
@@ -74,9 +80,15 @@ pub fn run_context_enhanced(
     let storage = kit.require::<StorageModule>()?;
     let project_id = resolve_project_id(&*storage, project)?;
     let collector = ContextCollector::new(&*storage);
-    collector
-        .collect(&project_id, symbol)
-        .map_err(|e| CodeNexusError::Internal(format!("context collect failed: {e}")))
+    collector.collect(&project_id, symbol).map_err(|e| match e {
+        crate::storage::StorageError::AmbiguousSymbol { symbol, count } => {
+            CodeNexusError::InvalidInput(format!("ambiguous symbol '{symbol}': {count} candidates"))
+        }
+        crate::storage::StorageError::NotFound(_) => {
+            CodeNexusError::InvalidInput(format!("symbol not found: {symbol}"))
+        }
+        other => CodeNexusError::Internal(format!("context collect failed: {other}")),
+    })
 }
 
 /// CLI wrapper — prints result to stdout as JSON.
@@ -309,6 +321,8 @@ mod tests {
 
     // ===== run_context_enhanced with ContextCollector =====
 
+    /// An unknown symbol is a usage error (`InvalidInput`, exit 2), matching
+    /// the legacy `run_context` path — not an internal failure.
     #[test]
     fn run_context_enhanced_fails_on_unknown_symbol() {
         let (_dir, db) = fresh_db_path();
@@ -317,11 +331,39 @@ mod tests {
         storage.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});").expect("create project");
         let err = run_context_enhanced(&kit, "demo", "nonexistent.symbol")
             .expect_err("unknown symbol should error");
+        assert!(
+            matches!(err, CodeNexusError::InvalidInput(_)),
+            "expected InvalidInput, got {err:?}"
+        );
         let msg = err.to_string();
         assert!(
-            msg.contains("context collect failed"),
-            "error should mention collect failure: {msg}"
+            msg.contains("symbol not found: nonexistent.symbol"),
+            "error should name the missing symbol: {msg}"
         );
+    }
+
+    /// An ambiguous short name fails fast with the canonical message and exit
+    /// code 2 (`InvalidInput`) — a regression guard for the enhanced path
+    /// previously wrapping ambiguity as an internal error (exit 1).
+    #[test]
+    fn run_context_enhanced_fails_fast_on_ambiguous_symbol() {
+        let (_dir, db) = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        let storage = kit.require::<crate::kit::StorageModule>().expect("storage");
+        storage.execute("CREATE (:Project {id: 'demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});").expect("create project");
+        storage.execute("CREATE (:Function {id: 'f1', project: 'demo', name: 'new', qualifiedName: 'demo.a.new', filePath: '/src/a.rs', startLine: 1, endLine: 2, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a");
+        storage.execute("CREATE (:Function {id: 'f2', project: 'demo', name: 'new', qualifiedName: 'demo.b.new', filePath: '/src/b.rs', startLine: 1, endLine: 2, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b");
+        let err =
+            run_context_enhanced(&kit, "demo", "new").expect_err("ambiguous symbol should error");
+        assert!(
+            matches!(err, CodeNexusError::InvalidInput(_)),
+            "expected InvalidInput, got {err:?}"
+        );
+        assert_eq!(
+            err.to_string(),
+            "invalid input: ambiguous symbol 'new': 2 candidates"
+        );
+        assert_eq!(err.exit_code(), 2);
     }
 
     #[test]
