@@ -129,6 +129,8 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-llvm-cov
       - name: Coverage (fail under 95% lines, default features)
         # cargo 级 --quiet 把构建进度与内层逐测试输出一并压成进度点（原始 358KB
         # 超 CI 日志单流 256KB 上限）；llvm-cov 文本表仍完整打印到 stdout，含
