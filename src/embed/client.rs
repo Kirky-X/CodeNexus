@@ -875,7 +875,8 @@ mod tests {
         let err = result.unwrap_err();
         assert!(
             matches!(err, EmbedError::Unavailable(_)),
-            "expected Unavailable, got: {err}"
+            "expected Unavailable, got {}",
+            err.kind()
         );
     }
 

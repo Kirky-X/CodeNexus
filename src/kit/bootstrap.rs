@@ -558,12 +558,17 @@ mod tests {
 
     #[cfg(feature = "embeddings")]
     #[tokio::test]
+    #[serial_test::serial(i18n_catalog)]
     async fn build_kit_registers_embed_when_feature_on() {
         // Ensure deterministic env state — no API key, no endpoint (local mode).
         std::env::remove_var(crate::embed::API_KEY_ENV);
         std::env::remove_var(crate::embed::OPENAI_API_KEY_ENV);
         std::env::remove_var(crate::embed::EMBED_ENDPOINT_ENV);
         std::env::remove_var(crate::embed::EMBED_MODEL_PATH_ENV);
+        // The error message is a localized catalog entry; init the catalog so
+        // the assertion sees the interpolated model path, not the bare-key
+        // fallback `t` serves before init.
+        crate::i18n::init();
 
         let config = KitBootstrapConfig::new(PathBuf::from(":memory:"));
         let kit = build_kit(&config).await.expect("build_kit");
@@ -574,15 +579,26 @@ mod tests {
         let embed = kit.require_embed().expect("require_embed");
         // Default is local mode; without a model file, embed() must
         // return Unavailable (not MissingApiKey — no API key needed locally).
+        // The message is localized, so assert on the locale-independent
+        // payload (the missing model path), not on any language's wording.
+        let expected = EmbeddingConfig::default()
+            .resolved_model_path()
+            .display()
+            .to_string();
         let result = embed.embed(&["hello"]);
         assert!(
-            matches!(result, Err(crate::embed::EmbedError::Unavailable(ref msg)) if msg.contains("not found")),
-            "expected Unavailable (model not found) in local mode, got {result:?}"
+            matches!(result, Err(crate::embed::EmbedError::Unavailable(ref msg)) if msg.contains(&expected)),
+            "expected Unavailable naming '{expected}', got {}",
+            result
+                .as_ref()
+                .err()
+                .map_or("ok", crate::embed::EmbedError::kind)
         );
     }
 
     #[cfg(feature = "embeddings")]
     #[tokio::test]
+    #[serial_test::serial(i18n_catalog)]
     async fn build_kit_embed_remote_without_key_returns_missing_api_key() {
         // Remote mode (endpoint=Some) without API key → MissingApiKey.
         std::env::remove_var(crate::embed::API_KEY_ENV);
@@ -598,7 +614,11 @@ mod tests {
         let result = embed.embed(&["hello"]);
         assert!(
             matches!(result, Err(crate::embed::EmbedError::MissingApiKey)),
-            "expected MissingApiKey in remote mode, got {result:?}"
+            "expected MissingApiKey in remote mode, got {}",
+            result
+                .as_ref()
+                .err()
+                .map_or("ok", crate::embed::EmbedError::kind)
         );
         std::env::remove_var(crate::embed::EMBED_ENDPOINT_ENV);
     }

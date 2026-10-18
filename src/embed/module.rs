@@ -330,7 +330,8 @@ mod tests {
         let result = cap.embed(&["hello"]);
         assert!(
             matches!(result, Err(EmbedError::MissingApiKey)),
-            "expected MissingApiKey, got {result:?}"
+            "expected MissingApiKey, got {}",
+            result.as_ref().err().map_or("ok", EmbedError::kind)
         );
     }
 
