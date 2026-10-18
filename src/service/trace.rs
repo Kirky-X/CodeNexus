@@ -123,44 +123,53 @@ pub(crate) fn find_start_node_id(
         .map(|n| n.id.clone())
 }
 
-/// Collects cross-service paths by finding `HttpCalls` edges from the start
-/// node in the loaded graph.
+/// Identity of a trace path for de-duplication: the `(name, label)` sequence
+/// of its nodes plus its edge-type sequence.
+type PathIdentity = (Vec<(String, String)>, Vec<String>);
+
+/// Identity of a trace path for de-duplication (see [`PathIdentity`]).
 ///
-/// Each HttpCalls edge produces a [`TracePath`] of depth 1 containing the
-/// start node and the target node. This exposes outbound HTTP dependencies
-/// that the standard `Calls`/`FfiCalls` tracers do not traverse.
-#[cfg(any(feature = "cli", feature = "mcp", test))]
-fn collect_cross_service_paths(graph: &crate::model::Graph, start_id: &str) -> Vec<TracePath> {
-    use crate::model::EdgeType;
-    let node_id: String = start_id.to_string();
-    let mut paths = Vec::new();
-    let Some(start_node) = graph.get_node(&node_id) else {
-        return paths;
-    };
-    let start_trace_node = TraceNode::from(start_node);
-    for edge in graph.edges_from(&node_id) {
-        if edge.edge_type != EdgeType::HttpCalls {
-            continue;
+/// The cross-service tracer is a superset of the standard `Calls`/`FfiCalls`
+/// tracer (it follows the same edges plus `HttpCalls` and reverse
+/// `HandlesRoute`), so its output overlaps the base result. Comparing
+/// identities keeps the cross-service extension strictly additive.
+fn path_identity(path: &TracePath) -> PathIdentity {
+    (
+        path.nodes
+            .iter()
+            .map(|n| (n.name.clone(), n.label.clone()))
+            .collect(),
+        path.edges.iter().map(|e| e.edge_type.clone()).collect(),
+    )
+}
+
+/// Appends `extra` paths to `existing`, skipping paths already present
+/// (compared by [`path_identity`]).
+fn extend_paths_dedup(existing: &mut Vec<TracePath>, extra: Vec<TracePath>) {
+    let mut seen: std::collections::HashSet<PathIdentity> =
+        existing.iter().map(path_identity).collect();
+    for path in extra {
+        if seen.insert(path_identity(&path)) {
+            existing.push(path);
         }
-        let Some(target_node) = graph.get_node(&edge.target) else {
-            continue;
-        };
-        paths.push(TracePath {
-            nodes: vec![start_trace_node.clone(), TraceNode::from(target_node)],
-            edges: vec![TraceEdge::from(edge)],
-            depth: 1,
-        });
     }
-    paths
 }
 
 /// Runs trace against an injected Kit (testable core).
 ///
+/// Unknown symbols are not an error: the result carries an empty `paths` list
+/// (the graph loader returns an empty graph and the trace reports it as an
+/// empty result). Ambiguous symbols keep failing fast via
+/// [`crate::trace::TraceError::AmbiguousSymbol`].
+///
 /// When `path_filter` is non-empty, trace paths are filtered by glob
 /// patterns against node `file_path`. When `detect_cycles` is true, the
 /// loaded subgraph is scanned for call-graph cycles via DFS coloring.
-/// When `cross_service` is true, `HttpCalls` edges from the start node
-/// are appended as additional paths.
+/// When `cross_service` is true, the call traversal is extended with
+/// `HTTP_CALLS` edges and reverse `HANDLES_ROUTE` edges
+/// ([`CallGraphTracer::trace_cross_service`]) so chains can cross service
+/// boundaries; the extra paths are appended without duplicating the plain
+/// call paths.
 #[cfg(any(feature = "cli", feature = "mcp", test))]
 pub fn run_trace(
     kit: &AsyncKit<AsyncReady>,
@@ -177,7 +186,17 @@ pub fn run_trace(
         ))
     })?;
     let trace_engine = kit.require::<TraceModule>()?;
-    let mut result = trace_engine.trace(symbol, tt, depth as usize)?;
+    let mut result = match trace_engine.trace(symbol, tt, depth as usize) {
+        Ok(result) => result,
+        // Unknown symbol → empty result, not an error (TRC-02: the trace of a
+        // symbol that does not exist reports an empty graph).
+        Err(crate::trace::TraceError::SymbolNotFound(_)) => TraceResult {
+            symbol: symbol.to_string(),
+            paths: Vec::new(),
+            cycles: Vec::new(),
+        },
+        Err(e) => return Err(CodeNexusError::Trace(e)),
+    };
 
     let needs_graph = detect_cycles || cross_service;
     let graph = if needs_graph {
@@ -191,8 +210,9 @@ pub fn run_trace(
     if cross_service {
         if let Some(ref graph) = graph {
             if let Some(start_id) = find_start_node_id(graph, symbol) {
-                let cross_paths = collect_cross_service_paths(graph, &start_id);
-                result.paths.extend(cross_paths);
+                let cross_paths =
+                    CallGraphTracer::new(graph).trace_cross_service(&start_id, depth as usize);
+                extend_paths_dedup(&mut result.paths, cross_paths);
             }
         }
     }
@@ -251,7 +271,7 @@ async fn trace(
     name = "trace",
     version = "0.3.5",
     tool_name = "trace",
-    description = "Trace a symbol's call or data-flow paths in the graph. Params: symbol (required); trace_type — calls|dataflow|all (required); depth — max hops, clamped to 10 (default 5); path_filter — glob on file paths (empty = no filter); detect_cycles — report re-entrant paths; cross_service — also traverse HttpCalls edges."
+    description = "Trace a symbol's call or data-flow paths in the graph. Params: symbol (required); trace_type — calls|dataflow|all (required); depth — max hops, clamped to 10 (default 5); path_filter — glob on file paths (empty = no filter); detect_cycles — report re-entrant paths; cross_service — also traverse HTTP_CALLS edges (persisted by `cross_service`) and reverse HANDLES_ROUTE edges."
 )]
 async fn trace_mcp(
     symbol: String,
@@ -295,18 +315,18 @@ mod tests {
             .expect("build_kit")
     }
 
+    /// TRC-02: an unknown symbol reports an empty path list instead of an
+    /// error — the caller gets `{"symbol": …, "paths": []}` with exit 0, the
+    /// same shape as a symbol that exists but has no paths.
     #[test]
-    fn run_trace_returns_trace_error_for_unknown_symbol() {
+    fn run_trace_returns_empty_output_for_unknown_symbol() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(&db);
-        let err = run_trace(&kit, "demo.foo", "calls", 3, "", false, false)
-            .expect_err("unknown symbol on empty DB should error");
-        match err {
-            CodeNexusError::Trace(crate::trace::TraceError::SymbolNotFound(s)) => {
-                assert_eq!(s, "demo.foo");
-            }
-            other => panic!("expected Trace(SymbolNotFound), got {other:?}"),
-        }
+        let output = run_trace(&kit, "demo.foo", "calls", 3, "", false, false)
+            .expect("unknown symbol must not error");
+        assert_eq!(output.symbol, "demo.foo");
+        assert!(output.paths.is_empty(), "unknown symbol → empty paths");
+        assert!(output.cycles.is_empty());
     }
 
     #[test]
@@ -727,68 +747,119 @@ mod tests {
         );
     }
 
-    // Covers collect_cross_service_paths early return when start node
-    // not found in graph (line 139).
-    #[test]
-    fn collect_cross_service_paths_returns_empty_for_nonexistent_start() {
-        use crate::model::Graph;
-        let graph = Graph::new();
-        let paths = collect_cross_service_paths(&graph, "nonexistent_id");
-        assert!(paths.is_empty(), "nonexistent start_id → empty paths");
-    }
+    // ===== cross-service traversal (HttpCalls + reverse HandlesRoute) =====
 
-    // Covers collect_cross_service_paths skipping HttpCalls edges whose
-    // target node is missing from the graph (lines 146-147).
-    #[test]
-    fn collect_cross_service_paths_skips_missing_target_node() {
+    /// Builds a graph shaped like a cross-service chain:
+    /// `caller --CALLS--> client --HTTP_CALLS--> route <--HANDLES_ROUTE-- handler`.
+    fn cross_service_graph() -> crate::model::Graph {
         use crate::model::{Edge, EdgeType, Graph, Node, NodeLabel};
         let mut graph = Graph::new();
-        let start_node = Node::builder(NodeLabel::Function, "caller", "demo.caller")
-            .id("f_a")
-            .file_path("/src/a.rs")
-            .build();
-        graph.add_node(start_node);
-        let edge = Edge::builder("f_a", "f_missing", EdgeType::HttpCalls, "demo")
-            .confidence(0.9)
-            .build();
-        graph.add_edge(edge);
-        let paths = collect_cross_service_paths(&graph, "f_a");
+        for (id, name) in [
+            ("f_caller", "caller"),
+            ("f_client", "client"),
+            ("f_handler", "handler"),
+        ] {
+            graph.add_node(
+                Node::builder(NodeLabel::Function, name, format!("demo.{name}"))
+                    .id(id)
+                    .file_path(format!("/src/{name}.rs"))
+                    .build(),
+            );
+        }
+        graph.add_node(
+            Node::builder(NodeLabel::Route, "/users", "demo./users")
+                .id("r_users")
+                .file_path("/src/routes.rs")
+                .build(),
+        );
+        graph.add_edge(Edge::builder("f_caller", "f_client", EdgeType::Calls, "demo").build());
+        graph.add_edge(
+            Edge::builder("f_client", "r_users", EdgeType::HttpCalls, "demo")
+                .reason("http request")
+                .build(),
+        );
+        graph.add_edge(
+            Edge::builder("f_handler", "r_users", EdgeType::HandlesRoute, "demo").build(),
+        );
+        graph
+    }
+
+    #[test]
+    fn extend_paths_dedup_skips_identical_paths_and_keeps_new_ones() {
+        use crate::trace::{TraceEdge, TraceNode, TracePath};
+        let node = |name: &str| TraceNode {
+            name: name.into(),
+            label: "Function".into(),
+            file_path: None,
+            start_line: None,
+        };
+        let edge = |t: &str| TraceEdge {
+            edge_type: t.into(),
+            reason: None,
+            confidence: 1.0,
+        };
+        let base = TracePath {
+            nodes: vec![node("a"), node("b")],
+            edges: vec![edge("CALLS")],
+            depth: 1,
+        };
+        let mut paths = vec![base.clone()];
+        extend_paths_dedup(
+            &mut paths,
+            vec![
+                base,
+                TracePath {
+                    nodes: vec![node("a"), node("b"), node("c")],
+                    edges: vec![edge("CALLS"), edge("HTTP_CALLS")],
+                    depth: 2,
+                },
+            ],
+        );
+        assert_eq!(paths.len(), 2, "duplicate path must be dropped");
+        assert_eq!(paths[1].depth, 2, "new path must be appended");
+    }
+
+    /// The cross-service tracer walks reverse `HANDLES_ROUTE` edges, so a
+    /// chain `caller → client → route ← handler` reaches the handler node.
+    /// The plain calls tracer stops at `client` (HTTP_CALLS is not a call
+    /// edge), which is exactly what `--cross_service true` extends.
+    #[test]
+    fn trace_cross_service_reaches_handler_through_route() {
+        use crate::trace::CallGraphTracer;
+        let graph = cross_service_graph();
+        let paths = CallGraphTracer::new(&graph).trace_cross_service(&"f_caller".to_string(), 5);
+        let reached_handler = paths
+            .iter()
+            .any(|p| p.nodes.iter().any(|n| n.name == "handler"));
         assert!(
-            paths.is_empty(),
-            "HttpCalls edge with missing target → skip"
+            reached_handler,
+            "cross-service traversal must reach the route handler, got: {:?}",
+            paths
+                .iter()
+                .map(|p| p.nodes.iter().map(|n| n.name.clone()).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
         );
     }
 
-    // Covers collect_cross_service_paths creating a path for a valid
-    // HttpCalls edge (lines 149-157).
+    /// `extend_paths_dedup` must not duplicate the plain call path that the
+    /// standard tracer already produced.
     #[test]
-    fn collect_cross_service_paths_creates_path_for_valid_http_edge() {
-        use crate::model::{Edge, EdgeType, Graph, Node, NodeLabel};
-        let mut graph = Graph::new();
-        let caller = Node::builder(NodeLabel::Function, "caller", "demo.caller")
-            .id("f_a")
-            .file_path("/src/a.rs")
-            .build();
-        let handler = Node::builder(NodeLabel::Function, "handler", "demo.handler")
-            .id("f_b")
-            .file_path("/src/b.rs")
-            .build();
-        graph.add_node(caller);
-        graph.add_node(handler);
-        let edge = Edge::builder("f_a", "f_b", EdgeType::HttpCalls, "demo")
-            .confidence(0.9)
-            .reason("http request")
-            .build();
-        graph.add_edge(edge);
-        let paths = collect_cross_service_paths(&graph, "f_a");
-        assert_eq!(
-            paths.len(),
-            1,
-            "should create 1 path for valid HttpCalls edge"
+    fn cross_service_extension_is_additive_without_duplicates() {
+        use crate::trace::CallGraphTracer;
+        let graph = cross_service_graph();
+        let mut paths = CallGraphTracer::new(&graph).trace(&"f_caller".to_string(), 5);
+        let before = paths.len();
+        let cross = CallGraphTracer::new(&graph).trace_cross_service(&"f_caller".to_string(), 5);
+        extend_paths_dedup(&mut paths, cross);
+        assert!(
+            paths.len() > before,
+            "cross-service traversal must add paths beyond the plain call paths"
         );
-        assert_eq!(paths[0].depth, 1);
-        assert_eq!(paths[0].nodes.len(), 2);
-        assert_eq!(paths[0].edges.len(), 1);
+        let mut ids: Vec<_> = paths.iter().map(path_identity).collect();
+        let total = ids.len();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), total, "dedup must leave no duplicate pairs");
     }
 
     // ===== run_trace: additional combined mode tests =====

@@ -35,8 +35,9 @@ const DEFAULT_ENTRY_PATTERNS: &[&str] = &["main", "Main", "__main__"];
 const HOTSPOT_LIMIT: usize = 10;
 
 /// Symbol tables queried for package grouping. Each has a `qualifiedName`
-/// column. LadybugDB does not support `UNION`, so we issue one query per
-/// table and merge in Rust.
+/// column. One query per table, merged in Rust: the Cypher subset validator
+/// rejects label predicates in `WHERE` (`n:Function OR n:Method`), so the
+/// label has to sit in the `MATCH (n:Label)` pattern.
 const PACKAGE_TABLES: &[&str] = &[
     "Function",
     "Method",

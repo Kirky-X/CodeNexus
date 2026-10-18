@@ -78,7 +78,7 @@ pub fn run_cross_service(
 #[forge(
     name = "cross_service",
     version = "0.3.5",
-    description = "Detect cross-service links by matching HTTP route patterns against caller string literals.",
+    description = "Detect cross-service links by matching HTTP route patterns against caller string literals. Detected HTTP links are persisted as HTTP_CALLS edges (caller -> route) for `trace --cross_service true`; function bodies are read from the indexed sources on disk. Params: project — project name or id (required); protocol — filter (http_rest|grpc|graphql|message_queue|event_bus, empty = all).",
     cli = true
 )]
 async fn cross_service(project: String, protocol: String) -> Result<(), ApiError> {

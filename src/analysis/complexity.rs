@@ -20,6 +20,10 @@ use crate::storage::capability::Storage;
 use crate::storage::error::Result as StorageResult;
 use crate::storage::schema::escape_cypher_string;
 
+// Disk fallback for nodes whose indexed `content` is empty (shared with
+// cross-service detection).
+use super::source_io::{read_source_file_canonical, slice_lines};
+
 /// Complexity severity level for a single metric.
 ///
 /// Variant order matters: `Green < Yellow < Red < Critical` via derived `Ord`.
@@ -1010,87 +1014,6 @@ fn nesting_depth_count(node: Node<'_>, language: Language, current_depth: u32) -
     }
 
     max_depth
-}
-
-/// Reads the full source file at `canonical_root/file_path` with path-traversal
-/// protection. `canonical_root` must already be canonicalized (e.g. via
-/// `Path::canonicalize`). Returns `None` if the file cannot be read or the
-/// resolved path escapes `canonical_root`.
-///
-/// The joined target is canonicalized and must start with `canonical_root`.
-/// This blocks `../` sequences and symlink escapes. Leading `/` in `file_path`
-/// is stripped so stored absolute-looking filePaths are treated as relative to
-/// `canonical_root`.
-///
-/// The file is opened via `File::open` on the canonicalized path and read from
-/// the handle, narrowing the TOCTOU window between canonicalize and read
-/// compared to `fs::read_to_string` (which re-resolves the path internally).
-fn read_source_file_canonical(canonical_root: &Path, file_path: &str) -> Option<String> {
-    use std::fs::File;
-    use std::io::Read;
-
-    let relative = file_path.trim_start_matches('/');
-    let canonical_target = canonical_root.join(relative).canonicalize().ok()?;
-    if !canonical_target.starts_with(canonical_root) {
-        return None;
-    }
-    let mut file = File::open(&canonical_target).ok()?;
-    let mut content = String::new();
-    file.read_to_string(&mut content).ok()?;
-    Some(content)
-}
-
-/// Reads the full source file at `root_path/file_path` with path-traversal
-/// protection. Returns `None` if the file cannot be read or the resolved path
-/// escapes `root_path`.
-///
-/// Convenience wrapper that canonicalizes `root_path` then delegates to
-/// [`read_source_file_canonical`]. Callers reading many files from the same
-/// root should pre-compute the canonical root and call
-/// [`read_source_file_canonical`] directly to avoid repeated canonicalize
-/// syscalls.
-#[cfg(test)]
-fn read_source_file(root_path: &str, file_path: &str) -> Option<String> {
-    let canonical_root = Path::new(root_path).canonicalize().ok()?;
-    read_source_file_canonical(&canonical_root, file_path)
-}
-
-/// Slices `content` by 1-based line range `[start_line, end_line]` (inclusive).
-/// Returns `None` for invalid ranges or `start_line` beyond the file length.
-/// `end_line` is clamped to the actual line count.
-///
-/// Uses lazy `skip().take()` iteration so only the requested lines are
-/// materialized, avoiding a full `Vec<&str>` allocation for large files.
-fn slice_lines(content: &str, start_line: u32, end_line: u32) -> Option<String> {
-    if start_line == 0 || end_line == 0 || start_line > end_line {
-        return None;
-    }
-    let start = (start_line - 1) as usize;
-    let count = (end_line - start_line + 1) as usize;
-    let selected: Vec<&str> = content.lines().skip(start).take(count).collect();
-    if selected.is_empty() {
-        return None;
-    }
-    Some(selected.join("\n"))
-}
-
-/// Reads lines `[start_line, end_line]` (1-indexed, inclusive) from the file
-/// at `root_path/file_path`. Returns `None` if the file cannot be read or the
-/// line range is invalid.
-///
-/// Path-traversal protected via [`read_source_file`]; range slicing via
-/// [`slice_lines`]. Convenience wrapper retained for unit tests; production
-/// code (`ComplexityAnalyzer::analyze`) caches full-file reads and calls
-/// [`read_source_file`] + [`slice_lines`] directly.
-#[cfg(test)]
-fn read_source_range(
-    root_path: &str,
-    file_path: &str,
-    start_line: u32,
-    end_line: u32,
-) -> Option<String> {
-    let content = read_source_file(root_path, file_path)?;
-    slice_lines(&content, start_line, end_line)
 }
 
 /// Analyzes per-function complexity metrics over a Storage graph.
@@ -3053,72 +2976,15 @@ fn f(arr: &[i32], target: i32) -> i32 {
         );
     }
 
-    // --- read_source_range unit tests ---
-
-    #[test]
-    fn read_source_range_returns_lines_from_file() {
-        let dir = TempDir::new().unwrap();
-        let file_path = dir.path().join("lib.rs");
-        std::fs::write(&file_path, "line1\nline2\nline3\nline4\nline5\n").unwrap();
-        let root = dir.path().to_str().unwrap();
-        let content = read_source_range(root, "lib.rs", 2, 4).expect("should read");
-        assert_eq!(content, "line2\nline3\nline4");
-    }
-
-    #[test]
-    fn read_source_range_handles_leading_slash_in_file_path() {
-        let dir = TempDir::new().unwrap();
-        let file_path = dir.path().join("lib.rs");
-        std::fs::write(&file_path, "fn foo() {}\n").unwrap();
-        let root = dir.path().to_str().unwrap();
-        let content = read_source_range(root, "/lib.rs", 1, 1).expect("should read");
-        assert_eq!(content, "fn foo() {}");
-    }
-
-    #[test]
-    fn read_source_range_returns_none_for_missing_file() {
-        let result = read_source_range("/nonexistent/path", "missing.rs", 1, 5);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn read_source_range_returns_none_for_zero_start_line() {
-        let dir = TempDir::new().unwrap();
-        let file_path = dir.path().join("lib.rs");
-        std::fs::write(&file_path, "fn foo() {}\n").unwrap();
-        let root = dir.path().to_str().unwrap();
-        assert!(read_source_range(root, "lib.rs", 0, 1).is_none());
-    }
-
-    #[test]
-    fn read_source_range_returns_none_for_inverted_range() {
-        let dir = TempDir::new().unwrap();
-        let file_path = dir.path().join("lib.rs");
-        std::fs::write(&file_path, "fn foo() {}\n").unwrap();
-        let root = dir.path().to_str().unwrap();
-        assert!(read_source_range(root, "lib.rs", 5, 1).is_none());
-    }
-
-    #[test]
-    fn read_source_range_clamps_end_line_to_file_length() {
-        let dir = TempDir::new().unwrap();
-        let file_path = dir.path().join("lib.rs");
-        std::fs::write(&file_path, "line1\nline2\n").unwrap();
-        let root = dir.path().to_str().unwrap();
-        let content = read_source_range(root, "lib.rs", 1, 10).expect("should read");
-        assert_eq!(content, "line1\nline2");
-    }
-
-    #[test]
-    fn read_source_range_returns_none_for_start_beyond_file() {
-        let dir = TempDir::new().unwrap();
-        let file_path = dir.path().join("lib.rs");
-        std::fs::write(&file_path, "line1\n").unwrap();
-        let root = dir.path().to_str().unwrap();
-        assert!(read_source_range(root, "lib.rs", 100, 200).is_none());
-    }
-
     // --- read_source_file path-traversal protection tests ---
+
+    /// Test helper: canonicalizes `root_path` then reads `file_path` under it
+    /// via the shared [`read_source_file_canonical`] (the production path uses
+    /// a pre-canonicalized root).
+    fn read_source_file(root_path: &str, file_path: &str) -> Option<String> {
+        let canonical_root = Path::new(root_path).canonicalize().ok()?;
+        read_source_file_canonical(&canonical_root, file_path)
+    }
 
     #[test]
     fn read_source_file_returns_content_for_valid_relative_path() {
@@ -3144,32 +3010,6 @@ fn f(arr: &[i32], target: i32) -> i32 {
     #[test]
     fn read_source_file_returns_none_for_missing_root() {
         assert!(read_source_file("/nonexistent/path", "lib.rs").is_none());
-    }
-
-    // --- slice_lines unit tests ---
-
-    #[test]
-    fn slice_lines_returns_expected_range() {
-        let content = "a\nb\nc\nd\ne\n";
-        assert_eq!(slice_lines(content, 2, 4).unwrap(), "b\nc\nd");
-    }
-
-    #[test]
-    fn slice_lines_clamps_end_to_line_count() {
-        let content = "a\nb\n";
-        assert_eq!(slice_lines(content, 1, 10).unwrap(), "a\nb");
-    }
-
-    #[test]
-    fn slice_lines_returns_none_for_invalid_range() {
-        assert!(slice_lines("a\n", 0, 1).is_none());
-        assert!(slice_lines("a\n", 2, 1).is_none());
-        assert!(slice_lines("a\n", 1, 0).is_none());
-    }
-
-    #[test]
-    fn slice_lines_returns_none_for_start_beyond_content() {
-        assert!(slice_lines("a\n", 100, 200).is_none());
     }
 
     // --- analyze: disk fallback for empty content ---

@@ -33,5 +33,10 @@ pub mod rules;
 #[cfg(feature = "complexity")]
 pub mod complexity;
 
+// Shared path-traversal-protected source reads for analyzers that fall back
+// to disk when the indexed `content` column is empty.
+#[cfg(any(feature = "complexity", feature = "analysis"))]
+pub(crate) mod source_io;
+
 // Re-export EdgeType for analysis modules needing multi-edge-type queries.
 pub use crate::model::EdgeType;

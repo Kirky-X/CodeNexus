@@ -4,7 +4,7 @@
 //! Cross-service link detection.
 //!
 //! Matches HTTP route patterns against string literals found in caller
-//! function bodies, then persists `CROSS_SERVICE_CALLS` edges into the
+//! function bodies, then persists `HTTP_CALLS` edges into the
 //! `CodeRelation` table. Current scope is HTTP REST only — gRPC/GraphQL/tRPC
 //! detection is explicitly out of scope per the analysis spec.
 //!
@@ -22,7 +22,7 @@
 //!    - **Wildcard**: pattern contains `*`; `*` matches any sequence
 //!      (including `/`).
 //! 5. On match, build a [`CrossServiceLink`] and persist a
-//!    `CROSS_SERVICE_CALLS` edge into the `CodeRelation` table (LadybugDB
+//!    `HTTP_CALLS` edge into the `CodeRelation` table (LadybugDB
 //!    stores edges as nodes per the convention used by `community.rs`).
 //!
 //! # Deterministic matching
@@ -37,10 +37,19 @@ use crate::storage::error::Result as StorageResult;
 use crate::storage::schema::escape_cypher_string;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-/// Edge type stored on `CodeRelation.type` for cross-service links.
-const CROSS_SERVICE_CALLS_EDGE_TYPE: &str = "CROSS_SERVICE_CALLS";
+/// Edge type stored on `CodeRelation.type` for detected cross-service links.
+///
+/// Links persist as `HTTP_CALLS` — the documented inferred edge type for
+/// "function makes an HTTP call to a route" (`src/model/edge_type.rs`). That
+/// keeps them out of the plain call tracer, while `trace --cross_service true`
+/// traverses them (forward `HTTP_CALLS` + reverse `HANDLES_ROUTE`) and
+/// `dead_code` treats the caller as live.
+fn link_edge_type() -> &'static str {
+    crate::model::EdgeType::HttpCalls.as_db_type()
+}
 
 /// The kind of match between a route pattern and a string literal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,7 +107,7 @@ impl<'a> CrossServiceLinker<'a> {
         }
     }
 
-    /// Detects cross-service links and persists `CROSS_SERVICE_CALLS` edges.
+    /// Detects cross-service links and persists `HTTP_CALLS` edges.
     ///
     /// # Errors
     ///
@@ -128,7 +137,7 @@ impl<'a> CrossServiceLinker<'a> {
                     if let Some(match_type) = match_route(&route.path, literal) {
                         let edge_key = (caller.id.clone(), route.id.clone());
                         if !existing_edges.contains(&edge_key) {
-                            self.persist_edge(&next_edge_id, &caller.id, &route.id)?;
+                            self.persist_edge(&next_edge_id, &caller.id, &route.id, match_type)?;
                             next_edge_id += 1;
                         }
                         links.push(CrossServiceLink {
@@ -169,9 +178,9 @@ impl<'a> CrossServiceLinker<'a> {
     }
 
     /// Loads all `Function` and `Method` nodes for the project with their
-    /// `content` field. LadybugDB Cypher subset does not support `UNION`,
-    /// so we issue two queries and merge in Rust (same pattern as
-    /// `architecture.rs`).
+    /// `content` field. The Cypher subset validator rejects label predicates
+    /// in `WHERE` (`n:Function OR n:Method`), so we issue two queries and
+    /// merge in Rust (same pattern as `architecture.rs`).
     fn load_callers(&self) -> StorageResult<Vec<CallerRow>> {
         let escaped = escape_cypher_string(&self.project);
         let mut out = Vec::new();
@@ -179,43 +188,44 @@ impl<'a> CrossServiceLinker<'a> {
             let cypher = format!(
                 "MATCH (n:{table}) WHERE n.project = '{escaped}' \
                  RETURN n.id AS id, n.filePath AS file_path, \
-                 n.startLine AS start_line, n.content AS content;"
+                 n.startLine AS start_line, n.endLine AS end_line, n.content AS content;"
             );
             let rows = self.storage.query(&cypher)?;
             for row in rows {
-                if row.len() < 4 {
+                if row.len() < 5 {
                     continue;
                 }
                 let id = row[0].as_str().unwrap_or_default().to_string();
                 let file_path = row[1].as_str().unwrap_or_default().to_string();
-                let start_line = row[2]
-                    .as_i64()
-                    .map(|v| v as u32)
-                    .or_else(|| row[2].as_u64().map(|v| v as u32))
-                    .unwrap_or(0);
-                let content = row[3].as_str().unwrap_or_default().to_string();
+                let start_line = row_u32(&row[2]);
+                let end_line = row_u32(&row[3]);
+                let content = row[4].as_str().unwrap_or_default().to_string();
                 if !id.is_empty() {
                     out.push(CallerRow {
                         id,
                         file_path,
                         start_line,
+                        end_line,
                         content,
                     });
                 }
             }
         }
+        let root = canonical_project_root(self.storage, &self.project);
+        backfill_content_from_disk(&mut out, root.as_deref());
         Ok(out)
     }
 
-    /// Loads existing `CROSS_SERVICE_CALLS` edges for the project, returning
+    /// Loads existing `HTTP_CALLS` edges for the project, returning
     /// the set of `(caller_id, route_id)` pairs already persisted. Used for
     /// idempotent insertion (no duplicate edges on repeated `link()` calls).
     fn load_existing_edges(&self) -> StorageResult<std::collections::HashSet<(String, String)>> {
         let escaped = escape_cypher_string(&self.project);
         let cypher = format!(
-            "MATCH (e:CodeRelation) WHERE e.type = 'CROSS_SERVICE_CALLS' \
+            "MATCH (e:CodeRelation) WHERE e.type = '{}' \
              AND e.project = '{escaped}' \
-             RETURN e.source AS source, e.target AS target;"
+             RETURN e.source AS source, e.target AS target;",
+            link_edge_type()
         );
         let rows = self.storage.query(&cypher)?;
         let mut out = std::collections::HashSet::new();
@@ -232,7 +242,7 @@ impl<'a> CrossServiceLinker<'a> {
         Ok(out)
     }
 
-    /// Returns the next edge id to use for new `CROSS_SERVICE_CALLS` edges.
+    /// Returns the next edge id to use for new cross-service link edges.
     /// Uses a deterministic prefix + 1-based index to keep ids readable.
     fn next_edge_id(
         &self,
@@ -240,8 +250,9 @@ impl<'a> CrossServiceLinker<'a> {
     ) -> StorageResult<u64> {
         let escaped = escape_cypher_string(&self.project);
         let cypher = format!(
-            "MATCH (e:CodeRelation) WHERE e.type = 'CROSS_SERVICE_CALLS' \
-             AND e.project = '{escaped}' RETURN e.id AS id;"
+            "MATCH (e:CodeRelation) WHERE e.type = '{}' \
+             AND e.project = '{escaped}' RETURN e.id AS id;",
+            link_edge_type()
         );
         let rows = self.storage.query(&cypher)?;
         let mut max_idx = 0u64;
@@ -260,19 +271,35 @@ impl<'a> CrossServiceLinker<'a> {
         Ok(max_idx + 1)
     }
 
-    /// Persists a single `CROSS_SERVICE_CALLS` edge into the `CodeRelation`
+    /// Persists a single cross-service link edge into the `CodeRelation`
     /// table. Source = caller id, target = route id (matches the
     /// `HANDLES` edge direction convention used by `architecture.rs`).
-    fn persist_edge(&self, idx: &u64, caller_id: &str, route_id: &str) -> StorageResult<()> {
+    ///
+    /// The edge is typed `HTTP_CALLS` with a confidence inside that type's
+    /// documented range (0.80–0.90, `EdgeType::confidence_range`) and the
+    /// `GLOBAL` tier — route-pattern matching carries no file/import
+    /// relationship.
+    fn persist_edge(
+        &self,
+        idx: &u64,
+        caller_id: &str,
+        route_id: &str,
+        match_type: MatchType,
+    ) -> StorageResult<()> {
         let edge_id = format!("csl_{idx}");
+        let confidence = match match_type {
+            MatchType::Exact => 0.90,
+            MatchType::Parameterized => 0.85,
+            MatchType::Wildcard | MatchType::Pattern => 0.80,
+        };
         let cypher = format!(
             "CREATE (:CodeRelation {{id: '{}', source: '{}', target: '{}', \
-             type: '{}', confidence: 1.0, confidenceTier: 'High', reason: 'route pattern match', \
-             startLine: 0, project: '{}'}});",
+             type: '{}', confidence: {confidence}, confidenceTier: 'GLOBAL', \
+             reason: 'route pattern match', startLine: 0, project: '{}'}});",
             escape_cypher_string(&edge_id),
             escape_cypher_string(caller_id),
             escape_cypher_string(route_id),
-            CROSS_SERVICE_CALLS_EDGE_TYPE,
+            link_edge_type(),
             escape_cypher_string(&self.project),
         );
         self.storage.execute(&cypher)
@@ -576,31 +603,31 @@ impl<'a> CrossServiceDetector<'a> {
             let cypher = format!(
                 "MATCH (n:{table}) WHERE n.project = '{escaped}' \
                  RETURN n.id AS id, n.filePath AS file_path, \
-                 n.startLine AS start_line, n.content AS content;"
+                 n.startLine AS start_line, n.endLine AS end_line, n.content AS content;"
             );
             let rows = self.storage.query(&cypher)?;
             for row in rows {
-                if row.len() < 4 {
+                if row.len() < 5 {
                     continue;
                 }
                 let id = row[0].as_str().unwrap_or_default().to_string();
                 let file_path = row[1].as_str().unwrap_or_default().to_string();
-                let start_line = row[2]
-                    .as_i64()
-                    .map(|v| v as u32)
-                    .or_else(|| row[2].as_u64().map(|v| v as u32))
-                    .unwrap_or(0);
-                let content = row[3].as_str().unwrap_or_default().to_string();
+                let start_line = row_u32(&row[2]);
+                let end_line = row_u32(&row[3]);
+                let content = row[4].as_str().unwrap_or_default().to_string();
                 if !id.is_empty() {
                     out.push(CallerRow {
                         id,
                         file_path,
                         start_line,
+                        end_line,
                         content,
                     });
                 }
             }
         }
+        let root = canonical_project_root(self.storage, project);
+        backfill_content_from_disk(&mut out, root.as_deref());
         Ok(out)
     }
 }
@@ -616,7 +643,80 @@ struct CallerRow {
     id: String,
     file_path: String,
     start_line: u32,
+    end_line: u32,
     content: String,
+}
+
+/// Reads the caller's source lines `[start_line, end_line]` (1-based,
+/// inclusive) from `canonical_root/file_path`.
+///
+/// The indexer does not persist `Function.content` (the column exists but
+/// stays NULL), so detection falls back to the file on disk, sliced to the
+/// function's line range. `canonical_root` is the project's canonicalized
+/// `rootPath` — stored `filePath` values are relative to it. Returns `None`
+/// when the root is unknown, the file is unreadable, or the range is invalid.
+fn read_caller_source(
+    canonical_root: Option<&Path>,
+    file_path: &str,
+    start_line: u32,
+    end_line: u32,
+) -> Option<String> {
+    let root = canonical_root?;
+    crate::analysis::source_io::read_source_slice_canonical(root, file_path, start_line, end_line)
+}
+
+/// Returns the project's canonicalized `rootPath`.
+///
+/// Indexed `filePath` values are relative to this root, so the disk fallback
+/// needs it to resolve sources. Returns `None` when the project row (or the
+/// table, on a fresh DB) is absent — callers then skip the fallback instead
+/// of failing.
+fn canonical_project_root(storage: &dyn Storage, project: &str) -> Option<PathBuf> {
+    let escaped = escape_cypher_string(project);
+    let cypher = format!(
+        "MATCH (p:Project) WHERE p.id = '{escaped}' OR p.name = '{escaped}' \
+         RETURN p.rootPath AS root;"
+    );
+    let rows = match storage.query(&cypher) {
+        Ok(rows) => rows,
+        Err(e) if crate::storage::is_table_missing_error(&e) => return None,
+        Err(_) => return None,
+    };
+    let root = rows
+        .into_iter()
+        .next()
+        .and_then(|row| row.into_iter().next())
+        .and_then(|v| v.as_str().map(String::from))?;
+    if root.is_empty() {
+        return None;
+    }
+    Path::new(&root).canonicalize().ok()
+}
+
+/// Converts a query cell holding a line number into `u32` (0 when absent).
+fn row_u32(value: &serde_json::Value) -> u32 {
+    value
+        .as_i64()
+        .map(|v| v as u32)
+        .or_else(|| value.as_u64().map(|v| v as u32))
+        .unwrap_or(0)
+}
+
+/// Fills `content` from the source file on disk when the indexed column is
+/// empty (the common case — see [`read_caller_source`]).
+fn backfill_content_from_disk(callers: &mut [CallerRow], canonical_root: Option<&Path>) {
+    for caller in callers.iter_mut() {
+        if caller.content.is_empty() {
+            if let Some(text) = read_caller_source(
+                canonical_root,
+                &caller.file_path,
+                caller.start_line,
+                caller.end_line,
+            ) {
+                caller.content = text;
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -980,10 +1080,13 @@ mod tests {
         s.execute(&cypher).expect("create function");
     }
 
+    /// Counts persisted cross-service link edges: `HTTP_CALLS` rows that carry
+    /// the linker's reason marker.
     fn count_cross_service_edges(kit: &AsyncKit<AsyncReady>, project: &str) -> usize {
         let s = storage(kit);
         let cypher = format!(
-            "MATCH (e:CodeRelation) WHERE e.type = 'CROSS_SERVICE_CALLS' AND e.project = '{}' \
+            "MATCH (e:CodeRelation) WHERE e.type = 'HTTP_CALLS' \
+             AND e.reason = 'route pattern match' AND e.project = '{}' \
              RETURN e.id AS id;",
             escape_cypher_string(project),
         );
@@ -1235,7 +1338,7 @@ mod tests {
         assert_eq!(
             count_cross_service_edges(&kit, "demo"),
             1,
-            "CROSS_SERVICE_CALLS edge should be persisted"
+            "HTTP_CALLS link edge should be persisted"
         );
     }
 
@@ -2294,6 +2397,111 @@ mod tests {
         assert!(matches.is_empty(), "empty-content caller should be skipped");
     }
 
+    // ====================================================================
+    // Source-file fallback when the `content` column is NULL
+    // ====================================================================
+
+    /// Seeds a Project row whose `rootPath` is `root`, so the disk fallback can
+    /// resolve relative `filePath` values.
+    fn create_project_rooted_at(kit: &AsyncKit<AsyncReady>, id: &str, root: &str) {
+        let s = storage(kit);
+        s.execute(&format!(
+            "CREATE (:Project {{id: '{id}', name: '{id}', rootPath: '{}', language: 'rust', \
+             fileCount: 1, indexedAt: 1000, lastCommit: 'abc'}});",
+            escape_cypher_string(root),
+        ))
+        .expect("create project");
+    }
+
+    #[test]
+    fn read_caller_source_requires_root_and_valid_range() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("caller.rs"), "one\ntwo\nthree\n").unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        assert_eq!(
+            read_caller_source(Some(&root), "caller.rs", 2, 3).as_deref(),
+            Some("two\nthree")
+        );
+        // Without a project root there is nothing to resolve against.
+        assert_eq!(read_caller_source(None, "caller.rs", 1, 2), None);
+        // Out-of-range start and unreadable file yield None.
+        assert_eq!(read_caller_source(Some(&root), "caller.rs", 9, 10), None);
+        assert_eq!(read_caller_source(Some(&root), "missing.rs", 1, 2), None);
+    }
+
+    /// Regression: the indexer stores no `Function.content` (the column stays
+    /// NULL), so detection must fall back to the caller's source file sliced
+    /// to its line range — otherwise every real index silently detects
+    /// nothing.
+    #[test]
+    fn detect_http_reads_source_file_when_content_column_is_null() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("caller.rs"),
+            "fn caller() {\n    let url = \"/api/users\";\n}\n",
+        )
+        .unwrap();
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_project_rooted_at(&kit, "demo", dir.path().to_str().unwrap());
+        create_route(&kit, "r1", "demo", "/api/users");
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "caller.rs",
+            1,
+            "",
+        );
+        let s = storage(&kit);
+        let detector = CrossServiceDetector::new(&*s);
+        let matches = detector.detect_http("demo").expect("detect_http");
+        assert_eq!(
+            matches.len(),
+            1,
+            "source-file fallback must detect the route literal, got {matches:?}"
+        );
+        assert_eq!(matches[0].callee, "r1");
+        assert_eq!(matches[0].match_type, MatchType::Exact);
+    }
+
+    /// The persisted-link path (`CrossServiceLinker::link`) must use the same
+    /// fallback so `cross_service` produces links on a real index.
+    #[test]
+    fn linker_persists_links_from_source_file_when_content_is_null() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("caller.rs"),
+            "fn caller() {\n    let url = \"/api/users\";\n}\n",
+        )
+        .unwrap();
+        let db = fresh_db_path();
+        let kit = build_kit_for_db(&db);
+        create_project_rooted_at(&kit, "demo", dir.path().to_str().unwrap());
+        create_route(&kit, "r1", "demo", "/api/users");
+        create_function_with_content(
+            &kit,
+            "f1",
+            "demo",
+            "caller",
+            "demo.caller",
+            "caller.rs",
+            1,
+            "",
+        );
+        let s = storage(&kit);
+        let linker = CrossServiceLinker::new(&*s, "demo");
+        let links = linker.link().expect("link");
+        assert_eq!(
+            links.len(),
+            1,
+            "linker must detect the route literal from disk, got {links:?}"
+        );
+        assert_eq!(count_cross_service_edges(&kit, "demo"), 1);
+    }
+
     #[test]
     fn detect_grpc_skips_empty_content_caller() {
         let db = fresh_db_path();
@@ -2571,7 +2779,7 @@ mod tests {
         assert_eq!(
             count_cross_service_edges(&kit, "demo"),
             2,
-            "should have 2 CROSS_SERVICE_CALLS edges"
+            "should have 2 HTTP_CALLS link edges"
         );
     }
 
