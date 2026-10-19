@@ -9,6 +9,7 @@ CodeNexus 的所有重要变更均记录于此文件。
 
 ## 📋 目录
 
+- [Unreleased](#unreleased)
 - [0.4.0-rc.2 — 2026-10-16](#040-rc2---2026-10-16)
 - [0.3.13-rc.1 — 2026-09-21](#0313-rc1---2026-09-21)
 - [0.3.12 — 2026-07-30](#0312---2026-07-30)
@@ -27,6 +28,24 @@ CodeNexus 的所有重要变更均记录于此文件。
 - [0.1.0 — 2026-06-29](#010---2026-06-29)
 
 ---
+
+## [Unreleased]
+
+### Fixed
+
+- **fix(index): 落库前边完整性门禁，消除 DQ-004 孤儿边并修复三处建边缺陷** — `LoadPhase` 在写入事务前新增 `enforce_edge_integrity`：缺失且带 `#` 的边源归属到 `#` 剥离后的父实体（repair）、按 id 串全局去重（修 `COPY FROM` 主键冲突）、端点不在 graph∪DB 的边丢弃（逐边 `debug!` + 聚合 `warn`）。连带修复：`resolve/imports.rs` 中 `FilePathIndex::lookup` 的 `(相对路径, file_id)` 返回值被颠倒解构，导致 IMPORTS/REEXPORTS/DEPENDS_ON 边的 source 全是匹配不到节点的相对路径、且目标解析器把 file_uuid 当相对路径（项目内导入误判为外部依赖）；`LoadPhase` 对无 `filePath` 标签节点（`ExternalPackage` 等）的存活者跳过重插，修复增量/热 `--force` 的主键冲突崩溃回滚。正确性语义：存活域 = 旧节点 − 待删路径行 ∪ 新图节点；`show_tables` 预检替代错误子串吞噬；NULL `filePath` 行判不存活。性能：fresh 全量索引 +10.4%（修复两类真实崩溃的不可约成本）。验证：`cargo test --lib` 4702 passed（新增 16 个测试）、clippy 0 warning。
+
+- **fix(ci): coverage job 补装 cargo-llvm-cov** — `taiki-e/install-action` 未传 `tool` 输入导致未安装任何工具，coverage job 持续以 `no such command: llvm-cov` 失败；按 fuzz-smoke job 的写法补 `tool: cargo-llvm-cov`。本地 pre-push 同款命令实测行覆盖率 ≥95%。
+
+- **fix(embed): 测试断言改用 `kind()` 静态标签，消除 CodeQL cleartext-logging 告警** — `EmbedError` 新增 `kind()`（返回 `&'static str` 变体标签，零分配、无通配臂）；`module.rs` / `bootstrap.rs` 三处 assert 消息与 `client.rs` 同类下游点不再格式化完整 `embed()` 返回值；`bootstrap.rs` 的断言改为 locale 无关的模型路径载荷并接入 i18n 串行组（修复 zh locale / 单独运行下必失败）。验证：`cargo test --lib` 4691 passed（含 zh/en/无 locale 三态）。
+
+### Changed
+
+- **docs(security): 漏洞报告以 GitHub 安全通告为首选渠道** — 安全通告链接统一指向已验证存在的 `/security/policy` 页，邮箱降为仅当首选通道不可用时的兜底渠道；移除不可达联系邮箱，统一为经 MX 校验的 `Kirky-X@outlook.com`；模糊团队署名统一为具体个人署名 Kirky.X；修正 CODE_OF_CONDUCT / FAQ 的渠道顺序。
+
+- **docs(readme): 路线图校准 Web UI 与图可视化状态** — 「3D graph-viewer 深度集成仍在规划中」的 📋 条目改为 ✅：v0.4.0-rc.2 已交付 opt-in `webui` feature 与 `codenexus webui [--port]` 内嵌服务（前端 `graph-viewer/dist` 编译期嵌入、仅回环绑定 + `x-graph-token` + Host 校验），以及 `diagram`/`arch_diff` 的架构图 HTML、语义 Delta 与快照合流（`--viewer_url`）；后续增强为更多图表类型与 diagram↔viewer 双向交互。README_EN 同步补齐 `webui` feature 表行、子命令说明与路线图条目。
+
+- **docs(assets): 主 logo 换为新版 1254×1254 方图并统一展示尺寸 240** — `docs/assets/CodeNexus.png` 内容替换为新版方图（引用路径不变）；README.md / README_EN.md 主 logo 展示尺寸由 180/200 统一为 240，与工作区其他仓库口径一致。
 
 ## [0.4.0-rc.2] — 2026-10-16
 
@@ -409,6 +428,7 @@ Initial public release. CodeNexus indexes source code into a queryable knowledge
 - **Database corruption detection** — corrupt LadybugDB files are detected at startup and reported with a distinct exit code (4) instead of being loaded into a half-valid state.
 - **`.env` files ignored by default** in `.gitignore`, with an explicit `!.env.example` allow-list so the template is tracked but real secrets never are.
 
+[Unreleased]: https://github.com/Kirky-X/codenexus/compare/v0.4.0-rc.2...HEAD
 [0.4.0-rc.2]: https://github.com/Kirky-X/codenexus/compare/v0.3.13-rc.1...v0.4.0-rc.2
 [0.3.11]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.11
 [0.3.10]: https://github.com/Kirky-X/codenexus/releases/tag/v0.3.10

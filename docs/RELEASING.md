@@ -16,6 +16,7 @@
 | 5 | 命令参数：`src/service/<cmd>.rs` 的 `#[forge]` CLI wrapper 签名 | — | `skill/references/commands.md` 对应条目 | 新增/改签名命令必须同步 commands.md 的 Options 列表与 sentinel 默认值（`src/main.rs` `SENTINEL_DEFAULTS`） |
 | 6 | advisory 忽略清单 | `deny.toml`（单一事实源） | `.cargo/audit.toml`（同步镜像；cargo-audit 只读该路径或 `~/.cargo/audit.toml`，根目录同名文件不会被加载）；CI audit-check ignore 由 deny.toml grep 生成 | 只改 deny.toml 并更新复核日期，再手动同步 `.cargo/audit.toml`；注释中只允许出现被 ignore 的 RUSTSEC 编号 |
 | 7 | 基库依赖口径 | `Cargo.toml`（trait-kit/sdforge/oxcache/inklog/limiteron/lbug/vecboost 等 base 库一律 crates.io version req，**无** path / `[patch.crates-io]`——vecboost 0.3.0-rc.2 起回归 crates.io，git patch 临时安排已随上游 rc.2 发布解除） | `Cargo.lock`（刷新后同 commit 入库） | 升级基库时同步 version req 至已发布最新并刷新 lockfile；禁止重新引入跨仓 path/patch（本地联调用 `cargo patch` 类临时手段且不入库）；release.yml 的 patch 守卫保留为常驻保险（再出现 patch 生效期间会拒绝 crates.io 发布） |
+| 8 | 自上个 tag 以来的行为变更：`git log --oneline $(git describe --tags --abbrev=0)..HEAD`（重点 feat/fix/perf） | — | `docs/CHANGELOG.md` 的 `## [Unreleased]` | tag 后的行为修复/新增/变更须先登记 `[Unreleased]`；发布时整体并入新版本段，不保留空段 |
 
 ## 机械校验（发布前跑一遍）
 
@@ -30,6 +31,13 @@ grep -c '^lang-' Cargo.toml
 grep -c '\[\[bin\]\]' examples/Cargo.toml
 # 5. 文档中不得再出现的过期口径
 grep -rn "28 subcommand\|8 languages\|Supported languages (8)\|6 个可运行示例\|6 runnable" README.md README_EN.md docs/ skill/ && echo "发现过期数字！" || echo "OK"
+
+# 6. Unreleased 登记（上个 tag 之后存在 feat/fix/perf 时必须存在）
+if git log --oneline "$(git describe --tags --abbrev=0)"..HEAD --grep='^\(feat\|fix\|perf\)' | grep -q .; then
+  grep -q '^## \[Unreleased\]' docs/CHANGELOG.md && echo "OK" || echo "缺少 [Unreleased] 登记！"
+else
+  echo "OK（无行为变更）"
+fi
 ```
 
 > 上述 1–4 的期望值随版本增长，**以对账项表格中事实源命令的输出为准**，不要回填本文件的数字。

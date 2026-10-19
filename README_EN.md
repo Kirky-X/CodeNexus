@@ -176,6 +176,7 @@ Requires Rust 1.97.1 or later (MSRV, matching `rust-version` in `Cargo.toml` and
 | `cli`             | Enabled | CLI binary (sdforge `cli` transport, required for the binary) |
 | `cache`           | Enabled | Query result cache (oxcache) |
 | `i18n`            | Enabled | Unicode case folding + NFC normalization (ICU4X) |
+| `webui`           | —       | Embedded graph-viewer Web UI: launched by `codenexus webui` (frontend `graph-viewer/dist` assets embedded at compile time; opt-in, not part of `full`) |
 
 > **Logging**: inklog is the only log backend (console + daily-rotating file sink with 30-day retention). inklog is pulled in with `default-features = false`; default (`full`) builds compile the zstd backend through vecboost's `inklog/compression` feature (cargo feature unification), so `compress = true` produces zstd-compressed rotation files. Feature sets without vecboost (e.g. `minimal`) compile no compression backend at all, and compression is skipped (warning, no compressed files). The gzip (flate2) backend is not enabled. The optional tracing-subscriber backend has been removed.
 
@@ -243,6 +244,8 @@ CodeNexus ships **37 subcommands** (plus the `codenexus mcp` serve mode), groupe
 - **Security & gates**: `taint` / `supply` / `ci` / `lint`
 - **Artifacts & agent ecosystem**: `hub` / `skill` / `ask` / `evolve`
 - **Multi-agent & LSP**: `setup` / `hook` / `lsp_goto_def` / `lsp_hover`
+
+With the `webui` feature enabled, an additional **`webui`** subcommand starts the embedded graph-viewer Web UI in one command (see [📖 User Guide · Embedded Web UI](docs/USER_GUIDE.md#-内嵌-web-ui-graph-viewer)). Every command is also available through the **`cn`** alias (same CLI surface as `codenexus`, e.g. `cn webui`, `cn index ...`).
 
 Full flag semantics and runnable examples for every command are in the [📖 User Guide · Command Reference](docs/USER_GUIDE.md); complexity metrics and thresholds in the [📖 User Guide · Complexity Analysis](docs/USER_GUIDE.md), dead-code configuration in the [📖 User Guide · Dead Code Detection](docs/USER_GUIDE.md).
 
@@ -411,7 +414,7 @@ Do not report security vulnerabilities through public issues. Use the GitHub [Se
 <tr><td align="center">✅</td><td>Large-repo memory defenses</td><td>v0.3.11 — Large-repo indexing OOM fix (L1–L7 seven-layer defense): <code>MemoryBudget</code> three-level memory pressure + <code>Graph::nodes_view/edges_view</code> iterators + streaming CSV + mpsc channel parallel parsing + L5 adaptive degradation + L6 pipeline streaming (<code>ctx.remove</code> replaces <code>Graph::clone</code>) + L7 LadybugDB buffer_pool cap (4 GB) + on-demand LSP startup + RAM-first 8× amplification budget. Peak memory on a 70 GB host dropped from 60 GB to ~4 GB</td></tr>
 <tr><td align="center">✅</td><td>In-house base library upgrades</td><td>Upgrade of in-house base libraries to crates.io RCs (trait-kit 0.5.0-rc.9, sdforge / oxcache 0.5.0-rc.8, inklog 0.3.0-rc.9); MSRV 1.97.1</td></tr>
 <tr><td align="center">✅</td><td>Feature expansion wave (feature-expansion-wave)</td><td>2026-09 — 12 capabilities ranked by RICE: token budgeter (internal `service::budget` library capability — no `--budget` CLI parameter exposed), <code>ci</code> architecture gates (with an official GitHub Action), <code>lint</code> custom architecture rule packs, <code>skill</code> skill sync, <code>ask</code> natural-language entry, graph-viewer snapshot integration (<code>diagram</code>/<code>arch_diff</code> <code>--viewer_url</code>), daemon impact alerts (DaemonConfig field, CLI wiring pending), Kotlin/Swift/Solidity language recognition (extension mapping and taint rules; tree-sitter parsing not yet supported), <code>taint</code> security audit (built-in source/sink rule library), <code>supply</code> supply-chain view (ExternalPackage/DEPENDS_ON), <code>evolve</code> architecture evolution replay, <code>hub</code> artifact client (protocol v1)</td></tr>
-<tr><td align="center">📋</td><td>Web UI & graph visualization</td><td>Web UI / graph visualization on top of the query facade (<code>diagram</code>/<code>arch_diff</code> already ship architecture HTML and semantic deltas; 3D graph-viewer integration and more chart types are still planned)</td></tr>
+<tr><td align="center">✅</td><td>Web UI & graph visualization</td><td>v0.4.0-rc.2 — opt-in <code>webui</code> feature: <code>codenexus webui [--port]</code> starts the embedded 3D graph-viewer in one command (React + react-three-fiber frontend assets from <code>graph-viewer/dist</code> embedded into the binary at compile time; loopback-only binding + <code>x-graph-token</code> + Host validation); <code>diagram</code>/<code>arch_diff</code> ship architecture HTML, semantic deltas, and graph-viewer snapshot integration (<code>--viewer_url</code>). Planned enhancements: more chart types and two-way diagram↔viewer interaction</td></tr>
 </table>
 
 ---
