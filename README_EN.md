@@ -2,7 +2,7 @@
 
 <img src="docs/assets/CodeNexus.png" alt="CodeNexus Logo" width="240">
 
-[![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) [![Crates.io](https://img.shields.io/crates/v/codenexus.svg)](https://crates.io/crates/codenexus) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Rust Version](https://img.shields.io/badge/rust-1.97.1%2B-orange.svg)](https://www.rust-lang.org)
+[![Rust 2021](https://img.shields.io/badge/Rust-2021-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![Rustc 1.97.1+](https://img.shields.io/badge/Rustc-1.97.1+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/) [![crates.io](https://img.shields.io/crates/v/codenexus?style=for-the-badge)](https://crates.io/crates/codenexus) [![downloads](https://img.shields.io/crates/d/codenexus?style=for-the-badge)](https://crates.io/crates/codenexus) [![CI](https://img.shields.io/github/actions/workflow/status/Kirky-X/codenexus/ci.yml?branch=main&label=CI&style=for-the-badge)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) [![license](https://img.shields.io/crates/l/codenexus?style=for-the-badge)](LICENSE)
 
 [CN](README.md) | **English**
 
