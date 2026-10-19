@@ -4,7 +4,7 @@
 
 [![Rust 2021](https://img.shields.io/badge/Rust-2021-edded?logo=rust&style=for-the-badge)](https://www.rust-lang.org/) [![Rustc 1.97.1+](https://img.shields.io/badge/Rustc-1.97.1+-orange.svg?style=for-the-badge)](https://www.rust-lang.org/) [![crates.io](https://img.shields.io/crates/v/codenexus?style=for-the-badge)](https://crates.io/crates/codenexus) [![downloads](https://img.shields.io/crates/d/codenexus?style=for-the-badge)](https://crates.io/crates/codenexus) [![CI](https://img.shields.io/github/actions/workflow/status/Kirky-X/codenexus/ci.yml?branch=main&label=CI&style=for-the-badge)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) [![license](https://img.shields.io/crates/l/codenexus?style=for-the-badge)](LICENSE)
 
-[CN](README.md) | **English**
+[中文](README.md) | **English**
 
 **A multi-language code knowledge graph tool built on LadybugDB and tree-sitter**
 
@@ -36,7 +36,7 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 ## 📋 Table of Contents
 
 <details open>
-<summary>📑 目录</summary>
+<summary>📑 Table of Contents</summary>
 
 - [✨ Key Features](#-key-features)
 - [🚀 Quick Start](#-quick-start)
@@ -118,7 +118,7 @@ Beyond the core capabilities above, CodeNexus also ships `context` assembly (tok
 ### 📦 Installation
 
 <details>
-<summary>📄 代码 · bash</summary>
+<summary>📄 Code · bash</summary>
 
 ```bash
 # Install from crates.io (default full preset, all 22 languages + all features)
@@ -148,7 +148,7 @@ Requires Rust 1.97.1 or later (MSRV, matching `rust-version` in `Cargo.toml` and
 **Presets**: `default = ["full"]`
 
 <details>
-<summary>📋 表格</summary>
+<summary>📋 Table</summary>
 
 | Feature           | Default | Description |
 | ----------------- | ------- | ----------- |
@@ -197,7 +197,7 @@ Requires Rust 1.97.1 or later (MSRV, matching `rust-version` in `Cargo.toml` and
 > **Logging**: inklog is the only log backend (console + daily-rotating file sink with 30-day retention). inklog is pulled in with `default-features = false`; default (`full`) builds compile the zstd backend through vecboost's `inklog/compression` feature (cargo feature unification), so `compress = true` produces zstd-compressed rotation files. Feature sets without vecboost (e.g. `minimal`) compile no compression backend at all, and compression is skipped (warning, no compressed files). The gzip (flate2) backend is not enabled. The optional tracing-subscriber backend has been removed.
 
 <details>
-<summary>📄 代码 · bash</summary>
+<summary>📄 Code · bash</summary>
 
 ```bash
 # Minimal build (Rust only, no daemon/analysis)
@@ -223,7 +223,7 @@ cargo build --release --features embeddings
 The following commands are adapted from [`examples/src/bin/basic_indexing.rs`](examples/src/bin/basic_indexing.rs) and other examples plus the [📖 User Guide](docs/USER_GUIDE.md), and run out of the box:
 
 <details>
-<summary>📄 代码 · bash</summary>
+<summary>📄 Code · bash</summary>
 
 ```bash
 # 1. Index a repository (the database defaults to .codenexus/<project>.lbug)
@@ -282,7 +282,7 @@ Full flag semantics and runnable examples for every command are in the [📖 Use
 CodeNexus uses [sdforge](https://crates.io/crates/sdforge) to provide an MCP (Model Context Protocol) server exposing **10 tools** (`query` / `trace` / `impact` / `search` / `context` / `architecture` / `diagram` / `arch_diff` / `dead_code` / `detect_changes`) over the sdforge `mcp` stdio transport. The tools share the same `#[forge]` definitions as the identically named CLI commands; each tool description documents its parameter semantics and defaults, and the server opens the database read-only so it can run alongside a writer.
 
 <details>
-<summary>📄 代码 · bash</summary>
+<summary>📄 Code · bash</summary>
 
 ```bash
 # Start the MCP server (stdio)
@@ -304,7 +304,7 @@ What each tool does is described in the [📖 User Guide · Multi-Agent Integrat
 ## 📚 Documentation
 
 <details>
-<summary>📋 表格</summary>
+<summary>📋 Table</summary>
 
 | Document | Description |
 | -------- | ----------- |
@@ -332,7 +332,7 @@ What each tool does is described in the [📖 User Guide · Multi-Agent Integrat
 All 14 runnable examples live in [`examples/`](examples/), each registered as a `cargo run --bin` target in `examples/Cargo.toml`:
 
 <details>
-<summary>📋 表格</summary>
+<summary>📋 Table</summary>
 
 | Example | File | Description |
 | ------- | ---- | ----------- |
@@ -354,7 +354,7 @@ All 14 runnable examples live in [`examples/`](examples/), each registered as a 
 </details>
 
 <details>
-<summary>📄 代码 · bash</summary>
+<summary>📄 Code · bash</summary>
 
 ```bash
 # Run a single example
@@ -389,7 +389,7 @@ Layered strategy: inline `#[cfg(test)]` unit tests in `src/` → integration tes
 ### ▶️ Commands (identical to CI)
 
 <details>
-<summary>📄 代码 · bash</summary>
+<summary>📄 Code · bash</summary>
 
 ```bash
 # Format check (nightly rustfmt; rustfmt.toml uses nightly-only options)
@@ -450,7 +450,7 @@ Do not report security vulnerabilities through public issues. Use the GitHub [Se
 ## 🗺️ Roadmap
 
 <details>
-<summary>📋 表格</summary>
+<summary>📋 Table</summary>
 
 <table style="width:100%; border-collapse: collapse">
 <tr><th style="text-align:center">Status</th><th style="text-align:left">Area</th><th style="text-align:left">Items</th></tr>
@@ -523,7 +523,7 @@ When filing an issue, please include: CodeNexus version (`codenexus --version`),
 The full release history lives in the [📋 Changelog](docs/CHANGELOG.md) (following the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format, semantic versioning).
 
 <details>
-<summary>📋 表格</summary>
+<summary>📋 Table</summary>
 
 | Version | Date | Highlights |
 | ------- | ---- | ---------- |
@@ -550,7 +550,7 @@ This project is licensed under the [MIT](LICENSE) license.
 CodeNexus stands on the shoulders of these excellent open-source projects:
 
 <details>
-<summary>📋 表格</summary>
+<summary>📋 Table</summary>
 
 | Dependency | Purpose |
 | ---------- | ------- |
