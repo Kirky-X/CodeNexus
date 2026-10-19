@@ -35,6 +35,9 @@
 
 ## 📋 目录
 
+<details open>
+<summary>📑 目录</summary>
+
 - [✨ 功能特性](#-功能特性)
 - [🚀 快速开始](#-快速开始)
 - [🛠️ CLI 命令](#️-cli-命令)
@@ -52,6 +55,8 @@
 - [🙏 致谢](#-致谢)
 - [📞 联系与支持](#-联系与支持)
 - [⭐ Star 历史](#-star-历史)
+
+</details>
 
 ---
 
@@ -112,6 +117,9 @@
 
 ### 📦 安装
 
+<details>
+<summary>📄 代码 · bash</summary>
+
 ```bash
 # 从 crates.io 安装（默认 full 预设，含全部 21 语言 + 所有功能）
 cargo install codenexus
@@ -125,6 +133,8 @@ cargo install --path .
 cargo build --release
 ```
 
+</details>
+
 > **链接失败排查（openEuler / CentOS 等 GCC ≤ 12 系统）**：默认安装会下载预编译的 LadybugDB 二进制，它依赖较新的 `libstdc++`。若链接报 `undefined symbol: std::to_chars(..., _Float128, ...)`，用环境变量强制从源码编译即可（需安装 `cmake`）：
 >
 > ```bash
@@ -136,6 +146,9 @@ cargo build --release
 #### 🔧 构建预设与 Feature 开关
 
 **预设**：`default = ["full"]`
+
+<details>
+<summary>📋 表格</summary>
 
 | Feature           | 默认 | 说明 |
 | ----------------- | ---- | ---- |
@@ -178,7 +191,12 @@ cargo build --release
 | `i18n`            | 启用 | Unicode case folding + NFC 规范化（ICU4X） |
 | `webui`           | —    | 内嵌 graph-viewer Web UI：`codenexus webui` 启动（前端 `graph-viewer/dist` 资源编译期嵌入；opt-in，不入 `full`） |
 
+</details>
+
 > **日志系统**：inklog 是唯一日志后端（console + 文件 sink 日轮转 + 保留 30 天）；inklog 以 `default-features = false` 引入，默认（`full`）构建经 vecboost 的 `inklog/compression` 特性合并编译进 zstd 后端，`compress = true` 产生 zstd 压缩轮转文件；`minimal` 等不含 vecboost 的特性组合不编译任何压缩后端，压缩被跳过（告警后不产出压缩文件）。gzip（flate2）后端未启用。不再提供 tracing-subscriber 可选后端。
+
+<details>
+<summary>📄 代码 · bash</summary>
 
 ```bash
 # 最小构建（仅 Rust，不含 daemon/analysis）
@@ -197,9 +215,14 @@ cargo build --release
 cargo build --release --features embeddings
 ```
 
+</details>
+
 ### 💡 最小示例
 
 以下命令改编自 [`examples/src/bin/basic_indexing.rs`](examples/src/bin/basic_indexing.rs) 等示例与 [📖 用户指南](docs/USER_GUIDE.md)，均可直接运行：
+
+<details>
+<summary>📄 代码 · bash</summary>
 
 ```bash
 # 1. 索引一个代码仓库（数据库默认写入 .codenexus/<项目名>.lbug）
@@ -218,6 +241,8 @@ codenexus trace --symbol main --trace_type calls
 codenexus search --text "parse" --mode exact
 codenexus search --text "authentication logic" --fulltext true
 ```
+
+</details>
 
 > 💡 **建议**：把 `.codenexus/` 加入项目的 `.gitignore`（索引库与日志都在这个目录里，不应入库）。也可以创建 `.codenexus/config.json` 固化每项目的常用参数（如 `ram_first`、复杂度阈值），详见 [📖 用户指南 · 配置文件](docs/USER_GUIDE.md#️-配置文件)。
 
@@ -255,6 +280,9 @@ CodeNexus 提供 **37 个子命令**（外加 `codenexus mcp` 服务模式），
 
 CodeNexus 使用 [sdforge](https://crates.io/crates/sdforge) 提供 MCP（Model Context Protocol）服务器，经 sdforge `mcp` stdio 传输暴露 **10 个工具**（`query` / `trace` / `impact` / `search` / `context` / `architecture` / `diagram` / `arch_diff` / `dead_code` / `detect_changes`），与同名 CLI 命令共用同一套 `#[forge]` 定义；每个工具的描述包含参数语义与默认值，服务器以只读方式打开数据库，可与写入进程并存。
 
+<details>
+<summary>📄 代码 · bash</summary>
+
 ```bash
 # 启动 MCP 服务（stdio）
 codenexus mcp [--db <DB_PATH>]
@@ -266,11 +294,16 @@ codenexus setup
 codenexus hook
 ```
 
+</details>
+
 各工具的能力说明见 [📖 用户指南 · 多智能体集成](docs/USER_GUIDE.md#-多智能体集成)。
 
 ---
 
 ## 📚 文档
+
+<details>
+<summary>📋 表格</summary>
 
 | 文档 | 说明 |
 |------|------|
@@ -289,11 +322,16 @@ codenexus hook
 | [📈 基准测试说明](benches/README.md) | Criterion 基准套件与 SLO 阈值表 |
 | [📦 crates.io](https://crates.io/crates/codenexus) | 发布页面 |
 
+</details>
+
 ---
 
 ## 💻 示例
 
 全部 14 个可运行示例位于 [`examples/`](examples/) 目录，每个示例对应一个 `cargo run --bin` 目标（经 `examples/Cargo.toml` 注册）：
+
+<details>
+<summary>📋 表格</summary>
 
 | 示例 | 文件 | 描述 |
 |------|------|------|
@@ -312,6 +350,11 @@ codenexus hook
 | git_integration | `examples/src/bin/git_integration.rs` | Git 集成：把 `git diff` 的变更行映射到受影响符号并做风险分级 |
 | setup_mcp | `examples/src/bin/setup_mcp.rs` | MCP 接入配置：自动探测已安装的 AI coding agent 并写入 MCP server 配置 |
 
+</details>
+
+<details>
+<summary>📄 代码 · bash</summary>
+
 ```bash
 # 运行单个示例
 cargo run --manifest-path examples/Cargo.toml --bin basic_indexing
@@ -321,6 +364,8 @@ for bin in basic_indexing cypher_query symbol_search call_tracing impact_analysi
   cargo run --manifest-path examples/Cargo.toml --bin $bin
 done
 ```
+
+</details>
 
 示例通过 `IndexFacade` 索引源码、`QueryFacade` 执行查询、`TraceFacade` 追踪调用，退出时临时目录自动清理。库 API 的完整说明见 [📘 API 参考](docs/API_REFERENCE.md)。
 
@@ -341,6 +386,9 @@ CodeNexus 采用「库 + 二进制」双目标 crate：`src/lib.rs` 暴露公共
 分层测试策略：`src/` 内联 `#[cfg(test)]` 单元测试 → `tests/` 集成测试（CLI 子进程 E2E、全功能套件、MCP/图集成、非 ASCII 路径）→ `tests/acceptance/` 8 语言真实开源项目验收（与 gitnexus 交叉验证）→ `benches/` 7 组 Criterion 基准回归。测试分层总览与逐条场景矩阵见 [🧪 测试场景矩阵](docs/TEST_SCENARIOS.md)。
 
 ### ▶️ 运行命令（与 CI 一致）
+
+<details>
+<summary>📄 代码 · bash</summary>
 
 ```bash
 # 格式检查（nightly rustfmt，rustfmt.toml 使用 nightly-only 选项）
@@ -365,6 +413,8 @@ cargo bench --bench daemon_bench --features daemon -- --quick
 cargo audit
 cargo deny check
 ```
+
+</details>
 
 > CI 还会在每次 push/PR 上运行 CodeQL 静态分析（`.github/workflows/codeql.yml`），并在 `v*` tag 推送时触发 Release 工作流（GitHub Release + crates.io 发布）。
 
@@ -398,6 +448,9 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 
 ## 🗺️ 开发路线图
 
+<details>
+<summary>📋 表格</summary>
+
 <table style="width:100%; border-collapse: collapse">
 <tr><th style="text-align:center">状态</th><th style="text-align:left">方向</th><th style="text-align:left">条目</th></tr>
 <tr><td align="center">✅</td><td>核心索引与图模型</td><td>v0.1.0 — 多语言索引（C/Rust/Fortran/Python/TypeScript）、图模式（45 种节点类型 + 32 种边类型）、<code>query</code>/<code>trace</code>/<code>impact</code>/<code>context</code>/<code>search</code>、增量索引、RAM 优先模式、MCP 服务、团队 <code>export</code>/<code>import</code>、守护进程模式、置信度分层、歧义消解</td></tr>
@@ -416,6 +469,8 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 <tr><td align="center">✅</td><td>功能拓展波次（feature-expansion-wave）</td><td>2026-09 — RICE 排序的 12 项能力：token 预算器（`service::budget` 内部库能力，CLI 未暴露 `--budget` 参数）、<code>ci</code> 架构门禁（含官方 GitHub Action）、<code>lint</code> 自定义架构规则包、<code>skill</code> 技能同步、<code>ask</code> 自然语言入口、graph-viewer 快照合流（<code>diagram</code>/<code>arch_diff</code> <code>--viewer_url</code>）、daemon 影响告警（DaemonConfig 字段，CLI 接线待补）、Kotlin/Swift/Solidity 语言识别（扩展名映射与污点规则，tree-sitter 解析暂不支持）、<code>taint</code> 安全审计（内置 source/sink 规则库）、<code>supply</code> 供应链视图（ExternalPackage/DEPENDS_ON）、<code>evolve</code> 架构演化回放、<code>hub</code> 制品客户端（协议 v1）</td></tr>
 <tr><td align="center">✅</td><td>Web UI 与图可视化</td><td>v0.4.0-rc.2 — opt-in <code>webui</code> feature：<code>codenexus webui [--port]</code> 一条命令启动内嵌 3D graph-viewer（React + react-three-fiber 前端 <code>graph-viewer/dist</code> 编译期嵌入二进制；仅回环绑定 + <code>x-graph-token</code> + Host 校验）；<code>diagram</code>/<code>arch_diff</code> 交付架构图 HTML、语义 Delta 与 graph-viewer 快照合流（<code>--viewer_url</code>）。后续增强：更多图表类型与 diagram↔viewer 双向交互</td></tr>
 </table>
+
+</details>
 
 ---
 
@@ -466,6 +521,9 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 
 完整版本历史见 [📋 更新日志](docs/CHANGELOG.md)（遵循 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 格式，语义化版本）。
 
+<details>
+<summary>📋 表格</summary>
+
 | 版本 | 日期 | 要点 |
 |------|------|------|
 | 0.4.0-rc.2 | 2026-10-16 | 嵌入后端 ort → vecboost（Candle）切换并需重新索引；自研五库升级至 crates.io 最新版（trait-kit 0.5.0-rc.9、sdforge 0.5.0-rc.8、inklog 0.3.0-rc.9、limiteron 0.3.0-rc.7、oxcache 0.5.0-rc.8）；graph-viewer server crate 移除 |
@@ -473,6 +531,8 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 | 0.3.12 | 2026-07-30 | 动态 `max_db_size` + `--fresh` 标志解决 DB 膨胀；read-only 连接 4 TiB cap 修复 >16 GiB 数据库查询崩溃；LSP hover 批量 UNWIND 更新等 P 系列修复 |
 | 0.3.11 | 2026-07-26 | L6+L7 内存优化：管线流式化 + 迭代器 API + buffer_pool 封顶，70 GB 主机峰值内存 60 GB → ~4 GB |
 | 0.3.10 | 2026-07-25 | 大仓库索引 OOM 的 L1–L5 五层防线：内存预算、图视图迭代器、流式 CSV、mpsc 并发上限、自适应降级 |
+
+</details>
 
 ---
 
@@ -488,6 +548,9 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 
 CodeNexus 站在以下优秀开源项目的肩膀上：
 
+<details>
+<summary>📋 表格</summary>
+
 | 依赖 | 用途 |
 |------|------|
 | [lbug](https://github.com/ladybugdb/ladybugdb)（LadybugDB） | 图数据库存储 |
@@ -502,6 +565,8 @@ CodeNexus 站在以下优秀开源项目的肩膀上：
 | [ICU4X](https://github.com/unicode-org/icu4x)（icu_normalizer / icu_casemap） | Unicode 规范化与大小写折叠 |
 | [petgraph](https://github.com/petgraph/petgraph) | 社区检测图算法 |
 | [criterion](https://github.com/bheisler/criterion.rs) | 基准测试 |
+
+</details>
 
 ### 💝 特别感谢
 

@@ -35,6 +35,9 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 
 ## 📋 Table of Contents
 
+<details open>
+<summary>📑 目录</summary>
+
 - [✨ Key Features](#-key-features)
 - [🚀 Quick Start](#-quick-start)
 - [🛠️ CLI Commands](#️-cli-commands)
@@ -52,6 +55,8 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 - [🙏 Acknowledgments](#-acknowledgments)
 - [📞 Contact & Support](#-contact--support)
 - [⭐ Star History](#-star-history)
+
+</details>
 
 ---
 
@@ -112,6 +117,9 @@ Beyond the core capabilities above, CodeNexus also ships `context` assembly (tok
 
 ### 📦 Installation
 
+<details>
+<summary>📄 代码 · bash</summary>
+
 ```bash
 # Install from crates.io (default full preset, all 21 languages + all features)
 cargo install codenexus
@@ -125,6 +133,8 @@ cargo install --path .
 cargo build --release
 ```
 
+</details>
+
 > **Link failure troubleshooting (openEuler / CentOS and other GCC ≤ 12 systems)**: the default install downloads a prebuilt LadybugDB binary that requires a recent `libstdc++`. If linking fails with `undefined symbol: std::to_chars(..., _Float128, ...)`, force a source build via an environment variable (requires `cmake`):
 >
 > ```bash
@@ -136,6 +146,9 @@ Requires Rust 1.97.1 or later (MSRV, matching `rust-version` in `Cargo.toml` and
 #### 🔧 Build presets and feature flags
 
 **Presets**: `default = ["full"]`
+
+<details>
+<summary>📋 表格</summary>
 
 | Feature           | Default | Description |
 | ----------------- | ------- | ----------- |
@@ -178,7 +191,12 @@ Requires Rust 1.97.1 or later (MSRV, matching `rust-version` in `Cargo.toml` and
 | `i18n`            | Enabled | Unicode case folding + NFC normalization (ICU4X) |
 | `webui`           | —       | Embedded graph-viewer Web UI: launched by `codenexus webui` (frontend `graph-viewer/dist` assets embedded at compile time; opt-in, not part of `full`) |
 
+</details>
+
 > **Logging**: inklog is the only log backend (console + daily-rotating file sink with 30-day retention). inklog is pulled in with `default-features = false`; default (`full`) builds compile the zstd backend through vecboost's `inklog/compression` feature (cargo feature unification), so `compress = true` produces zstd-compressed rotation files. Feature sets without vecboost (e.g. `minimal`) compile no compression backend at all, and compression is skipped (warning, no compressed files). The gzip (flate2) backend is not enabled. The optional tracing-subscriber backend has been removed.
+
+<details>
+<summary>📄 代码 · bash</summary>
 
 ```bash
 # Minimal build (Rust only, no daemon/analysis)
@@ -197,9 +215,14 @@ cargo build --release
 cargo build --release --features embeddings
 ```
 
+</details>
+
 ### 💡 Minimal example
 
 The following commands are adapted from [`examples/src/bin/basic_indexing.rs`](examples/src/bin/basic_indexing.rs) and other examples plus the [📖 User Guide](docs/USER_GUIDE.md), and run out of the box:
+
+<details>
+<summary>📄 代码 · bash</summary>
 
 ```bash
 # 1. Index a repository (the database defaults to .codenexus/<project>.lbug)
@@ -218,6 +241,8 @@ codenexus trace --symbol main --trace_type calls
 codenexus search --text "parse" --mode exact
 codenexus search --text "authentication logic" --fulltext true
 ```
+
+</details>
 
 > 💡 **Tip**: add `.codenexus/` to your project's `.gitignore` (the index database and logs both live there). You can also create `.codenexus/config.json` to pin per-project defaults (e.g. `ram_first`, complexity thresholds) — see the [📖 User Guide · Configuration](docs/USER_GUIDE.md).
 
@@ -255,6 +280,9 @@ Full flag semantics and runnable examples for every command are in the [📖 Use
 
 CodeNexus uses [sdforge](https://crates.io/crates/sdforge) to provide an MCP (Model Context Protocol) server exposing **10 tools** (`query` / `trace` / `impact` / `search` / `context` / `architecture` / `diagram` / `arch_diff` / `dead_code` / `detect_changes`) over the sdforge `mcp` stdio transport. The tools share the same `#[forge]` definitions as the identically named CLI commands; each tool description documents its parameter semantics and defaults, and the server opens the database read-only so it can run alongside a writer.
 
+<details>
+<summary>📄 代码 · bash</summary>
+
 ```bash
 # Start the MCP server (stdio)
 codenexus mcp [--db <DB_PATH>]
@@ -266,11 +294,16 @@ codenexus setup
 codenexus hook
 ```
 
+</details>
+
 What each tool does is described in the [📖 User Guide · Multi-Agent Integration](docs/USER_GUIDE.md).
 
 ---
 
 ## 📚 Documentation
+
+<details>
+<summary>📋 表格</summary>
 
 | Document | Description |
 | -------- | ----------- |
@@ -289,11 +322,16 @@ What each tool does is described in the [📖 User Guide · Multi-Agent Integrat
 | [📈 Benchmark Notes](benches/README.md) | Criterion benchmark suite and SLO threshold table |
 | [📦 crates.io](https://crates.io/crates/codenexus) | Publication page |
 
+</details>
+
 ---
 
 ## 💻 Examples
 
 All 14 runnable examples live in [`examples/`](examples/), each registered as a `cargo run --bin` target in `examples/Cargo.toml`:
+
+<details>
+<summary>📋 表格</summary>
 
 | Example | File | Description |
 | ------- | ---- | ----------- |
@@ -312,6 +350,11 @@ All 14 runnable examples live in [`examples/`](examples/), each registered as a 
 | git_integration | `examples/src/bin/git_integration.rs` | Git integration: map `git diff` changed lines to affected symbols with risk grading |
 | setup_mcp | `examples/src/bin/setup_mcp.rs` | MCP onboarding: auto-detect installed AI coding agents and write MCP server config |
 
+</details>
+
+<details>
+<summary>📄 代码 · bash</summary>
+
 ```bash
 # Run a single example
 cargo run --manifest-path examples/Cargo.toml --bin basic_indexing
@@ -321,6 +364,8 @@ for bin in basic_indexing cypher_query symbol_search call_tracing impact_analysi
   cargo run --manifest-path examples/Cargo.toml --bin $bin
 done
 ```
+
+</details>
 
 Examples use `IndexFacade` to index source, `QueryFacade` to query, and `TraceFacade` to trace calls; temp directories are cleaned up on exit. Full library API details in the [📘 API Reference](docs/API_REFERENCE.md).
 
@@ -341,6 +386,9 @@ The three-layer source structure, pipeline diagram, graph model (45 node / 32 ed
 Layered strategy: inline `#[cfg(test)]` unit tests in `src/` → integration tests in `tests/` (CLI child-process E2E, full-feature suite, MCP/diagram integration, non-ASCII paths) → acceptance tests in `tests/acceptance/` over 8 real open-source projects (cross-validated against gitnexus) → 7 Criterion benchmark groups in `benches/` for regression guarding. The layer overview and the exhaustive scenario matrix live in the [🧪 Test Scenario Matrix](docs/TEST_SCENARIOS.md).
 
 ### ▶️ Commands (identical to CI)
+
+<details>
+<summary>📄 代码 · bash</summary>
 
 ```bash
 # Format check (nightly rustfmt; rustfmt.toml uses nightly-only options)
@@ -365,6 +413,8 @@ cargo bench --bench daemon_bench --features daemon -- --quick
 cargo audit
 cargo deny check
 ```
+
+</details>
 
 > CI also runs CodeQL static analysis on every push/PR (`.github/workflows/codeql.yml`), and the Release workflow fires on `v*` tags (GitHub Release + crates.io publish).
 
@@ -398,6 +448,9 @@ Do not report security vulnerabilities through public issues. Use the GitHub [Se
 
 ## 🗺️ Roadmap
 
+<details>
+<summary>📋 表格</summary>
+
 <table style="width:100%; border-collapse: collapse">
 <tr><th style="text-align:center">Status</th><th style="text-align:left">Area</th><th style="text-align:left">Items</th></tr>
 <tr><td align="center">✅</td><td>Core indexing & graph model</td><td>v0.1.0 — Multi-language indexing (C/Rust/Fortran/Python/TypeScript), graph schema (45 node types + 32 edge types), <code>query</code>/<code>trace</code>/<code>impact</code>/<code>context</code>/<code>search</code>, incremental indexing, RAM-first mode, MCP server, team <code>export</code>/<code>import</code>, daemon mode, confidence tiers, ambiguity resolution</td></tr>
@@ -416,6 +469,8 @@ Do not report security vulnerabilities through public issues. Use the GitHub [Se
 <tr><td align="center">✅</td><td>Feature expansion wave (feature-expansion-wave)</td><td>2026-09 — 12 capabilities ranked by RICE: token budgeter (internal `service::budget` library capability — no `--budget` CLI parameter exposed), <code>ci</code> architecture gates (with an official GitHub Action), <code>lint</code> custom architecture rule packs, <code>skill</code> skill sync, <code>ask</code> natural-language entry, graph-viewer snapshot integration (<code>diagram</code>/<code>arch_diff</code> <code>--viewer_url</code>), daemon impact alerts (DaemonConfig field, CLI wiring pending), Kotlin/Swift/Solidity language recognition (extension mapping and taint rules; tree-sitter parsing not yet supported), <code>taint</code> security audit (built-in source/sink rule library), <code>supply</code> supply-chain view (ExternalPackage/DEPENDS_ON), <code>evolve</code> architecture evolution replay, <code>hub</code> artifact client (protocol v1)</td></tr>
 <tr><td align="center">✅</td><td>Web UI & graph visualization</td><td>v0.4.0-rc.2 — opt-in <code>webui</code> feature: <code>codenexus webui [--port]</code> starts the embedded 3D graph-viewer in one command (React + react-three-fiber frontend assets from <code>graph-viewer/dist</code> embedded into the binary at compile time; loopback-only binding + <code>x-graph-token</code> + Host validation); <code>diagram</code>/<code>arch_diff</code> ship architecture HTML, semantic deltas, and graph-viewer snapshot integration (<code>--viewer_url</code>). Planned enhancements: more chart types and two-way diagram↔viewer interaction</td></tr>
 </table>
+
+</details>
 
 ---
 
@@ -466,6 +521,9 @@ When filing an issue, please include: CodeNexus version (`codenexus --version`),
 
 The full release history lives in the [📋 Changelog](docs/CHANGELOG.md) (following the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format, semantic versioning).
 
+<details>
+<summary>📋 表格</summary>
+
 | Version | Date | Highlights |
 | ------- | ---- | ---------- |
 | 0.4.0-rc.2 | 2026-10-16 | Embedding backend switched from ort to vecboost (Candle), requiring re-indexing; in-house base libraries upgraded to the latest crates.io releases (trait-kit 0.5.0-rc.9, sdforge 0.5.0-rc.8, inklog 0.3.0-rc.9, limiteron 0.3.0-rc.7, oxcache 0.5.0-rc.8); graph-viewer server crate removed |
@@ -473,6 +531,8 @@ The full release history lives in the [📋 Changelog](docs/CHANGELOG.md) (follo
 | 0.3.12 | 2026-07-30 | Dynamic `max_db_size` + `--fresh` flag fix DB bloat; read-only 4 TiB cap fixes crashes on >16 GiB databases; LSP hover batched UNWIND updates and the rest of the P-series fixes |
 | 0.3.11 | 2026-07-26 | L6+L7 memory work: pipeline streaming + iterator APIs + buffer_pool cap, cutting peak memory on a 70 GB host from 60 GB to ~4 GB |
 | 0.3.10 | 2026-07-25 | L1–L5 five-layer defense against OOM on large-repo indexing: memory budget, graph view iterators, streaming CSV, mpsc concurrency cap, adaptive degradation |
+
+</details>
 
 ---
 
@@ -488,6 +548,9 @@ This project is licensed under the [MIT](LICENSE) license.
 
 CodeNexus stands on the shoulders of these excellent open-source projects:
 
+<details>
+<summary>📋 表格</summary>
+
 | Dependency | Purpose |
 | ---------- | ------- |
 | [lbug](https://github.com/ladybugdb/ladybugdb) (LadybugDB) | Graph database storage |
@@ -502,6 +565,8 @@ CodeNexus stands on the shoulders of these excellent open-source projects:
 | [ICU4X](https://github.com/unicode-org/icu4x) (icu_normalizer / icu_casemap) | Unicode normalization and case mapping |
 | [petgraph](https://github.com/petgraph/petgraph) | Community-detection graph algorithms |
 | [criterion](https://github.com/bheisler/criterion.rs) | Benchmarking |
+
+</details>
 
 ### 💝 Special thanks
 
