@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/CodeNexus.png" alt="CodeNexus Logo" width="200">
+<img src="docs/assets/CodeNexus.png" alt="CodeNexus Logo" width="240">
 
 [![Build](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirky-X/codenexus/actions/workflows/ci.yml) [![Crates.io](https://img.shields.io/crates/v/codenexus.svg)](https://crates.io/crates/codenexus) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Rust Version](https://img.shields.io/badge/rust-1.97.1%2B-orange.svg)](https://www.rust-lang.org)
 
