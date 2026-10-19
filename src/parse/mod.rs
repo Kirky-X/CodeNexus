@@ -75,6 +75,8 @@ pub mod ruby;
 pub mod rust_extractor;
 #[cfg(feature = "lang-scala")]
 pub mod scala;
+#[cfg(feature = "lang-swift")]
+pub mod swift;
 #[cfg(feature = "lang-typescript")]
 pub mod typescript;
 #[cfg(feature = "lang-verilog")]
@@ -131,6 +133,8 @@ pub use ruby::RubyExtractor;
 pub use rust_extractor::RustExtractor;
 #[cfg(feature = "lang-scala")]
 pub use scala::ScalaExtractor;
+#[cfg(feature = "lang-swift")]
+pub use swift::SwiftExtractor;
 #[cfg(feature = "lang-typescript")]
 pub use typescript::TypeScriptExtractor;
 #[cfg(feature = "lang-verilog")]

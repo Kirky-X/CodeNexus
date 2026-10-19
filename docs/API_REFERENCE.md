@@ -205,7 +205,7 @@ CLI 与 MCP 共用 `src/service/` 中 `#[forge]` 宏定义的同一套命令（c
 
 | 模块 / API | 所需 feature | 说明 |
 |------------|--------------|------|
-| `parse`（对应语言） | `lang-c` … `lang-verilog` | 21 个语言 feature，至少启用其一 |
+| `parse`（对应语言） | `lang-*` | 22 个语言 feature，至少启用其一 |
 | `analysis` | `analysis` | 死代码 / 架构概览 / 复杂度 / 社区 / 跨服务 |
 | `diagram` | `diagram`（含 `analysis`） | 架构图与语义 Delta |
 | `embed` | `embeddings` | 向量嵌入语义搜索 |

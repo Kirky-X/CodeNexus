@@ -4,7 +4,7 @@
 
 ## Supported Languages
 
-21 languages (each gated by a `lang-*` Cargo feature; all enabled by `full`):
+22 languages (each gated by a `lang-*` Cargo feature; all enabled by `full`):
 
 | Language | Extensions | Key extractions |
 |----------|-----------|-----------------|
@@ -29,6 +29,7 @@
 | JSON | `.json`, `.jsonc` | object keys as properties |
 | Regex | `.regex` | pattern constants |
 | Verilog | `.v`, `.sv` | `module`, function/task, ports |
+| Swift | `.swift` | `func`, `class`/`struct`/`enum`/`actor`, `protocol`, `extension`, `import`, calls, properties, `typealias` |
 
 > Static analysis limitation: For Rust in particular, trait-object `dyn` dispatch and many cross-module calls are not captured by tree-sitter. The resulting call graph is a lower bound. The reserved `--lsp true` flag and the `lsp_goto_def`/`lsp_hover` commands point at the future LSP-augmented path.
 

@@ -21,7 +21,7 @@
 
 | 能力 | 说明 |
 |:-----|:-----|
-| **多语言解析** | tree-sitter，默认 `full` 预设 21 种语言 |
+| **多语言解析** | tree-sitter，默认 `full` 预设 22 种语言 |
 | **图存储** | LadybugDB，45 种节点类型 + 32 种边类型 |
 | **查询分析** | Cypher 子集查询、调用链/数据流追踪、影响分析、语义搜索 |
 | **智能体集成** | MCP 服务器（10 个工具）+ setup 自动接入 Claude Code / Cursor / Codex |
@@ -117,7 +117,7 @@ codenexus index --path ./myrepo --name myrepo --ram_first true
 
 ### ❓ 支持哪些语言？
 
-默认 `full` 预设 21 种：C、Rust、Fortran、Python、TypeScript、Go、Java、C++、JavaScript、Ruby、Haskell、OCaml、Scala、PHP、C#、Bash、HTML、CSS、JSON、Regex、Verilog。各语言提取的节点/边类型见 [README · 支持语言相关章节](../README.md#️-架构)。
+默认 `full` 预设 22 种：C、Rust、Fortran、Python、TypeScript、Go、Java、C++、JavaScript、Ruby、Haskell、OCaml、Scala、PHP、C#、Bash、HTML、CSS、JSON、Regex、Verilog、Swift。各语言提取的节点/边类型见 [README · 支持语言相关章节](../README.md#️-架构)。
 
 ### ❓ 为什么死代码检测会误报？
 

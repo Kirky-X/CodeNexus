@@ -47,6 +47,8 @@ use super::ruby::RubyExtractor;
 use super::rust_extractor::RustExtractor;
 #[cfg(feature = "lang-scala")]
 use super::scala::ScalaExtractor;
+#[cfg(feature = "lang-swift")]
+use super::swift::SwiftExtractor;
 #[cfg(feature = "lang-typescript")]
 use super::typescript::TypeScriptExtractor;
 #[cfg(feature = "lang-verilog")]
@@ -102,6 +104,8 @@ pub fn get_extractor(language: Language) -> Box<dyn Extractor> {
         Language::Regex => Box::new(RegexExtractor::new()),
         #[cfg(feature = "lang-verilog")]
         Language::Verilog => Box::new(VerilogExtractor::new()),
+        #[cfg(feature = "lang-swift")]
+        Language::Swift => Box::new(SwiftExtractor::new()),
         #[allow(unreachable_patterns)]
         _ => panic!(
             "no tree-sitter extractor compiled for language '{language}'; \
@@ -259,6 +263,13 @@ mod tests {
     fn get_extractor_returns_verilog_for_verilog() {
         let ext = get_extractor(Language::Verilog);
         assert_eq!(ext.language(), Language::Verilog);
+    }
+
+    #[cfg(feature = "lang-swift")]
+    #[test]
+    fn get_extractor_returns_swift_for_swift() {
+        let ext = get_extractor(Language::Swift);
+        assert_eq!(ext.language(), Language::Swift);
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! Language enum representing the source languages supported by CodeNexus
 //! (DDD §7.3).
 //!
-//! All 21 variants are always compiled in — the enum is a model concept
+//! All 31 variants are always compiled in — the enum is a model concept
 //! independent of which tree-sitter parsers are enabled. The `lang-*` Cargo
 //! features gate only the parser implementations (in `src/parse/`), not the
 //! `Language` type itself. This allows LSP-only builds (no tree-sitter) to
@@ -43,8 +43,8 @@ pub enum Language {
     Verilog,
     Kotlin,
     Solidity,
-    // Extended languages (extension-only, no tree-sitter parser)
     Swift,
+    // Extended languages (extension-only, no tree-sitter parser)
     R,
     Sql,
     VisualBasic,
@@ -142,6 +142,8 @@ impl Language {
             Language::Regex,
             #[cfg(feature = "lang-verilog")]
             Language::Verilog,
+            #[cfg(feature = "lang-swift")]
+            Language::Swift,
         ]
     }
 
@@ -502,5 +504,14 @@ mod tests {
         let compiled = Language::compiled();
         let all = Language::all();
         assert!(compiled.len() <= all.len());
+    }
+
+    #[cfg(feature = "lang-swift")]
+    #[test]
+    fn compiled_includes_swift() {
+        assert!(
+            Language::compiled().contains(&Language::Swift),
+            "Swift should be a compiled language when lang-swift is enabled"
+        );
     }
 }

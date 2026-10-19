@@ -66,6 +66,10 @@ pub fn mro_for(lang: Language) -> MroStrategy {
         // matching the FirstWins DFS pre-order model used for Java/Rust/C.
         #[cfg(feature = "lang-csharp")]
         Language::CSharp => MroStrategy::FirstWins,
+        // Swift classes use single inheritance plus protocol conformance,
+        // matching the FirstWins DFS pre-order model.
+        #[cfg(feature = "lang-swift")]
+        Language::Swift => MroStrategy::FirstWins,
         // Verilog has no inheritance semantics; fail-loud with None (like Go).
         #[cfg(feature = "lang-verilog")]
         Language::Verilog => MroStrategy::None,

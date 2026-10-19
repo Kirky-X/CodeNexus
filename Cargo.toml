@@ -43,7 +43,7 @@ required-features = ["cli"]
 default = ["full"]
 minimal = ["lang-rust"]
 core = ["lang-c", "lang-rust", "lang-python"]
-full = ["core", "lang-fortran", "lang-typescript", "lang-go", "lang-java", "lang-cpp", "lang-javascript", "lang-ruby", "lang-haskell", "lang-ocaml", "lang-scala", "lang-php", "lang-csharp", "lang-bash", "lang-html", "lang-css", "lang-json", "lang-regex", "lang-verilog", "daemon", "analysis", "complexity", "api-review", "community", "cross-service", "diagram", "lsp", "cli", "mcp", "cache", "embeddings", "i18n", "hub"]
+full = ["core", "lang-fortran", "lang-typescript", "lang-go", "lang-java", "lang-cpp", "lang-javascript", "lang-ruby", "lang-haskell", "lang-ocaml", "lang-scala", "lang-php", "lang-csharp", "lang-bash", "lang-html", "lang-css", "lang-json", "lang-regex", "lang-verilog", "lang-swift", "daemon", "analysis", "complexity", "api-review", "community", "cross-service", "diagram", "lsp", "cli", "mcp", "cache", "embeddings", "i18n", "hub"]
 lang-c = ["dep:tree-sitter-c"]
 lang-rust = ["dep:tree-sitter-rust"]
 lang-fortran = ["dep:tree-sitter-fortran"]
@@ -65,6 +65,7 @@ lang-css = ["dep:tree-sitter-css"]
 lang-json = ["dep:tree-sitter-json"]
 lang-regex = ["dep:tree-sitter-regex"]
 lang-verilog = ["dep:tree-sitter-verilog"]
+lang-swift = ["dep:tree-sitter-swift"]
 # 向量嵌入（ML embeddings，vecboost/candle）；原名单 `embed` 易与 no-std 语境的 embedded 混淆
 embeddings = ["dep:reqwest", "dep:vecboost"]
 daemon = ["dep:notify", "dep:notify-debouncer-full", "dep:signal-hook"]
@@ -109,6 +110,7 @@ tree-sitter-css = { version = "0.25", default-features = false, optional = true 
 tree-sitter-json = { version = "0.24", default-features = false, optional = true }
 tree-sitter-regex = { version = "0.25", default-features = false, optional = true }
 tree-sitter-verilog = { version = "1.0", default-features = false, optional = true }
+tree-sitter-swift = { version = "0.7", default-features = false, optional = true }
 rayon = { version = "1.12", default-features = false }
 ignore = { version = "0.4", default-features = false }
 notify = { version = "8.2", default-features = false, features = ["macos_fsevent"], optional = true }
@@ -240,7 +242,7 @@ debug = true
 inherits = "release"
 
 [lints.rust]
-# 2026-09-19 审计：lang-kotlin/solidity/swift 死 cfg 已清理，从 "allow" 收紧为
+# 2026-09-19 审计：lang-kotlin/solidity 死 cfg 已清理，从 "allow" 收紧为
 # warn 级白名单（sdforge 宏会在 consumer 侧发射协议 cfg，白名单声明其合法性），
 # 未来再出现悬空 cfg 将直接暴露。
 unexpected_cfgs = { level = "warn", check-cfg = [

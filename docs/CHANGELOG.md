@@ -31,6 +31,10 @@ CodeNexus 的所有重要变更均记录于此文件。
 
 ## [Unreleased]
 
+### Added
+
+- **feat(parse): Swift 语言解析支持** — 新增 `lang-swift` feature（tree-sitter-swift 0.7）、`SwiftExtractor`（函数/方法、类/结构体/枚举/actor、协议、扩展、属性、构造器、类型别名、import、调用），`full` 预设语言数 21→22；用 apple/swift-argument-parser 与 Alamofire 两个真实 GitHub 仓库完成索引与图查询验证。
+
 ### Fixed
 
 - **fix(index): 落库前边完整性门禁，消除 DQ-004 孤儿边并修复三处建边缺陷** — `LoadPhase` 在写入事务前新增 `enforce_edge_integrity`：缺失且带 `#` 的边源归属到 `#` 剥离后的父实体（repair）、按 id 串全局去重（修 `COPY FROM` 主键冲突）、端点不在 graph∪DB 的边丢弃（逐边 `debug!` + 聚合 `warn`）。连带修复：`resolve/imports.rs` 中 `FilePathIndex::lookup` 的 `(相对路径, file_id)` 返回值被颠倒解构，导致 IMPORTS/REEXPORTS/DEPENDS_ON 边的 source 全是匹配不到节点的相对路径、且目标解析器把 file_uuid 当相对路径（项目内导入误判为外部依赖）；`LoadPhase` 对无 `filePath` 标签节点（`ExternalPackage` 等）的存活者跳过重插，修复增量/热 `--force` 的主键冲突崩溃回滚。正确性语义：存活域 = 旧节点 − 待删路径行 ∪ 新图节点；`show_tables` 预检替代错误子串吞噬；NULL `filePath` 行判不存活。性能：fresh 全量索引 +10.4%（修复两类真实崩溃的不可约成本）。验证：`cargo test --lib` 4702 passed（新增 16 个测试）、clippy 0 warning。

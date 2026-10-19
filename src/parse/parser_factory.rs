@@ -13,7 +13,7 @@ use crate::model::Language;
 use super::error::{ParseError, Result};
 
 /// Factory that creates tree-sitter [`Parser`]s and [`TsLanguage`]s for the
-/// five CodeNexus source languages (Factory pattern, ADR-003).
+/// supported CodeNexus source languages (Factory pattern, ADR-003).
 ///
 /// Language mapping:
 /// - [`Language::C`] → `tree_sitter_c::LANGUAGE`
@@ -73,6 +73,8 @@ impl ParserFactory {
             Language::Regex => Ok(tree_sitter_regex::LANGUAGE.into()),
             #[cfg(feature = "lang-verilog")]
             Language::Verilog => Ok(tree_sitter_verilog::LANGUAGE.into()),
+            #[cfg(feature = "lang-swift")]
+            Language::Swift => Ok(tree_sitter_swift::LANGUAGE.into()),
             #[allow(unreachable_patterns)]
             _ => Err(ParseError::UnsupportedLanguage(lang.to_string())),
         }
@@ -599,6 +601,33 @@ mod tests {
         assert!(
             !tree.root_node().has_error(),
             "Verilog source should parse without errors"
+        );
+    }
+
+    #[cfg(feature = "lang-swift")]
+    #[test]
+    fn create_language_swift_succeeds() {
+        let lang = ParserFactory::create_language(Language::Swift);
+        assert!(lang.is_ok(), "Swift language should be supported");
+    }
+
+    #[cfg(feature = "lang-swift")]
+    #[test]
+    fn create_parser_swift_succeeds() {
+        let parser = ParserFactory::create_parser(Language::Swift);
+        assert!(parser.is_ok(), "Swift parser should be creatable");
+    }
+
+    #[cfg(feature = "lang-swift")]
+    #[test]
+    fn parse_simple_swift_file() {
+        let mut parser = ParserFactory::create_parser(Language::Swift).unwrap();
+        let tree = parser
+            .parse("func foo() {}\n", None)
+            .expect("Swift parse failed");
+        assert!(
+            !tree.root_node().has_error(),
+            "Swift source should parse without errors"
         );
     }
 

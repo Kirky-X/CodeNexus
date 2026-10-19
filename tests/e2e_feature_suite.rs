@@ -52,6 +52,34 @@ fn fresh_db_path() -> std::path::PathBuf {
     path
 }
 
+/// 执行 `RETURN count(...) AS c` 形式的 Cypher 并取出首行首列。
+fn cypher_count(query: &QueryFacade, cypher: &str) -> i64 {
+    let result = query.cypher(cypher).expect("count query should succeed");
+    result
+        .rows
+        .first()
+        .and_then(|row| row.first())
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0)
+}
+
+/// 统计磁盘上的 `.swift` 文件数（与发现器相同的 ignore/gitignore 语义）。
+fn count_swift_files(root: &Path) -> i64 {
+    ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .filter_entry(|entry| entry.file_name() != ".git")
+        .build()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("swift"))
+        })
+        .count() as i64
+}
+
 // ===========================================================================
 // § 1 — 多语言索引
 // ===========================================================================
@@ -83,6 +111,131 @@ fn index_java_file() {
     let facade = IndexFacade::new(&db).expect("IndexFacade::new");
     let result = facade.index(tmp.path(), "java_demo", false).expect("index");
     assert!(result.files_indexed >= 1, "应索引 Java 文件");
+}
+
+#[test]
+fn index_swift_file() {
+    let tmp = TempDir::new().unwrap();
+    write_file(
+        tmp.path(),
+        "Sources/Demo.swift",
+        r#"import Foundation
+
+protocol Greeter {
+    func greeting() -> String
+}
+
+struct Person: Greeter {
+    let name: String
+
+    init(name: String) {
+        self.name = name
+    }
+
+    func greeting() -> String {
+        return "Hello, \(name)"
+    }
+}
+
+extension Person {
+    func shout() -> String {
+        return greeting().uppercased()
+    }
+}
+
+class App {}
+enum Mode { case idle }
+typealias Handler = () -> Void
+
+func run() {
+    let person = Person(name: "World")
+    print(person.shout())
+}
+"#,
+    );
+    let db = fresh_db_path();
+    let facade = IndexFacade::new(&db).expect("IndexFacade::new");
+    let result = facade
+        .index(tmp.path(), "swift_demo", false)
+        .expect("index");
+    assert!(result.files_indexed >= 1, "应索引 Swift 文件");
+    assert!(result.nodes_created > 0, "应创建 Swift 节点");
+
+    let query = QueryFacade::new(&db).expect("QueryFacade::new");
+    for cypher in [
+        "MATCH (f:Function) RETURN count(f) AS c",
+        "MATCH (m:Method) RETURN count(m) AS c",
+        "MATCH (c:Class) RETURN count(c) AS c",
+        "MATCH (s:Struct) RETURN count(s) AS c",
+        "MATCH (i:Interface) RETURN count(i) AS c",
+        "MATCH (e:Enum) RETURN count(e) AS c",
+        "MATCH (t:TypeAlias) RETURN count(t) AS c",
+        "MATCH (p:Property) RETURN count(p) AS c",
+        "MATCH (ct:Constructor) RETURN count(ct) AS c",
+        "MATCH (im:Impl) RETURN count(im) AS c",
+        "MATCH (r:CodeRelation) WHERE r.type='CALLS' RETURN count(r) AS c",
+        "MATCH (pkg:ExternalPackage) RETURN count(pkg) AS c",
+    ] {
+        assert!(
+            cypher_count(&query, cypher) > 0,
+            "expected non-zero result for: {cypher}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires SWIFT_REAL_REPO pointing to a cloned Swift repo"]
+fn index_real_swift_repo_smoke() {
+    let Ok(repo) = std::env::var("SWIFT_REAL_REPO") else {
+        return;
+    };
+    let db = fresh_db_path();
+    let facade = IndexFacade::new(&db).expect("IndexFacade::new");
+    if !codenexus::model::Language::compiled().contains(&codenexus::model::Language::Swift) {
+        return;
+    }
+    let result = facade
+        .index(Path::new(&repo), "swift_real", false)
+        .expect("index real Swift repo");
+    let expected_swift_files = count_swift_files(Path::new(&repo));
+    assert!(expected_swift_files > 0, "真实仓库应包含 .swift 文件");
+    assert!(
+        result.files_indexed as i64 >= expected_swift_files,
+        "files_indexed ({}) 应至少覆盖 Swift 文件数 ({expected_swift_files})",
+        result.files_indexed
+    );
+
+    let query = QueryFacade::new(&db).expect("QueryFacade::new");
+    assert_eq!(
+        cypher_count(
+            &query,
+            "MATCH (f:File) WHERE f.language = 'swift' RETURN count(f) AS c"
+        ),
+        expected_swift_files,
+        "Swift File 节点数应与磁盘 .swift 文件数一致"
+    );
+    // Some real-world Swift packages contain only methods/extensions and no
+    // top-level free functions (Alamofire is one), so require at least one
+    // callable of either kind rather than both.
+    let swift_functions = cypher_count(
+        &query,
+        "MATCH (f:Function) WHERE f.filePath CONTAINS '.swift' RETURN count(f) AS c",
+    );
+    let swift_methods = cypher_count(
+        &query,
+        "MATCH (m:Method) WHERE m.filePath CONTAINS '.swift' RETURN count(m) AS c",
+    );
+    assert!(
+        swift_functions + swift_methods > 0,
+        "真实仓库应存在 Swift Function/Method 节点（functions={swift_functions}, methods={swift_methods}）"
+    );
+    assert!(
+        cypher_count(
+            &query,
+            "MATCH (r:CodeRelation) WHERE r.type='CALLS' RETURN count(r) AS c"
+        ) > 0,
+        "真实仓库应存在 CALLS 边"
+    );
 }
 
 #[test]

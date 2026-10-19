@@ -64,7 +64,7 @@
 
 <table style="width:100%; border-collapse: collapse">
 <tr>
-<td width="50%" style="vertical-align:top; padding: 12px">🌐 <b>多语言解析</b><br><span style="color:#64748B">默认 <code>full</code> 预设支持 21 种语言（C、Rust、Fortran、Python、TypeScript、Go、Java、C++、JavaScript、Ruby、Haskell、OCaml、Scala、PHP、C#、Bash、HTML、CSS、JSON、Regex、Verilog），可用 <code>lang-*</code> feature 按需裁剪</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🌐 <b>多语言解析</b><br><span style="color:#64748B">默认 <code>full</code> 预设支持 22 种语言（C、Rust、Fortran、Python、TypeScript、Go、Java、C++、JavaScript、Ruby、Haskell、OCaml、Scala、PHP、C#、Bash、HTML、CSS、JSON、Regex、Verilog、Swift），可用 <code>lang-*</code> feature 按需裁剪</span></td>
 <td width="50%" style="vertical-align:top; padding: 12px">🕸️ <b>图数据库</b><br><span style="color:#64748B">LadybugDB 图存储，45 种节点类型 + 32 种边类型，Cypher 子集查询</span></td>
 </tr>
 <tr>
@@ -121,7 +121,7 @@
 <summary>📄 代码 · bash</summary>
 
 ```bash
-# 从 crates.io 安装（默认 full 预设，含全部 21 语言 + 所有功能）
+# 从 crates.io 安装（默认 full 预设，含全部 22 语言 + 所有功能）
 cargo install codenexus
 
 # 从源码构建
@@ -154,7 +154,7 @@ cargo build --release
 | ----------------- | ---- | ---- |
 | `minimal`         | —    | 最小预设：仅 `lang-rust` |
 | `core`            | —    | 核心预设：`lang-c` + `lang-rust` + `lang-python` |
-| `full`            | 启用 | 完整预设：`core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embeddings/i18n/hub |
+| `full`            | 启用 | 完整预设：`core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog/Swift + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embeddings/i18n/hub |
 | `lang-c`          | —    | C 语言解析器（tree-sitter-c） |
 | `lang-rust`       | 启用 | Rust 语言解析器（tree-sitter-rust） |
 | `lang-fortran`    | —    | Fortran 语言解析器（tree-sitter-fortran） |
@@ -176,6 +176,7 @@ cargo build --release
 | `lang-json`       | —    | JSON 语言解析器（tree-sitter-json） |
 | `lang-regex`      | —    | 正则语言解析器（tree-sitter-regex） |
 | `lang-verilog`    | —    | Verilog 语言解析器（tree-sitter-verilog） |
+| `lang-swift`      | —    | Swift 语言解析器（tree-sitter-swift） |
 | `daemon`          | 启用 | 文件监视守护进程（notify + notify-debouncer-full） |
 | `embeddings`      | 启用 | 向量嵌入语义搜索（reqwest HTTP + 本地 Candle 推理） |
 | `lsp`             | 启用 | LSP 增强解析（7 个 LSP 客户端） |
@@ -554,7 +555,7 @@ CodeNexus 站在以下优秀开源项目的肩膀上：
 | 依赖 | 用途 |
 |------|------|
 | [lbug](https://github.com/ladybugdb/ladybugdb)（LadybugDB） | 图数据库存储 |
-| [tree-sitter](https://tree-sitter.github.io/) + 21 个语言 grammar crate | 多语言 AST 解析 |
+| [tree-sitter](https://tree-sitter.github.io/) + 22 个语言 grammar crate | 多语言 AST 解析 |
 | [rayon](https://github.com/rayon-rs/rayon) | 数据并行 |
 | [notify](https://github.com/notify-rs/notify) / notify-debouncer-full | 文件监听与去抖 |
 | [sdforge](https://crates.io/crates/sdforge) | CLI + MCP 双传输框架（`#[forge]` 宏） |

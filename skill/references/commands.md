@@ -69,7 +69,7 @@ codenexus daemon --path <PATH> --name <PROJECT_NAME> [--debounce-ms <MS>] [--db 
 - `--debounce-ms <MS>` — Debounce window in milliseconds (global option, default: 2000)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
-**Behavior:** Watches the directory recursively; event filtering goes through `is_code_file` → `Language::from_extension` → `Language::compiled()`, so any compiled language's extension triggers indexing (21 languages under `full`; there is no fixed 9-extension whitelist — the set follows the enabled `lang-*` features); debounces consecutive changes; pauses event processing during indexing; runs until interrupted (Ctrl+C). Requires the `daemon` feature. Does not emit a final JSON blob (long-running).
+**Behavior:** Watches the directory recursively; event filtering goes through `is_code_file` → `Language::from_extension` → `Language::compiled()`, so any compiled language's extension triggers indexing (22 languages under `full`; there is no fixed 9-extension whitelist — the set follows the enabled `lang-*` features); debounces consecutive changes; pauses event processing during indexing; runs until interrupted (Ctrl+C). Requires the `daemon` feature. Does not emit a final JSON blob (long-running).
 
 ### Querying & search
 

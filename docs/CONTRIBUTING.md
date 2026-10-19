@@ -48,7 +48,7 @@ cargo test                     # 冒烟测试
 
 ### 构建变体
 
-默认特性集为 `full`（全部 21 种语言 + daemon + analysis + complexity + api-review + community + cross-service + lsp + mcp + cli + cache + embed）。为加快开发迭代，可以构建更精简的二进制：
+默认特性集为 `full`（全部 22 种语言 + daemon + analysis + complexity + api-review + community + cross-service + lsp + mcp + cli + cache + embed）。为加快开发迭代，可以构建更精简的二进制：
 
 ```bash
 # 最小：仅 Rust，无 daemon（编译最快）

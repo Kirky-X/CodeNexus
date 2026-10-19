@@ -44,7 +44,7 @@
 ## 📦 安装与准备
 
 ```bash
-# 从 crates.io 安装（默认 full 预设，含全部 21 语言 + 所有功能）
+# 从 crates.io 安装（默认 full 预设，含全部 22 语言 + 所有功能）
 cargo install codenexus
 
 # 或从源码构建
@@ -60,7 +60,7 @@ cargo install --path .
 | 磁盘空间 | 数据库默认写入 `<项目>/.codenexus/<项目名>.lbug`，随仓库规模增长 |
 | git | `detect_changes`、`diagram --repo_root` 源码证据等命令依赖 |
 
-构建预设：`minimal`（仅 Rust）/ `core`（C + Rust + Python）/ `full`（默认，21 语言 + 全部功能）。完整 Feature 清单见 [README · 构建预设与 Feature 开关](../README.md#-构建预设与-feature-开关)。
+构建预设：`minimal`（仅 Rust）/ `core`（C + Rust + Python）/ `full`（默认，22 语言 + 全部功能）。完整 Feature 清单见 [README · 构建预设与 Feature 开关](../README.md#-构建预设与-feature-开关)。
 
 ---
 

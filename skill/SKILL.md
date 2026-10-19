@@ -9,7 +9,7 @@ description: "Code knowledge graph indexer and query tool. Use when indexing cod
 
 ## Description
 
-CodeNexus is a code knowledge graph indexing tool. It parses source code (21 languages via tree-sitter — C, Rust, Fortran, Python, TypeScript, Go, Java, C++, JavaScript, Ruby, Haskell, OCaml, Scala, PHP, C#, Bash, HTML, CSS, JSON, Regex, Verilog; Kotlin/Swift/Solidity are recognized by extension mapping and taint rules only, with no tree-sitter parser) and builds a queryable graph in LadybugDB, supporting call-chain tracing, data-flow analysis, cross-language FFI tracking, semantic search, change-impact analysis, refactoring proposals, LSP integration, and MCP server integration.
+CodeNexus is a code knowledge graph indexing tool. It parses source code (22 languages via tree-sitter — C, Rust, Fortran, Python, TypeScript, Go, Java, C++, JavaScript, Ruby, Haskell, OCaml, Scala, PHP, C#, Bash, HTML, CSS, JSON, Regex, Verilog, Swift; Kotlin/Solidity are recognized by extension mapping and taint rules only, with no tree-sitter parser) and builds a queryable graph in LadybugDB, supporting call-chain tracing, data-flow analysis, cross-language FFI tracking, semantic search, change-impact analysis, refactoring proposals, LSP integration, and MCP server integration.
 
 Use this Skill when you need to index a codebase, query its structure, trace function calls or data flow, analyze the impact of changes, search for symbols, watch files for incremental updates, manage projects, export/import graph artifacts, inspect a symbol's 360° context, detect symbols affected by git changes, propose renames, query an LSP server, or set up MCP integration with AI agents.
 
@@ -42,7 +42,7 @@ cargo build --release
 
 The binary is at `target/release/codenexus` (or `~/.cargo/bin/codenexus` if installed via `cargo install`). Semantic search (vector embeddings) is already included in the default `full` preset — no extra flag needed.
 
-Feature presets: `minimal` (Rust only), `core` (C+Rust+Python), `full` (all 21 tree-sitter languages + daemon, analysis, complexity, api-review, community, cross-service, diagram, lsp, cli, mcp, cache, embeddings, i18n, hub). The `mcp` feature enables the sdforge-based MCP server (`codenexus mcp`). At least one `lang-*` feature is required — the crate fails to compile otherwise.
+Feature presets: `minimal` (Rust only), `core` (C+Rust+Python), `full` (all 22 tree-sitter languages + daemon, analysis, complexity, api-review, community, cross-service, diagram, lsp, cli, mcp, cache, embeddings, i18n, hub). The `mcp` feature enables the sdforge-based MCP server (`codenexus mcp`). At least one `lang-*` feature is required — the crate fails to compile otherwise.
 
 ## Command Quick Reference
 
@@ -107,7 +107,7 @@ Detailed documentation is split into supporting files that load on demand. The m
 | [`references/commands.md`](references/commands.md) | Full flag list, options, output schemas, and notes for the documented subcommands (36 of 37; for `ci` and anything not covered, defer to `codenexus <cmd> --help`). |
 | [`references/storage-model.md`](references/storage-model.md) | `CodeRelation` NODE TABLE design, 45 node types, 32 edge types, confidence tiers. |
 | [`references/workflows.md`](references/workflows.md) | Nine end-to-end workflows: indexing, daemon, multi-project, FFI, refactoring, team artifacts, MCP, complexity audit, API surface. |
-| [`references/appendix.md`](references/appendix.md) | Supported languages (21), exit codes, full known-issues table, example programs. |
+| [`references/appendix.md`](references/appendix.md) | Supported languages (22), exit codes, full known-issues table, example programs. |
 
 ## Storage Model (essential for `query` users)
 

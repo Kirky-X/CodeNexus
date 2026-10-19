@@ -51,6 +51,7 @@ pub fn ecosystem_for(language: Language) -> &'static str {
         Language::CSharp => "nuget",
         Language::Ruby => "rubygems",
         Language::Php => "packagist",
+        Language::Swift => "swiftpm",
         _ => "other",
     }
 }
@@ -172,6 +173,7 @@ mod tests {
         assert_eq!(ecosystem_for(Language::Python), "pypi");
         assert_eq!(ecosystem_for(Language::TypeScript), "npm");
         assert_eq!(ecosystem_for(Language::Go), "gomodules");
+        assert_eq!(ecosystem_for(Language::Swift), "swiftpm");
         assert_eq!(ecosystem_for(Language::C), "other");
     }
 

@@ -64,7 +64,7 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 
 <table style="width:100%; border-collapse: collapse">
 <tr>
-<td width="50%" style="vertical-align:top; padding: 12px">🌐 <b>Multi-language parsing</b><br><span style="color:#64748B">The default <code>full</code> preset supports 21 languages (C, Rust, Fortran, Python, TypeScript, Go, Java, C++, JavaScript, Ruby, Haskell, OCaml, Scala, PHP, C#, Bash, HTML, CSS, JSON, Regex, Verilog); trim it down with <code>lang-*</code> features</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🌐 <b>Multi-language parsing</b><br><span style="color:#64748B">The default <code>full</code> preset supports 22 languages (C, Rust, Fortran, Python, TypeScript, Go, Java, C++, JavaScript, Ruby, Haskell, OCaml, Scala, PHP, C#, Bash, HTML, CSS, JSON, Regex, Verilog, Swift); trim it down with <code>lang-*</code> features</span></td>
 <td width="50%" style="vertical-align:top; padding: 12px">🕸️ <b>Graph database</b><br><span style="color:#64748B">LadybugDB graph storage with 45 node types + 32 edge types, queryable via a Cypher subset</span></td>
 </tr>
 <tr>
@@ -121,7 +121,7 @@ Beyond the core capabilities above, CodeNexus also ships `context` assembly (tok
 <summary>📄 代码 · bash</summary>
 
 ```bash
-# Install from crates.io (default full preset, all 21 languages + all features)
+# Install from crates.io (default full preset, all 22 languages + all features)
 cargo install codenexus
 
 # Build from source
@@ -154,7 +154,7 @@ Requires Rust 1.97.1 or later (MSRV, matching `rust-version` in `Cargo.toml` and
 | ----------------- | ------- | ----------- |
 | `minimal`         | —       | Minimal preset: `lang-rust` only |
 | `core`            | —       | Core preset: `lang-c` + `lang-rust` + `lang-python` |
-| `full`            | Enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embeddings/i18n/hub |
+| `full`            | Enabled | Full preset: `core` + Fortran/TypeScript/Go/Java/C++/JavaScript/Ruby/Haskell/OCaml/Scala/PHP/C#/Bash/HTML/CSS/JSON/Regex/Verilog/Swift + daemon/analysis/complexity/api-review/community/cross-service/diagram/lsp/cli/mcp/cache/embeddings/i18n/hub |
 | `lang-c`          | —       | C parser (tree-sitter-c) |
 | `lang-rust`       | Enabled | Rust parser (tree-sitter-rust) |
 | `lang-fortran`    | —       | Fortran parser (tree-sitter-fortran) |
@@ -176,6 +176,7 @@ Requires Rust 1.97.1 or later (MSRV, matching `rust-version` in `Cargo.toml` and
 | `lang-json`       | —       | JSON parser (tree-sitter-json) |
 | `lang-regex`      | —       | Regex parser (tree-sitter-regex) |
 | `lang-verilog`    | —       | Verilog parser (tree-sitter-verilog) |
+| `lang-swift`      | —       | Swift parser (tree-sitter-swift) |
 | `daemon`          | Enabled | File-watching daemon (notify + notify-debouncer-full) |
 | `embeddings`      | Enabled | Vector embedding semantic search (reqwest HTTP + local Candle inference) |
 | `lsp`             | Enabled | LSP-enriched parsing (7 LSP clients: rust-analyzer, pyright, clangd, gopls, ts-lang-server, fortls, jdtls) |
@@ -554,7 +555,7 @@ CodeNexus stands on the shoulders of these excellent open-source projects:
 | Dependency | Purpose |
 | ---------- | ------- |
 | [lbug](https://github.com/ladybugdb/ladybugdb) (LadybugDB) | Graph database storage |
-| [tree-sitter](https://tree-sitter.github.io/) + 21 grammar crates | Multi-language AST parsing |
+| [tree-sitter](https://tree-sitter.github.io/) + 22 grammar crates | Multi-language AST parsing |
 | [rayon](https://github.com/rayon-rs/rayon) | Data parallelism |
 | [notify](https://github.com/notify-rs/notify) / notify-debouncer-full | File watching and debouncing |
 | [sdforge](https://crates.io/crates/sdforge) | CLI + MCP dual-transport framework (`#[forge]` macro) |
