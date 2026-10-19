@@ -392,7 +392,7 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 
 ### 🚨 报告安全漏洞
 
-请勿通过公开 issue 报告安全漏洞。请发送邮件至 **security@kirky-x.dev**，附漏洞描述与影响、复现步骤（最小代码库或 `codenexus` 命令序列）、版本信息（`codenexus --version`、Rust 工具链、操作系统）与已知缓解措施。项目承诺 48 小时内确认、5 个工作日内给出初步评估。完整政策（支持版本、披露流程、范围界定）见 [🔒 安全文档](docs/SECURITY.md)。
+请勿通过公开 issue 报告安全漏洞。请优先使用 GitHub [Security Advisories](https://github.com/Kirky-X/codenexus/security/policy) 私密披露通道提交报告（不可用时再邮件至 Kirky-X@outlook.com，受理人 Kirky.X），附漏洞描述与影响、复现步骤（最小代码库或 `codenexus` 命令序列）、版本信息（`codenexus --version`、Rust 工具链、操作系统）与已知缓解措施。项目承诺 48 小时内确认、5 个工作日内给出初步评估。完整政策（支持版本、披露流程、范围界定）见 [🔒 安全文档](docs/SECURITY.md)。
 
 ---
 

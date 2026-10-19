@@ -183,4 +183,4 @@ v0.3.8 起：`.codenexus/` 中恰好一个 `.lbug` 文件时自动选中；存�
 
 1. 收集信息：`codenexus --version`、Rust 版本、操作系统、完整命令、完整错误输出、最小复现仓库。
 2. 前往 [GitHub Issues](https://github.com/Kirky-X/codenexus/issues/new) 提交（Conventional Commits 风格的标题有助于快速分诊）。
-3. 安全漏洞**不要**公开提交——发邮件至 **security@kirky-x.dev**，见 [🔒 安全文档](SECURITY.md)。
+3. 安全漏洞**不要**公开提交——优先走 GitHub [Security Advisories](https://github.com/Kirky-X/codenexus/security/policy) 私密披露通道（不可用时再邮件至 Kirky-X@outlook.com，受理人 Kirky.X），见 [🔒 安全文档](SECURITY.md)。

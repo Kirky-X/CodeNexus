@@ -36,7 +36,7 @@
 
 ## 执法
 
-如有辱骂、骚扰或其他不可接受的行为，可向负责执法的社区负责人报告，联系方式：**security@kirky-x.dev**（此邮箱同时接收安全和行为报告）。所有投诉将被及时、公正地审查和调查。
+如有辱骂、骚扰或其他不可接受的行为，可向负责执法的社区负责人（Kirky.X）报告，联系方式：**Kirky-X@outlook.com**。安全漏洞请走 GitHub [Security Advisories](https://github.com/Kirky-X/codenexus/security/policy) 私密披露通道（见 [安全文档](SECURITY.md)），不要通过公开渠道提交。所有投诉将被及时、公正的审查和调查。
 
 所有社区负责人有义务尊重报告人的隐私和安全。具体执法政策的细则可另行发布。
 

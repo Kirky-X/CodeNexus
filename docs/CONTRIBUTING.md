@@ -121,7 +121,7 @@ footer 中的 `BREAKING CHANGE:` 或 `feat!:` / `fix!:`（带 `!`）标记破坏
    - 测试方式
    - 破坏性变更（如有）及迁移说明
 6. 通过推送新提交来**处理审查反馈**（审查期间不要 force-push，除非被要求）。
-7. 维护者 **squash-merge**。最终提交信息遵循 Conventional Commits。
+7. 由 Kirky.X **squash-merge**。最终提交信息遵循 Conventional Commits。
 
 ## ✅ 测试与 Lint 要求
 
@@ -187,4 +187,4 @@ cargo test --features embeddings
 
 ## ❓ 问题
 
-开 [GitHub Discussion](https://github.com/Kirky-X/codenexus/discussions) 或标记为 `question` 的 Issue。请耐心等待——本项目由小团队维护。
+开 [GitHub Discussion](https://github.com/Kirky-X/codenexus/discussions) 或标记为 `question` 的 Issue。请耐心等待——本项目由 Kirky.X 维护。

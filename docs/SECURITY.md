@@ -48,7 +48,9 @@ The historical audit record (Strix ReDoS false-positive triage with proof) lives
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Report vulnerabilities by email to **security@kirky-x.dev**. Please include:
+**Primary channel**: file a private report through GitHub [Security Advisories](https://github.com/Kirky-X/codenexus/security/policy) (repository **Security → Report a vulnerability**).
+
+**Fallback channel**: only if the primary channel is unavailable, email **Kirky-X@outlook.com** (handler: Kirky.X). Please include:
 
 - A description of the vulnerability and its impact.
 - Steps to reproduce, including a minimal codebase or `codenexus` command sequence if applicable.
@@ -66,7 +68,7 @@ If you have a fix ready, mention it in the report so we can coordinate a joint d
 | Fix or mitigation for accepted vulnerabilities | Best-effort within 30 days, sooner for high-severity issues |
 | Coordinated public disclosure | After a fixed release is available, on an agreed date with the reporter |
 
-These targets are commitments on a best-effort basis. CodeNexus is maintained by a small team; we will communicate proactively if a timeline slips and explain why.
+These targets are commitments on a best-effort basis. CodeNexus is maintained by Kirky.X; we will communicate proactively if a timeline slips and explain why.
 
 ## 📢 Disclosure Policy
 

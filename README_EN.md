@@ -389,7 +389,7 @@ CI enforces four gates: `cargo-audit` (RustSec advisory scanning), `cargo-deny` 
 
 ### 🚨 Reporting a vulnerability
 
-Do not report security vulnerabilities through public issues. Email **security@kirky-x.dev** instead, including a description of the vulnerability and its impact, reproduction steps (a minimal codebase or `codenexus` command sequence), version info (`codenexus --version`, Rust toolchain, OS), and any known mitigations. The project commits to acknowledging within 48 hours and giving an initial assessment within 5 business days. The full policy (supported versions, disclosure process, scope) is in the [🔒 Security doc](docs/SECURITY.md).
+Do not report security vulnerabilities through public issues. Use the GitHub [Security Advisories](https://github.com/Kirky-X/codenexus/security/policy) private disclosure channel as the primary route (fall back to email Kirky-X@outlook.com, handled by Kirky.X, only if that channel is unavailable), including a description of the vulnerability and its impact, reproduction steps (a minimal codebase or `codenexus` command sequence), version info (`codenexus --version`, Rust toolchain, OS), and any known mitigations. The project commits to acknowledging within 48 hours and giving an initial assessment within 5 business days. The full policy (supported versions, disclosure process, scope) is in the [🔒 Security doc](docs/SECURITY.md).
 
 ---
 
