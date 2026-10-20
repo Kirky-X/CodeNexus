@@ -34,9 +34,7 @@ required-features = ["cli"]
 [[bin]]
 name = "codenexus-verify"
 path = "tools/verification/src/main.rs"
-# verify 工具经 lib 的 `pub use sdforge`（cli 门控）取 clap——未开 cli 时该 bin
-# 无法编译；此前缺 required-features 导致 `--no-default-features` 构建必失败
-#（CI 一直用 --lib 编译而未暴露）。
+# 未开 cli 时该 bin 无法编译（经 lib 的 `pub use sdforge` 取 clap）
 required-features = ["cli"]
 
 [features]
@@ -136,39 +134,26 @@ lsp-types = { version = "0.97", default-features = false, optional = true }
 lsp-server = { version = "0.10", default-features = false, optional = true }
 crossbeam-channel = { version = "0.5", default-features = false, features = ["std"], optional = true }
 url = { version = "2.5", default-features = false, features = ["std"], optional = true }
-# i18n 消息目录（src/i18n/catalog.rs）常编并在 t/tr 转发 sdforge::i18n，
-# 故 sdforge 从 optional 收敛为常驻依赖（cli/mcp 仅再叠加各自 feature）。
+# i18n 消息目录常编并转发 sdforge::i18n，故 sdforge 为常驻依赖
 sdforge = { version = "0.5.0-rc.8", default-features = false, features = ["i18n"] }
 limiteron = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
 oxcache = { version = "0.5.0-rc.8", default-features = false, features = ["minimal", "macros"], optional = true }
 oxiarc-zstd = { version = "0.4", default-features = false, optional = true }
-# zstd-sys 经 oxcache/oxiarc-zstd 传递入树；显式钉 vendored，让它自带 zstd
-# 并以 rustc-link-lib 显式链接。lbug 0.21 起 bundled zstd 符号本地化后不再
-# 外泄全局符号，此前靠 lbug 赈济 zstd-sys 引用的隐形机制已终止——而
-# pkg-config 路径的 `-l:` 参数走 cargo:rustc-link-arg，不向下游传播（实测
-# 链接行无该参数），故 pkg-config 探测无法替代 vendored。
+# zstd-sys 显式钉 vendored：lbug 0.21 bundled zstd 不再外泄符号，pkg-config 探测无法替代
 zstd-sys = { version = "2.1", default-features = false, features = ["std", "vendored"] }
 inklog = { workspace = true }
 regex = { version = "1.13", default-features = false, features = ["std", "unicode", "perf"] }
 icu_normalizer = { version = "2.3", default-features = false, features = ["compiled_data"], optional = true }
 icu_casemap = { version = "2.3", default-features = false, features = ["compiled_data"], optional = true }
-# Message-level i18n (locale detection) — always on, per the unify-rust-i18n
-# change. Messages now resolve via sdforge i18n (see src/i18n/catalog.rs), so
-# the fluent-bundle direct dependency is gone; unic-langid remains for the
-# locale detection chain. Unrelated to the `i18n` feature above, which gates
-# the icu_normalizer/icu_casemap text-processing crates.
+# 消息级 i18n 常开：消息经 sdforge i18n 解析，unic-langid 仅用于语言探测链
 unic-langid = { workspace = true }
 sys-locale = { workspace = true }
 
 # graph-viewer 内嵌服务（见 feature `viewer`）
 axum = { workspace = true, optional = true }
 mime_guess = { version = "2.0", default-features = false, optional = true }
-# debug-embed 必须保留：rust-embed 未启用该特性时，debug 构建改为按进程 CWD
-# 运行时读盘（release 恒为编译期嵌入）——测试以临时目录为 CWD，会静默落到回退
-# 页，真实前端不再被覆盖；仓库根目录外 debug 运行同理。见 rust-embed README
-# "In debug and when debug-embed feature is not enabled, the folder path is
-# resolved relative to where the binary is run from"。
+# debug-embed 必须保留：缺失时 debug 构建按 CWD 运行时读盘，测试会静默落到回退页
 rust-embed = { version = "8.13", default-features = false, features = ["include-exclude", "debug-embed"], optional = true }
 
 [dev-dependencies]
@@ -181,9 +166,7 @@ oxiarc-zstd = { version = "0.4", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["smallvec", "fmt", "ansi", "tracing-log", "std"] }
 crossbeam-channel = { version = "0.5", default-features = false, features = ["std"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
-# `#[forge::log]` 壳函数经 `log` 门面发射记录；集成测试安装捕获 logger
-# 断言函数级日志（tests/log_attr_integration.rs）。`std` 为 set_boxed_logger
-# 所需，显式声明以关闭默认特性。
+# `#[forge::log]` 测试断言函数级日志；std 为 set_boxed_logger 所需
 log = { version = "0.4", default-features = false, features = ["std"] }
 
 [build-dependencies]
@@ -242,22 +225,17 @@ debug = true
 inherits = "release"
 
 [lints.rust]
-# 2026-09-19 审计：lang-kotlin/solidity 死 cfg 已清理，从 "allow" 收紧为
-# warn 级白名单（sdforge 宏会在 consumer 侧发射协议 cfg，白名单声明其合法性），
-# 未来再出现悬空 cfg 将直接暴露。
+# 审计（2026-09-19）：lang-kotlin/solidity 死 cfg 已清理，从 allow 收紧为 warn 白名单
 unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(feature, values("http", "openapi", "websocket", "streaming", "grpc", "docs", "cache", "health", "metrics", "security"))',
 ] }
 
 [workspace]
 members = ["examples"]
-# Daily commands (build/test/check) stay scoped to the main crate; examples
-# join only for workspace-wide ops (cargo clean --workspace, metadata).
+# 日常命令仅作用于主 crate；examples 只参与 workspace 级操作
 default-members = ["."]
 
-# 依赖集中管理：主 crate 与 workspace 成员（examples）
-# 的重复依赖在此声明一次，成员以 `dep = { workspace = true }` 引用，
-# 差异 features 在成员侧声明（与 garrison/sinnan 同一惯例）。
+# 依赖集中管理：主 crate 与 examples 的重复依赖在此声明，成员用 workspace = true
 [workspace.dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 tokio = { version = "1.53", default-features = false }
