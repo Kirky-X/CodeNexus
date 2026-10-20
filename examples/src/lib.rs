@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
+//! CodeNexus 核心能力示例程序。
+
 use std::fs;
 use std::path::PathBuf;
 
