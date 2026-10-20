@@ -77,9 +77,7 @@ impl Extractor for BashExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 /// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
 struct VisitContext<'a> {
@@ -120,9 +118,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     }
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name) = function_name(node, source) else {
@@ -184,16 +180,14 @@ fn extract_global_var(
     result.push_node(model_node);
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Extracts the function name from a `function_definition` node.
 ///
 /// tree-sitter-bash exposes the name as a `command_name` child (for
 /// `function foo { }`) or via the `name` field. This function tries the
 /// `name` field first, then scans for a `command_name` named child, and
-/// finally falls back to the first `word` child (for `foo() { }`).
+/// finally falls back to the first `word` child (for `foo { }`).
 fn function_name(node: Node, source: &str) -> Option<String> {
     // Try the `name` field first (covers `function foo { }`).
     if let Some(name_node) = node.child_by_field_name("name") {
@@ -209,7 +203,7 @@ fn function_name(node: Node, source: &str) -> Option<String> {
             }
         }
     }
-    // Fall back to the first `word` child (covers `foo() { }`).
+    // Fall back to the first `word` child (covers `foo { }`).
     for i in 0..node.named_child_count() as u32 {
         if let Some(child) = node.named_child(i) {
             if child.kind() == "word" {
@@ -220,7 +214,7 @@ fn function_name(node: Node, source: &str) -> Option<String> {
     None
 }
 
-/// Returns the first line of a signature string (the `foo() {` line).
+/// Returns the first line of a signature string (the `foo {` line).
 fn signature_first_line(text: &str) -> &str {
     text.lines().next().unwrap_or(text)
 }
@@ -251,9 +245,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -605,7 +597,7 @@ mod tests {
 
     #[test]
     fn function_with_subshell() {
-        // Exercises traversal through subshell `(... )` nodes.
+        // Exercises traversal through subshell `(...)` nodes.
         let result = extract("run_in_subshell() { ( cd /tmp && ls ); }\n");
         let funcs: Vec<_> = result
             .nodes
@@ -631,7 +623,7 @@ mod tests {
 
     #[test]
     fn function_with_keyword_and_parens() {
-        // `function foo()` syntax — exercises the name field path with
+        // `function foo` syntax — exercises the name field path with
         // parentheses.
         let result = extract("function bar() { echo hi; }\n");
         let funcs: Vec<_> = result
@@ -719,7 +711,7 @@ mod tests {
 
     #[test]
     fn function_with_arithmetic_expansion() {
-        // Function body with $((... )) arithmetic.
+        // Function body with $((...)) arithmetic.
         let result = extract("compute() { RESULT=$((1 + 2)); echo $RESULT; }\n");
         let funcs: Vec<_> = result
             .nodes

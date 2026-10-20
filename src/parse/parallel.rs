@@ -21,9 +21,7 @@ use crate::discover::FileInfo;
 use crate::parse::error::ParseError;
 use crate::parse::extractor::{extract_file, extract_from_source, ExtractResult};
 
-// ---------------------------------------------------------------------------
 // ParallelParseResult
-// ---------------------------------------------------------------------------
 
 /// The result of parsing a batch of files in parallel.
 ///
@@ -42,9 +40,7 @@ pub struct ParallelParseResult {
     pub files_failed: usize,
 }
 
-// ---------------------------------------------------------------------------
 // parallel_parse
-// ---------------------------------------------------------------------------
 
 /// Parses multiple files in parallel using rayon (ADR-010).
 ///
@@ -115,9 +111,7 @@ pub fn parallel_parse(files: &[FileInfo], project: &str) -> ParallelParseResult 
     }
 }
 
-// ---------------------------------------------------------------------------
 // parse_single
-// ---------------------------------------------------------------------------
 
 /// Parses a single file (for sequential use or testing).
 ///
@@ -133,9 +127,7 @@ pub fn parse_single(file: &FileInfo, project: &str) -> Result<ExtractResult, Par
     extract_file(&file.path, lang, project)
 }
 
-// ---------------------------------------------------------------------------
 // parallel_parse_ram_first (H15)
-// ---------------------------------------------------------------------------
 
 /// LZ4-compressed source buffer keyed by absolute file path.
 ///
@@ -160,7 +152,7 @@ pub type RamFirstSources = std::collections::HashMap<std::path::PathBuf, Vec<u8>
 ///
 /// # L2 memory-bounding refactor
 ///
-/// Pre-L2 used `files.par_iter().map(parse).collect::<Vec<_>>()` which
+/// Pre-L2 used `files.par_iter.map(parse).collect::<Vec<_>>` which
 /// forces rayon to materialize every `ExtractResult` in an intermediate
 /// `Vec` before the caller can drain it. For large repos this drives peak
 /// memory up to roughly `sum(all_extract_results) + N * max_source`
@@ -175,7 +167,7 @@ pub type RamFirstSources = std::collections::HashMap<std::path::PathBuf, Vec<u8>
 /// * `mpsc::sync_channel(CHANNEL_BOUND)` — workers send each result through
 ///   a bounded channel; when the main thread is slow to drain, workers block
 ///   on `send`, capping in-flight `ExtractResult` count at `CHANNEL_BOUND`
-///   instead of `files.len()`.
+///   instead of `files.len`.
 ///
 /// The main thread drains the channel and pushes successes/failures into the
 /// result `Vec`s in arrival order. The public API and `ParallelParseResult`
@@ -358,9 +350,7 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
     // 1. Parallel parse of multiple Rust files
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_parallel_parse_multiple_rust_files() {
@@ -377,9 +367,7 @@ mod tests {
         assert!(result.errors.is_empty());
     }
 
-    // -----------------------------------------------------------------------
     // 2. Parallel parse of mixed languages (C, Rust, Python)
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_parallel_parse_mixed_languages() {
@@ -412,9 +400,7 @@ mod tests {
         assert!(langs.contains(&Language::Python));
     }
 
-    // -----------------------------------------------------------------------
     // 3. Parse failure handling: one bad file, others succeed
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_parallel_parse_failure_handling() {
@@ -442,9 +428,7 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
     // 4. Empty file list
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_parallel_parse_empty_list() {
@@ -456,9 +440,7 @@ mod tests {
         assert!(result.errors.is_empty());
     }
 
-    // -----------------------------------------------------------------------
     // 5. Files with unknown language (None) are treated as errors
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_parallel_parse_unknown_language_is_error() {
@@ -477,9 +459,7 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
     // 6. parallel_parse returns correct counts
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_parallel_parse_correct_counts() {
@@ -512,9 +492,7 @@ mod tests {
         assert_eq!(result.files_parsed + result.files_failed, files.len());
     }
 
-    // -----------------------------------------------------------------------
     // 7. parse_single works for a single file
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_parse_single_succeeds() {
@@ -537,9 +515,7 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
     // 8. parse_single returns error for unknown language
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_parse_single_unknown_language_errors() {
@@ -554,9 +530,7 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
     // 9. Thread safety: parallel_parse works with many files (10+)
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_parallel_parse_thread_safety_many_files() {
@@ -594,9 +568,7 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
     // 10. Results contain correct nodes/edges from extraction
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_parallel_parse_results_contain_nodes_and_edges() {
@@ -628,9 +600,7 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
     // Bonus: parallel_parse preserves order independence (results count)
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_parallel_parse_preserves_total_count() {
@@ -652,9 +622,7 @@ mod tests {
         assert_eq!(result.files_parsed + result.files_failed, files.len());
     }
 
-    // -----------------------------------------------------------------------
     // file_parsed event emission
-    // -----------------------------------------------------------------------
 
     // Thread-local storage for the tracing `DefaultGuard` on rayon worker
     // threads. Each worker thread sets its own subscriber via
@@ -672,7 +640,7 @@ mod tests {
     /// the current thread's tracing subscriber, this helper builds a custom
     /// rayon thread pool whose `start_handler` installs an inklog
     /// `LoggerSubscriber` (sharing the same console channel) on each worker
-    /// thread. The test function `f` is then run via `pool.install()` so that
+    /// thread. The test function `f` is then run via `pool.install` so that
     /// `par_iter` calls inside `f` use worker threads that have the subscriber
     /// set.
     fn capture_tracing_debug<R: Send>(f: impl FnOnce() -> R + Send) -> String {
@@ -767,9 +735,7 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
     // parallel_parse_ram_first (H15/D9): LZ4-compressed in-memory parsing
-    // -----------------------------------------------------------------------
 
     /// Helper: LZ4-compress a source string with the size prefix that
     /// `decompress_size_prepended` expects (4-byte LE original size + raw
@@ -911,9 +877,7 @@ mod tests {
         assert!(result.errors.is_empty());
     }
 
-    // -----------------------------------------------------------------------
     // parse_single: IO error for missing file
-    // -----------------------------------------------------------------------
 
     #[test]
     fn parse_single_io_error_for_missing_file() {
@@ -939,9 +903,7 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
     // file_parsed_ram_first event emission
-    // -----------------------------------------------------------------------
 
     #[test]
     fn log_002_ram_first_emits_file_parsed_ram_first_event() {
@@ -1015,9 +977,7 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
     // parallel_parse_ram_first: multiple files in compressed map
-    // -----------------------------------------------------------------------
 
     #[test]
     fn ram_first_multiple_compressed_files_all_parsed() {
@@ -1071,14 +1031,12 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
     // L2: mpsc channel + par_chunks streaming — large-batch coverage
     //
     // These tests exercise the streaming/backpressure path that replaced the
-    // pre-L2 `par_iter().collect()` shape. They use batches larger than the
+    // pre-L2 `par_iter.collect` shape. They use batches larger than the
     // channel bound and chunk size to ensure results are not lost when the
     // main thread drains the channel slowly.
-    // -----------------------------------------------------------------------
 
     /// Builds `count` Rust files with unique function names `f0`, `f1`, ...
     /// and inserts each into `compressed` with LZ4-prepared bytes.

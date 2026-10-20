@@ -80,9 +80,7 @@ impl Extractor for CssExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 /// Immutable traversal context passed between visit_node/visit_children.
 struct VisitContext<'a> {
@@ -114,9 +112,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     }
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 fn extract_rule_set(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(selector_text) = rule_set_selector(node, source) else {
@@ -160,9 +156,7 @@ fn extract_media_statement(
     result.push_node(model_node);
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Extracts the first selector text from a `rule_set` node.
 ///
@@ -200,9 +194,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

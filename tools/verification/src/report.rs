@@ -93,10 +93,10 @@ pub fn generate_report(
     let mut out = String::new();
     out.push_str(&format!("# Verification Report: {name}\n\n"));
 
-    // --- Severity tally ---
+    // Severity tally
     let mut severities = SeverityCounts::default();
 
-    // --- Node comparison (comparable types) ---
+    // Node comparison (comparable types)
     out.push_str("## Node Type Comparison (Comparable Types)\n\n");
     out.push_str("| Type | CodeNexus | gitnexus | Delta | Severity |\n");
     out.push_str("|------|-----------|----------|-------|----------|\n");
@@ -126,7 +126,7 @@ pub fn generate_report(
     }
     out.push('\n');
 
-    // --- Edge comparison (comparable types) ---
+    // Edge comparison (comparable types)
     out.push_str("## Edge Type Comparison (Comparable Types)\n\n");
     out.push_str("| Type | CodeNexus | gitnexus | Delta | Severity |\n");
     out.push_str("|------|-----------|----------|-------|----------|\n");
@@ -155,7 +155,7 @@ pub fn generate_report(
     }
     out.push('\n');
 
-    // --- Query comparison ---
+    // Query comparison
     out.push_str("## Query Comparison\n\n");
     out.push_str("| Query | Result | Missing in CodeNexus | Missing in gitnexus |\n");
     out.push_str("|-------|--------|----------------------|---------------------|\n");
@@ -179,7 +179,7 @@ pub fn generate_report(
     }
     out.push('\n');
 
-    // --- Unmapped types (informational) ---
+    // Unmapped types (informational)
     out.push_str("## Unmapped Types (Informational)\n\n");
     out.push_str("### CodeNexus-only (not indexed by gitnexus)\n\n");
     out.push_str("| Type | Count |\n|------|-------|\n");
@@ -237,7 +237,7 @@ pub fn generate_report(
     }
     out.push('\n');
 
-    // --- Summary header (prepend after we know the totals) ---
+    // Summary header (prepend after we know the totals)
     let overall_pass = severities.critical == 0;
     let mut header = String::new();
     header.push_str("## Summary\n\n");

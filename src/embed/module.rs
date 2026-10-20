@@ -13,9 +13,9 @@
 //! [`EmbedCapability`] owns an [`EmbeddingConfig`] and chooses the backend:
 //!
 //! - **Local mode** (`endpoint = None`, default): lazily loads a
-//!   [`LocalEmbedClient`] (vecboost + arctic-embed-xs) on the first `embed()` call.
+//!   [`LocalEmbedClient`] (vecboost + arctic-embed-xs) on the first `embed` call.
 //!   The loaded client is cached behind a [`Mutex`] for reuse. If the model
-//!   file is missing, `embed()` returns [`EmbedError::Unavailable`] with a
+//!   file is missing, `embed` returns [`EmbedError::Unavailable`] with a
 //!   clear message.
 //! - **Remote mode** (`endpoint = Some(url)`): creates a fresh
 //!   [`OpenAIEmbedClient`] per call (matches existing `search_cmd` semantics).
@@ -23,7 +23,7 @@
 //!
 //! # Degradation
 //!
-//! In local mode, if the model file is missing at `embed()` time, the error is
+//! In local mode, if the model file is missing at `embed` time, the error is
 //! returned to the caller (e.g. `search_cmd`), which falls back to BM25. In
 //! remote mode without an API key, the same fallback applies. The caller is
 //! responsible for degradation — this mirrors the existing `semantic_search`
@@ -34,8 +34,8 @@
 //! The embedding config (`endpoint`, `model`, etc.) can be hot-reloaded at
 //! runtime via [`EmbedCapability::update_config`] without rebuilding the
 //! capability. The capability holds the config behind an `Arc<RwLock<…>>` so
-//! each `embed()` call reads the latest value. When the config changes, the
-//! cached local client is invalidated so the next `embed()` re-initialises
+//! each `embed` call reads the latest value. When the config changes, the
+//! cached local client is invalidated so the next `embed` re-initialises
 //! with the new settings.
 //!
 //! # Dependency note
@@ -45,7 +45,7 @@
 //! [`EmbedCapability`] is self-contained, however: it only owns the
 //! embedding-service config and does not touch the database directly
 //! (storage operations are orchestrated by `search_cmd` via
-//! `QueryFacade::connection()`). Therefore `dependencies = &[]` at the type
+//! `QueryFacade::connection`). Therefore `dependencies = &[]` at the type
 //! level; the bootstrap enforces build ordering
 //! (Storage → ... → Embed). This mirrors the
 //! [`QueryModule`](crate::query::module::QueryModule),
@@ -67,9 +67,7 @@ use crate::kit::{AsyncAutoBuilder, AsyncKit, ModuleMeta};
 use super::client::{EmbedClient, LocalEmbedClient, OpenAIEmbedClient};
 use super::{EmbedError, EmbeddingConfig, Result};
 
-// ---------------------------------------------------------------------------
 // Re-export
-// ---------------------------------------------------------------------------
 
 /// Re-export of [`EmbeddingConfig`] under the trait-kit convention name.
 ///
@@ -79,9 +77,7 @@ use super::{EmbedError, EmbeddingConfig, Result};
 /// so trait-kit consumers can write `embed::EmbedConfig`.
 pub type EmbedConfig = EmbeddingConfig;
 
-// ---------------------------------------------------------------------------
 // Module (ModuleMeta + AsyncAutoBuilder)
-// ---------------------------------------------------------------------------
 
 /// trait-kit module tag for the Embed subsystem.
 ///
@@ -93,11 +89,11 @@ pub type EmbedConfig = EmbeddingConfig;
 /// use codenexus::kit::{AsyncKit, EmbedModule};
 /// use codenexus::embed::EmbeddingConfig;
 ///
-/// let mut kit = AsyncKit::new();
-/// kit.set_config(EmbeddingConfig::from_env());
-/// kit.register::<EmbedModule>()?;
-/// let kit = kit.build().await?;
-/// let embed = kit.require::<EmbedModule>()?;
+/// let mut kit = AsyncKit::new;
+/// kit.set_config(EmbeddingConfig::from_env);
+/// kit.register::<EmbedModule>?;
+/// let kit = kit.build.await?;
+/// let embed = kit.require::<EmbedModule>?;
 /// ```
 pub struct EmbedModule;
 
@@ -151,9 +147,7 @@ impl EmbedModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Concrete dyn EmbedClient implementation
-// ---------------------------------------------------------------------------
 
 /// Concrete implementation of [`dyn EmbedClient`] that routes to either
 /// [`LocalEmbedClient`] (offline Candle) or [`OpenAIEmbedClient`] (remote HTTP)
@@ -161,14 +155,14 @@ impl EmbedModule {
 ///
 /// # Local mode (endpoint = None, default)
 ///
-/// The [`LocalEmbedClient`] is lazily loaded on the first `embed()` call and
+/// The [`LocalEmbedClient`] is lazily loaded on the first `embed` call and
 /// cached behind a [`Mutex`] for subsequent calls. If the model file is
-/// missing, `embed()` returns [`EmbedError::Unavailable`] — `build()` always
+/// missing, `embed` returns [`EmbedError::Unavailable`] — `build` always
 /// succeeds so that kit bootstrap doesn't fail when the model isn't present.
 ///
 /// # Remote mode (endpoint = Some)
 ///
-/// A fresh [`OpenAIEmbedClient`] is constructed on every `embed()` call
+/// A fresh [`OpenAIEmbedClient`] is constructed on every `embed` call
 /// (matching the existing `search_cmd::semantic_search` semantics). Requires
 /// an API key — returns [`EmbedError::MissingApiKey`] if absent.
 struct EmbedCapability {
@@ -215,7 +209,7 @@ impl EmbedClient for EmbedCapability {
         if let Ok(mut cfg) = self.config.write() {
             *cfg = new_config;
         }
-        // Invalidate cached local client — next embed() will re-load.
+        // Invalidate cached local client — next embed will re-load.
         if let Ok(mut guard) = self.local_client.lock() {
             *guard = None;
         }
@@ -245,9 +239,7 @@ impl EmbedCapability {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -274,8 +266,8 @@ mod tests {
     /// `embed` in local mode without a model file returns `Unavailable`
     /// (non-blocking failure path — build succeeds, embed fails clearly).
     ///
-    /// This verifies the lazy-loading path: `build()` succeeds even when the
-    /// model is missing, and `embed()` returns a clear error.
+    /// This verifies the lazy-loading path: `build` succeeds even when the
+    /// model is missing, and `embed` returns a clear error.
     #[test]
     #[serial_test::serial(i18n_catalog)]
     fn capability_embed_local_without_model_returns_unavailable() {
@@ -359,7 +351,7 @@ mod tests {
     }
 
     /// `update_config` hot-reloads the embedding config; the cached local
-    /// client is invalidated so the next `embed()` uses the new settings.
+    /// client is invalidated so the next `embed` uses the new settings.
     #[test]
     fn update_config_changes_shared_config() {
         // Directly construct EmbedCapability (test is in the same module).

@@ -45,7 +45,7 @@ use std::collections::{HashMap, HashSet};
 /// ```
 /// use codenexus::resolve::includes_graph::IncludesGraph;
 ///
-/// let mut graph = IncludesGraph::new();
+/// let mut graph = IncludesGraph::new;
 /// graph.add_include("main.cpp", "foo.h");
 /// graph.add_include("foo.h", "bar.h");
 ///
@@ -250,21 +250,21 @@ impl<T, S> SetCount for HashSet<T, S> {
 /// use codenexus::resolve::includes_graph::resolve_include;
 ///
 /// // Same-directory preference: src/foo.h wins over include/foo.h.
-/// let all = vec!["src/foo.h".to_string(), "include/foo.h".to_string()];
+/// let all = vec!["src/foo.h".to_string, "include/foo.h".to_string];
 /// assert_eq!(
 ///     resolve_include("foo.h", "src/main.cpp", &all),
-///     Some("src/foo.h".to_string())
-/// );
+///     Some("src/foo.h".to_string)
+///);
 ///
 /// // No same-directory match: falls back to any project file.
-/// let all = vec!["include/bar.h".to_string()];
+/// let all = vec!["include/bar.h".to_string];
 /// assert_eq!(
 ///     resolve_include("bar.h", "src/main.cpp", &all),
-///     Some("include/bar.h".to_string())
-/// );
+///     Some("include/bar.h".to_string)
+///);
 ///
 /// // System header: no match in project files.
-/// let all = vec!["src/main.cpp".to_string()];
+/// let all = vec!["src/main.cpp".to_string];
 /// assert_eq!(resolve_include("iostream", "src/main.cpp", &all), None);
 /// ```
 pub fn resolve_include(
@@ -311,7 +311,7 @@ pub fn resolve_include(
 mod tests {
     use super::*;
 
-    // --- new() / empty graph ---
+    // new / empty graph
 
     #[test]
     fn new_creates_empty_graph() {
@@ -326,7 +326,7 @@ mod tests {
         assert!(graph.is_empty());
     }
 
-    // --- add_include + contains (direct edges) ---
+    // add_include + contains (direct edges)
 
     #[test]
     fn add_include_creates_direct_edge() {
@@ -416,7 +416,7 @@ mod tests {
         assert!(graph.contains("main.cpp", "baz.h"));
     }
 
-    // --- reachable_from (transitive closure) ---
+    // reachable_from (transitive closure)
 
     #[test]
     fn includes_graph_reachable_transitive() {
@@ -528,7 +528,7 @@ mod tests {
         );
     }
 
-    // --- fill_reachable_from (zero-allocation variant) ---
+    // fill_reachable_from (zero-allocation variant)
 
     #[test]
     fn fill_reachable_from_reuses_buffer() {
@@ -581,7 +581,7 @@ mod tests {
         );
     }
 
-    // --- edge_count / is_empty ---
+    // edge_count / is_empty
 
     #[test]
     fn edge_count_counts_all_direct_edges() {
@@ -612,7 +612,7 @@ mod tests {
         assert!(graph.is_empty());
     }
 
-    // --- resolve_include (basename matching) ---
+    // resolve_include (basename matching)
 
     fn make_files(paths: &[&str]) -> Vec<String> {
         paths.iter().map(|s| s.to_string()).collect()
@@ -709,7 +709,7 @@ mod tests {
         // "src/main.cpp" with empty path_norm, prefix_len = 13, and byte
         // at [12] is 'c' (not '/'), so no match. Returns None.
         // Actually: "" ends_with "" is true for all strings. prefix_len =
-        // file.len(). boundary check: file.as_bytes()[file.len()-1] is
+        // file.len. boundary check: file.as_bytes[file.len-1] is
         // 'p' (not '/'), so rejected. All files rejected → None.
         assert_eq!(result, None, "empty source_file should not match anything");
     }

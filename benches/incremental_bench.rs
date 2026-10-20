@@ -160,7 +160,7 @@ fn bench_incremental_500_of_1000(c: &mut Criterion) {
     // which currently takes ~29 s per routine (observed: src/ incremental
     // re-index is dominated by database delete+re-insert of changed records).
     // The default `measurement_time` (5 s) would yield only one sample before
-    // timing out, tripping criterion's `slice.len() > 1` stats assert. Raise
+    // timing out, tripping criterion's `slice.len > 1` stats assert. Raise
     // the per-bench measurement window so criterion can collect at least the
     // minimum sample size (10) — `--quick` will still short-circuit earlier
     // once statistical significance is reached.

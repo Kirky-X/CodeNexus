@@ -100,9 +100,7 @@ impl Extractor for SwiftExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 /// Immutable traversal context passed between the visit/extract functions.
 struct VisitContext<'a> {
@@ -138,7 +136,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         "property_declaration" | "protocol_property_declaration" => {
             extract_property(node, source, ctx, result);
             // Inside a function, recurse into the initializer so a local
-            // `let x = Foo()` still produces a CallInfo for the enclosing
+            // `let x = Foo` still produces a CallInfo for the enclosing
             // function. At type/top level, skip recursion: initializer
             // closures and computed-property getters would otherwise emit
             // local `let` bindings as Property/GlobalVar nodes.
@@ -171,9 +169,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     }
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name) = declaration_name(node, source) else {
@@ -217,7 +213,7 @@ fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &m
 }
 
 fn extract_init(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
-    // Name constructors after their type (like Java/C#), so `Foo()` call
+    // Name constructors after their type (like Java/C#), so `Foo` call
     // resolution can match the Constructor node. Multiple initializers in the
     // same type are disambiguated by `dedupe_qn`'s `#L{line}` suffix.
     let name = ctx
@@ -448,9 +444,7 @@ fn extract_property(node: Node, source: &str, ctx: &VisitContext<'_>, result: &m
     result.push_node(model_node);
 }
 
-// ---------------------------------------------------------------------------
 // Record extractors
-// ---------------------------------------------------------------------------
 
 fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
     let line = node.start_position().row as u32 + 1;
@@ -531,9 +525,7 @@ fn extract_constructor_call(
     });
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Returns the declaration's `name` field text.
 fn declaration_name(node: Node, source: &str) -> Option<String> {
@@ -573,7 +565,7 @@ fn first_identifier_text(node: Node, source: &str) -> Option<String> {
 
 /// Returns the last identifier-like descendant text.
 ///
-/// Used for call callees: `foo()` → `foo`, `foo.bar()` → `bar`.
+/// Used for call callees: `foo` → `foo`, `foo.bar` → `bar`.
 fn last_identifier_text(node: Node, source: &str) -> Option<String> {
     if matches!(
         node.kind(),
@@ -592,7 +584,7 @@ fn last_identifier_text(node: Node, source: &str) -> Option<String> {
     last
 }
 
-/// Returns the constructed type name for `Foo()` expressions.
+/// Returns the constructed type name for `Foo` expressions.
 fn constructor_name(node: Node, source: &str) -> Option<String> {
     let type_node = node
         .child_by_field_name("constructed_type")
@@ -685,9 +677,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

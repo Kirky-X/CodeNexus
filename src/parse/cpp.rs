@@ -87,9 +87,7 @@ impl Extractor for CppExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 /// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
 struct VisitContext<'a> {
@@ -202,9 +200,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     }
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name) = function_name(node, source) else {
@@ -215,7 +211,7 @@ fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &m
     // walk the ancestor chain to distinguish class/struct scope from
     // namespace scope (mirrors python.rs `is_inside_class`).
     let is_inside = is_inside_class_or_struct(node);
-    // Out-of-class method definitions (`void Foo::bar() {}`) have a
+    // Out-of-class method definitions (`void Foo::bar {}`) have a
     // qualified_identifier declarator. Detect the qualifier (class name) so
     // these are classified as Method, not Function.
     let qualifier = extract_qualifier(node, source);
@@ -390,9 +386,7 @@ fn extract_namespace(node: Node, source: &str, ctx: &VisitContext<'_>, result: &
     result.push_node(model_node);
 }
 
-// ---------------------------------------------------------------------------
 // Record extractors
-// ---------------------------------------------------------------------------
 
 /// Extracts `#include` directives as import records.
 fn extract_include(node: Node, source: &str, result: &mut ExtractResult) {
@@ -435,9 +429,7 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
     });
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Returns true if the node has a `class_specifier` or `struct_specifier`
 /// ancestor (i.e. it is defined inside a class/struct body). Used to
@@ -456,8 +448,8 @@ fn is_inside_class_or_struct(node: Node) -> bool {
 /// Extracts the qualifier (class/namespace name) from a function_definition
 /// whose declarator is a `qualified_identifier`.
 ///
-/// For `void Foo::bar() {}`, returns `Some("Foo")`. For a plain function
-/// `void bar() {}`, returns `None`. Unwraps intermediate declarator nodes
+/// For `void Foo::bar {}`, returns `Some("Foo")`. For a plain function
+/// `void bar {}`, returns `None`. Unwraps intermediate declarator nodes
 /// (function_declarator, pointer_declarator, etc.) to reach the
 /// qualified_identifier.
 fn extract_qualifier(node: Node, source: &str) -> Option<String> {
@@ -554,7 +546,7 @@ fn callee_name(node: Node, source: &str) -> Option<String> {
             node_text(name, source).map(String::from)
         }
         "field_expression" => {
-            // `obj.method()` → use the field name.
+            // `obj.method` → use the field name.
             let field = node.child_by_field_name("field")?;
             node_text(field, source).map(String::from)
         }
@@ -605,9 +597,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -883,7 +873,7 @@ mod tests {
         assert_eq!(methods[0].name, "getX");
     }
 
-    // --- declarator_name branch coverage ---
+    // declarator_name branch coverage
 
     #[test]
     fn function_with_pointer_declarator_is_extracted() {
@@ -912,7 +902,7 @@ mod tests {
 
     #[test]
     fn function_with_qualified_identifier_name_is_extracted() {
-        // `void ns::func()` — qualified_identifier declarator. Covers the
+        // `void ns::func` — qualified_identifier declarator. Covers the
         // qualified_identifier arm of declarator_name.
         let result = extract("namespace ns { void ns_func() {} }\n");
         let f = result
@@ -938,7 +928,7 @@ mod tests {
         assert_eq!(m.label, NodeLabel::Method);
     }
 
-    // --- callee_name branch coverage ---
+    // callee_name branch coverage
 
     #[test]
     fn call_to_qualified_name_is_extracted() {
@@ -959,7 +949,7 @@ mod tests {
 
     #[test]
     fn call_to_method_is_extracted() {
-        // `obj.method()` — field_expression callee. Covers callee_name's
+        // `obj.method` — field_expression callee. Covers callee_name's
         // field_expression arm.
         let result =
             extract("class C { public: void m() {} };\nint main() { C c; c.m(); return 0; }\n");
@@ -977,11 +967,11 @@ mod tests {
 
     #[test]
     fn call_to_chained_invocation_is_extracted() {
-        // `get_fn()()` — call_expression whose function is itself a
+        // `get_fn` — call_expression whose function is itself a
         // call_expression. Covers callee_name's call_expression arm.
         let result =
             extract("typedef void(*Fn)(); Fn get_fn(); int main() { get_fn()(); return 0; }\n");
-        // The inner call `get_fn()` is extracted; the outer `()` call may
+        // The inner call `get_fn` is extracted; the outer `` call may
         // resolve to the same callee or to the result — either way, at least
         // one call record must exist.
         assert!(
@@ -991,7 +981,7 @@ mod tests {
         );
     }
 
-    // --- signature_first_line coverage ---
+    // signature_first_line coverage
 
     #[test]
     fn multi_line_function_signature_uses_first_line() {
@@ -1010,7 +1000,7 @@ mod tests {
         );
     }
 
-    // --- enum extraction (extract_type with NodeLabel::Enum) ---
+    // enum extraction (extract_type with NodeLabel::Enum)
 
     #[test]
     fn enum_is_extracted_as_top_level_node() {
@@ -1030,7 +1020,7 @@ mod tests {
 
     #[test]
     fn out_of_class_method_definition_is_classified_as_method() {
-        // `void Foo::bar() {}` is an out-of-class method definition.
+        // `void Foo::bar {}` is an out-of-class method definition.
         // The declarator is a qualified_identifier (Foo::bar). The previous
         // is_inside_class_or_struct only checked ancestors, not the declarator,
         // so this was misclassified as Function. It should be Method with
@@ -1056,7 +1046,7 @@ mod tests {
         );
     }
 
-    // --- EXTENDS heritage extraction (base_class_clause) ---
+    // EXTENDS heritage extraction (base_class_clause)
 
     #[test]
     fn class_extends_base_creates_extends_edge() {
@@ -1266,13 +1256,13 @@ mod tests {
         // scoping.
         //
         // Scenario (header-only definition — common C++ pattern like STL):
-        // - main.cpp: #includes "foo.h", calls foo()
-        // - foo.h:    defines void foo() {} (is_exported=true)
-        // - bar.cpp:  defines void foo() {} (unrelated, NOT included by main.cpp)
+        // - main.cpp: #includes "foo.h", calls foo
+        // - foo.h:    defines void foo {} (is_exported=true)
+        // - bar.cpp:  defines void foo {} (unrelated, NOT included by main.cpp)
         //
         // Assertions:
         // 1. main.cpp → foo.h has an INCLUDES edge in the IncludesGraph
-        // 2. main.cpp's foo() call resolves to foo.h's foo (reachable via #include)
+        // 2. main.cpp's foo call resolves to foo.h's foo (reachable via #include)
         // 3. Does NOT resolve to bar.cpp's foo (not reachable via #include)
         //
         // Note: The classic header/implementation split (foo.h declaration +

@@ -118,7 +118,7 @@ pub trait LspProvider: Send + Sync {
     ///
     /// Returns [`LspError::ServerStart`] if the binary cannot be spawned.
     /// Calling `start` twice without an intervening [`shutdown`] is
-    /// implementation-defined — `RustAnalyzerClient` returns `Ok(())`
+    /// implementation-defined — `RustAnalyzerClient` returns `Ok()`
     /// (idempotent no-op) to keep the failure-tolerant indexing path simple.
     ///
     /// [`shutdown`]: LspProvider::shutdown
@@ -152,7 +152,7 @@ pub trait LspProvider: Send + Sync {
         -> Result<Option<lsp_types::Hover>, LspError>;
 
     /// `textDocument/references` — resolve all reference sites of the symbol
-    /// at `(file, line, col)`. Returns `Ok(Vec::new())` when the server
+    /// at `(file, line, col)`. Returns `Ok(Vec::new)` when the server
     /// reports no references (e.g. unused symbol, built-in primitive).
     ///
     /// # Scope
@@ -189,7 +189,7 @@ pub trait LspProvider: Send + Sync {
     /// Send `shutdown` + `exit` to the server and reap the subprocess.
     ///
     /// Must be safe to call on a client that was never successfully
-    /// [`start`](LspProvider::start)ed (returns `Ok(())` without panicking)
+    /// [`start`](LspProvider::start)ed (returns `Ok()` without panicking)
     /// so that drop paths and CLI error branches can call it unconditionally.
     fn shutdown(&self) -> Result<(), LspError>;
 }

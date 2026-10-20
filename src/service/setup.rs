@@ -330,7 +330,7 @@ mod tests {
         Cursor::new(b"n\n".to_vec())
     }
 
-    // --- Agent detection ---
+    // Agent detection
 
     #[test]
     fn detect_all_returns_empty_when_no_agents_installed() {
@@ -366,7 +366,7 @@ mod tests {
         assert_eq!(agents, vec![Agent::ClaudeCode, Agent::Cursor, Agent::Codex]);
     }
 
-    // --- config_path ---
+    // config_path
 
     #[test]
     fn config_path_for_claude_code() {
@@ -395,7 +395,7 @@ mod tests {
         );
     }
 
-    // --- write_agent_config: fresh file ---
+    // write_agent_config: fresh file
 
     #[test]
     fn write_agent_config_creates_fresh_file() {
@@ -511,7 +511,7 @@ mod tests {
         assert_eq!(v["mcpServers"]["codenexus"]["command"], "codenexus");
     }
 
-    // --- run_with_home ---
+    // run_with_home
 
     #[test]
     fn run_with_home_errors_when_no_agents_detected() {
@@ -600,7 +600,7 @@ mod tests {
         assert_eq!(v["mcpServers"]["codenexus"]["command"], "/old/codenexus");
     }
 
-    // --- write_agent_config: error paths ---
+    // write_agent_config: error paths
 
     #[test]
     fn write_agent_config_invalid_json_returns_invalid_input() {
@@ -641,7 +641,7 @@ mod tests {
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
     }
 
-    // --- codenexus_mcp_entry ---
+    // codenexus_mcp_entry
 
     #[test]
     fn codenexus_mcp_entry_has_command_and_args() {
@@ -657,7 +657,7 @@ mod tests {
         assert_eq!(v, serde_json::json!({"command":"codenexus","args":["mcp"]}));
     }
 
-    // --- Agent::name ---
+    // Agent::name
 
     #[test]
     fn agent_name_returns_human_readable() {
@@ -666,7 +666,7 @@ mod tests {
         assert_eq!(Agent::Codex.name(), "Codex");
     }
 
-    // --- run() wrapper ---
+    // run wrapper
 
     /// Serializes tests that mutate the `HOME` environment variable.
     static HOME_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -704,7 +704,7 @@ mod tests {
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
     }
 
-    // --- setup() CLI wrapper ---
+    // setup CLI wrapper
 
     #[cfg(feature = "cli")]
     #[tokio::test]

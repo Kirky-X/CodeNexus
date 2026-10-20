@@ -29,7 +29,7 @@ use codenexus::kit::bootstrap::DEFAULT_DEBOUNCE_MS;
 fn main() {
     // Message i18n (daemon logs, CLI/user-visible strings): register the
     // embedded FTL catalogs into the sdforge i18n registry and pin the
-    // detected locale up front. Without init() the registry holds none of
+    // detected locale up front. Without init the registry holds none of
     // this crate's keys, so t/tr would serve bare keys — hence mandatory.
     codenexus::i18n::init();
 
@@ -123,7 +123,7 @@ fn run_cli() {
     let matches = cmd.get_matches();
 
     // Machine-readable output contract (`sdforge::cli::output`): the global
-    // `--format text|json` switch is mounted by `CliBuilder::build()` and
+    // `--format text|json` switch is mounted by `CliBuilder::build` and
     // propagates to every subcommand (before or after the subcommand name).
     // CodeNexus renders its own boundary output — handlers print their own
     // compact JSON — so the mode is read here; `text` (default) keeps every
@@ -618,10 +618,10 @@ fn validate_db_exists(db: &str, sub_name: &str) -> Result<(), String> {
 ///
 /// # TOCTOU
 ///
-/// Calls `remove_file` directly without a prior `exists()` check, matching
+/// Calls `remove_file` directly without a prior `exists` check, matching
 /// `ErrorKind::NotFound` to handle the "already absent" case. This eliminates
-/// the time-of-check-to-time-of-use window between `exists()` and
-/// `remove_file()`.
+/// the time-of-check-to-time-of-use window between `exists` and
+/// `remove_file`.
 fn delete_db_for_fresh(db: &str) -> std::io::Result<bool> {
     let db_path = PathBuf::from(db);
     if db_path.extension().and_then(|s| s.to_str()) != Some("lbug") {
@@ -796,7 +796,7 @@ fn extract_args(
 /// these sentinel defaults (see [`ProjectConfig`] and [`extract_args`]).
 ///
 /// This is a workaround for sdforge 0.4.2's lack of `Option<T>` CLI support
-/// (the macro generates `s.parse::<Option<T>>()` which fails because
+/// (the macro generates `s.parse::<Option<T>>` which fails because
 /// `Option<T>: FromStr` is not implemented). When sdforge fixes the
 /// `Option<T>` parse bug, these parameters can become `Option<T>` directly
 /// and this table can be removed.
@@ -1291,7 +1291,7 @@ mod tests {
         );
     }
 
-    // --- explicit_cli_arg ---
+    // explicit_cli_arg
 
     fn build_test_cmd() -> sdforge::clap::Command {
         sdforge::clap::Command::new("codenexus")
@@ -1353,7 +1353,7 @@ mod tests {
         assert_eq!(explicit_cli_arg(&matches2, sub2, "unused"), None);
     }
 
-    // --- default_db_path / sanitize_project_name ---
+    // default_db_path / sanitize_project_name
 
     fn index_sub_with(name: Option<&str>, path: Option<&str>) -> sdforge::clap::Command {
         let mut sub = sdforge::clap::Command::new("index")
@@ -1447,7 +1447,7 @@ mod tests {
         assert_eq!(default_db_path(sub), ".codenexus/codenexus.lbug");
     }
 
-    // --- find_cli_handler / mcp registration ---
+    // find_cli_handler / mcp registration
 
     /// Any name that clap knows but `inventory` does not must resolve to the
     /// documented NotFound receipt: resource `cli_command`, exit code 4.
@@ -1488,7 +1488,7 @@ mod tests {
         assert_eq!(CodeNexusError::from(err).exit_code(), 4);
     }
 
-    // --- env_db_path (CODENEXUS_DB_PATH) ---
+    // env_db_path (CODENEXUS_DB_PATH)
 
     #[test]
     #[serial_test::serial(env_db_path)]
@@ -1512,7 +1512,7 @@ mod tests {
         std::env::remove_var("CODENEXUS_DB_PATH");
     }
 
-    // --- requires_existing_db / opens_read_only / validate_db_exists ---
+    // requires_existing_db / opens_read_only / validate_db_exists
 
     #[test]
     fn validate_db_exists_errors_for_read_command_when_db_missing() {
@@ -1596,7 +1596,7 @@ mod tests {
         }
     }
 
-    // --- delete_db_for_fresh ---
+    // delete_db_for_fresh
 
     #[test]
     fn delete_db_for_fresh_deletes_existing_lbug_file() {
@@ -1700,7 +1700,7 @@ mod tests {
         assert_eq!(sanitize_project_name("weird*name!"), "weirdname");
     }
 
-    // --- extract_args ---
+    // extract_args
 
     #[test]
     fn extract_args_returns_empty_for_unregistered_command() {
@@ -1715,7 +1715,7 @@ mod tests {
         );
     }
 
-    // --- discover_single_indexed_db (multi-`.lbug` fallback coverage) ---
+    // discover_single_indexed_db (multi-`.lbug` fallback coverage)
 
     /// Restores the process cwd on drop. Used by the
     /// `discover_single_indexed_db_*` tests below so the original cwd is
@@ -1809,7 +1809,7 @@ mod tests {
         );
     }
 
-    // --- build_cli_command: sentinel defaults for high-frequency commands ---
+    // build_cli_command: sentinel defaults for high-frequency commands
 
     #[test]
     fn sentinel_defaults_relax_high_frequency_commands() {
@@ -1981,7 +1981,7 @@ mod tests {
         assert_eq!(sub.get_one::<String>("entry").map(String::as_str), Some(""));
     }
 
-    // --- extract_args: .codenexus/config.json command_defaults overlay ---
+    // extract_args: .codenexus/config.json command_defaults overlay
 
     fn trace_config_with_depth(value: &str) -> ProjectConfig {
         let mut defaults = HashMap::new();
@@ -2032,7 +2032,7 @@ mod tests {
         assert_eq!(args.get("depth").map(String::as_str), Some("2"));
     }
 
-    // --- ProjectConfig parsing ---
+    // ProjectConfig parsing
 
     #[test]
     fn project_config_parses_full_schema() {
@@ -2133,9 +2133,9 @@ mod tests {
         assert_eq!(cfg.db.as_deref(), Some(".codenexus/x.lbug"));
     }
 
-    // --- --format machine-readable output contract (sdforge `cli::output`) ---
+    // format machine-readable output contract (sdforge `cli::output`)
 
-    /// `CliBuilder::build()` mounts the global `--format text|json` switch;
+    /// `CliBuilder::build` mounts the global `--format text|json` switch;
     /// CodeNexus's own `--verbose` arg and the post-build sentinel defaults
     /// must not shadow or drop it.
     #[test]

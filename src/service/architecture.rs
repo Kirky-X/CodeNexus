@@ -182,7 +182,7 @@ mod tests {
         assert!(json.contains("\"overview\""));
     }
 
-    // ===== Enhanced architecture fields tests =====
+    // Enhanced architecture fields tests
 
     #[test]
     fn run_architecture_includes_module_boundaries() {
@@ -190,7 +190,6 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("storage");
         seed_project(&*storage, "demo", "demo");
-        // Create functions in different modules
         storage.execute("CREATE (:Function {id: 'f_a1', project: 'demo', name: 'a1', qualifiedName: 'demo.a1', filePath: '/src/a/a1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create a1");
         storage.execute("CREATE (:Function {id: 'f_b1', project: 'demo', name: 'b1', qualifiedName: 'demo.b1', filePath: '/src/b/b1.rs', startLine: 1, endLine: 5, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create b1");
         storage.execute("CREATE (:CodeRelation {id: 'e1', source: 'f_a1', target: 'f_b1', type: 'CALLS', confidence: 1.0, confidenceTier: 'High', reason: '', startLine: 2, project: 'demo'});").expect("create cross-module edge");
@@ -333,7 +332,7 @@ mod tests {
         );
     }
 
-    // ===== run_architecture: cross_service_deps via Route + fetch content =====
+    // run_architecture: cross_service_deps via Route + fetch content
 
     #[test]
     fn run_architecture_includes_cross_service_deps() {
@@ -390,7 +389,7 @@ mod tests {
         assert!(matches!(err, CodeNexusError::ProjectNotFound(_)));
     }
 
-    // ===== #[forge] wrapper tests via init_kit =====
+    // [forge] wrapper tests via init_kit
 
     #[serial_test::serial(kit_init)]
     #[test]

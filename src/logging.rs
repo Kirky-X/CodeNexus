@@ -15,7 +15,7 @@
 //! presets, which in turn win over the global level (inklog
 //! `domain/core/manager.rs`). CodeNexus only has to keep the *configured*
 //! global level a plain level name — a directive list handed to the builder's
-//! `level()` fails its level validation and aborts the build.
+//! `level` fails its level validation and aborts the build.
 //!
 //! Installed levels stay re-tunable at runtime through [`set_level`]: inklog
 //! rebuilds the `EnvFilter` and hot-swaps it through
@@ -718,7 +718,7 @@ mod tests {
             "inklog must resolve to exactly one compression backend, got zstd={zstd_backend} gzip={gzip_backend}"
         );
 
-        // The `// Global inklog backend: ...` comment above init_logging().
+        // The `// Global inklog backend: ...` comment above init_logging.
         let comment = main_rs
             .lines()
             .skip_while(|l| !l.contains("Global inklog backend"))

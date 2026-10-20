@@ -21,9 +21,7 @@ use super::error::IndexError;
 use super::pipeline::{IndexFacade, IndexResult};
 use crate::storage::StorageError;
 
-// ---------------------------------------------------------------------------
 // Config
-// ---------------------------------------------------------------------------
 
 /// Configuration for [`IndexerModule`].
 ///
@@ -47,9 +45,7 @@ impl IndexConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Module (ModuleMeta + AsyncAutoBuilder)
-// ---------------------------------------------------------------------------
 
 /// trait-kit module tag for the Indexer subsystem.
 ///
@@ -60,11 +56,11 @@ impl IndexConfig {
 /// use codenexus::kit::{AsyncKit, IndexerModule};
 /// use codenexus::index::IndexConfig;
 ///
-/// let mut kit = AsyncKit::new();
-/// kit.set_config(IndexConfig::in_memory());
-/// kit.register::<IndexerModule>()?;
-/// let kit = kit.build().await?;
-/// let indexer = kit.require::<IndexerModule>()?;
+/// let mut kit = AsyncKit::new;
+/// kit.set_config(IndexConfig::in_memory);
+/// kit.register::<IndexerModule>?;
+/// let kit = kit.build.await?;
+/// let indexer = kit.require::<IndexerModule>?;
 /// ```
 pub struct IndexerModule;
 
@@ -101,9 +97,7 @@ impl IndexerModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Concrete dyn Indexer implementation
-// ---------------------------------------------------------------------------
 
 /// Concrete implementation of [`dyn Indexer`] delegating to [`IndexFacade`].
 ///
@@ -142,9 +136,7 @@ impl Indexer for IndexerCapability {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

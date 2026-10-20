@@ -539,7 +539,7 @@ mod tests {
             .execute("CREATE (:Project {id: 'proj_demo', name: 'demo', rootPath: '/demo', language: 'rust', fileCount: 1, indexedAt: 1000, lastCommit: 'abc'});")
             .expect("create project");
 
-        // --- push ---
+        // push
         let pushed = run_hub(&src_kit, "push", &base_url, "demo", "demo", "secret")
             .expect("push should succeed");
         assert_eq!(pushed.action, "push");
@@ -570,7 +570,7 @@ mod tests {
             .expect("push must upload the .cnxp body");
         assert!(!stored.is_empty(), "uploaded artifact must not be empty");
 
-        // --- pull into a fresh DB (round-trips the uploaded bytes) ---
+        // pull into a fresh DB (round-trips the uploaded bytes)
         let dst_dir = tempfile::TempDir::new().unwrap();
         let dst_config = KitBootstrapConfig::new(dst_dir.path().join("hub_dst_db"));
         let dst_kit = tokio::runtime::Runtime::new()
@@ -588,7 +588,7 @@ mod tests {
             pulled.details
         );
 
-        // --- list ---
+        // list
         let listed =
             run_hub(&src_kit, "list", &base_url, "", "demo", "").expect("list should succeed");
         assert_eq!(listed.action, "list");

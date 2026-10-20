@@ -35,11 +35,11 @@ use crate::ir::ExtractResult;
 use crate::model::{ConfidenceTier, Edge, EdgeType, Graph, Language, NodeLabel};
 
 /// Confidence for an IMPORTS edge (structural, explicit in syntax).
-/// Matches the lower bound of `EdgeType::Imports::confidence_range()` = (0.95, 1.0).
+/// Matches the lower bound of `EdgeType::Imports::confidence_range` = (0.95, 1.0).
 const CONFIDENCE_IMPORTS: f32 = 0.95;
 
 /// Confidence for a REEXPORTS edge. Structural, explicit in syntax —
-/// matches the lower bound of `EdgeType::Reexports::confidence_range()` = (0.95, 1.0).
+/// matches the lower bound of `EdgeType::Reexports::confidence_range` = (0.95, 1.0).
 const CONFIDENCE_REEXPORTS: f32 = 0.95;
 
 /// When a wildcard
@@ -98,11 +98,11 @@ impl<'a> ImportResolver<'a> {
     /// Duplicate `(source, target)` pairs are collapsed to a single edge
     /// (matching `CallResolver`'s dedup behaviour).
     ///
-    /// fix: returns `()` instead of `Vec<Edge>`; edges are added directly
+    /// fix: returns `` instead of `Vec<Edge>`; edges are added directly
     /// to `graph`. The previous `Vec<Edge>` return was an anti-pattern —
     /// production callers (`orchestrator.rs::resolve_all`) discarded it via
     /// `let _ = ...`, wasting memory on 1M+ edge repos due to per-edge
-    /// `clone()` followed by immediate `drop`.
+    /// `clone` followed by immediate `drop`.
     ///
     /// # Arguments
     ///
@@ -342,7 +342,7 @@ fn build_function_index(
 /// # Performance
 ///
 /// Nested `HashMap<String, HashMap<String, String>>` enables O(1) file
-/// lookup + O(K) name lookup (K = `imported_names.len()`), with zero
+/// lookup + O(K) name lookup (K = `imported_names.len`), with zero
 /// temporary `(String, String)` tuple allocations. Wildcard lookups are
 /// O(target_file_function_count) instead of O(total_functions).
 fn resolve_reexport_targets(
@@ -385,7 +385,7 @@ fn resolve_reexport_targets(
 /// must pick the LONGEST suffix match for determinism (HashMap iteration
 /// order is non-deterministic).
 ///
-/// # Key normalisation (audit + )
+/// # Key normalisation (audit +)
 ///
 /// `file_index` keys may or may not be pre-normalised — this function
 /// defensively normalises each key with `rel.replace('\\', "/")` inside
@@ -893,7 +893,7 @@ mod tests {
         ExtractResult::new(file_path, Language::Cpp)
     }
 
-    // --- resolve_imports: explicit import ---
+    // resolve_imports: explicit import
 
     #[test]
     fn resolve_imports_creates_edge_for_explicit_import() {
@@ -924,7 +924,7 @@ mod tests {
         assert_eq!(edge.start_line, Some(1));
     }
 
-    // --- resolve_imports: empty imports ---
+    // resolve_imports: empty imports
 
     #[test]
     fn resolve_imports_handles_empty_imports() {
@@ -940,7 +940,7 @@ mod tests {
         assert_eq!(graph.edge_count(), 0, "no imports → no edges");
     }
 
-    // --- resolve_imports: generated File node ids (production shape) ---
+    // resolve_imports: generated File node ids (production shape)
 
     /// Builds a File node whose id differs from its path, mirroring
     /// production (`file_<uuid>` ids). Tests using path-equal ids cannot
@@ -1029,7 +1029,7 @@ mod tests {
         assert_eq!(graph.edge_count(), 0);
     }
 
-    // --- resolve_imports: skips unresolved ---
+    // resolve_imports: skips unresolved
 
     #[test]
     fn resolve_imports_skips_unresolved_imports() {
@@ -1106,7 +1106,7 @@ mod tests {
         assert_eq!(graph.edge_count(), 0);
     }
 
-    // --- resolve_imports: deduplication ---
+    // resolve_imports: deduplication
 
     #[test]
     fn resolve_imports_deduplicates_edges() {
@@ -1136,7 +1136,7 @@ mod tests {
         assert_eq!(graph.edge_count(), 1, "duplicate (source, target) → 1 edge");
     }
 
-    // --- resolve_imports: extension probing ---
+    // resolve_imports: extension probing
 
     #[test]
     fn resolve_imports_resolves_extensionless_relative_import() {
@@ -1235,7 +1235,7 @@ mod tests {
         assert_eq!(edge.target, "utils/index.ts");
     }
 
-    // --- resolve_imports: multiple files ---
+    // resolve_imports: multiple files
 
     #[test]
     fn resolve_imports_handles_multiple_files() {
@@ -1268,7 +1268,7 @@ mod tests {
         assert_eq!(graph.edge_count(), 2);
     }
 
-    // --- resolve_imports: adds edges to graph (neighbour traversal) ---
+    // resolve_imports: adds edges to graph (neighbour traversal)
 
     #[test]
     fn resolve_imports_adds_edges_to_graph_for_traversal() {
@@ -1294,7 +1294,7 @@ mod tests {
         assert_eq!(neighbors[0].id, "b.ts");
     }
 
-    // --- normalise_relative helper ---
+    // normalise_relative helper
 
     #[test]
     fn normalise_relative_dot_slash() {
@@ -1320,7 +1320,7 @@ mod tests {
         assert_eq!(n, "src/b");
     }
 
-    // --- resolve_import_target: Strategy 1 (direct match) ---
+    // resolve_import_target: Strategy 1 (direct match)
 
     #[test]
     fn resolve_imports_resolves_direct_match_strategy() {
@@ -1347,7 +1347,7 @@ mod tests {
         assert_eq!(edge.target, "b.ts");
     }
 
-    // --- resolve_import_target: final None fallback ---
+    // resolve_import_target: final None fallback
 
     #[test]
     fn resolve_imports_relative_unresolvable_returns_none() {
@@ -1376,7 +1376,7 @@ mod tests {
         );
     }
 
-    // --- resolve_imports: source File node missing from graph ---
+    // resolve_imports: source File node missing from graph
 
     #[test]
     fn resolve_imports_skips_when_source_file_not_in_graph() {
@@ -1401,7 +1401,7 @@ mod tests {
         assert_eq!(graph.edge_count(), 0, "source file not in graph → no edges");
     }
 
-    // --- resolve_imports: Rust module path resolution (crate::) ---
+    // resolve_imports: Rust module path resolution (crate::)
 
     #[test]
     fn resolve_imports_resolves_rust_crate_prefix_to_src_file() {
@@ -1512,7 +1512,7 @@ mod tests {
         assert_eq!(edge.target, "src/parse/parser.rs");
     }
 
-    // --- resolve_imports: Rust module path resolution (self::, super::) ---
+    // resolve_imports: Rust module path resolution (self::, super::)
 
     #[test]
     fn resolve_imports_resolves_rust_self_prefix() {
@@ -1590,7 +1590,7 @@ mod tests {
         assert_eq!(edge.target, "src/model.rs");
     }
 
-    // --- resolve_imports: Rust external crate skipped ---
+    // resolve_imports: Rust external crate skipped
 
     #[test]
     fn resolve_imports_skips_rust_external_crate() {
@@ -1617,7 +1617,7 @@ mod tests {
         );
     }
 
-    // --- resolve_imports: Rust module path resolution (unprefixed, e.g. `cli::run`) ---
+    // resolve_imports: Rust module path resolution (unprefixed, e.g. `cli::run`)
     //
     // BUG-FIX: `pub use cli::run` in src/lib.rs (where `mod cli;` is declared)
     // produces `source_file = "cli::run"`. Without unprefixed module path
@@ -1789,7 +1789,7 @@ mod tests {
         );
     }
 
-    // --- resolve_rust_module_path helper (direct unit tests) ---
+    // resolve_rust_module_path helper (direct unit tests)
 
     #[test]
     fn resolve_rust_module_path_crate_prefix_resolves_src_file() {
@@ -1862,7 +1862,7 @@ mod tests {
         assert_eq!(result, Some("id-model".to_string()));
     }
 
-    // --- find_file_in_index: absolute vs relative path mismatch ---
+    // find_file_in_index: absolute vs relative path mismatch
 
     #[test]
     fn find_file_in_index_direct_match_relative() {
@@ -1941,7 +1941,7 @@ mod tests {
         );
     }
 
-    // --- resolve_imports: absolute importer path (production scenario) ---
+    // resolve_imports: absolute importer path (production scenario)
 
     #[test]
     fn resolve_imports_handles_absolute_importer_path() {
@@ -2002,7 +2002,7 @@ mod tests {
         assert_eq!(edge.target, "src/b.ts");
     }
 
-    // --- TS ESM .js/.jsx extension stripping (NodeNext / bundler resolution) ---
+    // TS ESM .js/.jsx extension stripping (NodeNext / bundler resolution)
 
     #[test]
     fn resolve_imports_strips_js_extension_for_ts_esm() {
@@ -2116,7 +2116,7 @@ mod tests {
         assert_eq!(edge.target, "src/config.js");
     }
 
-    // --- C++ #include: skipped by ImportResolver ---
+    // C++ #include: skipped by ImportResolver
     // C++ #include is handled by ResolvePhase as EdgeType::Includes edges.
     // ImportResolver skips Language::Cpp results entirely — these tests
     // verify that NO IMPORTS edges are created for C++ #include directives,
@@ -2231,7 +2231,7 @@ mod tests {
         );
     }
 
-    // --- Java class import resolution (dotted package path) ---
+    // Java class import resolution (dotted package path)
 
     #[test]
     fn resolve_imports_resolves_java_class_import() {
@@ -2361,7 +2361,7 @@ mod tests {
         assert_eq!(edge.target, "src/com/google/gson/Gson.java");
     }
 
-    // --- Coverage gap tests: build_file_index, strip_js_style_extension, resolve_java_class_import ---
+    // Coverage gap tests: build_file_index, strip_js_style_extension, resolve_java_class_import
 
     #[test]
     fn build_file_index_handles_node_without_file_path() {
@@ -2452,7 +2452,7 @@ mod tests {
     #[test]
     fn normalise_relative_dot_dot_from_root_pops_empty() {
         // `../b` from `a.ts` (root-level file): importer_dir is empty,
-        // combined = "../b", segments.pop() on empty stack is a no-op.
+        // combined = "../b", segments.pop on empty stack is a no-op.
         let n = normalise_relative("../b", "a.ts");
         assert_eq!(n, "b");
     }
@@ -2476,7 +2476,7 @@ mod tests {
         assert_eq!(strip_js_style_extension("src/a.cjs"), "src/a");
     }
 
-    // --- REEXPORTS edge unit tests ---
+    // REEXPORTS edge unit tests
 
     /// Builds a Function node with the given id, name, and file_path.
     fn make_function_node(id: &str, name: &str, file_path: &str, project: &str) -> Node {

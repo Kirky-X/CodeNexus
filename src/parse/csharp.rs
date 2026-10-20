@@ -82,9 +82,7 @@ impl Extractor for CSharpExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 /// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
 struct VisitContext<'a> {
@@ -146,9 +144,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     }
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 /// Returns true if `name` starts with an uppercase ASCII letter, following
 /// C#'s PascalCase convention for public members. Used heuristically to set
@@ -217,9 +213,7 @@ fn extract_method(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     result.push_node(model_node);
 }
 
-// ---------------------------------------------------------------------------
 // Record extractors
-// ---------------------------------------------------------------------------
 
 fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
     // using_directive has no `name` field in tree-sitter-c-sharp; the
@@ -258,9 +252,7 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
     });
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Returns the text of the `name` field of `node`, if present.
 fn name_field(node: Node, source: &str) -> Option<String> {
@@ -351,9 +343,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -540,7 +530,7 @@ mod tests {
 
     #[test]
     fn extracts_qualified_invocation() {
-        // `Console.WriteLine()` -> callee is `WriteLine`.
+        // `Console.WriteLine` -> callee is `WriteLine`.
         let src = "using System; class Foo { void Bar() { Console.WriteLine(); } }\n";
         let result = extract(src);
         let callees: Vec<_> = result
@@ -829,7 +819,7 @@ mod tests {
         );
     }
 
-    // --- parse helper and tree walker for direct function tests ---
+    // parse helper and tree walker for direct function tests
 
     fn parse_source(source: &str) -> tree_sitter::Tree {
         let mut parser =
@@ -855,7 +845,7 @@ mod tests {
         None
     }
 
-    // --- callee_name: qualified_name branch (lines 285-297) ---
+    // callee_name: qualified_name branch (lines 285-297)
 
     #[test]
     fn callee_name_on_qualified_name_returns_rightmost() {
@@ -879,11 +869,11 @@ mod tests {
         // exercises the qualified_name branch.
     }
 
-    // --- callee_name: invocation_expression branch (lines 305-307) ---
+    // callee_name: invocation_expression branch (lines 305-307)
 
     #[test]
     fn callee_name_on_invocation_expression_recurses() {
-        // `Foo()()` — the inner invocation_expression is the function
+        // `Foo` — the inner invocation_expression is the function
         // of the outer one. callee_name on the inner invocation_expression
         // recurses into its function (identifier "Foo").
         let src = "class C { void M() { Foo()(); } }\n";
@@ -917,11 +907,11 @@ mod tests {
         }
     }
 
-    // --- callee_name: parenthesized_expression branch (lines 309-311) ---
+    // callee_name: parenthesized_expression branch (lines 309-311)
 
     #[test]
     fn callee_name_on_parenthesized_expression_recurses() {
-        // `(Foo)()` — the function is a parenthesized_expression.
+        // `(Foo)` — the function is a parenthesized_expression.
         // callee_name gets the inner child and recurses.
         let src = "class C { void M() { (Foo)(); } }\n";
         let tree = parse_source(src);
@@ -954,7 +944,7 @@ mod tests {
         }
     }
 
-    // --- callee_name: _ => None fallback (line 313) ---
+    // callee_name: _ => None fallback (line 313)
 
     #[test]
     fn callee_name_returns_none_for_unknown_kind() {
@@ -970,7 +960,7 @@ mod tests {
         );
     }
 
-    // --- call_arguments: no arguments field (line 319) ---
+    // call_arguments: no arguments field (line 319)
 
     #[test]
     fn call_arguments_returns_empty_when_no_arguments_field() {

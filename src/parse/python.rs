@@ -97,9 +97,7 @@ impl Extractor for PythonExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 /// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
 struct VisitContext<'a> {
@@ -287,9 +285,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     }
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name_node) = node.child_by_field_name("name") else {
@@ -397,7 +393,7 @@ fn extract_class(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut 
 
 /// P2-2: Extracts the base class name from a `superclasses` entry.
 /// Handles plain identifiers (`Foo`), attribute access (`module.Foo`), and
-/// call expressions (`Meta()` used as a base).
+/// call expressions (`Meta` used as a base).
 fn base_class_name(node: Node, source: &str) -> Option<String> {
     match node.kind() {
         "identifier" => node_text(node, source).map(String::from),
@@ -407,7 +403,7 @@ fn base_class_name(node: Node, source: &str) -> Option<String> {
             node_text(attr, source).map(String::from)
         }
         "call" => {
-            // `Meta()` as a base — unwrap to the function identifier.
+            // `Meta` as a base — unwrap to the function identifier.
             let func = node.child_by_field_name("function")?;
             base_class_name(func, source)
         }
@@ -415,9 +411,7 @@ fn base_class_name(node: Node, source: &str) -> Option<String> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Record extractors
-// ---------------------------------------------------------------------------
 
 fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
     // import_statement has one or more dotted_name children.
@@ -526,9 +520,7 @@ fn extract_assignment(node: Node, source: &str, result: &mut ExtractResult) {
     });
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Returns the enclosing scope kind for a function_definition:
 /// - `Class` if the function is (anywhere) inside a class_definition body
@@ -595,7 +587,7 @@ fn callee_name(node: Node, source: &str) -> Option<String> {
     match node.kind() {
         "identifier" => node_text(node, source).map(String::from),
         "attribute" => {
-            // e.g. `obj.method()` -> extract the attribute name.
+            // e.g. `obj.method` -> extract the attribute name.
             let attr = node.child_by_field_name("attribute")?;
             node_text(attr, source).map(String::from)
         }
@@ -773,9 +765,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -1153,7 +1143,7 @@ class Foo(metaclass=Meta):
             outer_node.is_global,
             "top-level outer function must be is_global=true"
         );
-        // The call to inner() inside outer() must still be captured.
+        // The call to inner inside outer must still be captured.
         let inner_call = result.calls.iter().find(|c| c.callee_name == "inner");
         assert!(
             inner_call.is_some(),

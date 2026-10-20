@@ -73,7 +73,7 @@ const TEST_ATTRIBUTE_MARKERS: &[&str] = &["#[test", "#[tokio::test", "#[rstest"]
 ///
 /// Cheap pre-filter: `signature.contains("#[")` returns `false` for the vast
 /// majority of functions (no outer attributes), short-circuiting before the
-/// `TEST_ATTRIBUTE_MARKERS.iter().any(...)` loop. On bulwark this saves ~115k
+/// `TEST_ATTRIBUTE_MARKERS.iter.any(...)` loop. On bulwark this saves ~115k
 /// unnecessary `contains` scans across 19k functions × 2 call sites
 fn has_test_attribute_marker(signature: &str) -> bool {
     signature.contains("#[")
@@ -200,7 +200,7 @@ impl Default for DeadCodeConfig {
             // Attribute-marked entry points. Defaults mirror
             // `DEFAULT_ATTRIBUTE_ENTRIES` (rmcp `#[tool]`, CodeNexus `#[forge]`,
             // async-runtime entry macros). Users can extend via
-            // `DeadCodeConfig { attribute_entries: ..., ..Default::default() }`.
+            // `DeadCodeConfig { attribute_entries: ..., ..Default::default }`.
             attribute_entries: DEFAULT_ATTRIBUTE_ENTRIES
                 .iter()
                 .map(|s| (*s).to_string())

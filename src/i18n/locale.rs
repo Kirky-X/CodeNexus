@@ -20,10 +20,10 @@ use std::sync::{OnceLock, RwLock};
 use unic_langid::LanguageIdentifier;
 
 /// Global default locale, resolved once on first access (lazy init —
-/// [`t`](super::t) works before an explicit [`init()`] call).
+/// [`t`](super::t) works before an explicit [`init`] call).
 static GLOBAL_LOCALE: OnceLock<LanguageIdentifier> = OnceLock::new();
 
-/// Override locale set via [`set_locale()`].
+/// Override locale set via [`set_locale`].
 static OVERRIDE_LOCALE: RwLock<Option<LanguageIdentifier>> = RwLock::new(None);
 
 /// Terminal fallback: English.
@@ -95,7 +95,7 @@ pub fn init() {
 
 /// Get the current locale.
 ///
-/// Resolution order: [`set_locale()`] override, then the global default
+/// Resolution order: [`set_locale`] override, then the global default
 /// (detected once on first access).
 pub fn current_locale() -> LanguageIdentifier {
     if let Ok(guard) = OVERRIDE_LOCALE.read() {

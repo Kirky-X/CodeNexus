@@ -121,7 +121,6 @@ pub fn run_single(repo: &Path, name: &str, language: &str, resume: bool) -> Resu
         stats
     };
 
-    // Write results
     let path = write_results(name, &stats)?;
     eprintln!("[ok] wrote {path:?}");
     Ok(stats)
@@ -266,7 +265,7 @@ pub fn extract_stats(db_path: &Path, name: &str) -> Result<CodeNexusStats> {
 
     let mut edge_counts = BTreeMap::new();
     // CodeNexus stores CodeRelation as a NODE TABLE (not a REL TABLE), so we
-    // must use `MATCH (r:CodeRelation)` — the `()-[r:CodeRelation]->()` REL
+    // must use `MATCH (r:CodeRelation)` — the `-[r:CodeRelation]->` REL
     // TABLE syntax is not valid against this schema. Filter by project_id so
     // we only count the current sample's edges.
     let edge_cypher = format!(

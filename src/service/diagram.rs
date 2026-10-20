@@ -590,7 +590,7 @@ mod tests {
         assert!(matches!(empty_output, Err(CodeNexusError::InvalidInput(_))));
     }
 
-    // ===== forge wrapper smoke (kit initialized) =====
+    // forge wrapper smoke (kit initialized)
 
     #[serial_test::serial(kit_init)]
     #[test]

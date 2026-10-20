@@ -120,7 +120,7 @@ mod tests {
     use crate::discover::DiscoverError;
     use crate::storage::StorageError;
 
-    // --- Display messages ---
+    // Display messages
 
     #[test]
     fn path_not_found_displays_message() {
@@ -162,7 +162,7 @@ mod tests {
         assert!(msg.contains("missing"), "got: {msg}");
     }
 
-    // --- From conversions ---
+    // From conversions
 
     #[test]
     fn from_io_error() {
@@ -193,7 +193,7 @@ mod tests {
         assert!(msg.contains("discover error"), "got: {msg}");
     }
 
-    // --- exit_code mapping (PRD §4.1.6) ---
+    // exit_code mapping (PRD §4.1.6)
 
     #[test]
     fn exit_code_path_not_found_is_1() {
@@ -234,7 +234,7 @@ mod tests {
         assert_eq!(err.exit_code(), 1);
     }
 
-    // --- Debug ---
+    // Debug
 
     #[test]
     fn debug_includes_variant_name() {
@@ -244,7 +244,7 @@ mod tests {
         assert!(s.contains("/x"), "got: {s}");
     }
 
-    // --- Result alias ---
+    // Result alias
 
     #[test]
     fn result_alias_compiles() {
@@ -260,7 +260,7 @@ mod tests {
         assert_send_sync::<IndexError>();
     }
 
-    // --- From<StorageError::Corrupt> maps to DatabaseCorrupt (exit code 4) ---
+    // From<StorageError::Corrupt> maps to DatabaseCorrupt (exit code 4)
 
     #[test]
     fn from_storage_corrupt_maps_to_database_corrupt() {
@@ -275,7 +275,7 @@ mod tests {
         assert_eq!(err.exit_code(), 4);
     }
 
-    // --- From<PhaseError> conversions ---
+    // From<PhaseError> conversions
 
     #[test]
     fn from_phase_error_execution_failed_with_index_error_preserves_variant() {
@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(err.exit_code(), 2);
     }
 
-    // --- From<PhaseError>: verify each infrastructure variant maps to Storage ---
+    // From<PhaseError>: verify each infrastructure variant maps to Storage
 
     #[test]
     fn from_phase_error_missing_dependency_maps_to_storage() {
@@ -364,7 +364,7 @@ mod tests {
         assert!(msg.contains("type mismatch"), "got: {msg}");
     }
 
-    // --- From<StorageError>: verify non-Corrupt variants are NOT mapped to DatabaseCorrupt ---
+    // From<StorageError>: verify non-Corrupt variants are NOT mapped to DatabaseCorrupt
 
     #[test]
     fn from_storage_not_found_maps_to_storage_not_database_corrupt() {
@@ -385,14 +385,14 @@ mod tests {
         assert_eq!(err.exit_code(), 2);
     }
 
-    // --- source() chain: #[from] variants expose inner error ---
+    // source chain: #[from] variants expose inner error
 
     #[test]
     fn source_chain_for_io_variant_returns_inner_error() {
         use std::error::Error as _;
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "missing file");
         let err: IndexError = io_err.into();
-        // Io has #[from], so source() should return the inner io::Error.
+        // Io has #[from], so source should return the inner io::Error.
         let source = err.source();
         assert!(
             source.is_some(),
@@ -409,7 +409,7 @@ mod tests {
         use std::error::Error as _;
         let discover_err = DiscoverError::from(std::io::Error::other("permission denied"));
         let err: IndexError = discover_err.into();
-        // Discover has #[from], so source() should return the inner DiscoverError.
+        // Discover has #[from], so source should return the inner DiscoverError.
         assert!(
             err.source().is_some(),
             "Discover variant should expose source via #[from]"
@@ -419,7 +419,7 @@ mod tests {
     #[test]
     fn source_returns_none_for_storage_variant() {
         use std::error::Error as _;
-        // Storage does NOT have #[from] or #[source], so source() returns None.
+        // Storage does NOT have #[from] or #[source], so source returns None.
         let err: IndexError = StorageError::Query("bad cypher".to_string()).into();
         assert!(
             err.source().is_none(),

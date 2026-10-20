@@ -60,7 +60,7 @@ pub fn is_cjk(ch: char) -> bool {
 mod tests {
     use super::*;
 
-    // ===== fold_case =====
+    // fold_case
 
     #[test]
     fn fold_case_ascii_unchanged() {
@@ -100,7 +100,7 @@ mod tests {
         assert_eq!(fold_case("こんにちは"), "こんにちは");
     }
 
-    // ===== normalize_nfc =====
+    // normalize_nfc
 
     #[test]
     fn normalize_nfc_already_normalized() {
@@ -133,7 +133,7 @@ mod tests {
         assert_eq!(normalize_nfc("你好"), "你好");
     }
 
-    // ===== is_cjk =====
+    // is_cjk
 
     #[test]
     fn is_cjk_basic_ideograph() {

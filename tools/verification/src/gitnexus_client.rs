@@ -5,7 +5,7 @@
 //!
 //! Invokes `gitnexus cypher --repo <name> <query>` as a subprocess, parses the
 //! JSON response (markdown table or `[]` or `{"error": "..."}`), and exposes
-//! `fetch_reference()` to obtain node/edge/file counts for comparison.
+//! `fetch_reference` to obtain node/edge/file counts for comparison.
 //!
 //! # Error model (Fail Loud)
 //!
@@ -197,7 +197,7 @@ fn split_row(line: &str) -> Vec<String> {
 ///
 /// Runs three queries:
 /// 1. `MATCH (n) RETURN label(n), count(*)` → node_counts_by_label
-/// 2. `MATCH ()-[r:CodeRelation]->() RETURN r.type, count(*)` → edge_counts_by_type
+/// 2. `MATCH -[r:CodeRelation]-> RETURN r.type, count(*)` → edge_counts_by_type
 /// 3. `MATCH (f:File) RETURN count(*)` → file_count
 ///
 /// Per-label binder errors (Table X does not exist) are recorded as 0, not
@@ -411,7 +411,7 @@ mod tests {
         assert_eq!(back, stats);
     }
 
-    // --- CypherJson parsing ---
+    // CypherJson parsing
 
     #[test]
     fn cypher_json_parses_markdown_response() {
@@ -441,7 +441,7 @@ mod tests {
         assert!(parsed.error.is_none());
     }
 
-    // --- split_row ---
+    // split_row
 
     #[test]
     fn split_row_trims_cells() {
@@ -455,7 +455,7 @@ mod tests {
         assert_eq!(cells, vec!["only".to_string()]);
     }
 
-    // --- write_reference + load_reference roundtrip ---
+    // write_reference + load_reference roundtrip
 
     #[test]
     fn write_and_load_reference_roundtrip() {

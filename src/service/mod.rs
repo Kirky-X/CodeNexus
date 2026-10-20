@@ -8,7 +8,7 @@
 //! - A CLI wrapper (`#[forge(cli = true)]`) that calls core + prints to stdout
 //! - An MCP wrapper (`#[forge(mcp = true)]`) that calls core + returns the value
 //!
-//! Kit injection uses the global [`runtime::kit()`] accessor (Mutex-protected)
+//! Kit injection uses the global [`runtime::kit`] accessor (Mutex-protected)
 //! because sdforge's `#[forge]` macro generates standalone functions
 //! that cannot accept injected state.
 pub mod api_impact;

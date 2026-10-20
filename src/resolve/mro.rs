@@ -286,7 +286,7 @@ mod tests {
         graph.add_edge(Edge::new(child, parent, EdgeType::Implements, "proj"));
     }
 
-    // --- mro_for language mapping ---
+    // mro_for language mapping
 
     #[test]
     fn mro_for_python_is_c3() {
@@ -313,7 +313,7 @@ mod tests {
         assert_eq!(mro_for(Language::Fortran), MroStrategy::None);
     }
 
-    // --- None strategy ---
+    // None strategy
 
     #[test]
     fn none_strategy_returns_empty() {
@@ -324,7 +324,7 @@ mod tests {
         assert!(resolver.compute_mro(&"a".to_string()).is_empty());
     }
 
-    // --- FirstWins: single inheritance chain ---
+    // FirstWins: single inheritance chain
 
     #[test]
     fn first_wins_single_chain() {
@@ -340,7 +340,7 @@ mod tests {
         assert_eq!(mro, vec!["b".to_string(), "c".to_string()]);
     }
 
-    // --- FirstWins: diamond deduplication ---
+    // FirstWins: diamond deduplication
 
     #[test]
     fn first_wins_diamond_dedup() {
@@ -364,7 +364,7 @@ mod tests {
         assert_eq!(mro, vec!["b".to_string(), "d".to_string(), "c".to_string()]);
     }
 
-    // --- FirstWins: no parents ---
+    // FirstWins: no parents
 
     #[test]
     fn first_wins_no_parents() {
@@ -374,7 +374,7 @@ mod tests {
         assert!(resolver.compute_mro(&"a".to_string()).is_empty());
     }
 
-    // --- single inheritance chain ---
+    // single inheritance chain
 
     #[test]
     fn c3_single_chain() {
@@ -390,7 +390,7 @@ mod tests {
         assert_eq!(mro, vec!["b".to_string(), "c".to_string()]);
     }
 
-    // --- diamond ---
+    // diamond
 
     #[test]
     fn c3_diamond() {
@@ -414,7 +414,7 @@ mod tests {
         assert_eq!(mro, vec!["b".to_string(), "c".to_string(), "d".to_string()]);
     }
 
-    // --- no parents ---
+    // no parents
 
     #[test]
     fn c3_no_parents() {
@@ -424,7 +424,7 @@ mod tests {
         assert!(resolver.compute_mro(&"a".to_string()).is_empty());
     }
 
-    // --- Implements edges also walked ---
+    // Implements edges also walked
 
     #[test]
     fn first_wins_includes_implements_edges() {
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(mro, vec!["t".to_string()]);
     }
 
-    // --- Ignores non-inheritance edges ---
+    // Ignores non-inheritance edges
 
     #[test]
     fn mro_ignores_calls_edges() {
@@ -451,7 +451,7 @@ mod tests {
         assert!(resolver.compute_mro(&"a".to_string()).is_empty());
     }
 
-    // --- RubyMixin uses same merge as C3 ---
+    // RubyMixin uses same merge as C3
 
     #[test]
     fn ruby_mixin_single_chain() {
@@ -464,14 +464,14 @@ mod tests {
         assert_eq!(mro, vec!["b".to_string()]);
     }
 
-    // --- Default strategy is FirstWins ---
+    // Default strategy is FirstWins
 
     #[test]
     fn default_strategy_is_first_wins() {
         assert_eq!(MroStrategy::default(), MroStrategy::FirstWins);
     }
 
-    // --- mro_for: remaining language arms ---
+    // mro_for: remaining language arms
 
     #[cfg(feature = "lang-go")]
     #[test]
@@ -494,7 +494,7 @@ mod tests {
         assert_eq!(mro_for(Language::Cpp), MroStrategy::FirstWins);
     }
 
-    // --- inconsistent hierarchy (fail-loud partial result) ---
+    // inconsistent hierarchy (fail-loud partial result)
 
     #[test]
     fn c3_inconsistent_hierarchy_returns_partial() {
@@ -532,7 +532,7 @@ mod tests {
         );
     }
 
-    // --- head appears in tail is skipped (is_in_tail branch) ---
+    // head appears in tail is skipped (is_in_tail branch)
 
     #[test]
     fn c3_diamond_skips_head_in_tail() {
@@ -554,7 +554,7 @@ mod tests {
         assert_eq!(mro, vec!["b".to_string(), "c".to_string(), "d".to_string()]);
     }
 
-    // --- FirstWins: seen-parent continue branch ---
+    // FirstWins: seen-parent continue branch
 
     #[test]
     fn first_wins_skips_already_seen_parent() {
@@ -576,7 +576,7 @@ mod tests {
         assert_eq!(d_count, 1, "D should appear exactly once, got {mro:?}");
     }
 
-    // --- mro_for: remaining language arms ---
+    // mro_for: remaining language arms
 
     #[cfg(feature = "lang-csharp")]
     #[test]

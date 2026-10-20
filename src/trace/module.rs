@@ -50,9 +50,7 @@ use super::TraceResult;
 
 use serde::{Deserialize, Serialize};
 
-// ---------------------------------------------------------------------------
 // Config
-// ---------------------------------------------------------------------------
 
 /// Configuration for [`TraceModule`] and [`TraceEngine`](super::facade::TraceEngine).
 ///
@@ -123,9 +121,7 @@ impl TraceConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Module (ModuleMeta + AsyncAutoBuilder)
-// ---------------------------------------------------------------------------
 
 /// trait-kit module tag for the Trace subsystem.
 ///
@@ -137,11 +133,11 @@ impl TraceConfig {
 /// use codenexus::kit::{AsyncKit, TraceModule};
 /// use codenexus::trace::TraceConfig;
 ///
-/// let mut kit = AsyncKit::new();
-/// kit.set_config(TraceConfig::in_memory());
-/// kit.register::<TraceModule>()?;
-/// let kit = kit.build().await?;
-/// let trace = kit.require::<TraceModule>()?;
+/// let mut kit = AsyncKit::new;
+/// kit.set_config(TraceConfig::in_memory);
+/// kit.register::<TraceModule>?;
+/// let kit = kit.build.await?;
+/// let trace = kit.require::<TraceModule>?;
 /// ```
 pub struct TraceModule;
 
@@ -181,9 +177,7 @@ impl TraceModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Concrete dyn TraceEngine implementation
-// ---------------------------------------------------------------------------
 
 /// Concrete implementation of [`dyn TraceEngine`] that loads a fresh subgraph
 /// from the database on every `trace` call.
@@ -234,7 +228,7 @@ impl TraceEngine for TraceCapability {
     ) -> std::result::Result<(crate::model::Graph, bool), TraceError> {
         // Delegate to the shared graph loader (`graph_loader.rs`).
         // `impact_cmd::run` uses this to obtain the raw Graph for
-        // ImpactAnalyzer, which cannot be expressed via `trace()` (that
+        // ImpactAnalyzer, which cannot be expressed via `trace` (that
         // returns a TraceResult, not the graph itself). The returned `bool` is
         // the `max_nodes` truncation flag surfaced to the impact output.
         // StorageError → TraceError::Storage via the `From` impl in error.rs.
@@ -248,9 +242,7 @@ impl TraceEngine for TraceCapability {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

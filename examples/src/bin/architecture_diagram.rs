@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 // Module boundaries are derived from the directory layout of the indexed
 // files: `api/mod.rs` belongs to module `api`, `core/mod.rs` to `core`.
-// The `crate::core::index_dir()` call creates the CALLS edge that becomes a
+// The `crate::core::index_dir` call creates the CALLS edge that becomes a
 // module dependency, and the axum-style route registers `list_projects` as a
 // Controller while `index_dir` is classified as a Service.
 const SAMPLE_CODE: &str = r#"
@@ -117,7 +117,7 @@ fn main() {
     let main_id = resolve_project_id(&repo, "main").expect("resolve main");
     let feature_id = resolve_project_id(&repo, "feature").expect("resolve feature");
 
-    // --- 1. Architecture overview (CLI: `architecture`) -----------------
+    // 1. Architecture overview (CLI: `architecture`)
     let analyzer = ArchitectureAnalyzer::new(&repo);
     let overview = analyzer.overview(&main_id).expect("overview");
 
@@ -133,7 +133,7 @@ fn main() {
     println!("  layer map:      {} modules", layer_map.len());
     println!();
 
-    // --- 2. Render a self-contained interactive HTML (CLI: `diagram`) ----
+    // 2. Render a self-contained interactive HTML (CLI: `diagram`)
     let base_doc = project_document(&repo, &main_id, "main");
     let rendered =
         diagram::render(&base_doc, QualityProfile::Standard, None).expect("diagram render");
@@ -145,7 +145,7 @@ fn main() {
     println!("  diagnostics: {}", rendered.diagnostics.len());
     println!();
 
-    // --- 3. Before/Delta/After between two projects (CLI: `arch_diff`) ---
+    // 3. Before/Delta/After between two projects (CLI: `arch_diff`)
     let head_doc = project_document(&repo, &feature_id, "feature");
     let delta =
         diagram::render_delta(&base_doc, &head_doc, "main -> feature").expect("render delta");

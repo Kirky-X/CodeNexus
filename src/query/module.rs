@@ -22,9 +22,7 @@ use super::error::QueryError;
 use super::facade::QueryFacade;
 use super::{QueryResult, SearchResult};
 
-// ---------------------------------------------------------------------------
 // Config
-// ---------------------------------------------------------------------------
 
 /// Configuration for [`QueryModule`].
 ///
@@ -55,9 +53,7 @@ impl QueryConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Module (ModuleMeta + AsyncAutoBuilder)
-// ---------------------------------------------------------------------------
 
 /// trait-kit module tag for the Query subsystem.
 ///
@@ -68,11 +64,11 @@ impl QueryConfig {
 /// use codenexus::kit::{AsyncKit, QueryModule};
 /// use codenexus::query::QueryConfig;
 ///
-/// let mut kit = AsyncKit::new();
-/// kit.set_config(QueryConfig::in_memory());
-/// kit.register::<QueryModule>()?;
-/// let kit = kit.build().await?;
-/// let query = kit.require::<QueryModule>()?;
+/// let mut kit = AsyncKit::new;
+/// kit.set_config(QueryConfig::in_memory);
+/// kit.register::<QueryModule>?;
+/// let kit = kit.build.await?;
+/// let query = kit.require::<QueryModule>?;
 /// ```
 pub struct QueryModule;
 
@@ -115,9 +111,7 @@ impl QueryModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Concrete dyn QueryEngine implementation
-// ---------------------------------------------------------------------------
 
 /// Concrete implementation of [`dyn QueryEngine`] wrapping a [`QueryFacade`]
 /// behind a [`Mutex`].
@@ -201,9 +195,7 @@ impl QueryEngine for QueryCapability {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

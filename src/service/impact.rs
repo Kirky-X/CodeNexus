@@ -365,7 +365,7 @@ mod tests {
         assert_eq!(output.edge_count, 0, "no edges at depth 0");
     }
 
-    // ===== build_impact_config unit tests =====
+    // build_impact_config unit tests
 
     #[test]
     fn build_impact_config_defaults_on_empty_params() {
@@ -418,7 +418,7 @@ mod tests {
         );
     }
 
-    // ===== find_start_node_id unit tests =====
+    // find_start_node_id unit tests
 
     #[test]
     fn find_start_node_id_matches_qualified_name() {
@@ -453,7 +453,7 @@ mod tests {
         assert_eq!(id, None);
     }
 
-    // ===== run_impact enhanced mode tests =====
+    // run_impact enhanced mode tests
 
     #[test]
     fn run_impact_enhanced_returns_risk_assessment() {
@@ -602,7 +602,7 @@ mod tests {
         );
     }
 
-    // ===== build_impact_config: empty segment filtering =====
+    // build_impact_config: empty segment filtering
 
     #[test]
     fn build_impact_config_filters_empty_segments_in_edge_types() {
@@ -628,7 +628,7 @@ mod tests {
         );
     }
 
-    // ===== run_impact: include_tests parameter =====
+    // run_impact: include_tests parameter
 
     #[test]
     fn run_impact_with_include_tests_succeeds() {
@@ -687,7 +687,7 @@ mod tests {
         );
     }
 
-    // ===== #[forge] wrapper tests via init_kit =====
+    // [forge] wrapper tests via init_kit
 
     #[serial_test::serial(kit_init)]
     #[test]

@@ -75,9 +75,7 @@ impl Extractor for ScalaExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 struct VisitContext<'a> {
     file_path: &'a str,
@@ -130,9 +128,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     }
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name) = function_name(node, source) else {
@@ -228,9 +224,7 @@ fn extract_trait(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut 
     result.push_node(model_node);
 }
 
-// ---------------------------------------------------------------------------
 // Record extractors
-// ---------------------------------------------------------------------------
 
 fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
     // import_declaration has children that are identifier nodes forming the
@@ -261,9 +255,7 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
     }
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 fn function_name(node: Node, source: &str) -> Option<String> {
     // function_definition has an `identifier` child for the name.
@@ -340,9 +332,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

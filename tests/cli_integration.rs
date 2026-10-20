@@ -204,7 +204,7 @@ fn corrupt_db_exits_4_with_clear_message() {
     }
 }
 
-// --- global `--format text|json` machine-readable output contract ---
+// global `--format text|json` machine-readable output contract
 // (sdforge `cli::output`; CodeNexus renders its own CLI boundary output, so
 // the contract is pinned end to end here: stream choice and exit codes.)
 

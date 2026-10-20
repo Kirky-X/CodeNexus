@@ -44,7 +44,7 @@ const PRUNABLE_EDGE_TYPES: [EdgeType; 3] =
 fn prune_dangling_type_edges(graph: &mut Graph) -> usize {
     let before = graph.edge_count();
     // L6 memory-overflow fix: previously built a `HashSet<String>` from
-    // `graph.nodes.keys().cloned().collect()` (N String allocations) just to
+    // `graph.nodes.keys.cloned.collect` (N String allocations) just to
     // answer `node_ids.contains(&edge.target)` inside `retain`. For large
     // graphs (100k+ nodes) this HashSet alone is hundreds of MB.
     //
@@ -113,7 +113,7 @@ pub fn build_symbol_table(results: &[ExtractResult], project: &str) -> ProjectSy
     // statements. Must run AFTER all file tables are added so suffix-match
     // against `files` keys can find target files. Used by CallResolver step 3
     // to prefer re-export targets over alphabetically-first exported entries
-    // (CalNexus regression: main.rs `calnexus::run()` → `cli::run`, not
+    // (CalNexus regression: main.rs `calnexus::run` → `cli::run`, not
     // `batch::run`).
     table.populate_reexport_targets(results);
     table
@@ -197,11 +197,11 @@ pub fn enrich_symbol_table_from_rows(
 ///
 /// # L6 memory-overflow fix
 ///
-/// Returns `()` instead of `Vec<Edge>`. The previous signature collected
+/// Returns `` instead of `Vec<Edge>`. The previous signature collected
 /// every resolved edge into a master `Vec<Edge>` that was immediately
 /// discarded by [`ResolvePhase`](crate::index::ResolvePhase) (the sole
 /// production caller). For large repos (1M+ edges) this was ~100 MB of
-/// pure waste. Each sub-resolver now returns `()` and adds edges directly
+/// pure waste. Each sub-resolver now returns `` and adds edges directly
 /// to `graph`, so peak RSS is bounded by the largest single resolver's
 /// working set rather than the union of all.
 ///
@@ -293,7 +293,7 @@ mod tests {
         result
     }
 
-    // --- build_symbol_table ---
+    // build_symbol_table
 
     #[test]
     fn build_from_empty_results() {
@@ -375,7 +375,7 @@ mod tests {
     #[test]
     fn build_fortran_module_fqn_via_generate_for_module() {
         // Direct test of generate_for_module since build_symbol_table uses
-        // generate() (top-level entities). Module-nested entities would be
+        // generate (top-level entities). Module-nested entities would be
         // handled by a higher-level resolver.
         let fqn =
             FqnGenerator::generate_for_module("proj", "src/mod.f90", "mymod", "my_func", None);
@@ -578,7 +578,7 @@ mod tests {
         assert_eq!(entry.project, "myproject");
     }
 
-    // --- resolve_all orchestration ---
+    // resolve_all orchestration
 
     #[test]
     fn resolve_all_combines_calls_and_dataflows() {
@@ -625,7 +625,7 @@ mod tests {
             }
         }
 
-        // fix: `resolve_all` now returns `()` — inspect `graph` directly.
+        // fix: `resolve_all` now returns `` — inspect `graph` directly.
         resolve_all(
             &results,
             &table,
@@ -662,7 +662,7 @@ mod tests {
     fn resolve_all_empty_results_returns_empty() {
         let table = ProjectSymbolTable::new();
         let mut graph = Graph::new();
-        // fix: `resolve_all` now returns `()` — check graph is empty.
+        // fix: `resolve_all` now returns `` — check graph is empty.
         resolve_all(
             &[],
             &table,
@@ -775,7 +775,7 @@ mod tests {
         );
     }
 
-    // --- prune unresolvable dangling type edges ---
+    // prune unresolvable dangling type edges
 
     #[test]
     fn resolve_all_prunes_unresolvable_dangling_type_edges() {
@@ -982,7 +982,7 @@ fn contains_scientific(ast: &AstNode) -> bool { true }
 "#;
         // Use absolute path to mirror production. Note: extract_from_source's
         // signature is (file_path_str, source, language, project).
-        // Cross-platform: use temp_dir() instead of hardcoding /home/kirky/...
+        // Cross-platform: use temp_dir instead of hardcoding /home/kirky/...
         // (no platform-specific paths).
         let dir = tempfile::tempdir().expect("tempdir");
         let file_path_buf = dir.path().join("scientific.rs");
@@ -991,7 +991,6 @@ fn contains_scientific(ast: &AstNode) -> bool { true }
         let result = extract_from_source(&file_path, src, crate::model::Language::Rust, project)
             .expect("extract failed");
 
-        // Build symbol table
         let results = vec![result.clone()];
         let table = build_symbol_table(&results, project);
 
@@ -1016,7 +1015,7 @@ fn contains_scientific(ast: &AstNode) -> bool { true }
         }
 
         // Resolve calls
-        // fix: `resolve_all` now returns `()` — inspect `graph` directly.
+        // fix: `resolve_all` now returns `` — inspect `graph` directly.
         resolve_all(
             &[result],
             &table,

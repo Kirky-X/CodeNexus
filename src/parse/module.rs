@@ -25,9 +25,7 @@ use super::error::ParseError;
 use super::extractor::Extractor;
 use super::parser_factory::ParserFactory;
 
-// ===========================================================================
 // ParserFactoryModule
-// ===========================================================================
 
 /// trait-kit module tag for the Parser subsystem.
 ///
@@ -37,10 +35,10 @@ use super::parser_factory::ParserFactory;
 /// ```ignore
 /// use codenexus::kit::{AsyncKit, ParserFactoryModule};
 ///
-/// let mut kit = AsyncKit::new();
-/// kit.register::<ParserFactoryModule>()?;
-/// let kit = kit.build().await?;
-/// let parser = kit.require::<ParserFactoryModule>()?;
+/// let mut kit = AsyncKit::new;
+/// kit.register::<ParserFactoryModule>?;
+/// let kit = kit.build.await?;
+/// let parser = kit.require::<ParserFactoryModule>?;
 /// ```
 pub struct ParserFactoryModule;
 
@@ -88,9 +86,7 @@ impl ParserRegistry for ParserRegistryCapability {
     }
 }
 
-// ===========================================================================
 // ExtractorRegistryModule
-// ===========================================================================
 
 /// trait-kit module tag for the Extractor registry.
 pub struct ExtractorRegistryModule;
@@ -136,9 +132,7 @@ impl ExtractorRegistry for ExtractorRegistryCapability {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -225,7 +219,7 @@ mod tests {
         assert!(!required.supported_languages().is_empty());
     }
 
-    // --- ExtractorRegistryModule tests ---
+    // ExtractorRegistryModule tests
 
     #[cfg(any(
         feature = "lang-c",

@@ -1450,7 +1450,6 @@ mod tests {
 
     // ====================================================================
     // Early-return paths in CrossServiceLinker::link
-    // ====================================================================
 
     #[test]
     fn link_returns_empty_when_routes_exist_but_no_callers() {

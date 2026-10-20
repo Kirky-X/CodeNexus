@@ -563,7 +563,7 @@ mod tests {
         Ok(())
     }
 
-    // --- is_valid_identifier ---
+    // is_valid_identifier
 
     #[test]
     fn is_valid_identifier_accepts_simple() {
@@ -588,7 +588,7 @@ mod tests {
         assert!(!is_valid_identifier("foo bar"));
     }
 
-    // --- compute_new_qn ---
+    // compute_new_qn
 
     #[test]
     fn compute_new_qn_replaces_trailing_segment() {
@@ -615,7 +615,7 @@ mod tests {
         assert_eq!(compute_new_qn("demo.foobar", "bar", "baz"), "demo.foobar");
     }
 
-    // --- compute_new_qn: `#` member separator ---
+    // compute_new_qn: `#` member separator
 
     #[test]
     fn compute_new_qn_replaces_segment_before_hash() {
@@ -641,7 +641,7 @@ mod tests {
         );
     }
 
-    // --- find_word_occurrences ---
+    // find_word_occurrences
 
     #[test]
     fn find_word_occurrences_simple() {
@@ -672,7 +672,7 @@ mod tests {
         assert!(find_word_occurrences("abc", "").is_empty());
     }
 
-    // --- resolve_under_root ---
+    // resolve_under_root
 
     #[test]
     fn resolve_under_root_accepts_relative_under_root() {
@@ -712,7 +712,7 @@ mod tests {
         );
     }
 
-    // --- file_to_rel_string ---
+    // file_to_rel_string
 
     #[test]
     fn file_to_rel_string_strips_root_prefix() {
@@ -728,7 +728,7 @@ mod tests {
         assert_eq!(file_to_rel_string(file, root), "/repo/src/main.rs");
     }
 
-    // --- apply_replacements ---
+    // apply_replacements
 
     #[test]
     fn apply_replacements_single_edit() {
@@ -781,7 +781,7 @@ mod tests {
         assert_eq!(result, "bar\n");
     }
 
-    // --- GraphEdit serialization ---
+    // GraphEdit serialization
 
     #[test]
     fn graph_edit_serializes_to_json() {
@@ -798,7 +798,7 @@ mod tests {
         assert!(json.contains("\"new_name\":\"bar\""));
     }
 
-    // --- resolve_start_id ---
+    // resolve_start_id
 
     #[test]
     fn resolve_start_id_by_name() {
@@ -828,7 +828,7 @@ mod tests {
         );
     }
 
-    // --- collect_candidate_files ---
+    // collect_candidate_files
 
     #[test]
     fn collect_candidate_files_includes_symbol_and_neighbors() {
@@ -914,7 +914,7 @@ mod tests {
         );
     }
 
-    // --- scan_text_edits ---
+    // scan_text_edits
 
     #[test]
     fn scan_text_edits_finds_word_occurrences_in_file() {
@@ -939,7 +939,7 @@ mod tests {
         assert!(edits.is_empty(), "unreadable files should be skipped");
     }
 
-    // --- apply_text_edits ---
+    // apply_text_edits
 
     #[test]
     fn apply_text_edits_writes_replacements_to_file() {
@@ -999,7 +999,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file_b).unwrap(), "let bar = 1;\n");
     }
 
-    // --- rename_core error cases ---
+    // rename_core error cases
 
     #[test]
     fn core_invalid_new_name_returns_error() {
@@ -1028,7 +1028,7 @@ mod tests {
         assert_eq!(err.exit_code(), 2, "TraceError::SymbolNotFound → exit 2");
     }
 
-    // --- rename_core success ---
+    // rename_core success
 
     #[test]
     fn core_dry_run_succeeds_with_symbol() {
@@ -1068,7 +1068,7 @@ mod tests {
         assert_eq!(name, "b", "graph name should be updated to 'b'");
     }
 
-    // --- resolve_start_id: multiple matches ---
+    // resolve_start_id: multiple matches
 
     #[test]
     fn resolve_start_id_multiple_name_matches_returns_ambiguous_error() {
@@ -1127,7 +1127,7 @@ mod tests {
         assert!(resolve_start_id(&graph, "bar").unwrap().is_none());
     }
 
-    // --- collect_candidate_files: edge cases ---
+    // collect_candidate_files: edge cases
 
     #[test]
     fn collect_candidate_files_excludes_absolute_paths_not_under_root() {
@@ -1179,7 +1179,7 @@ mod tests {
         );
     }
 
-    // --- apply_replacements: edge cases ---
+    // apply_replacements: edge cases
 
     #[test]
     fn apply_replacements_skips_edits_beyond_file_lines() {
@@ -1223,7 +1223,7 @@ mod tests {
         assert_eq!(result, "bar", "no trailing newline should be preserved");
     }
 
-    // --- apply_text_edits: error path ---
+    // apply_text_edits: error path
 
     #[test]
     fn apply_text_edits_fails_on_unreadable_file() {
@@ -1239,14 +1239,14 @@ mod tests {
         assert!(result.is_err(), "should fail on unreadable file");
     }
 
-    // --- find_word_occurrences: not found ---
+    // find_word_occurrences: not found
 
     #[test]
     fn find_word_occurrences_needle_not_found() {
         assert!(find_word_occurrences("hello world", "foo").is_empty());
     }
 
-    // --- is_valid_identifier: single char ---
+    // is_valid_identifier: single char
 
     #[test]
     fn is_valid_identifier_single_char() {
@@ -1255,7 +1255,7 @@ mod tests {
         assert!(!is_valid_identifier("1"));
     }
 
-    // --- is_ident_byte ---
+    // is_ident_byte
 
     #[test]
     fn is_ident_byte_classifies_correctly() {
@@ -1268,7 +1268,7 @@ mod tests {
         assert!(!is_ident_byte(b'.'));
     }
 
-    // --- scan_text_edits: multiple files ---
+    // scan_text_edits: multiple files
 
     #[test]
     fn scan_text_edits_across_multiple_files() {
@@ -1282,7 +1282,7 @@ mod tests {
         assert_eq!(edits.len(), 2, "should find 'foo' in both files");
     }
 
-    // --- rename_core: dry run with path but no matching files ---
+    // rename_core: dry run with path but no matching files
 
     #[test]
     fn core_dry_run_with_path_succeeds_without_text_edits() {
@@ -1299,7 +1299,7 @@ mod tests {
         );
     }
 
-    // --- rename_core: apply path with file not under root (text edits empty, graph edit applied) ---
+    // rename_core: apply path with file not under root (text edits empty, graph edit applied)
 
     #[test]
     fn core_apply_with_file_not_under_root_succeeds() {
@@ -1390,7 +1390,7 @@ mod tests {
         );
     }
 
-    // ===== #[forge] wrapper tests via init_kit =====
+    // [forge] wrapper tests via init_kit
 
     #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]

@@ -505,7 +505,7 @@ mod tests {
         assert_eq!(output.symbol, "demo.root");
     }
 
-    // ===== Enhanced trace tests =====
+    // Enhanced trace tests
 
     #[test]
     fn build_path_filter_empty_returns_none() {
@@ -747,7 +747,7 @@ mod tests {
         );
     }
 
-    // ===== cross-service traversal (HttpCalls + reverse HandlesRoute) =====
+    // cross-service traversal (HttpCalls + reverse HandlesRoute)
 
     /// Builds a graph shaped like a cross-service chain:
     /// `caller --CALLS--> client --HTTP_CALLS--> route <--HANDLES_ROUTE-- handler`.
@@ -862,7 +862,7 @@ mod tests {
         assert_eq!(ids.len(), total, "dedup must leave no duplicate pairs");
     }
 
-    // ===== run_trace: additional combined mode tests =====
+    // run_trace: additional combined mode tests
 
     #[test]
     fn run_trace_dataflow_with_detect_cycles_succeeds() {
@@ -950,7 +950,7 @@ mod tests {
         assert!(patterns.contains(&"/lib/*.rs".to_string()));
     }
 
-    // ===== #[forge] wrapper tests via init_kit =====
+    // [forge] wrapper tests via init_kit
 
     #[serial_test::serial(kit_init)]
     #[test]

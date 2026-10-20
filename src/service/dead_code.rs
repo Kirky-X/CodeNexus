@@ -413,7 +413,7 @@ mod tests {
         );
     }
 
-    // ===== run_dead_code with config parameters =====
+    // run_dead_code with config parameters
 
     #[test]
     fn run_dead_code_with_check_exported_excludes_exported() {
@@ -541,7 +541,7 @@ mod tests {
         );
     }
 
-    // ===== build_dead_code_config unit tests =====
+    // build_dead_code_config unit tests
 
     #[test]
     fn build_dead_code_config_parses_edge_types() {
@@ -602,7 +602,7 @@ mod tests {
         assert!(config.edge_types.contains(&EdgeType::Usage));
     }
 
-    // ===== check_dynamic_dispatch propagation tests =====
+    // check_dynamic_dispatch propagation tests
 
     #[test]
     fn build_dead_code_config_passes_check_dynamic_dispatch_true() {
@@ -628,7 +628,7 @@ mod tests {
         let kit = build_kit_for_db(&db);
         let storage = kit.require::<StorageModule>().expect("require_storage");
         seed_project(&*storage, "demo", "demo");
-        // Trait impl method (e.g. `impl Display for X { fn fmt() {} }`)
+        // Trait impl method (e.g. `impl Display for X { fn fmt {} }`)
         storage.execute("CREATE (:Method {id: 'm_fmt', project: 'demo', name: 'fmt', qualifiedName: 'demo.src.lib.rs.fmt#Display', filePath: '/src/lib.rs', startLine: 5, endLine: 10, signature: '', returnType: '', isExported: false, docstring: '', content: '', parentQn: ''});").expect("create trait impl");
 
         // With check_dynamic_dispatch=true(default), trait impl is NOT dead
@@ -653,7 +653,7 @@ mod tests {
         );
     }
 
-    // ===== #[forge] wrapper tests via init_kit =====
+    // [forge] wrapper tests via init_kit
 
     #[serial_test::serial(kit_init)]
     #[test]
@@ -702,7 +702,7 @@ mod tests {
         reset_kit_for_testing();
     }
 
-    // --- index freshness (indexed_commit / current_head / is_stale) ---
+    // index freshness (indexed_commit / current_head / is_stale)
 
     /// Helper: create a project row with custom `rootPath` and `lastCommit`.
     fn seed_project_with(

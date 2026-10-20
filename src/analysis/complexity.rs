@@ -494,7 +494,7 @@ fn count_exit_nodes_recursive(node: Node<'_>, language: Language) -> u32 {
     count
 }
 
-// --- Halstead complexity ---
+// Halstead complexity
 
 /// Returns the tree-sitter node kind for the function body block of `language`,
 /// or `None` for languages without a clear body container (e.g. Fortran).
@@ -665,7 +665,7 @@ fn collect_halstead<'a>(
     }
 }
 
-// --- Maintainability Index ---
+// Maintainability Index
 
 /// Computes the Maintainability Index (Microsoft 2007 revision).
 ///
@@ -681,7 +681,7 @@ pub fn calc_maintainability_index(cyclomatic: u32, halstead_volume: f64, loc: u3
     (raw * 100.0 / 171.0).clamp(0.0, 100.0)
 }
 
-// --- Time complexity estimation ---
+// Time complexity estimation
 
 /// Returns the tree-sitter node kind for `while` loops in `language`.
 fn while_kind(language: Language) -> &'static str {
@@ -723,7 +723,7 @@ fn max_loop_depth(node: Node<'_>, language: Language) -> u32 {
 }
 
 /// Returns true if `function_name` is invoked directly within the subtree
-/// (direct recursion). Matches `f()` and `self.f()` style calls.
+/// (direct recursion). Matches `f` and `self.f` style calls.
 fn has_direct_recursion(node: Node<'_>, source: &[u8], function_name: &str) -> bool {
     if node.kind() == "call_expression" {
         if let Some(func) = node.child_by_field_name("function") {
@@ -745,7 +745,7 @@ fn has_direct_recursion(node: Node<'_>, source: &[u8], function_name: &str) -> b
 
 /// Counts the number of direct recursive calls to `function_name` within the
 /// subtree (design D5). Used to distinguish linear recursion (1 call → O(n))
-/// from tree recursion (2+ calls → O(2^n)). Matches `f()` and `self.f()` style
+/// from tree recursion (2+ calls → O(2^n)). Matches `f` and `self.f` style
 /// calls, consistent with `has_direct_recursion`.
 fn count_recursive_calls(node: Node<'_>, source: &[u8], function_name: &str) -> usize {
     let mut count = 0;
@@ -832,11 +832,11 @@ pub fn estimate_time_complexity(
     }
 }
 
-// --- Space complexity estimation ---
+// Space complexity estimation
 
 /// Returns true if `text` contains a dynamic-allocation pattern (Rust
-/// collections: `Vec::new()`, `vec![]`, `HashMap::new()`, `BTreeMap::new()`,
-/// `String::new()`). Fixed-size arrays (`[T; N]`) do not match.
+/// collections: `Vec::new`, `vec![]`, `HashMap::new`, `BTreeMap::new`,
+/// `String::new`). Fixed-size arrays (`[T; N]`) do not match.
 fn has_allocation_pattern(text: &str) -> bool {
     text.contains("Vec::new(")
         || text.contains("vec![")

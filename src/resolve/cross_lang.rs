@@ -83,7 +83,7 @@ impl TypeMapper {
 /// Extracts parameter type names from a signature string.
 ///
 /// Parses the content between the first matching pair of parentheses and
-/// splits it by top-level commas (ignoring commas nested inside `()`, `[]`,
+/// splits it by top-level commas (ignoring commas nested inside ``, `[]`,
 /// or `<>`). For each parameter, extracts just the type name:
 ///
 /// - **Rust** (`"fn foo(x: i32, y: f64)"`): the type is the part after the
@@ -99,7 +99,7 @@ impl TypeMapper {
 /// - `"fn foo(x: i32, y: f64)"` (Rust) -> `["i32", "f64"]`
 /// - `"void foo(int x, double y)"` (C) -> `["int", "double"]`
 /// - `"int foo(int, double)"` (C) -> `["int", "double"]`
-/// - `"fn foo()"` -> `[]`
+/// - `"fn foo"` -> `[]`
 fn parse_params(signature: &str, language: Language) -> Vec<String> {
     let start = match signature.find('(') {
         Some(s) => s,
@@ -308,11 +308,11 @@ impl<'a> FfiResolver<'a> {
     /// function is found) to the target definition, and adds it directly to
     /// `graph`.
     ///
-    /// fix: returns `()` instead of `Vec<Edge>`; edges are added directly
+    /// fix: returns `` instead of `Vec<Edge>`; edges are added directly
     /// to `graph`. The previous `Vec<Edge>` return was an anti-pattern —
     /// production callers (`orchestrator.rs::resolve_all`) discarded it via
     /// `let _ = ...`, wasting memory on 1M+ edge repos due to per-edge
-    /// `clone()` followed by immediate `drop`.
+    /// `clone` followed by immediate `drop`.
     ///
     /// # Arguments
     ///
@@ -491,14 +491,14 @@ impl<'a> FfiResolver<'a> {
     ///
     /// Handles both Rust-style signatures (`fn foo(a: i32, b: i32)`) and
     /// C-style signatures (`int foo(int, int)`). Counts top-level commas
-    /// (ignoring commas nested inside `()`, `[]`, or `<>`) plus one for the
+    /// (ignoring commas nested inside ``, `[]`, or `<>`) plus one for the
     /// first parameter.
     ///
     /// # Examples
     ///
     /// - `"fn foo(a: i32, b: i32)"` -> 2
     /// - `"int foo(int, int)"` -> 2
-    /// - `"fn foo()"` -> 0
+    /// - `"fn foo"` -> 0
     /// - `""` -> 0
     pub fn param_count(signature: &str) -> usize {
         let start = match signature.find('(') {
@@ -507,7 +507,7 @@ impl<'a> FfiResolver<'a> {
         };
 
         // Find the matching ')' for the first '(' (handles nested parens,
-        // e.g. `fn foo(a: (i32, i32))` or `fn foo() -> (i32, i32)`).
+        // e.g. `fn foo(a: (i32, i32))` or `fn foo -> (i32, i32)`).
         let mut depth: i32 = 0;
         let mut end = None;
         // Single-line for coverage: tarpaulin attribute continuation
@@ -566,7 +566,7 @@ mod tests {
     use crate::model::{Language, Node, NodeLabel};
     use crate::resolve::{build_symbol_table, FqnGenerator, ProjectSymbolTable, SymbolEntry};
 
-    // --- helper functions ---
+    // helper functions
 
     /// Creates a definition node with the FQN as both `id` and
     /// `qualified_name`.
@@ -611,7 +611,7 @@ mod tests {
         }
     }
 
-    // --- param_count tests ---
+    // param_count tests
 
     #[test]
     fn param_count_rust_two_params() {
@@ -677,7 +677,7 @@ mod tests {
         assert_eq!(FfiResolver::param_count("fn foo(a: i32"), 0);
     }
 
-    // --- signatures_match tests ---
+    // signatures_match tests
 
     #[test]
     fn signatures_match_both_none_returns_false() {
@@ -714,7 +714,7 @@ mod tests {
         ));
     }
 
-    // --- MatchStrategy enum tests ---
+    // MatchStrategy enum tests
 
     #[test]
     fn match_strategy_has_three_variants() {
@@ -743,7 +743,7 @@ mod tests {
         assert!(format!("{:?}", MatchStrategy::NoMatch).contains("NoMatch"));
     }
 
-    // --- resolve_extern tests ---
+    // resolve_extern tests
 
     #[test]
     fn resolve_extern_name_match_returns_some() {
@@ -1026,7 +1026,7 @@ mod tests {
         assert!(result.is_none());
     }
 
-    // --- resolve_ffi tests ---
+    // resolve_ffi tests
 
     #[test]
     fn resolve_ffi_creates_edge_for_matching_extern() {
@@ -1345,7 +1345,7 @@ mod tests {
         assert_eq!(edge.confidence_tier, ConfidenceTier::Global);
     }
 
-    // --- Rust extern "C" -> C function FfiCalls edge ---
+    // Rust extern "C" -> C function FfiCalls edge
 
     #[test]
     fn ac_trace_003_rust_extern_c_calls_c_function() {
@@ -1457,7 +1457,7 @@ mod tests {
         assert!((edge.confidence - 0.85).abs() < 1e-6);
     }
 
-    // --- Fortran <-> C FFI tests ---
+    // Fortran <-> C FFI tests
 
     #[test]
     fn resolve_extern_fortran_calls_c_function() {
@@ -1488,7 +1488,7 @@ mod tests {
         assert_eq!(qn, "proj.c.c_func");
     }
 
-    // --- new constructor test ---
+    // new constructor test
 
     #[test]
     fn new_creates_resolver() {
@@ -1500,7 +1500,7 @@ mod tests {
         assert!(graph.edges.is_empty());
     }
 
-    // --- TypeMapper tests (ADD §7.4) ---
+    // TypeMapper tests (ADD §7.4)
 
     #[test]
     fn type_mapper_canonical_type_c_int_maps_to_int32() {
@@ -1682,7 +1682,7 @@ mod tests {
         ));
     }
 
-    // --- parse_params tests ---
+    // parse_params tests
 
     #[test]
     fn parse_params_rust_two_params() {
@@ -1748,7 +1748,7 @@ mod tests {
         assert_eq!(params, vec!["*const c_char"]);
     }
 
-    // --- match_by_signature tests ---
+    // match_by_signature tests
 
     #[test]
     fn match_by_signature_type_match_returns_high_confidence() {
@@ -1832,7 +1832,7 @@ mod tests {
         assert!((conf - 0.85).abs() < 1e-6, "expected 0.85, got {}", conf);
     }
 
-    // --- resolve_extern integration with type matching ---
+    // resolve_extern integration with type matching
 
     #[test]
     fn resolve_extern_type_mismatch_lowers_confidence() {
@@ -1903,7 +1903,7 @@ mod tests {
         );
     }
 
-    // --- branch coverage: edge-case params ---
+    // branch coverage: edge-case params
 
     #[test]
     fn parse_params_unmatched_open_paren_returns_empty() {
@@ -1968,17 +1968,17 @@ mod tests {
         assert_eq!(params, vec!["x"]);
     }
 
-    // --- Coverage gap tests: extract_c_type all-whitespace param ---
+    // Coverage gap tests: extract_c_type all-whitespace param
 
     #[test]
     fn extract_c_type_all_whitespace_returns_empty() {
-        // All-whitespace param: trimmed is empty → end == 0 → return String::new().
+        // All-whitespace param: trimmed is empty → end == 0 → return String::new.
         assert_eq!(extract_c_type("   "), "");
         assert_eq!(extract_c_type(""), "");
         assert_eq!(extract_c_type("\t\n"), "");
     }
 
-    // --- Coverage gap tests: match_by_signature zero params, extract_rust_type no colon ---
+    // Coverage gap tests: match_by_signature zero params, extract_rust_type no colon
 
     #[test]
     fn match_by_signature_zero_params_returns_full_confidence() {
@@ -2047,7 +2047,7 @@ mod tests {
     #[test]
     fn resolve_extern_keeps_first_name_only_when_second_name_also_matches() {
         // Two names both match with name-only (no signature). The first
-        // name's candidate is kept; `best_name_only.is_none()` is false for
+        // name's candidate is kept; `best_name_only.is_none` is false for
         // the second name → skip recording (line 415 false branch).
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(

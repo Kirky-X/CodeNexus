@@ -24,9 +24,7 @@ pub use crate::ir::{
     AssignInfo, CallInfo, ExternInfo, ExtractResult, ImportInfo, ReadInfo, WriteInfo,
 };
 
-// ---------------------------------------------------------------------------
 // Extractor trait (Adapter pattern, ADR-003).
-// ---------------------------------------------------------------------------
 
 /// Adapter trait for language-specific tree-sitter extraction.
 ///
@@ -56,9 +54,7 @@ pub trait Extractor: Send + Sync {
     fn extract(&self, source: &str, file_path: &str, project: &str) -> Result<ExtractResult>;
 }
 
-// ---------------------------------------------------------------------------
 // extract_file: convenience function.
-// ---------------------------------------------------------------------------
 
 /// Reads a source file and extracts symbols.
 ///
@@ -152,7 +148,7 @@ mod tests {
     use super::*;
     use crate::model::{Edge, EdgeType, Node, NodeLabel};
 
-    // --- ImportInfo tests ---
+    // ImportInfo tests
 
     #[test]
     fn import_info_can_be_constructed() {
@@ -190,7 +186,7 @@ mod tests {
         assert_eq!(info, cloned);
     }
 
-    // --- CallInfo tests ---
+    // CallInfo tests
 
     #[test]
     fn call_info_can_be_constructed() {
@@ -230,7 +226,7 @@ mod tests {
         assert_eq!(info, cloned);
     }
 
-    // --- AssignInfo tests ---
+    // AssignInfo tests
 
     #[test]
     fn assign_info_can_be_constructed() {
@@ -268,7 +264,7 @@ mod tests {
         assert_eq!(info, info.clone());
     }
 
-    // --- ExternInfo tests ---
+    // ExternInfo tests
 
     #[test]
     fn extern_info_can_be_constructed() {
@@ -307,7 +303,7 @@ mod tests {
         assert_eq!(info, info.clone());
     }
 
-    // --- ReadInfo tests ---
+    // ReadInfo tests
 
     #[test]
     fn read_info_can_be_constructed() {
@@ -341,7 +337,7 @@ mod tests {
         assert_eq!(info, info.clone());
     }
 
-    // --- WriteInfo tests ---
+    // WriteInfo tests
 
     #[test]
     fn write_info_can_be_constructed() {
@@ -375,7 +371,7 @@ mod tests {
         assert_eq!(info, info.clone());
     }
 
-    // --- ExtractResult tests ---
+    // ExtractResult tests
 
     #[test]
     fn extract_result_new_is_empty() {
@@ -486,7 +482,7 @@ mod tests {
         assert_eq!(cloned.nodes.len(), result.nodes.len());
     }
 
-    // --- extract_file tests ---
+    // extract_file tests
 
     #[test]
     fn extract_file_nonexistent_returns_error() {
@@ -531,7 +527,7 @@ mod tests {
         );
     }
 
-    // --- Extractor trait tests ---
+    // Extractor trait tests
 
     /// A dummy extractor used to verify the trait can be implemented and used.
     struct DummyExtractor {
@@ -624,7 +620,7 @@ mod tests {
         assert_eq!(result.nodes.len(), 1);
     }
 
-    // ---.h file C/C++ content detection ---
+    // .h file C/C++ content detection
 
     #[cfg(all(feature = "lang-c", feature = "lang-cpp"))]
     #[test]

@@ -84,9 +84,7 @@ impl Extractor for JavaExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 /// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
 struct VisitContext<'a> {
@@ -153,13 +151,13 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             visit_children(node, source, ctx, result);
         }
         "object_creation_expression" => {
-            // BUG-J1: `new Foo()` must be extracted as a call to the
-            // constructor. gitnexus counts `new Foo()` as a CALLS edge.
+            // BUG-J1: `new Foo` must be extracted as a call to the
+            // constructor. gitnexus counts `new Foo` as a CALLS edge.
             extract_object_creation(node, source, ctx, result);
             visit_children(node, source, ctx, result);
         }
         "explicit_constructor_invocation" => {
-            // BUG-J1: `super()` / `this()` in constructor bodies.
+            // BUG-J1: `super` / `this` in constructor bodies.
             extract_explicit_constructor(node, source, ctx, result);
             visit_children(node, source, ctx, result);
         }
@@ -177,9 +175,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     }
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 /// Extracts a class/interface/enum declaration. `label` selects the node label.
 fn extract_class(
@@ -346,9 +342,7 @@ fn extract_method(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     result.push_node(model_node);
 }
 
-// ---------------------------------------------------------------------------
 // Record extractors
-// ---------------------------------------------------------------------------
 
 fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
     // import_declaration has no named fields (per node-types.json); its
@@ -418,7 +412,7 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
     });
 }
 
-/// Extracts `new Foo()` (object_creation_expression) as a call to the
+/// Extracts `new Foo` (object_creation_expression) as a call to the
 /// constructor (BUG-J1). The callee name is the type name.
 fn extract_object_creation(
     node: Node,
@@ -444,7 +438,7 @@ fn extract_object_creation(
     });
 }
 
-/// Extracts `super()` / `this()` (explicit_constructor_invocation) as a call
+/// Extracts `super` / `this` (explicit_constructor_invocation) as a call
 /// (BUG-J1). The callee name is "super" or "this".
 fn extract_explicit_constructor(
     node: Node,
@@ -472,9 +466,7 @@ fn extract_explicit_constructor(
     });
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Extracts the `name` field from a class/interface/enum declaration.
 fn type_name(node: Node, source: &str) -> Option<String> {
@@ -555,9 +547,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -1051,8 +1041,8 @@ mod tests {
 
     #[test]
     fn extracts_object_creation_as_call() {
-        // BUG-J1: `new Foo()` is an object_creation_expression which was not
-        // handled as a call. gitnexus counts `new Foo()` as a CALLS edge to
+        // BUG-J1: `new Foo` is an object_creation_expression which was not
+        // handled as a call. gitnexus counts `new Foo` as a CALLS edge to
         // the constructor. Without this, ~77% of Java CALLS were missed on
         // gson (CN=1,415 vs GN=6,081).
         let result = extract("class Foo { Foo make() { return new Foo(); } }\n");
@@ -1071,7 +1061,7 @@ mod tests {
 
     #[test]
     fn extracts_explicit_constructor_invocation_as_call() {
-        // BUG-J1: `super()` and `this()` are explicit_constructor_invocation
+        // BUG-J1: `super` and `this` are explicit_constructor_invocation
         // nodes which were not handled as calls.
         let result = extract("class Foo { Foo() { super(); } }\n");
         let super_calls: Vec<_> = result

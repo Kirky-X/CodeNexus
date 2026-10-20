@@ -74,9 +74,7 @@ const OBSERVER_TIMEOUT: Duration = Duration::from_secs(30);
 /// the modify event to be missed and the bench to time out at 30 s.
 const WATCHER_INIT_DELAY: Duration = Duration::from_millis(500);
 
-// ---------------------------------------------------------------------------
 // Counting observer
-// ---------------------------------------------------------------------------
 
 /// Wraps [`IndexFacade`] with two shared counters so the bench thread can
 /// synchronize on index completion (`index_count`) and verify no events were
@@ -142,7 +140,7 @@ fn setup_daemon() -> DaemonBenchState {
     daemon.add_observer(Box::new(observer));
     let stop_handle = daemon.stop_handle();
 
-    // Use `run()` (not `run_for_duration`) so `stop_handle` can halt the
+    // Use `run` (not `run_for_duration`) so `stop_handle` can halt the
     // daemon from the bench thread. `run_for_duration` only checks its
     // deadline and ignores `stop`, which would force each iteration to run
     // the full duration instead of stopping after the first event.
@@ -190,9 +188,7 @@ fn modify_file(dir: &Path, i: usize) {
     std::fs::write(&path, format!("{original}{suffix}")).expect("write modified fixture");
 }
 
-// ---------------------------------------------------------------------------
 // Scenario 1: debounce_response_latency
-// ---------------------------------------------------------------------------
 
 /// Measures the wall-time latency from a single file modification to the
 /// observer's `on_events` callback firing.
@@ -206,7 +202,7 @@ fn bench_debounce_response_latency(c: &mut Criterion) {
     group.sample_size(10);
     // Each iteration waits out the 2 s debounce window plus the incremental
     // index (~200 ms), so ~2.2 s/iter. The default 5 s measurement window
-    // would only fit ~2 samples before tripping criterion's `slice.len() > 1`
+    // would only fit ~2 samples before tripping criterion's `slice.len > 1`
     // assert; raise the window so at least 10 samples can be collected.
     // `--quick` short-circuits once significance is reached.
     group.measurement_time(Duration::from_secs(300));
@@ -235,9 +231,7 @@ fn bench_debounce_response_latency(c: &mut Criterion) {
     group.finish();
 }
 
-// ---------------------------------------------------------------------------
 // Scenario 2: indexing_event_queue_throughput
-// ---------------------------------------------------------------------------
 
 /// Measures event-queue throughput while the daemon is under load
 ///

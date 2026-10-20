@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-// ===== Advanced tracing types =====
+// Advanced tracing types
 
 /// Filter applied to trace paths.
 ///
@@ -101,7 +101,7 @@ impl<'a> TraceEngine<'a> {
     }
 }
 
-// ===== Path filtering =====
+// Path filtering
 
 /// Converts a glob pattern to a regex string.
 ///
@@ -436,7 +436,7 @@ mod tests {
         g
     }
 
-    // --- TraceType ---
+    // TraceType
 
     #[test]
     fn trace_type_from_cli_str_parses_known() {
@@ -472,7 +472,7 @@ mod tests {
         }
     }
 
-    // --- TraceFacade: Calls ---
+    // TraceFacade: Calls
 
     #[test]
     fn facade_trace_calls_returns_call_path() {
@@ -499,7 +499,7 @@ mod tests {
         }
     }
 
-    // --- TraceFacade: DataFlow ---
+    // TraceFacade: DataFlow
 
     #[test]
     fn facade_trace_dataflow_returns_dataflow_path() {
@@ -523,7 +523,7 @@ mod tests {
         }
     }
 
-    // --- TraceFacade: All ---
+    // TraceFacade: All
 
     #[test]
     fn facade_trace_all_returns_both_call_and_dataflow_paths() {
@@ -542,7 +542,7 @@ mod tests {
         assert!(edge_types.contains(&"READS".to_string()));
     }
 
-    // --- TraceFacade: error cases ---
+    // TraceFacade: error cases
 
     #[test]
     fn facade_trace_symbol_not_found_returns_error() {
@@ -620,7 +620,7 @@ mod tests {
         assert!(matches!(result, Err(TraceError::InvalidDepth(0))));
     }
 
-    // --- TraceFacade: depth limit ---
+    // TraceFacade: depth limit
 
     #[test]
     fn facade_trace_respects_depth_limit() {
@@ -654,7 +654,7 @@ mod tests {
         assert_eq!(result.paths[0].depth, 1);
     }
 
-    // --- TraceFacade: qualified_name resolution ---
+    // TraceFacade: qualified_name resolution
 
     #[test]
     fn facade_trace_resolves_by_qualified_name() {
@@ -673,7 +673,7 @@ mod tests {
         assert_eq!(path_node_names(&result.paths[0]), vec!["foo", "bar"]);
     }
 
-    // --- TraceFacade: result symbol field ---
+    // TraceFacade: result symbol field
 
     #[test]
     fn facade_trace_result_symbol_matches_input() {
@@ -713,7 +713,7 @@ mod tests {
         assert_eq!(result.paths[0].edges[0].edge_type, "DATAFLOWS");
     }
 
-    // --- Advanced tracing types ---
+    // Advanced tracing types
 
     fn build_storage() -> std::sync::Arc<dyn Storage> {
         use crate::kit::StorageModule;
@@ -865,7 +865,7 @@ mod tests {
         assert!(json.contains("\"Calls\""));
     }
 
-    // --- Path filtering ---
+    // Path filtering
 
     use crate::trace::{TraceEdge, TraceNode, TracePath};
 
@@ -1129,7 +1129,7 @@ mod tests {
 
     #[test]
     fn trace_engine_storage_returns_storage_ref() {
-        // Covers lines 86-87: TraceEngine::storage() method.
+        // Covers lines 86-87: TraceEngine::storage method.
         let storage = build_storage();
         let engine = TraceEngine::new(storage.as_ref());
         let returned = engine.storage();
@@ -1141,7 +1141,7 @@ mod tests {
 
     #[test]
     fn trace_engine_apply_path_filter_delegates_to_standalone() {
-        // Covers lines 93, 98: TraceEngine::apply_path_filter() method
+        // Covers lines 93, 98: TraceEngine::apply_path_filter method
         // delegates to the standalone apply_path_filter function.
         let storage = build_storage();
         let engine = TraceEngine::new(storage.as_ref());
@@ -1226,7 +1226,7 @@ mod tests {
 
     #[test]
     fn facade_trace_by_id_invalid_depth_returns_error() {
-        // Covers line 319: trace_by_id's depth=0 guard. Unlike trace() which
+        // Covers line 319: trace_by_id's depth=0 guard. Unlike trace which
         // checks depth before calling trace_by_id, trace_by_id has its own
         // independent depth validation.
         let g = graph_a_calls_b_and_dataflow();
@@ -1249,7 +1249,7 @@ mod tests {
         assert_eq!(path_node_names(&result.paths[0]), vec!["a", "b"]);
     }
 
-    // ===== TraceType FromStr / Display tests =====
+    // TraceType FromStr / Display tests
 
     #[test]
     fn trace_type_display_canonical_strings() {

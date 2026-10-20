@@ -163,11 +163,11 @@ pub struct ProjectSymbolTable {
     /// # Background
     ///
     /// `pub use cli::run` in `src/lib.rs` re-exports `cli::run` as the
-    /// crate's public API. When `main.rs` calls `calnexus::run()`, the
+    /// crate's public API. When `main.rs` calls `calnexus::run`, the
     /// parser emits `callee_name = "run"` (scoped_identifier only keeps
     /// the last segment). `lookup_exported("run")` then returns multiple
     /// matches: `batch::run` (alphabetically first) and `cli::run`. Without
-    /// this set, `.first()` picks `batch::run`, breaking the
+    /// this set, `.first` picks `batch::run`, breaking the
     /// `main → cli::run` call edge and causing 100% false positives in
     /// dead_code analysis on `cli.rs` (CalNexus regression).
     ///
@@ -188,8 +188,8 @@ impl ProjectSymbolTable {
     ///
     /// Entries are sorted by qualified name before insertion to guarantee
     /// deterministic iteration order inside `global_symbols[name]`. Without
-    /// this, `FileSymbolTable::all_symbols()` iterates a `HashMap` whose order
-    /// is randomized per process (SipHash seed), making `lookup_exact().first()`
+    /// this, `FileSymbolTable::all_symbols` iterates a `HashMap` whose order
+    /// is randomized per process (SipHash seed), making `lookup_exact.first`
     /// and any caller relying on `Vec` order non-deterministic across runs.
     /// See B12 fix in `tools/verification/results/triage.md`.
     pub fn add_file_table(&mut self, file_path: &str, table: FileSymbolTable) {
@@ -217,14 +217,14 @@ impl ProjectSymbolTable {
 
     /// Global lookup: returns all entries matching the name across all files.
     ///
-    /// Results are sorted by qualified name so callers using `.first()`
+    /// Results are sorted by qualified name so callers using `.first`
     /// (e.g. `CallResolver::resolve_call_internal` steps 2/3) observe the
     /// same entry across runs. The `global_symbols` `HashMap` itself iterates
     /// in random order per process, but `add_file_table` already sorts entries
     /// on insertion — sorting here is a defensive guarantee for entries added
     /// via `add_symbol` or any other future mutation path. See B12 fix.
     ///
-    /// The `len() > 1` short-circuit avoids the `sort_by` call entirely on the
+    /// The `len > 1` short-circuit avoids the `sort_by` call entirely on the
     /// common K=1 path (single-definition name), which is the overwhelming
     /// majority in real codebases. `sort_by` on a 0/1-element `Vec` is already
     /// a no-op in the standard library, but skipping the call saves the
@@ -273,7 +273,7 @@ impl ProjectSymbolTable {
     /// A symbol in file B is a valid resolution target for a call in file A
     /// if A `#include`s B (directly or transitively). This method:
     /// 1. Computes the set of files reachable from `calling_file` via
-    ///    `includes_graph.reachable_from()` (includes `calling_file` itself).
+    ///    `includes_graph.reachable_from` (includes `calling_file` itself).
     /// 2. Filters `lookup(name)` to entries that are `is_exported` AND whose
     ///    `file_path` is in the reachable set.
     ///
@@ -474,7 +474,7 @@ fn file_path_matches_candidate(file_path_norm: &str, candidate: &str) -> bool {
     if file_path_norm == candidate {
         return true;
     }
-    // strip_suffix returns Some only when len >= candidate.len(); the equal
+    // strip_suffix returns Some only when len >= candidate.len; the equal
     // case is already handled above, so no extra filter needed.
     if let Some(prefix) = file_path_norm.strip_suffix(candidate) {
         return prefix.ends_with('/');
@@ -494,7 +494,7 @@ mod tests {
         make_entry(name, qn, file).with_exported(true)
     }
 
-    // --- SymbolEntry ---
+    // SymbolEntry
 
     #[test]
     fn symbol_entry_new_sets_required_fields() {
@@ -569,7 +569,7 @@ mod tests {
         assert!(debug.contains("foo"));
     }
 
-    // --- FileSymbolTable ---
+    // FileSymbolTable
 
     #[test]
     fn file_table_new_is_empty() {
@@ -663,7 +663,7 @@ mod tests {
         assert!(qns.contains(&"proj.b"));
     }
 
-    // --- ProjectSymbolTable ---
+    // ProjectSymbolTable
 
     #[test]
     fn project_table_new_is_empty() {
@@ -745,14 +745,14 @@ mod tests {
         assert!(project.lookup_exported("missing").is_empty());
     }
 
-    // --- lookup_exported_in_scope ---
+    // lookup_exported_in_scope
 
     use crate::resolve::includes_graph::IncludesGraph;
 
     #[test]
     fn lookup_exported_in_scope_filters_by_include() {
-        // Spec Red test: file A includes B, B has `fn foo()` exported,
-        // C also has `fn foo()` exported. lookup_exported_in_scope("foo", "A",
+        // Spec Red test: file A includes B, B has `fn foo` exported,
+        // C also has `fn foo` exported. lookup_exported_in_scope("foo", "A",
         // &graph) returns ONLY B's entry, not C's.
         let mut project = ProjectSymbolTable::new();
         project.add_symbol(make_exported_entry("foo", "proj.B.foo", "/abs/B.h"));
@@ -782,7 +782,7 @@ mod tests {
 
     #[test]
     fn lookup_exported_in_scope_transitive_include() {
-        // A includes B, B includes C. C has `fn foo()` exported.
+        // A includes B, B includes C. C has `fn foo` exported.
         // Transitive reachability: lookup from A should find C's foo.
         let mut project = ProjectSymbolTable::new();
         project.add_symbol(make_exported_entry("foo", "proj.C.foo", "/abs/C.h"));
@@ -798,7 +798,7 @@ mod tests {
 
     #[test]
     fn lookup_exported_in_scope_excludes_unreachable() {
-        // B has `fn foo()` exported, but A does NOT include B (directly or
+        // B has `fn foo` exported, but A does NOT include B (directly or
         // transitively). lookup from A should return empty.
         let mut project = ProjectSymbolTable::new();
         project.add_symbol(make_exported_entry("foo", "proj.B.foo", "/abs/B.h"));
@@ -810,7 +810,7 @@ mod tests {
 
     #[test]
     fn lookup_exported_in_scope_filters_non_exported() {
-        // B has `fn foo()` but is_exported=false. A includes B.
+        // B has `fn foo` but is_exported=false. A includes B.
         // lookup should return empty (only exported symbols qualify).
         let mut project = ProjectSymbolTable::new();
         project.add_symbol(make_entry("foo", "proj.B.foo", "/abs/B.h")); // not exported
@@ -836,7 +836,7 @@ mod tests {
 
     #[test]
     fn lookup_exported_in_scope_multiple_in_scope_entries() {
-        // A includes B and C. Both B and C have `fn foo()` exported.
+        // A includes B and C. Both B and C have `fn foo` exported.
         // lookup from A should return both entries.
         let mut project = ProjectSymbolTable::new();
         project.add_symbol(make_exported_entry("foo", "proj.B.foo", "/abs/B.h"));
@@ -958,7 +958,7 @@ mod tests {
         assert_eq!(project.lookup_in_file("a.rs", "bar").len(), 1);
     }
 
-    // --- populate_reexport_targets (Fix2) ---
+    // populate_reexport_targets (Fix2)
 
     use crate::ir::ImportInfo;
 

@@ -222,7 +222,7 @@ mod tests {
         assert!(tokens.iter().all(|t| t == &t.to_ascii_lowercase()));
     }
 
-    // ===== i18n / Unicode tests =====
+    // i18n / Unicode tests
 
     #[cfg(feature = "i18n")]
     #[test]

@@ -64,9 +64,7 @@ use crate::embed::EmbeddingConfig;
 #[cfg(feature = "cache")]
 use crate::cache::CacheConfig;
 
-// ---------------------------------------------------------------------------
 // Bootstrap config
-// ---------------------------------------------------------------------------
 
 /// Aggregated configuration for [`build_kit`].
 ///
@@ -200,13 +198,11 @@ impl KitBootstrapConfig {
 pub const DEFAULT_DEBOUNCE_MS: u64 = 2000;
 
 // When the `embed` feature is off, `EmbeddingConfig` is not in scope, so
-// `KitBootstrapConfig::new` cannot call `EmbeddingConfig::from_env()`. The
+// `KitBootstrapConfig::new` cannot call `EmbeddingConfig::from_env`. The
 // `embedding_config` field is also gated out. Nothing to do here — the
 // cfg on the field handles it.
 
-// ---------------------------------------------------------------------------
 // build_kit
-// ---------------------------------------------------------------------------
 
 /// Assemble every trait-kit module into a fresh [`AsyncKit`] in fixed
 /// dependency order.
@@ -236,8 +232,8 @@ pub const DEFAULT_DEBOUNCE_MS: u64 = 2000;
 /// # tokio_test::block_on(async {
 /// let config = KitBootstrapConfig::new(PathBuf::from("./codenexus.lbug"));
 /// let kit = build_kit(&config).await?;
-/// let storage = kit.require::<StorageModule>()?;
-/// # Ok::<_, codenexus::kit::KitError>(())
+/// let storage = kit.require::<StorageModule>?;
+/// # Ok::<_, codenexus::kit::KitError>()
 /// # });
 /// ```
 ///
@@ -312,12 +308,12 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
         kit.set_config(CacheConfig::default());
         kit.register::<CacheModule>()?;
         // trait-kit lifecycle: ready/shutdown diagnostics for the cache
-        // module (on_ready fires in build(), on_shutdown in
-        // `shutdown_async()` — invoked by the CLI after handler dispatch).
+        // module (on_ready fires in build, on_shutdown in
+        // `shutdown_async` — invoked by the CLI after handler dispatch).
         kit.register_lifecycle::<CacheModule>();
     }
 
-    // Health checkers for `status`'s `health_aggregate()` sampling — without a
+    // Health checkers for `status`'s `health_aggregate` sampling — without a
     // registered checker the aggregate stays empty regardless of module state.
     kit.register_health_check::<StorageModule>();
     #[cfg(feature = "cache")]
@@ -336,9 +332,7 @@ pub async fn build_kit(config: &KitBootstrapConfig) -> Result<AsyncKit<AsyncRead
     Ok(built)
 }
 
-// ---------------------------------------------------------------------------
 // Convenience: capability accessor helpers
-// ---------------------------------------------------------------------------
 
 /// Extension trait adding typed `require_*` shortcuts to
 /// [`AsyncKit<AsyncReady>`].
@@ -437,9 +431,7 @@ impl KitExt for AsyncKit<AsyncReady> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -525,7 +517,7 @@ mod tests {
         assert_eq!(config.debounce_ms, 500);
     }
 
-    // --- Feature-gated capability assertions ---
+    // Feature-gated capability assertions
 
     #[cfg(feature = "daemon")]
     #[tokio::test]
@@ -545,7 +537,7 @@ mod tests {
         let config = KitBootstrapConfig::new(PathBuf::from(":memory:"));
         let kit = build_kit(&config).await.expect("build_kit");
         // DaemonModule does not exist as a type under not(feature = "daemon"),
-        // so we cannot call contains::<DaemonModule>(). Instead, we verify the
+        // so we cannot call contains::<DaemonModule>. Instead, we verify the
         // Kit has exactly 7 capabilities by requiring the 7 core modules.
         assert!(kit.contains::<StorageModule>());
         assert!(kit.contains::<ParserFactoryModule>());
@@ -577,7 +569,7 @@ mod tests {
             "EmbedModule missing with embed feature"
         );
         let embed = kit.require_embed().expect("require_embed");
-        // Default is local mode; without a model file, embed() must
+        // Default is local mode; without a model file, embed must
         // return Unavailable (not MissingApiKey — no API key needed locally).
         // The message is localized, so assert on the locale-independent
         // payload (the missing model path), not on any language's wording.
@@ -656,7 +648,7 @@ mod tests {
     }
 
     /// Convenience helpers (`require_storage`, etc.) return the same `Arc`
-    /// as a direct `require::<Module>()` call.
+    /// as a direct `require::<Module>` call.
     #[tokio::test]
     async fn convenience_helpers_match_direct_require() {
         let config = KitBootstrapConfig::new(PathBuf::from(":memory:"));
@@ -728,7 +720,7 @@ mod tests {
     }
 
     /// Each convenience helper's returned `Arc` must be pointer-equal to the
-    /// `Arc` returned by a direct `require::<Module>()` call (they delegate,
+    /// `Arc` returned by a direct `require::<Module>` call (they delegate,
     /// so they must return the same registration).
     #[tokio::test]
     async fn convenience_helpers_all_match_direct_require() {

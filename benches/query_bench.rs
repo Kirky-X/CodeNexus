@@ -33,7 +33,7 @@ fn write_rust_files(dir: &Path, count: usize) {
 }
 
 fn bench_query(c: &mut Criterion) {
-    // --- Setup: index a fixture once -------------------------------------
+    // Setup: index a fixture once
     // The temp dir is leaked so LadybugDB's open handles stay valid for the
     // QueryFacade's lifetime (the facade holds an open connection). The path
     // is captured before `forget` moves the `TempDir`.
@@ -49,7 +49,7 @@ fn bench_query(c: &mut Criterion) {
 
     let query = QueryFacade::new(&db).unwrap();
 
-    // --- Benchmarks ------------------------------------------------------
+    // Benchmarks
     let mut group = c.benchmark_group("query");
     group.sample_size(50);
 

@@ -5,7 +5,7 @@
 //!
 //! 覆盖 CLI：`route_map` / `shape_check` / `api_impact` / `cross_service` / `tool_map`。
 //!
-//! 路由识别规则：axum 风格 `Router::new().route("/path", get(handler))`，
+//! 路由识别规则：axum 风格 `Router::new.route("/path", get(handler))`，
 //! handler 必须是裸标识符。跨服务检测：调用方字符串字面量与路由模式匹配。
 
 use codenexus::analysis::api_review::ApiReviewer;
@@ -52,7 +52,7 @@ fn main() {
     let repo = Repository::open(&ctx.db_path).expect("Repository::open");
     let reviewer = ApiReviewer::new(&repo);
 
-    // --- 1. Route map (CLI: `route_map`) --------------------------------
+    // 1. Route map (CLI: `route_map`)
     let routes = reviewer.route_map(&result.project_id).expect("route_map");
     println!("=== Routes ({} found) ===", routes.len());
     for r in &routes {
@@ -63,7 +63,7 @@ fn main() {
     }
     println!();
 
-    // --- 2. Schema consistency (CLI: `shape_check`) ----------------------
+    // 2. Schema consistency (CLI: `shape_check`)
     let violations = reviewer
         .shape_check(&result.project_id)
         .expect("shape_check");
@@ -76,7 +76,7 @@ fn main() {
     }
     println!();
 
-    // --- 3. API impact (CLI: `api_impact`) -------------------------------
+    // 3. API impact (CLI: `api_impact`)
     let impact = reviewer
         .api_impact(&result.project_id, "/users")
         .expect("api_impact");
@@ -92,8 +92,8 @@ fn main() {
     }
     println!();
 
-    // --- 4. Cross-service links (CLI: `cross_service`) -------------------
-    // `link()` writes CROSS_SERVICE_CALLS edges; `detect_all` only reports.
+    // 4. Cross-service links (CLI: `cross_service`)
+    // `link` writes CROSS_SERVICE_CALLS edges; `detect_all` only reports.
     let links = CrossServiceLinker::new(&repo, &result.project_id)
         .link()
         .expect("cross_service link");
@@ -117,7 +117,7 @@ fn main() {
     }
     println!();
 
-    // --- 5. MCP tool map (CLI: `tool_map`) -------------------------------
+    // 5. MCP tool map (CLI: `tool_map`)
     // Requires indexed Tool/Handler nodes (produced by indexing MCP-style
     // services) — a plain code sample typically yields an empty list.
     let tools = reviewer.tool_map(&result.project_id).expect("tool_map");

@@ -25,7 +25,7 @@ impl FqnGenerator {
     ///
     /// The file segment retains its full name (including extension). The
     /// optional `disambiguator` (ADR-003) disambiguates same-name entities in
-    /// the same file (e.g. `impl Foo { fn new() }` vs `impl Bar { fn new() }`)
+    /// the same file (e.g. `impl Foo { fn new }` vs `impl Bar { fn new }`)
     /// by appending `#parent_type` to the FQN.
     ///
     /// # Special cases
@@ -176,7 +176,7 @@ impl FqnGenerator {
 mod tests {
     use super::*;
 
-    // --- Basic generation (ADR-001: full filename retained) ---
+    // Basic generation (ADR-001: full filename retained)
 
     #[test]
     fn basic_rust_file() {
@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(fqn, "myproject.src.deep.nested.file.rs.entity");
     }
 
-    // --- Python __init__.py special case ---
+    // Python __init__.py special case
 
     #[test]
     fn python_init_py_removes_init_segment() {
@@ -235,7 +235,7 @@ mod tests {
         assert_eq!(fqn, "proj.src.a.b.Y");
     }
 
-    // --- C header files ---
+    // C header files
 
     #[test]
     fn c_header_file() {
@@ -255,7 +255,7 @@ mod tests {
         assert_eq!(fqn, "proj.src.main.c.main");
     }
 
-    // --- Fortran module ---
+    // Fortran module
 
     #[cfg(feature = "lang-fortran")]
     #[test]
@@ -286,7 +286,7 @@ mod tests {
         assert_eq!(fqn, "proj.src.physics.solver.f90.m.e");
     }
 
-    // --- parent_qn ---
+    // parent_qn
 
     #[test]
     fn parent_qn_returns_parent() {
@@ -318,7 +318,7 @@ mod tests {
         assert!(parent.is_none());
     }
 
-    // --- Path normalization ---
+    // Path normalization
 
     #[test]
     fn strips_leading_dot_slash() {
@@ -354,7 +354,7 @@ mod tests {
         assert_eq!(fqn, "proj._.src.main.rs.foo");
     }
 
-    // --- ADR-001: Extension retention (formerly "removes_*_extension") ---
+    // ADR-001: Extension retention (formerly "removes_*_extension")
 
     #[test]
     fn retains_c_extension() {
@@ -404,7 +404,7 @@ mod tests {
         assert_eq!(fqn, "p.src.f.f95.e");
     }
 
-    // --- Edge cases ---
+    // Edge cases
 
     #[test]
     fn empty_file_path() {
@@ -472,7 +472,7 @@ mod tests {
         assert_eq!(fqn, "proj.src.main.rs.");
     }
 
-    // --- ADR-001/002/003: New disambiguation tests ---
+    // ADR-001/002/003: New disambiguation tests
 
     #[test]
     fn file_full_name_preserved() {

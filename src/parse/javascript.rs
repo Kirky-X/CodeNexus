@@ -82,9 +82,7 @@ impl Extractor for JavaScriptExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 /// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
 struct VisitContext<'a> {
@@ -158,9 +156,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     }
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name) = function_name(node, source) else {
@@ -273,9 +269,7 @@ fn extract_variables(node: Node, source: &str, ctx: &VisitContext<'_>, result: &
     }
 }
 
-// ---------------------------------------------------------------------------
 // Record extractors
-// ---------------------------------------------------------------------------
 
 fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
     // import_statement has a `source` field (string_literal) holding the
@@ -313,9 +307,7 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
     });
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 fn function_name(node: Node, source: &str) -> Option<String> {
     let name_node = node.child_by_field_name("name")?;
@@ -341,7 +333,7 @@ fn callee_name(node: Node, source: &str) -> Option<String> {
     match node.kind() {
         "identifier" => node_text(node, source).map(String::from),
         "member_expression" => {
-            // `obj.method()` -> extract the property (rightmost) name.
+            // `obj.method` -> extract the property (rightmost) name.
             let property = node.child_by_field_name("property")?;
             node_text(property, source).map(String::from)
         }
@@ -403,9 +395,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

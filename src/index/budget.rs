@@ -171,8 +171,8 @@ impl MemoryBudget {
     /// to a conservative default in that case (see [`from_system`](Self::from_system)).
     #[must_use]
     pub fn probe_available_memory() -> u64 {
-        // sysinfo's `System::new()` does NOT populate fields; `refresh_memory()`
-        // is required before `available_memory()` returns a real value.
+        // sysinfo's `System::new` does NOT populate fields; `refresh_memory`
+        // is required before `available_memory` returns a real value.
         // The `system` feature is the only one we need (no disk / component /
         // network / user probes).
         let mut sys = sysinfo::System::new();
@@ -183,22 +183,20 @@ impl MemoryBudget {
 
 impl Default for MemoryBudget {
     /// Defaults to [`from_system`](Self::from_system) so that
-    /// `MemoryBudget::default()` produces a sensible environment-aware
+    /// `MemoryBudget::default` produces a sensible environment-aware
     /// budget without an explicit constructor call.
     fn default() -> Self {
         Self::from_system()
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // --- Pressure enum ---
+    // Pressure enum
 
     #[test]
     fn pressure_is_red_returns_true_only_for_red() {
@@ -229,14 +227,14 @@ mod tests {
         }
     }
 
-    // --- MemoryBudget defaults ---
+    // MemoryBudget defaults
 
     #[test]
     fn default_flush_batch_is_5000() {
         assert_eq!(MemoryBudget::DEFAULT_FLUSH_BATCH, 5_000);
     }
 
-    // --- MemoryBudget::new ---
+    // MemoryBudget::new
 
     #[test]
     fn new_sets_max_rss_and_defaults() {
@@ -254,7 +252,7 @@ mod tests {
         assert_eq!(b.check_pressure(1), Pressure::Red);
     }
 
-    // --- Builder methods ---
+    // Builder methods
 
     #[test]
     fn with_flush_batch_size_overrides_default() {
@@ -262,7 +260,7 @@ mod tests {
         assert_eq!(b.flush_batch_size, 1_000);
     }
 
-    // --- check_pressure boundaries ---
+    // check_pressure boundaries
 
     #[test]
     fn check_pressure_zero_rss_is_green() {
@@ -308,7 +306,7 @@ mod tests {
         assert_eq!(b.check_pressure(2_000_000), Pressure::Red);
     }
 
-    // --- from_system (env-aware, but assert invariants) ---
+    // from_system (env-aware, but assert invariants)
 
     #[test]
     fn from_system_returns_nonzero_max_rss() {
@@ -332,7 +330,7 @@ mod tests {
         assert_eq!(d.flush_batch_size, MemoryBudget::DEFAULT_FLUSH_BATCH);
     }
 
-    // --- probe_available_memory ---
+    // probe_available_memory
 
     #[test]
     fn probe_available_memory_returns_some_value_on_normal_host() {
@@ -342,7 +340,7 @@ mod tests {
         assert!(avail > 0, "probe_available_memory returned 0 — sandbox?");
     }
 
-    // --- Send + Sync ---
+    // Send + Sync
 
     #[test]
     fn memory_budget_is_send_sync() {
@@ -356,7 +354,7 @@ mod tests {
         let _b2 = b.clone();
     }
 
-    // --- Edge cases ---
+    // Edge cases
 
     #[test]
     fn very_large_max_rss_does_not_overflow() {

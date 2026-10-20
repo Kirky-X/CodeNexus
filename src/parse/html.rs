@@ -76,9 +76,7 @@ impl Extractor for HtmlExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 /// Immutable traversal context passed between visit_node/visit_children.
 struct VisitContext<'a> {
@@ -106,9 +104,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     }
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 fn extract_element(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(tag_name) = element_tag_name(node, source) else {
@@ -136,9 +132,7 @@ fn extract_element(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mu
     result.push_node(model_node);
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Extracts the tag name from an `element` node by locating its `start_tag`
 /// or `self_closing_tag` child and reading the first `tag_name` child within.
@@ -260,9 +254,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

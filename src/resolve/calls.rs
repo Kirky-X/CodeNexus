@@ -6,7 +6,7 @@
 //! Provides [`CallResolver`] for resolving function/method calls to CALLS
 //! edges. Uses a two-pass strategy:
 //!
-//! 1. **receiver-bound-calls**: If a call has a receiver (e.g. `obj.method()`),
+//! 1. **receiver-bound-calls**: If a call has a receiver (e.g. `obj.method`),
 //!    resolve the receiver's type and find the method on that type.
 //! 2. **free-call-fallback**: If no receiver or receiver-bound fails, look up
 //!    the function name in the symbol table (file-level first, then
@@ -108,11 +108,11 @@ impl<'a> CallResolver<'a> {
     /// a known caller qualified name, a CALLS edge is created and added
     /// directly to `graph`.
     ///
-    /// fix: returns `()` instead of `Vec<Edge>`; edges are added directly
+    /// fix: returns `` instead of `Vec<Edge>`; edges are added directly
     /// to `graph`. The previous `Vec<Edge>` return was an anti-pattern —
     /// production callers (`orchestrator.rs::resolve_all`) discarded it via
     /// `let _ = ...`, wasting ~100MB on 1M+ edge repos due to per-edge
-    /// `clone()` followed by immediate `drop`.
+    /// `clone` followed by immediate `drop`.
     ///
     /// # Arguments
     ///
@@ -256,7 +256,7 @@ impl<'a> CallResolver<'a> {
         // (e.g. `batch::run` and `cli::run`), the re-export target (via
         // `pub use cli::run` in lib.rs) is the canonical entry point
         // reachable from outside the crate. Without this preference,
-        // `.first()` picks `batch::run` (qn-sorted first), breaking the
+        // `.first` picks `batch::run` (qn-sorted first), breaking the
         // `main → cli::run` call edge (CalNexus regression: 100%
         // false-positive rate on cli.rs in dead_code analysis).
         if let Some(entry) = exported
@@ -279,7 +279,7 @@ impl<'a> CallResolver<'a> {
 ///    (e.g. `#NodeBuilder`, `#EdgeBuilder`, `#ResolverModuleBuilder`).
 /// 2. Builder entry method: method name is `builder` with a type-name
 ///    disambiguator (e.g. `builder#Edge`, `builder#Node`).
-///    `Edge::builder()` and `Node::builder()` are the only 2 entry
+///    `Edge::builder` and `Node::builder` are the only 2 entry
 ///    methods in CodeNexus, both are Builder pattern entry points.
 fn is_builder_type_method(callee_qn: &str) -> bool {
     callee_qn
@@ -348,7 +348,7 @@ mod tests {
         }
     }
 
-    // --- resolve_call: file-level lookup ---
+    // resolve_call: file-level lookup
 
     #[test]
     fn resolve_call_finds_function_in_same_file() {
@@ -383,7 +383,7 @@ mod tests {
         assert_eq!(tier, ConfidenceTier::SameFile);
     }
 
-    // --- resolve_call: import lookup ---
+    // resolve_call: import lookup
 
     #[test]
     fn resolve_call_finds_function_via_import() {
@@ -454,7 +454,7 @@ mod tests {
         assert_eq!(tier, ConfidenceTier::Global);
     }
 
-    // --- resolve_call: project-level exported lookup ---
+    // resolve_call: project-level exported lookup
 
     #[test]
     fn resolve_call_finds_exported_function_in_project() {
@@ -490,11 +490,11 @@ mod tests {
         assert!(resolved.is_none());
     }
 
-    // --- resolve_call: re-export target preference (Fix2) ---
+    // resolve_call: re-export target preference (Fix2)
 
     #[test]
     fn resolve_call_prefers_reexport_target_over_alphabetically_first() {
-        // CalNexus regression: main.rs calls `calnexus::run()`. Both
+        // CalNexus regression: main.rs calls `calnexus::run`. Both
         // `batch::run` and `cli::run` are exported. `pub use cli::run` in
         // lib.rs marks `cli::run` as the re-export target. Resolution
         // must pick `cli::run`, not `batch::run` (which sorts first by qn).
@@ -579,12 +579,12 @@ mod tests {
         assert_eq!(tier, ConfidenceTier::Global);
     }
 
-    // --- resolve_call: scope-aware lookup ---
+    // resolve_call: scope-aware lookup
 
     #[test]
     fn resolve_call_cpp_scoped() {
-        // main.cpp calls foo(). foo.h defines foo() (exported).
-        // bar.cpp also defines foo() (exported). main.cpp #includes foo.h
+        // main.cpp calls foo. foo.h defines foo (exported).
+        // bar.cpp also defines foo (exported). main.cpp #includes foo.h
         // but NOT bar.cpp. Resolution should point to foo.h's foo, not
         // bar.cpp's (over-resolution fix).
         use crate::resolve::symbol_table::SymbolEntry;
@@ -663,7 +663,7 @@ mod tests {
 
     #[test]
     fn resolve_call_cpp_scoped_excludes_unreachable() {
-        // main.cpp #includes foo.h. bar.cpp defines foo() (exported).
+        // main.cpp #includes foo.h. bar.cpp defines foo (exported).
         // main.cpp does NOT include bar.cpp. Resolution should return None
         // (foo is not in scope).
         use crate::resolve::symbol_table::SymbolEntry;
@@ -693,7 +693,7 @@ mod tests {
     #[test]
     fn resolve_call_cpp_scoped_transitive_include() {
         // main.cpp #includes a.h, a.h #includes b.h.
-        // b.h defines foo() (exported). Transitive reachability should
+        // b.h defines foo (exported). Transitive reachability should
         // allow resolution.
         use crate::resolve::symbol_table::SymbolEntry;
 
@@ -722,7 +722,7 @@ mod tests {
         assert_eq!(qn, "proj.b_h.foo", "transitive include should reach b.h");
     }
 
-    // --- resolve_call: not found ---
+    // resolve_call: not found
 
     #[test]
     fn resolve_call_returns_none_for_unknown_function() {
@@ -759,7 +759,7 @@ mod tests {
         assert!(resolved.is_none());
     }
 
-    // --- resolve_calls: batch resolution ---
+    // resolve_calls: batch resolution
 
     #[test]
     fn resolve_calls_creates_calls_edges_for_all_resolvable_calls() {
@@ -983,7 +983,7 @@ mod tests {
         assert_eq!(neighbors[0].id, bar_qn);
     }
 
-    // --- A calls B -> CALLS edge A->B in graph ---
+    // A calls B -> CALLS edge A->B in graph
 
     #[test]
     fn ac_trace_001_call_path_a_to_b() {
@@ -1026,7 +1026,7 @@ mod tests {
         assert_eq!(neighbors[0].name, "B");
     }
 
-    // --- with_imports builder ---
+    // with_imports builder
 
     #[test]
     fn with_imports_is_chainable() {
@@ -1044,7 +1044,7 @@ mod tests {
         assert!(resolver.imports.is_empty());
     }
 
-    // --- Edge case: assignment data is ignored by call resolver ---
+    // Edge case: assignment data is ignored by call resolver
 
     #[test]
     fn resolve_calls_ignores_assignments() {
@@ -1071,7 +1071,7 @@ mod tests {
         );
     }
 
-    // --- Import lookup fallthrough ---
+    // Import lookup fallthrough
 
     #[test]
     fn resolve_call_import_lookup_falls_through_when_symbol_not_in_table() {
@@ -1115,7 +1115,7 @@ mod tests {
         assert_eq!(tier, ConfidenceTier::Global);
     }
 
-    // --- C2 fix: Builder type method filtering ---
+    // C2 fix: Builder type method filtering
 
     /// Creates a definition node with a disambiguator (e.g. for impl methods).
     fn make_node_with_disambiguator(
@@ -1157,7 +1157,7 @@ mod tests {
         let caller_qn = fqn("proj", "a.rs", "caller", Language::Rust);
 
         let mut result = make_result("a.rs", vec![build_method, language_method, caller_node]);
-        // caller calls NodeBuilder.build() and NodeBuilder.language()
+        // caller calls NodeBuilder.build and NodeBuilder.language
         result.calls.push(CallInfo {
             caller_qn: Some(caller_qn.clone()),
             callee_name: "build".to_string(),
@@ -1232,11 +1232,11 @@ mod tests {
 
     #[test]
     fn c2_resolve_calls_filters_builder_entry_method() {
-        // C2 fix: Builder pattern entry method `Type::builder()` has
+        // C2 fix: Builder pattern entry method `Type::builder` has
         // disambiguator = type name (e.g. `#Edge`, `#Node`), NOT ending
         // with "Builder". Filter these to match gitnexus behavior, which
         // doesn't capture builder pattern entry calls as CALLS edges.
-        // Edge::builder() and Node::builder() are the only 2 entry methods
+        // Edge::builder and Node::builder are the only 2 entry methods
         // in CodeNexus, both are Builder pattern entry points.
         let builder_method = make_node_with_disambiguator(
             "builder",
@@ -1249,7 +1249,7 @@ mod tests {
         let caller_qn = fqn("proj", "a.rs", "caller", Language::Rust);
 
         let mut result = make_result("a.rs", vec![builder_method, caller_node]);
-        // caller calls Edge::builder()
+        // caller calls Edge::builder
         result.calls.push(CallInfo {
             caller_qn: Some(caller_qn.clone()),
             callee_name: "builder".to_string(),
@@ -1269,7 +1269,7 @@ mod tests {
         assert_eq!(graph.edge_count(), 0);
     }
 
-    // --- is_builder_type_method direct unit tests ---
+    // is_builder_type_method direct unit tests
 
     #[test]
     fn is_builder_type_method_no_hash_returns_false() {
@@ -1285,7 +1285,7 @@ mod tests {
         assert!(!is_builder_type_method("proj.a.rs.method#MyType"));
     }
 
-    // --- with_includes_graph builder ---
+    // with_includes_graph builder
 
     #[test]
     fn with_includes_graph_is_chainable() {
@@ -1295,7 +1295,7 @@ mod tests {
         assert!(resolver.includes_graph.is_empty());
     }
 
-    // --- resolve_calls batch with includes_graph (scope-aware lookup) ---
+    // resolve_calls batch with includes_graph (scope-aware lookup)
 
     #[test]
     fn resolve_calls_batch_with_includes_graph_uses_scope_aware_lookup() {
@@ -1355,7 +1355,7 @@ mod tests {
         );
     }
 
-    // --- resolve_calls batch with import-based lookup ---
+    // resolve_calls batch with import-based lookup
 
     #[test]
     fn resolve_calls_uses_import_lookup_in_batch_mode() {
@@ -1403,7 +1403,7 @@ mod tests {
         assert_eq!(edge.confidence_tier, ConfidenceTier::ImportScoped);
     }
 
-    // --- is_builder_type_method: true branches (direct unit tests) ---
+    // is_builder_type_method: true branches (direct unit tests)
 
     #[test]
     fn is_builder_type_method_builder_name_returns_true() {

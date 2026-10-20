@@ -37,9 +37,7 @@ use crate::kit::{AsyncAutoBuilder, AsyncKit, AsyncReady, ModuleMeta};
 
 use super::capability::CacheStore;
 
-// ---------------------------------------------------------------------------
 // Error
-// ---------------------------------------------------------------------------
 
 /// Error type for [`CacheModule`] operations.
 ///
@@ -49,21 +47,19 @@ use super::capability::CacheStore;
 /// This type covers only build/initialization failures.
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
-    /// `AsyncKit::config::<CacheConfig>()` failed (config not set or
+    /// `AsyncKit::config::<CacheConfig>` failed (config not set or
     /// type-mismatched). The cache module requires `kit.set_config(...)`
-    /// before `kit.register::<CacheModule>()`.
+    /// before `kit.register::<CacheModule>`.
     #[error("cache config error: {0}")]
     Config(String),
 
-    /// `oxcache::Cache::builder().build()` failed. This typically
+    /// `oxcache::Cache::builder.build` failed. This typically
     /// indicates a backend construction error (e.g., moka capacity = 0).
     #[error("cache build failed: {0}")]
     BuildFailed(String),
 }
 
-// ---------------------------------------------------------------------------
 // Config
-// ---------------------------------------------------------------------------
 
 /// Default max bytes per cache entry: 64 KiB.
 ///
@@ -89,7 +85,7 @@ pub const MACRO_QUERY_SERVICE: &str = "codenexus-query";
 /// ```ignore
 /// use codenexus::cache::CacheConfig;
 ///
-/// let config = CacheConfig::default().with_capacity(5_000);
+/// let config = CacheConfig::default.with_capacity(5_000);
 /// ```
 #[derive(Debug, Clone)]
 pub struct CacheConfig {
@@ -135,9 +131,7 @@ impl CacheConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Module (ModuleMeta + AsyncAutoBuilder)
-// ---------------------------------------------------------------------------
 
 /// trait-kit module tag for the Cache subsystem.
 ///
@@ -149,11 +143,11 @@ impl CacheConfig {
 /// use codenexus::kit::{AsyncKit, CacheModule};
 /// use codenexus::cache::CacheConfig;
 ///
-/// let mut kit = AsyncKit::new();
-/// kit.set_config(CacheConfig::default());
-/// kit.register::<CacheModule>()?;
-/// let kit = kit.build().await?;
-/// let cache = kit.require::<CacheModule>()?;
+/// let mut kit = AsyncKit::new;
+/// kit.set_config(CacheConfig::default);
+/// kit.register::<CacheModule>?;
+/// let kit = kit.build.await?;
+/// let cache = kit.require::<CacheModule>?;
 /// ```
 pub struct CacheModule;
 
@@ -223,7 +217,7 @@ impl CacheModule {
     ///
     /// # Errors
     ///
-    /// Returns [`CacheError::BuildFailed`] if oxcache's `Cache::build()`
+    /// Returns [`CacheError::BuildFailed`] if oxcache's `Cache::build`
     /// fails (e.g., invalid capacity).
     pub(crate) async fn build_cap(config: &CacheConfig) -> Result<Arc<dyn CacheStore>, CacheError> {
         let cache = oxcache::Cache::builder()
@@ -260,9 +254,7 @@ impl CacheModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Concrete dyn CacheStore implementation
-// ---------------------------------------------------------------------------
 
 /// Concrete implementation of [`dyn CacheStore`] wrapping an
 /// `oxcache::cache::Cache<String, Vec<u8>>`.
@@ -397,9 +389,7 @@ impl CacheStore for OxcacheStore {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

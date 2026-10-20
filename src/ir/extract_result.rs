@@ -24,7 +24,7 @@ pub struct ExtractResult {
     /// Extracted edges (calls, contains, defines, etc.).
     ///
     /// **L7-2 invariant**: After `ScopeResolutionPhase::run` (L7-2 memory
-    /// fix), this Vec is `clear()` + `shrink_to_fit()`'d to free ~1 GB on
+    /// fix), this Vec is `clear` + `shrink_to_fit`'d to free ~1 GB on
     /// large repos. Resolvers MUST read edges from `graph.edges`, NOT from
     /// this field. Verified via `grep -rn 'result\.edges\|r\.edges' src/resolve`
     /// (commit e4f92de). The only legitimate readers are:
@@ -114,7 +114,7 @@ impl ExtractResult {
     /// Returns a mutable reference to the per-file edges Vec.
     ///
     /// Extractors use this to populate `edges` during extraction.
-    /// `ScopeResolutionPhase` uses this to `clear()` + `shrink_to_fit()`
+    /// `ScopeResolutionPhase` uses this to `clear` + `shrink_to_fit`
     /// after cloning edges into the graph (L7-2 memory fix).
     pub fn edges_mut(&mut self) -> &mut Vec<Edge> {
         &mut self.edges

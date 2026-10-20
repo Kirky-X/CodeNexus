@@ -85,9 +85,7 @@ impl Extractor for HaskellExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 /// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
 struct VisitContext<'a> {
@@ -142,9 +140,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     }
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name) = function_name(node, source) else {
@@ -306,9 +302,7 @@ fn extract_module(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     result.push_node(model_node);
 }
 
-// ---------------------------------------------------------------------------
 // Record extractors
-// ---------------------------------------------------------------------------
 
 fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
     let line = node.start_position().row as u32 + 1;
@@ -322,9 +316,7 @@ fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Extracts the function name from a `function` or `type_signature` node by
 /// finding the first `variable` named child (direct or one level nested).
@@ -449,9 +441,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -804,7 +794,7 @@ mod tests {
         assert!(module.end_line.unwrap() >= module.start_line.unwrap());
     }
 
-    // --- parse helper and tree walker for direct function tests ---
+    // parse helper and tree walker for direct function tests
 
     fn parse_source(source: &str) -> tree_sitter::Tree {
         let mut parser =
@@ -830,7 +820,7 @@ mod tests {
         None
     }
 
-    // --- module_name Strategy 1: name field (line 391) ---
+    // module_name Strategy 1: name field (line 391)
     // The grammar doesn't have a "name" field on module nodes, but we can
     // call module_name on a different node kind that DOES have a name field
     // (e.g., function node) to cover Strategy 1.
@@ -852,7 +842,7 @@ mod tests {
         }
     }
 
-    // --- module_name returns None (line 402) ---
+    // module_name returns None (line 402)
 
     #[test]
     fn module_name_returns_none_for_node_without_name_like_children() {
@@ -867,7 +857,7 @@ mod tests {
         let _ = name;
     }
 
-    // --- import_module_name Strategy 2 (lines 411-415) ---
+    // import_module_name Strategy 2 (lines 411-415)
     // Call import_module_name on a module node (which has no "module" field
     // but has module_id/identifier children) to cover Strategy 2.
 
@@ -888,7 +878,7 @@ mod tests {
         }
     }
 
-    // --- import_module_name returns None (line 419) ---
+    // import_module_name returns None (line 419)
 
     #[test]
     fn import_module_name_returns_none_for_node_without_module_children() {
@@ -900,7 +890,7 @@ mod tests {
         let _ = name;
     }
 
-    // --- function_name Strategy 2 (lines 330-333) ---
+    // function_name Strategy 2 (lines 330-333)
     // Call function_name on a node without "name" field but with "variable" child.
 
     #[test]
@@ -937,7 +927,7 @@ mod tests {
         }
     }
 
-    // --- function_name returns None (line 345) ---
+    // function_name returns None (line 345)
 
     #[test]
     fn function_name_returns_none_for_root_node() {
@@ -949,7 +939,7 @@ mod tests {
         let _ = name;
     }
 
-    // --- haskell_type_name Strategy 2 (lines 355-358) ---
+    // haskell_type_name Strategy 2 (lines 355-358)
     // Call haskell_type_name on a data_type node. If the grammar doesn't
     // have a "name" field, Strategy 2 runs.
 
@@ -970,7 +960,7 @@ mod tests {
         }
     }
 
-    // --- haskell_type_name returns None (line 362) ---
+    // haskell_type_name returns None (line 362)
 
     #[test]
     fn haskell_type_name_returns_none_for_root_node() {
@@ -982,7 +972,7 @@ mod tests {
         let _ = name;
     }
 
-    // --- find_name_in_child: type_constructor/constructor/name branches (lines 369-371) ---
+    // find_name_in_child: type_constructor/constructor/name branches (lines 369-371)
 
     #[test]
     fn find_name_in_child_finds_type_constructor() {
@@ -1011,7 +1001,7 @@ mod tests {
         );
     }
 
-    // --- find_name_in_child: name field branch (lines 373-375) ---
+    // find_name_in_child: name field branch (lines 373-375)
 
     #[test]
     fn find_name_in_child_uses_name_field_if_present() {
@@ -1031,7 +1021,7 @@ mod tests {
         }
     }
 
-    // --- find_name_in_child returns None (line 385) ---
+    // find_name_in_child returns None (line 385)
 
     #[test]
     fn find_name_in_child_returns_none_for_node_without_name_like_children() {

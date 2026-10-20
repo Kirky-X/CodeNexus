@@ -319,18 +319,18 @@ pub(crate) fn is_workspace_not_ready(err: &LspError) -> bool {
 }
 
 /// How long [`shutdown_session`] waits for the server to exit voluntarily
-/// before falling back to `kill()`. Prevents `child.wait()` from blocking
+/// before falling back to `kill`. Prevents `child.wait` from blocking
 /// forever on a server that ignores the `exit` notification.
 const SHUTDOWN_TIMEOUT_MS: u64 = 5_000;
 
 /// How long [`kill_session`] waits after `SIGKILL` for the child to actually
 /// exit. Shorter than [`SHUTDOWN_TIMEOUT_MS`] because `kill_session` is the
 /// fallback path (graceful shutdown already failed or was never attempted).
-/// Prevents `child.wait()` from blocking forever on a zombie process or
+/// Prevents `child.wait` from blocking forever on a zombie process or
 /// kernel-state stall (L6-3 architecture fix).
 const KILL_TIMEOUT_MS: u64 = 3_000;
 
-/// Polls `child.try_wait()` in 50 ms steps until it exits or `timeout_ms`
+/// Polls `child.try_wait` in 50 ms steps until it exits or `timeout_ms`
 /// elapses. Returns `true` if the child exited within the timeout, `false`
 /// otherwise. Shared by [`shutdown_session`] (graceful wait) and
 /// [`kill_session`] (post-SIGKILL reap) to avoid busy-wait code duplication.
@@ -355,7 +355,7 @@ fn wait_with_timeout(child: &mut Child, timeout_ms: u64) -> bool {
 ///
 /// Single kill+warn helper used by [`kill_session`] (initialize-failure path)
 /// and [`shutdown_session`]'s fallback ([`force_kill_and_wait`]). Pre-L1 had
-/// two near-identical copies of the `child.kill() + wait_with_timeout +
+/// two near-identical copies of the `child.kill + wait_with_timeout +
 /// eprintln!` sequence; consolidating them removes the duplication and
 /// guarantees symmetric fail-loud behavior across both call sites.
 ///
@@ -363,7 +363,7 @@ fn wait_with_timeout(child: &mut Child, timeout_ms: u64) -> bool {
 ///
 /// `kill(SIGKILL)` cannot interrupt a process in D-state (uninterruptible
 /// sleep on NFS/FUSE/磁盘 IO 挂起) — the signal is queued until the kernel
-/// syscall returns, and `wait()` would block indefinitely. This helper
+/// syscall returns, and `wait` would block indefinitely. This helper
 /// bounds the wait to `timeout_ms` and, on timeout, leaves the OS to reap
 /// the orphaned process: zombies (already-exited children not yet waited
 /// on) are reaped by init when CodeNexus exits; D-state processes self-reap
@@ -373,8 +373,8 @@ fn wait_with_timeout(child: &mut Child, timeout_ms: u64) -> bool {
 /// fail-loud).
 ///
 ///
-/// Both `provider.shutdown()` (reaches here via
-/// [`shutdown_session`] → [`force_kill_and_wait`]) and direct `child.kill()`
+/// Both `provider.shutdown` (reaches here via
+/// [`shutdown_session`] → [`force_kill_and_wait`]) and direct `child.kill`
 /// callers ([`kill_session`] on the initialize-failure path) emit
 /// the stderr warning via this helper — no kill site is silent.
 fn kill_and_warn(child: &mut Child, timeout_ms: u64, context: &str) {

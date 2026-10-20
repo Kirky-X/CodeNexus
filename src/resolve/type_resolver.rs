@@ -139,10 +139,10 @@ impl<'a> TypeResolver<'a> {
     ///
     /// Edges whose target already exists in the graph are left unchanged.
     ///
-    /// fix: returns `()` instead of `Vec<Edge>`; edges are mutated directly
+    /// fix: returns `` instead of `Vec<Edge>`; edges are mutated directly
     /// in `graph`. The previous `Vec<Edge>` return was an anti-pattern —
     /// production callers (`orchestrator.rs::resolve_all`) discarded it via
-    /// `let _ = ...`, wasting memory on large repos due to per-edge `clone()`
+    /// `let _ = ...`, wasting memory on large repos due to per-edge `clone`
     /// followed by immediate `drop`.
     ///
     /// # Arguments
@@ -266,7 +266,7 @@ mod tests {
     // FQN format: proj.{file_path_with_dots}.{name} (ADR-001: extension retained)
     // e.g. a.py + A → proj.a.py.A
 
-    // --- helpers ---
+    // helpers
 
     fn make_class(name: &str, file: &str, lang: Language) -> Node {
         let qn = format!("proj.{file}.{name}");
@@ -312,7 +312,7 @@ mod tests {
         (results_vec, table)
     }
 
-    // --- resolve_type ---
+    // resolve_type
 
     #[test]
     fn resolve_type_same_file() {
@@ -372,7 +372,7 @@ mod tests {
         let _ = &results;
     }
 
-    // --- resolve_types: dangling Extends edge fix ---
+    // resolve_types: dangling Extends edge fix
 
     #[test]
     fn resolve_types_fixes_dangling_extends_edge() {
@@ -741,7 +741,7 @@ mod tests {
         assert_eq!(graph.edges[0].confidence_tier, ConfidenceTier::Global);
     }
 
-    // --- Coverage gap tests: import-match-but-lookup-fails, graph node without file_path ---
+    // Coverage gap tests: import-match-but-lookup-fails, graph node without file_path
 
     #[test]
     fn resolve_type_import_match_but_lookup_fails() {
@@ -855,7 +855,7 @@ mod tests {
 
     #[test]
     fn resolve_types_lookup_file_fallback_when_no_path_mapping() {
-        // Cover `graph_to_result_fp.get(source_file).copied().unwrap_or
+        // Cover `graph_to_result_fp.get(source_file).copied.unwrap_or
         // (source_file)` fallback (line 237): when the source node's file_path
         // is not in graph_to_result_fp (no matching result), lookup_file
         // falls back to source_file itself.
@@ -975,7 +975,7 @@ mod tests {
         assert_eq!(graph.edges[0].target, "proj.b.py.Nonexistent");
     }
 
-    // --- resolve_type: imported but not found (is_imported=true, lookup empty) ---
+    // resolve_type: imported but not found (is_imported=true, lookup empty)
 
     #[test]
     fn resolve_type_imported_but_not_found_returns_none() {
@@ -999,7 +999,7 @@ mod tests {
         let _ = &results;
     }
 
-    // --- resolve_types: resolve_type returns None → edge skipped ---
+    // resolve_types: resolve_type returns None → edge skipped
 
     #[test]
     fn resolve_types_skips_when_type_not_found_in_symbol_table() {
@@ -1022,7 +1022,7 @@ mod tests {
         );
     }
 
-    // --- resolve_type: imported and found via project-level (import true, lookup empty, exported found) ---
+    // resolve_type: imported and found via project-level (import true, lookup empty, exported found)
 
     #[test]
     fn resolve_type_imported_but_found_via_project_export() {
@@ -1048,7 +1048,7 @@ mod tests {
         let _ = &results;
     }
 
-    // --- resolve_types: file-level (SameFile) resolution where edge IS fixed ---
+    // resolve_types: file-level (SameFile) resolution where edge IS fixed
 
     #[test]
     fn resolve_types_fixes_edge_via_same_file_resolution() {
@@ -1078,7 +1078,7 @@ mod tests {
         assert_eq!(graph.edges[0].confidence_tier, ConfidenceTier::SameFile);
     }
 
-    // --- resolve_types: empty results ---
+    // resolve_types: empty results
 
     #[test]
     fn resolve_types_with_empty_results_skips_all_edges() {
@@ -1099,7 +1099,7 @@ mod tests {
         assert_eq!(graph.edges[0].target, "proj.b.py.Nonexistent");
     }
 
-    // --- resolve_types: multiple dangling edges ---
+    // resolve_types: multiple dangling edges
 
     #[test]
     fn resolve_types_fixes_multiple_dangling_edges() {
@@ -1132,7 +1132,7 @@ mod tests {
         assert_eq!(graph.edges[1].target, "proj.c.py.Nonexistent");
     }
 
-    // --- resolve_types: mixed dangling and non-dangling edges ---
+    // resolve_types: mixed dangling and non-dangling edges
 
     #[test]
     fn resolve_types_mixed_dangling_and_non_dangling_edges() {
@@ -1163,7 +1163,7 @@ mod tests {
         assert_eq!(graph.edges[1].target, "proj.a.py.A");
     }
 
-    // --- resolve_types: graph with no edges ---
+    // resolve_types: graph with no edges
 
     #[test]
     fn resolve_types_with_no_edges_returns_empty() {
@@ -1180,7 +1180,7 @@ mod tests {
         assert_eq!(graph.edge_count(), 0, "no edges → no fixes");
     }
 
-    // --- resolve_types: multiple resolvable edges accumulate in order ---
+    // resolve_types: multiple resolvable edges accumulate in order
 
     #[test]
     fn resolve_types_multiple_resolved_edges_preserve_insertion_order() {

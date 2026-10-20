@@ -50,7 +50,7 @@ impl<'a> CallGraphTracer<'a> {
     /// O(1) cycle-detection (`Rc<HashSet<NodeId>>` path_set) and O(1)
     /// child-expansion (`Rc` parent chain) data structures as the data-flow
     /// and taint engines. Eliminates the previous `Vec<NodeId>::contains`
-    /// O(depth) scan and per-step `visited_ids.clone()` O(depth) allocation.
+    /// O(depth) scan and per-step `visited_ids.clone` O(depth) allocation.
     pub fn trace(&self, start_id: &NodeId, depth: usize) -> Vec<TracePath> {
         bfs_trace(
             self.graph,
@@ -568,7 +568,7 @@ mod tests {
         assert_eq!(paths[0].depth, 1);
     }
 
-    // --- detect_cycles ---
+    // detect_cycles
 
     #[test]
     fn detect_cycles_abc_cycle_returns_trace_cycle() {
@@ -693,7 +693,7 @@ mod tests {
         assert!(tracer.detect_cycles().is_empty());
     }
 
-    // --- trace_cross_service ---
+    // trace_cross_service
 
     fn make_route(id: &str, name: &str) -> Node {
         Node::builder(NodeLabel::Route, name, format!("proj.{name}"))
@@ -774,7 +774,7 @@ mod tests {
 
     #[test]
     fn trace_regular_does_not_follow_http_calls() {
-        // Regular trace() should NOT follow HttpCalls edges
+        // Regular trace should NOT follow HttpCalls edges
         let mut g = Graph::new();
         g.add_node(make_func("a", "a"));
         g.add_node(make_route("r", "/api/r"));
@@ -828,7 +828,7 @@ mod tests {
         assert!(!paths.is_empty());
     }
 
-    // --- Coverage gap tests: detect_cycles Black node & cross-service edge filtering ---
+    // Coverage gap tests: detect_cycles Black node & cross-service edge filtering
 
     #[test]
     fn detect_cycles_diamond_graph_encounters_black_node() {
@@ -1024,7 +1024,7 @@ mod tests {
         );
     }
 
-    // --- Coverage gap tests: trace_cross_service with FfiCalls ---
+    // Coverage gap tests: trace_cross_service with FfiCalls
 
     #[test]
     fn trace_cross_service_follows_ffi_calls_edges() {
@@ -1039,7 +1039,7 @@ mod tests {
         assert_eq!(paths[0].edges[0].edge_type, "FFI_CALLS");
     }
 
-    // --- Coverage gap tests: trace with mixed edge types from same node ---
+    // Coverage gap tests: trace with mixed edge types from same node
 
     #[test]
     fn trace_node_with_mixed_edge_types_only_follows_calls() {
@@ -1056,7 +1056,7 @@ mod tests {
         assert_eq!(paths[0].edges[0].edge_type, "CALLS");
     }
 
-    // --- Coverage gap tests: detect_cycles with FfiCalls self-loop ---
+    // Coverage gap tests: detect_cycles with FfiCalls self-loop
 
     #[test]
     fn detect_cycles_ffi_self_loop_returns_cycle() {
@@ -1071,7 +1071,7 @@ mod tests {
         assert_eq!(cycles[0].edge_types, vec![EdgeType::FfiCalls]);
     }
 
-    // --- Coverage gap tests: trace_cross_service both forward and reverse ---
+    // Coverage gap tests: trace_cross_service both forward and reverse
 
     #[test]
     fn trace_cross_service_forward_and_reverse_to_different_nodes() {
@@ -1094,7 +1094,7 @@ mod tests {
         assert!(!paths.iter().any(|p| p.nodes.iter().any(|n| n.name == "b")));
     }
 
-    // --- Coverage gap tests: trace empty graph ---
+    // Coverage gap tests: trace empty graph
 
     #[test]
     fn trace_empty_graph_returns_empty() {
@@ -1104,7 +1104,7 @@ mod tests {
         assert!(paths.is_empty());
     }
 
-    // --- Coverage gap tests: detect_cycles single node no edges ---
+    // Coverage gap tests: detect_cycles single node no edges
 
     #[test]
     fn detect_cycles_single_node_no_edges_returns_empty() {
@@ -1114,7 +1114,7 @@ mod tests {
         assert!(tracer.detect_cycles().is_empty());
     }
 
-    // --- trace_cross_service: start node with no outgoing edges ---
+    // trace_cross_service: start node with no outgoing edges
 
     #[test]
     fn trace_cross_service_no_outgoing_edges_returns_empty() {
@@ -1130,7 +1130,7 @@ mod tests {
         );
     }
 
-    // --- trace_cross_service: both forward and reverse from same node ---
+    // trace_cross_service: both forward and reverse from same node
 
     #[test]
     fn trace_cross_service_both_forward_and_reverse_from_same_node() {
@@ -1157,9 +1157,7 @@ mod tests {
         assert_eq!(reverse.unwrap().edges[0].edge_type, "HANDLES_ROUTE");
     }
 
-    // ====================================================================
     // Mid-path nodes with only skippable edges
-    // ====================================================================
 
     #[test]
     fn trace_mid_path_node_with_only_non_call_edges_records_prefix() {
@@ -1215,9 +1213,7 @@ mod tests {
         );
     }
 
-    // ====================================================================
     // Parallel edges (same source and target, different edge types)
-    // ====================================================================
 
     #[test]
     fn trace_parallel_edges_same_target_different_types_produces_two_paths() {
@@ -1256,9 +1252,7 @@ mod tests {
         );
     }
 
-    // ====================================================================
     // trace_cross_service: depth boundary at exact path depth
-    // ====================================================================
 
     #[test]
     fn trace_cross_service_depth_exactly_2_includes_depth_2_paths() {
@@ -1282,9 +1276,7 @@ mod tests {
         );
     }
 
-    // ====================================================================
     // detect_cycles: larger cycle with mixed edge types
-    // ====================================================================
 
     #[test]
     fn detect_cycles_larger_cycle_with_mixed_edge_types() {
@@ -1313,9 +1305,7 @@ mod tests {
         );
     }
 
-    // ====================================================================
     // trace: branching with different depths
-    // ====================================================================
 
     #[test]
     fn trace_branching_with_different_depths_records_all_prefixes() {
@@ -1338,10 +1328,8 @@ mod tests {
         assert!(depths.contains(&2));
     }
 
-    // ====================================================================
     // Coverage gap: detect_cycles through nonexistent intermediate node
     // (exercises extract_cycle's filter_map filtering missing stack nodes)
-    // ====================================================================
 
     #[test]
     fn detect_cycles_cycle_through_nonexistent_intermediate_node() {
@@ -1367,10 +1355,8 @@ mod tests {
         assert_eq!(cycles[0].edge_types, vec![EdgeType::Calls, EdgeType::Calls]);
     }
 
-    // ====================================================================
     // Coverage gap: trace_cross_service mid-path node with BOTH forward
     // HttpCalls and reverse HandlesRoute edges
-    // ====================================================================
 
     #[test]
     fn trace_cross_service_mid_path_node_with_both_forward_and_reverse_edges() {
@@ -1409,9 +1395,7 @@ mod tests {
         );
     }
 
-    // ====================================================================
     // Trace 共享 path_set — 等价性表征测试
-    // ====================================================================
 
     /// Builds a linear call chain `n0 -> n1 -> ... -> n{size-1}` with `size`
     /// function nodes. Used by C2 equivalence tests to compare call_graph

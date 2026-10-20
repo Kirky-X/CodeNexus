@@ -180,7 +180,7 @@ impl Repository {
     ///
     /// # L4 memory-overflow fix
     ///
-    /// Streams the CSV directly to a `tempfile::tempdir()`-owned file via
+    /// Streams the CSV directly to a `tempfile::tempdir`-owned file via
     /// [`write_nodes_csv_stream`], avoiding the intermediate `String`
     /// allocation of the pre-L4 API. The `TempDir` is dropped when this
     /// method returns, auto-cleaning the CSV file (fixing the tempdir leak
@@ -322,7 +322,7 @@ impl Repository {
     /// Slice-based callers (`repo.save_edges(&[..])`) now route through the
     /// trait method, which delegates back to `save_edges_stream` via
     /// `&[Edge]: IntoIterator<Item = &Edge>`. Iterator-based callers (e.g.
-    /// [`LoadPhase`](crate::index::LoadPhase) passing `graph.edges_view()`)
+    /// [`LoadPhase`](crate::index::LoadPhase) passing `graph.edges_view`)
     /// MUST call `save_edges_stream` directly — the trait method's `&[Edge]`
     /// signature does not accept arbitrary `impl Iterator<Item = &Edge>`.
     pub fn save_edges_stream<'a, I>(&self, edges: I) -> Result<()>
@@ -1055,7 +1055,7 @@ mod tests {
             .build()
     }
 
-    // --- save_project / get_project ---
+    // save_project / get_project
 
     #[test]
     fn save_project_persists_node() {
@@ -1105,7 +1105,7 @@ mod tests {
         assert_eq!(rec.name, "it's demo");
     }
 
-    // --- list_projects ---
+    // list_projects
 
     #[test]
     fn list_projects_returns_all_projects_ordered_by_name() {
@@ -1128,7 +1128,7 @@ mod tests {
         assert!(projects.is_empty());
     }
 
-    // --- save_nodes / save_edges ---
+    // save_nodes / save_edges
 
     #[test]
     fn save_nodes_loads_function_nodes() {
@@ -1230,7 +1230,7 @@ mod tests {
     fn save_nodes_accepts_iterator_of_node_refs() {
         // L6-3 memory-overflow fix: Repository::save_nodes_stream inherent method now
         // accepts `impl IntoIterator<Item = &Node>` so callers can stream from
-        // `Graph::nodes_view()` without first collecting into a `Vec<Node>`.
+        // `Graph::nodes_view` without first collecting into a `Vec<Node>`.
         // The Storage trait method keeps the `&[Node]` signature for object
         // safety (dyn Storage is used in 89+ callsites); trait callers
         // transparently reach this inherent method via
@@ -1282,7 +1282,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // --- delete_project ---
+    // delete_project
 
     #[test]
     fn delete_project_removes_project_and_related_nodes() {
@@ -1350,7 +1350,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // --- get_file_hash / get_all_file_hashes ---
+    // get_file_hash / get_all_file_hashes
 
     #[test]
     fn get_file_hash_returns_stored_hash() {
@@ -1444,7 +1444,7 @@ mod tests {
         assert!(hashes.is_empty());
     }
 
-    // --- delete_file_nodes ---
+    // delete_file_nodes
 
     #[test]
     fn delete_file_nodes_removes_nodes_for_file() {
@@ -1526,7 +1526,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // --- query_functions ---
+    // query_functions
 
     #[test]
     fn query_functions_returns_functions_ordered_by_qn() {
@@ -1574,7 +1574,7 @@ mod tests {
         assert!(funcs.is_empty());
     }
 
-    // --- multi-project isolation ---
+    // multi-project isolation
 
     #[test]
     fn multi_project_isolation_br_index_004() {
@@ -1619,7 +1619,7 @@ mod tests {
         assert_eq!(projects[0].id, "beta");
     }
 
-    // --- open / connection / init_schema ---
+    // open / connection / init_schema
 
     #[test]
     fn open_creates_repository_with_schema() {
@@ -1646,7 +1646,7 @@ mod tests {
         repo.init_schema().expect("second init_schema");
     }
 
-    // --- helpers ---
+    // helpers
 
     #[test]
     fn project_record_equality() {
@@ -1679,7 +1679,7 @@ mod tests {
         assert!(s.contains("main"));
     }
 
-    // --- Storage trait impl on Repository (delegation coverage) ---
+    // Storage trait impl on Repository (delegation coverage)
 
     #[test]
     fn repository_impl_storage_init_schema_works() {
@@ -1843,7 +1843,7 @@ mod tests {
         assert!(file_rows.is_empty());
     }
 
-    // --- delete_file_nodes_batch ---
+    // delete_file_nodes_batch
 
     #[test]
     fn delete_file_nodes_batch_removes_multiple_files() {
@@ -1915,7 +1915,7 @@ mod tests {
         assert!(rows.is_empty(), "both files should be deleted");
     }
 
-    // --- Coverage gap tests: lastCommit property, empty orphan_ids ---
+    // Coverage gap tests: lastCommit property, empty orphan_ids
 
     #[test]
     fn save_project_with_last_commit_persists_value() {
@@ -1976,11 +1976,11 @@ mod tests {
         assert!(s.contains("demo"));
     }
 
-    // --- Coverage gap: save_project without language ---
+    // Coverage gap: save_project without language
 
     #[test]
     fn save_project_without_language_defaults_to_empty() {
-        // Cover the `node.language.map(...).unwrap_or_default()` branch
+        // Cover the `node.language.map(...).unwrap_or_default` branch
         // (line 121) when language is None → empty string in the DB.
         let repo = fresh_repo();
         let node = Node::builder(NodeLabel::Project, "nolang", "nolang")

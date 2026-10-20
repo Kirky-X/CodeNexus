@@ -39,7 +39,7 @@ pub struct CypherSubsetParser;
 
 /// Validates that `query` uses only the supported Cypher subset (H12).
 ///
-/// Returns `Ok(())` if the query parses against the subset grammar, or
+/// Returns `Ok()` if the query parses against the subset grammar, or
 /// `Err(QueryError::InvalidQuery)` with the pest parse error (position +
 /// expected tokens) when an unsupported construct is encountered.
 ///
@@ -53,8 +53,8 @@ pub struct CypherSubsetParser;
 /// ```
 /// use codenexus::query::cypher_subset::validate_cypher_subset;
 ///
-/// assert!(validate_cypher_subset("MATCH (n:Function) RETURN n.name").is_ok());
-/// assert!(validate_cypher_subset("CREATE (n:Person {name: 'a'})").is_err());
+/// assert!(validate_cypher_subset("MATCH (n:Function) RETURN n.name").is_ok);
+/// assert!(validate_cypher_subset("CREATE (n:Person {name: 'a'})").is_err);
 /// ```
 pub fn validate_cypher_subset(query: &str) -> Result<()> {
     if query.trim().is_empty() {
@@ -71,9 +71,7 @@ pub fn validate_cypher_subset(query: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    // -----------------------------------------------------------------------
     // Supported constructs — must parse without error.
-    // -----------------------------------------------------------------------
 
     #[test]
     fn validates_simple_match_return() {
@@ -307,9 +305,7 @@ mod tests {
         assert!(validate_cypher_subset(q).is_ok());
     }
 
-    // -----------------------------------------------------------------------
     // Unsupported constructs — must return InvalidQuery error.
-    // -----------------------------------------------------------------------
 
     #[test]
     fn rejects_create() {

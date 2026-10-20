@@ -4,7 +4,7 @@
 //! Thread-local pool of tree-sitter parsers (ADR-010).
 //!
 //! [`ParserPool`] caches one [`Parser`] per [`Language`] to avoid the overhead
-//! of repeated `Parser::new()` + `set_language()` calls during parallel
+//! of repeated `Parser::new` + `set_language` calls during parallel
 //! parsing. Each thread should use its own pool instance (or the thread-local
 //! instance via [`with_thread_pool`]).
 
@@ -35,10 +35,10 @@ use super::parser_factory::ParserFactory;
 /// use codenexus::model::Language;
 /// use codenexus::parse::ParserPool;
 ///
-/// let pool = ParserPool::new();
-/// let mut parser = pool.get_parser(Language::Rust).unwrap();
-/// let tree = parser.parse("fn main() {}", None);
-/// assert!(tree.is_some());
+/// let pool = ParserPool::new;
+/// let mut parser = pool.get_parser(Language::Rust).unwrap;
+/// let tree = parser.parse("fn main {}", None);
+/// assert!(tree.is_some);
 /// ```
 pub struct ParserPool {
     parsers: RefCell<HashMap<Language, Parser>>,
@@ -152,10 +152,8 @@ impl DerefMut for ParserGuard<'_> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Thread-local pool (ADR-010): each thread gets its own ParserPool, avoiding
 // synchronization overhead during rayon-based parallel parsing.
-// ---------------------------------------------------------------------------
 
 thread_local! {
     static THREAD_POOL: ParserPool = ParserPool::new();
@@ -174,9 +172,9 @@ thread_local! {
 /// use codenexus::parse::with_thread_pool;
 ///
 /// with_thread_pool(|pool| {
-///     let mut parser = pool.get_parser(Language::Rust).unwrap();
-///     let tree = parser.parse("fn main() {}", None);
-///     assert!(tree.is_some());
+///     let mut parser = pool.get_parser(Language::Rust).unwrap;
+///     let tree = parser.parse("fn main {}", None);
+///     assert!(tree.is_some);
 /// });
 /// ```
 pub fn with_thread_pool<R>(f: impl FnOnce(&ParserPool) -> R) -> R {
@@ -187,7 +185,7 @@ pub fn with_thread_pool<R>(f: impl FnOnce(&ParserPool) -> R) -> R {
 ///
 /// Production extraction path (ADR-010): language extractors call this once
 /// per `extract` instead of `ParserFactory::create_parser`, eliminating the
-/// per-file `Parser::new() + set_language()` cost. The parser only lives
+/// per-file `Parser::new + set_language` cost. The parser only lives
 /// inside the closure (it borrows the thread-local pool), which is exactly
 /// the `parse(source) → tree` window extraction needs.
 ///
@@ -327,7 +325,7 @@ mod tests {
     fn parser_guard_deref_mut_allows_parsing() {
         let pool = ParserPool::new();
         let mut guard = pool.get_parser(Language::Rust).unwrap();
-        // DerefMut allows calling &mut Parser methods like parse().
+        // DerefMut allows calling &mut Parser methods like parse.
         let tree = guard.parse("fn main() {}", None);
         assert!(tree.is_some());
     }

@@ -30,45 +30,45 @@ use serde::{Deserialize, Serialize};
 /// - **Community/extension (42-44)**: Community, Tool, Embedding
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum NodeLabel {
-    // --- Structural (1-4) ---
+    // Structural (1-4)
     Project,
     Folder,
     File,
     Module,
-    // --- Type definitions (5-9) ---
+    // Type definitions (5-9)
     Class,
     Struct,
     Enum,
     Trait,
     Impl,
-    // --- Callables (10-11) ---
+    // Callables (10-11)
     Function,
     Method,
-    // --- Variables (12-16) ---
+    // Variables (12-16)
     Variable,
     GlobalVar,
     Parameter,
     Const,
     Static,
-    // --- Meta (17-21) ---
+    // Meta (17-21)
     Macro,
     TypeAlias,
     Typedef,
     Namespace,
     Interface,
-    // --- H1 extension: Type definitions (22-26) ---
+    // H1 extension: Type definitions (22-26)
     Constructor,
     Property,
     Record,
     Delegate,
     Annotation,
-    // --- H1 extension: Templates (27) ---
+    // H1 extension: Templates (27)
     Template,
-    // --- H1 extension: Union/Variant/Field (28-30) ---
+    // H1 extension: Union/Variant/Field (28-30)
     Union,
     Variant,
     Field,
-    // --- H1 extension: Runtime/architecture (31-37) ---
+    // H1 extension: Runtime/architecture (31-37)
     Event,
     Handler,
     Middleware,
@@ -76,17 +76,17 @@ pub enum NodeLabel {
     Endpoint,
     Route,
     Process,
-    // --- H1 extension: Data/infra (38-39) ---
+    // H1 extension: Data/infra (38-39)
     Database,
     Config,
-    // --- H1 extension: Quality/docs (40-41) ---
+    // H1 extension: Quality/docs (40-41)
     Test,
     Section,
-    // --- H1 extension: Community/extension (42-44) ---
+    // H1 extension: Community/extension (42-44)
     Community,
     Tool,
     Embedding,
-    // --- feature-expansion-wave (45): external dependencies ---
+    // feature-expansion-wave (45): external dependencies
     ExternalPackage,
 }
 

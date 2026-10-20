@@ -233,7 +233,7 @@ impl IndexFacade {
 
     /// Attaches a [`CacheStore`] for post-write query-cache invalidation.
     ///
-    /// After each indexing run completes, `cache.invalidate_all()` is called
+    /// After each indexing run completes, `cache.invalidate_all` is called
     /// to ensure stale Cypher query results are not served.
     #[cfg(feature = "cache")]
     #[must_use]
@@ -336,8 +336,8 @@ impl IndexFacade {
         // soft-limit comparison (which was a budget distortion — see
         // [`evaluate_ram_first_budget`]).
         //
-        // NOTE (P1 tradeoff): `self.index()` → ScanPhase will re-discover
-        // files via `Walker::discover()`. This double walk is a known cost
+        // NOTE (P1 tradeoff): `self.index` → ScanPhase will re-discover
+        // files via `Walker::discover`. This double walk is a known cost
         // of the fallback path — the alternative (threading `disk_files`
         // through ScanInput) requires a non-trivial refactor of ScanPhase.
         // The extra walk is I/O-bound but cheap relative to the

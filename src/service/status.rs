@@ -33,12 +33,12 @@ const HEALTHY_STATUS: &str = "healthy";
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct StatusOutput {
     pub projects: Vec<ProjectOutput>,
-    /// trait-kit module health (`health_aggregate()`), non-healthy modules as
+    /// trait-kit module health (`health_aggregate`), non-healthy modules as
     /// `name=status` entries. Empty when every module reports healthy (normal
     /// case) or when no health checker is registered.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub kit_health: Vec<String>,
-    /// Structured trait-kit health (`health_aggregate()`): worst-of overall
+    /// Structured trait-kit health (`health_aggregate`): worst-of overall
     /// status plus per-module entries carrying the checker detail. Absent
     /// when no health checker is registered.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -46,7 +46,7 @@ pub struct StatusOutput {
 }
 
 /// Local view of trait-kit's health aggregate
-/// (`AsyncKit::health_aggregate()`).
+/// (`AsyncKit::health_aggregate`).
 ///
 /// The upstream type is serializable, but it has neither `PartialEq` nor
 /// `Default` (both required by `StatusOutput`'s derives), and its field shape
@@ -158,8 +158,8 @@ pub(crate) fn is_stale(last_commit: &str, current_head: &str) -> bool {
 /// canonicalize the path. When such an index is queried from a different
 /// CWD, `git rev-parse HEAD` would run against the wrong directory and
 /// produce false `is_stale=true` results. This function detects that case
-/// and falls back to `db_path.parent().and_then(parent)` — the typical
-/// layout is `<project>/.codenexus/<name>.lbug`, so two `.parent()` calls
+/// and falls back to `db_path.parent.and_then(parent)` — the typical
+/// layout is `<project>/.codenexus/<name>.lbug`, so two `.parent` calls
 /// walk from the DB file up to the project root.
 ///
 /// Returns the original `root_path` (wrapped as `PathBuf`) when:
@@ -287,7 +287,7 @@ mod tests {
     }
 
     /// Builds a minimal kit (StorageModule plus a deterministic failing probe)
-    /// with health checkers registered before `build()` — checkers only take
+    /// with health checkers registered before `build` — checkers only take
     /// effect when registered on the unbuilt kit, the same pattern the
     /// production bootstrap uses for Storage/Cache.
     fn build_kit_with_checkers(db: &std::path::Path) -> AsyncKit<AsyncReady> {
@@ -548,7 +548,7 @@ mod tests {
         assert!(json.contains("\"current_head\":\"def\""));
     }
 
-    // ===== #[forge] wrapper tests via init_kit =====
+    // [forge] wrapper tests via init_kit
 
     #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]

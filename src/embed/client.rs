@@ -66,7 +66,7 @@ pub trait EmbedClient: Send + Sync {
     fn update_config(&self, _new_config: EmbeddingConfig) {}
 }
 
-// --- OpenAI-compatible request/response types ---
+// OpenAI-compatible request/response types
 
 #[derive(Serialize)]
 struct EmbeddingRequest<'a> {
@@ -166,7 +166,7 @@ impl EmbedClient for OpenAIEmbedClient {
             .as_ref()
             .ok_or(EmbedError::MissingApiKey)?;
 
-        // endpoint is guaranteed Some by new(), but use as_deref().unwrap_or
+        // endpoint is guaranteed Some by new, but use as_deref.unwrap_or
         // for defensive programming (avoids panic if config was mutated).
         let endpoint = self.config.endpoint.as_deref().ok_or_else(|| {
             EmbedError::Unavailable("endpoint is None in remote mode".to_string())
@@ -221,9 +221,7 @@ impl std::fmt::Debug for OpenAIEmbedClient {
     }
 }
 
-// ---------------------------------------------------------------------------
 // LocalEmbedClient
-// ---------------------------------------------------------------------------
 
 /// Local embedding client backed by `vecboost` (Candle engine).
 ///
@@ -238,10 +236,10 @@ impl std::fmt::Debug for OpenAIEmbedClient {
 ///
 /// # Inference pipeline
 ///
-/// 1. `new()` performs a complete bundle pre-check (directory, config.json,
+/// 1. `new` performs a complete bundle pre-check (directory, config.json,
 ///    tokenizer.json, model.safetensors) before constructing the
 ///    `VecBoostLibrary`.
-/// 2. `embed()` converts texts to `Vec<String>` and calls `embed_batch_sync`
+/// 2. `embed` converts texts to `Vec<String>` and calls `embed_batch_sync`
 ///    (vecboost's process-level runtime), then extracts the embedding vectors.
 /// 3. Mean pooling and L2 normalization are handled by the vecboost engine.
 ///
@@ -392,9 +390,7 @@ impl std::fmt::Debug for LocalEmbedClient {
     }
 }
 
-// ---------------------------------------------------------------------------
 // vecboost construction helper
-// ---------------------------------------------------------------------------
 
 /// Per-call client-side inference chunk. vecboost hard-rejects any batch above
 /// its global `MAX_BATCH_SIZE` (100) regardless of the `max_batch_size` model
@@ -462,9 +458,7 @@ where
     })
 }
 
-// ---------------------------------------------------------------------------
 // Error mapping
-// ---------------------------------------------------------------------------
 
 /// Maps a `VecboostError` to [`EmbedError::Unavailable`].
 ///
@@ -512,7 +506,7 @@ fn vecboost_error_to_embed_error(e: VecboostError) -> EmbedError {
 pub struct MockEmbedClient {
     /// Override dimension (defaults to [`EMBEDDING_DIM`]).
     dim: usize,
-    /// If set, `embed()` returns this error instead of vectors.
+    /// If set, `embed` returns this error instead of vectors.
     error: Option<EmbedError>,
 }
 
@@ -584,9 +578,7 @@ impl std::fmt::Debug for MockEmbedClient {
     }
 }
 
-// ---------------------------------------------------------------------------
 // CachedEmbedClient
-// ---------------------------------------------------------------------------
 
 /// Serializes a `Vec<f32>` to little-endian bytes for cache storage.
 ///
@@ -702,7 +694,7 @@ impl EmbedClient for CachedEmbedClient {
 mod tests {
     use super::*;
 
-    // --- MockEmbedClient ---
+    // MockEmbedClient
 
     #[test]
     fn mock_client_returns_correct_count() {
@@ -773,7 +765,7 @@ mod tests {
         assert!(s.contains("dim"));
     }
 
-    // --- OpenAIEmbedClient ---
+    // OpenAIEmbedClient
 
     #[test]
     fn openai_client_new_without_endpoint_returns_error() {
@@ -880,11 +872,11 @@ mod tests {
         );
     }
 
-    // --- LocalEmbedClient ---
+    // LocalEmbedClient
 
     /// Registers the embedded FTL catalogs (idempotent) so tests exercise
     /// real translations rather than the bare-key fallback `t` serves when
-    /// `crate::i18n::init()` has not run in this process. Global registry
+    /// `crate::i18n::init` has not run in this process. Global registry
     /// state, so callers must serialize via `serial(i18n_catalog)`.
     fn init_i18n_catalog() {
         crate::i18n::init();

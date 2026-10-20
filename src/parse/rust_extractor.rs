@@ -88,9 +88,7 @@ impl Extractor for RustExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 /// 封装 ADR-005 的 current_parent 和 current_func 语义。
 struct VisitContext<'a> {
@@ -243,13 +241,13 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             // `format!(...)`, `json!(...)`) as `token_tree` nodes, which
             // contain raw tokens that are NOT parsed as `call_expression`.
             // This means function calls inside macro arguments (e.g.
-            // `println!("{}", helper())`) are invisible to the standard
+            // `println!("{}", helper)`) are invisible to the standard
             // `call_expression` visitor. On CalNexus, this caused 3/4
             // remaining dead-code false positives (format_json_output,
             // dmatrix_to_json, error_kind_prefix — all called inside macros).
             // The fix scans the `token_tree` for `identifier` + `token_tree`
-            // pairs (the macro-argument form of `fn()`) and extracts them as
-            // CallInfo. Method calls (`obj.method()`) are not handled here —
+            // pairs (the macro-argument form of `fn`) and extracts them as
+            // CallInfo. Method calls (`obj.method`) are not handled here —
             // they require field_expression parsing which token_tree doesn't
             // expose. See tools/verification/results/triage.md §B1.
             extract_calls_from_macro(node, source, ctx, result);
@@ -294,9 +292,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     }
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 /// Builds the signature text for a `function_item` node, prepending any
 /// leading `attribute_item` siblings (`#[tool(...)]`, `#[forge(...)]`,
@@ -311,7 +307,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
 /// so without this prepend every `#[tool]` / `#[forge]` function would be
 /// a false positive.
 ///
-/// Walks `prev_sibling()` backwards collecting consecutive `attribute_item`
+/// Walks `prev_sibling` backwards collecting consecutive `attribute_item`
 /// nodes, reverses the collected slice (so attributes appear in source
 /// order), then joins them with `\n` and appends the function body text.
 /// Returns `None` only when both the attribute walk and the function body
@@ -506,7 +502,7 @@ fn extract_struct_fields(
     let struct_qn = make_qn(ctx.file_path, &struct_name, ctx.project, ctx.current_parent);
     // P1 prepend `field_` to the disambiguator so struct fields
     // never collide with same-name impl methods. Without this, a struct
-    // `Foo` with field `bar` AND `impl Foo { fn bar() }` produce identical
+    // `Foo` with field `bar` AND `impl Foo { fn bar }` produce identical
     // FQNs (`...bar#Foo`) — the Property (field) and Function (method)
     // nodes violate uniqueness. The `field_` prefix cleanly
     // separates the two namespaces without changing Function FQNs.
@@ -548,9 +544,7 @@ fn extract_struct_fields(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Record extractors
-// ---------------------------------------------------------------------------
 
 fn extract_use(node: Node, source: &str, result: &mut ExtractResult) {
     // use_declaration has an `argument` field which is a use_clause.
@@ -596,7 +590,7 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
         .map(|name| make_qn(ctx.file_path, name, ctx.project, ctx.current_parent));
     // C2 fix: filter stdlib method calls to match gitnexus (only user-code
     // function calls are tracked). See triage.md §C2. Also handles
-    // generic_function wrapping a field_expression (e.g. `.collect::<Vec<_>>()`).
+    // generic_function wrapping a field_expression (e.g. `.collect::<Vec<_>>`).
     //
     // Do NOT short-circuit before `extract_function_ref_args`.
     // When the stdlib filter matches (e.g. `.map(fn_name)`), the method call
@@ -667,7 +661,7 @@ fn extract_function_ref_args(
         };
         // Only bare identifiers are potential function references. Field
         // expressions (`obj.method`), path expressions (`mod::fn`), closures
-        // (`|x| x + 1`), and call expressions (`bar()`) are handled by their
+        // (`|x| x + 1`), and call expressions (`bar`) are handled by their
         // own visitors.
         if arg.kind() != "identifier" {
             continue;
@@ -684,9 +678,7 @@ fn extract_function_ref_args(
     }
 }
 
-// ---------------------------------------------------------------------------
 // axum 编程式路由提取
-// ---------------------------------------------------------------------------
 
 /// axum HTTP method functions recognized in method routers.
 const AXUM_HTTP_METHODS: &[&str] = &[
@@ -704,7 +696,7 @@ const AXUM_HTTP_METHODS: &[&str] = &[
 /// - A [`NodeLabel::Route`] node with `httpMethod` and `path` properties
 /// - An [`EdgeType::HandlesRoute`] edge from the handler's FQN to the Route's FQN
 ///
-/// Non-axum calls (e.g. `foo.route()`, `obj.method()`) are filtered out by
+/// Non-axum calls (e.g. `foo.route`, `obj.method`) are filtered out by
 /// requiring: (1) the method name is `route`, (2) the first argument is a
 /// string literal, and (3) the second argument is a call to one of the
 /// [`AXUM_HTTP_METHODS`] functions (possibly chained).
@@ -927,7 +919,7 @@ fn sanitize_route_id(s: &str) -> String {
 ///   - `token_tree` "(42)"
 ///
 /// This function scans the macro's `token_tree` for this pattern and creates
-/// [`CallInfo`] records for each match. Method calls (`obj.method()`) are
+/// [`CallInfo`] records for each match. Method calls (`obj.method`) are
 /// NOT handled here because `token_tree` doesn't expose `field_expression`
 /// structure — they would appear as `identifier` "." `identifier` `token_tree`,
 /// and we can't reliably distinguish them from other token sequences.
@@ -999,7 +991,7 @@ fn extract_calls_from_macro(
             }
         }
         // Also recurse into nested token_tree to handle nested macros and
-        // complex expressions (e.g. `println!("{}", json!({ "k": helper() }))`).
+        // complex expressions (e.g. `println!("{}", json!({ "k": helper }))`).
         if curr.kind() == "token_tree" {
             extract_calls_from_token_tree(curr, source, ctx, result);
         }
@@ -1085,7 +1077,7 @@ fn macro_call_arguments(token_tree: Node, source: &str) -> Vec<String> {
 }
 
 /// Stdlib method names that should not generate CallInfo records when invoked
-/// as `field_expression` (e.g. `vec.push(x)`, `s.len()`). These are Rust
+/// as `field_expression` (e.g. `vec.push(x)`, `s.len`). These are Rust
 /// standard library methods on Vec/String/slice/Iterator/Option/Result/HashMap
 /// etc. User code rarely redefines these names, so filtering them removes
 /// ~60% of spurious CALLS edges while preserving user-code method calls.
@@ -1371,7 +1363,7 @@ fn is_stdlib_method(name: &str) -> bool {
 }
 
 /// Returns `true` if `func_node` is (or wraps) a `field_expression`, i.e. a
-/// receiver-bound method call like `obj.method()` or `obj.method::<T>()`.
+/// receiver-bound method call like `obj.method` or `obj.method::<T>`.
 /// Used by the C2 stdlib filter to distinguish method calls (filtered when
 /// stdlib) from free functions / static methods (preserved).
 fn is_field_expression_call(func_node: Node) -> bool {
@@ -1606,15 +1598,13 @@ fn extern_language(node: Node, source: &str) -> Language {
         }
     }
     // Default to the first compiled-in language for unknown extern blocks
-    // (previously defaulted to C; now uses Language::all()[0] to avoid
+    // (previously defaulted to C; now uses Language::all[0] to avoid
     // referencing Language::C when lang-c is disabled). The FFI resolver
     // (gated on both lang-c and lang-rust) will simply fail to match these.
     Language::all()[0]
 }
 
-// ---------------------------------------------------------------------------
 // Name / path helpers
-// ---------------------------------------------------------------------------
 
 fn is_pub(node: Node) -> bool {
     // Check if the node has a visibility modifier child that is `pub`.
@@ -1631,11 +1621,11 @@ fn is_pub(node: Node) -> bool {
 /// Returns true only for `pub` visibility
 /// without a `(...) ` restriction.
 ///
-/// - `pub fn foo()` → true (external — visible outside the crate)
-/// - `pub(crate) fn foo()` → false (crate-internal only)
-/// - `pub(super) fn foo()` → false (parent module only)
-/// - `pub(in path) fn foo()` → false (specific path only)
-/// - `fn foo()` → false (private)
+/// - `pub fn foo` → true (external — visible outside the crate)
+/// - `pub(crate) fn foo` → false (crate-internal only)
+/// - `pub(super) fn foo` → false (parent module only)
+/// - `pub(in path) fn foo` → false (specific path only)
+/// - `fn foo` → false (private)
 ///
 /// Used by `extract_use` to distinguish `pub use` (external re-export,
 /// creates REEXPORTS edge) from `pub(crate) use` (crate-internal, no
@@ -1767,7 +1757,7 @@ fn callee_name(node: Node, source: &str) -> Option<String> {
     match node.kind() {
         "identifier" | "type_identifier" => node_text(node, source).map(String::from),
         "field_expression" => {
-            // e.g. `obj.method()` or `Module::func()` -> extract the field name.
+            // e.g. `obj.method` or `Module::func` -> extract the field name.
             let field = node.child_by_field_name("field")?;
             node_text(field, source).map(String::from)
         }
@@ -1897,9 +1887,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(all(
     test,
@@ -1954,7 +1942,7 @@ impl CalculationDomain for ScientificDomain {
 fn contains_scientific(ast: &AstNode) -> bool { true }
 "#;
         let result = extract(src);
-        // The call to contains_scientific inside supports() should be extracted.
+        // The call to contains_scientific inside supports should be extracted.
         let contains_calls: Vec<_> = result
             .calls
             .iter()
@@ -2449,8 +2437,8 @@ fn caller(name: &str) {
 
     #[test]
     fn handles_method_calls() {
-        // C2 fix: String::new() is a scoped_identifier (kept), but
-        // s.push_str() is a field_expression with a stdlib method name
+        // C2 fix: String::new is a scoped_identifier (kept), but
+        // s.push_str is a field_expression with a stdlib method name
         // (filtered). Only user-code function calls should be recorded.
         let src = "fn main() { let s = String::new(); s.push_str(\"hi\"); }";
         let result = extract(src);
@@ -2494,7 +2482,7 @@ fn caller(name: &str) {
         }
     }
 
-    // ===== function calls inside macro arguments =====
+    // function calls inside macro arguments
 
     #[test]
     fn b1_extracts_function_call_inside_println_macro() {
@@ -2820,7 +2808,7 @@ impl Foo { fn new() -> Self { Self } }
         );
     }
 
-    // --- struct fields as Property nodes (feature gap closed) ---
+    // struct fields as Property nodes (feature gap closed)
 
     #[test]
     fn struct_fields_extracted_as_property_nodes() {
@@ -2936,7 +2924,7 @@ impl Foo { fn new() -> Self { Self } }
     fn struct_fields_have_disambiguated_fqn() {
         // P1 fix: Field FQN (qualified_name) is disambiguated by `field_`
         // prefix + struct name: e.g. `proj.test.x#field_Point` (NOT
-        // `#Point` — that would collide with `impl Point { fn x() }`).
+        // `#Point` — that would collide with `impl Point { fn x }`).
         // The `field_` prefix cleanly separates Property (field) and
         // Function (method) namespaces, eliminating duplicates.
         let result = extract(RUST_SOURCE);
@@ -2984,7 +2972,7 @@ impl Foo { fn new() -> Self { Self } }
         // regression test a struct field and an
         // impl method with the same name must produce DISTINCT FQNs.
         // Before the `field_` prefix fix, both `struct Foo { bar }` and
-        // `impl Foo { fn bar() }` produced `...bar#Foo` — violating FQN
+        // `impl Foo { fn bar }` produced `...bar#Foo` — violating FQN
         // uniqueness and causing ambiguity in context/rename/impact.
         // After the fix, the Property uses `#field_Foo` and the Function
         // keeps `#Foo`, so they never collide.

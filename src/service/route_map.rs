@@ -133,7 +133,7 @@ mod tests {
         assert!(json.contains("\"/api/users\""));
     }
 
-    // ===== #[forge] wrapper tests via init_kit =====
+    // [forge] wrapper tests via init_kit
 
     #[serial_test::serial(kit_init)]
     #[test]

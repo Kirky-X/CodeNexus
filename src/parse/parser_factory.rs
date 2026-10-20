@@ -28,7 +28,7 @@ impl ParserFactory {
     ///
     /// Each grammar crate exposes a `LANGUAGE` constant (a
     /// `tree_sitter_language::LanguageFn`) that is converted to a
-    /// [`TsLanguage`] via `.into()` (i.e. [`TsLanguage::new`]).
+    /// [`TsLanguage`] via `.into` (i.e. [`TsLanguage::new`]).
     pub fn create_language(lang: Language) -> Result<TsLanguage> {
         match lang {
             #[cfg(feature = "lang-c")]
@@ -82,7 +82,7 @@ impl ParserFactory {
 
     /// Creates a new [`Parser`] configured for the given language.
     ///
-    /// The parser is ready to call `.parse()` on source text immediately.
+    /// The parser is ready to call `.parse` on source text immediately.
     pub fn create_parser(lang: Language) -> Result<Parser> {
         let ts_lang = Self::create_language(lang)?;
         let mut parser = Parser::new();
@@ -103,7 +103,7 @@ impl ParserFactory {
     /// `create_incremental_parser(language, old_tree)` that "passes `old_tree`
     /// through to `parser.parse(source, old_tree)` callers". In tree-sitter
     /// 0.26, `old_tree` is **not** consumed at `Parser` construction time —
-    /// it is passed at `parse()` time. This method therefore:
+    /// it is passed at `parse` time. This method therefore:
     ///
     /// 1. Accepts `old_tree` for API symmetry with the spec and to make the
     ///    incremental intent explicit at the call site.
@@ -647,7 +647,7 @@ mod tests {
         assert!(tree.is_some(), "parser should produce a tree");
     }
 
-    // --- Parsing smoke tests for each language ---
+    // Parsing smoke tests for each language
 
     #[cfg(feature = "lang-rust")]
     #[test]
@@ -753,7 +753,7 @@ mod tests {
         );
     }
 
-    // --- Invalid / unsupported language handling ---
+    // Invalid / unsupported language handling
 
     #[test]
     fn unsupported_language_error_is_constructible_and_displayable() {
@@ -793,7 +793,7 @@ mod tests {
         assert!(!t2.root_node().has_error());
     }
 
-    // --- tree-sitter incremental parsing support ---
+    // tree-sitter incremental parsing support
 
     /// Counts every node in a tree (recursive walk) for cross-parse comparison.
     ///
@@ -843,8 +843,8 @@ mod tests {
         let new_source = format!("{original_source}{appended}");
 
         // Build an `InputEdit` describing a pure end-of-file insertion:
-        //   - start_byte = old_end_byte = original_source.len() (insertion point)
-        //   - new_end_byte = new_source.len() (inserted bytes)
+        //   - start_byte = old_end_byte = original_source.len (insertion point)
+        //   - new_end_byte = new_source.len (inserted bytes)
         //   - start_position = old_end_position = end of old source
         //   - new_end_position = end of new source
         let old_end_byte = original_source.len();

@@ -54,9 +54,7 @@ use super::capability::DaemonRunner;
 use super::{Daemon, DaemonError, IndexObserver, DEFAULT_DEBOUNCE_MS};
 use crate::index::IndexFacade;
 
-// ---------------------------------------------------------------------------
 // Config
-// ---------------------------------------------------------------------------
 
 /// Configuration for [`DaemonModule`].
 ///
@@ -95,9 +93,7 @@ impl DaemonConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Module (ModuleMeta + AsyncAutoBuilder)
-// ---------------------------------------------------------------------------
 
 /// trait-kit module tag for the Daemon subsystem.
 ///
@@ -110,11 +106,11 @@ impl DaemonConfig {
 /// use codenexus::daemon::DaemonConfig;
 /// use std::path::PathBuf;
 ///
-/// let mut kit = AsyncKit::new();
+/// let mut kit = AsyncKit::new;
 /// kit.set_config(DaemonConfig::new(PathBuf::from(":memory:")));
-/// kit.register::<DaemonModule>()?;
-/// let kit = kit.build().await?;
-/// let daemon = kit.require::<DaemonModule>()?;
+/// kit.register::<DaemonModule>?;
+/// let kit = kit.build.await?;
+/// let daemon = kit.require::<DaemonModule>?;
 /// ```
 pub struct DaemonModule;
 
@@ -154,9 +150,7 @@ impl DaemonModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Concrete dyn DaemonRunner implementation
-// ---------------------------------------------------------------------------
 
 /// Concrete implementation of [`dyn DaemonRunner`] that constructs a fresh
 /// [`Daemon`] + [`IndexObserver`] on every [`DaemonRunner::start`] call.
@@ -236,9 +230,7 @@ impl DaemonRunner for DaemonCapability {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

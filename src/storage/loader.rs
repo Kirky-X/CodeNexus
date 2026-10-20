@@ -186,7 +186,7 @@ where
             continue;
         }
         // P-03: feed `node_to_row`'s `Vec<String>` directly to `write_record`
-        // via `into_iter().map(sanitize_for_ladybugdb)`. Eliminates the
+        // via `into_iter.map(sanitize_for_ladybugdb)`. Eliminates the
         // per-node `Vec<String>` collect that pre-P-03 allocated (~13 fields
         // × 24 B String struct = ~310 B/node, ~31 MB peak on 100k-node repos).
         // The csv crate consumes the iterator field-by-field via
@@ -237,7 +237,7 @@ pub struct NodeCsvStats {
 ///
 /// Added `total` field so callers can compute dedup rate (`skipped / total`)
 /// in warnings. Restores the observability lost when `save_edges` switched
-/// from `&[Edge]` (where `edges.len()` was available) to `impl IntoIterator`
+/// from `&[Edge]` (where `edges.len` was available) to `impl IntoIterator`
 /// (where the count must be accumulated during streaming).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct EdgeCsvStats {
@@ -313,7 +313,7 @@ where
             continue;
         }
         // P-03: feed `edge_to_row`'s `Vec<String>` directly to `write_record`
-        // via `into_iter().map(sanitize_for_ladybugdb)`. Eliminates the
+        // via `into_iter.map(sanitize_for_ladybugdb)`. Eliminates the
         // per-edge `Vec<String>` collect that pre-P-03 allocated (9 String
         // structs × 24 B = ~216 B/edge, ~216 MB peak on 1M-edge repos).
         // The csv crate consumes the iterator field-by-field via
@@ -1455,7 +1455,7 @@ mod tests {
         assert!(content.contains("demo"));
     }
 
-    // --- node_to_row coverage for remaining NodeLabel variants ---
+    // node_to_row coverage for remaining NodeLabel variants
 
     #[test]
     fn node_to_row_constructor_has_thirteen_columns() {
@@ -1889,7 +1889,7 @@ mod tests {
         assert_eq!(row[7], "abc123");
     }
 
-    // --- L4 streaming API tests ---
+    // L4 streaming API tests
 
     #[test]
     fn write_nodes_csv_stream_writes_header_and_rows_to_vec() {
@@ -2020,12 +2020,12 @@ mod tests {
         assert_eq!(lines.len(), 1, "header only");
     }
 
-    // --- L6-3 memory-overflow fix: write_nodes_csv_stream iterator API ---
+    // L6-3 memory-overflow fix: write_nodes_csv_stream iterator API
 
     #[test]
     fn write_nodes_csv_stream_accepts_iterator_of_node_refs() {
         // L6-3: write_nodes_csv_stream now accepts `impl IntoIterator<Item = &Node>`
-        // so callers can stream from `Graph::nodes_view()` without first collecting
+        // so callers can stream from `Graph::nodes_view` without first collecting
         // into a `Vec<Node>`. Verify by passing a direct iterator over node refs.
         let nodes = [
             sample_function_node(),
@@ -2117,15 +2117,15 @@ mod tests {
         assert!(debug.contains("total"));
     }
 
-    // --- P-03 regression: write_*_csv_stream byte-level equivalence ---
+    // P-03 regression: write_*_csv_stream byte-level equivalence
 
     /// Reference implementation of `write_edges_csv_stream` using the
     /// pre-P-03 `Vec<String>` collect pattern. Used by P-03 regression tests
     /// to verify that the iterator-based implementation produces byte-identical
     /// CSV output.
     ///
-    /// P-03 replaces `let row: Vec<String> = ...collect(); csv_writer.write_record(&row)?;`
-    /// with `csv_writer.write_record(edge_to_row(edge).into_iter().map(sanitize_for_ladybugdb))?;`
+    /// P-03 replaces `let row: Vec<String> = ...collect; csv_writer.write_record(&row)?;`
+    /// with `csv_writer.write_record(edge_to_row(edge).into_iter.map(sanitize_for_ladybugdb))?;`
     /// — both forms feed the same `String` values to `csv::Writer::write_record`,
     /// so the serialized bytes must match exactly.
     ///
@@ -2183,7 +2183,7 @@ mod tests {
     /// pre-P-03 `Vec<String>` collect pattern. Used by P-03 regression tests.
     ///
     /// SYNC: this reference impl mirrors the production dedup logic in
-    /// `write_nodes_csv_stream` (HashSet key = `node.id.as_str()`). If the
+    /// `write_nodes_csv_stream` (HashSet key = `node.id.as_str`). If the
     /// production dedup key changes, update this reference too — otherwise
     /// the byte-identical regression tests would pass even when production
     /// diverges.

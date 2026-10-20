@@ -100,9 +100,7 @@ fn modify_rust_file(dir: &Path, i: usize) {
         .expect("write modified fixture");
 }
 
-// ---------------------------------------------------------------------------
 // Scenario 1: first_index_10k_files_peak (ignored)
-// ---------------------------------------------------------------------------
 
 /// Peak RSS while indexing 10 000 files from a cold database
 /// (PRD SLO <= 1 GB).
@@ -145,9 +143,7 @@ fn bench_first_index_10k_files_peak(c: &mut Criterion) {
     group.finish();
 }
 
-// ---------------------------------------------------------------------------
 // Scenario 2: daemon_sustained_10_increments (ignored, daemon-gated)
-// ---------------------------------------------------------------------------
 
 /// Wraps [`IndexFacade`] with a shared counter so the bench thread can wait
 /// for each incremental re-index to complete before sampling RSS.
@@ -308,9 +304,7 @@ fn bench_daemon_sustained_10_increments(c: &mut Criterion) {
     group.finish();
 }
 
-// ---------------------------------------------------------------------------
 // Scenario 3: ram_first_vs_default_comparison (default)
-// ---------------------------------------------------------------------------
 
 /// Compares peak RSS of [`IndexFacade::index`] vs [`IndexFacade::index_ram_first`]
 /// on the same 1000-file fixture.
@@ -328,7 +322,7 @@ fn bench_ram_first_vs_default_comparison(c: &mut Criterion) {
     // 1000 records — observed ~60 s per iteration, a src/ performance
     // characteristic this bench surfaces). The default `measurement_time`
     // (5 s) would yield only one sample before tripping criterion's
-    // `slice.len() > 1` stats assert; raise the window so at least two
+    // `slice.len > 1` stats assert; raise the window so at least two
     // samples can be collected. `--quick` short-circuits once significance
     // is reached, so this still finishes in ~2-3 iterations in practice.
     group.measurement_time(Duration::from_secs(300));

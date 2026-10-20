@@ -12,7 +12,7 @@
 //! Each [`Phase`] declares:
 //! - `type Input` / `type Output` — typed values flowing between phases.
 //! - `const NAME` — unique phase identifier (used as the context key).
-//! - `fn deps()` — names of phases whose outputs this phase consumes.
+//! - `fn deps` — names of phases whose outputs this phase consumes.
 //! - `fn run(input, ctx)` — executes the phase, reading dep outputs from
 //!   [`PipelineCtx`] as needed.
 //!
@@ -29,7 +29,7 @@
 //!
 //! - **Root phases** (no deps): the caller inserts the typed `Input` into
 //!   [`PipelineCtx`] under the phase's `NAME` before calling [`Pipeline::run`].
-//! - **Derived phases**: set `Input = ()` (caller inserts `()`) and read dep
+//! - **Derived phases**: set `Input = ` (caller inserts ``) and read dep
 //!   outputs from `ctx` inside `run` via [`PipelineCtx::get`]. This keeps the
 //!   `Phase` trait signature (5 items, no
 //!   `build_input` method) while supporting multi-dep wiring.
@@ -211,7 +211,7 @@ impl std::fmt::Debug for PipelineCtx {
 ///
 /// 2. **Bounded lifetime**: intermediate values that are no longer needed
 ///    MUST be dropped before the phase returns — either via `ctx.remove` +
-///    explicit `drop`, or via in-place `clear()` + `shrink_to_fit()` (L7-2
+///    explicit `drop`, or via in-place `clear` + `shrink_to_fit` (L7-2
 ///    clears `ExtractResult.edges` after cloning into the graph). Holding
 ///    stale data across phase boundaries is the dominant cause of OOM in the
 ///    indexing pipeline (5-Whys root cause).
@@ -226,7 +226,7 @@ pub trait Phase: Send + Sync + 'static {
     /// The typed input consumed by this phase.
     ///
     /// For root phases, this is the externally-provided input. For derived
-    /// phases, use `()` and read dep outputs from the context in [`run`](Self::run).
+    /// phases, use `` and read dep outputs from the context in [`run`](Self::run).
     type Input: Any + Send + Sync + 'static;
 
     /// The typed output produced by this phase.
@@ -477,7 +477,7 @@ impl std::fmt::Debug for Pipeline {
 mod tests {
     use super::*;
 
-    // --- Test fixtures ---
+    // Test fixtures
 
     // We can't override const NAME per-instance in Rust, so we define separate
     // phase types for each test name. To keep tests readable, we use a macro.
@@ -509,7 +509,7 @@ mod tests {
         };
     }
 
-    // --- PipelineCtx tests ---
+    // PipelineCtx tests
 
     #[test]
     fn ctx_insert_get_remove_round_trip() {
@@ -562,7 +562,7 @@ mod tests {
         assert!(!s.contains("secret"), "got: {s}");
     }
 
-    // --- Pipeline registration tests ---
+    // Pipeline registration tests
 
     named_phase!(PhaseA, "A", &[]);
 
@@ -585,7 +585,7 @@ mod tests {
         assert_eq!(p.len(), 1);
     }
 
-    // --- Topo sort tests ---
+    // Topo sort tests
 
     #[test]
     fn topo_sort_empty_pipeline() {
@@ -650,7 +650,7 @@ mod tests {
         assert_eq!(order, vec!["A", "Z"]);
     }
 
-    // --- Cycle detection ---
+    // Cycle detection
 
     named_phase!(CycleB, "CB", &["CA"]);
     named_phase!(CycleA, "CA", &["CB"]);
@@ -693,7 +693,7 @@ mod tests {
         }
     }
 
-    // --- Missing dependency ---
+    // Missing dependency
 
     named_phase!(PhaseWithMissingDep, "M", &["nonexistent"]);
 
@@ -711,7 +711,7 @@ mod tests {
         }
     }
 
-    // --- Execution tests ---
+    // Execution tests
 
     #[test]
     fn run_empty_pipeline_succeeds() {
@@ -740,7 +740,7 @@ mod tests {
     #[test]
     fn run_linear_chain_passes_outputs_in_order() {
         // A → B → C: each phase reads the previous phase's output from ctx.
-        // We use Input = () for B and C (derived phases) and read dep outputs
+        // We use Input =  for B and C (derived phases) and read dep outputs
         // from ctx inside run. But our named_phase! macro uses Input = String.
         // So for this test we define custom phases that read from ctx.
         struct A;
@@ -800,7 +800,7 @@ mod tests {
         p.register(C).unwrap();
 
         let mut ctx = PipelineCtx::new();
-        // Insert () inputs for all phases (derived phases use Input = ()).
+        // Insert  inputs for all phases (derived phases use Input =).
         ctx.insert("A", ());
         ctx.insert("B", ());
         ctx.insert("C", ());
@@ -897,7 +897,7 @@ mod tests {
 
         // A=10, B=11, C=12, D=11+12=23.
         assert_eq!(ctx.get::<u32>("D"), Some(&23));
-        // A's output must still be present (not consumed) since get() is shared.
+        // A's output must still be present (not consumed) since get is shared.
         assert_eq!(ctx.get::<u32>("A"), Some(&10));
     }
 
@@ -973,7 +973,7 @@ mod tests {
         }
     }
 
-    // --- Non-ExecutionFailed phase errors are rewrapped (other arm) ---
+    // Non-ExecutionFailed phase errors are rewrapped (other arm)
     //
     // A phase that returns a PhaseError variant OTHER than ExecutionFailed or
     // MissingInput must be wrapped into ExecutionFailed by the runner (lines 411-414).
@@ -1013,7 +1013,7 @@ mod tests {
         }
     }
 
-    // --- Default impls + Debug formatting (lines 181-182, 423-424, 429-431) ---
+    // Default impls + Debug formatting (lines 181-182, 423-424, 429-431)
 
     #[test]
     fn pipeline_ctx_default_is_empty() {
@@ -1144,7 +1144,7 @@ mod tests {
         );
     }
 
-    // --- Send + Sync assertions ---
+    // Send + Sync assertions
 
     #[test]
     fn pipeline_ctx_is_send_sync() {

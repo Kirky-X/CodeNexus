@@ -391,7 +391,7 @@ mod tests {
         assert_eq!(output.original_size, manifest.original_size);
     }
 
-    // ===== #[forge] wrapper tests via init_kit =====
+    // [forge] wrapper tests via init_kit
 
     /// RAII guard that resets the global Kit on Drop, ensuring test isolation.
     #[cfg(feature = "cli")]

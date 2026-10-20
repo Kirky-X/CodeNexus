@@ -5,15 +5,15 @@
 //!
 //! Provides [`capture_tracing`] and [`capture_tracing_debug`] for unit tests
 //! that need to assert on tracing event output. Each function installs a
-//! scoped `tracing_subscriber::registry()` with an inklog `LoggerSubscriber`
+//! scoped `tracing_subscriber::registry` with an inklog `LoggerSubscriber`
 //! layer, runs the supplied closure, then drains the console channel and
-//! formats each `LogRecord` into a single string for `.contains()` assertions.
+//! formats each `LogRecord` into a single string for `.contains` assertions.
 //!
 //! # Format
 //!
 //! Each captured event is rendered as `"{message} {key}={value} ..."` (one
 //! line per event). Structured fields appear as `key=value` pairs after the
-//! message, preserving compatibility with existing `.contains()` assertions.
+//! message, preserving compatibility with existing `.contains` assertions.
 
 use std::sync::Arc;
 

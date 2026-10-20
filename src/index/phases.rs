@@ -16,7 +16,7 @@
 //! # Input wiring
 //!
 //! [`ScanPhase`] is the root phase: its typed [`ScanInput`] is inserted into
-//! [`PipelineCtx`] externally. All other phases use `Input = ()` and read dep
+//! [`PipelineCtx`] externally. All other phases use `Input = ` and read dep
 //! outputs from the context via [`PipelineCtx::get`].
 
 use std::collections::HashMap;
@@ -42,12 +42,10 @@ use super::pipeline::IndexResult;
 use super::pipeline_dag::{Phase, PhaseError, PipelineCtx};
 
 /// Confidence for an INCLUDES edge (structural, explicit in syntax).
-/// Matches the lower bound of `EdgeType::Includes::confidence_range()` = (0.95, 1.0).
+/// Matches the lower bound of `EdgeType::Includes::confidence_range` = (0.95, 1.0).
 const CONFIDENCE_INCLUDES: f32 = 0.95;
 
-// ---------------------------------------------------------------------------
 // Phase I/O structs
-// ---------------------------------------------------------------------------
 
 /// Typed input for [`ScanPhase`] (root phase, externally provided).
 pub struct ScanInput {
@@ -122,9 +120,7 @@ pub struct LoadOutput {
     pub index_result: IndexResult,
 }
 
-// ---------------------------------------------------------------------------
 // Helper: convert IndexError to PhaseError
-// ---------------------------------------------------------------------------
 
 /// Boxes an [`IndexError`] into a [`PhaseError::ExecutionFailed`] so the
 /// pipeline runner can carry it to the caller, which downcasts it back
@@ -136,9 +132,7 @@ fn phase_err(phase: &'static str, e: IndexError) -> PhaseError {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Phase 1: ScanPhase
-// ---------------------------------------------------------------------------
 
 /// Phase 1: discover files, lookup/create project id, diff hashes.
 ///
@@ -217,9 +211,7 @@ impl Phase for ScanPhase {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Phase 2: ParsePhase
-// ---------------------------------------------------------------------------
 
 /// Phase 2: parallel-parse changed + added files.
 ///
@@ -238,7 +230,7 @@ impl Phase for ScanPhase {
 ///
 /// The compressed buffers are NO LONGER held as a `ParsePhase` struct field.
 /// Previously `ram_first_compressed: Option<RamFirstSources>` was moved into
-/// `ParsePhase` at registration time and held until `dag.run()` returned (i.e.
+/// `ParsePhase` at registration time and held until `dag.run` returned (i.e.
 /// until LoadPhase finished). For a 10k-file repository this kept ~30-40 GB
 /// of LZ4-compressed source bytes alive long after ParsePhase::run had
 /// finished using them.
@@ -273,11 +265,11 @@ impl Phase for ParsePhase {
         // L7-1 memory-overflow fix: take ownership of the compressed buffers
         // via `ctx.remove` (NOT `ctx.get`) so they are dropped at the end of
         // this `run` call. Previously the buffers were a `ParsePhase` struct
-        // field held until `dag.run()` returned (i.e. until LoadPhase
+        // field held until `dag.run` returned (i.e. until LoadPhase
         // finished), keeping ~30-40 GB of LZ4-compressed source bytes alive
         // for 4 phases longer than necessary.
         //
-        // `flatten()` turns `Option<Option<RamFirstSources>>` (outer from
+        // `flatten` turns `Option<Option<RamFirstSources>>` (outer from
         // `remove`, inner from the stored `Option`) into `Option<RamFirstSources>`.
         // When the key is absent (non-RAM-first mode never inserts it) or the
         // stored value is `None`, `compressed` is `None` → streaming disk-read
@@ -322,9 +314,7 @@ impl Phase for ParsePhase {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Phase 3: ScopeResolutionPhase
-// ---------------------------------------------------------------------------
 
 /// Phase 3: build the in-memory graph (definition nodes + per-file edges).
 ///
@@ -457,7 +447,7 @@ impl Phase for ScopeResolutionPhase {
         // L7-2: clear per-file edges and seen_qns from parse.results. The
         // edges have been cloned into `graph`; `seen_qns` was used only by
         // `push_node` during extraction. No subsequent phase reads either.
-        // `clear()` + `shrink_to_fit()` releases the backing allocation,
+        // `clear` + `shrink_to_fit` releases the backing allocation,
         // not just the length — important for large repos where the Vec was
         // grown to capacity during extraction.
         for result in &mut parse.results {
@@ -475,9 +465,7 @@ impl Phase for ScopeResolutionPhase {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Helper: build INCLUDES edges for C++ #include
-// ---------------------------------------------------------------------------
 
 /// Builds `EdgeType::Includes` edges for C++ `#include` directives and
 /// populates an [`IncludesGraph`] for downstream scope-aware resolution.
@@ -595,7 +583,7 @@ fn build_includes_edges(
                 .start_line(import.line)
                 .build();
                 // L6 memory-overflow fix: move `edge` into the graph (no
-                // clone). The previous `graph.add_edge(edge.clone()); edges.push(edge);`
+                // clone). The previous `graph.add_edge(edge.clone); edges.push(edge);`
                 // double-allocated every INCLUDES edge — the returned Vec was
                 // immediately discarded by ResolvePhase. Now `build_includes_edges`
                 // returns only `IncludesGraph`, so the edge is moved directly.
@@ -621,9 +609,7 @@ fn build_includes_edges(
     includes_graph
 }
 
-// ---------------------------------------------------------------------------
 // Phase 4: ResolvePhase
-// ---------------------------------------------------------------------------
 
 /// Phase 4: resolve symbols (calls + dataflow + FFI edges).
 ///
@@ -646,11 +632,11 @@ impl Phase for ResolvePhase {
 
     fn run(&self, _: Self::Input, ctx: &mut PipelineCtx) -> Result<Self::Output, PhaseError> {
         // L6 memory-overflow fix: take ownership of `ScopeOutput` via
-        // `ctx.remove` instead of `ctx.get` + `graph.clone()`.
+        // `ctx.remove` instead of `ctx.get` + `graph.clone`.
         //
         // `ResolvePhase` is the sole consumer of `scope` (LoadPhase deps are
         // `["scan", "resolve"]` — it does NOT read `scope`). The previous
-        // `let mut graph = scope.graph.clone();` deep-cloned the entire
+        // `let mut graph = scope.graph.clone;` deep-cloned the entire
         // `Graph` (nodes HashMap + edges Vec), which for large repos is
         // multi-GB and was the dominant memory-pressure point after L1–L5.
         //
@@ -658,7 +644,7 @@ impl Phase for ResolvePhase {
         // and the (now-moved) `Graph` for the remainder of the pipeline,
         // cutting peak RSS by roughly one full Graph worth of memory.
         //
-        // Safety of `remove`: if a future phase adds `scope` to its `deps()`,
+        // Safety of `remove`: if a future phase adds `scope` to its `deps`,
         // `topo_sort` will still order it after `resolve`, but the
         // `ctx.get::<ScopeOutput>("scope")` call in that phase will return
         // `None` → `MissingInput`. This is fail-loud and will be
@@ -698,7 +684,7 @@ impl Phase for ResolvePhase {
         // `resolve_all`'s internal `prune_dangling_type_edges(graph)` call.
         //
         // fix: `graph` is MOVED out of `scope` (no clone). The previous
-        // `scope.graph.clone()` was the largest single allocation in the
+        // `scope.graph.clone` was the largest single allocation in the
         // pipeline for large repos.
         let mut graph = scope.graph;
 
@@ -732,7 +718,7 @@ impl Phase for ResolvePhase {
         //
         // fix: `resolve_all` adds resolved edges to `graph` directly and
         // prunes dangling type edges via `prune_dangling_type_edges(graph)`.
-        // fix: `resolve_all` now returns `()` — no master Vec<Edge> is
+        // fix: `resolve_all` now returns `` — no master Vec<Edge> is
         // built. Each sub-resolver's Vec is dropped immediately after its
         // edges are cloned into `graph`.
         let mut symbol_table = build_symbol_table(&parse.results, project_id);
@@ -747,7 +733,7 @@ impl Phase for ResolvePhase {
         // (plus IMPORTS edges targeting them). Enrichment loads those
         // symbols/ids from the DB, excluding the (stale) rows of
         // changed/added/deleted files. Enriched data stays OUT of the graph —
-        // LoadPhase saves `graph.nodes_view()`, and re-persisting unchanged
+        // LoadPhase saves `graph.nodes_view`, and re-persisting unchanged
         // files would defeat incremental indexing.
         let enrichment = {
             let mut excluded: std::collections::HashSet<String> =
@@ -843,7 +829,6 @@ impl Phase for ResolvePhase {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Phase 5: ConfidencePhase (pass-through placeholder)
 // ---------------------------------------------------------------------------
 
@@ -867,7 +852,6 @@ impl Phase for ConfidencePhase {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Phase 6: LoadPhase
 // ---------------------------------------------------------------------------
 

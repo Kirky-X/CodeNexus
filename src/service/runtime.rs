@@ -5,7 +5,7 @@
 //!
 //! Provides a process-global `Mutex<Option<Arc<AsyncKit<AsyncReady>>>>` so that
 //! `#[forge]` handlers (which cannot accept injected state) can access
-//! the Kit via [`kit()`].
+//! the Kit via [`kit`].
 //!
 //! # Why AsyncKit<AsyncReady> and not Kit
 //!
@@ -114,7 +114,7 @@ mod tests {
     #[tokio::test]
     async fn init_kit_second_call_returns_error() {
         reset_kit_for_testing();
-        // Build empty AsyncKit<Ready> instances — build() on an empty kit
+        // Build empty AsyncKit<Ready> instances — build on an empty kit
         // succeeds (no modules to fail). We only need the type, not real
         // capabilities, to test the init_kit mutex behavior.
         let kit1 = AsyncKit::new().build().await.expect("build kit1");

@@ -51,7 +51,7 @@ const ROUTE_LIKE_LABELS: &[&str] = &["Endpoint", "Route"];
 /// `HANDLES_ROUTE` edge — i.e. handler-like entities.
 ///
 /// `Handler` is the legacy label; `Function` is what the axum extractor emits
-/// for `Router::new().route(path, get(handler))`. Merged here so
+/// for `Router::new.route(path, get(handler))`. Merged here so
 /// `route_map`/`api_impact`/`tool_map` resolve handlers regardless of style.
 const HANDLER_LIKE_LABELS: &[&str] = &["Handler", "Function"];
 
@@ -378,7 +378,7 @@ impl<'a> ApiReviewer<'a> {
         Ok(result)
     }
 
-    // --- Helper methods ---
+    // Helper methods
 
     /// Loads all `Route` and `Endpoint` nodes for `project`.
     ///

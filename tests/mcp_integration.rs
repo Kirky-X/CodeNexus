@@ -38,7 +38,7 @@ impl McpClient {
             .unwrap_or_else(|e| panic!("failed to spawn codenexus mcp: {e}"));
 
         // Take stdout once — the reader thread owns it for the lifetime of
-        // the client. This avoids the bug where `child.stdout.take()` on each
+        // the client. This avoids the bug where `child.stdout.take` on each
         // call removes stdout after the first request.
         let stdout = child.stdout.take().expect("stdout pipe");
         let (tx, rx) = mpsc::channel::<Value>();

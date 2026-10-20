@@ -59,7 +59,7 @@ fn main() {
     let result = index_sample_code(&ctx, "demo");
     let repo = Repository::open(&ctx.db_path).expect("Repository::open");
 
-    // --- 1. Complexity (CLI: `complexity`) -----------------------------
+    // 1. Complexity (CLI: `complexity`)
     let entries = ComplexityAnalyzer::new(&repo)
         .analyze(&result.project_id)
         .expect("complexity analyze");
@@ -75,7 +75,7 @@ fn main() {
     }
     println!();
 
-    // --- 2. Dead code (CLI: `dead_code`) -------------------------------
+    // 2. Dead code (CLI: `dead_code`)
     let dead = DeadCodeDetector::new(&repo)
         .detect(&result.project_id, &["main"])
         .expect("dead_code detect");
@@ -89,7 +89,7 @@ fn main() {
     }
     println!();
 
-    // --- 3. Community detection (CLI: `community`) ---------------------
+    // 3. Community detection (CLI: `community`)
     let communities = CommunityDetector::new(&repo, &result.project_id)
         .with_resolution(0.5)
         .detect_communities()

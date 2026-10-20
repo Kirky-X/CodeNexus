@@ -82,9 +82,7 @@ impl Extractor for CExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 /// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
 /// 封装 ADR-005 的 current_parent 和 current_func 语义。
@@ -161,7 +159,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         "declaration" => {
             extract_global_var(node, source, ctx, result);
             // Always recurse into declarations to find calls/reads inside
-            // (e.g. `int x = foo();`).
+            // (e.g. `int x = foo;`).
             visit_children(node, source, ctx, result);
         }
         "preproc_include" => {
@@ -294,9 +292,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     }
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 fn extract_function(
     node: Node,
@@ -649,9 +645,7 @@ fn extract_macro(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut 
     result.push_node(model_node);
 }
 
-// ---------------------------------------------------------------------------
 // Record extractors
-// ---------------------------------------------------------------------------
 
 fn extract_include(node: Node, source: &str, result: &mut ExtractResult) {
     // preproc_include has a `path` field that is either system_lib_string
@@ -694,9 +688,7 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
     });
 }
 
-// ---------------------------------------------------------------------------
 // Name / signature helpers
-// ---------------------------------------------------------------------------
 
 fn function_name(node: Node, source: &str) -> Option<String> {
     // function_definition has a `declarator` field (function_declarator).
@@ -748,7 +740,7 @@ fn callee_name(node: Node, source: &str) -> Option<String> {
     match node.kind() {
         "identifier" | "type_identifier" => node_text(node, source).map(String::from),
         "field_expression" => {
-            // e.g. obj.method() -> "method"
+            // e.g. obj.method -> "method"
             let field = node.child_by_field_name("field")?;
             node_text(field, source).map(String::from)
         }
@@ -863,9 +855,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

@@ -31,9 +31,7 @@ use codenexus::kit::{build_kit, KitBootstrapConfig, StorageModule, TraceModule};
 // resolution for the direct-query assertions below.
 use codenexus::storage::capability::Storage;
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// 在 `dir/rel` 写入文件（自动创建父目录）。
 fn write_file(dir: &Path, rel: &str, content: &str) {
@@ -80,9 +78,7 @@ fn count_swift_files(root: &Path) -> i64 {
         .count() as i64
 }
 
-// ===========================================================================
 // § 1 — 多语言索引
-// ===========================================================================
 
 #[test]
 fn index_go_file() {
@@ -294,9 +290,7 @@ fn index_html_css_json_files() {
     );
 }
 
-// ===========================================================================
 // § 2 — 增量索引边界场景
-// ===========================================================================
 
 #[test]
 fn index_empty_repo_produces_zero_files() {
@@ -341,9 +335,7 @@ fn incremental_index_detects_modified_file() {
     );
 }
 
-// ===========================================================================
 // § 3 — 查询引擎
-// ===========================================================================
 
 #[test]
 fn cypher_query_returns_function_nodes() {
@@ -417,7 +409,6 @@ fn structured_search_no_match_returns_empty() {
 #[test]
 fn structured_search_respects_limit() {
     let tmp = TempDir::new().unwrap();
-    // 创建多个函数。
     let content = (0..10)
         .map(|i| format!("pub fn func_{i}() {{}}\n"))
         .collect::<String>();
@@ -494,9 +485,7 @@ fn search_by_file_returns_symbols_in_file() {
     }
 }
 
-// ===========================================================================
 // § 4 — 追踪引擎（kit-based）
-// ===========================================================================
 
 #[tokio::test]
 async fn trace_calls_returns_call_paths() {
@@ -551,9 +540,7 @@ async fn trace_unknown_symbol_returns_empty_graph() {
     assert!(graph.nodes.is_empty(), "不存在的符号应返回空图");
 }
 
-// ===========================================================================
 // § 5 — 影响分析
-// ===========================================================================
 
 #[tokio::test]
 async fn impact_analysis_returns_upstream_callers() {
@@ -588,9 +575,7 @@ async fn impact_analysis_returns_upstream_callers() {
     );
 }
 
-// ===========================================================================
 // § 6 — 上下文函数
-// ===========================================================================
 
 #[tokio::test]
 async fn context_collect_incoming_and_outgoing() {
@@ -634,9 +619,7 @@ async fn context_collect_incoming_and_outgoing() {
     );
 }
 
-// ===========================================================================
 // § 7 — 死代码检测
-// ===========================================================================
 
 #[tokio::test]
 async fn dead_code_detection_finds_unreachable_functions() {
@@ -825,7 +808,6 @@ fn complex_fn(x: i32) -> i32 {
     }
 }
 
-// ===========================================================================
 // § 10 — 社区检测
 // ===========================================================================
 

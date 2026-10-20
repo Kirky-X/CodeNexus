@@ -34,7 +34,7 @@ pub const DEFAULT_DEBOUNCE_MS: u64 = 2000;
 /// 定时检查间隔（毫秒），PRD §4.3.2 步骤 6。
 const TICK_INTERVAL_MS: u64 = 500;
 
-// --- 自适应防抖窗口参数 ---
+// 自适应防抖窗口参数
 //
 // spec 主文描述："高频扩展到 ≥ 500ms、低频缩短到 ≤ 100ms"。防抖的标准行为：
 // 高频事件密集时扩展窗口以批量处理（减少重建索引次数），低频事件稀疏时缩短
@@ -68,7 +68,7 @@ const EMA_NEW_WEIGHT: f64 = 0.3;
 /// "5 秒内 1 个事件"，确保低频时 inverted_interval ≈ 0。
 const EMA_REFERENCE_INTERVAL_SECS: f64 = 5.0;
 
-// --- tree-sitter 增量解析参数 ---
+// tree-sitter 增量解析参数
 //
 // spec 主文：文件大小变化 > 50% 或 line count 变化 > 30% 时强制全量解析，
 // 否则使用增量解析（透传 old_tree 给 parser.parse）。
@@ -448,7 +448,7 @@ impl Daemon {
     /// 注册 SIGTERM/SIGINT 信号处理器，收到信号时设置 `stop` 标志。
     ///
     /// 使用 `signal_hook::flag::register` 将信号映射到 `self.stop` 的
-    /// `store(true, SeqCst)` 操作。收到信号后，`run()` 的循环会在下一
+    /// `store(true, SeqCst)` 操作。收到信号后，`run` 的循环会在下一
     /// 次 tick（≤500ms）检测到 `stop=true` 并优雅退出。
     ///
     /// # Errors
@@ -467,7 +467,7 @@ impl Daemon {
         Ok(())
     }
 
-    /// 启动阻塞事件循环，直到调用 `stop_handle().store(true)` 或通道断开。
+    /// 启动阻塞事件循环，直到调用 `stop_handle.store(true)` 或通道断开。
     ///
     /// # Errors
     ///
@@ -627,7 +627,7 @@ impl Daemon {
     }
 }
 
-// --- tree-sitter 增量解析辅助函数（free functions，无 &self 状态） ---
+// tree-sitter 增量解析辅助函数（free functions，无 &self 状态）
 
 /// 从文件路径推断 [`Language`]：取扩展名，调用 [`Language::from_extension`]。
 /// 无扩展名或不识别时返回 `None`。
@@ -642,8 +642,8 @@ fn infer_language_from_path(path: &str) -> Option<Language> {
 ///
 /// 用"公共前缀 + 公共后缀"算法找出变化区间，构造 `InputEdit`：
 /// - `start_byte` = 公共前缀长度
-/// - `old_end_byte` = `old_source.len()` - 公共后缀长度
-/// - `new_end_byte` = `new_source.len()` - 公共后缀长度
+/// - `old_end_byte` = `old_source.len` - 公共后缀长度
+/// - `new_end_byte` = `new_source.len` - 公共后缀长度
 ///
 /// 这是 O(N) 字节级 diff，足以处理常见编辑场景（局部修改、追加、删除）。
 /// 复杂 diff（移动、重排）超出 C1 范围——这种情况下 `InputEdit` 仍能让
@@ -733,7 +733,7 @@ mod tests {
     use std::thread;
     use tempfile::TempDir;
 
-    // --- 测试辅助函数 ---
+    // 测试辅助函数
 
     fn write_file(dir: &Path, rel: &str, content: &str) {
         let path = dir.join(rel);
@@ -818,7 +818,7 @@ mod tests {
         }
     }
 
-    // --- Daemon::new ---
+    // Daemon::new
 
     #[test]
     fn daemon_new_creates_instance() {
@@ -841,7 +841,7 @@ mod tests {
         assert_eq!(daemon.debounce_ms(), 500);
     }
 
-    // --- Daemon::add_observer ---
+    // Daemon::add_observer
 
     #[test]
     fn daemon_add_observer_stores_observer() {
@@ -866,7 +866,7 @@ mod tests {
         assert_eq!(*call_count.lock().unwrap(), 1, "观察者应被调用一次");
     }
 
-    // --- Daemon::convert_event ---
+    // Daemon::convert_event
 
     #[test]
     fn convert_event_create_code_file() {
@@ -1018,7 +1018,7 @@ mod tests {
         assert_eq!(received[1], DaemonEvent::Remove(PathBuf::from("util.rs")));
     }
 
-    // --- Daemon::process_debounced_events ---
+    // Daemon::process_debounced_events
 
     #[test]
     fn process_events_filters_non_code_files() {
@@ -1113,7 +1113,7 @@ mod tests {
         assert_eq!(*count2.lock().unwrap(), 1, "观察者 2 应被调用");
     }
 
-    // --- 集成测试：真实文件监视 ---
+    // 集成测试：真实文件监视
 
     #[test]
     fn daemon_triggers_index_on_code_file_change() {
@@ -1344,7 +1344,7 @@ mod tests {
         );
     }
 
-    // --- daemon_event 事件发出验证 ---
+    // daemon_event 事件发出验证
 
     #[test]
     #[cfg(feature = "lang-c")]
@@ -1440,7 +1440,7 @@ mod tests {
         );
     }
 
-    // --- 信号处理测试 ---
+    // 信号处理测试
 
     #[test]
     fn register_signal_handlers_returns_ok() {
@@ -1480,7 +1480,7 @@ mod tests {
         let _ = raise(sig);
     }
 
-    // --- 自适应防抖窗口测试 ---
+    // 自适应防抖窗口测试
     //
     // 反转 EMA 实现符合 spec 主文描述：高频（last_interval 小）→ inverted
     // 大 → 窗口扩展到 clamp 上限 500ms；低频（last_interval 大）→ inverted
@@ -1636,7 +1636,7 @@ mod tests {
         );
     }
 
-    // --- tree-sitter incremental parsing in daemon ---
+    // tree-sitter incremental parsing in daemon
 
     #[cfg(feature = "lang-rust")]
     #[test]

@@ -102,7 +102,7 @@ impl Graph {
     ///
     /// Sorting by `id` (FQN or `file_<uuid>`) makes the order deterministic
     /// across runs, since `self.nodes` is a `HashMap` whose iteration order
-    /// is randomized per process (SipHash seed). Callers that pick `.first()`
+    /// is randomized per process (SipHash seed). Callers that pick `.first`
     /// or iterate the result to build edges/parameters now observe stable
     /// output across indexes. See B12 fix in `tools/verification/results/triage.md`.
     #[must_use]
@@ -146,7 +146,7 @@ impl Graph {
     /// Replaces the `all_nodes: Vec<Node>` duplicate previously held in
     /// [`ScopeOutput`](crate::index::ScopeOutput) /
     /// [`ResolveOutput`](crate::index::ResolveOutput). Callers that
-    /// previously consumed `&all_nodes` now consume `graph.nodes_view()`,
+    /// previously consumed `&all_nodes` now consume `graph.nodes_view`,
     /// eliminating one of the 4-5 copies of the same node set.
     ///
     /// Iteration order is the HashMap's unspecified order; callers that need
@@ -526,7 +526,7 @@ mod tests {
         assert!(g.nodes_by_label(NodeLabel::Function).is_empty());
     }
 
-    // --- nodes_view (L3 memory-overflow fix) ---
+    // nodes_view (L3 memory-overflow fix)
 
     #[test]
     fn nodes_view_returns_all_nodes() {
@@ -544,7 +544,7 @@ mod tests {
         assert_eq!(g.nodes_view().count(), 0);
     }
 
-    // --- edges_view (L3 memory-overflow fix) ---
+    // edges_view (L3 memory-overflow fix)
 
     #[test]
     fn edges_view_returns_all_edges_in_insertion_order() {
@@ -572,7 +572,7 @@ mod tests {
         assert_eq!(g.edges_view().count(), 0);
     }
 
-    // --- for_each_node_with_label_mut (L3 memory-overflow fix) ---
+    // for_each_node_with_label_mut (L3 memory-overflow fix)
 
     #[test]
     fn for_each_node_with_label_mut_modifies_only_matching_label() {

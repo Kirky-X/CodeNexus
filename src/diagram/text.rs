@@ -4,7 +4,7 @@
 //! CJK-aware text measurement for deterministic diagram layout.
 //!
 //! Ports archify's `textUnits` (renderers/shared/utils.mjs) so label boxes
-//! are sized from measured advance width, not `chars().count()`. Wide glyphs
+//! are sized from measured advance width, not `chars.count`. Wide glyphs
 //! (CJK, Hangul, emoji) take two units; variation selectors re-present the
 //! base character and carry no width of their own.
 

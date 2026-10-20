@@ -739,7 +739,7 @@ mod tests {
         c.shutdown().unwrap();
     }
 
-    // ---- references method ----
+    // references method
 
     /// `references` must return every impl-site location the
     /// `rust-analyzer` server reports for a trait method.

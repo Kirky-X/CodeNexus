@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::TraceNode;
 
-// ===== L5: Path link for O(1) path sharing in trace_upstream =====
+// L5: Path link for O(1) path sharing in trace_upstream
 
 /// Singly-linked path node used by [`ImpactAnalyzer::trace_upstream`] to
 /// share the BFS path prefix without deep-cloning a `Vec<String>` on every
@@ -66,7 +66,7 @@ fn expand_path(link: &Rc<PathLink>) -> Vec<String> {
     path
 }
 
-// ===== Multi-dimensional impact types =====
+// Multi-dimensional impact types
 
 /// Configuration for multi-dimensional impact analysis.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -91,9 +91,9 @@ const MAX_DEPTH_LIMIT: u32 = 10;
 const MAX_NODES_LIMIT: usize = 5000;
 /// Default `max_depth` value used by [`ImpactConfig::default`].
 ///
-/// Extracted from the `5` literal previously hard-coded in `Default::default()`
+/// Extracted from the `5` literal previously hard-coded in `Default::default`
 /// so tests can reference the same source of truth (
-/// test constants were coupled to `Default::default()` via duplicated
+/// test constants were coupled to `Default::default` via duplicated
 /// literals — changing the default would silently break tests or, worse,
 /// tests would pass while runtime behaviour diverged from the documented
 /// spec). Tests that need to assert the default value now reference this
@@ -166,7 +166,7 @@ pub struct ImpactAnalyzer<'a> {
     config: ImpactConfig,
 }
 
-// ===== Risk scoring constants (assess_risk) =====
+// Risk scoring constants (assess_risk)
 
 /// Affected-count thresholds → weight factor, evaluated in order; first
 /// threshold exceeded wins. Indices map to levels: 0→Critical, 1→High,
@@ -490,7 +490,7 @@ mod tests {
             .build()
     }
 
-    // ===== L5: PathLink + expand_path unit tests =====
+    // L5: PathLink + expand_path unit tests
 
     #[test]
     fn path_link_root_expands_to_single_name() {
@@ -739,7 +739,7 @@ mod tests {
         assert_eq!(impacted.len(), 2);
     }
 
-    // ===== Serialization tests for multi-dimensional impact types =====
+    // Serialization tests for multi-dimensional impact types
 
     #[test]
     fn impact_config_default_has_expected_values() {
@@ -875,7 +875,7 @@ mod tests {
         assert!(!analyzer.config.include_tests);
     }
 
-    // ===== Multi-edge-type upstream tracing tests =====
+    // Multi-edge-type upstream tracing tests
 
     #[test]
     fn trace_upstream_calls_edge_type() {
@@ -1045,7 +1045,7 @@ mod tests {
         assert_eq!(result.affected.len(), 2);
     }
 
-    // ===== Type dependency impact tracing tests =====
+    // Type dependency impact tracing tests
 
     #[test]
     fn trace_type_dependency_finds_users() {
@@ -1116,7 +1116,7 @@ mod tests {
         assert_eq!(b_node.depth, 2);
     }
 
-    // ===== Risk assessment tests =====
+    // Risk assessment tests
 
     #[test]
     fn risk_assessment_60_affected_is_critical() {
@@ -1264,7 +1264,7 @@ mod tests {
         assert_eq!(result.risk_assessment.level, RiskLevel::Low);
     }
 
-    // ===== Constant guard tests (prevent accidental modification) =====
+    // Constant guard tests (prevent accidental modification)
 
     #[test]
     fn edge_type_weight_constants_match_expected_values() {
@@ -1311,7 +1311,7 @@ mod tests {
         assert!((total - 1.0).abs() < f64::EPSILON);
     }
 
-    // --- Coverage gap tests: Tests edge filtering, missing predecessor, risk scoring branches ---
+    // Coverage gap tests: Tests edge filtering, missing predecessor, risk scoring branches
 
     #[test]
     fn trace_upstream_skips_tests_edge_when_include_tests_false() {
@@ -1437,12 +1437,12 @@ mod tests {
         assert_eq!(result.risk_assessment.level, RiskLevel::High);
     }
 
-    // --- Coverage gap tests: MAX_NODES_LIMIT break, visited skip, count_level=High, depth clamping ---
+    // Coverage gap tests: MAX_NODES_LIMIT break, visited skip, count_level=High, depth clamping
 
     #[test]
     fn trace_upstream_breaks_at_max_nodes_limit() {
         // MAX_NODES_LIMIT (5000) direct predecessors of target + 1 transitive
-        // caller of f0. After adding 5000 predecessors, results.len() >=
+        // caller of f0. After adding 5000 predecessors, results.len >=
         // MAX_NODES_LIMIT, so the break at line 229 fires before the
         // transitive caller can be found.
         let mut g = Graph::new();

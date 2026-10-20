@@ -214,7 +214,7 @@ pub fn collect_processes(graph: &Graph, start_id: &NodeId) -> Vec<RelatedNodeOut
     out
 }
 
-// ===== Multi-dimensional context types =====
+// Multi-dimensional context types
 
 /// A symbol's definition (name, signature, source, location).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

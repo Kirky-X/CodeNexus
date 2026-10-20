@@ -319,7 +319,7 @@ mod tests {
         assert_eq!(output.node.name, "unique_name");
     }
 
-    // ===== run_context_enhanced with ContextCollector =====
+    // run_context_enhanced with ContextCollector
 
     /// An unknown symbol is a usage error (`InvalidInput`, exit 2), matching
     /// the legacy `run_context` path — not an internal failure.
@@ -414,7 +414,7 @@ mod tests {
         assert!(json.contains("\"callees\""));
     }
 
-    // ===== enhanced context resolves project name → id =====
+    // enhanced context resolves project name → id
 
     #[test]
     fn run_context_enhanced_resolves_project_name_to_id() {
@@ -439,7 +439,7 @@ mod tests {
         assert_eq!(ctx.symbol.qualified_name, "demo.deep.do_thing");
     }
 
-    // ===== run_context: process edges via HANDLES_ROUTE =====
+    // run_context: process edges via HANDLES_ROUTE
 
     #[test]
     fn run_context_returns_processes_with_handles_route_edges() {
@@ -491,7 +491,7 @@ mod tests {
         assert!(json.contains("\"processes\""));
     }
 
-    // ===== #[forge] wrapper tests via init_kit =====
+    // [forge] wrapper tests via init_kit
 
     #[serial_test::serial(kit_init)]
     #[test]

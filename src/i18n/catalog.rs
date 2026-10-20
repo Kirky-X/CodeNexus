@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 //! Fluent message catalog: `locales/{en,zh}/messages.ftl` embedded at
-//! compile time and registered into the sdforge i18n registry by [`init()`].
+//! compile time and registered into the sdforge i18n registry by [`init`].
 //!
 //! The FTL assets remain the single source of truth (same `key = value`
 //! single-line patterns, same `{ $name }` placeholders — which is exactly
@@ -10,8 +10,8 @@
 //! hand-rolled: [`t`]/[`tr`] forward to `sdforge::i18n::t`, which resolves
 //! host registrations → built-in catalog → the key itself (never panics).
 //!
-//! Applications must call [`init()`] once at startup (the CLI `main` does;
-//! see [`crate::i18n::init`]). Before `init()` the sdforge registry holds
+//! Applications must call [`init`] once at startup (the CLI `main` does;
+//! see [`crate::i18n::init`]). Before `init` the sdforge registry holds
 //! none of this crate's keys, so `t`/`tr` serve bare keys.
 
 use super::locale::current_locale;
@@ -62,7 +62,7 @@ fn ftl_entries(ftl: &str) -> impl Iterator<Item = (&str, &str)> {
 /// pin the active locale to the detected one.
 ///
 /// Must be called once from the application entry point before serving
-/// any messages: before `init()` the registry holds none of this crate's
+/// any messages: before `init` the registry holds none of this crate's
 /// keys, so [`t`] falls back to bare keys (no panic, no translation).
 /// Idempotent — re-registering the same `(locale, key)` pairs overwrites
 /// them with identical values.

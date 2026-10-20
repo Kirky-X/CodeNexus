@@ -94,7 +94,7 @@ mod tests {
             .expect("build_kit")
     }
 
-    // --- path validation ---
+    // path validation
 
     #[test]
     fn daemon_core_returns_error_for_nonexistent_path() {
@@ -118,7 +118,7 @@ mod tests {
         );
     }
 
-    // --- blocking daemon start ---
+    // blocking daemon start
 
     #[serial_test::serial(daemon_core)]
     #[test]
@@ -137,7 +137,7 @@ mod tests {
         assert!(!handle.is_finished(), "daemon should still be running");
     }
 
-    // --- debounce acceptance (path validation phase) ---
+    // debounce acceptance (path validation phase)
 
     #[test]
     fn daemon_core_accepts_custom_debounce() {
@@ -157,7 +157,7 @@ mod tests {
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
     }
 
-    // --- end-to-end: file watching + incremental indexing ---
+    // end-to-end: file watching + incremental indexing
 
     #[serial_test::serial(daemon_core)]
     #[test]
@@ -194,7 +194,7 @@ mod tests {
         assert!(!handle.is_finished(), "daemon should still be running");
     }
 
-    // ===== #[forge] wrapper tests via init_kit =====
+    // [forge] wrapper tests via init_kit
 
     #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
@@ -202,11 +202,11 @@ mod tests {
     fn daemon_wrapper_succeeds_via_init_kit() {
         use crate::service::runtime::{init_kit, reset_kit_for_testing};
 
-        // daemon() enters a blocking event loop (daemon.run()), so unlike
+        // daemon enters a blocking event loop (daemon.run), so unlike
         // architecture/search/cross_service we cannot block_on it directly.
         // Instead we spawn it on a thread; if kit init succeeded the thread
-        // stays alive (daemon running). kit() returns an Arc clone, so
-        // reset_kit_for_testing() is safe even while the daemon thread runs.
+        // stays alive (daemon running). kit returns an Arc clone, so
+        // reset_kit_for_testing is safe even while the daemon thread runs.
         reset_kit_for_testing();
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), "main.rs", "fn main() {}\n");

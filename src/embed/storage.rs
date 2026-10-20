@@ -14,7 +14,7 @@
 //!     id STRING, nodeId STRING, project STRING, chunkIndex INT32,
 //!     startLine INT64, endLine INT64, embedding FLOAT[384],
 //!     contentHash STRING, PRIMARY KEY (id)
-//! );
+//!);
 //! ```
 
 use std::path::Path;
@@ -208,7 +208,7 @@ impl<'a> EmbeddingStorage<'a> {
     /// # Errors
     ///
     /// Returns [`EmbedError::Storage`] on database failure. If the table is
-    /// missing, the operation is a no-op (returns `Ok(())`).
+    /// missing, the operation is a no-op (returns `Ok()`).
     pub fn delete_for_project(&self, project: &str) -> Result<()> {
         let cypher = format!(
             "MATCH (e:Embedding {{project: '{}'}}) DELETE e;",

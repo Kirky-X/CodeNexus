@@ -83,9 +83,7 @@ impl Extractor for GoExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 /// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
 struct VisitContext<'a> {
@@ -129,7 +127,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
         }
         "type_declaration" => {
             // A type_declaration groups one or more type_spec nodes
-            // (`type (Foo struct{}, Bar interface{} )`).
+            // (`type (Foo struct{}, Bar interface{})`).
             visit_children(node, source, ctx, result);
         }
         "type_spec" => {
@@ -156,9 +154,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     }
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 /// Returns true if `name` starts with an uppercase ASCII letter, following
 /// Go's visibility rule: uppercase = exported (public), lowercase = unexported
@@ -266,14 +262,12 @@ fn extract_type_spec(node: Node, source: &str, ctx: &VisitContext<'_>, result: &
     result.push_node(model_node);
 }
 
-// ---------------------------------------------------------------------------
 // Record extractors
-// ---------------------------------------------------------------------------
 
 fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
     // import_declaration has two forms:
     //   1. `import "fmt"`      — single import (import_spec is a direct child)
-    //   2. `import (... )` — import list (import_spec children are inside
+    //   2. `import (...)` — import list (import_spec children are inside
     //                            an `import_spec_list` node)
     // tree-sitter-go represents both with import_spec children; we walk all
     // named descendants of kind `import_spec`.
@@ -283,7 +277,7 @@ fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
             if child.kind() == "import_spec" {
                 push_import(child, source, line, result);
             } else if child.kind() == "import_spec_list" {
-                // `import (... )` form: import_spec_list contains import_spec children.
+                // `import (...)` form: import_spec_list contains import_spec children.
                 for j in 0..child.named_child_count() as u32 {
                     if let Some(spec) = child.named_child(j) {
                         if spec.kind() == "import_spec" {
@@ -338,9 +332,7 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
     });
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 fn function_name(node: Node, source: &str) -> Option<String> {
     let name_node = node.child_by_field_name("name")?;
@@ -354,7 +346,7 @@ fn method_name(node: Node, source: &str) -> Option<String> {
 
 /// Extracts the receiver type name from a `method_declaration`.
 ///
-/// `func (t T) Bar()` → `Some("T")`; `func (t *T) Bar()` → `Some("T")`.
+/// `func (t T) Bar` → `Some("T")`; `func (t *T) Bar` → `Some("T")`.
 /// The receiver type is used as the FQN disambiguator so methods on
 /// different types produce distinct FQNs.
 fn receiver_type_name(node: Node, source: &str) -> Option<String> {
@@ -398,7 +390,7 @@ fn callee_name(node: Node, source: &str) -> Option<String> {
     match node.kind() {
         "identifier" => node_text(node, source).map(String::from),
         "selector_expression" => {
-            // `pkg.Func()` -> extract the field (rightmost) name.
+            // `pkg.Func` -> extract the field (rightmost) name.
             let field = node.child_by_field_name("field")?;
             node_text(field, source).map(String::from)
         }
@@ -453,9 +445,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -575,7 +565,7 @@ mod tests {
 
     #[test]
     fn extracts_grouped_type_declaration() {
-        // `type (Foo struct{}; Bar interface{} )` produces two type_specs.
+        // `type (Foo struct{}; Bar interface{})` produces two type_specs.
         let result = extract("package main\ntype (\n\tFoo struct{}\n\tBar interface{}\n)\n");
         let structs: Vec<_> = result
             .nodes
@@ -760,7 +750,7 @@ mod tests {
 
     #[test]
     fn method_calls_from_different_types_have_distinct_caller_qn() {
-        // BUG-G1: Two methods named Run on different types both call helper().
+        // BUG-G1: Two methods named Run on different types both call helper.
         // caller_qn must include the receiver type so resolve_calls doesn't
         // deduplicate their CALLS edges.
         let src = "package main\nfunc helper() {}\ntype A struct{}\ntype B struct{}\nfunc (a A) Run() { helper() }\nfunc (b B) Run() { helper() }\n";

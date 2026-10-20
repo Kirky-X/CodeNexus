@@ -29,7 +29,7 @@ pub enum EdgeType {
     References,
     Imports,
     Includes,
-    // ---: 10 new edge types for richer graph semantics ---
+    // : 10 new edge types for richer graph semantics
     /// Class/struct/trait owns a method (structural, explicit in syntax).
     HasMethod,
     /// Class/struct/trait owns a property/field (structural).
@@ -50,7 +50,7 @@ pub enum EdgeType {
     HandlesTool,
     /// Function is the entry point of a process/service (structural).
     EntryPointOf,
-    // --- Feature-depth-enhancement: 6 new edge types for analysis ---
+    // Feature-depth-enhancement: 6 new edge types for analysis
     /// Symbol is used by another symbol (inferred from usage).
     Usage,
     /// Test function tests a target symbol (structural).
@@ -63,13 +63,13 @@ pub enum EdgeType {
     Emits,
     /// Function listens on an event/message (inferred).
     ListensOn,
-    // --- re-export edge for dead-code reachability ---
+    // re-export edge for dead-code reachability
     /// File re-exports a symbol from another file (Rust `pub use`,
     /// TypeScript `export ... from`). The target is the re-exported
     /// Function/Method node; the source is the importing File node.
     /// Treated as a live seed by dead-code analysis.
     Reexports,
-    // --- feature-expansion-wave (32): external dependencies ---
+    // feature-expansion-wave (32): external dependencies
     DependsOn,
 }
 
@@ -184,7 +184,7 @@ impl EdgeType {
             // Variable read / write access — inferred from usage.
             EdgeType::Reads => (0.70, 0.80),
             EdgeType::Writes => (0.70, 0.80),
-            // ---: 10 new edge types ---
+            // : 10 new edge types
             // Structural ownership — explicit in syntax.
             EdgeType::HasMethod => (0.95, 1.0),
             EdgeType::HasProperty => (0.95, 1.0),
@@ -537,7 +537,7 @@ mod tests {
         }
     }
 
-    // ===== parse_edge_type_list unit tests =====
+    // parse_edge_type_list unit tests
 
     #[test]
     fn parse_edge_type_list_parses_lowercase_names() {

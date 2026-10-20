@@ -42,7 +42,7 @@ fn main() {
     let ctx = setup(SAMPLE_CODE);
     let result = index_sample_code(&ctx, "demo");
 
-    // --- 1. Collector view: direct DB-backed 360° context ---------------
+    // 1. Collector view: direct DB-backed 360° context
     let repo = Repository::open(&ctx.db_path).expect("Repository::open");
     let context = ContextCollector::new(&repo)
         .collect(&result.project_id, "build_report")
@@ -55,7 +55,7 @@ fn main() {
     println!("  tests:    {}", context.test_context.len());
     println!();
 
-    // --- 2. Subgraph view: load + BFS collections ------------------------
+    // 2. Subgraph view: load + BFS collections
     let (graph, truncated) =
         load_graph_for_symbol(&ctx.db_path, "build_report", 1, MAX_SUBGRAPH_NODES, true)
             .expect("load subgraph");

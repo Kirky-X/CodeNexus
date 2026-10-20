@@ -70,9 +70,7 @@ impl Extractor for OCamlExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 struct VisitContext<'a> {
     file_path: &'a str,
@@ -109,9 +107,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     }
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 fn extract_module(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     // module_definition contains a module_name field or a module_path.
@@ -236,9 +232,7 @@ fn extract_include(node: Node, source: &str, result: &mut ExtractResult) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 fn signature_first_line(text: &str) -> &str {
     text.lines().next().unwrap_or(text)
@@ -282,9 +276,7 @@ fn find_descendant_dfs(node: Node, kind: &str, source: &str) -> Option<String> {
     None
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

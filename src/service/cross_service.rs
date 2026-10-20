@@ -177,7 +177,7 @@ mod tests {
         assert!(json.contains("\"matches\""));
     }
 
-    // ===== run_cross_service with protocol filter =====
+    // run_cross_service with protocol filter
 
     #[test]
     fn run_cross_service_with_empty_protocol_returns_all_matches() {
@@ -215,7 +215,7 @@ mod tests {
         assert!(output.matches.is_empty());
     }
 
-    // --- run_cross_service: protocol filter with real matches (covers retain closure) ---
+    // run_cross_service: protocol filter with real matches (covers retain closure)
 
     #[test]
     fn run_cross_service_with_http_protocol_filters_matches() {
@@ -278,7 +278,7 @@ mod tests {
         );
     }
 
-    // ===== #[forge] wrapper tests via init_kit =====
+    // [forge] wrapper tests via init_kit
 
     #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]

@@ -102,9 +102,7 @@ impl Extractor for FortranExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 /// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
 /// 封装 ADR-005 的 current_parent 和 current_func 语义。
@@ -425,9 +423,7 @@ fn first_identifier_child<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str
     None
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 fn extract_module(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name) = statement_name(node, "module_statement", source) else {
@@ -518,9 +514,7 @@ fn extract_program(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mu
     result.push_node(model_node);
 }
 
-// ---------------------------------------------------------------------------
 // Record extractors
-// ---------------------------------------------------------------------------
 
 /// Extracts FFI binding names from `bind(C)` declarations on subroutines and
 /// functions.
@@ -674,9 +668,7 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
     });
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Extracts the name from a statement child node
 /// (e.g. `module_statement`, `subroutine_statement`).
@@ -809,9 +801,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -1483,7 +1473,7 @@ end function"#;
         );
     }
 
-    // --- B11 fix: fixed-form Fortran comment preprocessing ---
+    // B11 fix: fixed-form Fortran comment preprocessing
 
     #[test]
     fn is_fixed_form_detects_f_extension() {
@@ -1586,7 +1576,7 @@ end function"#;
         );
     }
 
-    // --- Coverage gap: do while, field_expression, combine_scope ---
+    // Coverage gap: do while, field_expression, combine_scope
 
     #[test]
     fn do_while_loop_does_not_produce_loop_variable_write() {

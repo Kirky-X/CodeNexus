@@ -25,7 +25,7 @@
 //!
 //! - PHP has no simple visibility rule; top-level declarations default to
 //!   `is_exported = true` (module-level visibility).
-//! - Member call expressions (`$obj->method()`) are not captured as CallInfo;
+//! - Member call expressions (`$obj->method`) are not captured as CallInfo;
 //!   only free function calls (`function_call_expression`) are extracted.
 
 use super::helpers::node_text;
@@ -84,9 +84,7 @@ impl Extractor for PhpExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 /// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
 struct VisitContext<'a> {
@@ -161,9 +159,7 @@ fn visit_children(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     }
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(name) = function_name(node, source) else {
@@ -279,9 +275,7 @@ fn extract_namespace(node: Node, source: &str, ctx: &VisitContext<'_>, result: &
     result.push_node(model_node);
 }
 
-// ---------------------------------------------------------------------------
 // Record extractors
-// ---------------------------------------------------------------------------
 
 /// Extracts each `namespace_use_clause` child of a
 /// `namespace_use_declaration` as an [`ImportInfo`]. The `qualified_name`
@@ -323,9 +317,7 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
     });
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 fn function_name(node: Node, source: &str) -> Option<String> {
     let name_node = node.child_by_field_name("name")?;
@@ -430,9 +422,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -828,7 +818,7 @@ mod tests {
     #[test]
     fn parenthesized_call_expression_extracts_callee() {
         // Covers the `parenthesized_expression` branch in callee_name
-        // (line 374-377): `(foo)()` should extract `foo` as the callee.
+        // (line 374-377): `(foo)` should extract `foo` as the callee.
         let src = "<?php\nfunction main() { (foo)(); }\n";
         let result = extract(src);
         let callees: Vec<_> = result
@@ -845,7 +835,7 @@ mod tests {
     #[test]
     fn nested_function_call_expression_as_callee() {
         // Covers the `function_call_expression` branch in callee_name
-        // (line 370-373): `foo()()` should extract `foo` as the callee of
+        // (line 370-373): `foo` should extract `foo` as the callee of
         // the outer call.
         let src = "<?php\nfunction main() { getCallable()(); }\n";
         let result = extract(src);

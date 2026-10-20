@@ -136,7 +136,7 @@ impl StorageConnection {
         // L7-5 memory-overflow fix: pin explicit LadybugDB memory caps in BOTH
         // test and production builds.
         //
-        // Pre-L7-5 production path used `SystemConfig::default()` which leaves
+        // Pre-L7-5 production path used `SystemConfig::default` which leaves
         // `buffer_pool_size = 0` (auto-detect). DuckDB's auto-detection
         // resolves 0 to ~80% of physical memory — on a 70 GB host this is
         // ~56 GB of buffer pool reserved by a single indexing process, which
@@ -206,7 +206,7 @@ impl StorageConnection {
             //
             // P-DB-perf: cache `max_db_size` process-wide via `OnceLock`.
             // `compute_max_db_size` calls `probe_available_disk_space` which
-            // invokes `sysinfo::Disks::new_with_refreshed_list()` (reads
+            // invokes `sysinfo::Disks::new_with_refreshed_list` (reads
             // /proc/mounts + statvfs per mount point, 1-50ms). Without
             // caching, every `StorageConnection::open` — including read-only
             // query commands (query/impact/trace/context/search/list) —
@@ -1352,7 +1352,6 @@ mod tests {
         assert_eq!(obj.get("42"), Some(&serde_json::json!(100)));
     }
 
-    // -------------------------------------------------------------------------
     // 并发引擎能力探针（ladybug-concurrency-analysis §4 步骤 1）
     // -------------------------------------------------------------------------
     // 目的：实证 lbug 0.18.2 在 codenexus 现有「Arc/共享 &StorageConnection +
@@ -1533,7 +1532,6 @@ mod tests {
         );
     }
 
-    // -------------------------------------------------------------------------
     // probe_available_disk_space / compute_max_db_size (P-DB)
     // -------------------------------------------------------------------------
 

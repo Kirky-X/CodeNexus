@@ -88,9 +88,7 @@ impl Extractor for TypeScriptExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 /// 不可变的遍历上下文，在 visit_node/visit_children 之间传递。
 /// 封装 ADR-005 的 current_parent 和 current_func 语义。
@@ -105,7 +103,7 @@ struct VisitContext<'a> {
 fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     match node.kind() {
         "function_declaration" | "generator_function_declaration" => {
-            // P2-4: also handle `function* foo() {}` (generator_function_declaration)
+            // P2-4: also handle `function* foo {}` (generator_function_declaration)
             // which was previously missed.
             extract_function(node, source, ctx, result);
             // Pass the function's name as the enclosing function for body
@@ -143,7 +141,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
                 .get(Language::TypeScript)
                 .and_then(|r| r.resolve(node, &scope_ctx));
             let class_name = scope.as_ref().map(|s| s.name.as_str());
-            // TypeScript uses `.or()` (replace, not combine) — different from
+            // TypeScript uses `.or` (replace, not combine) — different from
             // Python/Rust/Fortran which use `combine_scope`.
             let parent = class_name.or(ctx.current_parent);
             let child_ctx = VisitContext {
@@ -248,7 +246,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
                     });
                 }
             }
-            // P2-4: `export default function() {}` and `export default () => {}`
+            // P2-4: `export default function {}` and `export default  => {}`
             // store the anonymous function as the `value` field (an expression),
             // not as a `declaration` field. visit_children won't promote it to
             // a Function node, so handle it explicitly here.
@@ -448,12 +446,10 @@ fn build_and_push_function(
     result.push_node(model_node);
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 fn extract_function(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
-    // P2-4: anonymous `export default function() {}` has no name field.
+    // P2-4: anonymous `export default function {}` has no name field.
     // Use "default" as the name (matches gitnexus behavior for default exports).
     //
     // NOTE: This None branch is currently defensive — extract_function is only
@@ -605,9 +601,7 @@ fn extract_named_item(
     result.push_node(model_node);
 }
 
-// ---------------------------------------------------------------------------
 // Record extractors
-// ---------------------------------------------------------------------------
 
 fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
     // import_statement has an optional import_clause and a source (string).
@@ -706,7 +700,7 @@ fn collect_imported_names(node: Node, source: &str, names: &mut Vec<String>) {
 ///
 /// This makes named re-exports precise instead of over-approximating to
 /// wildcard semantics. The previous implementation always passed
-/// `imported_names: Vec::new()`, which caused `resolve_reexport_targets`
+/// `imported_names: Vec::new`, which caused `resolve_reexport_targets`
 /// to return every Function in the target file as a live seed — a false
 /// negative for dead-code analysis on barrel-style modules.
 fn extract_ts_export_specifiers(node: Node, source: &str) -> Vec<String> {
@@ -860,7 +854,7 @@ fn extract_lexical_declaration(
         let value_kind = value_node.map(|v| v.kind());
 
         // P2-4: arrow_function / function_expression → Function node.
-        // `const f = () => {}` and `const g = function() {}` are function
+        // `const f =  => {}` and `const g = function {}` are function
         // definitions gitnexus captures; codenexus previously missed them.
         if matches!(
             value_kind,
@@ -992,9 +986,7 @@ fn extract_assignment(node: Node, source: &str, result: &mut ExtractResult) {
     });
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Returns true if the node is inside an `export_statement`.
 fn is_exported(node: Node) -> bool {
@@ -1010,7 +1002,7 @@ fn callee_name(node: Node, source: &str) -> Option<String> {
             node_text(node, source).map(String::from)
         }
         "member_expression" => {
-            // e.g. `obj.method()` -> extract the property name.
+            // e.g. `obj.method` -> extract the property name.
             let property = node.child_by_field_name("property")?;
             node_text(property, source).map(String::from)
         }
@@ -1172,9 +1164,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

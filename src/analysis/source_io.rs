@@ -46,7 +46,7 @@ pub(crate) fn read_source_file_canonical(canonical_root: &Path, file_path: &str)
 /// Returns `None` for invalid ranges or `start_line` beyond the file length.
 /// `end_line` is clamped to the actual line count.
 ///
-/// Uses lazy `skip().take()` iteration so only the requested lines are
+/// Uses lazy `skip.take` iteration so only the requested lines are
 /// materialized, avoiding a full `Vec<&str>` allocation for large files.
 pub(crate) fn slice_lines(content: &str, start_line: u32, end_line: u32) -> Option<String> {
     if start_line == 0 || end_line == 0 || start_line > end_line {

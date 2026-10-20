@@ -51,7 +51,7 @@ pub fn is_reserved_keyword(name: &str) -> bool {
 ///
 /// This function ONLY handles reserved-keyword escaping — it does NOT sanitise
 /// arbitrary user input. Callers MUST pass values that are known-safe
-/// identifiers (hard-coded constants, `NodeLabel::table_name()` results, or
+/// identifiers (hard-coded constants, `NodeLabel::table_name` results, or
 /// values from a fixed enum). Passing user-controlled strings here is a
 /// Cypher-injection risk: a malicious `name` containing backticks or single
 /// quotes would break out of the identifier context. For user-controlled
@@ -62,7 +62,7 @@ pub fn is_reserved_keyword(name: &str) -> bool {
 ///
 /// Returns [`Cow::Borrowed`] when no escaping is needed (the common case —
 /// only `MACRO` and `UNION` are reserved), avoiding a heap allocation per
-/// call. The previous `String` return forced `to_string()` on every
+/// call. The previous `String` return forced `to_string` on every
 /// non-keyword input (~12 wasted allocations per
 /// `route_map` call on bulwark-class graphs).
 #[must_use]

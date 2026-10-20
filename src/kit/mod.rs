@@ -12,11 +12,11 @@
 //! therefore `!Send + !Sync`. CodeNexus stores the kit in a
 //! `static Mutex<Option<Arc<AsyncKit<Ready>>>>` (see `service::runtime`),
 //! which requires `Send + Sync`. We therefore use `AsyncKit`, which is backed
-//! by `Arc<RwLock<...>>` and implements `Send + Sync`. Only `build()` is
-//! async; `require::<M>()` and `config::<C>()` are synchronous methods.
+//! by `Arc<RwLock<...>>` and implements `Send + Sync`. Only `build` is
+//! async; `require::<M>` and `config::<C>` are synchronous methods.
 //!
 //! Capability and config lookup uses the module type directly (e.g.,
-//! `kit.require::<StorageModule>()` and `kit.set_config::<StorageConfig>()`).
+//! `kit.require::<StorageModule>` and `kit.set_config::<StorageConfig>`).
 
 // `trait-kit` is a hard dependency (the in-tree shim was removed once
 // all modules migrated to `build_kit`). No feature gating needed.
@@ -35,7 +35,7 @@ pub use bootstrap::{build_kit, KitBootstrapConfig};
 // async markers via `pub use async_kit::{Ready as AsyncReady, Unbuilt as
 // AsyncUnbuilt}` — the two `Ready` types are distinct structs (sync `Ready`
 // in `kit.rs` vs async `Ready` in `async_kit.rs`). Using the wrong one causes
-// a type mismatch: `AsyncKit::build()` returns `AsyncKit<async_kit::Ready>`.
+// a type mismatch: `AsyncKit::build` returns `AsyncKit<async_kit::Ready>`.
 // trait-kit 0.3 renamed `KitError` to `TraitKitError` (ProjectNameError
 // convention); alias preserves the CodeNexus-internal `KitError` name.
 pub use trait_kit::core::meta::{AsyncAutoBuilder, ModuleMeta};
@@ -59,22 +59,20 @@ pub use crate::resolve::ResolverModule;
 pub use crate::storage::StorageModule;
 pub use crate::trace::TraceModule;
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// `AsyncKit::new()` creates an empty `AsyncKit<Unbuilt>` without
+    /// `AsyncKit::new` creates an empty `AsyncKit<Unbuilt>` without
     /// panicking. This is a smoke test that the trait-kit 0.3 wiring loads
     /// correctly after the migration from 0.1.0.
     #[test]
     fn async_kit_new_creates_empty_unbuilt_kit() {
         let kit = AsyncKit::new();
         // A fresh AsyncKit<Unbuilt> should be creatable. We don't call
-        // build() here because that requires an async runtime — the
+        // build here because that requires an async runtime — the
         // bootstrap tests in bootstrap.rs exercise the full build path.
         let _ = kit;
     }

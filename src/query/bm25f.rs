@@ -154,7 +154,7 @@ fn bm25f_field_score(field: &str, query: &str) -> f64 {
 /// ```
 /// use codenexus::query::bm25f::{bm25f_score, FieldWeights};
 ///
-/// let w = FieldWeights::default();
+/// let w = FieldWeights::default;
 /// // Exact name match dominates comment substring match.
 /// let name_exact = bm25f_score("parse", "parse", "demo.parse", "", "", &w);
 /// let comment_sub = bm25f_score("parse", "read", "demo.read", "parse a file", "", &w);
@@ -186,7 +186,7 @@ mod tests {
     use crate::query::FullTextSearcher;
     use crate::storage::Repository;
 
-    // === Unit tests for FieldWeights ===
+    // Unit tests for FieldWeights
 
     #[test]
     fn test_bm25f_field_weights_default_values() {
@@ -211,7 +211,7 @@ mod tests {
         assert_ne!(w1, w3);
     }
 
-    // === Unit tests for bm25f_score (pure function) ===
+    // Unit tests for bm25f_score (pure function)
 
     #[test]
     fn test_bm25f_empty_query_returns_zero() {
@@ -323,7 +323,7 @@ mod tests {
         );
     }
 
-    // === Unit tests for relevance_score_with_reason ===
+    // Unit tests for relevance_score_with_reason
 
     #[test]
     fn relevance_score_with_reason_exact_match_returns_one() {
@@ -431,7 +431,7 @@ mod tests {
         assert_eq!(reason, "no match");
     }
 
-    // === Integration tests through FullTextSearcher ===
+    // Integration tests through FullTextSearcher
 
     fn fresh_repo() -> Repository {
         Repository::in_memory().expect("in_memory repository")
@@ -440,7 +440,7 @@ mod tests {
     /// Argument bundle for [`sample_function_with_docstring`].
     ///
     /// All `String` fields default to empty via `#[derive(Default)]`; callers
-    /// only need to set fields they care about and can use `..Default::default()`
+    /// only need to set fields they care about and can use `..Default::default`
     /// to leave the rest blank.
     #[derive(Default)]
     struct SampleFunctionSpec {

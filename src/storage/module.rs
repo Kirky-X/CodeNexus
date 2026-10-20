@@ -15,8 +15,8 @@
 //! concurrent reads return zero errors; lbug 0.18.2 serializes writes at the
 //! engine level — "Only one write transaction at a time is allowed").
 //! [`StorageCapability`] wraps the repository in an [`RwLock`]: read methods
-//! take a shared `.read()` guard so concurrent queries no longer serialize,
-//! write methods take an exclusive `.write()` guard. Probe data in
+//! take a shared `.read` guard so concurrent queries no longer serialize,
+//! write methods take an exclusive `.write` guard. Probe data in
 //! `temp/ladybug-concurrency-analysis.md`.
 
 use std::any::TypeId;
@@ -32,9 +32,7 @@ use super::connection::SchemaInitReport;
 use super::error::StorageError;
 use super::repository::{FunctionRecord, ProjectRecord, Repository};
 
-// ---------------------------------------------------------------------------
 // Config
-// ---------------------------------------------------------------------------
 
 /// Configuration for [`StorageModule`].
 ///
@@ -68,9 +66,7 @@ impl StorageConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Module (ModuleMeta + AsyncAutoBuilder)
-// ---------------------------------------------------------------------------
 
 /// trait-kit module tag for the Storage subsystem.
 ///
@@ -82,11 +78,11 @@ impl StorageConfig {
 /// use codenexus::kit::{AsyncKit, StorageModule};
 /// use codenexus::storage::StorageConfig;
 ///
-/// let mut kit = AsyncKit::new();
-/// kit.set_config(StorageConfig { db_path: ":memory:".into() });
-/// kit.register::<StorageModule>()?;
-/// let kit = kit.build().await?;
-/// let storage = kit.require::<StorageModule>()?;
+/// let mut kit = AsyncKit::new;
+/// kit.set_config(StorageConfig { db_path: ":memory:".into });
+/// kit.register::<StorageModule>?;
+/// let kit = kit.build.await?;
+/// let storage = kit.require::<StorageModule>?;
 /// ```
 pub struct StorageModule;
 
@@ -143,17 +139,15 @@ impl StorageModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Concrete dyn Storage implementation
-// ---------------------------------------------------------------------------
 
 /// Concrete implementation of [`dyn Storage`] wrapping a [`Repository`] behind
 /// an [`RwLock`].
 ///
 /// Reads (`query`, `get_*`, `list_*`, `query_functions`) take a shared
-/// `.read()` guard so concurrent reads no longer serialize. Writes
+/// `.read` guard so concurrent reads no longer serialize. Writes
 /// (`save_*`, `delete_*`, `init_schema`, `execute`) take an exclusive
-/// `.write()` guard. `execute` is classified as a write because its Cypher is
+/// `.write` guard. `execute` is classified as a write because its Cypher is
 /// opaque — two concurrent executes that both issue writes would hit lbug's
 /// single-writer constraint.
 struct StorageCapability {
@@ -263,9 +257,7 @@ impl Storage for StorageCapability {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

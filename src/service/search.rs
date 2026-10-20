@@ -286,7 +286,7 @@ mod tests {
         assert!(v["qualifiedName"].is_null());
     }
 
-    // ===== run_search with mode parameter =====
+    // run_search with mode parameter
 
     #[test]
     fn run_search_with_exact_mode_finds_symbol() {
@@ -300,7 +300,7 @@ mod tests {
         assert!(output.count > 0, "should find do_thing in exact mode");
     }
 
-    // ===== legacy (empty-mode) path: `--project` filtering =====
+    // legacy (empty-mode) path: `--project` filtering
 
     /// Seeds two projects (id/name alpha, beta) each with one distinct
     /// function directly into the DB file and closes the seed connection.
@@ -449,7 +449,7 @@ mod tests {
         assert_eq!(output.count, 0);
     }
 
-    // ===== run_search: graph_enhanced and multi_signal modes =====
+    // run_search: graph_enhanced and multi_signal modes
 
     #[test]
     fn run_search_with_graph_enhanced_mode_finds_symbol() {
@@ -527,7 +527,7 @@ mod tests {
         assert_eq!(output.count, 0);
     }
 
-    // ===== run_search: fulltext mode exercises legacy fulltext path =====
+    // run_search: fulltext mode exercises legacy fulltext path
 
     #[test]
     fn run_search_fulltext_on_non_empty_db_succeeds() {
@@ -573,7 +573,7 @@ mod tests {
         assert_eq!(output.count, 0);
     }
 
-    // ===== #[forge] wrapper tests via init_kit =====
+    // [forge] wrapper tests via init_kit
 
     #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]

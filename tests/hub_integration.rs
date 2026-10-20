@@ -199,7 +199,7 @@ fn hub_push_pull_list_round_trip_against_http_registry() {
     let (_repo, db) = seed_project(dir.path(), "hubproj");
     let db = db.to_str().unwrap().to_string();
 
-    // --- push: export the project and upload it ---
+    // push: export the project and upload it
     let (code, stdout, stderr) = run(&[
         "hub",
         "--action",
@@ -250,7 +250,7 @@ fn hub_push_pull_list_round_trip_against_http_registry() {
         "push must upload a non-empty .cnxp body"
     );
 
-    // --- list: filter by project ---
+    // list: filter by project
     let (code, stdout, stderr) = run(&[
         "hub",
         "--action",
@@ -279,7 +279,7 @@ fn hub_push_pull_list_round_trip_against_http_registry() {
         "list must filter by project"
     );
 
-    // --- pull: download the latest artifact and import it (digest + size checked) ---
+    // pull: download the latest artifact and import it (digest + size checked)
     let db2 = dir.path().join("pulled.lbug");
     let (code, stdout, stderr) = run(&[
         "hub",

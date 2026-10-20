@@ -138,7 +138,7 @@ pub fn load_graph_for_symbol(
 
     // Phase 3: batch-materialize nodes for every visited id with one
     // `WHERE n.id IN [...]` query per label. Replaces the per-id
-    // `fetch_node_by_id` N+1 (N × |NodeLabel::all()| round-trips — the ~77s
+    // `fetch_node_by_id` N+1 (N × |NodeLabel::all| round-trips — the ~77s
     // `impact` regression root cause on a 5034-node subgraph).
     let mut graph = Graph::new();
     let visited_ids: Vec<String> = visited.iter().cloned().collect();
@@ -193,8 +193,8 @@ fn find_symbol_node_ids(repo: &Repository, symbol: &str) -> Result<Vec<String>, 
 
 /// Batch-fetches nodes by id, issuing one `WHERE n.id IN [...]` query per node
 /// label. Replaces the per-id `fetch_node_by_id` N+1: a 5034-node subgraph
-/// previously cost 5034 × |NodeLabel::all()| round-trips; now it costs
-/// |NodeLabel::all()| (~17), independent of the id count.
+/// previously cost 5034 × |NodeLabel::all| round-trips; now it costs
+/// |NodeLabel::all| (~17), independent of the id count.
 fn fetch_nodes_by_ids(repo: &Repository, ids: &[String]) -> Result<Vec<Node>, StorageError> {
     if ids.is_empty() {
         return Ok(Vec::new());
@@ -380,9 +380,7 @@ fn parse_edge_type(s: &str) -> EdgeType {
     EdgeType::Calls
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

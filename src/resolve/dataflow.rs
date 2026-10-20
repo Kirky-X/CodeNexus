@@ -11,11 +11,11 @@
 //! - Parameter passing - Variable -> Parameter, DataFlows edge.
 //!   `foo(var)` -> var flows to foo's parameter.
 //! - Return assignment - Function -> Variable, DataFlows edge.
-//!   `x = foo()` -> foo's return flows to x.
+//!   `x = foo` -> foo's return flows to x.
 //! - Variable assignment - Variable -> Variable, DataFlows edge.
 //!   `x = y` -> y flows to x.
 //! - Function assignment - Function -> Variable, DataFlows edge.
-//!   `x = foo()` (same as).
+//!   `x = foo` (same as).
 //! - Variable read - Function -> Variable, Reads edge.
 //! - Variable write - Function -> Variable, Writes edge.
 
@@ -83,7 +83,7 @@ impl<'a> DataFlowResolver<'a> {
             // Process assignments.
             for assign in &result.assignments {
                 let edge = if assign.is_return_assign {
-                    // x = foo() -> DataFlows edge foo -> x
+                    // x = foo -> DataFlows edge foo -> x
                     // Single-line for coverage: tarpaulin attribute continuation
                     self.resolve_return_assign(
                         file,
@@ -153,7 +153,7 @@ impl<'a> DataFlowResolver<'a> {
         self.resolve_writes(results, graph);
     }
 
-    /// Resolves a return assignment: `x = foo()` -> DataFlows edge from foo
+    /// Resolves a return assignment: `x = foo` -> DataFlows edge from foo
     /// to x.
     ///
     /// Implements and.
@@ -469,7 +469,7 @@ mod tests {
         }
     }
 
-    // --- is_identifier helper ---
+    // is_identifier helper
 
     #[test]
     fn is_identifier_valid_names() {
@@ -491,11 +491,11 @@ mod tests {
         assert!(!is_identifier("foo()"));
     }
 
-    // --- resolve_return_assign ---
+    // resolve_return_assign
 
     #[test]
     fn resolve_return_assign_creates_dataflows_edge() {
-        // x = foo() -> DataFlows edge foo -> x
+        // x = foo -> DataFlows edge foo -> x
         let foo_node = make_node("foo", "a.rs", "proj", NodeLabel::Function);
         let results = vec![make_result("a.rs", vec![foo_node])];
         let table = build_symbol_table(&results, "proj");
@@ -569,7 +569,7 @@ mod tests {
         assert_eq!(edge.source, "proj.b.rs.foo");
     }
 
-    // --- resolve_var_assign ---
+    // resolve_var_assign
 
     #[test]
     fn resolve_var_assign_creates_dataflows_edge() {
@@ -640,7 +640,7 @@ mod tests {
         assert!(edge.is_some());
     }
 
-    // --- resolve_var_identifier fallback FQN format ---
+    // resolve_var_identifier fallback FQN format
 
     #[test]
     fn resolve_var_identifier_fallback_uses_fqn_generator() {
@@ -706,7 +706,7 @@ mod tests {
         );
     }
 
-    // --- resolve_arg_pass ---
+    // resolve_arg_pass
 
     #[test]
     fn resolve_arg_pass_creates_dataflows_edge() {
@@ -773,7 +773,7 @@ mod tests {
         assert_eq!(edge.target, "proj.a.rs.foo.param0");
     }
 
-    // --- resolve_dataflows: batch resolution ---
+    // resolve_dataflows: batch resolution
 
     #[test]
     fn resolve_dataflows_creates_all_data_flow_edges() {
@@ -781,7 +781,7 @@ mod tests {
         let bar_node = make_node("bar", "a.rs", "proj", NodeLabel::Function);
         let mut result = make_result("a.rs", vec![foo_node, bar_node]);
 
-        // x = foo() -> return assignment
+        // x = foo -> return assignment
         result.assignments.push(AssignInfo {
             target_name: "x".to_string(),
             source_name: "foo".to_string(),
@@ -963,7 +963,7 @@ mod tests {
         assert_eq!(graph.edge_count(), 2);
     }
 
-    // --- x passed to foo param -> DataFlows edge ---
+    // x passed to foo param -> DataFlows edge
 
     #[test]
     fn ac_trace_002_dataflow_path_x_to_foo_param() {
@@ -1002,7 +1002,7 @@ mod tests {
         );
     }
 
-    // --- resolve_reads ---
+    // resolve_reads
 
     #[test]
     fn resolve_reads_creates_reads_edge() {
@@ -1105,7 +1105,7 @@ mod tests {
         assert_eq!(edge.target, "proj.a.rs.x");
     }
 
-    // --- resolve_writes ---
+    // resolve_writes
 
     #[test]
     fn resolve_writes_creates_writes_edge() {
@@ -1184,7 +1184,7 @@ mod tests {
         );
     }
 
-    // --- resolve_dataflows integration ---
+    // resolve_dataflows integration
 
     #[test]
     fn resolve_dataflows_includes_reads_and_writes() {
@@ -1348,7 +1348,7 @@ mod tests {
         );
     }
 
-    // --- Coverage gap tests: Static label in cross-file lookup ---
+    // Coverage gap tests: Static label in cross-file lookup
 
     #[test]
     fn resolve_var_identifier_finds_variable_via_static_lookup() {
@@ -1452,7 +1452,7 @@ mod tests {
         );
     }
 
-    // --- resolve_dataflows: call arg processing (integration) ---
+    // resolve_dataflows: call arg processing (integration)
 
     #[test]
     fn resolve_dataflows_processes_call_args_creating_parameter_node() {
@@ -1564,11 +1564,11 @@ mod tests {
         assert_eq!(graph.edge_count(), 0);
     }
 
-    // --- resolve_dataflows: return assignment with unresolvable function ---
+    // resolve_dataflows: return assignment with unresolvable function
 
     #[test]
     fn resolve_dataflows_skips_return_assign_with_unresolvable_function() {
-        // x = nonexistent() → is_return_assign=true, but 'nonexistent' is not
+        // x = nonexistent → is_return_assign=true, but 'nonexistent' is not
         // in the symbol table → resolve_return_assign returns None → no edge.
         let mut result = make_result("a.rs", vec![]);
         result.assignments.push(AssignInfo {

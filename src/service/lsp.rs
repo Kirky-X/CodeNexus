@@ -31,9 +31,7 @@ use sdforge::forge;
 #[cfg(feature = "cli")]
 use sdforge::prelude::ApiError;
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Resolves `file` against `workspace` if relative, returns the absolute path.
 #[cfg(feature = "lsp")]
@@ -81,9 +79,7 @@ fn print_json<T: Serialize>(value: &T) -> Result<(), CodeNexusError> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
 // JSON output shapes
-// ---------------------------------------------------------------------------
 
 /// JSON output for `lsp-goto-def`.
 #[derive(Debug, Serialize)]
@@ -302,7 +298,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    // --- resolve_file ---
+    // resolve_file
 
     #[test]
     fn resolve_file_absolute_path_unchanged() {
@@ -318,7 +314,7 @@ mod tests {
         assert_eq!(result, std::path::PathBuf::from("/repo/src/main.rs"));
     }
 
-    // --- cli_to_lsp_position / ensure_file_exists ---
+    // cli_to_lsp_position / ensure_file_exists
 
     /// The CLI contract is 1-based; LSP positions are 0-based. Passing the raw
     /// CLI values through would query the line/column before the requested
@@ -352,7 +348,7 @@ mod tests {
         );
     }
 
-    // --- JSON output shapes ---
+    // JSON output shapes
 
     #[test]
     fn goto_def_output_none_serializes_found_false() {
@@ -485,7 +481,7 @@ mod tests {
         assert!(contents.contains("line one\nfn two()"));
     }
 
-    // --- lsp_error_to_cli ---
+    // lsp_error_to_cli
 
     #[test]
     fn lsp_error_server_start_maps_to_invalid_input() {
@@ -509,7 +505,7 @@ mod tests {
         assert!(matches!(cli_err, CodeNexusError::InvalidInput(_)));
     }
 
-    // --- core functions (mirror service logic, return CodeNexusError) ---
+    // core functions (mirror service logic, return CodeNexusError)
 
     fn goto_def_core(
         file: &str,
@@ -572,7 +568,7 @@ mod tests {
         let _ = provider.shutdown();
     }
 
-    // --- print_json ---
+    // print_json
 
     #[test]
     fn print_json_outputs_valid_json() {
@@ -581,7 +577,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // --- select_provider: default cases ---
+    // select_provider: default cases
 
     #[test]
     fn select_provider_defaults_to_rust_analyzer_for_no_extension() {
@@ -601,7 +597,7 @@ mod tests {
         let _ = provider.shutdown();
     }
 
-    // --- resolve_file: edge cases ---
+    // resolve_file: edge cases
 
     #[test]
     fn resolve_file_empty_string_returns_workspace() {
@@ -617,7 +613,7 @@ mod tests {
         assert_eq!(result, std::path::PathBuf::from("/repo/."));
     }
 
-    // --- start_or_err: direct test ---
+    // start_or_err: direct test
 
     #[test]
     fn start_or_err_with_nonexistent_workspace_does_not_panic() {
@@ -626,7 +622,7 @@ mod tests {
         let _ = client.shutdown();
     }
 
-    // --- goto_def_core / hover_core: error result type ---
+    // goto_def_core / hover_core: error result type
 
     #[test]
     fn goto_def_core_error_is_code_nexus_error() {
@@ -641,7 +637,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // --- GotoDefOutput: serialization with range ---
+    // GotoDefOutput: serialization with range
 
     #[test]
     fn goto_def_output_from_location_includes_range() {
@@ -665,7 +661,7 @@ mod tests {
         assert!(json.contains("\"character\":20"));
     }
 
-    // ===== #[forge] wrapper tests =====
+    // [forge] wrapper tests
 
     #[cfg(feature = "cli")]
     #[test]

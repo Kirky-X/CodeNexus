@@ -18,7 +18,7 @@
 //!
 //! Given two ranked lists, the fused score for a document `d` is:
 //! ```text
-//! rrf_score(d) = sum(1 / (k + rank_i(d)) ) for each list i
+//! rrf_score(d) = sum(1 / (k + rank_i(d))) for each list i
 //! ```
 //! where `k = 60` (standard constant) and `rank_i(d)` is the 1-based rank of
 //! `d` in list `i` (or 0 if absent).
@@ -326,9 +326,7 @@ impl<'a, C: ?Sized + EmbedClient> SearchStrategy for HybridStrategy<'a, C> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Multi-signal scoring
-// ---------------------------------------------------------------------------
 
 /// Returns results unchanged if neither signal is enabled or no project filter
 /// is present. Otherwise applies [`apply_multi_signal_scoring`].

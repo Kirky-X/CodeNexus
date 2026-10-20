@@ -88,9 +88,7 @@ impl Extractor for RegexExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 fn make_qn(file_path: &str, name: &str, project: &str) -> String {
     FqnGenerator::generate(project, file_path, name, Language::Regex, None)
@@ -110,9 +108,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

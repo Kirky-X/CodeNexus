@@ -192,7 +192,7 @@ impl From<ApiError> for CodeNexusError {
     }
 }
 
-// --- Service-layer error helpers ---
+// Service-layer error helpers
 
 /// Returns the process boot timestamp (unix seconds) for error_id uniqueness
 /// across restarts.
@@ -640,7 +640,7 @@ mod tests {
         assert!(err.to_string().contains("Kit not initialized"));
     }
 
-    // --- exit_code for Index variants (delegates to IndexError::exit_code) ---
+    // exit_code for Index variants (delegates to IndexError::exit_code)
 
     #[test]
     fn exit_code_index_path_not_found_is_1() {
@@ -682,7 +682,7 @@ mod tests {
         assert_eq!(err.exit_code(), 1);
     }
 
-    // --- exit_code for Query (2) ---
+    // exit_code for Query (2)
 
     #[test]
     fn exit_code_query_is_2() {
@@ -709,7 +709,7 @@ mod tests {
         assert_eq!(err.exit_code(), 2);
     }
 
-    // --- exit_code for Trace (2) ---
+    // exit_code for Trace (2)
 
     #[test]
     fn exit_code_trace_symbol_not_found_is_2() {
@@ -746,7 +746,7 @@ mod tests {
         assert_eq!(err.exit_code(), 2);
     }
 
-    // --- exit_code for Storage (2) ---
+    // exit_code for Storage (2)
 
     #[test]
     fn exit_code_storage_query_is_2() {
@@ -782,7 +782,7 @@ mod tests {
         assert_eq!(err.exit_code(), 2);
     }
 
-    // --- exit_code for Parse (0) ---
+    // exit_code for Parse (0)
 
     #[test]
     fn exit_code_parse_unsupported_language_is_0() {
@@ -799,7 +799,7 @@ mod tests {
         assert_eq!(err.exit_code(), 0);
     }
 
-    // --- exit_code for Discover (1) ---
+    // exit_code for Discover (1)
 
     #[test]
     fn exit_code_discover_io_is_1() {
@@ -808,7 +808,7 @@ mod tests {
         assert_eq!(err.exit_code(), 1);
     }
 
-    // --- exit_code for Resolve (2) ---
+    // exit_code for Resolve (2)
 
     #[test]
     fn exit_code_resolve_symbol_not_found_is_2() {
@@ -834,7 +834,7 @@ mod tests {
         assert_eq!(err.exit_code(), 2);
     }
 
-    // --- exit_code for Phase (2) ---
+    // exit_code for Phase (2)
 
     #[test]
     fn exit_code_phase_cycle_is_2() {
@@ -858,7 +858,7 @@ mod tests {
         assert_eq!(err.exit_code(), 2);
     }
 
-    // --- exit_code for Io (1) ---
+    // exit_code for Io (1)
 
     #[test]
     fn exit_code_io_is_1() {
@@ -866,7 +866,7 @@ mod tests {
         assert_eq!(err.exit_code(), 1);
     }
 
-    // --- exit_code for Json (1) ---
+    // exit_code for Json (1)
 
     #[test]
     fn exit_code_json_is_1() {
@@ -875,7 +875,7 @@ mod tests {
         assert_eq!(err.exit_code(), 1);
     }
 
-    // --- exit_code for ProjectNotFound (2) ---
+    // exit_code for ProjectNotFound (2)
 
     #[test]
     fn exit_code_project_not_found_is_2() {
@@ -883,7 +883,7 @@ mod tests {
         assert_eq!(err.exit_code(), 2);
     }
 
-    // --- exit_code for Daemon (1) ---
+    // exit_code for Daemon (1)
 
     #[cfg(feature = "daemon")]
     #[test]
@@ -900,7 +900,7 @@ mod tests {
         assert_eq!(err.exit_code(), 1);
     }
 
-    // --- exit_code for Cache (1) ---
+    // exit_code for Cache (1)
 
     #[cfg(feature = "cache")]
     #[test]
@@ -916,7 +916,7 @@ mod tests {
         assert_eq!(err.exit_code(), 1);
     }
 
-    // --- exit_code for Embed (1) ---
+    // exit_code for Embed (1)
 
     #[cfg(feature = "embeddings")]
     #[test]
@@ -932,7 +932,7 @@ mod tests {
         assert_eq!(err.exit_code(), 1);
     }
 
-    // --- exit_code for Lsp (1) ---
+    // exit_code for Lsp (1)
 
     #[cfg(feature = "lsp")]
     #[test]
@@ -957,7 +957,7 @@ mod tests {
         assert_eq!(err.exit_code(), 1);
     }
 
-    // --- kit_exit_code: IndexError::DatabaseCorrupt in source chain ---
+    // kit_exit_code: IndexError::DatabaseCorrupt in source chain
 
     #[test]
     fn exit_code_kit_build_failed_with_index_database_corrupt_is_4() {
@@ -969,7 +969,7 @@ mod tests {
         assert_eq!(err.exit_code(), 4);
     }
 
-    // --- kit_exit_code: non-corrupt source falls through to 1 ---
+    // kit_exit_code: non-corrupt source falls through to 1
 
     #[test]
     fn exit_code_kit_build_failed_with_non_corrupt_is_1() {
@@ -981,7 +981,7 @@ mod tests {
         assert_eq!(err.exit_code(), 1);
     }
 
-    // --- wrap_error / wrap_kit_error (cli/mcp feature) ---
+    // wrap_error / wrap_kit_error (cli/mcp feature)
 
     #[cfg(any(feature = "cli", feature = "mcp"))]
     #[test]

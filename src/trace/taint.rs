@@ -104,7 +104,7 @@ mod tests {
             .build()
     }
 
-    // === trace_taint: basic data-flow paths ===
+    // trace_taint: basic data-flow paths
 
     #[test]
     fn trace_taint_simple_dataflow_path() {
@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn trace_taint_zero_depth_returns_empty() {
         // max_depth=0: initial path has no edges, so sink check's
-        // !edges.is_empty() guard skips it; depth 0 >= 0 prevents expansion.
+        // !edges.is_empty guard skips it; depth 0 >= 0 prevents expansion.
         let mut g = Graph::new();
         g.add_node(make_var("source", "source"));
         g.add_node(make_var("sink", "sink"));
@@ -282,7 +282,7 @@ mod tests {
         assert_eq!(paths[0].edges[1].edge_type, "DATAFLOWS");
     }
 
-    // === trace_taint: cross-language FFI paths ===
+    // trace_taint: cross-language FFI paths
 
     #[test]
     fn trace_taint_follows_ffi_calls_edge() {
@@ -340,7 +340,7 @@ mod tests {
         assert_eq!(paths[0].edges[2].edge_type, "DATAFLOWS");
     }
 
-    // === trace_taint: edge filtering ===
+    // trace_taint: edge filtering
 
     #[test]
     fn trace_taint_skips_calls_edges() {
@@ -369,7 +369,7 @@ mod tests {
         assert!(paths.is_empty(), "Imports edges should not be followed");
     }
 
-    // === trace_taint: confidence and reason ===
+    // trace_taint: confidence and reason
 
     #[test]
     fn trace_taint_carries_reason_and_confidence() {
@@ -390,7 +390,7 @@ mod tests {
         assert_eq!(edge.reason.as_deref(), Some("taint flow"));
     }
 
-    // === trace_from_source ===
+    // trace_from_source
 
     #[test]
     fn trace_from_source_returns_all_reachable_paths() {
@@ -487,7 +487,7 @@ mod tests {
         assert!(paths.is_empty());
     }
 
-    // === is_taint_edge ===
+    // is_taint_edge
 
     #[test]
     fn is_taint_edge_dataflows() {

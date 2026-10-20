@@ -84,9 +84,7 @@ impl Extractor for JsonExtractor {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tree-walking helpers
-// ---------------------------------------------------------------------------
 
 /// Immutable traversal context passed between extraction helpers.
 struct VisitContext<'a> {
@@ -114,9 +112,7 @@ fn extract_top_level_pairs(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Definition extractors
-// ---------------------------------------------------------------------------
 
 fn extract_pair(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut ExtractResult) {
     let Some(key) = pair_key(node, source) else {
@@ -139,9 +135,7 @@ fn extract_pair(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
     result.push_node(model_node);
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Extracts the key text from a `pair` node.
 ///
@@ -174,9 +168,7 @@ fn add_definition_edges(
     ));
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

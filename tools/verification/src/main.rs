@@ -171,7 +171,6 @@ fn run_single_orchestrator(
     let report_path = report::write_report(name, &markdown)?;
     eprintln!("[ok] wrote {report_path:?}");
 
-    // Print summary
     let overall_pass = query_diffs
         .iter()
         .all(|(_, d)| matches!(d, QueryDiff::Match { .. }));
@@ -418,7 +417,7 @@ mod tests {
         assert!(cli.gitnexus_binary.is_none());
     }
 
-    // --- read_severity_counts ---
+    // read_severity_counts
 
     #[test]
     fn read_severity_counts_parses_report() {

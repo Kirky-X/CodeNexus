@@ -8,7 +8,7 @@
 //! `detect_changes` 的核心 = 「unified diff 解析 → 变更行区间 → 与
 //! Function 节点的 [startLine, endLine] 求交 → 按入边数分级
 //! (0=low, 1..4=medium, >=5=high)」。本示例用 `Repository::query`
-//! 复现该管线（`parse_unified_diff` 在 crate 内是私有的）。
+//! 复现该管线（`parse_unified_diff` 在 crate 内是私有）。
 
 use std::process::Command;
 
@@ -129,7 +129,7 @@ fn main() {
         .index(repo_dir.path(), "git-demo", true)
         .expect("indexing failed");
 
-    // --- detect_changes pipeline: diff -> ranges -> affected symbols -----
+    // detect_changes pipeline: diff -> ranges -> affected symbols
     let diff = git(&repo_dir, &["diff", "--unified=0", "--", "lib.rs"]);
     let ranges = changed_line_ranges(&diff);
     println!("=== Changed Line Ranges ({} hunks) ===", ranges.len());

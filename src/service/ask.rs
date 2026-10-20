@@ -438,7 +438,7 @@ mod tests {
             .expect("build_kit")
     }
 
-    // --- symbol extraction ---
+    // symbol extraction
 
     #[test]
     fn extracts_backtick_quoted_symbol_first() {
@@ -469,7 +469,7 @@ mod tests {
         assert_eq!(extract_symbol("复杂度怎么样"), None);
     }
 
-    // --- routing ---
+    // routing
 
     #[test]
     fn routes_callers_question_to_trace_with_symbol() {
@@ -517,7 +517,7 @@ mod tests {
         assert!(trace.confidence < 0.6, "no symbol → not executable");
     }
 
-    // --- execution (kit-based) ---
+    // execution (kit-based)
 
     fn seed_symbol(kit: &AsyncKit<AsyncReady>) {
         let storage = kit.require::<StorageModule>().unwrap();

@@ -71,7 +71,7 @@ pub struct Community {
     pub members: Vec<String>,
     /// Modularity contribution of this community (Q_c).
     pub modularity: f64,
-    /// Number of members (== `members.len()`).
+    /// Number of members (== `members.len`).
     pub size: usize,
 }
 
@@ -95,9 +95,9 @@ pub struct CommunityDetector<'a> {
     /// `community_members` can answer without recomputing.
     ///
     /// `Vec<Community>` (not `Arc<Vec<Community>>`) is intentional: the
-    /// public `detect_communities()` API returns `Vec<Community>` by value,
+    /// public `detect_communities` API returns `Vec<Community>` by value,
     /// so an `Arc` would still require a clone on return (Arc::try_unwrap
-    /// fails because the cache holds a strong ref). `community_members()`
+    /// fails because the cache holds a strong ref). `community_members`
     /// also returns `Vec<String>` by value, so per-member cloning is
     /// unavoidable regardless of the cache container (evaluation:
     /// Arc has no performance benefit without breaking the public API).

@@ -88,7 +88,7 @@ fn cli_handler(name: &str) -> &'static sdforge::cli::CliHandlerRegistration {
 }
 
 /// Dispatches one CLI command the way `run_cli` does. The handler serializes
-/// the command's return value (`()` → `Value::Null` for these two).
+/// the command's return value (`` → `Value::Null` for these two).
 fn dispatch(
     runtime: &tokio::runtime::Runtime,
     name: &str,
@@ -106,7 +106,7 @@ fn cli_query_and_status_emit_forge_log_records() {
     install_capture_logger();
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
 
-    // --- failure path: no Kit initialized in this process -------------------
+    // failure path: no Kit initialized in this process
     // The credential-shaped tail proves the DataMasker pass: the macro
     // renders args lazily and masks them before the record reaches the
     // facade, so the plaintext must never appear in the captured output.

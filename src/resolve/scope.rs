@@ -58,7 +58,7 @@ impl Scope {
 /// `name_positions` maps each `name` to a non-empty stack of positions in
 /// `scopes` (outermost first, innermost last). For every name `n`:
 /// - `name_positions[n]` is non-empty whenever any scope named `n` is on the chain.
-/// - `name_positions[n].last()` is the position of the innermost occurrence of `n`.
+/// - `name_positions[n].last` is the position of the innermost occurrence of `n`.
 /// - When the innermost occurrence is popped, its position is popped from
 ///   `name_positions[n]`; if the stack becomes empty, the entry is removed.
 ///
@@ -165,7 +165,6 @@ impl ScopeChain {
     }
 }
 
-// ---------------------------------------------------------------------------
 // ScopeResolver trait + per-language implementations
 // ---------------------------------------------------------------------------
 
@@ -254,7 +253,6 @@ fn make_scope_qn(ctx: &ScopeContext, name: &str, language: Language) -> String {
     )
 }
 
-// ---------------------------------------------------------------------------
 // PythonScopeResolver
 // ---------------------------------------------------------------------------
 
@@ -291,7 +289,6 @@ impl ScopeResolver for PythonScopeResolver {
     }
 }
 
-// ---------------------------------------------------------------------------
 // RustScopeResolver
 // ---------------------------------------------------------------------------
 
@@ -355,7 +352,6 @@ impl ScopeResolver for RustScopeResolver {
     }
 }
 
-// ---------------------------------------------------------------------------
 // CScopeResolver
 // ---------------------------------------------------------------------------
 
@@ -465,7 +461,6 @@ fn c_declarator_name(node: Node, source: &str) -> Option<String> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // FortranScopeResolver
 // ---------------------------------------------------------------------------
 
@@ -553,7 +548,6 @@ fn fortran_statement_name(node: Node, statement_kind: &str, source: &str) -> Opt
     None
 }
 
-// ---------------------------------------------------------------------------
 // TypeScriptScopeResolver
 // ---------------------------------------------------------------------------
 
@@ -606,7 +600,6 @@ impl ScopeResolver for TypeScriptScopeResolver {
     }
 }
 
-// ---------------------------------------------------------------------------
 // GoScopeResolver
 // ---------------------------------------------------------------------------
 
@@ -655,7 +648,6 @@ impl ScopeResolver for GoScopeResolver {
     }
 }
 
-// ---------------------------------------------------------------------------
 // JavaScopeResolver
 // ---------------------------------------------------------------------------
 
@@ -703,7 +695,6 @@ impl ScopeResolver for JavaScopeResolver {
     }
 }
 
-// ---------------------------------------------------------------------------
 // CppScopeResolver
 // ---------------------------------------------------------------------------
 
@@ -807,7 +798,6 @@ fn has_class_or_struct_ancestor(node: Node) -> bool {
     false
 }
 
-// ---------------------------------------------------------------------------
 // ScopeResolverRegistry
 // ---------------------------------------------------------------------------
 

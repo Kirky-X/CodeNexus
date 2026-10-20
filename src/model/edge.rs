@@ -14,7 +14,7 @@ use super::{EdgeType, NodeId};
 ///
 /// The tier is a categorical classification complementing the numeric
 /// `Edge::confidence` score. Resolvers populate the tier during resolution;
-/// `--min-confidence` filtering uses the tier's `default_score()` to map
+/// `--min-confidence` filtering uses the tier's `default_score` to map
 /// categorical filters to numeric thresholds.
 ///
 /// # Variants
@@ -324,7 +324,7 @@ mod tests {
         assert_ne!(a, d);
     }
 
-    // --- ConfidenceTier: default_score ---
+    // ConfidenceTier: default_score
 
     #[test]
     fn confidence_tier_default_score_returns_tier_specific_values() {
@@ -342,7 +342,7 @@ mod tests {
         );
     }
 
-    // --- ConfidenceTier: as_db_type ---
+    // ConfidenceTier: as_db_type
 
     #[test]
     fn confidence_tier_as_db_type_returns_upper_snake_case_for_all_variants() {
@@ -351,7 +351,7 @@ mod tests {
         assert_eq!(ConfidenceTier::Global.as_db_type(), "GLOBAL");
     }
 
-    // --- ConfidenceTier: Display ---
+    // ConfidenceTier: Display
 
     #[test]
     fn confidence_tier_display_outputs_db_type_string() {
@@ -360,7 +360,7 @@ mod tests {
         assert_eq!(format!("{}", ConfidenceTier::Global), "GLOBAL");
     }
 
-    // --- ConfidenceTier: FromStr ---
+    // ConfidenceTier: FromStr
 
     #[test]
     fn confidence_tier_from_str_parses_all_valid_db_type_strings() {

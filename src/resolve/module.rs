@@ -22,9 +22,7 @@ use super::symbol_table::ProjectSymbolTable;
 use crate::ir::ExtractResult;
 use crate::model::Graph;
 
-// ---------------------------------------------------------------------------
 // Module (ModuleMeta + AsyncAutoBuilder)
-// ---------------------------------------------------------------------------
 
 /// trait-kit module tag for the Resolver subsystem.
 ///
@@ -34,10 +32,10 @@ use crate::model::Graph;
 /// ```ignore
 /// use codenexus::kit::{AsyncKit, ResolverModule};
 ///
-/// let mut kit = AsyncKit::new();
-/// kit.register::<ResolverModule>()?;
-/// let kit = kit.build().await?;
-/// let resolver = kit.require::<ResolverModule>()?;
+/// let mut kit = AsyncKit::new;
+/// kit.register::<ResolverModule>?;
+/// let kit = kit.build.await?;
+/// let resolver = kit.require::<ResolverModule>?;
 /// ```
 pub struct ResolverModule;
 
@@ -68,9 +66,7 @@ impl ResolverModule {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Concrete dyn Resolver implementation
-// ---------------------------------------------------------------------------
 
 /// Concrete implementation of [`dyn Resolver`] delegating to the stateless
 /// free functions [`build_symbol_table`](super::build_symbol_table) and
@@ -107,9 +103,7 @@ impl Resolver for ResolverCapability {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -186,7 +180,7 @@ mod tests {
         let (results, table, mut graph) = fixture_call_foo_to_bar();
         let cap = ResolverModule::build_cap().expect("build_cap");
         let includes_graph = IncludesGraph::new();
-        // fix: `resolve_all` now returns `()` — inspect `graph` directly.
+        // fix: `resolve_all` now returns `` — inspect `graph` directly.
         cap.resolve_all(&results, &table, "proj", &mut graph, &includes_graph);
 
         let calls_count = graph

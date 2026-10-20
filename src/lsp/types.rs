@@ -119,7 +119,7 @@ mod tests {
     use crate::model::NodeLabel;
     use lsp_types::SymbolKind;
 
-    // --- Mandatory mappings ---
+    // Mandatory mappings
 
     #[test]
     fn map_function_kind() {
@@ -190,7 +190,7 @@ mod tests {
         );
     }
 
-    // --- Extended mappings (optional rows) ---
+    // Extended mappings (optional rows)
 
     #[test]
     fn map_namespace_kind() {
@@ -248,7 +248,7 @@ mod tests {
         );
     }
 
-    // --- Unknown/unsupported kinds must return None ---
+    // Unknown/unsupported kinds must return None
 
     #[test]
     fn map_unknown_kind_returns_none() {
@@ -266,7 +266,7 @@ mod tests {
         assert_eq!(map_lsp_symbol_kind(SymbolKind::OPERATOR), None);
     }
 
-    // --- Edge case: raw/uninitialized SymbolKind value ---
+    // Edge case: raw/uninitialized SymbolKind value
     //
     // `SymbolKind` is a transparent struct over `i32`. A server might send a
     // kind value our mapping doesn't recognize (e.g. a future LSP revision
@@ -280,7 +280,7 @@ mod tests {
         assert_eq!(map_lsp_symbol_kind(unknown), None);
     }
 
-    // --- Symmetry: mapping is deterministic ---
+    // Symmetry: mapping is deterministic
 
     #[test]
     fn map_is_deterministic() {

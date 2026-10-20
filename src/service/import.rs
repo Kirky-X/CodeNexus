@@ -676,7 +676,7 @@ mod tests {
         assert!(import_output.db_size > 0);
     }
 
-    // ===== #[forge] wrapper tests via init_kit =====
+    // [forge] wrapper tests via init_kit
 
     /// RAII guard that resets the global Kit on Drop, ensuring test isolation.
     #[cfg(feature = "cli")]
@@ -738,7 +738,7 @@ mod tests {
     }
 
     // Covers the import wrapper success path (lines 180-188):
-    // kit() resolves, run_export creates artifact, run_import succeeds,
+    // kit resolves, run_export creates artifact, run_import succeeds,
     // serde_json::to_string succeeds, println outputs JSON.
     #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]
