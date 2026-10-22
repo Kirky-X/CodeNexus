@@ -183,6 +183,11 @@ pub fn run_import(
         out.flush()?;
     }
 
+    // The Kit opened this database at boot, before the file was replaced.
+    // That handle now points at the old file and its WAL bookkeeping no
+    // longer matches the bytes on disk, so it must not be handed out again.
+    crate::storage::StorageConnection::invalidate_cached_handle(&db_path);
+
     let db_size = db_path.metadata()?.len();
 
     let mut reindexed = false;

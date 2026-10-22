@@ -21,6 +21,7 @@ use csv::WriterBuilder;
 use super::error::{Result, StorageError};
 use super::schema::{escape_identifier, node_table_columns, relation_table_columns};
 use crate::model::{Edge, EdgeType, Node, NodeLabel};
+use tracing::warn;
 
 /// Tab character used as the CSV delimiter.
 ///
@@ -367,7 +368,10 @@ pub fn load_from_csv<C: crate::storage::connection::CypherExecutor>(
     let cypher = format!(
         "COPY {escaped_table} FROM '{escaped_path}' (HEADER, DELIM '\\t', PARALLEL=FALSE);"
     );
-    conn.execute_cypher(&cypher)?;
+    if let Err(err) = conn.execute_cypher(&cypher) {
+        warn!(statement = %cypher, error = %err, "COPY FROM failed");
+        return Err(err);
+    }
     Ok(())
 }
 

@@ -9,8 +9,16 @@
 //! [`Database`] and create short-lived [`Connection`]s on demand for each
 //! `execute` / `query` call. This trades a small per-call overhead for
 //! simplicity and testability.
+//!
+//! The [`Database`] handle is shared process-wide per path (see
+//! `OPEN_DATABASES`): LadybugDB takes an exclusive write lock on the file
+//! when a read-write instance opens it, and on Windows that lock belongs to
+//! the file handle rather than the process — so a second read-write handle
+//! on the same file fails even inside one process.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use lbug::{Connection, Database, SystemConfig, Value};
 use tracing::warn;
@@ -91,12 +99,51 @@ fn is_corruption_error(e: &StorageError) -> bool {
 /// A wrapper around a LadybugDB [`Database`] providing schema initialization,
 /// DDL/DML execution, and JSON-valued query helpers.
 ///
-/// Cloning is intentionally **not** supported — each instance owns its
-/// underlying database files. To share data across logical owners, open the
-/// same path from multiple [`StorageConnection`] instances (LadybugDB supports
-/// multi-process access).
+/// Cloning is intentionally **not** supported — each instance owns a handle to
+/// the underlying database file. Opening the same path twice **in one
+/// process** shares one LadybugDB handle (see `OPEN_DATABASES`); opening it
+/// from another process stays independent (LadybugDB supports multi-process
+/// access).
 pub struct StorageConnection {
-    db: Database,
+    db: Arc<Database>,
+}
+
+/// Process-wide cache of open LadybugDB handles, keyed by (path, read-only).
+///
+/// LadybugDB takes an exclusive write lock on the database file when a
+/// read-write instance opens it. On Windows that lock is a byte-range lock
+/// (`LockFileEx`) and belongs to the **file handle**, not the process, so a
+/// second read-write handle on the same file fails with
+/// `ERROR_LOCK_VIOLATION` (33) even when both come from one process. Linux
+/// accepts the same code because `fcntl` locks are owned per process.
+///
+/// The Kit opens one database path from several modules (Storage, Query,
+/// Trace), so without sharing a handle the second `Database::new` always lost
+/// that race on Windows and every writing command (`index`/`import`) failed
+/// with "database is locked".
+///
+/// The cache holds weak references: once the last [`StorageConnection`] for a
+/// path is dropped the handle is closed and the entry disappears, so opening
+/// the same path later starts from a clean file.
+type OpenDatabaseCache = Mutex<HashMap<(PathBuf, bool), Weak<Database>>>;
+
+static OPEN_DATABASES: OnceLock<OpenDatabaseCache> = OnceLock::new();
+
+/// Cache key for a database path: the canonical parent directory plus the
+/// file name, so the same file reached through different spellings maps to
+/// one handle even when the file does not exist yet.
+fn db_cache_key(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| path.to_path_buf());
+    match path
+        .parent()
+        .and_then(|dir| std::fs::canonicalize(dir).ok())
+    {
+        Some(dir) => dir.join(file_name),
+        None => file_name,
+    }
 }
 
 impl StorageConnection {
@@ -127,12 +174,40 @@ impl StorageConnection {
 
     /// Shared open implementation parameterized by read-only mode.
     ///
+    /// The same path opened twice in one process reuses one LadybugDB handle
+    /// (see `OPEN_DATABASES`); `:memory:` always gets a fresh instance.
+    ///
     /// On `Database::new` failure, a lock conflict is mapped to
     /// [`StorageError::DatabaseLocked`] (exit 2 — must not hide behind
     /// a generic exit-1 error), a corruption pattern to
     /// [`StorageError::Corrupt`] (exit 4), otherwise the raw
     /// [`StorageError::Database`] is returned.
     fn open_with<P: AsRef<Path>>(path: P, read_only: bool) -> Result<Self> {
+        let path = path.as_ref();
+        if path == Path::new(":memory:") {
+            return Ok(Self {
+                db: Arc::new(Self::open_fresh(path, read_only)?),
+            });
+        }
+        let key = (db_cache_key(path), read_only);
+        let cache = OPEN_DATABASES.get_or_init(|| Mutex::new(HashMap::new()));
+        // The cache lock is held across `open_fresh`: two threads racing for
+        // the same path must not both create a handle, or the loser would
+        // fail with a lock error on Windows.
+        let mut guard = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(db) = guard.get(&key).and_then(Weak::upgrade) {
+            return Ok(Self { db });
+        }
+        let db = Arc::new(Self::open_fresh(path, read_only)?);
+        guard.insert(key, Arc::downgrade(&db));
+        Ok(Self { db })
+    }
+
+    /// Opens a new LadybugDB handle for `path`, bypassing the process-wide
+    /// handle cache.
+    fn open_fresh(path: &Path, read_only: bool) -> Result<Database> {
         // L7-5 memory-overflow fix: pin explicit LadybugDB memory caps in BOTH
         // test and production builds.
         //
@@ -225,7 +300,7 @@ impl StorageConnection {
             let max_db_size = if read_only {
                 4 * 1024 * 1024 * 1024 * 1024 // 4 TiB cap (read-only: covers any DB size)
             } else {
-                *MAX_DB_SIZE.get_or_init(|| compute_max_db_size(path.as_ref()))
+                *MAX_DB_SIZE.get_or_init(|| compute_max_db_size(path))
             };
             SystemConfig::default()
                 .buffer_pool_size(compute_buffer_pool_size())
@@ -234,7 +309,7 @@ impl StorageConnection {
                 .read_only(read_only)
         };
         match Database::new(path, config) {
-            Ok(db) => Ok(Self { db }),
+            Ok(db) => Ok(db),
             Err(e) => {
                 let storage_err = StorageError::Database(e);
                 if is_db_locked(&storage_err) {
@@ -253,6 +328,23 @@ impl StorageConnection {
     /// Creates an in-memory database (alias for `open(":memory:")`).
     pub fn in_memory() -> Result<Self> {
         Self::open(":memory:")
+    }
+
+    /// Drops the cached handle for `path` so the next open creates a fresh one.
+    ///
+    /// The import flow rewrites a database file in place while a handle to it
+    /// is still open (the Kit opens the DB at boot). Handing that stale
+    /// handle out again is wrong: its WAL bookkeeping no longer matches the
+    /// file on disk, and the next commit fails on a missing WAL sidecar.
+    pub fn invalidate_cached_handle(path: &Path) {
+        let Some(cache) = OPEN_DATABASES.get() else {
+            return;
+        };
+        let key_path = db_cache_key(path);
+        let Ok(mut guard) = cache.lock() else {
+            return;
+        };
+        guard.retain(|(cached_path, _), _| cached_path != &key_path);
     }
 
     /// Initializes the full CodeNexus schema: all 20 node tables, the
@@ -551,13 +643,22 @@ fn probe_available_disk_space(db_path: &Path) -> u64 {
     // Find the disk whose mount point is the longest prefix of our path.
     // This correctly handles nested mounts (e.g. /home on a separate
     // partition from /).
+    //
+    // The comparison runs on strings because Windows canonicalize() returns a
+    // verbatim path (`\\?\C:\Users\...`) while sysinfo reports the mount
+    // point without that prefix (`C:\`) — a Path-level `starts_with` would
+    // never match and the probe would report 0 on every Windows path.
+    let canonical_str = canonical.to_string_lossy();
+    let canonical_str = canonical_str
+        .strip_prefix("\\\\?\\")
+        .unwrap_or(&canonical_str);
     let mut best: Option<u64> = None;
     let mut best_len: usize = 0;
     for disk in disks.list() {
-        let mount = disk.mount_point();
-        if canonical.starts_with(mount) && mount.as_os_str().len() > best_len {
+        let mount = disk.mount_point().to_string_lossy();
+        if canonical_str.starts_with(mount.as_ref()) && mount.len() > best_len {
             best = Some(disk.available_space());
-            best_len = mount.as_os_str().len();
+            best_len = mount.len();
         }
     }
     best.unwrap_or(0)
@@ -760,6 +861,45 @@ mod tests {
         let conn = StorageConnection::open(dir.path().join("testdb"));
         assert!(conn.is_ok(), "failed to open database: {:?}", conn.err());
         dir.close().unwrap();
+    }
+
+    /// Opening the same path twice in one process must reuse one LadybugDB
+    /// handle. LadybugDB's write lock belongs to the file handle on Windows,
+    /// so a second read-write handle on the same file fails with
+    /// `ERROR_LOCK_VIOLATION` — the Kit opens one path from the Storage,
+    /// Query and Trace modules, so this is the difference between a working
+    /// and a broken `index` on Windows.
+    #[test]
+    fn open_same_path_twice_in_one_process_reuses_the_handle() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shared.lbug");
+        let first = StorageConnection::open(&path).expect("first open");
+        let second = StorageConnection::open(&path).expect("second open in the same process");
+        assert!(
+            Arc::ptr_eq(&first.db, &second.db),
+            "opening the same path twice must reuse one LadybugDB handle"
+        );
+    }
+
+    #[test]
+    fn in_memory_databases_stay_independent() {
+        let first = StorageConnection::in_memory().expect("in_memory");
+        let second = StorageConnection::in_memory().expect("in_memory");
+        assert!(
+            !Arc::ptr_eq(&first.db, &second.db),
+            "in-memory databases must not be shared"
+        );
+    }
+
+    #[test]
+    fn different_paths_get_different_handles() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = StorageConnection::open(dir.path().join("a.lbug")).expect("open a");
+        let second = StorageConnection::open(dir.path().join("b.lbug")).expect("open b");
+        assert!(
+            !Arc::ptr_eq(&first.db, &second.db),
+            "different paths must not share a handle"
+        );
     }
 
     #[test]
@@ -1537,8 +1677,9 @@ mod tests {
 
     #[test]
     fn probe_available_disk_space_returns_nonzero_for_real_path() {
-        let avail = probe_available_disk_space(Path::new("/tmp"));
-        assert!(avail > 0, "expected non-zero disk space for /tmp");
+        let temp_dir = std::env::temp_dir();
+        let avail = probe_available_disk_space(&temp_dir);
+        assert!(avail > 0, "expected non-zero disk space for {temp_dir:?}");
     }
 
     #[test]

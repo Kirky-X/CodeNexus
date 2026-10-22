@@ -754,8 +754,14 @@ const MAX_CSV_ALIAS_LEN: usize = 160;
 /// [`MAX_CSV_ALIAS_LEN`] are therefore truncated at a char boundary and
 /// suffixed with a digest of the full id — still readable, still unique,
 /// and guaranteed to fit the file system's name limit.
+///
+/// The id is also sanitized for characters that are illegal in a Windows file
+/// name. A Windows absolute path keeps its drive letter in the id
+/// (`C:.Users.Kirky...`), and the colon is the NTFS alternate-data-stream
+/// separator: LadybugDB's path parser then reads `C` as the file type and
+/// `COPY FROM` fails with "Cannot load from file type C".
 fn node_batch_csv_file_name(label: NodeLabel, first_node_id: &str) -> String {
-    let safe_id = first_node_id.replace(['/', '\\'], "_");
+    let safe_id = first_node_id.replace(['/', '\\', ':'], "_");
     if safe_id.len() <= MAX_CSV_ALIAS_LEN {
         return format!("{}_{safe_id}.csv", label.table_name());
     }
