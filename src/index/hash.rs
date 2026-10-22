@@ -594,6 +594,7 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 
+    #[cfg(unix)]
     #[test]
     fn compute_file_hash_rejects_symlink() {
         // Symlinks are rejected to prevent

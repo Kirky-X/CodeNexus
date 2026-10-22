@@ -1449,6 +1449,7 @@ mod tests {
         assert!(result.is_ok(), "信号处理器注册应成功: {result:?}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn signal_sets_stop_flag_via_signal_hook() {
         // 用 SIGUSR1（安全测试信号）验证 signal_hook → stop 标志的映射。
