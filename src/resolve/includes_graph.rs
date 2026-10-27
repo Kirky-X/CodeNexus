@@ -45,7 +45,7 @@ use std::collections::{HashMap, HashSet};
 /// ```
 /// use codenexus::resolve::includes_graph::IncludesGraph;
 ///
-/// let mut graph = IncludesGraph::new;
+/// let mut graph = IncludesGraph::new();
 /// graph.add_include("main.cpp", "foo.h");
 /// graph.add_include("foo.h", "bar.h");
 ///
@@ -250,21 +250,21 @@ impl<T, S> SetCount for HashSet<T, S> {
 /// use codenexus::resolve::includes_graph::resolve_include;
 ///
 /// // Same-directory preference: src/foo.h wins over include/foo.h.
-/// let all = vec!["src/foo.h".to_string, "include/foo.h".to_string];
+/// let all = vec!["src/foo.h".to_string(), "include/foo.h".to_string()];
 /// assert_eq!(
 ///     resolve_include("foo.h", "src/main.cpp", &all),
-///     Some("src/foo.h".to_string)
-///);
+///     Some("src/foo.h".to_string())
+/// );
 ///
 /// // No same-directory match: falls back to any project file.
-/// let all = vec!["include/bar.h".to_string];
+/// let all = vec!["include/bar.h".to_string()];
 /// assert_eq!(
 ///     resolve_include("bar.h", "src/main.cpp", &all),
-///     Some("include/bar.h".to_string)
+///     Some("include/bar.h".to_string())
 ///);
 ///
 /// // System header: no match in project files.
-/// let all = vec!["src/main.cpp".to_string];
+/// let all = vec!["src/main.cpp".to_string()];
 /// assert_eq!(resolve_include("iostream", "src/main.cpp", &all), None);
 /// ```
 pub fn resolve_include(

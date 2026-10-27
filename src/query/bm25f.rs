@@ -154,7 +154,7 @@ fn bm25f_field_score(field: &str, query: &str) -> f64 {
 /// ```
 /// use codenexus::query::bm25f::{bm25f_score, FieldWeights};
 ///
-/// let w = FieldWeights::default;
+/// let w = FieldWeights::default();
 /// // Exact name match dominates comment substring match.
 /// let name_exact = bm25f_score("parse", "parse", "demo.parse", "", "", &w);
 /// let comment_sub = bm25f_score("parse", "read", "demo.read", "parse a file", "", &w);

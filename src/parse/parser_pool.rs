@@ -35,10 +35,10 @@ use super::parser_factory::ParserFactory;
 /// use codenexus::model::Language;
 /// use codenexus::parse::ParserPool;
 ///
-/// let pool = ParserPool::new;
-/// let mut parser = pool.get_parser(Language::Rust).unwrap;
-/// let tree = parser.parse("fn main {}", None);
-/// assert!(tree.is_some);
+/// let pool = ParserPool::new();
+/// let mut parser = pool.get_parser(Language::Rust).unwrap();
+/// let tree = parser.parse("fn main() {}", None);
+/// assert!(tree.is_some());
 /// ```
 pub struct ParserPool {
     parsers: RefCell<HashMap<Language, Parser>>,
@@ -172,9 +172,9 @@ thread_local! {
 /// use codenexus::parse::with_thread_pool;
 ///
 /// with_thread_pool(|pool| {
-///     let mut parser = pool.get_parser(Language::Rust).unwrap;
-///     let tree = parser.parse("fn main {}", None);
-///     assert!(tree.is_some);
+///     let mut parser = pool.get_parser(Language::Rust).unwrap();
+///     let tree = parser.parse("fn main() {}", None);
+///     assert!(tree.is_some());
 /// });
 /// ```
 pub fn with_thread_pool<R>(f: impl FnOnce(&ParserPool) -> R) -> R {

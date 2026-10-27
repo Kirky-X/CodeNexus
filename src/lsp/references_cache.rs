@@ -95,18 +95,18 @@ impl CacheKey {
 /// use lsp_types::{Location, Position, Range, Uri};
 /// use std::str::FromStr;
 ///
-/// let cache = ReferencesCache::new;
-/// let key = CacheKey::new("file:///tmp/x.rs".to_string, 5, 10);
+/// let cache = ReferencesCache::new();
+/// let key = CacheKey::new("file:///tmp/x.rs".to_string(), 5, 10);
 /// let loc = Location {
-///     uri: Uri::from_str("file:///tmp/x.rs").unwrap,
+///     uri: Uri::from_str("file:///tmp/x.rs").unwrap(),
 ///     range: Range {
 ///         start: Position { line: 5, character: 0 },
 ///         end: Position { line: 5, character: 10 },
 ///     },
 /// };
-/// cache.insert(key.clone, vec![loc.clone]);
+/// cache.insert(key.clone(), vec![loc.clone()]);
 /// let got = cache.get(&key).expect("entry present");
-/// assert_eq!(got.len, 1);
+/// assert_eq!(got.len(), 1);
 /// ```
 pub struct ReferencesCache {
     inner: Mutex<CacheInner>,

@@ -53,8 +53,8 @@ pub struct CypherSubsetParser;
 /// ```
 /// use codenexus::query::cypher_subset::validate_cypher_subset;
 ///
-/// assert!(validate_cypher_subset("MATCH (n:Function) RETURN n.name").is_ok);
-/// assert!(validate_cypher_subset("CREATE (n:Person {name: 'a'})").is_err);
+/// assert!(validate_cypher_subset("MATCH (n:Function) RETURN n.name").is_ok());
+/// assert!(validate_cypher_subset("CREATE (n:Person {name: 'a'})").is_err());
 /// ```
 pub fn validate_cypher_subset(query: &str) -> Result<()> {
     if query.trim().is_empty() {

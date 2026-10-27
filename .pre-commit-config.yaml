@@ -10,20 +10,20 @@ repos:
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
         # fuzz 语料是二进制回归输入，按文本规则改写会污染用例字节
-        exclude: '^fuzz/corpus/'
+        exclude: "^fuzz/corpus/"
       - id: end-of-file-fixer
-        exclude: '^fuzz/corpus/'
+        exclude: "^fuzz/corpus/"
       - id: check-yaml
-        exclude: '^fuzz/corpus/'
+        exclude: "^fuzz/corpus/"
       - id: check-toml
       - id: check-added-large-files
-        args: ['--maxkb=2000']
+        args: ["--maxkb=2000"]
       - id: detect-private-key
       - id: check-merge-conflict
-        args: ['--assume-in-merge']
+        args: ["--assume-in-merge"]
       - id: mixed-line-ending
-        args: ['--fix=lf']
-        exclude: '^fuzz/corpus/'
+        args: ["--fix=lf"]
+        exclude: "^fuzz/corpus/"
 
   # 2. Detect secrets
   - repo: https://github.com/Yelp/detect-secrets
@@ -38,7 +38,10 @@ repos:
       - id: cargo-fmt
         name: Format Rust code
         description: Check Rust formatting with rustfmt
-        entry: cargo +nightly fmt --all -- --check
+        # rustup run 而非 cargo +nightly：后者要求 cargo 是 rustup 代理，
+        # 在直连 cargo 二进制的环境下（如本机 .cargo/bin 非代理）会报
+        # "no such command: +nightly"，使格式门禁恒失败。
+        entry: rustup run nightly cargo fmt --all -- --check
         language: system
         types: [rust]
         pass_filenames: false
@@ -54,7 +57,7 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
-        args: ['--', '-D', 'warnings']
+        args: ["--", "-D", "warnings"]
       - id: cargo-test
         name: cargo test
         entry: cargo test --lib --quiet
@@ -108,4 +111,4 @@ ci:
   autoupdate_commit_msg: "chore: update pre-commit hooks"
 
 # 全局阶段约束
-default_stages: [pre-commit]  # 锁定未显式声明 stages 的 hook，避免污染 post-commit 等阶段
+default_stages: [pre-commit] # 锁定未显式声明 stages 的 hook，避免污染 post-commit 等阶段
