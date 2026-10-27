@@ -142,7 +142,10 @@ fn db_cache_key(path: &Path) -> PathBuf {
         .and_then(|dir| std::fs::canonicalize(dir).ok())
     {
         Some(dir) => dir.join(file_name),
-        None => file_name,
+        // 目录尚不存在（首次建库）时不能退化为裸文件名：两个不同目录下的
+        // 同名库会拿到同一个 key，共享错误句柄。退化为完整原始路径——此时
+        // 目录缺失，open 本就会失败，不会有旧句柄可复用，无碰撞窗口。
+        None => path.to_path_buf(),
     }
 }
 
@@ -194,6 +197,12 @@ impl StorageConnection {
         // The cache lock is held across `open_fresh`: two threads racing for
         // the same path must not both create a handle, or the loser would
         // fail with a lock error on Windows.
+        //
+        // 例外：`MAX_DB_SIZE`（OnceLock）首次初始化会做 1–50ms 磁盘探活，
+        // 此时持全局锁会把**所有**路径的 open 串行在这一次 I/O 后面。故当
+        // 缓存为空且探活尚未初始化时先做一次探活，把 I/O 移出临界区；
+        // 探活幂等（OnceLock 只算一次），同路径并发保护不受影响。
+        prime_max_db_size(path, read_only);
         let mut guard = cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -296,11 +305,10 @@ impl StorageConnection {
             // max_db_size throw BufferManagerException. Use the 4 TiB CAP
             // (power of 2, avoids probe on every query). This is virtual
             // address space reservation (mmap MAP_NORESERVE), not actual memory.
-            static MAX_DB_SIZE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
             let max_db_size = if read_only {
                 4 * 1024 * 1024 * 1024 * 1024 // 4 TiB cap (read-only: covers any DB size)
             } else {
-                *MAX_DB_SIZE.get_or_init(|| compute_max_db_size(path))
+                max_db_size_cached(path)
             };
             SystemConfig::default()
                 .buffer_pool_size(compute_buffer_pool_size())
@@ -336,6 +344,10 @@ impl StorageConnection {
     /// is still open (the Kit opens the DB at boot). Handing that stale
     /// handle out again is wrong: its WAL bookkeeping no longer matches the
     /// file on disk, and the next commit fails on a missing WAL sidecar.
+    ///
+    /// 该 path 的**读写与只读两种 key 一并清除**（`read_only` 标志刻意不参与
+    /// 过滤）：文件被原地替换后，只读句柄同样指向旧文件、WAL 记账同样失配，
+    /// 保留它只会把坏句柄发给下一次 open。
     pub fn invalidate_cached_handle(path: &Path) {
         let Some(cache) = OPEN_DATABASES.get() else {
             return;
@@ -656,12 +668,42 @@ fn probe_available_disk_space(db_path: &Path) -> u64 {
     let mut best_len: usize = 0;
     for disk in disks.list() {
         let mount = disk.mount_point().to_string_lossy();
-        if canonical_str.starts_with(mount.as_ref()) && mount.len() > best_len {
+        // Windows 文件系统大小写不敏感：用户传入 `d:\data` 而 sysinfo 报告
+        // `D:\` 时，大小写敏感比较会 miss（fail-safe 到 64 GiB 回退，但探测
+        // 白做）。Windows 上做 ASCII 大小写折叠；Unix 路径大小写敏感，保持
+        // 精确比较（折叠会在大小写区分的挂载点上引入误匹配）。
+        let matched = if cfg!(windows) {
+            canonical_str.len() >= mount.len()
+                && canonical_str[..mount.len()].eq_ignore_ascii_case(mount.as_ref())
+        } else {
+            canonical_str.starts_with(mount.as_ref())
+        };
+        if matched && mount.len() > best_len {
             best = Some(disk.available_space());
             best_len = mount.len();
         }
     }
     best.unwrap_or(0)
+}
+
+/// 进程级缓存的 max_db_size（磁盘空间变化缓慢，首次探测值即近似全进程可用）。
+static MAX_DB_SIZE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+/// 返回缓存的 max_db_size，未初始化时执行一次磁盘探测。
+///
+/// 与 `prime_max_db_size` 共用同一 `OnceLock`：`open_with` 在取缓存锁**之前**
+/// 调用后者，把首次探测的 I/O 移出临界区，避免一次磁盘探活串行化所有路径的 open。
+fn max_db_size_cached(db_path: &Path) -> u64 {
+    *MAX_DB_SIZE.get_or_init(|| compute_max_db_size(db_path))
+}
+
+/// 预热 `MAX_DB_SIZE`，使后续 `max_db_size_cached` 不再触发磁盘 I/O。
+///
+/// 只读连接不使用该值（走 4 TiB cap），故只读路径直接跳过。
+fn prime_max_db_size(db_path: &Path, read_only: bool) {
+    if !read_only {
+        let _ = max_db_size_cached(db_path);
+    }
 }
 
 /// Computes the DuckDB `max_db_size` for production builds based on the disk

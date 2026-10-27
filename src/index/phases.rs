@@ -965,19 +965,18 @@ fn enforce_edge_integrity<E: crate::storage::connection::CypherExecutor>(
         // Edge endpoints carry no label, so every node table must be
         // consulted; `live_db_nodes` materializes the id list per label
         // lazily.
-        live_db_nodes(
-            conn,
-            |_label| missing.iter().cloned().collect::<Vec<String>>(),
-            excluded_paths,
-            project,
-        )?
+        //
+        // 先收集一次再进闭包：`ids_for` 会被每个 label 调用（20 张节点表），
+        // 闭包内 `missing.iter().cloned().collect()` 会把整个集合重复物化
+        // 20 次；提升到闭包外后每次只剩一次 Vec 克隆。
+        let missing_ids: Vec<String> = missing.iter().cloned().collect();
+        live_db_nodes(conn, |_label| missing_ids.clone(), excluded_paths, project)?
     };
     let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     graph.retain_edges(|edge| {
-        if !seen_ids.insert(crate::storage::loader::edge_id(edge)) {
-            stats.deduplicated += 1;
-            return false;
-        }
+        // 端点门先于去重：同 PK 的第一条若因端点不可解析被丢弃，不应把
+        // 第二条（可能有效）误标为「重复」。PK 冲突对里至少有效的那条
+        // 得以存活，`deduplicated` 只统计真正被去重的有效边。
         let endpoints_ok = [&edge.source, &edge.target]
             .iter()
             .all(|id| node_ids.contains(id.as_str()) || db_live.contains_key(id.as_str()));
@@ -990,8 +989,13 @@ fn enforce_edge_integrity<E: crate::storage::connection::CypherExecutor>(
                 "dropped edge with unresolvable endpoints"
             );
             stats.dropped += 1;
+            return false;
         }
-        endpoints_ok
+        if !seen_ids.insert(crate::storage::loader::edge_id(edge)) {
+            stats.deduplicated += 1;
+            return false;
+        }
+        true
     });
     Ok(stats)
 }

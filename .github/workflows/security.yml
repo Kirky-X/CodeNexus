@@ -11,9 +11,16 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # 同分支重复触发时取消上一次：安全扫描每次都要全量 clone（fetch-depth: 0），
+  # 并发堆积会长时间占用 runner。
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   security:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       # gitleaks 需要全量提交历史：浅克隆（默认 depth=1）下 action 算出的
       # `<head>^..<head>` 区间取不到父提交，gitleaks 会以
@@ -25,7 +32,8 @@ jobs:
         with:
           fetch-depth: 0
       - name: actionlint
-        uses: docker://rhysd/actionlint:latest
+        # 第三方 docker action 钉具体版本：latest 可变，上游可静默换镜像。
+        uses: docker://rhysd/actionlint:v1.7.7
         with:
           # shellcheck 子检查降到 error 级：YAML 语法/表达式错误仍阻断，
           # 风格级（SC2086/SC2034 等）不阻断，避免打断既有流水线。
@@ -41,7 +49,8 @@ jobs:
         # 也救不回来——同族 NebulaId run 39447128551、CalNexus 与 garrison 均因此长红。
         uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
       - name: gitleaks 密钥扫描
-        uses: gitleaks/gitleaks-action@v2
+        # 第三方 action 钉 SHA：@v2 可变 tag，上游可重指。
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
       # 不引入 cargo-vet：依赖来源审计由 ci.yml 已有的 "cargo-audit + cargo-deny" 作业
@@ -50,7 +59,8 @@ jobs:
       # 依赖无法在此补齐，`cargo vet verify` 是从第一天起就必失败的空转门禁。
       # 处理方式与本工作区 vecboost/CalNexus/NebulaId 的同一 workflow 一致。
       - name: trivy (文件系统/依赖漏洞)
-        uses: aquasecurity/trivy-action@master
+        # 同上：@master 是可变分支，钉 v0.36.0。
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
