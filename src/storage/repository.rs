@@ -761,7 +761,9 @@ const MAX_CSV_ALIAS_LEN: usize = 160;
 /// separator: LadybugDB's path parser then reads `C` as the file type and
 /// `COPY FROM` fails with "Cannot load from file type C".
 fn node_batch_csv_file_name(label: NodeLabel, first_node_id: &str) -> String {
-    let safe_id = first_node_id.replace(['/', '\\', ':'], "_");
+    // NTFS 非法字符全集：`/ \ : * ? " < > |`。冒号另有特殊含义（NTFS 备用数据流
+    // 分隔符，见上方文档），其余字符会让 Windows 创建文件时直接失败。
+    let safe_id = first_node_id.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
     if safe_id.len() <= MAX_CSV_ALIAS_LEN {
         return format!("{}_{safe_id}.csv", label.table_name());
     }
@@ -1208,6 +1210,48 @@ mod tests {
             name_a,
             node_batch_csv_file_name(NodeLabel::Function, &long_a)
         );
+    }
+
+    /// NTFS 全部九类非法字符都必须被替换：`/ \ : * ? " < > |`。
+    /// 冒号是 NTFS 备用数据流分隔符（Windows 盘符 `C:` 会触发 COPY FROM 失败），
+    /// 其余字符会让 Windows 直接拒绝创建文件。
+    #[test]
+    fn node_batch_csv_file_name_replaces_all_ntfs_illegal_chars() {
+        // 逐字符断言：单独出现时替换为 `_`，既不是删除也不是换用其他占位符
+        // （名字仍需可读，且不同 id 不能因清洗而碰撞）。
+        for illegal in ['/', '\\', ':', '*', '?', '"', '<', '>', '|'] {
+            let name = node_batch_csv_file_name(NodeLabel::Function, &format!("a{illegal}b"));
+            assert_eq!(
+                name, "Function_a_b.csv",
+                "illegal char {illegal:?} must map to `_`"
+            );
+        }
+
+        let id = r#"C:\path/to:file*name?with"weird<chars>and|pipe"#;
+        let name = node_batch_csv_file_name(NodeLabel::Function, id);
+        assert_eq!(
+            name, "Function_C__path_to_file_name_with_weird_chars_and_pipe.csv",
+            "all nine illegal chars must be replaced in place"
+        );
+    }
+
+    /// 合法字符必须原样保留（字母/数字/空格/点/下划线/连字符/CJK），
+    /// 且清洗结果非空、不以空白结尾——NTFS 对文件名有额外约束。
+    #[test]
+    fn node_batch_csv_file_name_preserves_legal_chars() {
+        let name = node_batch_csv_file_name(NodeLabel::Function, "src 目录/模块-一.v2_final");
+        assert_eq!(name, "Function_src 目录_模块-一.v2_final.csv");
+
+        assert!(!name.is_empty(), "sanitized name must not be empty");
+        assert!(
+            !name.chars().next_back().unwrap().is_whitespace(),
+            "sanitized name must not end with whitespace: {name:?}"
+        );
+
+        // 全非法字符的 id 仍产出非空、以 `.csv` 结尾的名字。
+        let all_illegal = node_batch_csv_file_name(NodeLabel::Function, "///");
+        assert_eq!(all_illegal, "Function____.csv");
+        assert!(!all_illegal.trim_end().is_empty());
     }
 
     #[test]

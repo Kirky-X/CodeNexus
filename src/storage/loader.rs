@@ -369,7 +369,9 @@ pub fn load_from_csv<C: crate::storage::connection::CypherExecutor>(
         "COPY {escaped_table} FROM '{escaped_path}' (HEADER, DELIM '\\t', PARALLEL=FALSE);"
     );
     if let Err(err) = conn.execute_cypher(&cypher) {
-        warn!(statement = %cypher, error = %err, "COPY FROM failed");
+        // 只记表名与错误：完整语句含 CSV 绝对路径（用户环境信息），
+        // 入日志会把主机目录结构写进日志文件与 CI 输出。
+        warn!(table = %escaped_table, error = %err, "COPY FROM failed");
         return Err(err);
     }
     Ok(())
@@ -769,6 +771,7 @@ mod tests {
     use super::*;
     use crate::model::Language;
     use crate::storage::StorageConnection;
+    use std::sync::{Arc, Mutex};
 
     fn sample_function_node() -> Node {
         Node::builder(NodeLabel::Function, "main", "proj.src.main")
@@ -1149,6 +1152,87 @@ mod tests {
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0][0], serde_json::json!("MY_MACRO"));
+    }
+
+    /// COPY 失败日志必须保留表名与错误，但不得带出 CSV 绝对路径：日志会进
+    /// CI 输出与用户日志文件，路径含主机目录结构（R-log-sanitization-001）。
+    #[test]
+    fn load_from_csv_failure_log_omits_csv_path() {
+        struct FailingExecutor;
+
+        impl crate::storage::connection::CypherExecutor for FailingExecutor {
+            fn execute_cypher(&self, _cypher: &str) -> Result<()> {
+                Err(StorageError::Query("COPY rejected".to_string()))
+            }
+
+            fn query_cypher(&self, _cypher: &str) -> Result<Vec<Vec<serde_json::Value>>> {
+                Ok(Vec::new())
+            }
+        }
+
+        #[derive(Clone, Default)]
+        struct CapturedLog(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for CapturedLog {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("log lock").extend_from_slice(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedLog {
+            type Writer = CapturedLog;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let csv_path = dir.path().join("Function_nodes.csv");
+        std::fs::write(&csv_path, b"id\tname\n").unwrap();
+
+        let log = CapturedLog::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(log.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        let err = tracing::subscriber::with_default(subscriber, || {
+            load_from_csv(&FailingExecutor, "Function", &csv_path)
+        })
+        .expect_err("COPY failure must surface");
+        assert!(
+            err.to_string().contains("COPY rejected"),
+            "error must reach the caller: {err}"
+        );
+
+        let captured = String::from_utf8(log.0.lock().unwrap().clone()).expect("utf8 log");
+        assert!(
+            captured.contains("COPY FROM failed"),
+            "missing log event: {captured}"
+        );
+        assert!(
+            captured.contains("table=Function"),
+            "log must name the table: {captured}"
+        );
+        assert!(
+            captured.contains("COPY rejected"),
+            "log must keep the error: {captured}"
+        );
+        let csv_path_str = csv_path.to_str().unwrap();
+        assert!(
+            !captured.contains(csv_path_str),
+            "log must not leak the CSV path {csv_path_str}: {captured}"
+        );
+        assert!(
+            !captured.contains(dir.path().to_str().unwrap()),
+            "log must not leak the temp directory: {captured}"
+        );
     }
 
     #[test]
