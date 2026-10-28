@@ -97,6 +97,8 @@ fn build_cli_command() -> sdforge::clap::Command {
     // on the command line (sdforge 0.4.2 marks all non-Option Body params
     // required=true with no default attribute). See `apply_sentinel_defaults`.
     let cmd = apply_sentinel_defaults(cmd);
+    // Accept the spec's kebab-case spelling alongside the generated name.
+    let cmd = apply_cli_aliases(cmd);
 
     // `mcp` is the stdio MCP server, dispatched before clap parsing (see
     // `main`), so no inventory `#[forge(cli = true)]` handler is registered
@@ -902,11 +904,8 @@ const SENTINEL_DEFAULTS: &[(&str, &str, &str)] = &[
     ("impact", "max_depth", "0"),
     ("impact", "include_tests", "false"),
     // — context: depth defaults to 1 (USER_GUIDE example), empty project =
-    // no project validation, enhanced=false = legacy 360 view.
-    // NOTE: no `budget` entry — the `context` CLI command does not define a
-    // `budget` parameter (token budgeting lives in service::budget, applied
-    // internally); a sentinel entry here would panic clap's `mut_arg`
-    // ("Argument `budget` is undefined") on every CLI startup.
+    // no project validation, enhanced=false = legacy 360 view. `budget` is
+    // `Option<usize>`: absent flag = no token budget, so no sentinel entry.
     ("context", "depth", "1"),
     ("context", "project", ""),
     ("context", "enhanced", "false"),
@@ -927,10 +926,9 @@ const SENTINEL_DEFAULTS: &[(&str, &str, &str)] = &[
     ("lint", "rules", ".codenexus/rules.json"),
     ("lint", "fail_on", "error"),
     ("lint", "project", ""),
-    // NOTE: no `daemon notify_impact` entry — the `daemon` CLI command only
-    // defines `path`/`name`; impact notifications have no CLI flag today
-    // (a sentinel entry here would panic clap's `mut_arg`
-    // ("Argument `notify_impact` is undefined") on every CLI startup).
+    // — daemon: notify_impact defaults to false (impact notifications are
+    // opt-in); true attaches the impact-notify observer to index completion.
+    ("daemon", "notify_impact", "false"),
     // — taint: rules mode by default (empty source/sink); language filter
     // empty = all rule languages.
     ("taint", "source", ""),
@@ -975,6 +973,31 @@ fn apply_sentinel_defaults(mut cmd: sdforge::clap::Command) -> sdforge::clap::Co
             let taken = std::mem::take(sub);
             *sub = taken.mut_arg(arg_name, |a| a.required(false).default_value(default));
         }
+    }
+    cmd
+}
+
+/// Adds alias spellings and flag forms for generated CLI arguments.
+///
+/// sdforge derives the long flag from the Rust parameter name
+/// (`notify_impact` → `--notify_impact`), while the documented spelling is
+/// kebab-case (`--notify-impact`). The same pass lets the boolean
+/// `notify_impact` work as a bare flag: sdforge surfaces every body arg as
+/// `--name <value>`, so a bare `--notify-impact` would otherwise be rejected
+/// for a missing value. `default_missing_value("true")` keeps both
+/// `--notify-impact` and `--notify_impact true` working.
+fn apply_cli_aliases(mut cmd: sdforge::clap::Command) -> sdforge::clap::Command {
+    for sub in cmd.get_subcommands_mut() {
+        if sub.get_name() != "daemon" {
+            continue;
+        }
+        // mut_arg consumes self; take the subcommand out, modify, put back.
+        let taken = std::mem::take(sub);
+        *sub = taken.mut_arg("notify_impact", |a| {
+            a.alias("notify-impact")
+                .num_args(0..=1)
+                .default_missing_value("true")
+        });
     }
     cmd
 }
@@ -1913,6 +1936,57 @@ mod tests {
             sub6.get_one::<String>("mode").map(String::as_str),
             Some("unstaged")
         );
+    }
+
+    /// `context --budget` reaches `extract_args` as a string; omitting it
+    /// leaves the key absent so the service layer sees `None`.
+    #[test]
+    fn context_budget_flag_parses_into_args() {
+        let cmd = build_cli_command();
+        let m = cmd.get_matches_from([
+            "codenexus",
+            "context",
+            "--symbol",
+            "main",
+            "--budget",
+            "128",
+        ]);
+        let sub = m.subcommand_matches("context").unwrap();
+        let args = extract_args("context", sub, &ProjectConfig::default());
+        assert_eq!(args.get("budget").map(String::as_str), Some("128"));
+
+        let cmd = build_cli_command();
+        let m = cmd.get_matches_from(["codenexus", "context", "--symbol", "main"]);
+        let sub = m.subcommand_matches("context").unwrap();
+        let args = extract_args("context", sub, &ProjectConfig::default());
+        assert!(
+            !args.contains_key("budget"),
+            "omitted --budget must stay absent (None), got {:?}",
+            args.get("budget")
+        );
+    }
+
+    /// A bare `--notify-impact` parses as `true`; both spellings and an
+    /// explicit `false` reach the daemon service as the same argument name.
+    #[test]
+    fn daemon_notify_impact_parses_as_expected() {
+        let parse = |extra: &[&str]| {
+            let mut argv = vec!["codenexus", "daemon", "--path", ".", "--name", "demo"];
+            argv.extend_from_slice(extra);
+            let m = build_cli_command().get_matches_from(argv);
+            let sub = m.subcommand_matches("daemon").unwrap();
+            extract_args("daemon", sub, &ProjectConfig::default())
+                .get("notify_impact")
+                .cloned()
+        };
+
+        assert_eq!(parse(&["--notify-impact"]).as_deref(), Some("true"));
+        assert_eq!(
+            parse(&["--notify-impact", "false"]).as_deref(),
+            Some("false")
+        );
+        assert_eq!(parse(&["--notify_impact", "true"]).as_deref(), Some("true"));
+        assert_eq!(parse(&[]).as_deref(), Some("false"));
     }
 
     /// Locks the documented `dead_code` CLI contract (docs/USER_GUIDE.md

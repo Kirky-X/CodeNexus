@@ -91,6 +91,41 @@ pub fn run_context_enhanced(
     })
 }
 
+/// Rejects `--budget 0` before any DB work.
+///
+/// `service::budget` treats 0 as "unlimited" internally, but the CLI contract
+/// reserves that meaning for omitting the flag — an explicit 0 is a parameter
+/// error (exit 2), not a silent no-op.
+#[cfg(feature = "cli")]
+fn validate_budget(budget: Option<usize>) -> Result<Option<usize>, CodeNexusError> {
+    match budget {
+        Some(0) => Err(CodeNexusError::InvalidInput(
+            "--budget must be >= 1 (omit the flag for no token budget)".to_string(),
+        )),
+        other => Ok(other),
+    }
+}
+
+/// Serializes a context payload for stdout, applying the token budget when set.
+///
+/// `None` keeps the historical byte-for-byte output: serializing straight from
+/// the typed value preserves field declaration order, while routing through
+/// `serde_json::Value` re-sorts object keys. Only the budgeted path pays that
+/// reordering cost (and gains the `budget` receipt from `service::budget`).
+#[cfg(feature = "cli")]
+fn render_json<T: serde::Serialize>(
+    value: &T,
+    budget: Option<usize>,
+) -> Result<String, serde_json::Error> {
+    match budget {
+        None => serde_json::to_string(value),
+        Some(limit) => {
+            let packed = crate::service::budget::apply_budget(serde_json::to_value(value)?, limit);
+            serde_json::to_string(&packed)
+        }
+    }
+}
+
 /// CLI wrapper — prints result to stdout as JSON.
 ///
 /// When `enhanced=true`, uses [`ContextCollector`] to return [`SymbolContext`]
@@ -101,25 +136,35 @@ pub fn run_context_enhanced(
 /// before running — returns `ProjectNotFound` (exit 2) if not found. This
 /// catches typos and non-existent projects early instead of silently
 /// returning results from a different project.
+///
+/// When `budget` is set, the serialized payload is packed by
+/// [`crate::service::budget::apply_budget`] and gains a `budget` receipt.
 #[cfg(feature = "cli")]
-#[forge::log(args, err_detail)]
+// `#[forge]` must expand before `#[forge::log]`: forge strips the
+// parameter-only `#[param]` attribute, while log re-emits the signature
+// verbatim and would leave it for rustc to reject.
 #[forge(
     name = "context",
     version = "0.3.5",
     description = "Show a 360-degree view of a symbol (callers, callees, processes).",
     cli = true
 )]
+#[forge::log(args, err_detail)]
 async fn context(
     symbol: String,
     depth: u32,
     project: String,
     enhanced: bool,
+    // sdforge classifies bare `Option<T>` params as HTTP query params, which
+    // the CLI generator skips; the explicit body kind surfaces `--budget`.
+    #[param(kind = "body")] budget: Option<usize>,
 ) -> Result<(), ApiError> {
+    let budget = validate_budget(budget).map_err(|e| to_api_error(e, "context_error"))?;
     let kit = kit().ok_or_else(kit_not_initialized)?;
     if enhanced {
         let result = run_context_enhanced(&kit, &project, &symbol)
             .map_err(|e| to_api_error(e, "context_error"))?;
-        let json = serde_json::to_string(&result)
+        let json = render_json(&result, budget)
             .map_err(|e| to_api_error(CodeNexusError::from(e), "context_error"))?;
         println!("{json}");
     } else {
@@ -136,7 +181,7 @@ async fn context(
         }
         let result =
             run_context(&kit, &symbol, depth).map_err(|e| to_api_error(e, "context_error"))?;
-        let json = serde_json::to_string(&result)
+        let json = render_json(&result, budget)
             .map_err(|e| to_api_error(CodeNexusError::from(e), "context_error"))?;
         println!("{json}");
     }
@@ -204,6 +249,78 @@ mod tests {
             .unwrap()
             .block_on(build_kit(&config))
             .expect("build_kit")
+    }
+
+    #[test]
+    #[cfg(feature = "cli")]
+    fn validate_budget_rejects_explicit_zero() {
+        let err = validate_budget(Some(0)).expect_err("explicit zero should be rejected");
+        assert!(matches!(err, CodeNexusError::InvalidInput(_)));
+        let msg = err.to_string();
+        assert!(msg.contains("budget must be"), "unexpected message: {msg}");
+    }
+
+    #[test]
+    #[cfg(feature = "cli")]
+    fn validate_budget_passes_none_and_positive_values() {
+        assert_eq!(validate_budget(None).expect("None passes"), None);
+        assert_eq!(validate_budget(Some(1)).expect("1 passes"), Some(1));
+        assert_eq!(
+            validate_budget(Some(4096)).expect("4096 passes"),
+            Some(4096)
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "cli")]
+    fn render_json_without_budget_keeps_declaration_order() {
+        #[derive(serde::Serialize)]
+        struct OrderedPayload {
+            zeta: &'static str,
+            alpha: &'static str,
+        }
+
+        let payload = OrderedPayload {
+            zeta: "z",
+            alpha: "a",
+        };
+        let rendered = render_json(&payload, None).expect("render without budget");
+        assert_eq!(
+            rendered, r#"{"zeta":"z","alpha":"a"}"#,
+            "unbudgeted output must preserve field declaration order"
+        );
+        assert!(!rendered.contains("\"budget\""));
+    }
+
+    #[test]
+    #[cfg(feature = "cli")]
+    fn render_json_with_budget_truncates_and_attaches_receipt() {
+        #[derive(serde::Serialize)]
+        struct Payload {
+            symbol: &'static str,
+            incoming: Vec<String>,
+        }
+
+        let payload = Payload {
+            symbol: "demo.f1",
+            incoming: (0..50)
+                .map(|i| format!("caller-{i}-{}", "x".repeat(40)))
+                .collect(),
+        };
+        let rendered = render_json(&payload, Some(40)).expect("render with budget");
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).expect("valid json");
+
+        assert_eq!(parsed["budget"]["requested"], 40);
+        assert_eq!(parsed["budget"]["truncated"], true);
+        assert!(
+            parsed["incoming"].as_array().unwrap().len() < 50,
+            "budgeted payload should drop elements"
+        );
+        let estimated = parsed["budget"]["estimated_tokens"].as_u64().unwrap();
+        assert!(
+            estimated <= 40,
+            "estimated_tokens {estimated} should stay within the limit"
+        );
     }
 
     #[test]
@@ -508,7 +625,13 @@ mod tests {
         init_kit(kit).expect("init_kit");
 
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let result = rt.block_on(context("demo.f1".to_string(), 3, "demo".to_string(), false));
+        let result = rt.block_on(context(
+            "demo.f1".to_string(),
+            3,
+            "demo".to_string(),
+            false,
+            None,
+        ));
         assert!(result.is_ok(), "wrapper should succeed: {:?}", result.err());
 
         reset_kit_for_testing();
@@ -522,7 +645,13 @@ mod tests {
 
         reset_kit_for_testing();
         let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let result = rt.block_on(context("demo.f1".to_string(), 3, "demo".to_string(), false));
+        let result = rt.block_on(context(
+            "demo.f1".to_string(),
+            3,
+            "demo".to_string(),
+            false,
+            None,
+        ));
         assert!(result.is_err(), "wrapper should fail without kit");
         reset_kit_for_testing();
     }
@@ -551,6 +680,7 @@ mod tests {
             3,
             "NonExistentProject".to_string(),
             false,
+            None,
         ));
         let err = result.expect_err("nonexistent project should error");
         // ProjectNotFound maps to ApiError::InvalidInput (exit 2) via
@@ -581,7 +711,13 @@ mod tests {
 
         let rt = tokio::runtime::Runtime::new().expect("runtime");
         // Empty project string → skip validation → proceed to load_graph
-        let result = rt.block_on(context("demo.f1".to_string(), 3, "".to_string(), false));
+        let result = rt.block_on(context(
+            "demo.f1".to_string(),
+            3,
+            "".to_string(),
+            false,
+            None,
+        ));
         assert!(
             result.is_ok(),
             "empty project should skip validation: {:?}",
@@ -614,6 +750,7 @@ mod tests {
             3,
             "demo".to_string(),
             true, // enhanced=true
+            None,
         ));
         assert!(
             result.is_ok(),
@@ -645,6 +782,7 @@ mod tests {
             3,
             "demo".to_string(),
             false,
+            None,
         ));
         let err = result.expect_err("unknown symbol should error");
         assert!(
@@ -676,6 +814,7 @@ mod tests {
             3,
             "demo".to_string(),
             true, // enhanced=true
+            None,
         ));
         assert!(
             result.is_err(),
@@ -707,6 +846,7 @@ mod tests {
             0, // depth=0
             "demo".to_string(),
             false,
+            None,
         ));
         assert!(
             result.is_ok(),

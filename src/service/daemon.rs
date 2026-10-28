@@ -27,8 +27,18 @@ use sdforge::prelude::ApiError;
 /// the blocking event loop.
 ///
 /// Separated from the `#[forge]` function for testability.
+///
+/// `notify_impact` is authoritative for this run: it hot-reloads
+/// `DaemonConfig::impact_notify` before [`DaemonRunner::start`], so the flag
+/// decides whether the impact-notify observer is attached to index
+/// completion. The bootstrap default stays `false` (opt-in).
 #[cfg(feature = "daemon")]
-fn daemon_core(kit: &AsyncKit<AsyncReady>, path: &str, name: &str) -> Result<(), CodeNexusError> {
+fn daemon_core(
+    kit: &AsyncKit<AsyncReady>,
+    path: &str,
+    name: &str,
+    notify_impact: bool,
+) -> Result<(), CodeNexusError> {
     let watch_path = Path::new(path);
     if !watch_path.exists() {
         return Err(CodeNexusError::InvalidInput(format!(
@@ -37,6 +47,7 @@ fn daemon_core(kit: &AsyncKit<AsyncReady>, path: &str, name: &str) -> Result<(),
         )));
     }
     let daemon = kit.require::<DaemonModule>()?;
+    daemon.update_impact_notify(notify_impact);
     daemon.start(watch_path, name)?;
     Ok(())
 }
@@ -49,9 +60,9 @@ fn daemon_core(kit: &AsyncKit<AsyncReady>, path: &str, name: &str) -> Result<(),
     description = "Run the file-watcher daemon for incremental indexing.",
     cli = true
 )]
-async fn daemon(path: String, name: String) -> Result<(), ApiError> {
+async fn daemon(path: String, name: String, notify_impact: bool) -> Result<(), ApiError> {
     let kit = kit().ok_or_else(kit_not_initialized)?;
-    daemon_core(&kit, &path, &name).map_err(|e| to_api_error(e, "daemon_error"))
+    daemon_core(&kit, &path, &name, notify_impact).map_err(|e| to_api_error(e, "daemon_error"))
 }
 
 #[cfg(all(test, feature = "daemon"))]
@@ -100,7 +111,7 @@ mod tests {
     fn daemon_core_returns_error_for_nonexistent_path() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
-        let err = daemon_core(&kit, "/nonexistent/path/xyz", "demo")
+        let err = daemon_core(&kit, "/nonexistent/path/xyz", "demo", false)
             .expect_err("nonexistent path should error");
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
         assert_eq!(err.exit_code(), 2, "input error → exit 2");
@@ -110,7 +121,7 @@ mod tests {
     fn daemon_core_error_message_contains_path() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
-        let err = daemon_core(&kit, "/no/such/dir", "demo").expect_err("should error");
+        let err = daemon_core(&kit, "/no/such/dir", "demo", false).expect_err("should error");
         let msg = err.to_string();
         assert!(
             msg.contains("/no/such/dir"),
@@ -128,7 +139,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 200);
         let watch_path = tmp.path().to_str().unwrap().to_string();
-        let handle = thread::spawn(move || daemon_core(&kit, &watch_path, "demo"));
+        let handle = thread::spawn(move || daemon_core(&kit, &watch_path, "demo", true));
 
         thread::sleep(Duration::from_millis(500));
         write_file(tmp.path(), "main.rs", "fn main() { /* v2 */ }\n");
@@ -143,7 +154,7 @@ mod tests {
     fn daemon_core_accepts_custom_debounce() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 500);
-        let err = daemon_core(&kit, "/nonexistent/path/xyz", "demo")
+        let err = daemon_core(&kit, "/nonexistent/path/xyz", "demo", false)
             .expect_err("should error on nonexistent path");
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
     }
@@ -152,7 +163,7 @@ mod tests {
     fn daemon_core_accepts_default_debounce() {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db(db.to_str().unwrap());
-        let err = daemon_core(&kit, "/nonexistent/path/xyz", "demo")
+        let err = daemon_core(&kit, "/nonexistent/path/xyz", "demo", false)
             .expect_err("should error on nonexistent path");
         assert!(matches!(err, CodeNexusError::InvalidInput(_)));
     }
@@ -167,7 +178,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 200);
         let watch_path = tmp.path().to_str().unwrap().to_string();
-        let handle = thread::spawn(move || daemon_core(&kit, &watch_path, "demo"));
+        let handle = thread::spawn(move || daemon_core(&kit, &watch_path, "demo", true));
 
         thread::sleep(Duration::from_millis(500));
         write_file(tmp.path(), "main.rs", "fn main() { /* modified */ }\n");
@@ -184,7 +195,7 @@ mod tests {
         let (_dir, db) = fresh_db_path();
         let kit = build_kit_for_db_with_debounce(db.to_str().unwrap(), 200);
         let watch_path = tmp.path().to_str().unwrap().to_string();
-        let handle = thread::spawn(move || daemon_core(&kit, &watch_path, "demo"));
+        let handle = thread::spawn(move || daemon_core(&kit, &watch_path, "demo", true));
 
         thread::sleep(Duration::from_millis(500));
         write_file(tmp.path(), "notes.txt", "hello world\n");
@@ -220,7 +231,7 @@ mod tests {
         #[allow(clippy::result_large_err)]
         let handle = thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("runtime");
-            rt.block_on(daemon(watch_path, "demo".to_string()))
+            rt.block_on(daemon(watch_path, "demo".to_string(), true))
         });
 
         thread::sleep(Duration::from_millis(500));
@@ -243,6 +254,7 @@ mod tests {
         let result = rt.block_on(daemon(
             "/nonexistent/path/xyz".to_string(),
             "demo".to_string(),
+            false,
         ));
         assert!(result.is_err(), "wrapper should fail without kit");
         reset_kit_for_testing();

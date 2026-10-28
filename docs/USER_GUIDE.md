@@ -91,6 +91,12 @@ codenexus search --text "authentication logic" --fulltext true --project ""
 # 7. 看某个符号的 360° 上下文
 codenexus context --symbol main --depth 1 --project "" --enhanced false
 codenexus context --symbol main --project myproject --enhanced true
+
+# 8. 限制上下文的 token 预算（省略 --budget 即不裁剪；0 为非法值）
+codenexus context --symbol main --budget 128
+
+# 9. 启动守护进程并开启影响告警（默认关闭）
+codenexus daemon --path . --name myproject --notify-impact
 ```
 
 每条命令输出单个 JSON 对象/数组到 stdout（`daemon`、`hook`、`mcp` 为流式/常驻命令除外）。
@@ -102,9 +108,9 @@ codenexus context --symbol main --project myproject --enhanced true
 以下约定适用于所有子命令（与 [`skill/SKILL.md`](../skill/SKILL.md) 对 v0.4.0-rc.2 的校验一致）：
 
 - **无位置参数**。一切都是命名 flag：`codenexus query "MATCH ..."` 会失败，必须写 `codenexus query --cypher "MATCH ..."`。
-- **布尔参数显式传值**：`--force true`、`--fresh true`（仅 `index`）、`--apply true`、`--cross_service false`（仅 `trace`）、`--embed false`、`--ram_first false`、`--enhanced false`、`--include_tests false`（`impact`）。
+- **布尔参数显式传值**：`--force true`、`--fresh true`（仅 `index`）、`--apply true`、`--cross_service false`（仅 `trace`）、`--embed false`、`--ram_first false`、`--enhanced false`、`--include_tests false`（`impact`）。`daemon --notify-impact` 是例外：既可裸写（等价 `true`），也可显式传 `true`/`false`。
 - **`--project` 接受名称或 id**：所有带 `--project <VALUE>` 的命令经 `resolve_project_id`（`src/service/project.rs`）解析：匹配已存项目 `name` 则用其规范 `id`，否则按原始 project id 处理。仅在有文档明确说明处才可传 `--project ""` 关闭过滤。
-- **可选参数自带默认值**：高频命令的"可选"参数已内置默认值，无需传占位 flag——`trace`：`--depth 5`、`--path_filter ""`、`--detect_cycles false`、`--cross_service false`；`search`：`--limit 50`、`--mode ""`、`--fulltext false`、`--project ""`；`impact`：`--depth 3`、`--edge_types ""`、`--max_depth 0`、`--include_tests false`；`context`：`--depth 1`、`--project ""`、`--enhanced false`；`index` 的 `--force`/`--lsp`/`--embed`/`--ram_first` 默认 `false`；`detect_changes --mode` 默认 `unstaged`；其余（complexity 阈值等）见各命令 `--help`。默认值可用 `.codenexus/config.json` 按项目覆盖（见 [配置文件](#️-配置文件)）。
+- **可选参数自带默认值**：高频命令的"可选"参数已内置默认值，无需传占位 flag——`trace`：`--depth 5`、`--path_filter ""`、`--detect_cycles false`、`--cross_service false`；`search`：`--limit 50`、`--mode ""`、`--fulltext false`、`--project ""`；`impact`：`--depth 3`、`--edge_types ""`、`--max_depth 0`、`--include_tests false`；`context`：`--depth 1`、`--project ""`、`--enhanced false`，`--budget` 省略即不裁剪；`index` 的 `--force`/`--lsp`/`--embed`/`--ram_first` 默认 `false`；`detect_changes --mode` 默认 `unstaged`；其余（complexity 阈值等）见各命令 `--help`。默认值可用 `.codenexus/config.json` 按项目覆盖（见 [配置文件](#️-配置文件)）。
 - **全局选项**：`--db <DB_PATH>`、`--debounce-ms <MS>`（默认 `2000`，仅 daemon 相关）与 `--format text|json`（默认 `text`）适用于每个命令。`--format json` 时所有 CLI 边界错误（无子命令 / 未知命令 / 缺库 / 数据库被锁 / `--fresh`·`--rebuild` 失败）以 UnifiedError JSON 写 stdout，退出码与 payload 分类一致（见下方退出码契约）；`text` 保持历史 stderr 行为逐字不变。
 - **默认数据库路径**（省略 `--db` 时）：`.codenexus/<project>.lbug`，`<project>` 取 `index`/`daemon` 的 `--name`（优先）或 `--path` 目录名，兜底 `codenexus`。v0.3.7 起，无 `--name`/`--path` 可用且 `.codenexus/` 中恰好只有一个 `.lbug` 文件时自动选中该文件；存在多个时回退到 `codenexus` 并要求显式 `--db`。环境变量 `CODENEXUS_DB_PATH` 可直接钉住默认库路径（优先级见「环境变量」），配置文件 `general.db` 可为非标准路径兜底。
 - **stderr 噪音**：所有日志（含 info 级与索引逐阶段进度行 `[codenexus] [i/n] <phase> ok`）都输出到 stderr，stdout 永远只有命令本身的 JSON，重定向无需过滤；日志文件在 `.codenexus/logs/codenexus.log`。stderr 中 `inklog ... Failed to set log crate logger` 等警告属良性输出。`query` 与 `status` 另经 sdforge `#[forge::log]` 输出函数级结构化记录（随 inklog 管道进 stderr 与日志文件）：成功为 `fn_exit fn=<命令> ok=true duration_ms=…`（info 级），失败为 `fn_exit … ok=false error=…`（error 级）；进入记录 `fn_enter`（含 DataMasker 脱敏后的 `args`）为 debug 级，需 `RUST_LOG=debug` 才可见。一次性命令退出前会排空日志队列（`logging::flush`），失败命令的 error 级 `fn_exit` 也会落入日志文件；长驻模式（`mcp`/`webui`）不做排空。
@@ -119,7 +125,7 @@ codenexus context --symbol main --project myproject --enhanced true
 | 命令 | 关键参数 | 说明 |
 |------|----------|------|
 | `index` | `--path` `--name` `--force` `--fresh` `--ram_first` | 索引仓库到知识图谱。`--name` 可省略（默认取 `--path` 目录名，项目名与默认库文件名一致）；增量模式经 SHA-256 哈希比对只解析变更文件；`--force true` 全量重建；`--fresh true` 索引前删除旧 DB 文件回收 DuckDB 死空间；`--ram_first true` 启用 LZ4 内存压缩批量入库 |
-| `daemon` | `--path` `--name` | 文件监视守护进程，检测到变更自动增量索引；SIGTERM/SIGINT 优雅退出；`--debounce-ms` 全局选项控制去抖（默认 2000ms） |
+| `daemon` | `--path` `--name` `--notify-impact` | 文件监视守护进程，检测到变更自动增量索引；SIGTERM/SIGINT 优雅退出；`--debounce-ms` 全局选项控制去抖（默认 2000ms）；`--notify-impact` 开启增量索引后的受影响符号告警（默认关闭） |
 | `status` | — | 查看当前索引状态 |
 | `list` | — | 列出所有已索引项目 |
 | `clean` | `--project` | 删除项目及其索引 |
@@ -132,7 +138,7 @@ codenexus context --symbol main --project myproject --enhanced true
 |------|----------|------|
 | `query` | `--cypher` | 对图执行 Cypher 子集查询。子集**支持** `UNION` / `UNION ALL`（实测返回合并行，exit 0）；不支持标签判定表达式 `WHERE (n:A OR n:B)`（标签需写在 `MATCH (n:A)` pattern 中，否则报 `unsupported Cypher construct`、exit 2）与写操作（`CREATE`/`DELETE`/`SET`/`MERGE`/`REMOVE`） |
 | `search` | `--text` `--mode` `--limit` `--fulltext` `--project` | 5 种结构化模式 `exact` / `regex` / `fuzzy` / `graph` / `multi`；`--fulltext true` 走 BM25 全文检索（`matchReason` 为 `bm25 fts` / `bm25f weighted`）。CLI `search` 不按 node label 过滤；按类型（label）过滤仅存在于库 API `QueryFacade::search_by_type(label: NodeLabel, …)`（`src/query/facade.rs`） |
-| `context` | `--symbol` `--depth` `--project` `--enhanced` | 360° 符号视图：入度调用/导入、出度调用、所属流程；`--enhanced true` 追加多维 SymbolContext（LSP 增强信息等） |
+| `context` | `--symbol` `--depth` `--project` `--enhanced` `--budget` | 360° 符号视图：入度调用/导入、出度调用、所属流程；`--enhanced true` 追加多维 SymbolContext（LSP 增强信息等）；`--budget <N>` 限制输出 token 数（省略不裁剪，`0` 为非法值），超限时按 `service::budget` 截断并附带 `budget` receipt |
 
 ### 🕸️ 追踪与影响分析
 

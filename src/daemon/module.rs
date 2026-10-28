@@ -180,19 +180,11 @@ struct DaemonCapability {
 impl DaemonRunner for DaemonCapability {
     fn start(&self, watch_path: &Path, project_name: &str) -> Result<(), DaemonError> {
         // Read the current debounce_ms from the shared config (hot-reloadable).
-        // notify_webhook 仅在 hub 组合下存在——元组元素上挂 #[cfg] 会让无 hub
-        // 组合的元组元数与解构不匹配（E0308），故拆成独立读取。
         let config_guard = self.config.read().ok();
-        let (debounce_ms, verbose_events, impact_notify) = config_guard
+        let (debounce_ms, verbose_events) = config_guard
             .as_ref()
-            .map(|c| (c.debounce_ms, c.verbose_events, c.impact_notify))
-            .unwrap_or((DEFAULT_DEBOUNCE_MS, false, false));
-        #[cfg(feature = "hub")]
-        let notify_webhook = config_guard.as_ref().and_then(|c| c.notify_webhook.clone());
-
-        // Construct the IndexFacade (lazy — opens DB on first index call).
-        let facade = IndexFacade::new(&self.db_path)
-            .map_err(|e| std::io::Error::other(format!("IndexFacade::new: {e}")))?;
+            .map(|c| (c.debounce_ms, c.verbose_events))
+            .unwrap_or((DEFAULT_DEBOUNCE_MS, false));
 
         // Construct the daemon with the current debounce window.
         let mut daemon = Daemon::new(watch_path, project_name, debounce_ms, &self.db_path);
@@ -200,17 +192,9 @@ impl DaemonRunner for DaemonCapability {
 
         // Register the IndexObserver (Observer pattern) — triggers
         // incremental indexing on code-file changes.
-        let mut observer =
-            IndexObserver::new(facade, project_name.to_string(), watch_path.to_path_buf());
-        // 影响告警（默认关闭）：增量索引成功后对变更文件输出受影响符号通知。
-        if impact_notify {
-            let notify_observer =
-                crate::daemon::impact_observer::ImpactNotifyObserver::new(self.db_path.clone());
-            #[cfg(feature = "hub")]
-            let notify_observer = notify_observer.with_webhook(notify_webhook);
-            observer.add_completion_observer(Box::new(notify_observer));
-        }
-        daemon.add_observer(Box::new(observer));
+        daemon.add_observer(Box::new(
+            self.build_index_observer(project_name, watch_path)?,
+        ));
 
         // Enter the blocking event loop. Returns when the daemon stops
         // (user interrupt, watcher error, or channel disconnect).
@@ -227,6 +211,43 @@ impl DaemonRunner for DaemonCapability {
         if let Ok(mut cfg) = self.config.write() {
             cfg.impact_notify = enabled;
         }
+    }
+}
+
+impl DaemonCapability {
+    /// Builds the index observer for one `start` call.
+    ///
+    /// Extracted from [`DaemonRunner::start`] so tests can assert the
+    /// impact-notify completion observer is attached only when
+    /// `DaemonConfig::impact_notify` is set (the event loop itself blocks and
+    /// cannot be entered from a unit test).
+    fn build_index_observer(
+        &self,
+        project_name: &str,
+        watch_path: &Path,
+    ) -> Result<IndexObserver, DaemonError> {
+        // Construct the IndexFacade (lazy — opens DB on first index call).
+        let facade = IndexFacade::new(&self.db_path)
+            .map_err(|e| std::io::Error::other(format!("IndexFacade::new: {e}")))?;
+
+        let mut observer =
+            IndexObserver::new(facade, project_name.to_string(), watch_path.to_path_buf());
+
+        // 影响告警（默认关闭）：增量索引成功后对变更文件输出受影响符号通知。
+        // notify_webhook 仅在 hub 组合下存在——元组元素上挂 #[cfg] 会让无 hub
+        // 组合的元组元数与解构不匹配（E0308），故拆成独立读取。
+        let config_guard = self.config.read().ok();
+        let impact_notify = config_guard.as_ref().is_some_and(|c| c.impact_notify);
+        #[cfg(feature = "hub")]
+        let notify_webhook = config_guard.as_ref().and_then(|c| c.notify_webhook.clone());
+        if impact_notify {
+            let notify_observer =
+                crate::daemon::impact_observer::ImpactNotifyObserver::new(self.db_path.clone());
+            #[cfg(feature = "hub")]
+            let notify_observer = notify_observer.with_webhook(notify_webhook);
+            observer.add_completion_observer(Box::new(notify_observer));
+        }
+        Ok(observer)
     }
 }
 
@@ -318,5 +339,46 @@ mod tests {
             let cfg = cap.config.read().unwrap();
             assert_eq!(cfg.debounce_ms, 500);
         }
+    }
+
+    /// `update_impact_notify` hot-reloads the impact-notify toggle in the
+    /// shared config; the CLI flag calls it before `start`, so the flag is
+    /// authoritative for that run.
+    #[test]
+    fn update_impact_notify_changes_shared_config() {
+        let config = DaemonConfig::new(PathBuf::from(":memory:"));
+        let cap = DaemonCapability {
+            db_path: config.db_path.clone(),
+            config: Arc::new(RwLock::new(config)),
+        };
+
+        assert!(!cap.config.read().unwrap().impact_notify, "opt-in default");
+        cap.update_impact_notify(true);
+        assert!(cap.config.read().unwrap().impact_notify);
+        cap.update_impact_notify(false);
+        assert!(!cap.config.read().unwrap().impact_notify);
+    }
+
+    /// The impact-notify completion observer is attached only when the toggle
+    /// is on: `--notify-impact false` / omitted leaves index completion with
+    /// zero completion observers, `true` attaches exactly one.
+    #[test]
+    fn impact_observer_registered_only_when_enabled() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let watch = tmp.path();
+        let observer_count = |enabled: bool| {
+            let mut config = DaemonConfig::new(tmp.path().join("notify.lbug"));
+            config.impact_notify = enabled;
+            let cap = DaemonCapability {
+                db_path: config.db_path.clone(),
+                config: Arc::new(RwLock::new(config)),
+            };
+            cap.build_index_observer("demo", watch)
+                .expect("build_index_observer")
+                .completion_observer_count()
+        };
+
+        assert_eq!(observer_count(false), 0, "flag off must not register");
+        assert_eq!(observer_count(true), 1, "flag on must register one");
     }
 }

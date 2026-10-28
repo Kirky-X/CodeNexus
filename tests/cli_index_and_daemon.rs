@@ -1219,3 +1219,161 @@ mod post_index {
         );
     }
 }
+
+// =============================================================================
+// CLI parameter wiring: `context --budget` and `daemon --notify-impact`
+// =============================================================================
+
+mod param_wiring {
+    use super::*;
+
+    /// `context --budget <N>` must survive clap parsing. An unregistered flag
+    /// is rejected by clap (exit 2, "unexpected argument"); a registered one
+    /// reaches dispatch and fails later on the missing DB (NotFound, exit 4).
+    #[test]
+    fn context_budget_flag_is_registered() {
+        let tmp = TempDir::new().unwrap();
+        let missing = tmp.path().join("missing.lbug");
+        let (code, stdout, stderr) = run(&[
+            "context",
+            "--symbol",
+            "main",
+            "--budget",
+            "128",
+            "--db",
+            missing.to_str().unwrap(),
+        ]);
+        assert!(
+            !stderr.contains("unexpected argument"),
+            "clap rejected --budget: {stderr}"
+        );
+        assert_eq!(
+            code, 4,
+            "expected missing-DB NotFound (4) after parsing, stdout: {stdout}, stderr: {stderr}"
+        );
+    }
+
+    /// `--budget 0` is a parameter error (exit 2), not a silent alias for
+    /// "unlimited" — omission is the documented way to disable the budget.
+    #[test]
+    fn context_budget_zero_is_rejected() {
+        let (tmp, db) = index_fresh_repo();
+        let _ = tmp;
+        let (code, stdout, stderr) = run(&[
+            "context",
+            "--symbol",
+            "main",
+            "--budget",
+            "0",
+            "--db",
+            db.to_str().unwrap(),
+        ]);
+        assert_eq!(
+            code, 2,
+            "--budget 0 should be InvalidInput (2), stdout: {stdout}, stderr: {stderr}"
+        );
+        assert!(
+            !stderr.contains("unexpected argument"),
+            "--budget must be registered before its value is validated: {stderr}"
+        );
+        assert!(
+            stderr.contains("budget must be"),
+            "error should come from the service budget check: {stderr}"
+        );
+    }
+
+    /// `daemon --notify-impact` must survive clap parsing. The DB is missing
+    /// on purpose: exit 4 proves dispatch ran, exit 2 + "unexpected argument"
+    /// would prove the flag is not registered.
+    #[test]
+    fn daemon_notify_impact_flag_is_registered() {
+        let tmp = TempDir::new().unwrap();
+        let missing = tmp.path().join("missing.lbug");
+        let (code, stdout, stderr) = run(&[
+            "daemon",
+            "--path",
+            tmp.path().to_str().unwrap(),
+            "--name",
+            "demo",
+            "--notify-impact",
+            "--db",
+            missing.to_str().unwrap(),
+        ]);
+        assert!(
+            !stderr.contains("unexpected argument"),
+            "clap rejected --notify-impact: {stderr}"
+        );
+        assert_eq!(
+            code, 4,
+            "expected missing-DB NotFound (4) after parsing, stdout: {stdout}, stderr: {stderr}"
+        );
+    }
+
+    /// The generated sdforge flag name uses underscores (`--notify_impact`);
+    /// both spellings must resolve to the same parameter.
+    #[test]
+    fn daemon_notify_impact_underscore_spelling_parses() {
+        let tmp = TempDir::new().unwrap();
+        let missing = tmp.path().join("missing.lbug");
+        let (code, _stdout, stderr) = run(&[
+            "daemon",
+            "--path",
+            tmp.path().to_str().unwrap(),
+            "--name",
+            "demo",
+            "--notify_impact",
+            "true",
+            "--db",
+            missing.to_str().unwrap(),
+        ]);
+        assert!(
+            !stderr.contains("unexpected argument"),
+            "clap rejected --notify_impact: {stderr}"
+        );
+        assert_eq!(code, 4, "expected NotFound (4) after parsing: {stderr}");
+    }
+
+    /// Backward compatibility: without `--notify-impact` the daemon reaches
+    /// the same watch-path validation and fails identically to an explicit
+    /// `--notify-impact false` run.
+    #[test]
+    fn daemon_without_notify_flag_keeps_previous_behavior() {
+        let (tmp, db) = index_fresh_repo();
+        let missing_watch = tmp.path().join("does-not-exist");
+        let db_arg = db.to_str().unwrap();
+        let watch_arg = missing_watch.to_str().unwrap();
+
+        let (default_code, _, default_stderr) = run(&[
+            "daemon", "--path", watch_arg, "--name", "demo", "--db", db_arg,
+        ]);
+        let (explicit_code, _, explicit_stderr) = run(&[
+            "daemon",
+            "--path",
+            watch_arg,
+            "--name",
+            "demo",
+            "--notify-impact",
+            "false",
+            "--db",
+            db_arg,
+        ]);
+
+        assert_eq!(
+            default_code, explicit_code,
+            "omitting --notify-impact must not change the exit code:\n\
+             default: {default_stderr}\nexplicit: {explicit_stderr}"
+        );
+        assert_eq!(
+            default_code, 2,
+            "missing watch path is InvalidInput (2): {default_stderr}"
+        );
+        assert!(
+            default_stderr.contains("watch path does not exist"),
+            "default run should fail on the watch path: {default_stderr}"
+        );
+        assert!(
+            explicit_stderr.contains("watch path does not exist"),
+            "explicit run should fail on the same check: {explicit_stderr}"
+        );
+    }
+}

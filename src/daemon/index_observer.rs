@@ -78,6 +78,13 @@ impl IndexObserver {
     pub fn last_error(&self) -> Option<&IndexError> {
         self.last_error.as_ref()
     }
+
+    /// 返回已注册的"索引完成"观察者数量（crate 内测试用）。
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn completion_observer_count(&self) -> usize {
+        self.completion_observers.len()
+    }
 }
 
 impl EventObserver for IndexObserver {

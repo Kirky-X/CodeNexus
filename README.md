@@ -109,7 +109,7 @@
 </tr>
 </table>
 
-除上述核心能力外，CodeNexus 还提供 `context` 上下文组装（token 预算截断由 `service::budget` 内部库能力提供，CLI 未暴露 `--budget` 参数）、`detect_changes` 变更检测、`rename` 重命名影响预检、`ask` 自然语言入口、`ci`/`lint` 架构门禁、`taint` 污点审计、`supply` 供应链视图、`evolve` 演化回放、`hub` 制品客户端、`skill` 技能同步、基于 oxcache 的查询结果缓存与 inklog 结构化日志等能力；全部 37 个子命令（外加 `mcp` 服务模式）的分组清单见 [🛠️ CLI 命令](#️-cli-命令) 一节，逐命令参数语义与可运行示例见 [📖 用户指南 · 命令详解](docs/USER_GUIDE.md#️-命令详解)。
+除上述核心能力外，CodeNexus 还提供 `context` 上下文组装（`--budget <N>` 控制 token 预算，省略时不裁剪）、`detect_changes` 变更检测、`rename` 重命名影响预检、`ask` 自然语言入口、`ci`/`lint` 架构门禁、`taint` 污点审计、`supply` 供应链视图、`evolve` 演化回放、`hub` 制品客户端、`skill` 技能同步、基于 oxcache 的查询结果缓存与 inklog 结构化日志等能力；全部 37 个子命令（外加 `mcp` 服务模式）的分组清单见 [🛠️ CLI 命令](#️-cli-命令) 一节，逐命令参数语义与可运行示例见 [📖 用户指南 · 命令详解](docs/USER_GUIDE.md#️-命令详解)。
 
 ---
 
@@ -467,7 +467,7 @@ CI 内置四道门禁：`cargo-audit`（RustSec 公告扫描）、`cargo-deny`�
 <tr><td align="center">✅</td><td>Harness 现代化</td><td>v0.3.3 — CI 升级 Rust 1.91 + 6 特性矩阵 + dependabot + codeql + crates.io 发布</td></tr>
 <tr><td align="center">✅</td><td>大仓库内存防线</td><td>v0.3.11 — 大型仓库索引 OOM 修复（L1–L7 七层防线）：<code>MemoryBudget</code> 三级内存压力 + <code>Graph::nodes_view/edges_view</code> 迭代器 + 流式 CSV + mpsc channel 并行解析 + L5 自适应降级 + L6 管线流式化（<code>ctx.remove</code> 取代 <code>Graph::clone</code>）+ L7 LadybugDB buffer_pool 封顶（4 GB）+ LSP 按需启动 + RAM-first 8× 放大因子预算。70 GB 主机峰值内存从 60 GB 降至 ~4 GB</td></tr>
 <tr><td align="center">✅</td><td>基础库升级</td><td>自研基础库升级至 crates.io RC（trait-kit 0.5.0-rc.9、sdforge / oxcache 0.5.0-rc.8、inklog 0.3.0-rc.9）；MSRV 1.97.1</td></tr>
-<tr><td align="center">✅</td><td>功能拓展波次（feature-expansion-wave）</td><td>2026-09 — RICE 排序的 12 项能力：token 预算器（`service::budget` 内部库能力，CLI 未暴露 `--budget` 参数）、<code>ci</code> 架构门禁（含官方 GitHub Action）、<code>lint</code> 自定义架构规则包、<code>skill</code> 技能同步、<code>ask</code> 自然语言入口、graph-viewer 快照合流（<code>diagram</code>/<code>arch_diff</code> <code>--viewer_url</code>）、daemon 影响告警（DaemonConfig 字段，CLI 接线待补）、Kotlin/Swift/Solidity 语言识别（扩展名映射与污点规则，tree-sitter 解析暂不支持）、<code>taint</code> 安全审计（内置 source/sink 规则库）、<code>supply</code> 供应链视图（ExternalPackage/DEPENDS_ON）、<code>evolve</code> 架构演化回放、<code>hub</code> 制品客户端（协议 v1）</td></tr>
+<tr><td align="center">✅</td><td>功能拓展波次（feature-expansion-wave）</td><td>2026-09 — RICE 排序的 12 项能力：token 预算器（`context --budget <N>` 控制 token 上限，省略时不裁剪）、<code>ci</code> 架构门禁（含官方 GitHub Action）、<code>lint</code> 自定义架构规则包、<code>skill</code> 技能同步、<code>ask</code> 自然语言入口、graph-viewer 快照合流（<code>diagram</code>/<code>arch_diff</code> <code>--viewer_url</code>）、daemon 影响告警（<code>daemon --notify-impact</code>）、Kotlin/Swift/Solidity 语言识别（扩展名映射与污点规则，tree-sitter 解析暂不支持）、<code>taint</code> 安全审计（内置 source/sink 规则库）、<code>supply</code> 供应链视图（ExternalPackage/DEPENDS_ON）、<code>evolve</code> 架构演化回放、<code>hub</code> 制品客户端（协议 v1）</td></tr>
 <tr><td align="center">✅</td><td>Web UI 与图可视化</td><td>v0.4.0-rc.2 — opt-in <code>webui</code> feature：<code>codenexus webui [--port]</code> 一条命令启动内嵌 3D graph-viewer（React + react-three-fiber 前端 <code>graph-viewer/dist</code> 编译期嵌入二进制；仅回环绑定 + <code>x-graph-token</code> + Host 校验）；<code>diagram</code>/<code>arch_diff</code> 交付架构图 HTML、语义 Delta 与 graph-viewer 快照合流（<code>--viewer_url</code>）。后续增强：更多图表类型与 diagram↔viewer 双向交互</td></tr>
 </table>
 

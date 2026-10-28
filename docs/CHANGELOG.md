@@ -33,6 +33,8 @@ CodeNexus 的所有重要变更均记录于此文件。
 
 ### Added
 
+- **feat(cli): `context --budget` 与 `daemon --notify-impact` 接线** — `context` 新增 `--budget <N>`（`Option<usize>`，省略即不裁剪，`0` 按参数错误 exit 2）：结果经 `service::budget` 截断并附带 `budget` receipt，未设预算时逐字节保持既有输出。`daemon` 新增 `--notify-impact`（缺省 false，同时接受 `--notify_impact` 与显式 `true`/`false`）：开启后在增量索引完成时注册 `impact_observer` 告警回调，关闭时行为与变更前一致。两处「能力存在但 CLI 不可达」的落差消除；README、README_EN 与 USER_GUIDE 同步参数说明。
+
 - **feat(parse): Swift 语言解析支持** — 新增 `lang-swift` feature（tree-sitter-swift 0.7）、`SwiftExtractor`（函数/方法、类/结构体/枚举/actor、协议、扩展、属性、构造器、类型别名、import、调用），`full` 预设语言数 21→22；用 apple/swift-argument-parser 与 Alamofire 两个真实 GitHub 仓库完成索引与图查询验证。
 
 ### Fixed
