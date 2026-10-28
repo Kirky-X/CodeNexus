@@ -133,11 +133,11 @@ impl TraceConfig {
 /// use codenexus::kit::{AsyncKit, TraceModule};
 /// use codenexus::trace::TraceConfig;
 ///
-/// let mut kit = AsyncKit::new;
-/// kit.set_config(TraceConfig::in_memory);
-/// kit.register::<TraceModule>?;
-/// let kit = kit.build.await?;
-/// let trace = kit.require::<TraceModule>?;
+/// let mut kit = AsyncKit::new();
+/// kit.set_config(TraceConfig::in_memory());
+/// kit.register::<TraceModule>()?;
+/// let kit = kit.build().await?;
+/// let trace = kit.require::<TraceModule>()?;
 /// ```
 pub struct TraceModule;
 

@@ -661,7 +661,7 @@ mod tests {
         assert!(json.contains("\"character\":20"));
     }
 
-    // [forge] wrapper tests
+    // `#[forge]` wrapper tests
 
     #[cfg(feature = "cli")]
     #[test]

@@ -1390,7 +1390,7 @@ mod tests {
         );
     }
 
-    // [forge] wrapper tests via init_kit
+    // `#[forge]` wrapper tests via init_kit
 
     #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]

@@ -971,7 +971,7 @@ mod tests {
         // call_expression. Covers callee_name's call_expression arm.
         let result =
             extract("typedef void(*Fn)(); Fn get_fn(); int main() { get_fn()(); return 0; }\n");
-        // The inner call `get_fn` is extracted; the outer `` call may
+        // The inner call `get_fn()` is extracted; the outer `()` call may
         // resolve to the same callee or to the result — either way, at least
         // one call record must exist.
         assert!(

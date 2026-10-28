@@ -11,11 +11,11 @@
 //! - Parameter passing - Variable -> Parameter, DataFlows edge.
 //!   `foo(var)` -> var flows to foo's parameter.
 //! - Return assignment - Function -> Variable, DataFlows edge.
-//!   `x = foo` -> foo's return flows to x.
+//!   `x = foo()` -> foo's return flows to x.
 //! - Variable assignment - Variable -> Variable, DataFlows edge.
 //!   `x = y` -> y flows to x.
 //! - Function assignment - Function -> Variable, DataFlows edge.
-//!   `x = foo` (same as).
+//!   `x = foo()` (same as).
 //! - Variable read - Function -> Variable, Reads edge.
 //! - Variable write - Function -> Variable, Writes edge.
 

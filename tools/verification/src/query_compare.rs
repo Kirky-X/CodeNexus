@@ -4,7 +4,7 @@
 //! Query comparison module (tasks 5.1-5.4).
 //!
 //! Loads `.cql` query files from `tools/verification/queries/`, executes each
-//! against both CodeNexus (via `Repository::connection.query`) and gitnexus
+//! against both CodeNexus (via `Repository::connection().query()`) and gitnexus
 //! (via `gitnexus_client::run_cypher`), then compares the result sets as
 //! order-insensitive `(symbol_name, file_path)` tuple sets.
 //!

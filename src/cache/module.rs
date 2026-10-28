@@ -85,7 +85,7 @@ pub const MACRO_QUERY_SERVICE: &str = "codenexus-query";
 /// ```ignore
 /// use codenexus::cache::CacheConfig;
 ///
-/// let config = CacheConfig::default.with_capacity(5_000);
+/// let config = CacheConfig::default().with_capacity(5_000);
 /// ```
 #[derive(Debug, Clone)]
 pub struct CacheConfig {
@@ -143,11 +143,11 @@ impl CacheConfig {
 /// use codenexus::kit::{AsyncKit, CacheModule};
 /// use codenexus::cache::CacheConfig;
 ///
-/// let mut kit = AsyncKit::new;
-/// kit.set_config(CacheConfig::default);
-/// kit.register::<CacheModule>?;
-/// let kit = kit.build.await?;
-/// let cache = kit.require::<CacheModule>?;
+/// let mut kit = AsyncKit::new();
+/// kit.set_config(CacheConfig::default());
+/// kit.register::<CacheModule>()?;
+/// let kit = kit.build().await?;
+/// let cache = kit.require::<CacheModule>()?;
 /// ```
 pub struct CacheModule;
 

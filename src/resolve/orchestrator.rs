@@ -197,11 +197,11 @@ pub fn enrich_symbol_table_from_rows(
 ///
 /// # L6 memory-overflow fix
 ///
-/// Returns `` instead of `Vec<Edge>`. The previous signature collected
+/// Returns `()` instead of `Vec<Edge>`. The previous signature collected
 /// every resolved edge into a master `Vec<Edge>` that was immediately
 /// discarded by [`ResolvePhase`](crate::index::ResolvePhase) (the sole
 /// production caller). For large repos (1M+ edges) this was ~100 MB of
-/// pure waste. Each sub-resolver now returns `` and adds edges directly
+/// pure waste. Each sub-resolver now returns `()` and adds edges directly
 /// to `graph`, so peak RSS is bounded by the largest single resolver's
 /// working set rather than the union of all.
 ///
@@ -625,7 +625,7 @@ mod tests {
             }
         }
 
-        // fix: `resolve_all` now returns `` — inspect `graph` directly.
+        // fix: `resolve_all` now returns `()` — inspect `graph` directly.
         resolve_all(
             &results,
             &table,
@@ -662,7 +662,7 @@ mod tests {
     fn resolve_all_empty_results_returns_empty() {
         let table = ProjectSymbolTable::new();
         let mut graph = Graph::new();
-        // fix: `resolve_all` now returns `` — check graph is empty.
+        // fix: `resolve_all` now returns `()` — check graph is empty.
         resolve_all(
             &[],
             &table,
@@ -1015,7 +1015,7 @@ fn contains_scientific(ast: &AstNode) -> bool { true }
         }
 
         // Resolve calls
-        // fix: `resolve_all` now returns `` — inspect `graph` directly.
+        // fix: `resolve_all` now returns `()` — inspect `graph` directly.
         resolve_all(
             &[result],
             &table,

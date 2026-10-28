@@ -138,7 +138,7 @@ pub fn load_graph_for_symbol(
 
     // Phase 3: batch-materialize nodes for every visited id with one
     // `WHERE n.id IN [...]` query per label. Replaces the per-id
-    // `fetch_node_by_id` N+1 (N × |NodeLabel::all| round-trips — the ~77s
+    // `fetch_node_by_id` N+1 (N × `NodeLabel::all()` round-trips — the ~77s
     // `impact` regression root cause on a 5034-node subgraph).
     let mut graph = Graph::new();
     let visited_ids: Vec<String> = visited.iter().cloned().collect();

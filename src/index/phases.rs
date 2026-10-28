@@ -16,7 +16,7 @@
 //! # Input wiring
 //!
 //! [`ScanPhase`] is the root phase: its typed [`ScanInput`] is inserted into
-//! [`PipelineCtx`] externally. All other phases use `Input = ` and read dep
+//! [`PipelineCtx`] externally. All other phases use `Input = ()` and read dep
 //! outputs from the context via [`PipelineCtx::get`].
 
 use std::collections::HashMap;
@@ -718,7 +718,7 @@ impl Phase for ResolvePhase {
         //
         // fix: `resolve_all` adds resolved edges to `graph` directly and
         // prunes dangling type edges via `prune_dangling_type_edges(graph)`.
-        // fix: `resolve_all` now returns `` — no master Vec<Edge> is
+        // fix: `resolve_all` now returns `()` — no master Vec<Edge> is
         // built. Each sub-resolver's Vec is dropped immediately after its
         // edges are cloned into `graph`.
         let mut symbol_table = build_symbol_table(&parse.results, project_id);

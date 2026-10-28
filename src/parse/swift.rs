@@ -453,7 +453,9 @@ fn extract_import(node: Node, source: &str, result: &mut ExtractResult) {
         let Some(child) = node.named_child(i) else {
             continue;
         };
-        // `@testable`, `@_exported`, etc. are modifiers, not the module name.
+        // `@testable`, `@_exported`, etc. are `modifiers` nodes (grammar
+        // tree-sitter-swift 0.7.4: import_declaration children = identifier|modifiers),
+        // not the module name.
         if child.kind() == "modifiers" {
             continue;
         }

@@ -98,7 +98,7 @@ impl<'a> ImportResolver<'a> {
     /// Duplicate `(source, target)` pairs are collapsed to a single edge
     /// (matching `CallResolver`'s dedup behaviour).
     ///
-    /// fix: returns `` instead of `Vec<Edge>`; edges are added directly
+    /// fix: returns `()` instead of `Vec<Edge>`; edges are added directly
     /// to `graph`. The previous `Vec<Edge>` return was an anti-pattern —
     /// production callers (`orchestrator.rs::resolve_all`) discarded it via
     /// `let _ = ...`, wasting memory on 1M+ edge repos due to per-edge
@@ -342,7 +342,7 @@ fn build_function_index(
 /// # Performance
 ///
 /// Nested `HashMap<String, HashMap<String, String>>` enables O(1) file
-/// lookup + O(K) name lookup (K = `imported_names.len`), with zero
+/// lookup + O(K) name lookup (K = `imported_names.len()`), with zero
 /// temporary `(String, String)` tuple allocations. Wildcard lookups are
 /// O(target_file_function_count) instead of O(total_functions).
 fn resolve_reexport_targets(
@@ -2452,7 +2452,7 @@ mod tests {
     #[test]
     fn normalise_relative_dot_dot_from_root_pops_empty() {
         // `../b` from `a.ts` (root-level file): importer_dir is empty,
-        // combined = "../b", segments.pop on empty stack is a no-op.
+        // combined = "../b", `segments.pop()` on empty stack is a no-op.
         let n = normalise_relative("../b", "a.ts");
         assert_eq!(n, "b");
     }

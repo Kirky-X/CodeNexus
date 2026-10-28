@@ -106,11 +106,11 @@ impl DaemonConfig {
 /// use codenexus::daemon::DaemonConfig;
 /// use std::path::PathBuf;
 ///
-/// let mut kit = AsyncKit::new;
+/// let mut kit = AsyncKit::new();
 /// kit.set_config(DaemonConfig::new(PathBuf::from(":memory:")));
-/// kit.register::<DaemonModule>?;
-/// let kit = kit.build.await?;
-/// let daemon = kit.require::<DaemonModule>?;
+/// kit.register::<DaemonModule>()?;
+/// let kit = kit.build().await?;
+/// let daemon = kit.require::<DaemonModule>()?;
 /// ```
 pub struct DaemonModule;
 

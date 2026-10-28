@@ -88,7 +88,7 @@ fn cli_handler(name: &str) -> &'static sdforge::cli::CliHandlerRegistration {
 }
 
 /// Dispatches one CLI command the way `run_cli` does. The handler serializes
-/// the command's return value (`` → `Value::Null` for these two).
+/// the command's return value (`()` → `Value::Null` for these two).
 fn dispatch(
     runtime: &tokio::runtime::Runtime,
     name: &str,

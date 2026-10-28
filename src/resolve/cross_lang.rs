@@ -83,7 +83,7 @@ impl TypeMapper {
 /// Extracts parameter type names from a signature string.
 ///
 /// Parses the content between the first matching pair of parentheses and
-/// splits it by top-level commas (ignoring commas nested inside ``, `[]`,
+/// splits it by top-level commas (ignoring commas nested inside `()`, `[]`,
 /// or `<>`). For each parameter, extracts just the type name:
 ///
 /// - **Rust** (`"fn foo(x: i32, y: f64)"`): the type is the part after the
@@ -99,7 +99,7 @@ impl TypeMapper {
 /// - `"fn foo(x: i32, y: f64)"` (Rust) -> `["i32", "f64"]`
 /// - `"void foo(int x, double y)"` (C) -> `["int", "double"]`
 /// - `"int foo(int, double)"` (C) -> `["int", "double"]`
-/// - `"fn foo"` -> `[]`
+/// - `"fn foo()"` -> `[]`
 fn parse_params(signature: &str, language: Language) -> Vec<String> {
     let start = match signature.find('(') {
         Some(s) => s,
@@ -308,7 +308,7 @@ impl<'a> FfiResolver<'a> {
     /// function is found) to the target definition, and adds it directly to
     /// `graph`.
     ///
-    /// fix: returns `` instead of `Vec<Edge>`; edges are added directly
+    /// fix: returns `()` instead of `Vec<Edge>`; edges are added directly
     /// to `graph`. The previous `Vec<Edge>` return was an anti-pattern —
     /// production callers (`orchestrator.rs::resolve_all`) discarded it via
     /// `let _ = ...`, wasting memory on 1M+ edge repos due to per-edge
@@ -491,14 +491,14 @@ impl<'a> FfiResolver<'a> {
     ///
     /// Handles both Rust-style signatures (`fn foo(a: i32, b: i32)`) and
     /// C-style signatures (`int foo(int, int)`). Counts top-level commas
-    /// (ignoring commas nested inside ``, `[]`, or `<>`) plus one for the
+    /// (ignoring commas nested inside `()`, `[]`, or `<>`) plus one for the
     /// first parameter.
     ///
     /// # Examples
     ///
     /// - `"fn foo(a: i32, b: i32)"` -> 2
     /// - `"int foo(int, int)"` -> 2
-    /// - `"fn foo"` -> 0
+    /// - `"fn foo()"` -> 0
     /// - `""` -> 0
     pub fn param_count(signature: &str) -> usize {
         let start = match signature.find('(') {
@@ -507,7 +507,7 @@ impl<'a> FfiResolver<'a> {
         };
 
         // Find the matching ')' for the first '(' (handles nested parens,
-        // e.g. `fn foo(a: (i32, i32))` or `fn foo -> (i32, i32)`).
+        // e.g. `fn foo(a: (i32, i32))` or `fn foo() -> (i32, i32)`).
         let mut depth: i32 = 0;
         let mut end = None;
         // Single-line for coverage: tarpaulin attribute continuation
@@ -1972,7 +1972,7 @@ mod tests {
 
     #[test]
     fn extract_c_type_all_whitespace_returns_empty() {
-        // All-whitespace param: trimmed is empty → end == 0 → return String::new.
+        // All-whitespace param: trimmed is empty → end == 0 → return String::new().
         assert_eq!(extract_c_type("   "), "");
         assert_eq!(extract_c_type(""), "");
         assert_eq!(extract_c_type("\t\n"), "");
@@ -2047,7 +2047,7 @@ mod tests {
     #[test]
     fn resolve_extern_keeps_first_name_only_when_second_name_also_matches() {
         // Two names both match with name-only (no signature). The first
-        // name's candidate is kept; `best_name_only.is_none` is false for
+        // name's candidate is kept; `best_name_only.is_none()` is false for
         // the second name → skip recording (line 415 false branch).
         let mut table = ProjectSymbolTable::new();
         table.add_symbol(

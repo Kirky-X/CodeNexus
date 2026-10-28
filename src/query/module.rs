@@ -64,11 +64,11 @@ impl QueryConfig {
 /// use codenexus::kit::{AsyncKit, QueryModule};
 /// use codenexus::query::QueryConfig;
 ///
-/// let mut kit = AsyncKit::new;
-/// kit.set_config(QueryConfig::in_memory);
-/// kit.register::<QueryModule>?;
-/// let kit = kit.build.await?;
-/// let query = kit.require::<QueryModule>?;
+/// let mut kit = AsyncKit::new();
+/// kit.set_config(QueryConfig::in_memory());
+/// kit.register::<QueryModule>()?;
+/// let kit = kit.build().await?;
+/// let query = kit.require::<QueryModule>()?;
 /// ```
 pub struct QueryModule;
 

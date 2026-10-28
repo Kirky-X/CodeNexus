@@ -34,7 +34,7 @@ pub trait Resolver: Send + Sync {
     ///
     /// # L6 memory-overflow fix
     ///
-    /// Returns `` instead of `Vec<Edge>` — see [`super::resolve_all`] for
+    /// Returns `()` instead of `Vec<Edge>` — see [`super::resolve_all`] for
     /// rationale.
     fn resolve_all(
         &self,

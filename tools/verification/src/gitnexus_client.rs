@@ -197,7 +197,7 @@ fn split_row(line: &str) -> Vec<String> {
 ///
 /// Runs three queries:
 /// 1. `MATCH (n) RETURN label(n), count(*)` → node_counts_by_label
-/// 2. `MATCH -[r:CodeRelation]-> RETURN r.type, count(*)` → edge_counts_by_type
+/// 2. `MATCH ()-[r:CodeRelation]->() RETURN r.type, count(*)` → edge_counts_by_type
 /// 3. `MATCH (f:File) RETURN count(*)` → file_count
 ///
 /// Per-label binder errors (Table X does not exist) are recorded as 0, not

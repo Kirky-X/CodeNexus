@@ -29,7 +29,7 @@
 //!
 //! - **Root phases** (no deps): the caller inserts the typed `Input` into
 //!   [`PipelineCtx`] under the phase's `NAME` before calling [`Pipeline::run`].
-//! - **Derived phases**: set `Input = ` (caller inserts ``) and read dep
+//! - **Derived phases**: set `Input = ()` (caller inserts nothing) and read dep
 //!   outputs from `ctx` inside `run` via [`PipelineCtx::get`]. This keeps the
 //!   `Phase` trait signature (5 items, no
 //!   `build_input` method) while supporting multi-dep wiring.
@@ -226,7 +226,7 @@ pub trait Phase: Send + Sync + 'static {
     /// The typed input consumed by this phase.
     ///
     /// For root phases, this is the externally-provided input. For derived
-    /// phases, use `` and read dep outputs from the context in [`run`](Self::run).
+    /// phases, use `()` and read dep outputs from the context in [`run`](Self::run).
     type Input: Any + Send + Sync + 'static;
 
     /// The typed output produced by this phase.

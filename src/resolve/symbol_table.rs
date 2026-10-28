@@ -167,7 +167,7 @@ pub struct ProjectSymbolTable {
     /// parser emits `callee_name = "run"` (scoped_identifier only keeps
     /// the last segment). `lookup_exported("run")` then returns multiple
     /// matches: `batch::run` (alphabetically first) and `cli::run`. Without
-    /// this set, `.first` picks `batch::run`, breaking the
+    /// this set, `.first()` picks `batch::run`, breaking the
     /// `main → cli::run` call edge and causing 100% false positives in
     /// dead_code analysis on `cli.rs` (CalNexus regression).
     ///

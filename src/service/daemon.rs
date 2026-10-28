@@ -205,7 +205,7 @@ mod tests {
         assert!(!handle.is_finished(), "daemon should still be running");
     }
 
-    // [forge] wrapper tests via init_kit
+    // `#[forge]` wrapper tests via init_kit
 
     #[serial_test::serial(kit_init)]
     #[cfg(feature = "cli")]

@@ -73,7 +73,7 @@ const TEST_ATTRIBUTE_MARKERS: &[&str] = &["#[test", "#[tokio::test", "#[rstest"]
 ///
 /// Cheap pre-filter: `signature.contains("#[")` returns `false` for the vast
 /// majority of functions (no outer attributes), short-circuiting before the
-/// `TEST_ATTRIBUTE_MARKERS.iter.any(...)` loop. On bulwark this saves ~115k
+/// `TEST_ATTRIBUTE_MARKERS.iter().any(...)` loop. On bulwark this saves ~115k
 /// unnecessary `contains` scans across 19k functions × 2 call sites
 fn has_test_attribute_marker(signature: &str) -> bool {
     signature.contains("#[")

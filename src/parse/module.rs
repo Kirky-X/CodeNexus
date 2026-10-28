@@ -35,10 +35,10 @@ use super::parser_factory::ParserFactory;
 /// ```ignore
 /// use codenexus::kit::{AsyncKit, ParserFactoryModule};
 ///
-/// let mut kit = AsyncKit::new;
-/// kit.register::<ParserFactoryModule>?;
-/// let kit = kit.build.await?;
-/// let parser = kit.require::<ParserFactoryModule>?;
+/// let mut kit = AsyncKit::new();
+/// kit.register::<ParserFactoryModule>()?;
+/// let kit = kit.build().await?;
+/// let parser = kit.require::<ParserFactoryModule>()?;
 /// ```
 pub struct ParserFactoryModule;
 

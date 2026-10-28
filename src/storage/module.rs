@@ -78,11 +78,11 @@ impl StorageConfig {
 /// use codenexus::kit::{AsyncKit, StorageModule};
 /// use codenexus::storage::StorageConfig;
 ///
-/// let mut kit = AsyncKit::new;
-/// kit.set_config(StorageConfig { db_path: ":memory:".into });
-/// kit.register::<StorageModule>?;
-/// let kit = kit.build.await?;
-/// let storage = kit.require::<StorageModule>?;
+/// let mut kit = AsyncKit::new();
+/// kit.set_config(StorageConfig { db_path: ":memory:".into() });
+/// kit.register::<StorageModule>()?;
+/// let kit = kit.build().await?;
+/// let storage = kit.require::<StorageModule>()?;
 /// ```
 pub struct StorageModule;
 

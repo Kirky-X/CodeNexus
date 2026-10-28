@@ -25,7 +25,7 @@ impl FqnGenerator {
     ///
     /// The file segment retains its full name (including extension). The
     /// optional `disambiguator` (ADR-003) disambiguates same-name entities in
-    /// the same file (e.g. `impl Foo { fn new }` vs `impl Bar { fn new }`)
+    /// the same file (e.g. `impl Foo { fn new() }` vs `impl Bar { fn new() }`)
     /// by appending `#parent_type` to the FQN.
     ///
     /// # Special cases

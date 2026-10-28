@@ -681,7 +681,7 @@ mod tests {
         assert!(import_output.db_size > 0);
     }
 
-    // [forge] wrapper tests via init_kit
+    // `#[forge]` wrapper tests via init_kit
 
     /// RAII guard that resets the global Kit on Drop, ensuring test isolation.
     #[cfg(feature = "cli")]
