@@ -30,6 +30,7 @@ jobs:
       # @v4 的 Node.js 20 弃用告警与 zizmor 的 unpinned-uses。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: actionlint
         # 第三方 docker action 钉具体版本：latest 可变，上游可静默换镜像。
@@ -39,14 +40,13 @@ jobs:
           # 风格级（SC2086/SC2034 等）不阻断，避免打断既有流水线。
           args: -color -shellcheck=error
       - name: zizmor (GitHub Actions 安全审计)
-        # 首轮为非阻断基线：既有 workflow 存在一批 unpinned-uses / cache-poisoning /
-        # template-injection 发现，阻断式会直接打断现有流水线。backlog 清零后
-        # 把 continue-on-error 删掉即可转为阻断。
-        continue-on-error: true
+        # 阻断式（2026-10-28 转）：本地 zizmor v1.31.1 全量扫 .github/workflows/
+        # 结果为 0 low / 0 medium / 0 high（仅 2 条 info：template-injection 的低置信
+        # 版本号插值与 softprops action 的 superfluous-actions 建议），backlog 已清零，
+        # 故移除 continue-on-error 让审计发现真正阻断。
         # 版本修正（外部事实）：`v0.12.0` 在 zizmorcore/zizmor-action 仓库不存在
         # （API tags 最高为 v0.7.1）。引用不存在的 action 会在 job 解析下载清单阶段
-        # （"Getting action download info" / "Set up job"）就直接失败，continue-on-error
-        # 也救不回来——同族 NebulaId run 39447128551、CalNexus 与 garrison 均因此长红。
+        # （"Getting action download info" / "Set up job"）就直接失败。
         uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
       - name: gitleaks 密钥扫描
         # 第三方 action 钉 SHA：@v2 可变 tag，上游可重指。

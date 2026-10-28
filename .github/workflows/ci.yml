@@ -9,12 +9,19 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# 默认 GITHUB_TOKEN 权限过宽（zizmor excessive-permissions）：CI 只需读代码，
+# 不写 issue/PR/package。需要写权限的 job 在其 job 级显式声明。
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: fmt + clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # Toolchain version must match the declared MSRV (Cargo.toml
       # `rust-version` / clippy.toml `msrv`) — this job is what verifies it.
       - name: Install Rust 1.97.1 with clippy
@@ -78,6 +85,8 @@ jobs:
             cache-key: "full-webui"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install Rust 1.97.1 (declared MSRV)
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
@@ -113,6 +122,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install Rust 1.97.1 (declared MSRV)
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
@@ -146,6 +157,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # cargo-fuzz requires nightly (sanitizer) + rust-src (build-std).
       - name: Install nightly with rust-src
         uses: dtolnay/rust-toolchain@2c76c034f9e32a5d6e2c104dc4df23a22476db04 # nightly
@@ -181,6 +194,8 @@ jobs:
       checks: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # deny.toml is the single source of truth for advisory ignores
       # (.cargo/audit.toml is the synced mirror for local `cargo audit` runs;
       # audit-check cannot read config files, so the ignore list is derived
