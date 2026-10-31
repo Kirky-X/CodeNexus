@@ -113,7 +113,7 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             let name = method_name(node, source);
             // The receiver type is propagated as current_parent so that
             // extract_call can build a receiver-disambiguated caller_qn
-            // (BUG-G1: methods on different types with the same name must
+            // (methods on different types with the same name must
             // produce distinct caller_qns to avoid over-deduplication in
             // resolve_calls).
             let receiver = receiver_type_name(node, source);
@@ -750,7 +750,7 @@ mod tests {
 
     #[test]
     fn method_calls_from_different_types_have_distinct_caller_qn() {
-        // BUG-G1: Two methods named Run on different types both call helper.
+        // Two methods named Run on different types both call helper.
         // caller_qn must include the receiver type so resolve_calls doesn't
         // deduplicate their CALLS edges.
         let src = "package main\nfunc helper() {}\ntype A struct{}\ntype B struct{}\nfunc (a A) Run() { helper() }\nfunc (b B) Run() { helper() }\n";
@@ -781,7 +781,7 @@ mod tests {
 
     #[test]
     fn exported_function_has_is_exported_true() {
-        // BUG-G2: Go exported symbols (uppercase first letter) must have
+        // Go exported symbols (uppercase first letter) must have
         // is_exported=true so resolve_calls can find them via lookup_exported.
         let result = extract("package main\nfunc Foo() {}\n");
         let func = result

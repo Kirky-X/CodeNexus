@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 //! Node label enum representing the 44 node types in the CodeNexus graph
-//! (DDD §7.1 base 20 + Interface + H1 extension 23).
+//! (DDD §7.1 base 20 + Interface + extension 23).
 use std::fmt;
 use std::str::FromStr;
 
@@ -56,19 +56,19 @@ pub enum NodeLabel {
     Typedef,
     Namespace,
     Interface,
-    // H1 extension: Type definitions (22-26)
+    // extension: Type definitions (22-26)
     Constructor,
     Property,
     Record,
     Delegate,
     Annotation,
-    // H1 extension: Templates (27)
+    // extension: Templates (27)
     Template,
-    // H1 extension: Union/Variant/Field (28-30)
+    // extension: Union/Variant/Field (28-30)
     Union,
     Variant,
     Field,
-    // H1 extension: Runtime/architecture (31-37)
+    // extension: Runtime/architecture (31-37)
     Event,
     Handler,
     Middleware,
@@ -76,13 +76,13 @@ pub enum NodeLabel {
     Endpoint,
     Route,
     Process,
-    // H1 extension: Data/infra (38-39)
+    // extension: Data/infra (38-39)
     Database,
     Config,
-    // H1 extension: Quality/docs (40-41)
+    // extension: Quality/docs (40-41)
     Test,
     Section,
-    // H1 extension: Community/extension (42-44)
+    // extension: Community/extension (42-44)
     Community,
     Tool,
     Embedding,
@@ -121,19 +121,19 @@ impl NodeLabel {
             NodeLabel::Typedef,
             NodeLabel::Namespace,
             NodeLabel::Interface,
-            // H1 extension: Type definitions
+            // extension: Type definitions
             NodeLabel::Constructor,
             NodeLabel::Property,
             NodeLabel::Record,
             NodeLabel::Delegate,
             NodeLabel::Annotation,
-            // H1 extension: Templates
+            // extension: Templates
             NodeLabel::Template,
-            // H1 extension: Union/Variant/Field
+            // extension: Union/Variant/Field
             NodeLabel::Union,
             NodeLabel::Variant,
             NodeLabel::Field,
-            // H1 extension: Runtime/architecture
+            // extension: Runtime/architecture
             NodeLabel::Event,
             NodeLabel::Handler,
             NodeLabel::Middleware,
@@ -141,13 +141,13 @@ impl NodeLabel {
             NodeLabel::Endpoint,
             NodeLabel::Route,
             NodeLabel::Process,
-            // H1 extension: Data/infra
+            // extension: Data/infra
             NodeLabel::Database,
             NodeLabel::Config,
-            // H1 extension: Quality/docs
+            // extension: Quality/docs
             NodeLabel::Test,
             NodeLabel::Section,
-            // H1 extension: Community/extension
+            // extension: Community/extension
             NodeLabel::Community,
             NodeLabel::Tool,
             NodeLabel::Embedding,
@@ -303,7 +303,7 @@ mod tests {
         assert_eq!(NodeLabel::Typedef.to_string(), "Typedef");
         assert_eq!(NodeLabel::Namespace.to_string(), "Namespace");
         assert_eq!(NodeLabel::Interface.to_string(), "Interface");
-        // H1 extension
+        // extension
         assert_eq!(NodeLabel::Constructor.to_string(), "Constructor");
         assert_eq!(NodeLabel::Property.to_string(), "Property");
         assert_eq!(NodeLabel::Record.to_string(), "Record");

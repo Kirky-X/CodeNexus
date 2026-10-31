@@ -30,7 +30,7 @@
 //!
 //! The implementation uses [`petgraph::graph::UnGraph`] as the in-memory
 //! weighted undirected graph and self-implements the Leiden loop (≈200
-//! lines) per design decision D7 — no external Leiden crate is introduced.
+//! lines) — no external Leiden crate is introduced.
 //! [`modularity_core`] is shared by both Leiden ([`RefineMode::RefineConnected`])
 //! and the legacy [`louvain`] entry point ([`RefineMode::Plain`], kept for
 //! quality comparison against [`leiden`] in tests).

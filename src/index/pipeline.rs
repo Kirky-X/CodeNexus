@@ -290,7 +290,7 @@ impl IndexFacade {
         self.index(path, project_name, force)
     }
 
-    /// Runs the RAM-first index pipeline (H15/D9).
+    /// Runs the RAM-first index pipeline.
     ///
     /// Reads all source files under `path` into memory, LZ4-compresses each
     /// into a `Vec<u8>` (bounding peak memory), then runs the standard DAG
@@ -358,7 +358,7 @@ impl IndexFacade {
             return self.index(path, project_name, force);
         }
 
-        // H15: LZ4-compress every discovered file into memory. Files that
+        // LZ4-compress every discovered file into memory. Files that
         // ScanPhase later marks unchanged (hash match) won't be in `to_parse`,
         // so their compressed bytes are simply never looked up — the small
         // waste of compressing them is preferable to a second scan+hash pass
@@ -453,7 +453,7 @@ impl Pipeline {
         self.run_inner(path, project_name, force, None)
     }
 
-    /// Runs the RAM-first indexing pipeline (H15/D9).
+    /// Runs the RAM-first indexing pipeline.
     ///
     /// Same as [`run`](Self::run) but all source files are LZ4-compressed into
     /// memory before parsing, and the parse phase decompresses on demand

@@ -127,7 +127,7 @@ impl StorageModule {
     /// capability-level tests can run without an async runtime.
     pub(crate) fn build_cap(config: &StorageConfig) -> Result<Arc<dyn Storage>, StorageError> {
         // Read-only: skip schema init (read commands target an already-indexed
-        // DB whose schema exists; DDL would fail under read_only anyway — H2).
+        // DB whose schema exists; DDL would fail under read_only anyway).
         let repo = if config.read_only {
             Repository::open_read_only(&config.db_path)?
         } else {

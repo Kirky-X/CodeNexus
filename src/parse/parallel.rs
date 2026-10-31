@@ -127,7 +127,7 @@ pub fn parse_single(file: &FileInfo, project: &str) -> Result<ExtractResult, Par
     extract_file(&file.path, lang, project)
 }
 
-// parallel_parse_ram_first (H15)
+// parallel_parse_ram_first
 
 /// LZ4-compressed source buffer keyed by absolute file path.
 ///
@@ -141,7 +141,7 @@ pub fn parse_single(file: &FileInfo, project: &str) -> Result<ExtractResult, Par
 pub type RamFirstSources = std::collections::HashMap<std::path::PathBuf, Vec<u8>>;
 
 /// Parses multiple files in parallel from LZ4-compressed in-memory buffers
-/// (H15/D9 RAM-first indexing).
+/// (RAM-first indexing).
 ///
 /// For each file in `files`, if its `path` is present in `compressed`, the
 /// LZ4-compressed bytes are decompressed into a `String` and parsed via
@@ -735,7 +735,7 @@ mod tests {
         );
     }
 
-    // parallel_parse_ram_first (H15/D9): LZ4-compressed in-memory parsing
+    // parallel_parse_ram_first: LZ4-compressed in-memory parsing
 
     /// Helper: LZ4-compress a source string with the size prefix that
     /// `decompress_size_prepended` expects (4-byte LE original size + raw

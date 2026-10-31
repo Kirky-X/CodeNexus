@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
-//! `codenexus_tokenizer` — identifier-aware tokenization for BM25 search (H11).
+//! `codenexus_tokenizer` — identifier-aware tokenization for BM25 search.
 //!
 //! Source-code identifiers use `camelCase`, `PascalCase`, `snake_case`,
 //! `SCREAMING_SNAKE_CASE`, and mixed conventions. A naive whitespace tokenizer

@@ -315,7 +315,7 @@ impl<'a> TraceFacade<'a> {
 
     /// Traces from a specific node id, bypassing symbol resolution.
     ///
-    /// Used by the H14 disambiguation gate in `trace_cmd` / `impact_cmd`:
+    /// Used by the disambiguation gate in `trace_cmd` / `impact_cmd`:
     /// when `--uid`/`--file`/`--kind` narrows to a single candidate, the
     /// caller already knows the node id and passes it here directly.
     /// `symbol_label` is used only for the `TraceResult.symbol` field.

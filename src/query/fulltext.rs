@@ -1,14 +1,14 @@
 // Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
-//! BM25 full-text search (PRD §4.4.3, H11).
+//! BM25 full-text search (PRD §4.4.3).
 //!
 //! [`FullTextSearcher`] attempts to use the LadybugDB FTS extension
 //! (`CALL fts_search(...)`) for BM25-ranked results. When the FTS extension is
 //! unavailable (the common case in tests), it falls back to a `CONTAINS`-based
 //! scan over the symbol tables, ranking results with a simple relevance score.
 //!
-//! # codenexus_tokenizer (H11)
+//! # codenexus_tokenizer
 //!
 //! Both the FTS query and the CONTAINS fallback use [`codenexus_tokenize`] to
 //! split camelCase / snake_case identifiers before matching. This enables
@@ -143,7 +143,7 @@ impl<'a> FullTextSearcher<'a> {
         }
     }
 
-    /// Attempts a LadybugDB FTS query against the `name` FTS indexes (H11).
+    /// Attempts a LadybugDB FTS query against the `name` FTS indexes.
     ///
     /// Queries three FTS indexes — `fts_function_name`, `fts_class_name`,
     /// `fts_method_name` — created by [`crate::storage::schema::index_ddl`].
@@ -160,7 +160,7 @@ impl<'a> FullTextSearcher<'a> {
         project: Option<&str>,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
-        // H11: tokenize the query so camelCase/snake_case identifiers are split
+        // Tokenize the query so camelCase/snake_case identifiers are split
         // into sub-tokens before passing to the FTS engine.
         let tokenized = codenexus_tokenize(text);
         if tokenized.is_empty() {
@@ -212,9 +212,9 @@ impl<'a> FullTextSearcher<'a> {
     }
 
     /// Fallback: scans symbol tables with `CONTAINS` and ranks by BM25F
-    /// multi-field scoring (C4 upgrade). Case-insensitive.
+    /// multi-field scoring. Case-insensitive.
     ///
-    /// H11: the query is pre-tokenized via [`codenexus_tokenize`] so that a
+    /// The query is pre-tokenized via [`codenexus_tokenize`] so that a
     /// multi-token query like `parseFile` becomes `["parse", "file"]`. The
     /// WHERE clause ORs one `CONTAINS` per token across each available text
     /// field (`name`, `qualifiedName`, `docstring`, `content`), enabling
@@ -876,7 +876,7 @@ mod tests {
 
     #[test]
     fn fallback_contains_search_matches_camel_query_to_snake_name() {
-        // H11: searching `parseFile` (camelCase) should match `parse_file`
+        // Searching `parseFile` (camelCase) should match `parse_file`
         // (snake_case) via tokenization. Without tokenization, a single
         // `CONTAINS('parseFile')` would miss `parse_file`.
         let repo = fresh_repo();
@@ -905,7 +905,7 @@ mod tests {
 
     #[test]
     fn fallback_contains_search_rejects_query_that_tokenizes_to_empty() {
-        // H11: a query consisting only of separators tokenizes to empty and
+        // A query consisting only of separators tokenizes to empty and
         // must error (fail loud) rather than silently returning all
         // rows.
         let repo = fresh_repo();

@@ -218,7 +218,7 @@ impl Phase for ScanPhase {
 /// Replaces original step 4 of the pipeline. Parse failures are logged and
 /// skipped (PRD §4.1.6) — they do not abort the pipeline.
 ///
-/// # RAM-first mode (H15)
+/// # RAM-first mode
 ///
 /// When the caller ([`IndexFacade::index_ram_first`]) provides LZ4-compressed
 /// source bytes via [`PipelineCtx`], files are decompressed from in-memory
@@ -291,7 +291,7 @@ impl Phase for ParsePhase {
         let mut to_parse: Vec<FileInfo> = scan.diff.changed.clone();
         to_parse.extend(scan.diff.added.iter().cloned());
 
-        // H15: RAM-first path uses LZ4-compressed in-memory buffers; the
+        // RAM-first path uses LZ4-compressed in-memory buffers; the
         // streaming path reads from disk.
         let parse_result = match compressed {
             Some(c) => parallel_parse_ram_first(&to_parse, &c, &scan.project_id),
@@ -1412,7 +1412,7 @@ fn save_project_node_on<E: crate::storage::connection::CypherExecutor>(
 /// empty string if `root` is not a git repo (or git is unavailable).
 ///
 /// Used to populate the `lastCommit` field on Project nodes for staleness
-/// tracking (H9).
+/// tracking.
 fn git_head_commit(root: &Path) -> String {
     std::process::Command::new("git")
         .arg("-C")

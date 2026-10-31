@@ -70,7 +70,7 @@ impl Default for FieldWeights {
 
 /// Computes a relevance score in `[0.0, 1.0]` for `name` against `query`.
 ///
-/// Scoring tiers (H11 token-aware):
+/// Scoring tiers (token-aware):
 /// - `1.0` — exact match (case-insensitive)
 /// - `0.8` — name starts with query (prefix)
 /// - `0.7` — every query token appears as a substring of some name token

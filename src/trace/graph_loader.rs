@@ -340,8 +340,9 @@ fn row_to_edge(row: &[serde_json::Value]) -> Option<Edge> {
     let target = row.get(1).and_then(|v| v.as_str())?.to_string();
     let type_str = row.get(2).and_then(|v| v.as_str()).unwrap_or("CALLS");
     let confidence = row.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-    // confidenceTier column may be absent in databases created before H4;
-    // default to Global (fail-safe, not fail-loud — old data is unclassified).
+    // confidenceTier column may be absent in databases created before the
+    // column was added; default to Global (fail-safe, not fail-loud — old
+    // data is unclassified).
     let confidence_tier = row
         .get(4)
         .and_then(|v| v.as_str())

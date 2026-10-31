@@ -37,7 +37,7 @@ pub trait Indexer: Send + Sync {
         force: bool,
     ) -> std::result::Result<IndexResult, IndexError>;
 
-    /// Runs the RAM-first index pipeline (H15/D9).
+    /// Runs the RAM-first index pipeline.
     ///
     /// LZ4-compresses source files into memory, parses from memory, then
     /// performs a single `COPY FROM` dump. Use for small-to-medium

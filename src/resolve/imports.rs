@@ -781,7 +781,7 @@ fn resolve_rust_module_path(
     // resolve as internal module: first component is a module name, rest is
     // path/symbol.
     //
-    // BUG-FIX: `pub use cli::run` in src/lib.rs produces `source_file =
+    // `pub use cli::run` in src/lib.rs produces `source_file =
     // "cli::run"`. Without this branch, all strategies fail and no
     // REEXPORTS edge is created, causing dead_code false positives
     // (cli.rs::run judged dead despite being the crate root entry point via
@@ -1619,7 +1619,7 @@ mod tests {
 
     // resolve_imports: Rust module path resolution (unprefixed, e.g. `cli::run`)
     //
-    // BUG-FIX: `pub use cli::run` in src/lib.rs (where `mod cli;` is declared)
+    // `pub use cli::run` in src/lib.rs (where `mod cli;` is declared)
     // produces `source_file = "cli::run"`. Without unprefixed module path
     // resolution, this fails all strategies and no REEXPORTS edge is created,
     // causing dead_code false positives (cli.rs::run judged dead despite being

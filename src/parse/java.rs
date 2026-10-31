@@ -151,13 +151,13 @@ fn visit_node(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut Ext
             visit_children(node, source, ctx, result);
         }
         "object_creation_expression" => {
-            // BUG-J1: `new Foo` must be extracted as a call to the
+            // `new Foo` must be extracted as a call to the
             // constructor. gitnexus counts `new Foo` as a CALLS edge.
             extract_object_creation(node, source, ctx, result);
             visit_children(node, source, ctx, result);
         }
         "explicit_constructor_invocation" => {
-            // BUG-J1: `super` / `this` in constructor bodies.
+            // `super` / `this` in constructor bodies.
             extract_explicit_constructor(node, source, ctx, result);
             visit_children(node, source, ctx, result);
         }
@@ -316,7 +316,7 @@ fn extract_method(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
     let signature = node_text(node, source)
         .map(signature_first_line)
         .map(String::from);
-    // BUG-J3: set is_exported based on visibility. Non-private methods are
+    // Set is_exported based on visibility. Non-private methods are
     // callable cross-file (within visibility rules) and must be findable via
     // lookup_exported. Private methods are only callable within the same class
     // (file-level lookup suffices).
@@ -336,7 +336,7 @@ fn extract_method(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut
         builder = builder.signature(sig);
     }
     let model_node = builder.build();
-    // BUG-J2: methods do NOT get a DEFINES edge. DEFINES semantics is
+    // Methods do NOT get a DEFINES edge. DEFINES semantics is
     // file -> top-level definition; methods are class members, not
     // top-level. Only class/interface/enum (extract_class) create DEFINES.
     result.push_node(model_node);
@@ -413,7 +413,7 @@ fn extract_call(node: Node, source: &str, ctx: &VisitContext<'_>, result: &mut E
 }
 
 /// Extracts `new Foo` (object_creation_expression) as a call to the
-/// constructor (BUG-J1). The callee name is the type name.
+/// constructor. The callee name is the type name.
 fn extract_object_creation(
     node: Node,
     source: &str,
@@ -438,8 +438,8 @@ fn extract_object_creation(
     });
 }
 
-/// Extracts `super` / `this` (explicit_constructor_invocation) as a call
-/// (BUG-J1). The callee name is "super" or "this".
+/// Extracts `super` / `this` (explicit_constructor_invocation) as a call.
+/// The callee name is "super" or "this".
 fn extract_explicit_constructor(
     node: Node,
     source: &str,
@@ -932,7 +932,7 @@ mod tests {
 
     #[test]
     fn public_method_is_exported() {
-        // BUG-J3: Java methods must have is_exported set based on visibility
+        // Java methods must have is_exported set based on visibility
         // so resolve_calls can find them via lookup_exported for cross-file
         // call resolution (same-package calls without explicit imports).
         let result = extract("class Foo { public void bar() {} }\n");
@@ -1020,7 +1020,7 @@ mod tests {
 
     #[test]
     fn method_does_not_create_defines_edge() {
-        // BUG-J2: DEFINES edge semantics is file -> top-level definition.
+        // DEFINES edge semantics is file -> top-level definition.
         // Methods are not top-level (they live inside a class), so they must
         // NOT produce a DEFINES edge. gitnexus only creates DEFINES for
         // class/interface/enum. The previous code created one DEFINES per
@@ -1041,7 +1041,7 @@ mod tests {
 
     #[test]
     fn extracts_object_creation_as_call() {
-        // BUG-J1: `new Foo` is an object_creation_expression which was not
+        // `new Foo` is an object_creation_expression which was not
         // handled as a call. gitnexus counts `new Foo` as a CALLS edge to
         // the constructor. Without this, ~77% of Java CALLS were missed on
         // gson (CN=1,415 vs GN=6,081).
@@ -1061,7 +1061,7 @@ mod tests {
 
     #[test]
     fn extracts_explicit_constructor_invocation_as_call() {
-        // BUG-J1: `super` and `this` are explicit_constructor_invocation
+        // `super` and `this` are explicit_constructor_invocation
         // nodes which were not handled as calls.
         let result = extract("class Foo { Foo() { super(); } }\n");
         let super_calls: Vec<_> = result

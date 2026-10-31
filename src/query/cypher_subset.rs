@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
-//! Cypher subset validation via PEG parsing (H12).
+//! Cypher subset validation via PEG parsing.
 //!
 //! [`validate_cypher_subset`] checks that a user-supplied Cypher query uses
 //! only the supported clause subset before forwarding it to LadybugDB. This
@@ -37,7 +37,7 @@ use super::error::{QueryError, Result};
 #[grammar = "query/cypher_subset.pest"]
 pub struct CypherSubsetParser;
 
-/// Validates that `query` uses only the supported Cypher subset (H12).
+/// Validates that `query` uses only the supported Cypher subset.
 ///
 /// Returns `Ok()` if the query parses against the subset grammar, or
 /// `Err(QueryError::InvalidQuery)` with the pest parse error (position +

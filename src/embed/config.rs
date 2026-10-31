@@ -34,7 +34,7 @@ pub const EMBED_MODEL_SHA256_ENV: &str = "CODENEXUS_EMBED_MODEL_SHA256";
 /// repository (90 MB) — it must be downloaded separately and placed at this
 /// path (or at a custom path via [`EmbeddingConfig::model_path`]).
 ///
-/// Design D7 open question: the exact distribution method (git-lfs vs build.rs
+/// Open question: the exact distribution method (git-lfs vs build.rs
 /// download vs release asset) is unresolved. This default provides a stable
 /// convention; users can override via `CODENEXUS_EMBED_MODEL_PATH`.
 pub const DEFAULT_MODEL_PATH: &str = "assets/arctic-embed-xs";

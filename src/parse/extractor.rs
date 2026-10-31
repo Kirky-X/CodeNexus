@@ -76,7 +76,7 @@ pub fn extract_file(path: &Path, language: Language, project: &str) -> Result<Ex
 
 /// Extracts symbols from an in-memory source string.
 ///
-/// Used by the RAM-first indexing path (H15): source bytes are LZ4-decompressed
+/// Used by the RAM-first indexing path: source bytes are LZ4-decompressed
 /// into a `String` and passed here directly, bypassing the disk read in
 /// [`extract_file`]. `file_path_str` is used only for node `file_path` fields
 /// and error messages — no filesystem access occurs.

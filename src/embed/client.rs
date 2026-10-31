@@ -599,18 +599,18 @@ fn serialize_vec(vec: &[f32]) -> Vec<u8> {
 /// length is not a multiple of 4 — this signals corrupt cache data so the
 /// caller can treat it as a cache miss and recompute.
 ///
-/// Note: [`chunks_exact`] silently drops a trailing partial chunk; the
-/// explicit length check here makes that behavior visible and recoverable.
-///
-/// [`chunks_exact`]: slice::chunks_exact
+/// Note: a trailing partial chunk would silently drop data; the explicit
+/// length check here rejects such input outright, so no remainder exists.
 #[cfg(feature = "cache")]
 fn deserialize_vec(bytes: &[u8]) -> Vec<f32> {
     if !bytes.len().is_multiple_of(4) {
         return Vec::new();
     }
     bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect()
 }
 

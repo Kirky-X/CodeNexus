@@ -744,7 +744,7 @@ fn has_direct_recursion(node: Node<'_>, source: &[u8], function_name: &str) -> b
 }
 
 /// Counts the number of direct recursive calls to `function_name` within the
-/// subtree (design D5). Used to distinguish linear recursion (1 call → O(n))
+/// subtree. Used to distinguish linear recursion (1 call → O(n))
 /// from tree recursion (2+ calls → O(2^n)). Matches `f` and `self.f` style
 /// calls, consistent with `has_direct_recursion`.
 fn count_recursive_calls(node: Node<'_>, source: &[u8], function_name: &str) -> usize {
@@ -790,8 +790,8 @@ fn has_sort_call(source_text: &str) -> bool {
     source_text.contains(".sort(")
 }
 
-/// Estimates the time complexity class of a function via AST pattern matching
-/// (design D5). Priority cascade (first match wins):
+/// Estimates the time complexity class of a function via AST pattern matching.
+/// Priority cascade (first match wins):
 /// 1. Tree recursion (2+ self-calls) → `O(2^n)`; linear recursion (1 self-call)
 ///    → `O(n)`.
 /// 2. Binary-search halving inside a `while` loop → `O(log n)`.
@@ -864,7 +864,7 @@ fn has_allocation_in_loop(node: Node<'_>, source: &[u8], language: Language) -> 
 }
 
 /// Estimates the space complexity class of a function via allocation pattern
-/// recognition (design D6). Priority (max wins):
+/// recognition. Priority (max wins):
 /// 1. Dynamic allocation inside a loop → `O(n^2)`.
 /// 2. Dynamic allocation (anywhere) or direct recursion → `O(n)`.
 /// 3. Default (fixed arrays / no allocation) → `O(1)`.
@@ -892,7 +892,7 @@ pub fn estimate_space_complexity(
 }
 
 /// Returns true if the child node kind is a short-circuit logical operator
-/// for the specified language (design D4).
+/// for the specified language.
 ///
 /// - **Python**: `and` / `or` keywords
 /// - **Fortran**: `.and.` / `.or.` (tree-sitter produces lowercase node kinds)
