@@ -83,10 +83,11 @@ pub fn measure_peak_rss<F: FnOnce()>(f: F) -> u64 {
     let peak_worker = Arc::clone(&peak);
     let stop_worker = Arc::clone(&stop);
     let handle = std::thread::spawn(move || {
-        // sysinfo 0.40 makes `System::new` fallible; a failed sampler degrades
-        // to a peak of 0 rather than killing the bench run.
+        // sysinfo 0.40 makes `System::new` fallible; a failed sampler must fail
+        // loudly (same as memory_bench.rs) — degrading to peak=0 would let the
+        // RSS SLO assert pass vacuously.
         let Ok(mut sys) = System::new() else {
-            return;
+            panic!("sysinfo init failed: cannot sample peak RSS");
         };
         let pid: Pid = Pid::from(std::process::id() as usize);
         while !stop_worker.load(Ordering::SeqCst) {

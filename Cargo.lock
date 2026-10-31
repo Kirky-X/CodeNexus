@@ -2876,7 +2876,7 @@ dependencies = [
 
 [[package]]
 name = "inklog"
-version = "0.3.0-rc.11"
+version = "0.3.0-rc.12"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2891,7 +2891,7 @@ dependencies = [
  "log",
  "nix",
  "owo-colors",
- "parking_lot 0.12.5",
+ "parking_lot 0.13.0",
  "pbkdf2",
  "rand 0.10.3",
  "regex",
@@ -3170,7 +3170,7 @@ dependencies = [
 
 [[package]]
 name = "limiteron"
-version = "0.3.0-rc.9"
+version = "0.3.0-rc.10"
 dependencies = [
  "ahash",
  "async-trait",
@@ -3211,7 +3211,7 @@ dependencies = [
 
 [[package]]
 name = "limiteron-macros"
-version = "0.3.0-rc.9"
+version = "0.3.0-rc.10"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4229,7 +4229,7 @@ version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "itertools 0.14.0",
  "log",
  "multimap",
@@ -4952,7 +4952,7 @@ checksum = "d68f2ec51b097e4c1a75b681a8bec621909b5e91f15bb7b840c4f2f7b01148b2"
 
 [[package]]
 name = "sdforge"
-version = "0.5.0-rc.9"
+version = "0.5.0-rc.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4976,7 +4976,7 @@ dependencies = [
 
 [[package]]
 name = "sdforge-macros"
-version = "0.5.0-rc.9"
+version = "0.5.0-rc.10"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5128,7 +5128,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8050abb251097357e24aff63ba2c52a6309ecb7d23a5474023df960a02694d8"
 dependencies = [
  "annotate-snippets",
- "base64 0.23.1",
+ "base64 0.22.1",
  "encoding_rs_io",
  "granit-parser 1.3.0",
  "nohash-hasher",
@@ -5145,7 +5145,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a253edfdea34032da21af84e16fcc94f4c7a6ba237f9f3bc2dbf43cea8535c44"
 dependencies = [
  "annotate-snippets",
- "base64 0.23.1",
+ "base64 0.22.1",
  "encoding_rs_io",
  "granit-parser 2.0.0",
  "nohash-hasher",
@@ -5836,7 +5836,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
