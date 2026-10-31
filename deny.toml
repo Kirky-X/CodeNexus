@@ -12,31 +12,20 @@ yanked = "deny"
 # 只加载该路径或 ~/.cargo/audit.toml，仓库根目录同名文件不会被读取）。
 # 约束：下方注释只允许出现被 ignore 的 RUSTSEC 编号（会被 grep 命中）。
 # 每条 ignore 必须带"复核日期"，到期重新评估是否仍需忽略。
-# 临时接受（最近复核 2026-10-16，基于 Cargo.lock 实锁版本）：
+# 临时接受（最近复核 2026-10-31，基于 Cargo.lock 实锁版本）：
 # - paste RUSTSEC-2024-0436 (unmaintained)：tokenizers 间接依赖（paste 1.0.15，
-#   vecboost/candle 树仍在使用），无安全升级路径。复核：2026-12。
-# - unsafe-libyaml RUSTSEC-2024-0449 (unmaintained)：limiteron 0.3.0-rc.7 间接
-#   依赖（serde_yaml_ng 0.10），实证仍传递该依赖，无安全升级路径。复核：2026-12，
-#   待 limiteron 移除 serde_yaml_ng 后移除。
-# - number_prefix RUSTSEC-2025-0119 (unmaintained)：indicatif（vecboost/candle
+#   vecboost 树仍在使用），无安全升级路径。复核：2026-12。
+# - number_prefix RUSTSEC-2025-0119 (unmaintained)：indicatif（vecboost
 #   进度条树）0.4.0 间接依赖，无安全升级路径。复核：2026-12，随 vecboost
 #   上游更换进度条或发布新版后复评。
 # 历史项复核结论（2026-10-16 移除）：cxx 与 event-listener 两条 unsound
 # advisory 的锁内实版均已达到各自 patched 下限，advisory 不再命中，对应
 # ignore 已删（编号见本文件 git 历史，注释约束不允许在此复述）。
-# - zip RUSTSEC-2026-0367 / RUSTSEC-2026-0368 / RUSTSEC-2026-0369 (vulnerability，
-#   ZipArchive::extract 的 SUID 保留 / 符号链接逃逸 / 经符号链接提权)：candle-core
-#   0.11 钉死 zip 8.6.0（约束 ^8.6.0 不含修复所在的 9.0.x 大版本，锁内无可更
-#   目标；zip 8.6.0 本身未被 yank，2026-10-17 复核）；漏洞面在 extract() 落盘
-#   提取，本仓与 candle 仅随机读取、从不调用 extract()，实际不可达。
-#   复核：随 candle-core 升级 zip 9.x 后移除。
+# 2026-10-31 复核：vecboost 0.3.0-rc.3 起图谱不再包含 candle/zip 树与
+# serde_yaml_ng 树，相应 ignore 已随本次复核删除。
 ignore = [
     "RUSTSEC-2024-0436",
-    "RUSTSEC-2024-0449",
     "RUSTSEC-2025-0119",
-    "RUSTSEC-2026-0367",
-    "RUSTSEC-2026-0368",
-    "RUSTSEC-2026-0369",
 ]
 
 [licenses]

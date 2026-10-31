@@ -926,6 +926,13 @@ mod tests {
     #[test]
     #[serial_test::serial(i18n_catalog)]
     fn embed_messages_resolve_through_catalog() {
+        // The assertions pin English catalog text, so the locale must be
+        // pinned too: without an override the detection chain falls through
+        // to sys-locale, which is zh on zh-language hosts (macOS/Windows) and
+        // en only where the system language happens to be English. The
+        // override must precede `init`, which snapshots `current_locale()`
+        // into the sdforge registry that `t` resolves through.
+        crate::i18n::set_locale("en").expect("en is a supported locale");
         init_i18n_catalog();
         assert_eq!(
             crate::i18n::t(

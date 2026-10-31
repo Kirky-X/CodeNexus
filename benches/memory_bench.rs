@@ -249,7 +249,12 @@ fn bench_daemon_sustained_10_increments(c: &mut Criterion) {
             },
             |state| {
                 let mut rss_samples: Vec<u64> = Vec::with_capacity(SUSTAINED_INCREMENTS);
-                let mut sys = sysinfo::System::new();
+                // This bench's SLO assertions are meaningless without a
+                // sampler, so a failed sysinfo init fails the run loudly
+                // instead of silently passing with RSS = 0.
+                let Ok(mut sys) = sysinfo::System::new() else {
+                    panic!("sysinfo init failed: cannot sample daemon RSS");
+                };
                 let pid = sysinfo::Pid::from(std::process::id() as usize);
 
                 for i in 0..SUSTAINED_INCREMENTS {

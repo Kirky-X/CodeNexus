@@ -83,7 +83,11 @@ pub fn measure_peak_rss<F: FnOnce()>(f: F) -> u64 {
     let peak_worker = Arc::clone(&peak);
     let stop_worker = Arc::clone(&stop);
     let handle = std::thread::spawn(move || {
-        let mut sys = System::new();
+        // sysinfo 0.40 makes `System::new` fallible; a failed sampler degrades
+        // to a peak of 0 rather than killing the bench run.
+        let Ok(mut sys) = System::new() else {
+            return;
+        };
         let pid: Pid = Pid::from(std::process::id() as usize);
         while !stop_worker.load(Ordering::SeqCst) {
             sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), false);

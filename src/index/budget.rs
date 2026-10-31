@@ -175,7 +175,11 @@ impl MemoryBudget {
         // is required before `available_memory` returns a real value.
         // The `system` feature is the only one we need (no disk / component /
         // network / user probes).
-        let mut sys = sysinfo::System::new();
+        // sysinfo 0.40 makes `System::new` fallible; this probe degrades to 0
+        // like every other undeterminable value here.
+        let Ok(mut sys) = sysinfo::System::new() else {
+            return 0;
+        };
         sys.refresh_memory();
         sys.available_memory()
     }

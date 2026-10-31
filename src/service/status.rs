@@ -470,6 +470,7 @@ mod tests {
     #[test]
     fn kit_health_aggregate_output_maps_entries_and_empty() {
         let aggregate = trait_kit::core::health::HealthAggregate {
+            schema_version: trait_kit::core::health::HEALTH_SCHEMA_VERSION,
             status: "unhealthy",
             healthy: false,
             modules: vec![
@@ -495,6 +496,7 @@ mod tests {
         assert_eq!(output.modules[1].detail, None);
 
         let empty = trait_kit::core::health::HealthAggregate {
+            schema_version: trait_kit::core::health::HEALTH_SCHEMA_VERSION,
             status: "healthy",
             healthy: true,
             modules: Vec::new(),

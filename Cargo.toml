@@ -127,7 +127,7 @@ serde_json = { workspace = true }
 csv = { version = "1.4", default-features = false }
 tempfile = { workspace = true }
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
-sysinfo = { version = "0.39", default-features = false, features = ["system", "disk"] }
+sysinfo = { version = "0.40", default-features = false, features = ["system", "disk"] }
 uuid = { version = "1.28", default-features = false, features = ["v7"] }
 petgraph = { version = "0.8", default-features = false, optional = true }
 lsp-types = { version = "0.97", default-features = false, optional = true }
@@ -140,7 +140,7 @@ limiteron = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
 oxcache = { version = "0.5.0-rc.8", default-features = false, features = ["minimal", "macros"], optional = true }
 oxiarc-zstd = { version = "0.4", default-features = false, optional = true }
-# zstd-sys 显式钉 vendored：lbug 0.21 bundled zstd 不再外泄符号，pkg-config 探测无法替代
+# zstd-sys 显式钉 vendored：lbug bundled zstd 不再外泄符号，pkg-config 探测无法替代
 zstd-sys = { version = "2.1", default-features = false, features = ["std", "vendored"] }
 inklog = { workspace = true }
 regex = { version = "1.13", default-features = false, features = ["std", "unicode", "perf"] }
@@ -247,4 +247,13 @@ inklog = { version = "0.3.0-rc.9", default-features = false }
 unic-langid = { version = "0.9", default-features = false }
 limiteron = { version = "0.3.0-rc.7", default-features = false, features = ["retry"] }
 sys-locale = { version = "0.3", default-features = false }
-lbug = { version = "0.21", default-features = false }
+lbug = { version = "0.22", default-features = false }
+
+# 发布前置运行专用：本地源码接线，正式发布前整体移除并回落锁。
+[patch.crates-io]
+trait-kit = { path = "../trait-kit" }
+vecboost = { path = "../vecboost" }
+sdforge = { path = "../sdforge" }
+limiteron = { path = "../limiteron" }
+oxcache = { path = "../oxcache" }
+inklog = { path = "../inklog" }

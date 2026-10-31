@@ -680,9 +680,14 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         std::fs::write(dir.path().join("src/main.rs"), "fn main() {}").unwrap();
         let resolved = resolve_under_root(dir.path(), "src/main.rs");
+        // `resolve_under_root` returns the canonicalized path (documented
+        // contract), so the expectation must be canonicalized too: on macOS
+        // tempdir ancestors contain symlinks (/var → /private/var), which
+        // would otherwise make this test host-dependent.
+        let expected = dir.path().canonicalize().unwrap().join("src/main.rs");
         assert_eq!(
             resolved.as_ref(),
-            Some(&dir.path().join("src/main.rs")),
+            Some(&expected),
             "existing relative path under root must resolve"
         );
     }
@@ -879,7 +884,11 @@ mod tests {
             1,
             "relative file_path should be joined with root"
         );
-        assert_eq!(files[0], root.join("src/main.rs"));
+        // The candidate carries the canonicalized root (non-existent files
+        // keep the lexical join against the canonical root). On macOS tempdir
+        // ancestors contain symlinks (/var → /private/var), so the
+        // expectation must canonicalize root to stay host-independent.
+        assert_eq!(files[0], root.canonicalize().unwrap().join("src/main.rs"));
     }
 
     #[test]

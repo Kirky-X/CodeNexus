@@ -650,7 +650,11 @@ fn probe_available_disk_space(db_path: &Path) -> u64 {
             .unwrap_or_else(|| Path::new(".").to_path_buf()),
     };
 
-    let disks = sysinfo::Disks::new_with_refreshed_list();
+    // sysinfo 0.40 makes this constructor fallible; an unprobeable disk
+    // degrades to the same 0 fallback as an unmatched mount point below.
+    let Ok(disks) = sysinfo::Disks::new_with_refreshed_list() else {
+        return 0;
+    };
 
     // Find the disk whose mount point is the longest prefix of our path.
     // This correctly handles nested mounts (e.g. /home on a separate
@@ -666,7 +670,7 @@ fn probe_available_disk_space(db_path: &Path) -> u64 {
         .unwrap_or(&canonical_str);
     let mut best: Option<u64> = None;
     let mut best_len: usize = 0;
-    for disk in disks.list() {
+    for disk in &disks {
         let mount = disk.mount_point().to_string_lossy();
         // Windows 文件系统大小写不敏感：用户传入 `d:\data` 而 sysinfo 报告
         // `D:\` 时，大小写敏感比较会 miss（fail-safe 到 64 GiB 回退，但探测
