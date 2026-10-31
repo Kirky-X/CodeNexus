@@ -85,7 +85,7 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🔗 <b>Cross-language FFI</b><br><span style="color:#64748B">C-Fortran bind(C), Rust extern, and other cross-language call resolution</span></td>
-<td width="50%" style="vertical-align:top; padding: 12px">📦 <b>Team artifacts</b><br><span style="color:#64748B"><code>export</code> / <code>import</code> compressed <code>.graph.zst</code> artifacts for sharing indexes</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">📦 <b>Team artifacts</b><br><span style="color:#64748B"><code>export</code> / <code>import</code> compressed <code>.cnxp</code> artifacts for sharing indexes</span></td>
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🤖 <b>Multi-agent MCP</b><br><span style="color:#64748B"><code>setup</code> auto-detects Claude Code / Cursor / Codex; <code>hook</code> emits PreToolUse/PostToolUse JSON; <code>mcp</code> stdio server exposes 10 tools with parameter semantics in each tool description</span></td>
@@ -229,7 +229,9 @@ The following commands are adapted from [`examples/src/bin/basic_indexing.rs`](e
 # 1. Index a repository (the database defaults to .codenexus/<project>.lbug)
 codenexus index --path /path/to/project --name myproject
 
-# 1b. RAM-first indexing (LZ4 in-memory compression, faster for small-to-medium repos)
+# 1b. RAM-first indexing (LZ4 in-memory compression + single bulk load; recommended for
+#     repos with ≥ 1 GB of source, ADR-024; measured to use more memory on small repos,
+#     falls back to streaming disk reads when the memory budget would be exceeded)
 codenexus index --path /path/to/project --name myproject --ram_first true
 
 # 2. Query functions (Cypher subset)
@@ -421,7 +423,7 @@ cargo deny check
 
 ### 📊 Test scale
 
-As of v0.4.0-rc.2 (fixed-string grep count of `#[test]` / `#[tokio::test]` functions): 4764 unit tests (4721 `#[test]` + 43 `#[tokio::test]` in `src/`; 170 source files contain `#[cfg(test)]` modules) + 128 integration tests (10 top-level `.rs` files under `tests/`: 108 `#[test]` + 20 `#[tokio::test]`) + 8 acceptance projects + 7 Criterion benchmark groups; the coverage gate is ≥95% line coverage, enforced by both the CI coverage job and the pre-push hook. The per-file breakdown and full statistics live in [🧪 Test Scenario Matrix · Statistics](docs/TEST_SCENARIOS.md).
+As of v0.4.0-rc.2 (fixed-string grep count of `#[test]` / `#[tokio::test]` functions): 4832 unit tests (4789 `#[test]` + 43 `#[tokio::test]` in `src/`; 172 source files contain `#[cfg(test)]` modules) + 140 integration tests (11 top-level `.rs` files under `tests/`: 120 `#[test]` + 20 `#[tokio::test]`) + 8 acceptance projects + 7 Criterion benchmark groups; the coverage gate is ≥95% line coverage, enforced by both the CI coverage job and the pre-push hook. The per-file breakdown and full statistics live in [🧪 Test Scenario Matrix · Statistics](docs/TEST_SCENARIOS.md).
 
 ---
 
@@ -435,7 +437,7 @@ The benchmark suite is 7 Criterion groups in `benches/` (indexing / incremental 
 
 ### 🛡️ Security design
 
-The attack surface is concentrated in index files (LadybugDB databases, `.graph.zst` import artifacts, tree-sitter parse inputs) and the user input fed into Cypher-subset queries by `query` / `trace` / `impact` / `search`; on the code side this is paired with Cypher/identifier escaping, dry-run-by-default graph edits, and fail-loud diagnostic receipts. Design details and scope are in the [🔒 Security doc](docs/SECURITY.md).
+The attack surface is concentrated in index files (LadybugDB databases, `.cnxp` import artifacts, tree-sitter parse inputs) and the user input fed into Cypher-subset queries by `query` / `trace` / `impact` / `search`; on the code side this is paired with Cypher/identifier escaping, dry-run-by-default graph edits, and fail-loud diagnostic receipts. Design details and scope are in the [🔒 Security doc](docs/SECURITY.md).
 
 ### ⛓️ Supply chain and gates
 
@@ -561,7 +563,7 @@ CodeNexus stands on the shoulders of these excellent open-source projects:
 | [sdforge](https://crates.io/crates/sdforge) | CLI + MCP dual-transport framework (`#[forge]` macro) |
 | [trait-kit](https://crates.io/crates/trait-kit) | Capability registry |
 | [oxcache](https://crates.io/crates/oxcache) | Query result cache |
-| [inklog](https://crates.io/crates/inklog) | Log backend (console + daily-rotating file sink; inklog is pulled in with `default-features = false`, no compression backend is compiled in, so no compressed rotation files are produced) |
+| [inklog](https://crates.io/crates/inklog) | Log backend (console + daily-rotating file sink; inklog is pulled in with `default-features = false`, and `full` builds compile the zstd compression backend through vecboost's `inklog/compression` feature, so rotation files are zstd-compressed) |
 | [vecboost](https://crates.io/crates/vecboost) | Local Candle embedding inference |
 | [ICU4X](https://github.com/unicode-org/icu4x) (icu_normalizer / icu_casemap) | Unicode normalization and case mapping |
 | [petgraph](https://github.com/petgraph/petgraph) | Community-detection graph algorithms |

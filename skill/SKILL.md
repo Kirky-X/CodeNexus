@@ -62,7 +62,7 @@ CodeNexus has **37 subcommands** (plus the `codenexus mcp` serve mode) grouped i
 | `context` | Tracing | 360° view of a symbol: callers/callees/processes/routes/endpoints. `--enhanced true` resolves `--project <name\|id>` and fails fast on ambiguous symbols (verified 0.3.5). |
 | `dead_code` | Analysis | Detect unreferenced `Function`/`Method` nodes with confidence levels (High/Medium/Low). ⚠️ **Rust results are triage-only** — manually verify the entry chain (`main` → crate-root re-export `pub use` → target function) before deleting; tree-sitter may miss `calnexus::run()`-style calls where the crate name is used as a module prefix. |
 | `architecture` | Analysis | High-level overview: module boundaries, dependency directions, layers, entry points, hotspots. |
-| `complexity` | Analysis | AST-based per-function complexity (cyclomatic/cognitive/nesting/length/Halstead/MI/time/space). 26 threshold flags required. |
+| `complexity` | Analysis | AST-based per-function complexity (cyclomatic/cognitive/nesting/length/Halstead/MI/time/space). 25 threshold/flag parameters, all optional (built-in sentinel defaults; see User Guide). |
 | `community` | Analysis | Leiden community detection on the call graph (guarantees internally connected communities; C3 upgrade from Louvain). |
 | `cross_service` | Analysis | Detect cross-service call links (HTTP REST, gRPC, GraphQL, message queue, event bus); detected HTTP links persist as `HTTP_CALLS` edges (read-write DB open) for `trace --cross_service true` to walk to the far-side handler. |
 | `route_map` | Analysis | List HTTP API routes and their handler functions. |

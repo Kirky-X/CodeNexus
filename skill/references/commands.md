@@ -22,7 +22,7 @@ codenexus index --path <PATH> [--name <PROJECT_NAME>] [OPTIONS]
 - `--force <BOOL>` — Re-parse every file, ignoring cached hashes (optional, default `false`; e.g. `--force true`)
 - `--lsp <BOOL>` — Run LSP semantic enhancement after indexing (requires the `lsp` feature; optional, default `false`; e.g. `--lsp true` calls `enhance_with_lsp` for `semantic_type` extraction)
 - `--embed <BOOL>` — Deprecated: embedding is now controlled by the `embeddings` cargo feature. A `--embed true` only emits a warning to stderr. Optional, default `false`.
-- `--ram_first <BOOL>` — RAM-first indexing (H15): LZ4-compress sources into memory, parse from memory, single `COPY FROM` dump. Recommended for repos < 1 GB source. Default is streaming. (optional, default `false`)
+- `--ram_first <BOOL>` — RAM-first indexing (H15): LZ4-compress sources into memory, parse from memory, single `COPY FROM` dump. Recommended for repos with ≥ 1 GB of source (ADR-024); measured to use more memory on small repos. Falls back to streaming disk reads when the memory budget would be exceeded. (optional, default `false`)
 - `--fresh <BOOL>` — Delete the old DB file before init to reclaim DuckDB dead space (optional, default `false`)
 - `--db <DB_PATH>` — Database path (default: `.codenexus/<project>.lbug`; see Conventions)
 
@@ -517,7 +517,7 @@ Both `--output` and `--project` are **required**.
 Dumps the LadybugDB database to a zstd-compressed artifact with a JSON manifest (version, timestamp, source DB path).
 
 **Options:**
-- `--output <PATH>` — Output artifact path (required; e.g. `./codenexus.graph.zst`)
+- `--output <PATH>` — Output artifact path (required; e.g. `./codenexus.cnxp`)
 - `--project <NAME_OR_ID>` — Project name or id to include in the manifest (required)
 - `--db <DB_PATH>` — Database path to export (default: `.codenexus/<project>.lbug`; see Conventions)
 
@@ -534,7 +534,7 @@ All of `--input`, `--reindex`, `--path`, `--name` are **required** (the CLI mark
 Decompresses a team artifact and loads it into a LadybugDB database. Optionally triggers an incremental reindex of the local diff when `--reindex true`.
 
 **Options:**
-- `--input <PATH>` — Input artifact path (required; e.g. `./codenexus.graph.zst`)
+- `--input <PATH>` — Input artifact path (required; e.g. `./codenexus.cnxp`)
 - `--reindex <BOOL>` — `true` triggers incremental reindex after import (required)
 - `--path <PATH>` — Codebase root path for reindex (required; pass `""` when `--reindex false`)
 - `--name <NAME>` — Project name for reindex (required; pass `""` when `--reindex false`)

@@ -60,9 +60,9 @@ codenexus rename --from old_name --to new_name --path /repo --apply true
 
 ```bash
 # On machine A: export the indexed graph
-codenexus export --output myproject.graph.zst --project myproject --db /work/graph.lbug
+codenexus export --output myproject.cnxp --project myproject --db /work/graph.lbug
 # On machine B: import and reindex local diff
-codenexus import --input myproject.graph.zst --reindex true --path /repo --name myproject --db /work/graph.lbug
+codenexus import --input myproject.cnxp --reindex true --path /repo --name myproject --db /work/graph.lbug
 ```
 
 ### Workflow 7: MCP integration with AI agents
@@ -77,7 +77,8 @@ codenexus mcp --db /work/graph.lbug
 ### Workflow 8: Complexity audit
 
 ```bash
-# All 26 threshold flags are required. Pass 0/"" to keep in-memory defaults.
+# All 25 threshold/flag parameters are optional — omitting any uses the built-in
+# sentinel default (0/""/"false"); pass 0/"" explicitly to keep in-memory defaults.
 codenexus complexity \
   --project myproject \
   --red_only false --sort_by_severity true \

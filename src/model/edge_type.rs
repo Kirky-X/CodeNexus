@@ -1,15 +1,15 @@
 // Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
-//! Edge type enum representing the 31 relation types in the CodeNexus graph (DDD §7.2).
+//! Edge type enum representing the 32 relation types in the CodeNexus graph (DDD §7.2).
 use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// The 31 edge type variants defined in DDD §7.2 (14 original + 10 added in
-/// unified graph schema + 6 added for analysis + 1 for
-/// re-exports).
+/// The 32 edge type variants defined in DDD §7.2 (14 original + 10 added in
+/// unified graph schema + 6 added for analysis + 1 for re-exports + 1 for
+/// external dependencies).
 ///
 /// Each variant maps to an UPPERCASE DDL type string used in the LadybugDB
 /// `CodeRelation` table.
@@ -305,7 +305,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn has_thirty_one_variants() {
+    fn has_thirty_two_variants() {
         assert_eq!(EdgeType::all().len(), 32);
     }
 

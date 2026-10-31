@@ -112,7 +112,7 @@ async fn query(cypher: String) -> Result<(), ApiError> {
     name = "query",
     version = "0.3.5",
     tool_name = "query",
-    description = "Execute a read-only Cypher-subset query against the knowledge graph. Write clauses (CREATE/DELETE/SET/MERGE/REMOVE) and CALL procedures are rejected; UNION and multi-label OR are not supported by the subset. Params: cypher (required) — a MATCH/RETURN query."
+    description = "Execute a read-only Cypher-subset query against the knowledge graph. Write clauses (CREATE/DELETE/SET/MERGE/REMOVE) and CALL procedures are rejected; UNION / UNION ALL are supported, while label disjunction (`WHERE (n:A OR n:B)` or `(:A|B)`) is not supported by the subset. Params: cypher (required) — a MATCH/RETURN query."
 )]
 async fn query_mcp(cypher: String) -> Result<QueryOutput, ApiError> {
     #[cfg(feature = "cache")]

@@ -78,9 +78,17 @@ Runnable example programs live in `examples/src/bin/`:
 | `basic_indexing` | `index` + Cypher query |
 | `cypher_query` | `query` with multiple Cypher patterns |
 | `symbol_search` | `search` with empty-result handling |
-| `call_tracing` | `trace --type calls` + graph construction |
+| `call_tracing` | `trace --trace_type calls` + graph construction |
 | `impact_analysis` | `impact` reverse BFS |
 | `export_import` | DB copy (note: production uses `codenexus export`/`import` with zstd + manifest) |
+| `project_lifecycle` | Index multiple projects → list → resolve by name → remove (`index`/`list`/`clean`) |
+| `code_analysis` | `complexity` / `dead_code` / `community` |
+| `architecture_diagram` | `architecture` + `diagram` HTML + `arch_diff` |
+| `api_surface` | `route_map` / `shape_check` / `api_impact` / `cross_service` / `tool_map` |
+| `symbol_context` | `context` 360° view + subgraph loading + symbol disambiguation |
+| `git_integration` | `detect_changes` risk classification + `hook` decision summary |
+| `daemon_watch` | `daemon` debounce → incremental index → graceful stop |
+| `setup_mcp` | `setup` auto-detects installed AI coding agents and writes MCP config |
 
 Run with: `cargo run --manifest-path examples/Cargo.toml --bin <name>`
 

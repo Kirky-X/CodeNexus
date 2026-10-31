@@ -129,7 +129,7 @@ codenexus daemon --path . --name myproject --notify-impact
 | `status` | — | 查看当前索引状态 |
 | `list` | — | 列出所有已索引项目 |
 | `clean` | `--project` | 删除项目及其索引 |
-| `export` | `--output` `--project` | 导出 LadybugDB 转储为 zstd 压缩制品（`.graph.zst`），数据库由全局 `--db` 指定 |
+| `export` | `--output` `--project` | 导出 LadybugDB 转储为 zstd 压缩制品（`.cnxp`），数据库由全局 `--db` 指定 |
 | `import` | `--input` `--reindex` `--path` `--name` | 导入制品；`--reindex true` 时配合 `--path`/`--name` 增量补齐本地差异 |
 
 ### 🔎 查询与搜索

@@ -21,6 +21,7 @@ CodeNexus is pre-1.0 software. Security fixes are applied only to the latest min
 
 | Version | Supported |
 |---------|-----------|
+| 0.4.x   | Yes       |
 | 0.3.x   | Yes       |
 | < 0.3   | No        |
 
@@ -28,7 +29,7 @@ The minimum supported Rust version (MSRV) is **1.97.1** (`Cargo.toml` `rust-vers
 
 ## 🛡️ Security Design
 
-CodeNexus's attack surface is concentrated in handling index files and query inputs: LadybugDB database files, `.graph.zst` import artifacts, tree-sitter parse inputs, and the user input fed into Cypher-subset queries by `query` / `trace` / `impact` / `search`. On the code side this is paired with:
+CodeNexus's attack surface is concentrated in handling index files and query inputs: LadybugDB database files, `.cnxp` import artifacts, tree-sitter parse inputs, and the user input fed into Cypher-subset queries by `query` / `trace` / `impact` / `search`. On the code side this is paired with:
 
 - `escape_cypher_string` escaping for values interpolated into Cypher statements (including NUL bytes).
 - `escape_identifier` reserved-word escaping for identifiers.
@@ -39,7 +40,7 @@ The historical audit record (Strix ReDoS false-positive triage with proof) lives
 
 ## ⛓️ Supply Chain and Gates
 
-- `cargo-audit` (rustsec/audit-check): RustSec advisory scanning in CI; 4 advisories are temporarily ignored (rkyv / cxx / event-listener / paste — none are in the build graph or have an upgrade path, see the `ci.yml` comments).
+- `cargo-audit` (rustsec/audit-check): RustSec advisory scanning in CI; 6 advisory IDs are temporarily ignored (paste RUSTSEC-2024-0436 / unsafe-libyaml RUSTSEC-2024-0449 / number_prefix RUSTSEC-2025-0119 / zip RUSTSEC-2026-0367, RUSTSEC-2026-0368, RUSTSEC-2026-0369 — see the `deny.toml` comments for the rationale and re-check triggers).
 - `cargo-deny`: license / banned-dependency / advisory checks (`deny.toml`).
 - CodeQL: Rust static analysis on push / PR / weekly schedule (`.github/workflows/codeql.yml`).
 - pre-commit hooks: trailing-whitespace, detect-private-key, detect-secrets, and other file checks (`.pre-commit-config.yaml`).
@@ -82,7 +83,7 @@ In scope:
 
 - The CodeNexus CLI and library (`src/`, `tests/`, `benches/`).
 - The MCP server (`codenexus mcp`) and agent integration (`setup`, `hook`).
-- Index file handling — malformed LadybugDB databases, `.graph.zst` import artifacts, and tree-sitter parse inputs that could cause panics, memory unsafety, or arbitrary code execution.
+- Index file handling — malformed LadybugDB databases, `.cnxp` import artifacts, and tree-sitter parse inputs that could cause panics, memory unsafety, or arbitrary code execution.
 - Cypher subset query handling — injection vectors through `query` / `trace` / `impact` / `search` inputs.
 
 Out of scope:
@@ -93,6 +94,6 @@ Out of scope:
 
 ## 🛡️ Security Best Practices for Users
 
-- Do not `import` `.graph.zst` artifacts from untrusted sources — a malicious artifact could trigger bugs in the import path.
+- Do not `import` `.cnxp` artifacts from untrusted sources — a malicious artifact could trigger bugs in the import path.
 - Treat `codenexus query` input as you would treat any input that reaches a database: prefer parameterized patterns over string interpolation when embedding user input in Cypher queries.
 - The `embeddings` feature can make outbound HTTP requests to an OpenAI-compatible endpoint. Set the endpoint explicitly and do not point it at untrusted servers.

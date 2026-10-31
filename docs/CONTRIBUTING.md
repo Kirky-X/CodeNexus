@@ -22,18 +22,17 @@
 
 | 工具 | 版本 | 说明 |
 |------|------|------|
-| Rust 工具链（stable） | 1.95+ | 最低支持版本，在 CI 和 `Cargo.toml` 中固定（`rust-version = "1.95"`）。 |
+| Rust 工具链（stable） | 1.97.1+ | 最低支持版本，在 CI 和 `Cargo.toml` 中固定（`rust-version = "1.97.1"`）。 |
 | Rust nightly 工具链 | 最新 | `cargo fmt` 使用 nightly 专有选项 `imports_granularity` 和 `group_imports`（见 `rustfmt.toml`）。 |
 | C/C++ 编译器 | 系统默认 | 构建 `tree-sitter` 语法 crate 所需。 |
-| `zstd` CLI | 任意近期版本 | `export`/`import` 用于 `.graph.zst` 制品。 |
 | Git | 2.20+ | Hooks 和 `detect-changes` 依赖现代 `git` 行为。 |
 
 使用 [rustup](https://rustup.rs/) 安装两个 Rust 工具链：
 
 ```bash
-rustup toolchain install 1.95
+rustup toolchain install 1.97.1
 rustup toolchain install nightly
-rustup component add clippy --toolchain 1.95
+rustup component add clippy --toolchain 1.97.1
 rustup component add rustfmt --toolchain nightly
 ```
 
@@ -48,7 +47,7 @@ cargo test                     # 冒烟测试
 
 ### 构建变体
 
-默认特性集为 `full`（全部 22 种语言 + daemon + analysis + complexity + api-review + community + cross-service + lsp + mcp + cli + cache + embed）。为加快开发迭代，可以构建更精简的二进制：
+默认特性集为 `full`（全部 22 种语言 + daemon + analysis + complexity + api-review + community + cross-service + diagram + lsp + mcp + cli + cache + embeddings + i18n + hub）。为加快开发迭代，可以构建更精简的二进制：
 
 ```bash
 # 最小：仅 Rust，无 daemon（编译最快）
@@ -97,7 +96,7 @@ feat(parse): 添加 Go 语言提取器
 fix(storage): 防止解析器端点 ID 失同步时的孤儿边
 perf(parse): dedupe_qn O(N²) → O(1) HashSet
 docs(readme): 添加 Roadmap 和 Acknowledgments 章节
-chore(ci): workflow 中固定 Rust 1.95
+chore(ci): workflow 中固定 Rust 1.97.1
 ```
 
 footer 中的 `BREAKING CHANGE:` 或 `feat!:` / `fix!:`（带 `!`）标记破坏性变更，必须包含迁移说明。

@@ -85,7 +85,7 @@
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🔗 <b>跨语言 FFI</b><br><span style="color:#64748B">C-Fortran bind(C)、Rust extern 等跨语言调用解析</span></td>
-<td width="50%" style="vertical-align:top; padding: 12px">📦 <b>团队制品</b><br><span style="color:#64748B"><code>export</code> / <code>import</code> 压缩 <code>.graph.zst</code> 制品，共享索引</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">📦 <b>团队制品</b><br><span style="color:#64748B"><code>export</code> / <code>import</code> 压缩 <code>.cnxp</code> 制品，共享索引</span></td>
 </tr>
 <tr>
 <td width="50%" style="vertical-align:top; padding: 12px">🤖 <b>多智能体 MCP</b><br><span style="color:#64748B"><code>setup</code> 自动检测 Claude Code / Cursor / Codex；<code>skill</code> 一键同步技能文档到各 Agent 全局技能目录；<code>hook</code> 输出 PreToolUse/PostToolUse JSON；<code>mcp</code> stdio 服务暴露 10 个工具（参数语义写入工具描述）；<code>ask</code> 自然语言入口路由既有命令</span></td>
@@ -229,7 +229,8 @@ cargo build --release --features embeddings
 # 1. 索引一个代码仓库（数据库默认写入 .codenexus/<项目名>.lbug）
 codenexus index --path /path/to/project --name myproject
 
-# 1b. RAM 优先索引（LZ4 内存压缩，适合中小仓库，更快）
+# 1b. RAM 优先索引（LZ4 内存压缩 + 单次批量入库；建议源码 ≥ 1 GB 的仓库使用，ADR-024，
+#     小仓库实测更耗内存，超出内存预算时自动回退流式磁盘读取）
 codenexus index --path /path/to/project --name myproject --ram_first true
 
 # 2. 查询函数（Cypher 子集）
@@ -421,7 +422,7 @@ cargo deny check
 
 ### 📊 测试规模
 
-截至 v0.4.0-rc.2（`#[test]` / `#[tokio::test]` 固定字符串 grep 统计）：4764 条单元测试（`src/` 4721 个 `#[test]` + 43 个 `#[tokio::test]`，170 个源文件含 `#[cfg(test)]`）+ 128 条集成测试（`tests/` 顶层 10 个 .rs 文件，108 个 `#[test]` + 20 个 `#[tokio::test]`）+ 8 个验收项目 + 7 组 Criterion 基准；覆盖率门禁为行覆盖 ≥ 95%（CI coverage job 与 pre-push 钩子双重执行）。逐文件分解与完整统计见 [🧪 测试场景矩阵 · 统计汇总](docs/TEST_SCENARIOS.md#-统计汇总)。
+截至 v0.4.0-rc.2（`#[test]` / `#[tokio::test]` 固定字符串 grep 统计）：4832 条单元测试（`src/` 4789 个 `#[test]` + 43 个 `#[tokio::test]`，172 个源文件含 `#[cfg(test)]`）+ 140 条集成测试（`tests/` 顶层 11 个 .rs 文件，120 个 `#[test]` + 20 个 `#[tokio::test]`）+ 8 个验收项目 + 7 组 Criterion 基准；覆盖率门禁为行覆盖 ≥ 95%（CI coverage job 与 pre-push 钩子双重执行）。逐文件分解与完整统计见 [🧪 测试场景矩阵 · 统计汇总](docs/TEST_SCENARIOS.md#-统计汇总)。
 
 ---
 
@@ -435,7 +436,7 @@ cargo deny check
 
 ### 🛡️ 安全设计
 
-攻击面集中在索引文件（LadybugDB 数据库、`.graph.zst` 导入制品、tree-sitter 解析输入）与进入 Cypher 子集查询的 `query` / `trace` / `impact` / `search` 用户输入；代码层面配套 Cypher / 标识符转义、图编辑 dry-run 默认与诊断回执的失败显性化。设计细节与范围界定见 [🔒 安全文档](docs/SECURITY.md)。
+攻击面集中在索引文件（LadybugDB 数据库、`.cnxp` 导入制品、tree-sitter 解析输入）与进入 Cypher 子集查询的 `query` / `trace` / `impact` / `search` 用户输入；代码层面配套 Cypher / 标识符转义、图编辑 dry-run 默认与诊断回执的失败显性化。设计细节与范围界定见 [🔒 安全文档](docs/SECURITY.md)。
 
 ### ⛓️ 供应链与门禁
 
@@ -561,7 +562,7 @@ CodeNexus 站在以下优秀开源项目的肩膀上：
 | [sdforge](https://crates.io/crates/sdforge) | CLI + MCP 双传输框架（`#[forge]` 宏） |
 | [trait-kit](https://crates.io/crates/trait-kit) | 能力注册表 |
 | [oxcache](https://crates.io/crates/oxcache) | 查询结果缓存 |
-| [inklog](https://crates.io/crates/inklog) | 日志后端（console + 日轮转文件 sink；inklog 以 `default-features = false` 引入，未编译压缩后端，不产生压缩轮转文件） |
+| [inklog](https://crates.io/crates/inklog) | 日志后端（console + 日轮转文件 sink；inklog 以 `default-features = false` 引入，`full` 构建经 vecboost 的 `inklog/compression` 特性合并编译 zstd 压缩后端，轮转文件以 zstd 压缩） |
 | [vecboost](https://crates.io/crates/vecboost) | 本地 Candle 向量嵌入推理 |
 | [ICU4X](https://github.com/unicode-org/icu4x)（icu_normalizer / icu_casemap） | Unicode 规范化与大小写折叠 |
 | [petgraph](https://github.com/petgraph/petgraph) | 社区检测图算法 |

@@ -1,14 +1,14 @@
 // Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
-//! Node label enum representing the 44 node types in the CodeNexus graph
-//! (DDD §7.1 base 20 + Interface + extension 23).
+//! Node label enum representing the 45 node types in the CodeNexus graph
+//! (DDD §7.1 base 20 + Interface + extension 24).
 use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// The 44 node label variants.
+/// The 45 node label variants.
 ///
 /// Each variant corresponds to a node table in the LadybugDB schema and is
 /// used as the `label` field on [`crate::model::Node`].
@@ -17,17 +17,18 @@ use serde::{Deserialize, Serialize};
 ///
 /// - **Structural (1-4)**: Project, Folder, File, Module
 /// - **Type definitions (5-9, 22-26)**: Class, Struct, Enum, Trait, Impl,
-///   Union, Variant, Field, Record, Typedef
-/// - **Callables (10-11, 27)**: Function, Method, Constructor
-/// - **Variables (12-16, 28)**: Variable, GlobalVar, Parameter, Const,
-///   Static, Property
-/// - **Meta (17-21)**: Macro, TypeAlias, Namespace, Interface, Delegate
-/// - **Annotations/templates (29-30)**: Annotation, Template
+///   Constructor, Property, Record, Delegate, Annotation
+/// - **Callables (10-11)**: Function, Method
+/// - **Variables (12-16)**: Variable, GlobalVar, Parameter, Const, Static
+/// - **Meta (17-21)**: Macro, TypeAlias, Typedef, Namespace, Interface
+/// - **Templates (27)**: Template
+/// - **Union/Variant/Field (28-30)**: Union, Variant, Field
 /// - **Runtime/architecture (31-37)**: Event, Handler, Middleware, Service,
 ///   Endpoint, Route, Process
 /// - **Data/infra (38-39)**: Database, Config
 /// - **Quality/docs (40-41)**: Test, Section
 /// - **Community/extension (42-44)**: Community, Tool, Embedding
+/// - **External (45)**: ExternalPackage
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum NodeLabel {
     // Structural (1-4)

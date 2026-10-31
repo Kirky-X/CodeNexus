@@ -3,7 +3,7 @@
 
 //! DDL string generation for the LadybugDB schema (DDD §12.1).
 //!
-//! Produces the exact DDL strings for the 44 node tables, the `CodeRelation`
+//! Produces the exact DDL strings for the 45 node tables, the `CodeRelation`
 //! relationship table, the optional `Embedding` table, and all secondary
 //! indexes (DDD §12.2).
 //!
@@ -12,7 +12,7 @@
 //! DDD §5.8 specifies `CREATE REL TABLE CodeRelation (FROM Node TO Node, ...)`,
 //! but LadybugDB's `REL TABLE` requires concrete node-table names in the
 //! `FROM`/`TO` clauses — there is no generic `Node` union type. To support
-//! heterogeneous edges between any of the 44 node tables we materialize
+//! heterogeneous edges between any of the 45 node tables we materialize
 //! `CodeRelation` as a `NODE TABLE` with explicit `source`/`target` string
 //! columns (holding node primary keys) plus a synthetic `id` primary key. This
 //! preserves every field from the spec while remaining queryable with plain
@@ -836,7 +836,7 @@ mod tests {
     }
 
     #[test]
-    fn node_table_ddl_returns_forty_four_entries() {
+    fn node_table_ddl_returns_forty_five_entries() {
         let ddl = node_table_ddl();
         assert_eq!(ddl.len(), 45, "expected 45 node table DDL entries");
     }
@@ -1126,7 +1126,7 @@ mod tests {
     #[test]
     fn all_init_ddl_includes_node_tables_relation_embedding_and_indexes() {
         let ddl = all_init_ddl();
-        // 44 node tables (incl. Embedding via ddl_for_label) + 1 relation
+        // 45 node tables (incl. Embedding via ddl_for_label) + 1 relation
         // + 1 SchemaMeta + 39 indexes (20 secondary + 18 FTS + 1 VECTOR) = 85
         // (added idx_rel_source + idx_rel_target for targeted WHERE
         // e.target/e.source lookups)

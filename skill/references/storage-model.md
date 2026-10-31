@@ -24,7 +24,7 @@
 - `CodeRelation` columns: `id`, `source`, `target`, `type`, `confidence`, `confidenceTier`, `reason`, `startLine`, `project`. `source`/`target` hold the symbol qualifiedName (equal to `Function.id`).
 - High-level commands (`trace`, `impact`, `dead_code`, `architecture`, `community`, etc.) abstract over this layout — they read `CodeRelation` internally so you don't have to write the join yourself.
 
-## Node Types (44)
+## Node Types (45)
 
 **Structural (4):** Project, Folder, File, Module
 **Type definitions (5):** Class, Struct, Enum, Trait, Impl
@@ -38,10 +38,12 @@
 **H1 Data/infra (2):** Database, Config
 **H1 Quality/docs (2):** Test, Section
 **H1 Community/extension (3):** Community, Tool, Embedding
+**H1 External (1):** ExternalPackage
 
 ## Edge Types
 
 **Original (14):** CONTAINS, DEFINES, MEMBER_OF, CALLS, FFI_CALLS, DATAFLOWS, READS, WRITES, IMPLEMENTS, EXTENDS, USES_TYPE, REFERENCES, IMPORTS, INCLUDES
 **H1 T9 extension (10):** HAS_METHOD, HAS_PROPERTY, ACCESSES, METHOD_OVERRIDES, METHOD_IMPLEMENTS, STEP_IN_PROCESS, HANDLES_ROUTE, FETCHES, HANDLES_TOOL, ENTRY_POINT_OF
+**H1 Analysis & dependency (8):** USAGE, TESTS, HTTP_CALLS, ASYNC_CALLS, EMITS, LISTENS_ON, REEXPORTS, DEPENDS_ON
 
 Each `CodeRelation` row carries a `confidence` score in `[0.0, 1.0]` and a `confidenceTier` (`SameFile` / `ImportScoped` / `Global`) populated during resolution. Use `--edge_types` on `impact` and `--path_filter` on `trace` to scope results by edge type or file path (design.md D4).

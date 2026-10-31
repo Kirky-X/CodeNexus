@@ -35,7 +35,7 @@
 
 ## 📏 基准套件
 
-7 组 Criterion 基准位于 `benches/`（`daemon_bench` 由 `daemon` feature 门控，其余五组在所有 feature 预设下编译；`graph_bench` 覆盖图数据结构）：
+7 组 Criterion 基准位于 `benches/`（`daemon_bench` 由 `daemon` feature 门控，其余六组在所有 feature 预设下编译；`graph_bench` 覆盖图数据结构）：
 
 | 文件 | 组 | 场景 | SLO 维度 |
 |------|-----|------|----------|

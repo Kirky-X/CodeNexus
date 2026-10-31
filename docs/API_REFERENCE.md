@@ -48,7 +48,7 @@
 | `with_budget` | `(self, budget: MemoryBudget) -> Self` | 设置内存预算（大仓库三级内存压力防线） |
 | `index` | `(&self, path: &Path, project_name: &str, force: bool) -> Result<IndexResult>` | 运行标准索引管线；`force = true` 全量重建 |
 | `index_incremental` | `(&self, path: &Path, project_name: &str, force: bool) -> Result<IndexResult>` | 增量管线（仅解析变更文件；当前委托到 `index`） |
-| `index_ram_first` | `(&self, path: &Path, project_name: &str, force: bool) -> Result<IndexResult>` | RAM 优先管线：源码读入内存并 LZ4 压缩后批量入库。适合 < 1 GB 源码的中小仓库；大仓库请用默认 `index` 流式路径避免 OOM |
+| `index_ram_first` | `(&self, path: &Path, project_name: &str, force: bool) -> Result<IndexResult>` | RAM 优先管线：源码读入内存并 LZ4 压缩后批量入库。建议源码 ≥ 1 GB 的仓库使用（ADR-024），小仓库实测更耗内存；内存预算不足时自动回退默认流式磁盘读取路径 |
 
 `IndexResult` 字段：
 
@@ -77,19 +77,27 @@
 | `search_by_file` | `(&self, file_path: &str, project: Option<&str>) -> Result<Vec<SearchResult>>` | 列出某文件内的全部符号 |
 | `fulltext_search` | `(&self, text: &str, project: Option<&str>, limit: usize) -> Result<Vec<SearchResult>>` | BM25 全文搜索（有 FTS 扩展用 FTS，否则回退 CONTAINS） |
 
-`SearchResult` 字段：`name`、`label`、`file_path: Option<String>`、`start_line: Option<u32>`、`qualified_name: Option<String>`、`score: f64`（0.0-1.0 相关度）、`match_reason: String`（如 `"exact name match"`、`"bm25 fts"`）。
+`SearchResult` 字段：`name`、`label`、`file_path: Option<String>`、`start_line: Option<u32>`、`qualified_name: Option<String>`、`score: f64`（0.0-1.0 相关度）、`match_reason: String`（如 `"exact name match"`、`"bm25 fts"`）、`degree: u32`（图增强评分使用的入度，非图搜索模式为 0）。
 
-### TraceFacade（追踪与影响分析）
+### TraceEngine（追踪与影响分析引擎）
 
-定义于 `src/trace/facade.rs`。封装调用链 / 数据流追踪与影响分析。
+定义于 `src/trace/facade.rs`。基于 `Storage` trait 对象的追踪引擎，封装调用链 / 数据流追踪与影响分析。
 
 | 方法 | 签名要点 | 说明 |
 |------|----------|------|
-| `new` | `(storage: &'a dyn Storage) -> Self` | 基于 Storage trait 对象构造 |
+| `new` | `(storage: &'a dyn Storage) -> Self` | 基于 Storage trait 对象构造（默认 `TraceConfig`） |
 | `with_config` | `(storage: &'a dyn Storage, config: TraceConfig) -> Self` | 携带 `TraceConfig` 构造 |
 | `config` / `storage` | 访问器 | 读取配置与存储句柄 |
 | `apply_path_filter` | 路径过滤 | glob 语义过滤追踪路径（CLI `--path_filter` 的库层实现） |
-| `trace` | `(&self, symbol: &str, trace_type: TraceType, depth: usize) -> Result<TraceResult>`（图视图形态） | 对图执行调用/数据流追踪 |
+
+### TraceFacade（图视图追踪）
+
+定义于 `src/trace/facade.rs`。持有 `Graph` 不可变借用的图视图形态追踪 Facade，供已持有图结构的调用方使用。
+
+| 方法 | 签名要点 | 说明 |
+|------|----------|------|
+| `new` | `(graph: &'a Graph) -> Self` | 基于图视图构造（非 Storage 连接） |
+| `trace` | `(&self, symbol: &str, trace_type: TraceType, depth: usize) -> Result<TraceResult>` | 对图执行调用/数据流追踪 |
 | `trace_by_id` | 按节点 id 追踪 | 从已解析的节点 id 出发 |
 
 `TraceConfig`（定义于 `src/trace/module.rs`）字段与默认值：
@@ -195,7 +203,8 @@ CLI 与 MCP 共用 `src/service/` 中 `#[forge]` 宏定义的同一套命令（c
 | 1 | `Internal` / `Io` / `Json` / `Discover` / `Daemon` / `Cache` / `Embed` / `Lsp` / `Index`（部分） | 内部错误、I/O、JSON 序列化、能力引导失败等 |
 | 2 | `InvalidInput` / `ProjectNotFound` / `Query` / `Trace` / `Storage` / `Resolve` / `Phase` | 无效输入、项目不存在、查询 / 追踪 / 存储 / 解析错误 |
 | 4 | `NotFound` | NotFound、数据库损坏（`Index` 的 `DatabaseCorrupt` 同样映射 4） |
-| 5/6 | `--fresh` 删除失败 | 旧 DB 文件删除失败的专用码 |
+| 5 | `--fresh` 删除失败 | 旧 DB 文件删除失败的专用码（内部错误，`--fresh` 仅 `index` 子命令支持） |
+| 6 | `--fresh` 非法 `--db` | `--db` 指向非 `.lbug` 文件时的安全拒绝（`InvalidInput`） |
 
 `KitError` 经 `kit_exit_code` 独立映射。`IndexError` 的典型变体包括 `PathNotFound`（路径不存在）等。
 
