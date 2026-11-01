@@ -34,7 +34,7 @@ jobs:
           fetch-depth: 0
       - name: actionlint
         # 第三方 docker action 钉具体版本：latest 可变，上游可静默换镜像。
-        uses: docker://rhysd/actionlint:v1.7.7
+        uses: docker://rhysd/actionlint:1.7.12
         with:
           # shellcheck 子检查降到 error 级：YAML 语法/表达式错误仍阻断，
           # 风格级（SC2086/SC2034 等）不阻断，避免打断既有流水线。
