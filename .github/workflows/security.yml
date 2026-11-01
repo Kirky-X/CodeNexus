@@ -48,6 +48,11 @@ jobs:
         # （API tags 最高为 v0.7.1）。引用不存在的 action 会在 job 解析下载清单阶段
         # （"Getting action download info" / "Set up job"）就直接失败。
         uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
+        env:
+          # impostor-commit 审计需要 GitHub API 校验 SHA 归属；缺 token 时
+          # 上游报 "fast path impostor check failed ... request error" 后整步
+          # 以 "Resource not accessible by integration" 失败（run 41362793119）。
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: gitleaks 密钥扫描
         # 第三方 action 钉 SHA：@v2 可变 tag，上游可重指。
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
