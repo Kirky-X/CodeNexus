@@ -44,10 +44,11 @@ jobs:
         # 结果为 0 low / 0 medium / 0 high（仅 2 条 info：template-injection 的低置信
         # 版本号插值与 softprops action 的 superfluous-actions 建议），backlog 已清零，
         # 故移除 continue-on-error 让审计发现真正阻断。
-        # 版本修正（外部事实）：`v0.12.0` 在 zizmorcore/zizmor-action 仓库不存在
-        # （API tags 最高为 v0.7.1）。引用不存在的 action 会在 job 解析下载清单阶段
-        # （"Getting action download info" / "Set up job"）就直接失败。
-        uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
+        # 版本：v0.8.0（与 garrison 同 SHA）。v0.7.1 在 GitHub Actions 环境下
+        # 做 impostor-commit 审计时以 "Resource not accessible by integration"
+        # 整步失败（run 41363569435 实证，补 GH_TOKEN 后仍复现），v0.8.0 起同
+        # workflow 在 garrison 稳定通过。
+        uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
         env:
           # impostor-commit 审计需要 GitHub API 校验 SHA 归属；缺 token 时
           # 上游报 "fast path impostor check failed ... request error" 后整步
