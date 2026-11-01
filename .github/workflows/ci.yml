@@ -30,7 +30,11 @@ jobs:
           toolchain: "1.97.1"
           components: clippy
       - name: Install nightly toolchain with rustfmt
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # nightly
+        # 不用 SHA 钉：dtolnay/rust-toolchain 的 SHA 钉会锁定 toolchain 输入文件本身，
+        # 上一轮把 stable 的 SHA（b725eda）误用于 nightly 线，导致 `cargo +nightly`
+        # 找不到 rustfmt 组件（CI 实测 'cargo-fmt' is not installed for nightly）。
+        # 改回 @nightly ref（该 action 的 nightly 分支由上游按日刷新，是官方推荐用法）。
+        uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt
       - name: Install dependencies
