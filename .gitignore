@@ -81,6 +81,8 @@ assets/arctic-embed-xs/
 # Graph viewer build output
 graph-viewer/dist/
 graph-viewer/node_modules/
+# 仓根 node_modules：工作区根跑 vitest 时产生的缓存目录（node_modules/.vite）
+node_modules/
 *.tsbuildinfo
 
 # Graph viewer local GUI test evidence (screenshots, rebuildable)
@@ -117,6 +119,5 @@ strix_runs/
 .mimosa/
 .agents/
 
-# ZCode workflow drafts and run journals (machine-generated)
-.zcode/workflow-drafts/
-.zcode/workflow-runs/
+# ZCode 工作区配置（agents/agents-catalog/rules 为指向工作区根的软链）
+.zcode/
