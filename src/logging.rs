@@ -56,11 +56,29 @@ const SAMPLE_ENV: &str = "CODENEXUS_LOG_SAMPLE";
 /// rule covers stay on the unthrottled global path.
 const RATE_LIMIT_ENV: &str = "CODENEXUS_LOG_RATE_LIMIT";
 
+/// Absolute path for the log file, overriding the default
+/// `<cwd>/.codenexus/logs/codenexus.log`.
+///
+/// The default lives inside the *current working directory*, so running any
+/// command from a subdirectory of a workspace creates a stray `.codenexus/`
+/// there even when `--db` points at a shared database. Set this to pin the
+/// log beside that database instead. Blank values are ignored.
+const LOG_FILE_ENV: &str = "CODENEXUS_LOG_FILE";
+
 /// Log file inside [`crate::DEFAULT_DB_DIR`] so a one-off command in any
 /// project creates only the side-effect directory users already gitignore.
 /// inklog's file sink creates missing parent directories itself.
+///
+/// [`LOG_FILE_ENV`] overrides the default when it names a non-blank path,
+/// which keeps a shared-database workspace free of per-project
+/// `.codenexus/` directories.
 fn log_file() -> PathBuf {
-    PathBuf::from(crate::DEFAULT_DB_DIR).join("logs/codenexus.log")
+    std::env::var(LOG_FILE_ENV)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(crate::DEFAULT_DB_DIR).join("logs/codenexus.log"))
 }
 
 const LOG_FORMAT: &str = "{timestamp} [{level}] {target} - {message}";
@@ -374,6 +392,14 @@ mod tests {
             std::env::set_var(key, value);
             Self { key, previous }
         }
+
+        /// Removes the variable for the duration of the guard, restoring the
+        /// previous value (if any) on drop.
+        fn unset(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, previous }
+        }
     }
 
     impl Drop for EnvGuard {
@@ -431,6 +457,36 @@ mod tests {
             target_levels("bad,hyper=warn"),
             HashMap::from([("hyper".to_string(), "warn".to_string())])
         );
+    }
+
+    #[test]
+    #[serial_test::serial(logging_env)]
+    fn log_file_env_overrides_default_and_ignores_blank() {
+        // Unset → the gitignore-friendly default inside the cwd.
+        {
+            let _guard = EnvGuard::unset(LOG_FILE_ENV);
+            assert_eq!(
+                log_file(),
+                PathBuf::from(crate::DEFAULT_DB_DIR).join("logs/codenexus.log")
+            );
+        }
+        // Set → exactly the requested path (this is what keeps a shared-DB
+        // workspace free of per-project .codenexus/ directories).
+        {
+            let _guard = EnvGuard::set(LOG_FILE_ENV, "/tmp/cn-shared/logs/codenexus.log");
+            assert_eq!(
+                log_file(),
+                PathBuf::from("/tmp/cn-shared/logs/codenexus.log")
+            );
+        }
+        // Blank / whitespace-only → ignored, falls back to the default.
+        for blank in ["", "   "] {
+            let _guard = EnvGuard::set(LOG_FILE_ENV, blank);
+            assert_eq!(
+                log_file(),
+                PathBuf::from(crate::DEFAULT_DB_DIR).join("logs/codenexus.log")
+            );
+        }
     }
 
     #[test]
