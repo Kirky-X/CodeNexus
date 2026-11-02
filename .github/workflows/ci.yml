@@ -30,13 +30,14 @@ jobs:
           toolchain: "1.97.1"
           components: clippy
       - name: Install nightly toolchain with rustfmt
-        # 不用 SHA 钉：dtolnay/rust-toolchain 的 SHA 钉会锁定 toolchain 输入文件本身，
-        # 上一轮把 stable 的 SHA（b725eda）误用于 nightly 线，导致 `cargo +nightly`
-        # 找不到 rustfmt 组件（CI 实测 'cargo-fmt' is not installed for nightly）。
-        # 改回 @nightly ref（该 action 的 nightly 分支由上游按日刷新，是官方推荐用法）。
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt
+        # 用 rustup 脚本而非 action：dtolnay/rust-toolchain 的 SHA 钉会锁死 toolchain
+        # 输入文件（上轮把 stable 的 SHA 误用于 nightly 线，`cargo +nightly` 报
+        # 'cargo-fmt' is not installed）；而 @nightly 浮动 ref 会被 semgrep
+        # github-actions-mutable-action-tag 规则阻断（实测 2 findings）。
+        # rustup 脚本无第三方 action 引用，两难同时消解。
+        run: |
+          rustup toolchain install nightly --profile minimal --component rustfmt
+          rustup default stable
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -165,10 +166,11 @@ jobs:
           persist-credentials: false
       # cargo-fuzz requires nightly (sanitizer) + rust-src (build-std).
       - name: Install nightly with rust-src
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # nightly
-        with:
-          toolchain: nightly
-          components: rust-src
+        # 同 fmt 腿：改 rustup 脚本安装（SHA 钉会锁死 toolchain 内容并触发 E0391；
+        # 浮动 ref 会被 semgrep mutable-tag 规则阻断）。
+        run: |
+          rustup toolchain install nightly --profile minimal --component rust-src
+          rustup default stable
       - name: Install dependencies
         run: |
           sudo apt-get update
