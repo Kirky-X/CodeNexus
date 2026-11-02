@@ -171,8 +171,11 @@ jobs:
         # cargo-fuzz 需 nightly 为默认工具链（-Zsanitizer 只在 nightly 接受）；
         # runner 预装 stable，仅 install nightly 不改变 default，必须显式切换。
         run: |
-          rustup toolchain install nightly --profile minimal --component rust-src
-          rustup default nightly
+          # 钉具体 nightly 日期：滚动 nightly 的 rustc 曾在 sdforge 编译触发
+          # E0391（cycle detected ... ArgMatches needs async drop，run 41368714405）。
+          # 2026-10-25 版在本机实测可编译本仓 fuzz 目标。
+          rustup toolchain install nightly-2026-10-25 --profile minimal --component rust-src
+          rustup default nightly-2026-10-25
       - name: Install dependencies
         run: |
           sudo apt-get update
