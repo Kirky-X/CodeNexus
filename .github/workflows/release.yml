@@ -120,8 +120,11 @@ jobs:
       # crates.io 版本硬校验:防止任何形式的静默漏发
       - name: Verify on crates.io
         if: always()
+        env:
+          # 经 env 传值而非直插 run 块：`${{ }}` 直接展开到 shell 是经典工作流注入
+          # 向量（zizmor template-injection 告警 #8）。
+          VERSION: ${{ steps.published.outputs.version }}
         run: |
-          VERSION=${{ steps.published.outputs.version }}
           for i in 1 2 3 4 5; do
             sleep 20
             CODE=$(curl -s -o /dev/null -w "%{http_code}" -H 'User-Agent: kirky-x-release-verify' \
