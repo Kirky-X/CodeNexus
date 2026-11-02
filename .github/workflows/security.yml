@@ -10,6 +10,11 @@ on:
 
 permissions:
   contents: read
+  # zizmor 通过 codeql-action/upload-sarif 上传结果；缺此权限时
+  # upload-sarif 以 "This run of the CodeQL Action does not have permission to
+  # access the CodeQL Action API endpoints ... at least 'security-events: read'"
+  # 失败（run 41364242434 实证）。
+  security-events: write
 
 concurrency:
   # 同分支重复触发时取消上一次：安全扫描每次都要全量 clone（fetch-depth: 0），
