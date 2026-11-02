@@ -168,8 +168,11 @@ jobs:
       - name: Install nightly with rust-src
         # 同 fmt 腿：改 rustup 脚本安装（SHA 钉会锁死 toolchain 内容并触发 E0391；
         # 浮动 ref 会被 semgrep mutable-tag 规则阻断）。
-        # cargo-fuzz 需 nightly 为默认工具链（-Zsanitizer 只在 nightly 接受）
-        run: rustup toolchain install nightly --profile minimal --component rust-src
+        # cargo-fuzz 需 nightly 为默认工具链（-Zsanitizer 只在 nightly 接受）；
+        # runner 预装 stable，仅 install nightly 不改变 default，必须显式切换。
+        run: |
+          rustup toolchain install nightly --profile minimal --component rust-src
+          rustup default nightly
       - name: Install dependencies
         run: |
           sudo apt-get update
