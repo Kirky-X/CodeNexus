@@ -63,6 +63,9 @@ jobs:
         # 第三方 action 钉 SHA：@v2 可变 tag，上游可重指。
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
+          # v3 起强制要求（PR 扫描鉴权），缺失即 job 红且跳过扫描
+          # （实跑 run 41778198648 即此原因）。
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
       # 不引入 cargo-vet：依赖来源审计由 ci.yml 已有的 "cargo-audit + cargo-deny" 作业
       # （ci.yml:176，配 EmbarkStudios/cargo-deny-action 与 .cargo/audit.toml）承担；
