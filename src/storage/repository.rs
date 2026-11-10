@@ -626,6 +626,41 @@ impl Repository {
         Ok(())
     }
 
+    /// Deletes persisted `CodeRelation` rows by primary-key id, chunked
+    /// (500 ids per statement), scoped to `project`.
+    ///
+    /// Incremental load path (index/phases.rs) calls this inside the write
+    /// transaction right before `save_edges_stream_on`: the edge PK
+    /// `{source}_{target}_{type}_{start_line}` is deterministic (ADR-014),
+    /// and a re-derived edge can reference unchanged-file nodes on BOTH ends
+    /// (enrichment), which the path-keyed delete does not cover — without
+    /// this pre-delete, `COPY FROM` aborts on the persisted duplicate.
+    /// Same-transaction delete-then-insert is sanctioned by the guard test
+    /// `lbug_allows_delete_then_insert_same_pk_in_one_tx`.
+    pub fn delete_edges_by_ids_on<E: crate::storage::connection::CypherExecutor>(
+        conn: &E,
+        ids: &[String],
+        project: &str,
+    ) -> Result<()> {
+        const CHUNK: usize = 500;
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let proj_escaped = escape_cypher_string(project);
+        for chunk in ids.chunks(CHUNK) {
+            let list = chunk
+                .iter()
+                .map(|id| format!("'{}'", escape_cypher_string(id)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let cypher = format!(
+                "MATCH (r:CodeRelation) WHERE r.id IN [{list}] AND r.project = '{proj_escaped}' DELETE r;"
+            );
+            conn.execute_cypher(&cypher)?;
+        }
+        Ok(())
+    }
+
     /// Runs `f` on a dedicated connection inside an explicit write
     /// transaction. See [`StorageConnection::in_write_transaction`] — this is
     /// the repository-level passthrough used by the indexing pipeline.
@@ -1098,6 +1133,84 @@ mod tests {
         let err = repo.save_project(&node);
         assert!(err.is_err());
         assert!(err.unwrap_err().to_string().contains("Project"));
+    }
+
+    // delete_edges_by_ids_on
+
+    /// Builds an edge with a deterministic persisted id
+    /// (`{source}_{target}_{type}_{start_line}`).
+    fn sample_edge(
+        source: &str,
+        target: &str,
+        edge_type: EdgeType,
+        line: u32,
+        project: &str,
+    ) -> crate::model::Edge {
+        let mut edge = crate::model::Edge::builder(source, target, edge_type, project).build();
+        edge.start_line = Some(line);
+        edge
+    }
+
+    fn edge_rows(repo: &Repository) -> Vec<String> {
+        repo.query("MATCH (r:CodeRelation) RETURN r.id AS id ORDER BY id;")
+            .expect("query edge ids")
+            .iter()
+            .filter_map(|r| r.first().and_then(|v| v.as_str()).map(String::from))
+            .collect()
+    }
+
+    #[test]
+    fn delete_edges_by_ids_removes_only_matching_rows() {
+        let repo = fresh_repo();
+        let e1 = sample_edge("a", "b", EdgeType::Calls, 1, "demo");
+        let e2 = sample_edge("a", "b", EdgeType::Calls, 2, "demo");
+        let e3 = sample_edge("c", "d", EdgeType::DataFlows, 7, "demo");
+        repo.save_edges(&[e1, e2, e3]).expect("seed edges");
+        assert_eq!(edge_rows(&repo).len(), 3);
+
+        let e2_id =
+            crate::storage::loader::edge_id(&sample_edge("a", "b", EdgeType::Calls, 2, "demo"));
+        let e3_id =
+            crate::storage::loader::edge_id(&sample_edge("c", "d", EdgeType::DataFlows, 7, "demo"));
+        Repository::delete_edges_by_ids_on(repo.connection(), &[e2_id, e3_id], "demo")
+            .expect("delete by ids");
+
+        let remaining = edge_rows(&repo);
+        assert_eq!(remaining.len(), 1, "only the untouched edge survives");
+        assert!(
+            remaining[0].contains("CALLS"),
+            "the CALLS line-1 edge must remain: {remaining:?}"
+        );
+    }
+
+    #[test]
+    fn delete_edges_by_ids_is_noop_for_empty_input() {
+        let repo = fresh_repo();
+        let e1 = sample_edge("a", "b", EdgeType::Calls, 1, "demo");
+        repo.save_edges(&[e1]).expect("seed edge");
+        Repository::delete_edges_by_ids_on(repo.connection(), &[], "demo")
+            .expect("empty input is a no-op");
+        assert_eq!(edge_rows(&repo).len(), 1, "row must survive empty delete");
+    }
+
+    #[test]
+    fn delete_edges_by_ids_respects_project_scope() {
+        let repo = fresh_repo();
+        let e1 = sample_edge("a", "b", EdgeType::Calls, 1, "demo");
+        repo.save_edges(&[e1]).expect("seed edge");
+        let e1_id =
+            crate::storage::loader::edge_id(&sample_edge("a", "b", EdgeType::Calls, 1, "demo"));
+        // 同一 id 属于 demo；以其他 project 名删除必须不动它（防御性谓词）
+        Repository::delete_edges_by_ids_on(repo.connection(), &[e1_id.clone()], "other")
+            .expect("scoped delete");
+        assert_eq!(
+            edge_rows(&repo).len(),
+            1,
+            "foreign project delete must not match"
+        );
+        Repository::delete_edges_by_ids_on(repo.connection(), &[e1_id], "demo")
+            .expect("own project delete");
+        assert!(edge_rows(&repo).is_empty());
     }
 
     #[test]

@@ -1225,12 +1225,16 @@ impl Phase for LoadPhase {
             .map_err(IndexError::from)
             .map_err(|e| phase_err("load", e))?
             .is_some();
+        // Full-coverage run (no unchanged files): every filePath-bearing row
+        // is deleted in the transaction below. Hoisted for reuse by the
+        // edge pre-delete gate below (full-coverage runs cannot collide on
+        // edge PKs — every persisted edge touches a path-deleted node).
+        let full_coverage = scan.diff.unchanged.is_empty();
         let survivors = if project_exists {
             // Full-coverage run (no unchanged files): every filePath-bearing
             // row is deleted in the transaction below, so only column-less
             // labels (ExternalPackage etc.) can possibly survive — skip the
             // per-label lookups for everything else.
-            let full_coverage = scan.diff.unchanged.is_empty();
             let mut ids_by_label: HashMap<NodeLabel, Vec<String>> = HashMap::new();
             for node in graph.nodes_view() {
                 if full_coverage
@@ -1263,6 +1267,9 @@ impl Phase for LoadPhase {
             );
         }
 
+        // Candidate count of edge ids pre-deleted inside the load transaction
+        // (logged with index_completed; see the pre-delete comment below).
+        let mut edges_pre_deleted = 0usize;
         let result: std::result::Result<(), IndexError> = self.repo.in_write_transaction(|tx| {
             // Step 7: batch-delete old nodes for deleted + changed files.
             //
@@ -1288,6 +1295,27 @@ impl Phase for LoadPhase {
                     .filter(|n| !survivors.contains_key(&n.id)),
             )?;
             if has_edges {
+                // Edge PK pre-delete: the edge primary key
+                // `{source}_{target}_{type}_{start_line}` is deterministic
+                // (ADR-014), and enrichment can re-derive edges whose BOTH
+                // endpoints live in unchanged files — rows the path-keyed
+                // delete above does not cover. Without this pre-delete the
+                // re-derived id collides with the persisted row and COPY FROM
+                // aborts the whole run ("Found duplicated primary key value").
+                // Full-coverage runs skip this: every persisted edge touches
+                // a path-deleted node, so no duplicate can survive. Zero-change
+                // runs never reach here (`has_edges` is false).
+                // Same-transaction delete-then-insert of one PK is sanctioned
+                // by the guard test `lbug_allows_delete_then_insert_same_pk_in_one_tx`.
+                if !full_coverage {
+                    let incoming_ids: Vec<String> = graph
+                        .edges_view()
+                        .map(crate::storage::loader::edge_id)
+                        .collect();
+                    edges_pre_deleted = incoming_ids.len();
+                    Repository::delete_edges_by_ids_on(tx, &incoming_ids, project_id)
+                        .map_err(IndexError::from)?;
+                }
                 Repository::save_edges_stream_on(tx, graph.edges_view())
                     .map_err(IndexError::from)?;
             }
@@ -1310,6 +1338,7 @@ impl Phase for LoadPhase {
             files_skipped = files_skipped,
             nodes_created = nodes_created,
             edges_created = edges_created,
+            edges_pre_deleted = edges_pre_deleted,
             duration_ms = duration_ms,
             "indexing completed"
         );
