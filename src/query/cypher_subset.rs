@@ -23,10 +23,12 @@
 //!
 //! The grammar lives in [`cypher_subset.pest`](cypher_subset.pest).
 
+use pest::iterators::Pairs;
 use pest::Parser;
 use pest_derive::Parser;
 
 use super::error::{QueryError, Result};
+use crate::storage::schema::is_reserved_keyword;
 
 /// Auto-generated `Rule` enum from the pest grammar.
 ///
@@ -62,9 +64,37 @@ pub fn validate_cypher_subset(query: &str) -> Result<()> {
             "cypher query must not be empty".to_string(),
         ));
     }
-    CypherSubsetParser::parse(Rule::query, query)
-        .map(|_| ())
-        .map_err(|e| QueryError::InvalidQuery(format!("unsupported Cypher construct: {e}")))
+    let pairs = CypherSubsetParser::parse(Rule::query, query)
+        .map_err(|e| QueryError::InvalidQuery(format!("unsupported Cypher construct: {e}")))?;
+    reject_bare_reserved_labels(pairs)
+}
+
+/// Rejects bare (unquoted) label / relationship-type identifiers that collide
+/// with a LadybugDB reserved keyword: the engine requires backtick escaping
+/// for those, so a bare `Macro` can never match the persisted table — fail
+/// fast here with the fix in the message instead of a confusing engine error
+/// downstream. Backtick-quoted idents pass through untouched.
+fn reject_bare_reserved_labels(pairs: Pairs<'_, Rule>) -> Result<()> {
+    for pair in pairs {
+        match pair.as_rule() {
+            Rule::label | Rule::rel_type => {
+                for node_ident in pair.into_inner() {
+                    for ident in node_ident.into_inner() {
+                        if ident.as_rule() == Rule::ident && is_reserved_keyword(ident.as_str()) {
+                            return Err(QueryError::InvalidQuery(format!(
+                                "reserved keyword `{}` in label/type position must be \
+                                 backtick-quoted, e.g. (n:`{}`)",
+                                ident.as_str(),
+                                ident.as_str()
+                            )));
+                        }
+                    }
+                }
+            }
+            _ => reject_bare_reserved_labels(pair.into_inner())?,
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -72,6 +102,31 @@ mod tests {
     use super::*;
 
     // Supported constructs — must parse without error.
+
+    #[test]
+    fn validates_backtick_quoted_label() {
+        assert!(validate_cypher_subset("MATCH (n:`Macro`) RETURN count(n.id) AS cnt").is_ok());
+    }
+
+    #[test]
+    fn validates_backtick_quoted_rel_type() {
+        assert!(validate_cypher_subset("MATCH (a)-[r:`UNION`]->(b) RETURN a.id").is_ok());
+    }
+
+    #[test]
+    fn rejects_bare_reserved_label_with_fix_hint() {
+        let err = validate_cypher_subset("MATCH (n:Macro) RETURN n.id").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("`Macro`"), "keyword echo missing: {msg}");
+        assert!(msg.contains("(n:`Macro`)"), "fix example missing: {msg}");
+    }
+
+    #[test]
+    fn allows_non_reserved_label_word() {
+        // `MACRO` is reserved, but a word merely containing it is a normal
+        // identifier and must pass untouched.
+        assert!(validate_cypher_subset("MATCH (n:MacroV2) RETURN n.id").is_ok());
+    }
 
     #[test]
     fn validates_simple_match_return() {

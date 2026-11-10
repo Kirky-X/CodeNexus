@@ -71,7 +71,7 @@
 | `new_read_only` | `(db_path: &Path) -> Result<Self>` | 只读连接（多进程并发读） |
 | `with_connection` | `(conn: StorageConnection) -> Self` | 复用已有连接 |
 | `connection` | `(&self) -> &StorageConnection` | 暴露底层连接 |
-| `cypher` | `(&self, query: &str) -> Result<QueryResult>` | 执行 Cypher 子集查询；`QueryResult.rows` 为 JSON 值向量（`row[0].as_str()` 等按列取值）。子集支持 `UNION` / `UNION ALL`；不支持标签判定表达式 `WHERE (n:A OR n:B)` 与写操作（`CREATE`/`DELETE`/`SET`/`MERGE`/`REMOVE`），校验见 `src/query/cypher_subset.pest` |
+| `cypher` | `(&self, query: &str) -> Result<QueryResult>` | 执行 Cypher 子集查询；`QueryResult.rows` 为 JSON 值向量（`row[0].as_str()` 等按列取值）。子集支持 `UNION` / `UNION ALL`；不支持标签判定表达式 `WHERE (n:A OR n:B)` 与写操作（`CREATE`/`DELETE`/`SET`/`MERGE`/`REMOVE`），校验见 `src/query/cypher_subset.pest`。保留字 label/关系类型（如 `Macro`）须反引号转义 `(n:\`Macro\`)`，裸保留字被校验器定向拒绝并附修复示例 |
 | `search` | `(&self, text: &str, project: Option<&str>, limit: usize) -> Result<Vec<SearchResult>>` | 按名称结构化搜索（CONTAINS），按相关度排序 |
 | `search_by_type` | `(&self, label: NodeLabel, project: Option<&str>, limit: usize) -> Result<Vec<SearchResult>>` | 按节点类型列出符号 |
 | `search_by_file` | `(&self, file_path: &str, project: Option<&str>) -> Result<Vec<SearchResult>>` | 列出某文件内的全部符号 |

@@ -136,9 +136,10 @@ codenexus daemon --path . --name myproject --notify-impact
 
 | 命令 | 关键参数 | 说明 |
 |------|----------|------|
-| `query` | `--cypher` | 对图执行 Cypher 子集查询。子集**支持** `UNION` / `UNION ALL`（实测返回合并行，exit 0）；不支持标签判定表达式 `WHERE (n:A OR n:B)`（标签需写在 `MATCH (n:A)` pattern 中，否则报 `unsupported Cypher construct`、exit 2）与写操作（`CREATE`/`DELETE`/`SET`/`MERGE`/`REMOVE`） |
+| `query` | `--cypher` | 对图执行 Cypher 子集查询。子集**支持** `UNION` / `UNION ALL`（实测返回合并行，exit 0）；不支持标签判定表达式 `WHERE (n:A OR n:B)`（标签需写在 `MATCH (n:A)` pattern 中，否则报 `unsupported Cypher construct`、exit 2）与写操作（`CREATE`/`DELETE`/`SET`/`MERGE`/`REMOVE`）。保留字 label/关系类型（如 `Macro`、`UNION`）须用反引号转义：`MATCH (n:\`Macro\`)`；裸保留字被校验器定向拒绝并附修复示例 |
 | `search` | `--text` `--mode` `--limit` `--fulltext` `--project` | 5 种结构化模式 `exact` / `regex` / `fuzzy` / `graph` / `multi`；`--fulltext true` 走 BM25 全文检索（`matchReason` 为 `bm25 fts` / `bm25f weighted`）。CLI `search` 不按 node label 过滤；按类型（label）过滤仅存在于库 API `QueryFacade::search_by_type(label: NodeLabel, …)`（`src/query/facade.rs`） |
 | `context` | `--symbol` `--depth` `--project` `--enhanced` `--budget` | 360° 符号视图：入度调用/导入、出度调用、所属流程；`--enhanced true` 追加多维 SymbolContext（LSP 增强信息等）；`--budget <N>` 限制输出 token 数（省略不裁剪，`0` 为非法值），超限时按 `service::budget` 截断并附带 `budget` receipt |
+| `source` | `--qualified_name` `--id` `--file` `--name` `--start_line` `--end_line` `--max_lines` | 按标识读取符号完整源码（函数/方法/类/结构体/trait 等全部带行级 span 的符号）。三键互斥：`--qualified_name`（稳定标识，推荐从 `search`/`context` 输出复制）/ `--id`（节点 UUID，重索引后失效）/（`--file` + `--name`）组合。可选行窗口 `--start_line`/`--end_line`（绝对行号，分页取超大符号）与 `--max_lines`（上限，默认 500，超限报错提示分页）。索引后源文件被改过则硬错误拒答并提示 `codenexus index` 重索引；图谱只存定位，源码查询期回盘读、不入库 |
 
 ### 🕸️ 追踪与影响分析
 

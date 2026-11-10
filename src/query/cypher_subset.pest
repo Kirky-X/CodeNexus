@@ -39,7 +39,7 @@ distinct       = { kw_distinct }
 // --- Patterns ---------------------------------------------------------------
 pattern       = { node_pattern ~ (rel_pattern ~ node_pattern)* }
 node_pattern  = { "(" ~ var? ~ label? ~ props? ~ ")" }
-label         = { (":" ~ ident)+ }
+label         = { (":" ~ node_ident)+ }
 props         = { "{" ~ (prop ~ ("," ~ prop)*)? ~ "}" }
 prop          = { ident ~ ":" ~ expr }
 
@@ -50,7 +50,7 @@ rel_pattern = {
     | "-"  ~ bracket_rel ~ "-"
 }
 bracket_rel = { "[" ~ var? ~ rel_type? ~ var_length? ~ "]" }
-rel_type    = { ":" ~ ident ~ ("|" ~ ":" ~ ident)* }
+rel_type    = { ":" ~ node_ident ~ ("|" ~ ":" ~ node_ident)* }
 var_length  = { "*" ~ range? }
 range       = { number? ~ (".." ~ number?)? }
 
@@ -115,6 +115,10 @@ var            = { ident }
 ident       = @{ ident_start ~ ident_rest* }
 ident_start = @{ ASCII_ALPHA | "_" }
 ident_rest  = @{ ASCII_ALPHANUMERIC | "_" }
+// Backtick-quoted identifier (openCypher reserved-word escape, e.g. the
+// `Macro` node table): the engine accepts it, so the subset grammar must too.
+quoted_ident = @{ "`" ~ (!"`" ~ ANY)+ ~ "`" }
+node_ident   = { ident | quoted_ident }
 number      = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
 string_lit  = @{ ("\"" ~ (!"\"" ~ ANY)* ~ "\"") | ("'" ~ (!"'" ~ ANY)* ~ "'") }
 
