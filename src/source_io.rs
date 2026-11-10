@@ -1,12 +1,11 @@
 // Copyright (c) 2026 Kirky.X🌠
 // SPDX-License-Identifier: MIT
 
-//! Source-file reads for analyzers that fall back to disk when the indexed
-//! `content` column is empty (the indexer does not persist function bodies).
+//! Source-file reads that slice code text from disk by 1-based line range.
 //!
-//! Shared by [`ComplexityAnalyzer`](super::complexity::ComplexityAnalyzer) and
-//! [`CrossServiceLinker`](super::cross_service::CrossServiceLinker) /
-//! [`CrossServiceDetector`](super::cross_service::CrossServiceDetector).
+//! Shared by the analyzers ([`ComplexityAnalyzer`], [`CrossServiceLinker`] /
+//! [`CrossServiceDetector`], re-exported via `crate::analysis`) and by the
+//! `service::source` symbol-source reader ([`crate::service::source`]).
 //!
 //! All reads are path-traversal protected: the target is resolved under the
 //! project's canonical `rootPath` and must stay inside it, so a hostile

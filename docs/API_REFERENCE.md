@@ -182,7 +182,33 @@ crate 根另外导出：
 
 ## 🖥️ CLI / MCP 对外接口
 
-CLI 与 MCP 共用 `src/service/` 中 `#[forge]` 宏定义的同一套命令（core 函数 + CLI wrapper + MCP wrapper）。37 个 CLI 子命令（外加 `mcp` 服务模式）、10 个 MCP 工具（query / trace / impact / search / context / architecture / diagram / arch_diff / dead_code / detect_changes）与全部参数的语义见 [📖 用户指南](USER_GUIDE.md)。
+CLI 与 MCP 共用 `src/service/` 中 `#[forge]` 宏定义的同一套命令（core 函数 + CLI wrapper + MCP wrapper）。38 个 CLI 子命令（外加 `mcp` 服务模式）、11 个 MCP 工具（query / trace / impact / search / source / context / architecture / diagram / arch_diff / dead_code / detect_changes）与全部参数的语义见 [📖 用户指南](USER_GUIDE.md)。
+
+### service::source（符号源码读取库 API）
+
+定义于 `src/service/source.rs`。核心库接口——外部 Rust 程序可不经 CLI/MCP 直接封装（常驻编译，无 feature 门控）：
+
+```rust
+use codenexus::service::source::{
+    run_read_symbol_source, LineWindow, SourceOptions, SymbolKey,
+};
+
+// 按 qualifiedName 读完整函数源码（推荐从 search/context 输出复制标识）
+let out = run_read_symbol_source(&kit, SymbolKey::QualifiedName("myproj.src.main.rs.build_cli_command".into()), &SourceOptions::default())?;
+println!("{}", out.source); // 完整函数体；out.start_line/end_line 为实际切片行号
+
+// 超大符号分页：绝对行号窗口（span ∩ window）
+let opts = SourceOptions {
+    window: Some(LineWindow { start: 500, end: None }),
+    ..SourceOptions::default()
+};
+
+// 其余定位键：SymbolKey::NodeId(id)、SymbolKey::FilePathAndName { file_path, name }
+```
+
+- 返回 `SymbolSource`（serde camelCase：`nodeId` / `label` / `qualifiedName` / `filePath` / `startLine` / `endLine` / `totalLines` / `source`）
+- 错误 `SourceError`（经 `From` 桥接 `CodeNexusError` 统一退出码）：`SymbolNotFound` / `AmbiguousSymbol`（附候选）/ `StaleIndex`（FileMissing / HashMismatch / SpanBeyondFile，提示 `codenexus index`）/ `WindowOutsideSpan` / `SourceTooLarge`（提示窗口分页）/ `SourceUnavailable`
+- **安全契约**：图谱是唯一路径真源——读盘路径只取 DB 节点行，切片经 canonicalize + 前缀校验防穿越；入参 filePath 仅作查询键
 
 关键契约：
 

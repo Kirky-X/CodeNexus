@@ -25,7 +25,7 @@
 <td align="center" width="25%">⚡<br><b>增量管线</b><br><span style="color:#64748B">哈希比对 · 只解析变更</span></td>
 <td align="center" width="25%">🕸️<br><b>属性图模型</b><br><span style="color:#64748B">45类节点 · 32类边 · Cypher</span></td>
 <td align="center" width="25%">🧭<br><b>多跳追踪</b><br><span style="color:#64748B">调用链 · 数据流 · 污点路径</span></td>
-<td align="center" width="25%">🔌<br><b>双入口</b><br><span style="color:#64748B">37 命令 + mcp · 10 工具 · 同语义</span></td>
+<td align="center" width="25%">🔌<br><b>双入口</b><br><span style="color:#64748B">38 命令 + mcp · 11 工具 · 同语义</span></td>
 </tr>
 </table>
 
@@ -88,7 +88,7 @@
 <td width="50%" style="vertical-align:top; padding: 12px">📦 <b>团队制品</b><br><span style="color:#64748B"><code>export</code> / <code>import</code> 压缩 <code>.cnxp</code> 制品，共享索引</span></td>
 </tr>
 <tr>
-<td width="50%" style="vertical-align:top; padding: 12px">🤖 <b>多智能体 MCP</b><br><span style="color:#64748B"><code>setup</code> 自动检测 Claude Code / Cursor / Codex；<code>skill</code> 一键同步技能文档到各 Agent 全局技能目录；<code>hook</code> 输出 PreToolUse/PostToolUse JSON；<code>mcp</code> stdio 服务暴露 10 个工具（参数语义写入工具描述）；<code>ask</code> 自然语言入口路由既有命令</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🤖 <b>多智能体 MCP</b><br><span style="color:#64748B"><code>setup</code> 自动检测 Claude Code / Cursor / Codex；<code>skill</code> 一键同步技能文档到各 Agent 全局技能目录；<code>hook</code> 输出 PreToolUse/PostToolUse JSON；<code>mcp</code> stdio 服务暴露 11 个工具（参数语义写入工具描述）；<code>ask</code> 自然语言入口路由既有命令</span></td>
 <td width="50%" style="vertical-align:top; padding: 12px">👁️ <b>文件监视</b><br><span style="color:#64748B">守护进程模式，自动增量索引（<code>daemon</code> feature，SIGTERM/SIGINT 优雅退出）</span></td>
 </tr>
 <tr>
@@ -109,7 +109,7 @@
 </tr>
 </table>
 
-除上述核心能力外，CodeNexus 还提供 `context` 上下文组装（`--budget <N>` 控制 token 预算，省略时不裁剪）、`detect_changes` 变更检测、`rename` 重命名影响预检、`ask` 自然语言入口、`ci`/`lint` 架构门禁、`taint` 污点审计、`supply` 供应链视图、`evolve` 演化回放、`hub` 制品客户端、`skill` 技能同步、基于 oxcache 的查询结果缓存与 inklog 结构化日志等能力；全部 37 个子命令（外加 `mcp` 服务模式）的分组清单见 [🛠️ CLI 命令](#️-cli-命令) 一节，逐命令参数语义与可运行示例见 [📖 用户指南 · 命令详解](docs/USER_GUIDE.md#️-命令详解)。
+除上述核心能力外，CodeNexus 还提供 `context` 上下文组装（`--budget <N>` 控制 token 预算，省略时不裁剪）、`detect_changes` 变更检测、`rename` 重命名影响预检、`ask` 自然语言入口、`ci`/`lint` 架构门禁、`taint` 污点审计、`supply` 供应链视图、`evolve` 演化回放、`hub` 制品客户端、`skill` 技能同步、基于 oxcache 的查询结果缓存与 inklog 结构化日志等能力；全部 38 个子命令（外加 `mcp` 服务模式）的分组清单见 [🛠️ CLI 命令](#️-cli-命令) 一节，逐命令参数语义与可运行示例见 [📖 用户指南 · 命令详解](docs/USER_GUIDE.md#️-命令详解)。
 
 ---
 
@@ -261,10 +261,10 @@ codenexus search --text "authentication logic" --fulltext true
 
 ## 🛠️ CLI 命令
 
-CodeNexus 提供 **37 个子命令**（外加 `codenexus mcp` 服务模式），按功能分组：
+CodeNexus 提供 **38 个子命令**（外加 `codenexus mcp` 服务模式），按功能分组：
 
 - **索引与项目管理**：`index` / `daemon` / `status` / `list` / `clean` / `export` / `import`
-- **查询与搜索**：`query` / `search` / `context`
+- **查询与搜索**：`query` / `search` / `source` / `context`
 - **追踪与影响分析**：`trace` / `impact` / `detect_changes` / `rename`
 - **分析工具包**：`dead_code` / `architecture` / `complexity` / `community` / `cross_service`
 - **API 审查与架构图**：`route_map` / `shape_check` / `api_impact` / `tool_map` / `diagram` / `arch_diff`
@@ -280,7 +280,7 @@ CodeNexus 提供 **37 个子命令**（外加 `codenexus mcp` 服务模式），
 
 ## 🔌 MCP 集成
 
-CodeNexus 使用 [sdforge](https://crates.io/crates/sdforge) 提供 MCP（Model Context Protocol）服务器，经 sdforge `mcp` stdio 传输暴露 **10 个工具**（`query` / `trace` / `impact` / `search` / `context` / `architecture` / `diagram` / `arch_diff` / `dead_code` / `detect_changes`），与同名 CLI 命令共用同一套 `#[forge]` 定义；每个工具的描述包含参数语义与默认值，服务器以只读方式打开数据库，可与写入进程并存。
+CodeNexus 使用 [sdforge](https://crates.io/crates/sdforge) 提供 MCP（Model Context Protocol）服务器，经 sdforge `mcp` stdio 传输暴露 **11 个工具**（`query` / `trace` / `impact` / `search` / `source` / `context` / `architecture` / `diagram` / `arch_diff` / `dead_code` / `detect_changes`），与同名 CLI 命令共用同一套 `#[forge]` 定义；每个工具的描述包含参数语义与默认值，服务器以只读方式打开数据库，可与写入进程并存。
 
 <details>
 <summary>📄 代码 · bash</summary>

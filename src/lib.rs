@@ -104,6 +104,11 @@ pub use sdforge;
 #[doc(hidden)]
 pub mod analysis;
 
+// 行级切片读取（防穿越）：analyzer 与 service::source 共用；
+// 独立于 analysis 门控（minimal 组合下 service::source 仍可用）。
+#[doc(hidden)]
+pub(crate) mod source_io;
+
 #[cfg(feature = "diagram")]
 #[doc(hidden)]
 pub mod diagram;

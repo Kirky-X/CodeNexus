@@ -53,6 +53,7 @@ pub mod search;
 pub mod setup;
 pub mod shape_check;
 pub mod skill_sync;
+pub mod source;
 pub mod status;
 pub mod supply;
 #[cfg(feature = "analysis")]

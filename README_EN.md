@@ -25,7 +25,7 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 <td align="center" width="25%">⚡<br><b>Incremental pipeline</b><br><span style="color:#64748B">hash diffing · reparse only changes</span></td>
 <td align="center" width="25%">🕸️<br><b>Property graph</b><br><span style="color:#64748B">45 node types · 32 edge types · Cypher</span></td>
 <td align="center" width="25%">🧭<br><b>Multi-hop tracing</b><br><span style="color:#64748B">call chains · data flow · taint paths</span></td>
-<td align="center" width="25%">🔌<br><b>Dual entry</b><br><span style="color:#64748B">37 CLI commands + serve mode · 10 MCP tools</span></td>
+<td align="center" width="25%">🔌<br><b>Dual entry</b><br><span style="color:#64748B">38 CLI commands + serve mode · 11 MCP tools</span></td>
 </tr>
 </table>
 
@@ -88,7 +88,7 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 <td width="50%" style="vertical-align:top; padding: 12px">📦 <b>Team artifacts</b><br><span style="color:#64748B"><code>export</code> / <code>import</code> compressed <code>.cnxp</code> artifacts for sharing indexes</span></td>
 </tr>
 <tr>
-<td width="50%" style="vertical-align:top; padding: 12px">🤖 <b>Multi-agent MCP</b><br><span style="color:#64748B"><code>setup</code> auto-detects Claude Code / Cursor / Codex; <code>hook</code> emits PreToolUse/PostToolUse JSON; <code>mcp</code> stdio server exposes 10 tools with parameter semantics in each tool description</span></td>
+<td width="50%" style="vertical-align:top; padding: 12px">🤖 <b>Multi-agent MCP</b><br><span style="color:#64748B"><code>setup</code> auto-detects Claude Code / Cursor / Codex; <code>hook</code> emits PreToolUse/PostToolUse JSON; <code>mcp</code> stdio server exposes 11 tools with parameter semantics in each tool description</span></td>
 <td width="50%" style="vertical-align:top; padding: 12px">👁️ <b>File watching</b><br><span style="color:#64748B">Daemon mode with automatic incremental indexing (<code>daemon</code> feature, graceful SIGTERM/SIGINT shutdown)</span></td>
 </tr>
 <tr>
@@ -109,7 +109,7 @@ Run `codenexus index` once and symbol relationships land in the graph — every 
 </tr>
 </table>
 
-Beyond the core capabilities above, CodeNexus also ships `context` assembly (`--budget <N>` caps the token budget; omitting it disables truncation), `detect_changes` change detection, `rename` rename-impact pre-checks, `ask` natural-language entry, `ci`/`lint` architecture gates, `taint` taint auditing, `supply` supply-chain view, `evolve` evolution replay, `hub` artifact client, `skill` skill sync, oxcache-backed query-result caching, and structured logging via inklog; the grouped list of the 37 subcommands (plus the `mcp` serve mode) lives in the [🛠️ CLI Commands](#️-cli-commands) section, and per-command flag semantics with runnable examples are in the [📖 User Guide · Command Reference](docs/USER_GUIDE.md).
+Beyond the core capabilities above, CodeNexus also ships `context` assembly (`--budget <N>` caps the token budget; omitting it disables truncation), `detect_changes` change detection, `rename` rename-impact pre-checks, `ask` natural-language entry, `ci`/`lint` architecture gates, `taint` taint auditing, `supply` supply-chain view, `evolve` evolution replay, `hub` artifact client, `skill` skill sync, oxcache-backed query-result caching, and structured logging via inklog; the grouped list of the 38 subcommands (plus the `mcp` serve mode) lives in the [🛠️ CLI Commands](#️-cli-commands) section, and per-command flag semantics with runnable examples are in the [📖 User Guide · Command Reference](docs/USER_GUIDE.md).
 
 ---
 
@@ -262,10 +262,10 @@ codenexus search --text "authentication logic" --fulltext true
 
 ## 🛠️ CLI Commands
 
-CodeNexus ships **37 subcommands** (plus the `codenexus mcp` serve mode), grouped by function:
+CodeNexus ships **38 subcommands** (plus the `codenexus mcp` serve mode), grouped by function:
 
 - **Indexing & project management**: `index` / `daemon` / `status` / `list` / `clean` / `export` / `import`
-- **Query & search**: `query` / `search` / `context`
+- **Query & search**: `query` / `search` / `source` / `context`
 - **Tracing & impact analysis**: `trace` / `impact` / `detect_changes` / `rename`
 - **Analysis toolkit**: `dead_code` / `architecture` / `complexity` / `community` / `cross_service`
 - **API review & diagrams**: `route_map` / `shape_check` / `api_impact` / `tool_map` / `diagram` / `arch_diff`
@@ -281,7 +281,7 @@ Full flag semantics and runnable examples for every command are in the [📖 Use
 
 ## 🔌 MCP Integration
 
-CodeNexus uses [sdforge](https://crates.io/crates/sdforge) to provide an MCP (Model Context Protocol) server exposing **10 tools** (`query` / `trace` / `impact` / `search` / `context` / `architecture` / `diagram` / `arch_diff` / `dead_code` / `detect_changes`) over the sdforge `mcp` stdio transport. The tools share the same `#[forge]` definitions as the identically named CLI commands; each tool description documents its parameter semantics and defaults, and the server opens the database read-only so it can run alongside a writer.
+CodeNexus uses [sdforge](https://crates.io/crates/sdforge) to provide an MCP (Model Context Protocol) server exposing **11 tools** (`query` / `trace` / `impact` / `search` / `source` / `context` / `architecture` / `diagram` / `arch_diff` / `dead_code` / `detect_changes`) over the sdforge `mcp` stdio transport. The tools share the same `#[forge]` definitions as the identically named CLI commands; each tool description documents its parameter semantics and defaults, and the server opens the database read-only so it can run alongside a writer.
 
 <details>
 <summary>📄 Code · bash</summary>

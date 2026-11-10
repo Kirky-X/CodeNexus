@@ -206,7 +206,7 @@ fn run_cli() {
     let db = explicit_cli_arg(&matches, sub_matches, "db")
         .or_else(env_db_path)
         .unwrap_or_else(|| {
-            let derived = default_db_path(sub_matches);
+            let derived = default_db_path(sub_name, sub_matches);
             // general.db only fills the "no signal" case: derivation fell through
             // to the fallback name AND no single .lbug file was discovered. When
             // discovery succeeded, `derived` already is the discovered path and
@@ -463,7 +463,7 @@ fn explicit_cli_arg(
 /// the old code unconditionally fell back to `codenexus` (this repo's own
 /// name), producing `.codenexus/codenexus.lbug` which does not exist in
 /// downstream project workspaces.
-fn default_db_path(sub: &sdforge::clap::ArgMatches) -> String {
+fn default_db_path(command: &str, sub: &sdforge::clap::ArgMatches) -> String {
     // try_get_one (not get_one): commands like `search`/`impact`/`context` do
     // not define a `name`/`path` arg, and clap's get_one panics on an
     // undefined arg id. Fall back gracefully instead.
@@ -472,21 +472,34 @@ fn default_db_path(sub: &sdforge::clap::ArgMatches) -> String {
     // sentinel default (see `SENTINEL_DEFAULTS`) when the user omits it, and
     // an empty name must fall through to the `--path` directory name instead
     // of resolving to the fallback project name.
-    let raw_project = sub
-        .try_get_one::<String>("name")
-        .ok()
-        .flatten()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .or_else(|| {
-            sub.try_get_one::<String>("path")
-                .ok()
-                .flatten()
-                .map(|p| p.trim())
-                .filter(|p| !p.is_empty())
-                .map(|p| derive_project_name(std::path::Path::new(p)))
-        });
+    //
+    // The `name` borrow is gated to the commands whose `--name` denotes the
+    // indexed project (index/import/daemon). Other commands define `name`
+    // with unrelated semantics — `source --name` is the SYMBOL name of the
+    // file+name locator key, `hub --name` the artifact name — and borrowing
+    // those silently opened (created!) `.codenexus/<symbol>.lbug` instead of
+    // the indexed DB (found 2026-11-10 via the read-symbol-source
+    // cross-validation: `source --file X --name Y` queried an empty
+    // `Y.lbug` and reported the symbol as not found).
+    const NAME_MEANS_PROJECT: [&str; 3] = ["index", "import", "daemon"];
+    let raw_project = if NAME_MEANS_PROJECT.contains(&command) {
+        sub.try_get_one::<String>("name")
+            .ok()
+            .flatten()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    } else {
+        None
+    }
+    .or_else(|| {
+        sub.try_get_one::<String>("path")
+            .ok()
+            .flatten()
+            .map(|p| p.trim())
+            .filter(|p| !p.is_empty())
+            .map(|p| derive_project_name(std::path::Path::new(p)))
+    });
 
     let project = match raw_project {
         Some(name) => sanitize_project_name(&name),
@@ -506,7 +519,13 @@ fn default_db_path(sub: &sdforge::clap::ArgMatches) -> String {
 /// user runs a read-only command (`query`, `list`, `search`, ...) without
 /// `--db` in the project's own workspace.
 fn discover_single_indexed_db() -> Option<String> {
-    let dir = std::path::Path::new(DEFAULT_DB_DIR);
+    discover_single_indexed_db_in(std::path::Path::new(DEFAULT_DB_DIR))
+}
+
+/// [`discover_single_indexed_db`] against an explicit directory — the
+/// seam that keeps the fallback tests deterministic (they must not depend on
+/// whether the developer's real `.codenexus/` happens to hold one DB).
+fn discover_single_indexed_db_in(dir: &std::path::Path) -> Option<String> {
     let entries = std::fs::read_dir(dir).ok()?;
     let mut lbug_files: Vec<String> = entries
         .filter_map(|e| e.ok())
@@ -951,6 +970,15 @@ const SENTINEL_DEFAULTS: &[(&str, &str, &str)] = &[
     ("hub", "name", ""),
     ("hub", "project", ""),
     ("hub", "token", ""),
+    // — source: 三键全部可选（互斥校验在 service 层给 usage 错误）；行窗口与
+    // 上限 0 = 未提供（core 里落到默认 500）。
+    ("source", "qualified_name", ""),
+    ("source", "id", ""),
+    ("source", "file", ""),
+    ("source", "name", ""),
+    ("source", "start_line", "0"),
+    ("source", "end_line", "0"),
+    ("source", "max_lines", "0"),
 ];
 
 /// Applies sentinel `default_value`s to CLI parameters listed in
@@ -1005,10 +1033,10 @@ fn apply_cli_aliases(mut cmd: sdforge::clap::Command) -> sdforge::clap::Command 
 /// MCP mode: build Kit, serve sdforge MCP server over stdio.
 ///
 /// The Kit opens the DB **read-only**: the MCP tool surface is query-only by
-/// design (query/trace/impact/search/context/architecture/diagram/arch_diff/
-/// dead_code/detect_changes — write tools like index/import/rename are
-/// CLI-only), so a shared-read open lets the server run alongside an active
-/// `index`/`daemon` writer instead of either side failing with
+/// design (query/trace/impact/search/source/context/architecture/diagram/
+/// arch_diff/dead_code/detect_changes — write tools like index/import/rename
+/// are CLI-only), so a shared-read open lets the server run alongside an
+/// active `index`/`daemon` writer instead of either side failing with
 /// `DatabaseLocked` (LadybugDB is single-writer).
 #[cfg(feature = "mcp")]
 fn run_mcp_server() {
@@ -1398,7 +1426,7 @@ mod tests {
         let cmd = index_sub_with(Some("my-project"), None);
         let m = cmd.get_matches_from(["codenexus", "index", "--name", "my-project"]);
         let sub = m.subcommand_matches("index").unwrap();
-        assert_eq!(default_db_path(sub), ".codenexus/my-project.lbug");
+        assert_eq!(default_db_path("index", sub), ".codenexus/my-project.lbug");
     }
 
     #[test]
@@ -1406,7 +1434,7 @@ mod tests {
         let cmd = index_sub_with(None, Some("/home/user/CodeNexus"));
         let m = cmd.get_matches_from(["codenexus", "index", "--path", "/home/user/CodeNexus"]);
         let sub = m.subcommand_matches("index").unwrap();
-        assert_eq!(default_db_path(sub), ".codenexus/CodeNexus.lbug");
+        assert_eq!(default_db_path("index", sub), ".codenexus/CodeNexus.lbug");
     }
 
     /// `index --name` carries the empty sentinel when omitted — the blank
@@ -1418,7 +1446,7 @@ mod tests {
         let cmd = index_sub_with(Some(""), Some("/home/user/myrepo"));
         let m = cmd.get_matches_from(["codenexus", "index", "--path", "/home/user/myrepo"]);
         let sub = m.subcommand_matches("index").unwrap();
-        assert_eq!(default_db_path(sub), ".codenexus/myrepo.lbug");
+        assert_eq!(default_db_path("index", sub), ".codenexus/myrepo.lbug");
     }
 
     /// Whitespace-only names are blank too.
@@ -1427,7 +1455,7 @@ mod tests {
         let cmd = index_sub_with(Some("   "), Some("/home/user/myrepo"));
         let m = cmd.get_matches_from(["codenexus", "index", "--path", "/home/user/myrepo"]);
         let sub = m.subcommand_matches("index").unwrap();
-        assert_eq!(default_db_path(sub), ".codenexus/myrepo.lbug");
+        assert_eq!(default_db_path("index", sub), ".codenexus/myrepo.lbug");
     }
 
     /// The real `index` command accepts `--path` without `--name`: clap gets
@@ -1443,31 +1471,84 @@ mod tests {
             Some(""),
             "omitted --name must resolve to the empty sentinel"
         );
-        assert_eq!(default_db_path(sub), ".codenexus/myrepo.lbug");
+        assert_eq!(default_db_path("index", sub), ".codenexus/myrepo.lbug");
+    }
+
+    /// Discovery seam is injectable and hermetic: zero or 2+ `.lbug` files in
+    /// the given dir yield `None`, exactly one is picked up. Deterministic —
+    /// must not depend on the developer's real `.codenexus/` contents
+    /// (regression: the original env-dependent tests passed only because the
+    /// garbage-DB bug happened to keep the count off-by-one).
+    #[test]
+    fn discover_single_indexed_db_in_is_hermetic() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+        assert_eq!(discover_single_indexed_db_in(dir), None, "empty dir");
+        std::fs::write(dir.join("a.lbug"), b"x").expect("seed a");
+        std::fs::write(dir.join("b.lbug"), b"x").expect("seed b");
+        assert_eq!(discover_single_indexed_db_in(dir), None, "two lbug files");
+        std::fs::remove_file(dir.join("b.lbug")).expect("cleanup b");
+        let found = discover_single_indexed_db_in(dir).expect("single lbug found");
+        assert!(found.ends_with("a.lbug"), "discovered wrong file: {found}");
     }
 
     #[test]
-    #[serial_test::serial(db_discover)]
-    fn default_db_path_falls_back_when_no_args() {
-        let cmd = index_sub_with(None, None);
-        let m = cmd.get_matches_from(["codenexus", "index"]);
-        let sub = m.subcommand_matches("index").unwrap();
-        assert_eq!(default_db_path(sub), ".codenexus/codenexus.lbug");
-    }
-
-    #[test]
-    #[serial_test::serial(db_discover)]
     fn default_db_path_does_not_panic_when_subcommand_has_no_name_arg() {
         // Real commands like `search`/`impact`/`context` do not define a `name`
-        // or `path` arg. default_db_path must use [`FALLBACK_PROJECT_NAME`]
-        // (after [`discover_single_indexed_db`] returns `None`) instead of
-        // panicking. Regression: clap `get_one` panics on an arg id that the
-        // Command never defined.
+        // or `path` arg. default_db_path must consult discovery (its result is
+        // env-derived, hence only the contract is asserted) and return a
+        // well-formed DB path instead of panicking. Regression: clap `get_one`
+        // panics on an arg id that the Command never defined.
         let sub_cmd = sdforge::clap::Command::new("search");
         let cmd = sdforge::clap::Command::new("codenexus").subcommand(sub_cmd);
         let m = cmd.get_matches_from(["codenexus", "search"]);
         let sub = m.subcommand_matches("search").unwrap();
-        assert_eq!(default_db_path(sub), ".codenexus/codenexus.lbug");
+        assert!(default_db_path("search", sub).ends_with(".lbug"));
+    }
+
+    /// `source`/`hub` define `--name` with NON-project semantics (symbol name
+    /// / artifact name). The borrow must be ignored for them — regression:
+    /// `source --file X --name Y` silently opened (created) an empty
+    /// `.codenexus/Y.lbug` and reported the symbol as not found. Hermetic:
+    /// the synthetic command carries a `path` arg so no real `.codenexus/`
+    /// discovery is consulted.
+    #[test]
+    fn default_db_path_ignores_name_for_non_project_commands() {
+        let sub_cmd = sdforge::clap::Command::new("source")
+            .arg(sdforge::clap::Arg::new("name").long("name"))
+            .arg(sdforge::clap::Arg::new("path").long("path"));
+        let cmd = sdforge::clap::Command::new("codenexus").subcommand(sub_cmd);
+        let m = cmd.get_matches_from([
+            "codenexus",
+            "source",
+            "--name",
+            "build_kit",
+            "--path",
+            "/home/user/myrepo",
+        ]);
+        let sub = m.subcommand_matches("source").unwrap();
+        assert_eq!(
+            default_db_path("source", sub),
+            ".codenexus/myrepo.lbug",
+            "--name on `source` must not be borrowed as project name; path dir wins"
+        );
+    }
+
+    /// The whitelist keeps `index`/`import`/`daemon` borrowing `--name` even
+    /// when `--path` is also present: name wins for project-denoting commands.
+    #[test]
+    fn default_db_path_borrows_name_for_whitelisted_commands() {
+        let cmd = index_sub_with(Some("my-project"), Some("/home/user/other"));
+        let m = cmd.get_matches_from([
+            "codenexus",
+            "index",
+            "--name",
+            "my-project",
+            "--path",
+            "/home/user/other",
+        ]);
+        let sub = m.subcommand_matches("index").unwrap();
+        assert_eq!(default_db_path("index", sub), ".codenexus/my-project.lbug");
     }
 
     // find_cli_handler / mcp registration
