@@ -19,7 +19,7 @@
 //! [`PipelineCtx`] externally. All other phases use `Input = ()` and read dep
 //! outputs from the context via [`PipelineCtx::get`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -1119,6 +1119,104 @@ pub struct LoadPhase {
     pub repo: Arc<Repository>,
 }
 
+/// Whether the path-keyed node delete already removed `edge`'s persisted row.
+///
+/// The path-keyed delete ([`Repository::delete_file_nodes_batch_on`]) removes
+/// every node whose `filePath` is in the delete set and — right after — every
+/// edge whose source or target is one of those nodes. An edge is therefore
+/// already gone (and needs no id pre-delete) iff one of its endpoints is a
+/// node that delete removed.
+///
+/// "Removed" is decided from the **persisted** row, not from the graph:
+/// - a **survivor** (a graph node whose persisted row survives the delete)
+///   keeps its row — and therefore its edges — so its edges still need the
+///   pre-delete even when the graph's `filePath` is in the delete set (the
+///   symbol moved to another file since the last run);
+/// - a graph node whose `filePath` is in the delete set and that is *not* a
+///   survivor had its row deleted (or never had one — a brand-new symbol has
+///   no persisted edge to collide with), so the orphan cleanup removed its
+///   edges;
+/// - an endpoint that is not in the graph is a persisted node outside this
+///   run's graph (a cross-file edge into an unchanged file) — the path-keyed
+///   delete never touched it.
+fn edge_covered_by_path_delete(
+    graph: &Graph,
+    edge: &Edge,
+    survivors: &HashMap<String, Option<String>>,
+    deleted_paths: &HashSet<&str>,
+) -> bool {
+    [&edge.source, &edge.target].iter().any(|id| {
+        if survivors.contains_key(id.as_str()) {
+            return false;
+        }
+        graph.nodes.get(id.as_str()).is_some_and(|node| {
+            node.file_path
+                .as_deref()
+                .is_some_and(|file_path| deleted_paths.contains(file_path))
+        })
+    })
+}
+
+/// Pre-deletes the persisted `CodeRelation` rows of the edges that the
+/// path-keyed node delete does **not** already remove.
+///
+/// The edge primary key `{source}_{target}_{type}_{start_line}` is
+/// deterministic (ADR-014), so a re-derived edge whose persisted row still
+/// exists collides with it and `COPY FROM` aborts the whole transaction
+/// ("Found duplicated primary key value"). Two classes of edges keep their
+/// persisted row across a run:
+///
+/// - **enrichment**: both endpoints live in files that did not change, so the
+///   path-keyed delete (keyed by file path) never reaches them;
+/// - **`filePath`-less labels**: both endpoints are e.g. `ExternalPackage`
+///   nodes — those labels have no `filePath` column, so *no* path-keyed
+///   delete can ever reach them.
+///
+/// The second class is why the pre-delete must run on **every** load: the
+/// full-coverage shortcut (skip the pre-delete when every file changed) was
+/// only valid while the "every persisted edge touches a path-deleted node"
+/// invariant held, and the `filePath`-less case breaks exactly that
+/// invariant. [`edge_covered_by_path_delete`] is the mechanical form of that
+/// invariant.
+///
+/// The ids are collected in bounded chunks — the whole set is never
+/// materialized (≈125 bytes per edge means a 500k-edge graph would peak at
+/// ~60 MB) — and the write transaction's lock is held for the delete
+/// statements only.
+///
+/// Returns the number of edge ids pre-deleted (candidates, not rows actually
+/// matched: the delete is a no-op for ids that were never persisted).
+fn pre_delete_edges_not_covered_by_path_delete<E: crate::storage::connection::CypherExecutor>(
+    conn: &E,
+    graph: &Graph,
+    survivors: &HashMap<String, Option<String>>,
+    paths_to_delete: &[String],
+    project: &str,
+) -> Result<usize, IndexError> {
+    /// Ids per delete statement — matches the chunk size of
+    /// [`Repository::delete_edges_by_ids_on`].
+    const CHUNK: usize = 500;
+    let deleted_paths: HashSet<&str> = paths_to_delete.iter().map(String::as_str).collect();
+    let mut buffer: Vec<String> = Vec::with_capacity(CHUNK);
+    let mut pre_deleted = 0usize;
+    for edge in graph.edges_view() {
+        if edge_covered_by_path_delete(graph, edge, survivors, &deleted_paths) {
+            continue;
+        }
+        buffer.push(crate::storage::loader::edge_id(edge));
+        if buffer.len() == CHUNK {
+            pre_deleted += buffer.len();
+            Repository::delete_edges_by_ids_on(conn, &buffer, project).map_err(IndexError::from)?;
+            buffer.clear();
+        }
+    }
+    if !buffer.is_empty() {
+        pre_deleted += buffer.len();
+        Repository::delete_edges_by_ids_on(conn, &buffer, project).map_err(IndexError::from)?;
+    }
+    Ok(pre_deleted)
+}
+
 impl Phase for LoadPhase {
     type Input = ();
     type Output = LoadOutput;
@@ -1226,9 +1324,20 @@ impl Phase for LoadPhase {
             .map_err(|e| phase_err("load", e))?
             .is_some();
         // Full-coverage run (no unchanged files): every filePath-bearing row
-        // is deleted in the transaction below. Hoisted for reuse by the
-        // edge pre-delete gate below (full-coverage runs cannot collide on
-        // edge PKs — every persisted edge touches a path-deleted node).
+        // is deleted in the transaction below, so only column-less
+        // labels (ExternalPackage etc.) can possibly survive — skip the
+        // per-label lookups for everything else. The survivor set also
+        // decides which edges the edge pre-delete has to cover (see
+        // `pre_delete_edges_not_covered_by_path_delete`).
+        //
+        // Boundary note: in full-coverage mode the filePath-bearing labels are
+        // NOT queried, so `edge_covered_by_path_delete` classifies their
+        // edges as "covered" without verifying a persisted row was actually
+        // removed. That inference rests on the structural fact the node-save
+        // path has always shared — the persisted baseline IS the diff baseline
+        // (unchanged is empty ⟹ every previously indexed file is in
+        // changed ∪ deleted = paths_to_delete). If that ever breaks, the
+        // failure is a loud PK-conflict abort, never silent corruption.
         let full_coverage = scan.diff.unchanged.is_empty();
         let survivors = if project_exists {
             // Full-coverage run (no unchanged files): every filePath-bearing
@@ -1267,8 +1376,10 @@ impl Phase for LoadPhase {
             );
         }
 
-        // Candidate count of edge ids pre-deleted inside the load transaction
-        // (logged with index_completed; see the pre-delete comment below).
+        // Number of edge ids pre-deleted inside the load transaction (logged
+        // with index_completed; see the pre-delete comment below). Counts the
+        // candidates handed to the pre-delete — the rows actually matched are
+        // fewer (the delete is a no-op for ids that were never persisted).
         let mut edges_pre_deleted = 0usize;
         let result: std::result::Result<(), IndexError> = self.repo.in_write_transaction(|tx| {
             // Step 7: batch-delete old nodes for deleted + changed files.
@@ -1302,20 +1413,27 @@ impl Phase for LoadPhase {
                 // delete above does not cover. Without this pre-delete the
                 // re-derived id collides with the persisted row and COPY FROM
                 // aborts the whole run ("Found duplicated primary key value").
-                // Full-coverage runs skip this: every persisted edge touches
-                // a path-deleted node, so no duplicate can survive. Zero-change
-                // runs never reach here (`has_edges` is false).
+                // The same holds for edges between `filePath`-less labels
+                // (e.g. ExternalPackage → ExternalPackage): no path-keyed
+                // delete can ever reach them, so the full-coverage shortcut
+                // ("every persisted edge touches a path-deleted node") does
+                // not hold for them either.
+                //
+                // The pre-delete therefore runs on EVERY load and covers
+                // exactly the edges the path-keyed delete did not already
+                // remove — the narrower set keeps the write transaction's
+                // lock time down, and the 500-id chunks keep the collected
+                // ids from being materialized as a whole.
+                // Zero-change runs never reach here (`has_edges` is false).
                 // Same-transaction delete-then-insert of one PK is sanctioned
                 // by the guard test `lbug_allows_delete_then_insert_same_pk_in_one_tx`.
-                if !full_coverage {
-                    let incoming_ids: Vec<String> = graph
-                        .edges_view()
-                        .map(crate::storage::loader::edge_id)
-                        .collect();
-                    edges_pre_deleted = incoming_ids.len();
-                    Repository::delete_edges_by_ids_on(tx, &incoming_ids, project_id)
-                        .map_err(IndexError::from)?;
-                }
+                edges_pre_deleted = pre_delete_edges_not_covered_by_path_delete(
+                    tx,
+                    graph,
+                    &survivors,
+                    &paths_to_delete,
+                    project_id,
+                )?;
                 Repository::save_edges_stream_on(tx, graph.edges_view())
                     .map_err(IndexError::from)?;
             }
@@ -1584,6 +1702,160 @@ mod tests {
             }
             other => panic!("expected ExecutionFailed, got {other:?}"),
         }
+    }
+
+    // --- edge pre-delete coverage (guard: every persisted edge is covered) ---
+
+    /// Records every executed Cypher statement so a test can assert which
+    /// edge ids the pre-delete asked the database to remove.
+    #[derive(Default)]
+    struct RecordingExecutor {
+        statements: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl crate::storage::connection::CypherExecutor for RecordingExecutor {
+        fn execute_cypher(&self, cypher: &str) -> crate::storage::error::Result<()> {
+            self.statements
+                .lock()
+                .expect("statements lock")
+                .push(cypher.to_string());
+            Ok(())
+        }
+
+        fn query_cypher(
+            &self,
+            _cypher: &str,
+        ) -> crate::storage::error::Result<Vec<Vec<serde_json::Value>>> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// An `ExternalPackage` node — a label whose table has **no** `filePath`
+    /// column, so no path-keyed delete can ever reach it.
+    fn column_less_node(id: &str, project: &str) -> Node {
+        Node::builder(NodeLabel::ExternalPackage, id, id)
+            .id(id)
+            .project(project)
+            .build()
+    }
+
+    /// A file-backed node (`Function` has a `filePath` column).
+    fn file_backed_node(id: &str, file_path: &str, project: &str) -> Node {
+        Node::builder(NodeLabel::Function, id, id)
+            .id(id)
+            .project(project)
+            .file_path(file_path)
+            .build()
+    }
+
+    /// Guard for the "every persisted edge is removed before it is re-inserted"
+    /// invariant: an edge between two `filePath`-less nodes is unreachable for
+    /// the path-keyed delete, so it must be covered by the id pre-delete —
+    /// otherwise its persisted row survives the run and `COPY FROM` aborts the
+    /// whole transaction on the duplicate primary key.
+    #[test]
+    fn pre_delete_covers_edges_between_column_less_nodes() {
+        let mut graph = Graph::new();
+        graph.add_node(column_less_node("extpkg:demo:leftpad", "demo"));
+        graph.add_node(column_less_node("extpkg:demo:rightpad", "demo"));
+        graph.add_edge(
+            Edge::builder(
+                "extpkg:demo:leftpad",
+                "extpkg:demo:rightpad",
+                EdgeType::DependsOn,
+                "demo",
+            )
+            .start_line(7)
+            .build(),
+        );
+
+        let executor = RecordingExecutor::default();
+        let pre_deleted = pre_delete_edges_not_covered_by_path_delete(
+            &executor,
+            &graph,
+            &HashMap::new(),
+            &[],
+            "demo",
+        )
+        .expect("pre-delete");
+
+        assert_eq!(
+            pre_deleted, 1,
+            "the column-less edge must be pre-deleted, not left to the orphan cleanup"
+        );
+        let statements = executor.statements.lock().expect("statements lock");
+        assert_eq!(statements.len(), 1, "one delete statement expected");
+        let edge_id = crate::storage::loader::edge_id(&graph.edges[0]);
+        assert!(
+            statements[0].contains(&edge_id),
+            "the pre-delete must name the edge id {edge_id}: {}",
+            statements[0]
+        );
+    }
+
+    /// The narrowing: an edge whose endpoint the path-keyed delete removed
+    /// (its `filePath` is in the delete set and it is not a survivor) is
+    /// already gone — the orphan cleanup deleted it with its node — so it must
+    /// NOT be pre-deleted again.
+    #[test]
+    fn pre_delete_skips_edges_already_removed_by_the_path_keyed_delete() {
+        let mut graph = Graph::new();
+        graph.add_node(file_backed_node("file_a", "src/a.rs", "demo"));
+        graph.add_node(file_backed_node("demo.f", "src/b.rs", "demo"));
+        graph.add_edge(Edge::builder("file_a", "demo.f", EdgeType::Calls, "demo").build());
+
+        let executor = RecordingExecutor::default();
+        let pre_deleted = pre_delete_edges_not_covered_by_path_delete(
+            &executor,
+            &graph,
+            &HashMap::new(),
+            &["src/a.rs".to_string()],
+            "demo",
+        )
+        .expect("pre-delete");
+
+        assert_eq!(
+            pre_deleted, 0,
+            "the orphan cleanup already removed this edge with its node"
+        );
+        assert!(
+            executor
+                .statements
+                .lock()
+                .expect("statements lock")
+                .is_empty(),
+            "no delete statement expected"
+        );
+    }
+
+    /// A survivor keeps its persisted row (and therefore its edges), even when
+    /// the graph's `filePath` for it is in the delete set — the symbol moved
+    /// to another file since the last run. Its edges must still be
+    /// pre-deleted, otherwise the re-inserted row collides.
+    #[test]
+    fn pre_delete_covers_edges_of_surviving_nodes_under_deleted_paths() {
+        let mut graph = Graph::new();
+        graph.add_node(file_backed_node("file_a", "src/a.rs", "demo"));
+        graph.add_node(file_backed_node("demo.f", "src/b.rs", "demo"));
+        graph.add_edge(Edge::builder("file_a", "demo.f", EdgeType::Calls, "demo").build());
+
+        // `file_a`'s persisted row survives (its stored filePath is not in the
+        // delete set) → it is a survivor.
+        let survivors = HashMap::from([("file_a".to_string(), Some("src/other.rs".to_string()))]);
+        let executor = RecordingExecutor::default();
+        let pre_deleted = pre_delete_edges_not_covered_by_path_delete(
+            &executor,
+            &graph,
+            &survivors,
+            &["src/a.rs".to_string()],
+            "demo",
+        )
+        .expect("pre-delete");
+
+        assert_eq!(
+            pre_deleted, 1,
+            "a survivor's persisted edge survives the path-keyed delete"
+        );
     }
 
     // --- build_includes_edges(C++ #include → INCLUDES edges) ---
