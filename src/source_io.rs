@@ -13,19 +13,29 @@
 
 use std::path::Path;
 
+use crate::index::hash::MAX_FILE_SIZE;
+
 /// Reads the full source file at `canonical_root/file_path` with path-traversal
 /// protection. `canonical_root` must already be canonicalized (e.g. via
-/// `Path::canonicalize`). Returns `None` if the file cannot be read or the
-/// resolved path escapes `canonical_root`.
+/// `Path::canonicalize`). Returns `None` if the file cannot be read, the
+/// resolved path escapes `canonical_root`, or the file exceeds
+/// [`MAX_FILE_SIZE`].
 ///
 /// The joined target is canonicalized and must start with `canonical_root`.
 /// This blocks `../` sequences and symlink escapes. Leading `/` in `file_path`
 /// is stripped so stored absolute-looking filePaths are treated as relative to
 /// `canonical_root`.
 ///
-/// The file is opened via `File::open` on the canonicalized path and read from
-/// the handle, narrowing the TOCTOU window between canonicalize and read
-/// compared to `fs::read_to_string` (which re-resolves the path internally).
+/// The size cap is checked on the metadata **before** any read (same constant
+/// as the hashing path): the analysis-side callers of this helper have no
+/// hashing stage to bound them, and an unbounded slurp is an OOM hazard.
+///
+/// The file is opened via `File::open` on the canonicalized path; the size
+/// cap is checked on the OPENED HANDLE (`handle.metadata()` = fstat on the
+/// same object) and the read is bounded with `take`, so a concurrent
+/// replace/grow between stat and read can neither slip past the cap nor blow
+/// memory — the earlier `symlink_metadata`-then-`fs::read` shape left that
+/// window open.
 pub(crate) fn read_source_file_canonical(canonical_root: &Path, file_path: &str) -> Option<String> {
     use std::fs::File;
     use std::io::Read;
@@ -35,9 +45,14 @@ pub(crate) fn read_source_file_canonical(canonical_root: &Path, file_path: &str)
     if !canonical_target.starts_with(canonical_root) {
         return None;
     }
-    let mut file = File::open(&canonical_target).ok()?;
+    // 与 hash 路径同源的上限：超限文件在读取前拒绝，不依赖 hash 阶段兜底。
+    // 上限检查落在已打开的句柄上（fstat 同一对象），消除 stat/read 竞态窗口。
+    let file = File::open(&canonical_target).ok()?;
+    if file.metadata().ok()?.len() > MAX_FILE_SIZE {
+        return None;
+    }
     let mut content = String::new();
-    file.read_to_string(&mut content).ok()?;
+    file.take(MAX_FILE_SIZE).read_to_string(&mut content).ok()?;
     Some(content)
 }
 
@@ -91,6 +106,41 @@ mod tests {
         let root = dir.path().canonicalize().unwrap();
         assert!(read_source_file_canonical(&root, "../escape.rs").is_none());
         assert!(read_source_file_canonical(&root, "lib.rs").is_some());
+    }
+
+    /// 与 hash 路径同源的 10MB 上限必须在读取**前**生效：analysis 侧调用方
+    /// 没有 hash 阶段兜底，超限文件不得整体读进内存。稀疏文件构造超限长度
+    /// （与 hash.rs 的同款手法），不占真实磁盘。
+    #[test]
+    fn read_source_file_canonical_rejects_oversized_file_before_reading() {
+        use std::io::{Seek, Write};
+
+        let dir = TempDir::new().unwrap();
+        let oversized = dir.path().join("huge.rs");
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&oversized)
+            .unwrap();
+        file.seek(std::io::SeekFrom::Start(MAX_FILE_SIZE + 1))
+            .unwrap();
+        file.write_all(b"x").unwrap();
+        drop(file);
+        assert!(
+            std::fs::symlink_metadata(&oversized).unwrap().len() > MAX_FILE_SIZE,
+            "sparse file must report an over-limit logical size"
+        );
+
+        let root = dir.path().canonicalize().unwrap();
+        assert!(
+            read_source_file_canonical(&root, "huge.rs").is_none(),
+            "oversized file must be rejected before any read"
+        );
+        assert!(
+            read_source_slice_canonical(&root, "huge.rs", 1, 2).is_none(),
+            "slice path must reject before reading too"
+        );
     }
 
     #[test]

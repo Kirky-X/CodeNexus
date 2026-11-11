@@ -14,11 +14,11 @@ use serde::{Deserialize, Serialize};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
-use crate::index::hash::compute_file_hash;
+use crate::index::hash::{compute_content_hash, MAX_FILE_SIZE};
 use crate::kit::{AsyncKit, AsyncReady, StorageModule};
 use crate::model::node_label::NodeLabel;
 use crate::service::error::CodeNexusError;
-use crate::source_io::read_source_slice_canonical;
+use crate::source_io::slice_lines;
 use crate::storage::schema::{escape_cypher_string, escape_identifier, node_table_columns};
 
 #[cfg(any(feature = "cli", feature = "mcp"))]
@@ -99,6 +99,9 @@ pub enum StaleReason {
     HashMismatch,
     /// 图谱记录的 span 超出文件实际长度
     SpanBeyondFile,
+    /// 项目根退化为文件系统根（`/`）：`starts_with` 恒真，穿越防护失效。
+    /// 正常索引不可能写出这种根，只会源于被篡改/损坏的索引库。
+    InvalidProjectRoot,
 }
 
 impl std::fmt::Display for StaleReason {
@@ -107,6 +110,10 @@ impl std::fmt::Display for StaleReason {
             StaleReason::FileMissing => write!(f, "source file missing"),
             StaleReason::HashMismatch => write!(f, "file changed since last index"),
             StaleReason::SpanBeyondFile => write!(f, "indexed span exceeds file length"),
+            StaleReason::InvalidProjectRoot => write!(
+                f,
+                "indexed project root is the filesystem root (corrupted index)"
+            ),
         }
     }
 }
@@ -138,7 +145,9 @@ pub enum SourceError {
         span_end: u32,
     },
 
-    #[error("symbol spans {total_lines} lines, exceeding max {max_lines}; pass a line window (start/end) to page through")]
+    #[error(
+        "symbol spans {total_lines} lines, exceeding max {max_lines}; pass a line window (start/end) to page through"
+    )]
     SourceTooLarge {
         total_lines: usize,
         max_lines: usize,
@@ -211,15 +220,22 @@ pub(crate) struct SymbolRow {
 /// File/Folder/Module 无 span 列；Variable/GlobalVar/Parameter/Const/Static/
 /// TypeAlias/Typedef 仅有单点 startLine 无 endLine（点符号，非"完整源码"
 /// 语义）；Embedding 无 name/qualifiedName（辅助向量表，非符号）。
-pub(crate) fn span_bearing_labels() -> Vec<NodeLabel> {
-    const REQUIRED: [&str; 4] = ["startLine", "endLine", "name", "qualifiedName"];
-    NodeLabel::all()
-        .into_iter()
-        .filter(|l| {
-            let cols = node_table_columns(*l);
-            REQUIRED.iter().all(|c| cols.contains(c))
-        })
-        .collect()
+///
+/// 结果是 schema 列清单的纯函数，进程内不变——`OnceLock` 缓存一次计算
+/// （每次调用重建 45 label × 4 列检查 → 进程内一次）。返回切片，
+/// 调用方只读。
+pub(crate) fn span_bearing_labels() -> &'static [NodeLabel] {
+    static LABELS: std::sync::OnceLock<Vec<NodeLabel>> = std::sync::OnceLock::new();
+    LABELS.get_or_init(|| {
+        const REQUIRED: [&str; 4] = ["startLine", "endLine", "name", "qualifiedName"];
+        NodeLabel::all()
+            .into_iter()
+            .filter(|l| {
+                let cols = node_table_columns(*l);
+                REQUIRED.iter().all(|c| cols.contains(c))
+            })
+            .collect()
+    })
 }
 
 /// 定位键的 WHERE 谓词（图谱点查键；绝不生成读盘路径）。
@@ -268,7 +284,7 @@ pub(crate) fn resolve_symbol(
             .query(&cypher)
             .map_err(|e| SourceError::SourceUnavailable(e.to_string()))?;
         for row in &rows {
-            hits.push(parse_symbol_row(label, row)?);
+            hits.push(parse_symbol_row(*label, row)?);
         }
         if hits.len() >= 2 {
             break;
@@ -405,22 +421,44 @@ fn project_root(
             reason: StaleReason::FileMissing,
         });
     }
-    std::fs::canonicalize(path).map_err(|_| SourceError::StaleIndex {
+    let canonical = std::fs::canonicalize(path).map_err(|_| SourceError::StaleIndex {
         file_path: root.to_string(),
         reason: StaleReason::FileMissing,
-    })
+    })?;
+    // 纵深防御：rootPath 退化为文件系统根时 `starts_with` 恒真，后续全部
+    // 根包含校验失效。只可能源于被篡改/损坏的索引库——拒绝并指向重索引。
+    // 判定用「无父目录」而非 `== "/"`：Windows 盘符根（`C:\`）与 UNC 共享
+    // 根 canonicalize 后同样无 parent，字符串等值只覆盖 Unix。
+    if canonical.parent().is_none() {
+        return Err(SourceError::StaleIndex {
+            file_path: root.to_string(),
+            reason: StaleReason::InvalidProjectRoot,
+        });
+    }
+    Ok(canonical)
 }
 
-/// stale 硬错误校验链（顺序执行，任一失败即拒绝返回源码；成功返回
-/// canonical 项目根供后续切片使用）：
-/// ① Project 根存在且可 canonicalize → 否则 FileMissing
+/// stale 硬错误校验链（顺序执行，任一失败即拒绝返回源码）的成功产物：
+/// 为 hash 一次性读取的文件原始字节。切片直接复用——单次调用至多一次
+/// 整文件读 + 一次文件 canonicalize（在链内完成，根 canonicalize 另计）。
+#[derive(Debug)]
+pub(crate) struct FreshSource {
+    /// 索引期同款 BLAKE3 在字节上计算（与读盘路径无关）；切片亦复用。
+    pub content: Vec<u8>,
+}
+
+/// stale 硬错误校验链（顺序执行，任一失败即拒绝返回源码；成功返回为 hash
+/// 一次性读取的文件内容——切片复用该字节，不再二次 canonicalize/读盘）：
+/// ① Project 根存在且可 canonicalize（退化根 `/` 拒绝）→ 否则 FileMissing
 /// ② File 行存在（hash/lineCount 齐备）→ 否则 FileMissing
-/// ③ `compute_file_hash`（索引期同款 BLAKE3）比对 → 不等则 HashMismatch
-/// ④ 节点 span 不超文件实际长度 → 否则 SpanBeyondFile
+/// ③ 文件 canonicalize + 根包含校验 → 否则 FileMissing
+/// ④ 有界整读（索引期同款 `MAX_FILE_SIZE` 上限，读取前检查）+ BLAKE3 比对
+///    → 不等则 HashMismatch
+/// ⑤ 节点 span 不超文件实际长度 → 否则 SpanBeyondFile
 pub(crate) fn validate_freshness(
     storage: &dyn crate::storage::capability::Storage,
     row: &SymbolRow,
-) -> Result<PathBuf, SourceError> {
+) -> Result<FreshSource, SourceError> {
     let root = project_root(storage, &row.project)?;
 
     let file = query_file_freshness(storage, &row.file_path, &row.project)?;
@@ -429,20 +467,49 @@ pub(crate) fn validate_freshness(
     // hash 解析走与切片读取同款的 canonicalize + 根包含校验，防 DB 行被篡改
     // 时 `../` 逃出项目根对任意可读文件做存在性/内容探测。
     let abs = root.join(row.file_path.trim_start_matches('/'));
-    let abs = abs.canonicalize().map_err(|_| SourceError::StaleIndex {
+    let canonical_file = abs.canonicalize().map_err(|_| SourceError::StaleIndex {
         file_path: row.file_path.clone(),
         reason: StaleReason::FileMissing,
     })?;
-    if !abs.starts_with(&root) {
+    if !canonical_file.starts_with(&root) {
         return Err(SourceError::StaleIndex {
             file_path: row.file_path.clone(),
             reason: StaleReason::FileMissing,
         });
     }
-    let actual_hash = compute_file_hash(&abs).map_err(|_| SourceError::StaleIndex {
+
+    // 有界整读：hash 与切片共用这一次读取。上限检查落在已打开的句柄上
+    // （fstat 同一对象）并以 `take` 封顶，消除 stat/read 竞态窗口；错误映射
+    // 与 `compute_file_hash` 的调用方约定一致（InvalidInput → FileMissing）。
+    // canonical 路径不可能再是符号链接，symlink 拒绝由此天然成立。
+    let handle = std::fs::File::open(&canonical_file).map_err(|_| SourceError::StaleIndex {
         file_path: row.file_path.clone(),
         reason: StaleReason::FileMissing,
     })?;
+    if handle
+        .metadata()
+        .map_err(|_| SourceError::StaleIndex {
+            file_path: row.file_path.clone(),
+            reason: StaleReason::FileMissing,
+        })?
+        .len()
+        > MAX_FILE_SIZE
+    {
+        return Err(SourceError::StaleIndex {
+            file_path: row.file_path.clone(),
+            reason: StaleReason::FileMissing,
+        });
+    }
+    let mut content = Vec::new();
+    use std::io::Read as _;
+    handle
+        .take(MAX_FILE_SIZE)
+        .read_to_end(&mut content)
+        .map_err(|_| SourceError::StaleIndex {
+            file_path: row.file_path.clone(),
+            reason: StaleReason::FileMissing,
+        })?;
+    let actual_hash = compute_content_hash(&content);
     if actual_hash != file.hash {
         return Err(SourceError::StaleIndex {
             file_path: row.file_path.clone(),
@@ -457,7 +524,7 @@ pub(crate) fn validate_freshness(
         });
     }
 
-    Ok(root)
+    Ok(FreshSource { content })
 }
 
 /// 计算有效切片范围：span ∩ window。
@@ -522,10 +589,19 @@ pub fn run_read_symbol_source(
         .require::<StorageModule>()
         .map_err(|e| SourceError::SourceUnavailable(e.to_string()))?;
     let row = resolve_symbol(&*storage, &key)?;
-    let canonical_root = validate_freshness(&*storage, &row)?;
+    // 校验链顺带完成唯一的整文件读取：切片复用其字节——单次调用至多一次
+    // 整文件读 + 一次文件 canonicalize（根 canonicalize 另计）。
+    let fresh = validate_freshness(&*storage, &row)?;
     let (eff_start, eff_end, total_lines) = effective_range(&row, opts)?;
-    let source = read_source_slice_canonical(&canonical_root, &row.file_path, eff_start, eff_end)
-        .ok_or_else(|| {
+    // 非 UTF-8 文件：hash 按字节计算不受影响；切片需要文本，错误族与消息
+    // 与旧切片读取失败路径保持一致。
+    let content = String::from_utf8(fresh.content).map_err(|_| {
+        SourceError::SourceUnavailable(format!(
+            "failed to slice {} lines [{eff_start}, {eff_end}] under canonical project root",
+            row.file_path
+        ))
+    })?;
+    let source = slice_lines(&content, eff_start, eff_end).ok_or_else(|| {
         SourceError::SourceUnavailable(format!(
             "failed to slice {} lines [{eff_start}, {eff_end}] under canonical project root",
             row.file_path
@@ -672,6 +748,7 @@ async fn source_mcp(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::hash::compute_file_hash;
 
     #[test]
     fn symbol_source_serializes_camel_case_fields() {
@@ -1037,16 +1114,16 @@ mod tests {
     }
 
     #[test]
-    fn freshness_ok_returns_canonical_root() {
-        let (kit, _dir, _fp) = seed_fresh_workspace(SEED_SOURCE, 3);
+    fn freshness_ok_reads_indexed_file_bytes() {
+        let (kit, dir, _fp) = seed_fresh_workspace(SEED_SOURCE, 3);
         let storage = storage_of(&kit);
         let row = resolve_symbol(&*storage, &SymbolKey::QualifiedName("demo.seed_fn".into()))
             .expect("resolve");
-        let root = validate_freshness(&*storage, &row).expect("fresh workspace");
-        assert!(root.is_absolute());
-        assert!(
-            root.join("a.rs").exists(),
-            "canonical root usable for slicing"
+        let fresh = validate_freshness(&*storage, &row).expect("fresh workspace");
+        let expected = std::fs::read(dir.path().join("a.rs")).expect("read indexed file");
+        assert_eq!(
+            fresh.content, expected,
+            "the validation chain's single read returns the indexed file's bytes"
         );
     }
 
@@ -1067,6 +1144,32 @@ mod tests {
                 }
             ),
             "{err}"
+        );
+    }
+
+    /// 纵深防御：rootPath 为文件系统根 `/` 时 `starts_with` 恒真，穿越防护
+    /// 完全失效（任何盘上路径都被判为「根内」）。正常索引不可能写出这种根，
+    /// 只会源于被篡改/损坏的索引库——必须拒绝，且错误指向重索引。
+    #[test]
+    fn freshness_rejects_degenerate_filesystem_root() {
+        let (kit, _dir, _fp) = seed_fresh_workspace_at(SEED_SOURCE, 3, Some(Path::new("/")));
+        let storage = storage_of(&kit);
+        let row = resolve_symbol(&*storage, &SymbolKey::QualifiedName("demo.seed_fn".into()))
+            .expect("resolve");
+        let err = validate_freshness(&*storage, &row).expect_err("degenerate root rejected");
+        assert!(
+            matches!(
+                err,
+                SourceError::StaleIndex {
+                    reason: StaleReason::InvalidProjectRoot,
+                    ..
+                }
+            ),
+            "degenerate root must carry its own stale reason: {err}"
+        );
+        assert!(
+            err.to_string().contains("codenexus index"),
+            "error must point at the re-index remedy: {err}"
         );
     }
 
