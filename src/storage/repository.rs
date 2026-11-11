@@ -631,7 +631,8 @@ impl Repository {
     ///
     /// Incremental load path (index/phases.rs) calls this inside the write
     /// transaction right before `save_edges_stream_on`: the edge PK
-    /// `{source}_{target}_{type}_{start_line}` is deterministic (ADR-014),
+    /// `{source_len}|{source}|{target_len}|{target}|{type}|{line}`
+    /// (see [`edge_id`]) is deterministic (ADR-014),
     /// and a re-derived edge can reference unchanged-file nodes on BOTH ends
     /// (enrichment), which the path-keyed delete does not cover — without
     /// this pre-delete, `COPY FROM` aborts on the persisted duplicate.
@@ -1138,7 +1139,7 @@ mod tests {
     // delete_edges_by_ids_on
 
     /// Builds an edge with a deterministic persisted id
-    /// (`{source}_{target}_{type}_{start_line}`).
+    /// (`{source_len}|{source}|…`, see [`edge_id`]).
     fn sample_edge(
         source: &str,
         target: &str,

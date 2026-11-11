@@ -279,24 +279,24 @@ where
         .from_writer(writer);
     csv_writer.write_record(columns)?;
     // P-06: dedup key is `(&source, &target, edge_type, start_line)` — borrowed
-    // from each `&Edge` instead of allocating a `format!("{}_{}_{}_{}", ...)`
-    // String per edge. Pre-P-06 built a `HashSet<String>` where each insert
-    // allocated ~80 bytes (source + target + type + line + underscores) for
-    // every edge in the stream. For a 1 M-edge repo this was ~80 MB of pure
-    // dedup-key allocations, all freed at function exit but contributing to
-    // peak RSS during CSV generation.
+    // from each `&Edge` instead of allocating a String per edge. Pre-P-06 built
+    // a `HashSet<String>` where each insert allocated ~80 bytes (source +
+    // target + type + line + underscores) for every edge in the stream. For a
+    // 1 M-edge repo this was ~80 MB of pure dedup-key allocations, all freed at
+    // function exit but contributing to peak RSS during CSV generation.
     //
     // The tuple form borrows `edge.source` and `edge.target` (which are
     // `String` = `NodeId`) by reference for the duration of the loop iteration;
-    // `EdgeType` is `Copy` (derives `Hash + Eq`); `start_line` is `u32`. The
-    // HashSet stores `(Option<&str>, ...)`-free tuples — `&str` borrows into
-    // the edge which outlives the `insert` call.
+    // `EdgeType` is `Copy` (derives `Hash + Eq`); `start_line` is `Option<u32>`.
     //
-    // Correctness: this matches `edge_id`'s dedup contract
-    // (`{source}_{target}_{type}_{start_line}`) — same four fields, same
-    // equality semantics. The `edge_id` String is still computed inside
-    // `edge_to_row` for the CSV `id` column; only the dedup key changes.
-    let mut seen: std::collections::HashSet<(&str, &str, EdgeType, u32)> =
+    // Correctness: this matches `edge_id`'s dedup contract — same four fields,
+    // same equality semantics. `start_line` stays `Option<u32>` (NOT
+    // `unwrap_or(0)`) so a span-less edge and a line-0 edge keep distinct keys,
+    // exactly as the v2 edge_id renders them (`…|-` vs `…|0`); collapsing them
+    // here would silently drop a legitimate edge whose id is unique. The
+    // `edge_id` String is still computed inside `edge_to_row` for the CSV `id`
+    // column; only the dedup key changes.
+    let mut seen: std::collections::HashSet<(&str, &str, EdgeType, Option<u32>)> =
         std::collections::HashSet::new();
     let mut skipped = 0usize;
     let mut written = 0usize;
@@ -307,7 +307,7 @@ where
             edge.source.as_str(),
             edge.target.as_str(),
             edge.edge_type,
-            edge.start_line.unwrap_or(0),
+            edge.start_line,
         );
         if !seen.insert(key) {
             skipped += 1;
@@ -733,25 +733,71 @@ pub fn node_to_row(node: &Node, label: NodeLabel) -> Vec<String> {
 }
 
 /// Generates the primary-key id for an edge.
+/// Generates the primary-key id for an edge.
 ///
-/// The id is `{source}_{target}_{type}_{start_line}`, with `start_line`
-/// defaulting to 0 when `None`. Callers that batch-insert edges must dedup
-/// by this id to avoid primary-key conflicts (ADR-014).
+/// Format: `{source_len}|{source}|{target_len}|{target}|{type}|{line}`, where
+/// the two length prefixes make the `source`/`target` split unambiguous and
+/// `{line}` is the start line or `-` when the edge has none.
+///
+/// The result is the **persisted-key form**: it passes through the same
+/// [`sanitize_for_ladybugdb`] transform the CSV writer applies to every
+/// column, so callers comparing ids against persisted rows (the load path's
+/// edge pre-delete, the integrity gate's dedup) match the stored bytes
+/// exactly. The length prefixes are computed on the RAW source/target —
+/// sanitization only rewrites `\ " \n \r \t` characters in place and never
+/// changes the component count, so the id stays unambiguous.
+///
+/// The v1 format `{source}_{target}_{type}_{start_line}` joined components
+/// with `_`, and qualified-name segments contain `_`, so `("a_b", "c")` and
+/// `("a", "b_c")` rendered the same id STRING while the CSV writer dedups by
+/// the exact `(source, target, type, line)` TUPLE — two distinct edges, one
+/// primary key, `COPY FROM` aborting on the conflict. It also rendered
+/// `None` and `Some(0)` start lines identically. The length-prefixed form
+/// removes both collisions ([`EdgeType::as_db_type`] names are guaranteed
+/// `|`-free by `edge_type_db_names_never_contain_the_id_separator`).
+///
+/// Callers that batch-insert edges must dedup by this id to avoid
+/// primary-key conflicts (ADR-014).
+///
+/// # Breaking change
+///
+/// Ids written by v1 builds do not match this format: a database indexed by
+/// an older build must be rebuilt with `codenexus index --force` after
+/// upgrading (recorded in `docs/CHANGELOG.md`). Without the rebuild the
+/// edge pre-delete looks up new-format ids and misses the persisted
+/// old-format rows, so a re-derived edge collides with its stale row.
 #[must_use]
 pub fn edge_id(edge: &Edge) -> String {
-    format!(
-        "{}_{}_{}_{}",
-        edge.source,
-        edge.target,
-        edge.edge_type.as_db_type(),
-        edge.start_line.unwrap_or(0)
-    )
+    let raw = match edge.start_line {
+        Some(line) => format!(
+            "{s}|{source}|{t}|{target}|{kind}|{line}",
+            s = edge.source.len(),
+            source = edge.source,
+            t = edge.target.len(),
+            target = edge.target,
+            kind = edge.edge_type.as_db_type(),
+        ),
+        None => format!(
+            "{s}|{source}|{t}|{target}|{kind}|-",
+            s = edge.source.len(),
+            source = edge.source,
+            t = edge.target.len(),
+            target = edge.target,
+            kind = edge.edge_type.as_db_type(),
+        ),
+    };
+    sanitize_for_ladybugdb(raw)
 }
 
 /// Builds the column-value vector for an edge, in the order specified by
 /// [`relation_table_columns`].
 #[must_use]
 pub fn edge_to_row(edge: &Edge) -> Vec<String> {
+    // `edge_id` already emits the sanitized persisted-key form (it applies
+    // [`sanitize_for_ladybugdb`] itself — the delete/dedup lookups against
+    // persisted rows must match the stored bytes), so the id column here is
+    // the stored primary key without a second pass. The other string columns
+    // are sanitized by the CSV writer, like every node column.
     let id = edge_id(edge);
     vec![
         id,
@@ -806,6 +852,29 @@ mod tests {
         let mut buf = Vec::new();
         write_edges_csv_stream(edges, &mut buf).expect("stream write");
         String::from_utf8(buf).expect("csv utf8")
+    }
+
+    /// 删除键必须等于写入键：CSV 写入把 id 列与其他列一起净化后才落库，
+    /// `edge_id`（预删除与去重门的查找键）必须产生同一个净化后的串——否则
+    /// 含 `\`/`"`/`\n`/`\r`/`\t` 的路径段会让预删除永远查不到持久行。
+    #[test]
+    fn edge_id_matches_the_persisted_id_column_byte_for_byte() {
+        let edge = Edge::builder("src/a\\b.rs", "tar\"get", EdgeType::Calls, "p")
+            .start_line(1)
+            .build();
+        let csv = write_edges_csv_to_string(&[edge.clone()]);
+        let data_row = csv.lines().nth(1).expect("one data row");
+        let id_column = data_row.split('\t').next().expect("id column first");
+        assert_eq!(edge_id(&edge), id_column);
+        // 净化确实发生了（否则该测试什么都没锁住）
+        assert!(
+            id_column.contains('/'),
+            "backslash must be rewritten: {id_column}"
+        );
+        assert!(
+            !id_column.contains('"'),
+            "double-quote must be rewritten: {id_column}"
+        );
     }
 
     /// Test helper: streams nodes to a temp file and returns the path. The
@@ -1246,13 +1315,60 @@ mod tests {
         let edge = Edge::builder("src", "tgt", EdgeType::Calls, "p")
             .start_line(42)
             .build();
-        assert_eq!(edge_id(&edge), "src_tgt_CALLS_42");
+        assert_eq!(edge_id(&edge), "3|src|3|tgt|CALLS|42");
     }
 
     #[test]
-    fn edge_id_defaults_line_to_zero_when_none() {
+    fn edge_id_marks_missing_start_line() {
         let edge = Edge::new("s", "t", EdgeType::Reads, "p");
-        assert_eq!(edge_id(&edge), "s_t_READS_0");
+        assert_eq!(edge_id(&edge), "1|s|1|t|READS|-");
+    }
+
+    /// The v1 `{source}_{target}_{type}_{line}` id joined components with `_`,
+    /// and FQN segments contain `_`: `("a_b", "c")` and `("a", "b_c")` both
+    /// rendered `a_b_c_…` — two distinct edges colliding on one primary key.
+    #[test]
+    fn edge_id_is_unambiguous_across_underscore_boundaries() {
+        let left = Edge::builder("a_b", "c", EdgeType::Calls, "p")
+            .start_line(1)
+            .build();
+        let right = Edge::builder("a", "b_c", EdgeType::Calls, "p")
+            .start_line(1)
+            .build();
+        assert_ne!(
+            edge_id(&left),
+            edge_id(&right),
+            "distinct (source, target) pairs must not collide on one id"
+        );
+    }
+
+    /// v1 rendered `None` and `Some(0)` identically (`…_0`), so a span-less
+    /// edge and a line-0 edge shared one primary key.
+    #[test]
+    fn edge_id_distinguishes_missing_from_zero_start_line() {
+        let none = Edge::new("s", "t", EdgeType::Reads, "p");
+        let zero = Edge::builder("s", "t", EdgeType::Reads, "p")
+            .start_line(0)
+            .build();
+        assert_ne!(
+            edge_id(&none),
+            edge_id(&zero),
+            "None and Some(0) start lines must not collide on one id"
+        );
+    }
+
+    /// The length prefixes and the `-` line marker keep the id decodable only
+    /// while the edge-type names stay free of the `|` separator — a new
+    /// `EdgeType` DB name containing `|` would make `{type}|{line}` ambiguous.
+    #[test]
+    fn edge_type_db_names_never_contain_the_id_separator() {
+        for edge_type in EdgeType::all() {
+            let name = edge_type.as_db_type();
+            assert!(
+                !name.contains('|'),
+                "EdgeType db name {name:?} must not contain the edge_id separator"
+            );
+        }
     }
 
     #[test]
@@ -1276,6 +1392,19 @@ mod tests {
         assert_eq!(lines.len(), 3);
         assert!(lines[1].contains("0.900000"));
         assert!(lines[2].contains("20"));
+    }
+
+    /// A span-less edge and a line-0 edge have distinct v2 ids; the dedup key
+    /// must keep both rows (the v1 `unwrap_or(0)` key silently dropped one).
+    #[test]
+    fn write_edges_csv_keeps_none_and_zero_line_edges_distinct() {
+        let none = Edge::new("s", "t", EdgeType::Reads, "p");
+        let zero = Edge::builder("s", "t", EdgeType::Reads, "p")
+            .start_line(0)
+            .build();
+        let csv = write_edges_csv_to_string(&[none, zero]);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), 3, "header + both edges, neither deduped");
     }
 
     #[test]
