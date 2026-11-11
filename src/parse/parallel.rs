@@ -329,7 +329,6 @@ mod tests {
     use rayon::ThreadPoolBuilder;
     use std::cell::RefCell;
     use std::sync::Arc;
-    use tracing_subscriber::filter::LevelFilter;
     use tracing_subscriber::prelude::*;
 
     /// Builds a `FileInfo` for a file written to `dir/name` with `content`
@@ -633,8 +632,9 @@ mod tests {
             const { RefCell::new(None) };
     }
 
-    /// Runs `f` inside a scoped tracing subscriber (DEBUG and above) that
-    /// captures all event output into a string, returning that string.
+    /// Runs `f` inside a scoped tracing subscriber (main thread + one per rayon
+    /// worker) that captures all event output into a string, returning that
+    /// string.
     ///
     /// Because `parallel_parse` uses rayon worker threads that do NOT inherit
     /// the current thread's tracing subscriber, this helper builds a custom
@@ -643,6 +643,14 @@ mod tests {
     /// thread. The test function `f` is then run via `pool.install` so that
     /// `par_iter` calls inside `f` use worker threads that have the subscriber
     /// set.
+    ///
+    /// The subscribers are installed WITHOUT a per-layer level filter (the
+    /// historical `with_filter(LevelFilter::DEBUG)` is the root cause of the
+    /// LOG-003 flake — see `test_log_capture::capture_tracing_debug`): a
+    /// per-layer filter routes the callsite `Interest` through a thread-local
+    /// `FilterState` that concurrent rebuilds can poison to `never`, after
+    /// which the asserted events are skipped process-wide. Callers assert
+    /// with `.contains`, so the extra captured levels are harmless.
     fn capture_tracing_debug<R: Send>(f: impl FnOnce() -> R + Send) -> String {
         let (console_tx, console_rx) = unbounded::<Arc<LogRecord>>();
         let (async_tx, _async_rx) = unbounded::<Arc<LogRecord>>();
@@ -650,8 +658,7 @@ mod tests {
 
         // Main thread subscriber
         let main_layer =
-            LoggerSubscriber::new(console_tx.clone(), async_tx.clone(), metrics.clone())
-                .with_filter(LevelFilter::DEBUG);
+            LoggerSubscriber::new(console_tx.clone(), async_tx.clone(), metrics.clone());
         let main_registry = tracing_subscriber::registry().with(main_layer);
 
         // Build a custom rayon thread pool that installs an inklog
@@ -665,8 +672,7 @@ mod tests {
                     console_tx_for_handler.clone(),
                     async_tx_for_handler.clone(),
                     metrics_for_handler.clone(),
-                )
-                .with_filter(LevelFilter::DEBUG);
+                );
                 let worker_registry = tracing_subscriber::registry().with(worker_layer);
                 let guard = tracing::subscriber::set_default(worker_registry);
                 TRACING_GUARD.with(|g| *g.borrow_mut() = Some(guard));
@@ -675,6 +681,10 @@ mod tests {
             .expect("rayon thread pool");
 
         tracing::subscriber::with_default(main_registry, || {
+            // Re-anchor the callsite-interest cache while this capture is the
+            // active dispatcher (see `test_log_capture::capture_tracing_debug`
+            // for why the cache must be rebuilt per capture window).
+            let _rebuild = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::new());
             pool.install(f);
         });
 

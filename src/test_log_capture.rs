@@ -21,7 +21,6 @@ use crossbeam_channel::unbounded;
 use inklog::domain::core::LoggerSubscriber;
 use inklog::LogRecord;
 use inklog::Metrics;
-use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::prelude::*;
 
 /// Formats a `LogRecord` into a string containing the message and all
@@ -54,27 +53,48 @@ pub fn drain_to_string(rx: &crossbeam_channel::Receiver<Arc<LogRecord>>) -> Stri
 
 /// Runs `f` inside a scoped tracing subscriber (all levels) that captures
 /// all event output into a string, returning that string.
+///
+/// The throwaway `Dispatch::new` inside the window forces tracing to rebuild
+/// its process-wide callsite-interest cache while THIS capture is the active
+/// dispatcher (see `capture_tracing_debug` for why that cache must be
+/// re-anchored per capture).
 pub fn capture_tracing<R>(f: impl FnOnce() -> R) -> String {
     let (console_tx, console_rx) = unbounded::<Arc<LogRecord>>();
     let (async_tx, _async_rx) = unbounded::<Arc<LogRecord>>();
     let metrics = Arc::new(Metrics::new());
     let layer = LoggerSubscriber::new(console_tx, async_tx, metrics);
     let registry = tracing_subscriber::registry().with(layer);
-    tracing::subscriber::with_default(registry, f);
+    tracing::subscriber::with_default(registry, || {
+        let _rebuild = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::new());
+        f()
+    });
     drain_to_string(&console_rx)
 }
 
-/// Runs `f` inside a scoped tracing subscriber (DEBUG and above) that
-/// captures all event output into a string, returning that string.
+/// Runs `f` inside a scoped tracing subscriber that captures all event output
+/// (all levels) into a string, returning that string.
+///
+/// Historically this installed a `LevelFilter::DEBUG` per-layer filter. That
+/// filter is the root cause of the LOG-003 flake and must not come back:
+/// a per-layer filter makes the registry compute a callsite's cached
+/// `Interest` through a **thread-local** `FilterState`, which concurrent
+/// tests' rebuilds can poison to `Interest::never` (a below-filter callsite
+/// deposits a `never` that the next rebuild takes for a different callsite).
+/// Once a callsite is cached `never`, its events are skipped process-wide —
+/// the emitting thread never reaches the active subscriber — so a capture
+/// running on another thread silently loses the event it asserts on.
+/// Without a per-layer filter the registry answers `Interest::always()`
+/// directly and the interest can never collapse to `never` while this
+/// subscriber is alive. Callers assert with `.contains`, so the extra
+/// captured levels are harmless.
+///
+/// Version note: the rebuild trick relies on `Interest::and` NOT being
+/// never-dominant (tracing-core 0.1.36: differing interests fold to
+/// `sometimes`, so our `always` keeps every callsite dispatchable). If a
+/// tracing upgrade ever makes captures come back empty across the board,
+/// check `Interest::and`'s semantics first.
 pub fn capture_tracing_debug<R>(f: impl FnOnce() -> R) -> String {
-    let (console_tx, console_rx) = unbounded::<Arc<LogRecord>>();
-    let (async_tx, _async_rx) = unbounded::<Arc<LogRecord>>();
-    let metrics = Arc::new(Metrics::new());
-    let layer =
-        LoggerSubscriber::new(console_tx, async_tx, metrics).with_filter(LevelFilter::DEBUG);
-    let registry = tracing_subscriber::registry().with(layer);
-    tracing::subscriber::with_default(registry, f);
-    drain_to_string(&console_rx)
+    capture_tracing(f)
 }
 
 #[cfg(test)]
